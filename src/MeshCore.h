@@ -66,6 +66,12 @@ public:
   virtual const char* getResetReasonString(uint32_t reason) { return "Not available"; }
   virtual uint8_t getShutdownReason() const { return 0; }
   virtual const char* getShutdownReasonString(uint8_t reason) { return "Not available"; }
+
+  // External LoRa FEM LNA control (boards with a controllable FEM override these).
+  // Default: not supported (boards without an external FEM, or without a controllable LNA path).
+  virtual bool setLoRaFemLnaEnabled(bool enable) { return false; }
+  virtual bool canControlLoRaFemLna() const { return false; }
+  virtual bool isLoRaFemLnaEnabled() const { return false; }
 };
 
 /**

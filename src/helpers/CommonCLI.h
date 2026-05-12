@@ -61,6 +61,9 @@ struct NodePrefs { // persisted to file
   uint8_t rx_boosted_gain; // power settings
   uint8_t path_hash_mode;   // which path mode to use when sending
   uint8_t loop_detect;
+  // External FEM LNA enable (1 = LNA on, 0 = bypass). Default 1 (ON).
+  // Only meaningful on boards where MainBoard::canControlLoRaFemLna() returns true.
+  uint8_t radio_fem_rxgain;
 };
 
 class CommonCLICallbacks {

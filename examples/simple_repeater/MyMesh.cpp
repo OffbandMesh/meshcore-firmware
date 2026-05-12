@@ -912,6 +912,9 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 #endif
 #endif
 
+  // External FEM LNA enabled by default (boards without controllable FEM ignore this).
+  _prefs.radio_fem_rxgain = 1;
+
   pending_discover_tag = 0;
   pending_discover_until = 0;
 
@@ -959,6 +962,11 @@ void MyMesh::begin(FILESYSTEM *fs) {
   radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
   MESH_DEBUG_PRINTLN("RX Boosted Gain Mode: %s",
                      radio_driver.getRxBoostedGainMode() ? "Enabled" : "Disabled");
+
+  // Apply persisted FEM LNA enable. No-op on boards without a controllable FEM.
+  if (board.canControlLoRaFemLna()) {
+    board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain != 0);
+  }
 
   updateAdvertTimer();
   updateFloodAdvertTimer();
@@ -1308,3 +1316,26 @@ bool MyMesh::hasPendingWork() const {
 #endif
   return _mgr->getOutboundTotal() > 0;
 }
+
+#if MAX_NEIGHBOURS
+int MyMesh::getNeighbourCount() const {
+  int count = 0;
+  for (int i = 0; i < MAX_NEIGHBOURS; i++) {
+    if (neighbours[i].heard_timestamp != 0) {
+      count++;
+    }
+  }
+  return count;
+}
+
+int MyMesh::getNeighbours(NeighbourInfo* out, int max_out) const {
+  if (!out || max_out <= 0) return 0;
+  int copied = 0;
+  for (int i = 0; i < MAX_NEIGHBOURS && copied < max_out; i++) {
+    if (neighbours[i].heard_timestamp != 0) {
+      out[copied++] = neighbours[i];
+    }
+  }
+  return copied;
+}
+#endif

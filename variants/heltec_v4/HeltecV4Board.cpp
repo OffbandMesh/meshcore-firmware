@@ -83,3 +83,24 @@ void HeltecV4Board::begin() {
     return loRaFEMControl.getFEMType() == KCT8103L_PA ? "Heltec V4.3 OLED" : "Heltec V4 OLED";
 #endif
   }
+
+  // Runtime control of the external FEM LNA. The TX/RX mode switching happens
+  // automatically on each transmit (via onBeforeTransmit/onAfterTransmit);
+  // changing the LNA enable flag here takes effect on the next RX-mode entry.
+  // To make the change immediate, re-enter RX mode now.
+  bool HeltecV4Board::setLoRaFemLnaEnabled(bool enable) {
+    loRaFEMControl.setLNAEnable(enable);
+    // Apply the change to the current chip state if we're not mid-TX.
+    // setRxModeEnable() drives the CTX/PA pins per the new lna_enabled flag.
+    loRaFEMControl.setRxModeEnable();
+    return loRaFEMControl.isLnaCanControl();
+  }
+
+  bool HeltecV4Board::canControlLoRaFemLna() const {
+    // const_cast: LoRaFEMControl::isLnaCanControl is non-const by upstream design.
+    return const_cast<LoRaFEMControl&>(loRaFEMControl).isLnaCanControl();
+  }
+
+  bool HeltecV4Board::isLoRaFemLnaEnabled() const {
+    return loRaFEMControl.isLnaEnabled();
+  }

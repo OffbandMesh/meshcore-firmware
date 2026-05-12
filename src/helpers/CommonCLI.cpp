@@ -8,6 +8,19 @@
 #define BRIDGE_MAX_BAUD 115200
 #endif
 
+#ifdef ENABLE_WIFI_TELEMETRY
+// Bridge to the WiFi telemetry admin API defined in the example's main.cpp.
+// Allows the `wifi`/`telemetry` CLI commands to introspect and control the
+// duty-cycled WiFi+MQTT publisher over the always-on LoRa admin channel.
+extern "C" {
+  void wifi_telemetry_set_disabled(int);
+  int  wifi_telemetry_is_disabled(void);
+  void wifi_telemetry_force_now(void);
+  void wifi_telemetry_reset_state(void);
+  int  wifi_telemetry_get_status(char* buf, int buflen);
+}
+#endif
+
 // Believe it or not, this std C function is busted on some platforms!
 static uint32_t _atoi(const char* sp) {
   uint32_t n = 0;
@@ -88,7 +101,10 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *)&_prefs->adc_multiplier, sizeof(_prefs->adc_multiplier));                 // 166
     file.read((uint8_t *)_prefs->owner_info, sizeof(_prefs->owner_info));                          // 170
     file.read((uint8_t *)&_prefs->rx_boosted_gain, sizeof(_prefs->rx_boosted_gain));              // 290
-    // next: 291
+    file.read((uint8_t *)&_prefs->radio_fem_rxgain, sizeof(_prefs->radio_fem_rxgain));            // 291
+    // next: 292
+    // NOTE: For old SPIFFS files predating radio_fem_rxgain, file.read above returns 0
+    // and the field retains its in-memory default (set by MyMesh constructor to 1 = LNA on).
 
     // sanitise bad pref values
     _prefs->rx_delay_base = constrain(_prefs->rx_delay_base, 0, 20.0f);
@@ -118,6 +134,7 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
 
     // sanitise settings
     _prefs->rx_boosted_gain = constrain(_prefs->rx_boosted_gain, 0, 1); // boolean
+    _prefs->radio_fem_rxgain = constrain(_prefs->radio_fem_rxgain, 0, 1); // boolean
 
     file.close();
   }
@@ -179,7 +196,8 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)&_prefs->adc_multiplier, sizeof(_prefs->adc_multiplier));                 // 166
     file.write((uint8_t *)_prefs->owner_info, sizeof(_prefs->owner_info));                          // 170
     file.write((uint8_t *)&_prefs->rx_boosted_gain, sizeof(_prefs->rx_boosted_gain));              // 290
-    // next: 291
+    file.write((uint8_t *)&_prefs->radio_fem_rxgain, sizeof(_prefs->radio_fem_rxgain));            // 291
+    // next: 292
 
     file.close();
   }
@@ -439,6 +457,39 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       } else {
         strcpy(reply, "off");
       }
+    } else if (memcmp(command, "fem on", 6) == 0) {
+      _prefs->radio_fem_rxgain = 1;
+      _board->setLoRaFemLnaEnabled(true);
+      savePrefs();
+      strcpy(reply, "ok");
+    } else if (memcmp(command, "fem off", 7) == 0) {
+      _prefs->radio_fem_rxgain = 0;
+      _board->setLoRaFemLnaEnabled(false);
+      savePrefs();
+      strcpy(reply, "ok");
+    } else if (memcmp(command, "fem", 3) == 0) {
+      sprintf(reply, "fem lna: %s, controllable: %s, hw_state: %s",
+              _prefs->radio_fem_rxgain ? "on" : "off",
+              _board->canControlLoRaFemLna() ? "yes" : "no",
+              _board->isLoRaFemLnaEnabled() ? "on" : "off");
+#ifdef ENABLE_WIFI_TELEMETRY
+    } else if (memcmp(command, "telemetry off", 13) == 0) {
+      wifi_telemetry_set_disabled(1);
+      strcpy(reply, "ok");
+    } else if (memcmp(command, "telemetry on", 12) == 0) {
+      wifi_telemetry_set_disabled(0);
+      strcpy(reply, "ok");
+    } else if (memcmp(command, "telemetry now", 13) == 0) {
+      wifi_telemetry_force_now();
+      strcpy(reply, "ok (scheduled for next loop pass)");
+    } else if (memcmp(command, "telemetry", 9) == 0) {
+      sprintf(reply, "telemetry: %s", wifi_telemetry_is_disabled() ? "off" : "on");
+    } else if (memcmp(command, "wifi reset", 10) == 0) {
+      wifi_telemetry_reset_state();
+      strcpy(reply, "ok (will reconnect on next publish)");
+    } else if (memcmp(command, "wifi", 4) == 0) {
+      wifi_telemetry_get_status(reply, 160);
+#endif
     } else if (memcmp(command, "log start", 9) == 0) {
       _callbacks->setLoggingOn(true);
       strcpy(reply, "   logging on");
