@@ -1,0 +1,32 @@
+; Template for platformio.local.ini.
+;
+; Copy to platformio.local.ini and fill in real values.
+; platformio.local.ini is gitignored — never commit real credentials.
+;
+; All values here are baked into the firmware at COMPILE TIME.
+; Rotating any secret requires a rebuild and re-flash.
+
+[wifi_secrets]
+; Used by: heltec_v4_companion_radio_wifi, heltec_v4_tft_companion_radio_wifi
+ssid = your_wifi_ssid
+password = your_wifi_password
+
+[node_secrets]
+; admin_password — repeater, espnow_bridge, room_server, sensor (OLED + TFT).
+; room_password  — room_server only.
+admin_password = strong_admin_password
+room_password = room_join_password
+
+[ble_secrets]
+; Used by: heltec_v4_companion_radio_ble, heltec_v4_tft_companion_radio_ble
+; Integer literal (no quotes), 6-digit numeric BLE pairing PIN.
+pin = 654321
+
+[mqtt_secrets]
+; Used by: heltec_v4_repeater_telemetry (and any future *_telemetry env)
+; MQTT broker your Repeater publishes status to.
+; For Home Assistant + Mosquitto on Pi5: host is the Pi5 LAN IP/hostname.
+host = 192.168.50.x
+port = 1883
+user = your_mqtt_user
+password = your_mqtt_password

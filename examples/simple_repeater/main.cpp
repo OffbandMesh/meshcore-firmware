@@ -8,6 +8,65 @@
   static UITask ui_task(display);
 #endif
 
+// ----------------------------------------------------------------------------
+// WiFi telemetry module integration (issue #42)
+// Active only when -D ENABLE_WIFI_TELEMETRY=1 is set in the build flags.
+// All other env builds compile this block to nothing.
+// ----------------------------------------------------------------------------
+#ifdef ENABLE_WIFI_TELEMETRY
+#include "../../src/helpers/wifi_telemetry/WifiTelemetry.h"
+#include "../../src/helpers/wifi_telemetry/WifiMqttTransport.h"
+
+static WifiMqttTransport* g_tel_transport = nullptr;
+static WifiTelemetry g_telemetry;
+static uint32_t g_tel_next_publish_ms = 0;
+
+static void wifi_telemetry_setup() {
+    g_tel_transport = new WifiMqttTransport(
+        WIFI_TELEMETRY_WIFI_SSID,
+        WIFI_TELEMETRY_WIFI_PASS,
+        WIFI_TELEMETRY_MQTT_HOST,
+        (uint16_t)WIFI_TELEMETRY_MQTT_PORT,
+        WIFI_TELEMETRY_MQTT_USER,
+        WIFI_TELEMETRY_MQTT_PASS,
+        WIFI_TELEMETRY_NODE_ID
+    );
+    g_telemetry.begin(
+        g_tel_transport,
+        WIFI_TELEMETRY_NODE_ID,
+        WIFI_TELEMETRY_MQTT_PREFIX,
+        WIFI_TELEMETRY_FRIENDLY_NAME
+    );
+    // publish immediately on first loop pass
+    g_tel_next_publish_ms = millis();
+}
+
+static void wifi_telemetry_collect_and_publish() {
+    TelemetryData d;
+    d.battery_mv = board.getBattMilliVolts();
+    d.battery_pct = WifiTelemetry::batteryPercent(d.battery_mv);
+    d.uptime_seconds = millis() / 1000UL;
+    // The following fields need accessors on MyMesh; stubbed at 0 for v1.
+    // Follow-up issue will expose getOutboundTotal/getNoiseFloor/getNeighborCount.
+    d.tx_queue_len = 0;
+    d.noise_floor_dbm = 0;
+    d.neighbor_count = 0;
+    d.timestamp = (uint32_t)rtc_clock.getCurrentTime();
+
+    g_telemetry.sample(d);
+    // Drop WiFi after publish to save power.
+    g_tel_transport->end();
+}
+
+static void wifi_telemetry_loop() {
+    g_telemetry.loop();
+    if ((int32_t)(millis() - g_tel_next_publish_ms) >= 0) {
+        wifi_telemetry_collect_and_publish();
+        g_tel_next_publish_ms = millis() + WIFI_TELEMETRY_INTERVAL_MS;
+    }
+}
+#endif // ENABLE_WIFI_TELEMETRY
+
 StdRNG fast_rng;
 SimpleMeshTables tables;
 
@@ -99,6 +158,10 @@ void setup() {
 #if ENABLE_ADVERT_ON_BOOT == 1
   the_mesh.sendSelfAdvertisement(16000, false);
 #endif
+
+#ifdef ENABLE_WIFI_TELEMETRY
+  wifi_telemetry_setup();
+#endif
 }
 
 void loop() {
@@ -149,6 +212,10 @@ void loop() {
   ui_task.loop();
 #endif
   rtc_clock.tick();
+
+#ifdef ENABLE_WIFI_TELEMETRY
+  wifi_telemetry_loop();
+#endif
 
   if (the_mesh.getNodePrefs()->powersaving_enabled && !the_mesh.hasPendingWork()) {
 #if defined(NRF52_PLATFORM)
