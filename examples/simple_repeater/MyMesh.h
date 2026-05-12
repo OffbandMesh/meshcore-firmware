@@ -226,6 +226,15 @@ public:
   void handleCommand(uint32_t sender_timestamp, char* command, char* reply);
   void loop();
 
+#if MAX_NEIGHBOURS
+  // Telemetry accessors. Filled entries are those with heard_timestamp != 0.
+  // getNeighbours() copies up to max_out filled entries into out[] and returns
+  // how many were copied. getNeighbourCount() returns the total filled count
+  // regardless of max_out.
+  int getNeighbourCount() const;
+  int getNeighbours(NeighbourInfo* out, int max_out) const;
+#endif
+
 #if defined(WITH_BRIDGE)
   void setBridgeState(bool enable) override {
     if (enable == bridge.isRunning()) return;

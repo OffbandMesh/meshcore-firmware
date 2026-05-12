@@ -20,4 +20,8 @@ public:
   uint16_t getBattMilliVolts() override;
   const char* getManufacturerName() const override ;
 
+  // External FEM LNA runtime control (used by `fem on/off` CLI + telemetry).
+  bool setLoRaFemLnaEnabled(bool enable) override;
+  bool canControlLoRaFemLna() const override;
+  bool isLoRaFemLnaEnabled() const override;
 };
