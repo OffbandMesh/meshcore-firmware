@@ -539,6 +539,9 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       _board->getSafetyLog(reply, 160);
     } else if (memcmp(command, "safety state", 12) == 0) {
       _board->getSafetyState(reply, 160);
+    } else if (memcmp(command, "safety partitions", 17) == 0) {
+      // Epic E / E8 #72: dump all-partition state for OTA diagnostic visibility.
+      _board->getPartitionsInfo(reply, 160);
     } else if (memcmp(command, "safety", 6) == 0) {
       // Bare "safety" -> state snapshot (most useful single-line summary).
       _board->getSafetyState(reply, 160);

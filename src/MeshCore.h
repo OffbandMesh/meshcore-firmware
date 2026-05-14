@@ -142,6 +142,15 @@ public:
   virtual void appendSafetyEvent(uint8_t type, const char* detail) {
     (void)type; (void)detail;
   }
+
+  // Epic E / E8 #72: dump per-partition state for OTA diagnostic visibility.
+  // Driver: E7 (#71) needed full otadata visibility (state of BOTH OTA
+  // partitions, not just the running one) to resolve why a post-OTA boot
+  // didn't show PENDING_VERIFY despite both compile units having rollback
+  // support. Default no-op for boards without partition support.
+  virtual void getPartitionsInfo(char* buf, size_t buflen) {
+    if (buf && buflen > 0) buf[0] = 0;
+  }
 };
 
 /**

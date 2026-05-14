@@ -160,6 +160,10 @@ public:
   // E3 #67: external entry point so non-board code (main.cpp wifi_telemetry_loop
   // OTA detector) can log without exposing the file-static safety_log_append.
   void appendSafetyEvent(uint8_t type, const char* detail) override;
+  // E8 #72: enumerate app partitions + their states. Used to disambiguate
+  // OTA boot-state mysteries that safety state (which only reports the running
+  // partition) cannot answer.
+  void getPartitionsInfo(char* buf, size_t buflen) override;
 
   void setInhibitSleep(bool inhibit) {
     inhibit_sleep = inhibit;
