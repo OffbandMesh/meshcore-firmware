@@ -297,8 +297,24 @@ static const char* safety_event_type_str(uint8_t t) {
   }
 }
 
+// E9 #73 forward declaration: ota_state_short() is defined later in this
+// file (added by E8 #72 alongside getPartitionsInfo). beginBootSafety needs
+// it before that definition site to include the state value in EVT_BOOT_INC.
+static const char* ota_state_short(esp_ota_img_states_t st);
+
 void ESP32Board::beginBootSafety() {
   s_validation_pending = false;
+
+  // E9 #73: read the running partition's OTA state EARLY so we can include
+  // it in the EVT_BOOT_INC event detail. The downstream PENDING_VERIFY check
+  // reuses this same value instead of re-reading. This resolves the E7
+  // diagnostic gap: previously we only logged when state == PENDING_VERIFY,
+  // making all other states (NEW, VALID, UNDEFINED, etc.) invisible.
+  esp_ota_img_states_t boot_state = ESP_OTA_IMG_UNDEFINED;
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  if (running != nullptr) {
+    esp_ota_get_state_partition(running, &boot_state);
+  }
 
   // NVS is initialized by arduino-esp32's pre-setup() framework startup, so
   // we can just open a namespace here. If NVS itself is hosed, we bail rather
@@ -319,11 +335,17 @@ void ESP32Board::beginBootSafety() {
   boot_count++;
   nvs_set_u8(h, k_nvs_boot_count, boot_count);
   nvs_commit(h);
-  Serial.printf("[SAFETY] boot count: %u (threshold %u)\n",
-                (unsigned)boot_count, (unsigned)ROLLBACK_THRESHOLD);
+  Serial.printf("[SAFETY] boot count: %u (threshold %u) partition state: %s\n",
+                (unsigned)boot_count, (unsigned)ROLLBACK_THRESHOLD,
+                ota_state_short(boot_state));
   {
-    char d[16];
-    snprintf(d, sizeof(d), "%u/%u", (unsigned)boot_count, (unsigned)ROLLBACK_THRESHOLD);
+    // E9 #73: detail now carries the actual partition state, e.g. "1/3 st=new"
+    // or "1/3 st=valid". Fits within the 27-char detail field even for the
+    // longest state name "pending" (15 chars total).
+    char d[28];
+    snprintf(d, sizeof(d), "%u/%u st=%s",
+             (unsigned)boot_count, (unsigned)ROLLBACK_THRESHOLD,
+             ota_state_short(boot_state));
     safety_log_append(EVT_BOOT_INC, d);
   }
 
@@ -366,20 +388,16 @@ void ESP32Board::beginBootSafety() {
   }
   nvs_close(h);
 
-  // Check the running partition's OTA state. If we just booted a freshly-OTA'd
-  // image, the bootloader will have transitioned it from ESP_OTA_IMG_NEW to
+  // E9 #73: use the boot_state value already read at the top of this function
+  // instead of re-reading. If we just booted a freshly-OTA'd image, the
+  // bootloader will have transitioned it from ESP_OTA_IMG_NEW to
   // ESP_OTA_IMG_PENDING_VERIFY. We must call cancel_rollback() before the next
   // reboot or bootloader will revert us. Cache the flag so loop() can do it.
-  const esp_partition_t* running = esp_ota_get_running_partition();
-  if (running != nullptr) {
-    esp_ota_img_states_t state;
-    if (esp_ota_get_state_partition(running, &state) == ESP_OK
-        && state == ESP_OTA_IMG_PENDING_VERIFY) {
-      s_validation_pending = true;
-      Serial.printf("[SAFETY] running '%s' is PENDING_VERIFY; bootloader rollback armed\n",
-                    running->label);
-      safety_log_append(EVT_BOOT_PENDING, running->label ? running->label : "?");
-    }
+  if (boot_state == ESP_OTA_IMG_PENDING_VERIFY && running != nullptr) {
+    s_validation_pending = true;
+    Serial.printf("[SAFETY] running '%s' is PENDING_VERIFY; bootloader rollback armed\n",
+                  running->label);
+    safety_log_append(EVT_BOOT_PENDING, running->label ? running->label : "?");
   }
 }
 
