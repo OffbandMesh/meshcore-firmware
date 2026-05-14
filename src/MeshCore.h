@@ -57,7 +57,19 @@ public:
   virtual void setGpio(uint32_t values) {}
   virtual uint8_t getStartupReason() const = 0;
   virtual bool getBootloaderVersion(char* version, size_t max_len) { return false; }
-  virtual bool startOTAUpdate(const char* id, char reply[]) { return false; }   // not supported
+  virtual bool startOTAUpdate(const char* id, char reply[]) { return false; }   // not supported (AP-mode OTA)
+
+  // STA-mode OTA: uses existing connected WiFi instead of starting an AP.
+  // Requires caller to have brought WiFi up (e.g., via persistent-mode admin command).
+  // password is used for HTTP Basic Auth on the /update endpoint.
+  virtual bool startOTAUpdateOverSTA(const char* id, const char* password, char reply[]) { return false; }
+  // Stop any running OTA server (AP-mode or STA-mode). No-op if not running.
+  virtual void stopOTAUpdate() { /* no-op */ }
+  // Query OTA running state; fills buf with human-readable status. Returns true if running.
+  virtual bool getOTAStatus(char* buf, size_t buflen) {
+    if (buf && buflen > 0) buf[0] = 0;
+    return false;
+  }
 
   // Power management interface (boards with power management override these)
   virtual bool isExternalPowered() { return false; }
@@ -72,6 +84,21 @@ public:
   virtual bool setLoRaFemLnaEnabled(bool enable) { return false; }
   virtual bool canControlLoRaFemLna() const { return false; }
   virtual bool isLoRaFemLnaEnabled() const { return false; }
+
+  // D9 / issue #63: app-level boot rollback safety. Boards with ESP-IDF
+  // rollback APIs override these. Default no-op for non-ESP32 boards.
+  // beginBootSafety()    — call EARLY in setup(); increments NVS boot counter
+  //                        and rolls back to the other partition if threshold
+  //                        is exceeded. Also detects PENDING_VERIFY state so
+  //                        the app knows whether the bootloader is waiting on
+  //                        a markBootValid() call.
+  // markBootValid()      — call from loop() after a healthy uptime window;
+  //                        resets the counter and (if pending) confirms the
+  //                        partition so the bootloader stops considering rollback.
+  // isBootValidationPending() — true if the bootloader has us in PENDING_VERIFY.
+  virtual void beginBootSafety() { /* no-op */ }
+  virtual void markBootValid() { /* no-op */ }
+  virtual bool isBootValidationPending() const { return false; }
 };
 
 /**

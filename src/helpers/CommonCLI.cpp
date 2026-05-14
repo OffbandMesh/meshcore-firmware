@@ -18,6 +18,10 @@ extern "C" {
   void wifi_telemetry_force_now(void);
   void wifi_telemetry_reset_state(void);
   int  wifi_telemetry_get_status(char* buf, int buflen);
+  // D2/D3 persistent-mode controls
+  void wifi_telemetry_set_persistent(uint32_t duration_ms);
+  int  wifi_telemetry_is_persistent(void);
+  uint32_t wifi_telemetry_persistent_remaining_ms(void);
 }
 #endif
 
@@ -487,8 +491,43 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
     } else if (memcmp(command, "wifi reset", 10) == 0) {
       wifi_telemetry_reset_state();
       strcpy(reply, "ok (will reconnect on next publish)");
+    } else if (memcmp(command, "wifi off", 8) == 0) {
+      // D3 / issue #57: revert to BURST mode immediately
+      wifi_telemetry_set_persistent(0);
+      strcpy(reply, "ok - burst mode");
+    } else if (memcmp(command, "wifi on", 7) == 0) {
+      // D3 / issue #57: enter PERSISTENT_STA mode.
+      // Optional minutes argument: "wifi on" -> 15 min default, "wifi on N" -> N min.
+      int minutes = 15;  // default
+      if (command[7] == ' ' && command[8] != 0) {
+        int parsed = atoi(&command[8]);
+        if (parsed >= 1 && parsed <= 60) {
+          minutes = parsed;
+        } else if (parsed > 60) {
+          minutes = 60;  // hard cap at 60 min (matches WIFI_PERSISTENT_MAX_MS)
+        }
+        // parsed < 1 or non-numeric leaves minutes at default 15
+      }
+      wifi_telemetry_set_persistent((uint32_t)minutes * 60000UL);
+      sprintf(reply, "ok - persistent for %d min", minutes);
     } else if (memcmp(command, "wifi", 4) == 0) {
       wifi_telemetry_get_status(reply, 160);
+    // D5 / issue #59: STA-mode OTA controls. Order: "ota end" and "ota status"
+    // must match before bare "ota" since memcmp(3) would otherwise swallow them.
+    } else if (memcmp(command, "ota end", 7) == 0) {
+      _board->stopOTAUpdate();
+      strcpy(reply, "ok - OTA stopped");
+    } else if (memcmp(command, "ota status", 10) == 0) {
+      _board->getOTAStatus(reply, 160);
+    } else if (memcmp(command, "ota", 3) == 0) {
+      // Decision 1A: STA-mode OTA requires explicit `wifi on N` first so we don't
+      // race against the BURST publisher tearing the radio down mid-upload.
+      if (!wifi_telemetry_is_persistent()) {
+        strcpy(reply, "ERR: run 'wifi on N' first");
+      } else if (!_board->startOTAUpdateOverSTA(_prefs->node_name, _prefs->password, reply)) {
+        // reply already populated by the failure path inside startOTAUpdateOverSTA
+        // (e.g. "ERR: STA WiFi not connected", "ERR: OTA already running at ...")
+      }
 #endif
     } else if (memcmp(command, "log start", 9) == 0) {
       _callbacks->setLoggingOn(true);

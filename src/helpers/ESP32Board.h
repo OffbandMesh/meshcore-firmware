@@ -127,6 +127,30 @@ public:
 
   bool startOTAUpdate(const char* id, char reply[]) override;
 
+  // D4 / issue #58: STA-mode OTA. Uses the already-connected STA WiFi
+  // (caller's responsibility to ensure WiFi is up) and binds an
+  // AsyncElegantOTA server to the device's STA IP. Returns false if WiFi
+  // is not in a usable STA state.
+  // password is used for HTTP Basic Auth on the /update endpoint.
+  bool startOTAUpdateOverSTA(const char* id, const char* password, char reply[]) override;
+
+  // D5/D6: stop the OTA server (if running) and release resources.
+  // No-op if not currently running.
+  void stopOTAUpdate() override;
+
+  // D5: query whether the OTA server is currently running and where.
+  // buf is filled with a human-readable status string. Returns true if running.
+  bool getOTAStatus(char* buf, size_t buflen) override;
+
+  // D9 / issue #63: app-level rollback safety. Layers on top of arduino-esp32's
+  // built-in bootloader rollback (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=1) by
+  // adding an NVS-tracked boot counter for the "alive but silently broken"
+  // failure mode that bootloader rollback can't catch (because the app doesn't
+  // actually crash). See ESP32Board.cpp for the full lifecycle comment.
+  void beginBootSafety() override;
+  void markBootValid() override;
+  bool isBootValidationPending() const override;
+
   void setInhibitSleep(bool inhibit) {
     inhibit_sleep = inhibit;
   }
