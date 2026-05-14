@@ -45,6 +45,27 @@ static uint32_t g_tel_publish_fails = 0;
 static uint32_t g_tel_last_publish_ms = 0;     // millis() of last SUCCESSFUL publish, 0 if never
 static int      g_tel_last_mqtt_state = 99;    // PubSubClient state after last attempt
 
+// Persistent WiFi mode (D2 / issue #56). When non-zero, marks the millis()
+// deadline at which to auto-revert to BURST mode. Zero = BURST mode (default).
+// When persistent, wifi_telemetry_collect_and_publish() skips the final
+// transport.end() so WiFi stays up between publish cycles, enabling features
+// like OTA (D5) that need persistent connectivity.
+static uint32_t g_tel_persistent_until_ms = 0;
+// Hard cap on persistent-mode duration to prevent forgotten-on battery drain.
+// Even if a CLI command tries to set a longer timeout, it gets clamped here.
+#define WIFI_PERSISTENT_MAX_MS (60UL * 60UL * 1000UL)   // 60 minutes
+
+// D6 / issue #60: OTA active-upload extension. While an OTA upload is in
+// progress, refresh the persistent-mode deadline on each chunk so a slow
+// upload doesn't get cut off when the user's original "wifi on N" window
+// expires. A stall in Update.progress() lets the deadline elapse naturally —
+// the timeout is a rolling activity window, not a per-session grace.
+// AsyncElegantOTA uses ESP-IDF's global Update object (Update.h), so we can
+// observe upload state from outside without monkeypatching the deprecated lib.
+#include <Update.h>
+#define OTA_EXTEND_MS (5UL * 60UL * 1000UL)   // 5 minutes per chunk
+static size_t g_ota_last_progress = 0;
+
 static void wifi_telemetry_setup() {
     g_tel_transport = new WifiMqttTransport(
         WIFI_TELEMETRY_WIFI_SSID,
@@ -199,13 +220,47 @@ static void wifi_telemetry_collect_and_publish() {
         first_cycle_completed = true;
     }
 
-    g_tel_transport->end();
+    // Persistent-mode hook (D2 / issue #56): when persistent timer is active,
+    // skip the teardown so WiFi stays up between publish cycles. The
+    // wifi_telemetry_loop()'s timeout check (below) handles auto-revert.
+    if (g_tel_persistent_until_ms == 0) {
+        g_tel_transport->end();
+    }
 }
 
 static void wifi_telemetry_loop() {
     g_telemetry.loop();
     // Honor the admin kill-switch — skip everything when telemetry is disabled.
     if (g_tel_disabled) return;
+
+    // D6 / issue #60: OTA active-upload extension.
+    // Refresh the persistent-mode deadline whenever Update.progress() advances.
+    // Runs BEFORE the expiry check so a chunk arriving close to the deadline
+    // gets the extension applied before we'd otherwise tear the transport down.
+    // No-op when no OTA is in progress (Update.isRunning() == false).
+    if (g_tel_persistent_until_ms != 0 && Update.isRunning()) {
+        size_t now_progress = Update.progress();
+        if (now_progress != g_ota_last_progress) {
+            if (g_ota_last_progress == 0) {
+                Serial.println("[OTA] upload started, auto-extending wifi window");
+            }
+            g_ota_last_progress = now_progress;
+            g_tel_persistent_until_ms = millis() + OTA_EXTEND_MS;
+        }
+    }
+
+    // D2 / issue #56: persistent-mode auto-revert.
+    // If the persistent timer is active and has expired, tear down WiFi and
+    // revert to BURST mode. The actual transport.end() happens here (the
+    // collect_and_publish skips end() while persistent is non-zero).
+    if (g_tel_persistent_until_ms != 0 &&
+        (int32_t)(millis() - g_tel_persistent_until_ms) >= 0) {
+        if (g_tel_transport) g_tel_transport->end();
+        g_tel_persistent_until_ms = 0;
+        g_ota_last_progress = 0;  // D6: reset for next OTA session
+        Serial.println("[WTEL] persistent timer expired, reverted to BURST");
+    }
+
     if ((int32_t)(millis() - g_tel_next_publish_ms) >= 0) {
         wifi_telemetry_collect_and_publish();
         g_tel_next_publish_ms = millis() + WIFI_TELEMETRY_INTERVAL_MS;
@@ -240,7 +295,38 @@ void wifi_telemetry_reset_state(void) {
     g_tel_publish_fails = 0;
     g_tel_last_publish_ms = 0;
     g_tel_last_mqtt_state = 99;
+    g_tel_persistent_until_ms = 0;  // also clear persistent mode
     g_tel_next_publish_ms = millis();
+}
+
+// D2 / issue #56: persistent-mode admin API.
+// Pass duration in milliseconds. 0 = revert to BURST immediately.
+// Values above WIFI_PERSISTENT_MAX_MS get clamped to the hard cap.
+void wifi_telemetry_set_persistent(uint32_t duration_ms) {
+    g_ota_last_progress = 0;  // D6: reset OTA progress tracker for new session
+    if (duration_ms == 0) {
+        g_tel_persistent_until_ms = 0;
+        // The next wifi_telemetry_loop() iteration will tear down the transport.
+        return;
+    }
+    if (duration_ms > WIFI_PERSISTENT_MAX_MS) {
+        duration_ms = WIFI_PERSISTENT_MAX_MS;
+    }
+    g_tel_persistent_until_ms = millis() + duration_ms;
+    // Force an immediate publish cycle so WiFi comes up RIGHT NOW rather
+    // than waiting up to 15 min for the next scheduled publish. The
+    // collect_and_publish will skip transport.end() because persistent is set.
+    g_tel_next_publish_ms = millis();
+}
+
+int wifi_telemetry_is_persistent(void) {
+    return g_tel_persistent_until_ms != 0 ? 1 : 0;
+}
+
+uint32_t wifi_telemetry_persistent_remaining_ms(void) {
+    if (g_tel_persistent_until_ms == 0) return 0;
+    int32_t remaining = (int32_t)(g_tel_persistent_until_ms - millis());
+    return remaining > 0 ? (uint32_t)remaining : 0;
 }
 
 int wifi_telemetry_get_status(char* buf, int buflen) {
@@ -251,8 +337,19 @@ int wifi_telemetry_get_status(char* buf, int buflen) {
     if (g_tel_last_publish_ms != 0) state_str = "ok";
     if (g_tel_wifi_fails > 0 && g_tel_publish_attempts == 0) state_str = "wifi_fail";
     if (g_tel_publish_fails > 0) state_str = "publish_fail";
+
+    // Persistent-mode descriptor for the status line.
+    char persist[40];
+    if (g_tel_persistent_until_ms == 0) {
+        snprintf(persist, sizeof(persist), "mode=burst");
+    } else {
+        uint32_t remain_s = wifi_telemetry_persistent_remaining_ms() / 1000UL;
+        snprintf(persist, sizeof(persist), "mode=persistent(%lus left)",
+                 (unsigned long)remain_s);
+    }
+
     return snprintf(buf, buflen,
-        "wifi a=%lu f=%lu | mqtt a=%lu f=%lu state=%d | last_ok=%lus ago | %s%s",
+        "wifi a=%lu f=%lu | mqtt a=%lu f=%lu state=%d | last_ok=%lus ago | %s | %s%s",
         (unsigned long)g_tel_wifi_attempts,
         (unsigned long)g_tel_wifi_fails,
         (unsigned long)g_tel_publish_attempts,
@@ -260,6 +357,7 @@ int wifi_telemetry_get_status(char* buf, int buflen) {
         g_tel_last_mqtt_state,
         since_last,
         state_str,
+        persist,
         g_tel_disabled ? " [DISABLED]" : "");
 }
 
@@ -292,6 +390,13 @@ void setup() {
   delay(1000);
 
   board.begin();
+
+  // D9 / issue #63: app-level boot-rollback safety. Runs AFTER Serial.begin()
+  // (so we can log) and AFTER board.begin() (so platform init is settled), but
+  // BEFORE any radio/mesh/WiFi work (those are the things that can crash). If
+  // the NVS boot counter has tripped, this call reboots into the other partition
+  // and never returns. Otherwise it caches PENDING_VERIFY state for loop().
+  board.beginBootSafety();
 
 #if defined(MESH_DEBUG) && defined(NRF52_PLATFORM)
   // give some extra time for serial to settle so
@@ -420,6 +525,20 @@ void loop() {
 #ifdef ENABLE_WIFI_TELEMETRY
   wifi_telemetry_loop();
 #endif
+
+  // D9 / issue #63: one-shot boot validation. After ROLLBACK_VALIDATION_MS of
+  // healthy uptime (the_mesh.loop() and friends have been ticking), reset the
+  // NVS boot counter and (if pending) tell the bootloader this image is good.
+  // Runs ONCE per boot. Placed at end of loop() so the_mesh/sensors/wifi work
+  // is part of the implicit self-check signal.
+#ifndef ROLLBACK_VALIDATION_MS
+#define ROLLBACK_VALIDATION_MS 60000UL   // 60s default; override per-env
+#endif
+  static bool s_boot_validated = false;
+  if (!s_boot_validated && millis() > ROLLBACK_VALIDATION_MS) {
+    board.markBootValid();
+    s_boot_validated = true;
+  }
 
   if (the_mesh.getNodePrefs()->powersaving_enabled && !the_mesh.hasPendingWork()) {
     #if defined(NRF52_PLATFORM)
