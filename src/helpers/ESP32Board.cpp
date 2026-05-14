@@ -522,4 +522,74 @@ void ESP32Board::getSafetyState(char* buf, size_t buflen) {
            (unsigned long)uptime_s);
 }
 
+// -----------------------------------------------------------------------------
+// E8 #72: enumerate app partitions and dump their states. Resolves the visibility
+// gap in getSafetyState() (which only reports the running partition's state) and
+// gives direct evidence for diagnostic questions about OTA partition transitions.
+// -----------------------------------------------------------------------------
+
+// Map esp_ota_img_states_t to a short string suitable for the compact reply
+// buffer. Mirrors the mapping in getSafetyState() but kept short for inline use.
+static const char* ota_state_short(esp_ota_img_states_t st) {
+  switch (st) {
+    case ESP_OTA_IMG_NEW:            return "new";
+    case ESP_OTA_IMG_PENDING_VERIFY: return "pending";
+    case ESP_OTA_IMG_VALID:          return "valid";
+    case ESP_OTA_IMG_INVALID:        return "invalid";
+    case ESP_OTA_IMG_ABORTED:        return "aborted";
+    case ESP_OTA_IMG_UNDEFINED:      return "undef";
+    default:                         return "?";
+  }
+}
+
+void ESP32Board::getPartitionsInfo(char* buf, size_t buflen) {
+  if (!buf || buflen == 0) return;
+  buf[0] = 0;
+
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
+
+  // Lead with the run/next summary so the most diagnostic info is visible
+  // even if the per-partition list gets truncated.
+  int pos = snprintf(buf, buflen, "run=%s next=%s [",
+                     running ? running->label : "?",
+                     next ? next->label : "?");
+  if (pos < 0 || (size_t)pos >= buflen) return;
+
+  // Iterate every app-type partition (factory + ota_0..ota_15) and report
+  // each one's stored OTA state. The ESP-IDF partition_next() API automatically
+  // releases each previous iterator; the loop terminates when next() returns
+  // NULL, at which point no release is needed.
+  bool first = true;
+  esp_partition_iterator_t it = esp_partition_find(
+      ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, nullptr);
+  while (it != nullptr) {
+    const esp_partition_t* p = esp_partition_get(it);
+    if (p != nullptr) {
+      esp_ota_img_states_t st = ESP_OTA_IMG_UNDEFINED;
+      // Factory partition has no otadata entry; esp_ota_get_state_partition
+      // returns ESP_ERR_NOT_SUPPORTED in that case. Leave st at UNDEFINED.
+      esp_ota_get_state_partition(p, &st);
+      int n = snprintf(buf + pos, buflen - pos, "%s%s:%s",
+                       first ? "" : " ",
+                       p->label,
+                       ota_state_short(st));
+      if (n < 0 || (size_t)n >= buflen - pos) {
+        // Truncation; release iterator and bail (closing bracket lost).
+        esp_partition_iterator_release(it);
+        return;
+      }
+      pos += n;
+      first = false;
+    }
+    it = esp_partition_next(it);
+  }
+
+  // Close the bracket if we have room.
+  if ((size_t)pos + 1 < buflen) {
+    buf[pos++] = ']';
+    buf[pos] = 0;
+  }
+}
+
 #endif
