@@ -186,6 +186,117 @@ static const char* k_nvs_safety_ns = "ota_safety";
 static const char* k_nvs_boot_count = "boot_count";
 static bool s_validation_pending = false;
 
+// =============================================================================
+// Epic E (#64) / E1 #65: Persistent safety/diagnostic event ring buffer.
+//
+// SAFELANE Error Visibility violation fix discovered during D7 (#61) testing:
+// D9 SAFETY logs and OTA events were emitted only via Serial.println, lost if
+// no monitor attached or if monitor dropped on USB re-enumeration. This block
+// adds an NVS-backed ring buffer that persists events across reboots, giving
+// the safety machinery a forensic record of its own operation that is
+// retrievable later via the admin CLI (E4 #68: safety log / safety state).
+//
+// NVS layout (same namespace 'ota_safety' as the existing D9 boot_count):
+//   key 'evt_buf' : single blob, SAFETY_LOG_SLOTS * sizeof(SafetyEvent) bytes
+//   key 'evt_idx' : uint16_t write index (next slot to write, mod SLOTS)
+//   key 'evt_seq' : uint32_t monotonic event sequence number across boots
+//
+// Append semantics (safety_log_append): writes new event to slot evt_idx,
+// bumps evt_seq and evt_idx, commits. Best-effort: silently drops if NVS
+// is unavailable - safety machinery must not crash because logging failed.
+//
+// Read semantics (getSafetyLog): starts at evt_idx (oldest, soon-to-be-
+// overwritten slot), iterates SLOTS times mod SLOTS, skipping EVT_NONE
+// slots. Output is oldest-first chronological order.
+// =============================================================================
+
+#define SAFETY_LOG_SLOTS 16
+#define SAFETY_LOG_DETAIL_LEN 28
+
+enum SafetyEventType : uint8_t {
+  EVT_NONE             = 0,  // empty slot marker (NVS blob starts zeroed)
+  EVT_BOOT_INC         = 1,  // boot counter incremented at beginBootSafety
+  EVT_BOOT_THRESHOLD   = 2,  // counter exceeded threshold, rollback firing
+  EVT_BOOT_ROLLBACK    = 3,  // app-level rollback set boot partition + restart
+  EVT_BOOT_PENDING     = 4,  // running partition is PENDING_VERIFY (post-OTA)
+  EVT_BOOT_VALID       = 5,  // markBootValid succeeded
+  EVT_BOOT_VALID_FAIL  = 6,  // markBootValid failed (esp_ota_mark error)
+  EVT_OTA_START        = 7,  // OTA upload first chunk observed
+  EVT_OTA_PROGRESS     = 8,  // OTA upload progress milestone
+  EVT_OTA_RESTART      = 9,  // OTA-triggered reset about to fire
+  EVT_NVS_FAIL         = 10, // nvs_open or commit failed in safety codepath
+};
+
+struct __attribute__((packed)) SafetyEvent {
+  uint32_t seq;       // monotonic across boots (from evt_seq NVS counter)
+  uint32_t ts_ms;     // millis() at time of event; resets per boot
+  uint8_t  type;      // SafetyEventType enum value
+  uint8_t  _pad;      // reserved for alignment / future flags
+  char     detail[SAFETY_LOG_DETAIL_LEN];  // free-form, NUL-terminated when len permits
+};
+// sizeof(SafetyEvent) = 4 + 4 + 1 + 1 + 28 = 38 bytes
+// Total blob = 16 * 38 = 608 bytes (NVS handles this trivially)
+
+static const char* k_nvs_safety_evt_buf = "evt_buf";
+static const char* k_nvs_safety_evt_idx = "evt_idx";
+static const char* k_nvs_safety_evt_seq = "evt_seq";
+
+// safety_log_append: append a single event to the ring buffer.
+// Best-effort - returns silently on NVS failure. Called from D9 SAFETY paths
+// (E2) and from OTA upload path (E3); both are file-internal callers.
+// Synchronous: blocks until NVS commit returns (~tens of ms for 608-byte blob).
+static void safety_log_append(uint8_t type, const char* detail) {
+  nvs_handle_t h;
+  if (nvs_open(k_nvs_safety_ns, NVS_READWRITE, &h) != ESP_OK) return;
+
+  SafetyEvent events[SAFETY_LOG_SLOTS] = {0};
+  size_t size = sizeof(events);
+  // NOT_FOUND is fine on first call; events stays zeroed.
+  nvs_get_blob(h, k_nvs_safety_evt_buf, events, &size);
+
+  uint16_t idx = 0;
+  uint32_t seq = 0;
+  nvs_get_u16(h, k_nvs_safety_evt_idx, &idx);
+  nvs_get_u32(h, k_nvs_safety_evt_seq, &seq);
+  if (idx >= SAFETY_LOG_SLOTS) idx = 0;  // defensive against corruption
+
+  events[idx].seq = ++seq;
+  events[idx].ts_ms = millis();
+  events[idx].type = type;
+  events[idx]._pad = 0;
+  if (detail) {
+    strncpy(events[idx].detail, detail, SAFETY_LOG_DETAIL_LEN - 1);
+    events[idx].detail[SAFETY_LOG_DETAIL_LEN - 1] = '\0';
+  } else {
+    events[idx].detail[0] = '\0';
+  }
+
+  idx = (idx + 1) % SAFETY_LOG_SLOTS;
+
+  nvs_set_blob(h, k_nvs_safety_evt_buf, events, sizeof(events));
+  nvs_set_u16(h, k_nvs_safety_evt_idx, idx);
+  nvs_set_u32(h, k_nvs_safety_evt_seq, seq);
+  nvs_commit(h);
+  nvs_close(h);
+}
+
+// Map event type code to short human-readable string for log dump output.
+static const char* safety_event_type_str(uint8_t t) {
+  switch (t) {
+    case EVT_BOOT_INC:        return "boot_inc";
+    case EVT_BOOT_THRESHOLD:  return "threshold";
+    case EVT_BOOT_ROLLBACK:   return "rollback";
+    case EVT_BOOT_PENDING:    return "pending";
+    case EVT_BOOT_VALID:      return "valid";
+    case EVT_BOOT_VALID_FAIL: return "valid_fail";
+    case EVT_OTA_START:       return "ota_start";
+    case EVT_OTA_PROGRESS:    return "ota_prog";
+    case EVT_OTA_RESTART:     return "ota_restart";
+    case EVT_NVS_FAIL:        return "nvs_fail";
+    default:                  return "?";
+  }
+}
+
 void ESP32Board::beginBootSafety() {
   s_validation_pending = false;
 
@@ -280,6 +391,106 @@ void ESP32Board::markBootValid() {
 
 bool ESP32Board::isBootValidationPending() const {
   return s_validation_pending;
+}
+
+// -----------------------------------------------------------------------------
+// Epic E (#64) / E1 #65: getter implementations exposing the persistent log.
+// Read-only on NVS; safe to call from CLI handler context.
+// -----------------------------------------------------------------------------
+
+void ESP32Board::getSafetyLog(char* buf, size_t buflen) {
+  if (!buf || buflen == 0) return;
+  buf[0] = 0;
+
+  nvs_handle_t h;
+  if (nvs_open(k_nvs_safety_ns, NVS_READONLY, &h) != ESP_OK) {
+    snprintf(buf, buflen, "(no log: nvs unavailable)");
+    return;
+  }
+
+  SafetyEvent events[SAFETY_LOG_SLOTS] = {0};
+  size_t size = sizeof(events);
+  esp_err_t err = nvs_get_blob(h, k_nvs_safety_evt_buf, events, &size);
+  uint16_t idx = 0;
+  nvs_get_u16(h, k_nvs_safety_evt_idx, &idx);
+  nvs_close(h);
+
+  if (err == ESP_ERR_NVS_NOT_FOUND) {
+    snprintf(buf, buflen, "(no events yet)");
+    return;
+  }
+  if (err != ESP_OK) {
+    snprintf(buf, buflen, "(log read err: %s)", esp_err_to_name(err));
+    return;
+  }
+
+  // Iterate oldest-first: start at evt_idx (oldest slot, soon to be overwritten).
+  size_t pos = 0;
+  size_t emitted = 0;
+  for (size_t i = 0; i < SAFETY_LOG_SLOTS; i++) {
+    size_t slot = (idx + i) % SAFETY_LOG_SLOTS;
+    const SafetyEvent& e = events[slot];
+    if (e.type == EVT_NONE) continue;
+
+    int n = snprintf(buf + pos, buflen - pos,
+                     "#%lu +%lums %s:%s\n",
+                     (unsigned long)e.seq,
+                     (unsigned long)e.ts_ms,
+                     safety_event_type_str(e.type),
+                     e.detail);
+    if (n < 0 || (size_t)n >= buflen - pos) {
+      // Output would overflow the caller's buffer; truncate with marker.
+      if (buflen >= 5) {
+        snprintf(buf + buflen - 5, 5, "...\n");
+      }
+      return;
+    }
+    pos += n;
+    emitted++;
+  }
+
+  if (emitted == 0) {
+    snprintf(buf, buflen, "(no events yet)");
+  }
+}
+
+void ESP32Board::getSafetyState(char* buf, size_t buflen) {
+  if (!buf || buflen == 0) return;
+  buf[0] = 0;
+
+  uint32_t uptime_s = millis() / 1000UL;
+
+  uint8_t boot_count = 0;
+  nvs_handle_t h;
+  if (nvs_open(k_nvs_safety_ns, NVS_READONLY, &h) == ESP_OK) {
+    nvs_get_u8(h, k_nvs_boot_count, &boot_count);
+    nvs_close(h);
+  }
+
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  const char* part_label = running ? running->label : "?";
+  const char* state_str = "unknown";
+  if (running) {
+    esp_ota_img_states_t st;
+    if (esp_ota_get_state_partition(running, &st) == ESP_OK) {
+      switch (st) {
+        case ESP_OTA_IMG_NEW:            state_str = "new"; break;
+        case ESP_OTA_IMG_PENDING_VERIFY: state_str = "pending_verify"; break;
+        case ESP_OTA_IMG_VALID:          state_str = "valid"; break;
+        case ESP_OTA_IMG_INVALID:        state_str = "invalid"; break;
+        case ESP_OTA_IMG_ABORTED:        state_str = "aborted"; break;
+        case ESP_OTA_IMG_UNDEFINED:      state_str = "undefined"; break;
+      }
+    }
+  }
+
+  snprintf(buf, buflen,
+           "boot_count=%u pending=%s partition=%s state=%s uptime=%lus",
+           (unsigned)boot_count,
+           s_validation_pending ? "yes" : "no",
+           part_label,
+           state_str,
+           (unsigned long)uptime_s);
 }
 
 #endif

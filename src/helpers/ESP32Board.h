@@ -151,6 +151,13 @@ public:
   void markBootValid() override;
   bool isBootValidationPending() const override;
 
+  // Epic E (#64) / E1 #65: persistent SAFETY event log retrieval.
+  // The append side is internal (safety_log_append in ESP32Board.cpp); these
+  // getters expose it to the admin CLI (E4 #68) and to anything else that
+  // needs to inspect the on-device forensic record.
+  void getSafetyLog(char* buf, size_t buflen) override;
+  void getSafetyState(char* buf, size_t buflen) override;
+
   void setInhibitSleep(bool inhibit) {
     inhibit_sleep = inhibit;
   }

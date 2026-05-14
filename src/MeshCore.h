@@ -87,18 +87,33 @@ public:
 
   // D9 / issue #63: app-level boot rollback safety. Boards with ESP-IDF
   // rollback APIs override these. Default no-op for non-ESP32 boards.
-  // beginBootSafety()    — call EARLY in setup(); increments NVS boot counter
+  // beginBootSafety()    - call EARLY in setup(); increments NVS boot counter
   //                        and rolls back to the other partition if threshold
   //                        is exceeded. Also detects PENDING_VERIFY state so
   //                        the app knows whether the bootloader is waiting on
   //                        a markBootValid() call.
-  // markBootValid()      — call from loop() after a healthy uptime window;
+  // markBootValid()      - call from loop() after a healthy uptime window;
   //                        resets the counter and (if pending) confirms the
   //                        partition so the bootloader stops considering rollback.
-  // isBootValidationPending() — true if the bootloader has us in PENDING_VERIFY.
+  // isBootValidationPending() - true if the bootloader has us in PENDING_VERIFY.
   virtual void beginBootSafety() { /* no-op */ }
   virtual void markBootValid() { /* no-op */ }
   virtual bool isBootValidationPending() const { return false; }
+
+  // Epic E (#64) / E1 #65: persistent on-device safety/diagnostic logging.
+  // Fixes SAFELANE Error Visibility violation discovered during D7 (#61) test:
+  // D9 SAFETY and OTA events were emitted only via Serial.println, lost if no
+  // monitor attached or if monitor dropped on USB re-enumeration. These getters
+  // expose the NVS-backed event ring buffer + current snapshot. Default no-op
+  // on boards without persistent storage; ESP32 overrides format real data.
+  // Each getter writes a NUL-terminated human-readable string into buf, truncating
+  // (with "..." marker) if buflen is exceeded.
+  virtual void getSafetyLog(char* buf, size_t buflen) {
+    if (buf && buflen > 0) buf[0] = 0;
+  }
+  virtual void getSafetyState(char* buf, size_t buflen) {
+    if (buf && buflen > 0) buf[0] = 0;
+  }
 };
 
 /**
