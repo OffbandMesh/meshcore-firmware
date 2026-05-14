@@ -213,19 +213,19 @@ static bool s_validation_pending = false;
 #define SAFETY_LOG_SLOTS 16
 #define SAFETY_LOG_DETAIL_LEN 28
 
-enum SafetyEventType : uint8_t {
-  EVT_NONE             = 0,  // empty slot marker (NVS blob starts zeroed)
-  EVT_BOOT_INC         = 1,  // boot counter incremented at beginBootSafety
-  EVT_BOOT_THRESHOLD   = 2,  // counter exceeded threshold, rollback firing
-  EVT_BOOT_ROLLBACK    = 3,  // app-level rollback set boot partition + restart
-  EVT_BOOT_PENDING     = 4,  // running partition is PENDING_VERIFY (post-OTA)
-  EVT_BOOT_VALID       = 5,  // markBootValid succeeded
-  EVT_BOOT_VALID_FAIL  = 6,  // markBootValid failed (esp_ota_mark error)
-  EVT_OTA_START        = 7,  // OTA upload first chunk observed
-  EVT_OTA_PROGRESS     = 8,  // OTA upload progress milestone
-  EVT_OTA_RESTART      = 9,  // OTA-triggered reset about to fire
-  EVT_NVS_FAIL         = 10, // nvs_open or commit failed in safety codepath
-};
+// SafetyEventType enum moved to src/MeshCore.h (E3 #67) so main.cpp can use
+// it via the appendSafetyEvent virtual without duplicating the codes.
+using mesh::EVT_NONE;
+using mesh::EVT_BOOT_INC;
+using mesh::EVT_BOOT_THRESHOLD;
+using mesh::EVT_BOOT_ROLLBACK;
+using mesh::EVT_BOOT_PENDING;
+using mesh::EVT_BOOT_VALID;
+using mesh::EVT_BOOT_VALID_FAIL;
+using mesh::EVT_OTA_START;
+using mesh::EVT_OTA_PROGRESS;
+using mesh::EVT_OTA_RESTART;
+using mesh::EVT_NVS_FAIL;
 
 struct __attribute__((packed)) SafetyEvent {
   uint32_t seq;       // monotonic across boots (from evt_seq NVS counter)
@@ -474,6 +474,13 @@ void ESP32Board::getSafetyLog(char* buf, size_t buflen) {
   if (emitted == 0) {
     snprintf(buf, buflen, "(no events yet)");
   }
+}
+
+void ESP32Board::appendSafetyEvent(uint8_t type, const char* detail) {
+  // External entry: delegates to the file-static helper. Keeps the NVS
+  // marshaling localized while letting non-board code log events through
+  // the polymorphic MainBoard interface.
+  safety_log_append(type, detail);
 }
 
 void ESP32Board::getSafetyState(char* buf, size_t buflen) {

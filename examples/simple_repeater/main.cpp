@@ -66,6 +66,13 @@ static uint32_t g_tel_persistent_until_ms = 0;
 #include <Update.h>
 #define OTA_EXTEND_MS (5UL * 60UL * 1000UL)   // 5 minutes per chunk
 static size_t g_ota_last_progress = 0;
+// E3 #67: track byte-count milestones so we log progress every ~256 KB.
+// Stored as KB so an int comparison is cheap and the value is human-readable.
+#define OTA_PROGRESS_KB_STRIDE 256
+static size_t g_ota_last_logged_kb_mark = 0;
+// E3 #67: track Update.isRunning() across loop iterations so we can detect
+// the running->not-running transition that marks Update.end() completion.
+static bool g_ota_was_running = false;
 
 static void wifi_telemetry_setup() {
     g_tel_transport = new WifiMqttTransport(
@@ -239,16 +246,36 @@ static void wifi_telemetry_loop() {
     // Runs BEFORE the expiry check so a chunk arriving close to the deadline
     // gets the extension applied before we'd otherwise tear the transport down.
     // No-op when no OTA is in progress (Update.isRunning() == false).
-    if (g_tel_persistent_until_ms != 0 && Update.isRunning()) {
+    bool ota_now_running = Update.isRunning();
+    if (g_tel_persistent_until_ms != 0 && ota_now_running) {
         size_t now_progress = Update.progress();
         if (now_progress != g_ota_last_progress) {
             if (g_ota_last_progress == 0) {
                 Serial.println("[OTA] upload started, auto-extending wifi window");
+                // E3 #67: persistent forensic record of OTA start.
+                board.appendSafetyEvent(mesh::EVT_OTA_START, "extend_5min");
             }
             g_ota_last_progress = now_progress;
             g_tel_persistent_until_ms = millis() + OTA_EXTEND_MS;
+            // E3 #67: log every OTA_PROGRESS_KB_STRIDE KB so a stalled or
+            // aborted upload leaves a trail showing how far it got.
+            size_t now_kb = now_progress / 1024;
+            while (now_kb >= g_ota_last_logged_kb_mark + OTA_PROGRESS_KB_STRIDE) {
+                g_ota_last_logged_kb_mark += OTA_PROGRESS_KB_STRIDE;
+                char d[20];
+                snprintf(d, sizeof(d), "%uKB", (unsigned)g_ota_last_logged_kb_mark);
+                board.appendSafetyEvent(mesh::EVT_OTA_PROGRESS, d);
+            }
         }
     }
+    // E3 #67: detect the running->not-running transition which marks
+    // Update.end() completion. AsyncElegantOTA's restart() fires ~1s later;
+    // this log line is the last persistent event before reboot.
+    if (g_ota_was_running && !ota_now_running) {
+        const char* d = Update.hasError() ? "Update.end_err" : "Update.end_ok";
+        board.appendSafetyEvent(mesh::EVT_OTA_RESTART, d);
+    }
+    g_ota_was_running = ota_now_running;
 
     // D2 / issue #56: persistent-mode auto-revert.
     // If the persistent timer is active and has expired, tear down WiFi and
@@ -258,7 +285,8 @@ static void wifi_telemetry_loop() {
         (int32_t)(millis() - g_tel_persistent_until_ms) >= 0) {
         if (g_tel_transport) g_tel_transport->end();
         g_tel_persistent_until_ms = 0;
-        g_ota_last_progress = 0;  // D6: reset for next OTA session
+        g_ota_last_progress = 0;        // D6: reset for next OTA session
+        g_ota_last_logged_kb_mark = 0;  // E3: reset progress milestone tracker
         Serial.println("[WTEL] persistent timer expired, reverted to BURST");
     }
 
@@ -304,7 +332,8 @@ void wifi_telemetry_reset_state(void) {
 // Pass duration in milliseconds. 0 = revert to BURST immediately.
 // Values above WIFI_PERSISTENT_MAX_MS get clamped to the hard cap.
 void wifi_telemetry_set_persistent(uint32_t duration_ms) {
-    g_ota_last_progress = 0;  // D6: reset OTA progress tracker for new session
+    g_ota_last_progress = 0;        // D6: reset OTA progress tracker for new session
+    g_ota_last_logged_kb_mark = 0;  // E3: reset progress milestone tracker
     if (duration_ms == 0) {
         g_tel_persistent_until_ms = 0;
         // The next wifi_telemetry_loop() iteration will tear down the transport.
