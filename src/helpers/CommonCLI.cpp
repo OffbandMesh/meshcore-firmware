@@ -529,6 +529,19 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
         // (e.g. "ERR: STA WiFi not connected", "ERR: OTA already running at ...")
       }
 #endif
+    // Epic E (#64) / E4 #68: safety/diagnostic log retrieval.
+    // Order: "safety log" (10) and "safety state" (12) match before bare "safety" (6).
+    // "safety state" must come before "safety log" in source order ONLY if its
+    // shorter prefix "safety s" could match "safety log" - they cannot (different
+    // 8th char), so order within these two is freely chosen. Bare "safety"
+    // defaults to "safety state" per the issue spec.
+    } else if (memcmp(command, "safety log", 10) == 0) {
+      _board->getSafetyLog(reply, 160);
+    } else if (memcmp(command, "safety state", 12) == 0) {
+      _board->getSafetyState(reply, 160);
+    } else if (memcmp(command, "safety", 6) == 0) {
+      // Bare "safety" -> state snapshot (most useful single-line summary).
+      _board->getSafetyState(reply, 160);
     } else if (memcmp(command, "log start", 9) == 0) {
       _callbacks->setLoggingOn(true);
       strcpy(reply, "   logging on");
