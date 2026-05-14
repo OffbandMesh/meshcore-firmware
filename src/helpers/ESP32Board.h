@@ -157,6 +157,9 @@ public:
   // needs to inspect the on-device forensic record.
   void getSafetyLog(char* buf, size_t buflen) override;
   void getSafetyState(char* buf, size_t buflen) override;
+  // E3 #67: external entry point so non-board code (main.cpp wifi_telemetry_loop
+  // OTA detector) can log without exposing the file-static safety_log_append.
+  void appendSafetyEvent(uint8_t type, const char* detail) override;
 
   void setInhibitSleep(bool inhibit) {
     inhibit_sleep = inhibit;

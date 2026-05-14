@@ -41,6 +41,24 @@ namespace mesh {
 #define  BD_STARTUP_NORMAL     0  // getStartupReason() codes
 #define  BD_STARTUP_RX_PACKET  1
 
+// Epic E (#64) / E1 #65: SafetyEventType codes for the persistent
+// on-device safety/diagnostic event log. Boards that implement the
+// persistent log (currently ESP32Board) accept these codes via
+// MainBoard::appendSafetyEvent(). Cross-board API: values are stable.
+enum SafetyEventType : uint8_t {
+  EVT_NONE             = 0,  // empty slot marker; never appended directly
+  EVT_BOOT_INC         = 1,  // boot counter incremented at beginBootSafety
+  EVT_BOOT_THRESHOLD   = 2,  // counter exceeded threshold (rollback failed/rejected)
+  EVT_BOOT_ROLLBACK    = 3,  // app-level rollback succeeded, about to restart
+  EVT_BOOT_PENDING     = 4,  // running partition is PENDING_VERIFY (post-OTA)
+  EVT_BOOT_VALID       = 5,  // markBootValid succeeded
+  EVT_BOOT_VALID_FAIL  = 6,  // markBootValid failed (esp_ota_mark error)
+  EVT_OTA_START        = 7,  // OTA upload first chunk observed
+  EVT_OTA_PROGRESS     = 8,  // OTA upload progress milestone
+  EVT_OTA_RESTART      = 9,  // OTA-triggered reset about to fire (or just fired)
+  EVT_NVS_FAIL         = 10, // nvs_open or commit failed in safety codepath
+};
+
 class MainBoard {
 public:
   virtual uint16_t getBattMilliVolts() = 0;
@@ -113,6 +131,16 @@ public:
   }
   virtual void getSafetyState(char* buf, size_t buflen) {
     if (buf && buflen > 0) buf[0] = 0;
+  }
+
+  // Epic E / E3 #67: append an event to the persistent log. Type is a
+  // SafetyEventType value; detail is a free-form NUL-terminated string
+  // (truncated to ~27 chars by the implementation). Best-effort: callers
+  // do not need to check return because logging failure must never bring
+  // down the calling path. Default no-op for boards without persistent
+  // storage.
+  virtual void appendSafetyEvent(uint8_t type, const char* detail) {
+    (void)type; (void)detail;
   }
 };
 
