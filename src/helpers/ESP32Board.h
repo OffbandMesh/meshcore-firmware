@@ -164,6 +164,10 @@ public:
   // OTA boot-state mysteries that safety state (which only reports the running
   // partition) cannot answer.
   void getPartitionsInfo(char* buf, size_t buflen) override;
+  // E10 #74: dump N newest events, newest-first. Needed when the reply buffer
+  // is too small to show the full oldest-first log AND we care about the
+  // newest events (e.g., current boot's state-value detail from E9).
+  void getSafetyLogTail(char* buf, size_t buflen, uint8_t max_events) override;
 
   void setInhibitSleep(bool inhibit) {
     inhibit_sleep = inhibit;

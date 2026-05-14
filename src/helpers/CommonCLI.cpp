@@ -535,6 +535,18 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
     // shorter prefix "safety s" could match "safety log" - they cannot (different
     // 8th char), so order within these two is freely chosen. Bare "safety"
     // defaults to "safety state" per the issue spec.
+    } else if (memcmp(command, "safety log tail", 15) == 0) {
+      // Epic E / E10 #74: newest-first dump for diagnosing recent boots when
+      // the oldest-first log truncates in the 160-byte buffer. Optional integer
+      // arg sets max event count (default 5, cap 9 to stay within budget).
+      uint8_t max_events = 5;
+      if (command[15] == ' ' && command[16] != 0) {
+        int parsed = atoi(&command[16]);
+        if (parsed >= 1 && parsed <= 9) {
+          max_events = (uint8_t)parsed;
+        }
+      }
+      _board->getSafetyLogTail(reply, 160, max_events);
     } else if (memcmp(command, "safety log", 10) == 0) {
       _board->getSafetyLog(reply, 160);
     } else if (memcmp(command, "safety state", 12) == 0) {

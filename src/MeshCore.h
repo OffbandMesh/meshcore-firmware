@@ -151,6 +151,16 @@ public:
   virtual void getPartitionsInfo(char* buf, size_t buflen) {
     if (buf && buflen > 0) buf[0] = 0;
   }
+
+  // Epic E / E10 #74: dump the N newest safety events, newest-first.
+  // Pairs with getSafetyLog (oldest-first). Used when the buffer-size budget
+  // forces us to choose: the OLDEST events are forensic history (already
+  // observed); the NEWEST events are the diagnostic for the current boot.
+  // Default no-op for boards without persistent storage.
+  virtual void getSafetyLogTail(char* buf, size_t buflen, uint8_t max_events) {
+    if (buf && buflen > 0) buf[0] = 0;
+    (void)max_events;
+  }
 };
 
 /**
