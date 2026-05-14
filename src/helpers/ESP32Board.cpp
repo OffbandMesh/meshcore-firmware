@@ -501,6 +501,65 @@ void ESP32Board::appendSafetyEvent(uint8_t type, const char* detail) {
   safety_log_append(type, detail);
 }
 
+void ESP32Board::getSafetyLogTail(char* buf, size_t buflen, uint8_t max_events) {
+  if (!buf || buflen == 0) return;
+  buf[0] = 0;
+  if (max_events == 0) return;
+
+  nvs_handle_t h;
+  if (nvs_open(k_nvs_safety_ns, NVS_READONLY, &h) != ESP_OK) {
+    snprintf(buf, buflen, "(no log: nvs unavailable)");
+    return;
+  }
+
+  SafetyEvent events[SAFETY_LOG_SLOTS] = {0};
+  size_t size = sizeof(events);
+  esp_err_t err = nvs_get_blob(h, k_nvs_safety_evt_buf, events, &size);
+  uint16_t idx = 0;
+  nvs_get_u16(h, k_nvs_safety_evt_idx, &idx);
+  nvs_close(h);
+
+  if (err == ESP_ERR_NVS_NOT_FOUND) {
+    snprintf(buf, buflen, "(no events yet)");
+    return;
+  }
+  if (err != ESP_OK) {
+    snprintf(buf, buflen, "(log read err: %s)", esp_err_to_name(err));
+    return;
+  }
+
+  // Walk BACKWARDS from the slot just before write_index (the newest event).
+  // Skip EVT_NONE slots (unfilled). Stop after max_events emitted or buffer full.
+  size_t pos = 0;
+  uint8_t emitted = 0;
+  for (size_t i = 0; i < SAFETY_LOG_SLOTS && emitted < max_events; i++) {
+    // Slot index: walk backwards from (idx-1) mod SLOTS.
+    size_t slot = (idx + SAFETY_LOG_SLOTS - 1 - i) % SAFETY_LOG_SLOTS;
+    const SafetyEvent& e = events[slot];
+    if (e.type == EVT_NONE) continue;
+
+    int n = snprintf(buf + pos, buflen - pos,
+                     "#%lu +%lums %s:%s\n",
+                     (unsigned long)e.seq,
+                     (unsigned long)e.ts_ms,
+                     safety_event_type_str(e.type),
+                     e.detail);
+    if (n < 0 || (size_t)n >= buflen - pos) {
+      // Truncated mid-event. Mark and return.
+      if (buflen >= 5) {
+        snprintf(buf + buflen - 5, 5, "...\n");
+      }
+      return;
+    }
+    pos += n;
+    emitted++;
+  }
+
+  if (emitted == 0) {
+    snprintf(buf, buflen, "(no events yet)");
+  }
+}
+
 void ESP32Board::getSafetyState(char* buf, size_t buflen) {
   if (!buf || buflen == 0) return;
   buf[0] = 0;
