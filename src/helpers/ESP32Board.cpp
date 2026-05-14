@@ -308,17 +308,24 @@ void ESP32Board::beginBootSafety() {
   if (err != ESP_OK) {
     Serial.printf("[SAFETY] nvs_open failed: %s (no rollback this boot)\n",
                   esp_err_to_name(err));
+    // Can't log to persistent buffer if NVS itself is dead. Serial is our only
+    // record of this edge case.
     return;
   }
 
   uint8_t boot_count = 0;
-  // ESP_ERR_NVS_NOT_FOUND is expected on first boot ever — boot_count stays 0.
+  // ESP_ERR_NVS_NOT_FOUND is expected on first boot ever - boot_count stays 0.
   nvs_get_u8(h, k_nvs_boot_count, &boot_count);
   boot_count++;
   nvs_set_u8(h, k_nvs_boot_count, boot_count);
   nvs_commit(h);
   Serial.printf("[SAFETY] boot count: %u (threshold %u)\n",
                 (unsigned)boot_count, (unsigned)ROLLBACK_THRESHOLD);
+  {
+    char d[16];
+    snprintf(d, sizeof(d), "%u/%u", (unsigned)boot_count, (unsigned)ROLLBACK_THRESHOLD);
+    safety_log_append(EVT_BOOT_INC, d);
+  }
 
   if (boot_count > ROLLBACK_THRESHOLD) {
     // Too many consecutive boots without successful validation. Reset the
@@ -331,16 +338,27 @@ void ESP32Board::beginBootSafety() {
     if (other == nullptr) {
       // Single-partition layout (factory only). Nothing to roll back to.
       Serial.println("[SAFETY] threshold exceeded but no other partition exists");
+      safety_log_append(EVT_BOOT_THRESHOLD, "no_other_partition");
       return;
     }
     esp_err_t set_err = esp_ota_set_boot_partition(other);
     if (set_err != ESP_OK) {
       Serial.printf("[SAFETY] esp_ota_set_boot_partition failed: %s\n",
                     esp_err_to_name(set_err));
+      {
+        char d[28];
+        snprintf(d, sizeof(d), "set_part_fail:%s", esp_err_to_name(set_err));
+        safety_log_append(EVT_BOOT_THRESHOLD, d);
+      }
       return;
     }
     Serial.printf("[SAFETY] threshold exceeded, rolling back to partition '%s'\n",
                   other->label);
+    {
+      char d[28];
+      snprintf(d, sizeof(d), "->%s", other->label ? other->label : "?");
+      safety_log_append(EVT_BOOT_ROLLBACK, d);
+    }
     Serial.flush();
     delay(500);   // let serial drain before reboot
     esp_restart();
@@ -360,6 +378,7 @@ void ESP32Board::beginBootSafety() {
       s_validation_pending = true;
       Serial.printf("[SAFETY] running '%s' is PENDING_VERIFY; bootloader rollback armed\n",
                     running->label);
+      safety_log_append(EVT_BOOT_PENDING, running->label ? running->label : "?");
     }
   }
 }
@@ -380,12 +399,15 @@ void ESP32Board::markBootValid() {
     esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
     if (err == ESP_OK) {
       Serial.println("[SAFETY] partition marked valid (bootloader rollback canceled)");
+      safety_log_append(EVT_BOOT_VALID, "mark_valid_ok");
       s_validation_pending = false;
     } else {
       Serial.printf("[SAFETY] mark_valid failed: %s\n", esp_err_to_name(err));
+      safety_log_append(EVT_BOOT_VALID_FAIL, esp_err_to_name(err));
     }
   } else {
     Serial.println("[SAFETY] boot validated (no bootloader rollback was pending)");
+    safety_log_append(EVT_BOOT_VALID, "no_rollback");
   }
 }
 
