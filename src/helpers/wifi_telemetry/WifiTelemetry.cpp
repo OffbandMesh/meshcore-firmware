@@ -205,17 +205,14 @@ bool WifiTelemetry::publishDiscovery() {
         }
     }
 
-    // 2) Publish discovery for the neighbours sensor (numeric count + JSON attributes).
-    buildDiscoveryTopic(topic, sizeof(topic), "neighbors");
-    size_t nn = buildNeighborsDiscoveryPayload(payload, sizeof(payload));
-    if (nn == 0) return false;
-    if (!_transport->publish(topic, payload, true /* retain */)) {
-        return false;
-    }
-
-    // 3) Publish discovery for the neighbours summary sensor (text on the
-    //    same neighbours topic, reading value_json.summary). No state_class
-    //    because the value is a text string — graphing wouldn't make sense.
+    // 2) Publish discovery for the neighbours summary sensor (text on the
+    //    neighbours topic, reading value_json.summary). No state_class because
+    //    the value is a text string — graphing wouldn't make sense.
+    //
+    //    Per issue #84: the numeric-count sensor that previously bound to
+    //    value_json.count was removed when the duplicate count field was
+    //    dropped from the neighbours-topic payload. State topic's
+    //    neighbor_count is the canonical scalar going forward.
     buildDiscoveryTopic(topic, sizeof(topic), "neighbors_summary");
     size_t nss = buildNeighborsSummaryDiscoveryPayload(payload, sizeof(payload));
     if (nss == 0) return false;
@@ -295,9 +292,11 @@ size_t WifiTelemetry::buildNeighborsPayload(char* buf, size_t buflen, const Tele
     size_t pos = 0;
     int w;
 
+    // Per issue #84: 'count' was removed from this payload. State topic's
+    // neighbor_count is the canonical scalar count. Consumers of this topic
+    // derive count from list length if needed, or subscribe to the state topic.
     w = snprintf(buf + pos, buflen - pos,
-                 "{\"count\":%u,\"repeater_pk\":\"%s\",\"summary\":\"%s\",\"list\":[",
-                 (unsigned)n.total_count,
+                 "{\"repeater_pk\":\"%s\",\"summary\":\"%s\",\"list\":[",
                  n.repeater_pubkey_short,
                  n.summary);
     if (w < 0 || (size_t)w >= buflen - pos) return 0;
@@ -390,42 +389,20 @@ size_t WifiTelemetry::buildScalarDiscoveryPayload(char* buf, size_t buflen,
     return (size_t)n;
 }
 
-size_t WifiTelemetry::buildNeighborsDiscoveryPayload(char* buf, size_t buflen) {
-    char state_topic[WIFI_TELEMETRY_TOPIC_MAX];
-    buildNeighborsTopic(state_topic, sizeof(state_topic));
-
-    char sw_version[64];
-    if (_fw_version && _fw_build_date) {
-        snprintf(sw_version, sizeof(sw_version), "%s (%s)", _fw_version, _fw_build_date);
-    } else if (_fw_version) {
-        snprintf(sw_version, sizeof(sw_version), "%s", _fw_version);
-    } else {
-        snprintf(sw_version, sizeof(sw_version), "unknown");
-    }
-
-    // State = neighbour count; attributes = full JSON (list, repeater_pk, count).
-    // HA will expose `state_attr('sensor.X_neighbors', 'list')` to dashboards.
-    // Entity name is JUST "Neighbors" — HA prepends device name where needed.
-    int n = snprintf(buf, buflen,
-        "{\"name\":\"Neighbors\","
-        "\"uniq_id\":\"%s_neighbors\","
-        "\"stat_t\":\"%s\","
-        "\"val_tpl\":\"{{ value_json.count }}\","
-        "\"json_attr_t\":\"%s\","
-        "\"stat_cla\":\"measurement\","
-        "\"ent_cat\":\"diagnostic\","
-        "\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mf\":\"MeshCore\",\"mdl\":\"Repeater\",\"sw_version\":\"%s\",\"hw_version\":\"%s\"}}",
-        _node_id,
-        state_topic,
-        state_topic,
-        _node_id,
-        _friendly_name,
-        sw_version,
-        _hw_model ? _hw_model : "Heltec V4");
-
-    if (n < 0 || (size_t)n >= buflen) return 0;
-    return (size_t)n;
-}
+// buildNeighborsDiscoveryPayload removed per issue #84 / LoRa-6fw:
+//   - It bound a HA sensor's state to value_json.count from the neighbours
+//     MQTT topic; with the duplicate 'count' field gone from that topic, the
+//     binding has no valid source.
+//   - The numeric neighbor count is now exclusively in the state topic
+//     (TelemetryData::neighbor_count), reachable via the neighbors_simple /
+//     "Neighbor Count" Discovery config in publishDiscovery().
+//   - The companion text summary remains via buildNeighborsSummaryDiscoveryPayload
+//     below; that sensor reads value_json.summary from the neighbours topic
+//     which is still populated.
+// If a future need arises to expose the neighbour list as HA entity attributes
+// (e.g., state_attr('sensor.X_neighbors', 'list')), reintroduce a Discovery
+// config whose val_tpl computes its state from value_json.list (e.g., list
+// length) rather than from a parallel scalar field that can desync.
 
 size_t WifiTelemetry::buildNeighborsSummaryDiscoveryPayload(char* buf, size_t buflen) {
     char state_topic[WIFI_TELEMETRY_TOPIC_MAX];

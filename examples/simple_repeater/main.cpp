@@ -131,7 +131,10 @@ static void wifi_telemetry_fill_neighbors(TelemetryNeighbors& n) {
     strncpy(n.repeater_pubkey_short, g_tel_repeater_pk_short,
             sizeof(n.repeater_pubkey_short) - 1);
 
-    n.total_count = (uint8_t)the_mesh.getNeighbourCount();
+    // Per issue #84: scalar neighbour count is no longer carried in
+    // TelemetryNeighbors. It lives in the state topic (TelemetryData) only.
+    // List below is the canonical neighbour information published on this
+    // topic; consumers derive count from list length if needed.
 
     NeighbourInfo scratch[WIFI_TELEMETRY_MAX_NEIGHBORS];
     int filled = the_mesh.getNeighbours(scratch, WIFI_TELEMETRY_MAX_NEIGHBORS);
@@ -166,8 +169,12 @@ static void wifi_telemetry_fill_neighbors(TelemetryNeighbors& n) {
     } else {
         const int kMaxShow = 8;
         int show = (filled < kMaxShow) ? filled : kMaxShow;
+        // Per issue #84: total_count removed; use entries_filled as the prefix
+        // (the count of nodes actually listed below). Same value as total_count
+        // had been in the common non-capped case, and consistent with the rest
+        // of this payload (which now omits a duplicate scalar count field).
         int pos = snprintf(n.summary, sizeof(n.summary), "%u: ",
-                           (unsigned)n.total_count);
+                           (unsigned)n.entries_filled);
         for (int i = 0; i < show; i++) {
             if (pos >= (int)sizeof(n.summary) - 5) break;
             int w = snprintf(n.summary + pos, sizeof(n.summary) - pos,

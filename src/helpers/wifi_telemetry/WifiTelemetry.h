@@ -91,11 +91,14 @@ struct NeighborEntry {
 };
 
 struct TelemetryNeighbors {
-    uint8_t  total_count;                                   // total neighbours known
-    uint8_t  entries_filled;                                // valid entries in entries[] (<= total)
+    uint8_t  entries_filled;                                // valid entries in entries[] (<= WIFI_TELEMETRY_MAX_NEIGHBORS)
     char     repeater_pubkey_short[3];                      // THIS repeater's own first-2-hex registry short ID
     char     summary[96];                                   // compact text for at-a-glance display, e.g. "3: a6, b8, 0a"
     NeighborEntry entries[WIFI_TELEMETRY_MAX_NEIGHBORS];
+    // Note: scalar neighbour count is published in the state topic only
+    // (TelemetryData::neighbor_count). Per issue #84, this struct intentionally
+    // does NOT carry a count field; consumers of the neighbours topic derive
+    // count from `entries[]` length, or read it from the state topic.
 };
 
 // ---------------------------------------------------------------------------
@@ -218,6 +221,10 @@ private:
                                        const char* state_class,
                                        const char* value_template,
                                        const char* entity_category);
-    size_t buildNeighborsDiscoveryPayload(char* buf, size_t buflen);
+    // buildNeighborsDiscoveryPayload removed per issue #84: the duplicate
+    // 'count' field is no longer published on the neighbours topic, so the
+    // numeric-count Discovery sensor bound to it had no valid source. State
+    // topic's neighbor_count remains the canonical scalar; neighbors_summary
+    // Discovery (text) below remains for at-a-glance display.
     size_t buildNeighborsSummaryDiscoveryPayload(char* buf, size_t buflen);
 };
