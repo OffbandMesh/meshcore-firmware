@@ -16,6 +16,12 @@
   #define WIFI_TEL_DBG(fmt, ...) do {} while (0)
 #endif
 
+// Singleton-instance pointer for the PubSubClient C-callback trampoline.
+// Only one WifiMqttTransport exists per device; this is a safe assumption
+// for the embedded use case and avoids the complexity of std::function or
+// per-instance callback registration.
+WifiMqttTransport* WifiMqttTransport::_instance = nullptr;
+
 WifiMqttTransport::WifiMqttTransport(const char* ssid,
                                        const char* password,
                                        const char* mqtt_host,
@@ -32,6 +38,15 @@ WifiMqttTransport::WifiMqttTransport(const char* ssid,
       _client_id(client_id),
       _mqtt(_wifi_client) {
     _mqtt.setBufferSize(WIFI_TELEMETRY_PAYLOAD_MAX + WIFI_TELEMETRY_TOPIC_MAX + 32);
+
+    // Register singleton + PubSubClient callback trampoline (per issue #86).
+    // If a second WifiMqttTransport is ever constructed, the most recent one
+    // wins; not expected to happen but logged via debug if it does.
+    if (_instance != nullptr) {
+        WIFI_TEL_DBG("ctor: WARNING - _instance already set; replacing (multi-instance not supported)");
+    }
+    _instance = this;
+    _mqtt.setCallback(&WifiMqttTransport::pubsubTrampoline);
 }
 
 bool WifiMqttTransport::begin() {
@@ -101,6 +116,44 @@ bool WifiMqttTransport::connectWifi(uint32_t timeout_ms) {
         delay(100);
     }
     return true;
+}
+
+// ---- Subscribe / message-callback API (issue #86) ----
+
+bool WifiMqttTransport::subscribe(const char* topic, uint8_t qos) {
+    if (!isReady()) {
+        WIFI_TEL_DBG("subscribe: transport not ready, topic=%s", topic);
+        return false;
+    }
+    bool ok = _mqtt.subscribe(topic, qos);
+    if (!ok) {
+        WIFI_TEL_DBG("subscribe: FAILED topic=%s qos=%u state=%d",
+                     topic, (unsigned)qos, _mqtt.state());
+    } else {
+        WIFI_TEL_DBG("subscribe: ok topic=%s qos=%u", topic, (unsigned)qos);
+    }
+    return ok;
+}
+
+void WifiMqttTransport::setMessageCallback(MessageCallback cb, void* user_data) {
+    _user_cb = cb;
+    _user_cb_data = user_data;
+}
+
+// Static trampoline. PubSubClient delivers an incoming message via this C
+// function pointer; we dispatch back through the singleton instance to the
+// user-supplied callback with the original user_data context.
+void WifiMqttTransport::pubsubTrampoline(char* topic, uint8_t* payload, unsigned int length) {
+    if (_instance == nullptr) return;
+    if (_instance->_user_cb == nullptr) {
+        WIFI_TEL_DBG("trampoline: no user callback registered, dropping topic=%s len=%u",
+                     topic, length);
+        return;
+    }
+    _instance->_user_cb(topic,
+                         (const uint8_t*)payload,
+                         (size_t)length,
+                         _instance->_user_cb_data);
 }
 
 bool WifiMqttTransport::connectMqtt(uint32_t timeout_ms) {
