@@ -18,6 +18,7 @@
 #include <string.h>
 #include "../../src/helpers/wifi_telemetry/WifiTelemetry.h"
 #include "../../src/helpers/wifi_telemetry/WifiMqttTransport.h"
+#include "../../src/helpers/wifi_telemetry/RemoteCommand.h"  // issue #86 - remote OTA trigger
 
 #ifndef FIRMWARE_HW_MODEL
 #define FIRMWARE_HW_MODEL "Heltec V4"
@@ -73,6 +74,33 @@ static size_t g_ota_last_logged_kb_mark = 0;
 // the running->not-running transition that marks Update.end() completion.
 static bool g_ota_was_running = false;
 
+// Issue #86: remote command (MQTT-triggered OTA enable) state.
+// Singletons - constructed in wifi_telemetry_setup().
+class PatioRemoteCallbacks;  // forward decl; full def below extern "C" block
+static PatioRemoteCallbacks* g_remote_callbacks = nullptr;
+static RemoteCommandHandler* g_remote_cmd_handler = nullptr;
+// Track subscription state so we re-subscribe after MQTT reconnect.
+static bool g_remote_cmd_subscribed = false;
+// Deferred-reboot state: 0 = no pending reboot, otherwise millis() deadline.
+static uint32_t g_reboot_deadline_ms = 0;
+
+// Message callback shim that the WifiMqttTransport invokes. Routes incoming
+// messages to the handler if topic matches our cmd topic. Topic filter is a
+// safety belt; PubSubClient should only deliver subscribed-topic messages.
+static bool publishResponseShim(const char* response_topic,
+                                 const char* response_payload,
+                                 void* user_data);
+static void remoteCommandMessageCallback(const char* topic,
+                                          const uint8_t* payload,
+                                          size_t length,
+                                          void* user_data);
+
+// Constructs the remote command handler + callbacks instance and registers
+// the message-callback shim with the transport. Called once from
+// wifi_telemetry_setup(); defined after PatioRemoteCallbacks below so the
+// class type is complete at instantiation.
+static void wifi_telemetry_remote_command_setup();
+
 static void wifi_telemetry_setup() {
     g_tel_transport = new WifiMqttTransport(
         WIFI_TELEMETRY_WIFI_SSID,
@@ -97,6 +125,11 @@ static void wifi_telemetry_setup() {
 
     snprintf(g_tel_repeater_pk_short, sizeof(g_tel_repeater_pk_short),
              "%02x", the_mesh.self_id.pub_key[0]);
+
+    // Issue #86: construct the remote command handler + callbacks, register
+    // the message callback with the transport. Subscription to the cmd topic
+    // happens later in the publish cycle when MQTT connect is verified.
+    wifi_telemetry_remote_command_setup();
 
     g_tel_next_publish_ms = millis();
 }
@@ -234,16 +267,46 @@ static void wifi_telemetry_collect_and_publish() {
         first_cycle_completed = true;
     }
 
+    // Issue #86: subscribe to the cmd topic once per connection cycle.
+    // Skipped if already subscribed for this cycle, or if transport not
+    // ready, or if handler not yet constructed. PubSubClient holds the
+    // subscription across publish() calls within one MQTT session.
+    if (g_remote_cmd_handler && !g_remote_cmd_subscribed && g_tel_transport->isReady()) {
+        char cmd_topic[64];
+        g_remote_cmd_handler->buildCmdTopic(cmd_topic, sizeof(cmd_topic));
+        if (g_tel_transport->subscribe(cmd_topic, /* qos */ 1)) {
+            g_remote_cmd_subscribed = true;
+        }
+    }
+
     // Persistent-mode hook (D2 / issue #56): when persistent timer is active,
     // skip the teardown so WiFi stays up between publish cycles. The
     // wifi_telemetry_loop()'s timeout check (below) handles auto-revert.
     if (g_tel_persistent_until_ms == 0) {
         g_tel_transport->end();
+        // Issue #86: re-subscribe on next connect since the broker session ends
+        // with the transport teardown.
+        g_remote_cmd_subscribed = false;
     }
 }
 
 static void wifi_telemetry_loop() {
     g_telemetry.loop();
+    // Drive incoming MQTT messages through PubSubClient's poll. Required for
+    // the issue-#86 remote command callback to fire when persistent-mode WiFi
+    // is up. No-op when transport not ready.
+    if (g_tel_transport) g_tel_transport->loop();
+
+    // Issue #86: deferred reboot check. Set by PatioRemoteCallbacks::rebootAfter
+    // (called from REBOOT command dispatch). Honored regardless of telemetry
+    // kill-switch state — a remote reboot command should always reboot.
+    if (g_reboot_deadline_ms != 0 &&
+        (int32_t)(millis() - g_reboot_deadline_ms) >= 0) {
+        Serial.println("[#86] deferred reboot deadline reached, rebooting");
+        board.reboot();
+        // not reached
+    }
+
     // Honor the admin kill-switch — skip everything when telemetry is disabled.
     if (g_tel_disabled) return;
 
@@ -293,6 +356,9 @@ static void wifi_telemetry_loop() {
         g_tel_persistent_until_ms = 0;
         g_ota_last_progress = 0;        // D6: reset for next OTA session
         g_ota_last_logged_kb_mark = 0;  // E3: reset progress milestone tracker
+        // Issue #86: transport teardown means cmd-topic subscription is gone;
+        // mark for re-subscribe on next connect.
+        g_remote_cmd_subscribed = false;
         Serial.println("[WTEL] persistent timer expired, reverted to BURST");
     }
 
@@ -398,6 +464,132 @@ int wifi_telemetry_get_status(char* buf, int buflen) {
 }
 
 }  // extern "C"
+
+// ----------------------------------------------------------------------------
+// Issue #86 (LoRa-xci): MQTT remote-command integration.
+//
+// PatioRemoteCallbacks bridges RemoteCommandHandler's abstract action API to
+// the existing wifi_telemetry helpers and board methods. The class lives
+// here (in main.cpp's translation unit) rather than as a separate module so
+// it can call the static wifi_telemetry_* helpers + reference globals like
+// g_tel_persistent_until_ms.
+// ----------------------------------------------------------------------------
+class PatioRemoteCallbacks : public RemoteCommandCallbacks {
+public:
+    bool wifiOn(uint32_t seconds) override {
+        // Map seconds to the existing persistent-mode helper which takes ms.
+        // The helper internally clamps to WIFI_PERSISTENT_MAX_MS (60 min).
+        wifi_telemetry_set_persistent(seconds * 1000UL);
+        return true;
+    }
+
+    void wifiOff() override {
+        wifi_telemetry_set_persistent(0);
+    }
+
+    bool otaStart(char* ota_url, size_t ota_url_buflen) override {
+        if (!wifi_telemetry_is_persistent()) {
+            // Caller should have called wifiOn() first via OTA_ENABLE dispatch
+            // (RemoteCommand.cpp dispatch handles wifi+ota together for
+            // OTA_ENABLE; if we got here for any other reason it's a logic error)
+            snprintf(ota_url, ota_url_buflen, "ERR: WiFi persistent mode not active");
+            return false;
+        }
+        char reply[160];
+        bool ok = board.startOTAUpdateOverSTA(the_mesh.getNodePrefs()->node_name,
+                                              the_mesh.getNodePrefs()->password,
+                                              reply);
+        if (!ok) {
+            snprintf(ota_url, ota_url_buflen, "ERR: %s", reply);
+            return false;
+        }
+        // startOTAUpdateOverSTA fills `reply` with a status string; for our
+        // response we want the URL specifically. Extract via the OTA status
+        // call which returns "http://<ip>/update" or similar.
+        char status_buf[160];
+        board.getOTAStatus(status_buf, sizeof(status_buf));
+        snprintf(ota_url, ota_url_buflen, "%s", status_buf);
+        return true;
+    }
+
+    void otaStop() override {
+        board.stopOTAUpdate();
+    }
+
+    bool getOtaStatus(char* buf, size_t buflen) override {
+        // board.getOTAStatus signature is (char*, size_t) and returns bool indicating running
+        return board.getOTAStatus(buf, buflen);
+    }
+
+    void rebootAfter(uint32_t delay_ms) override {
+        // Defer the reboot so the MQTT response publish has time to flush.
+        // Checked in wifi_telemetry_loop() each iteration.
+        uint32_t deadline = millis() + delay_ms;
+        if (deadline == 0) deadline = 1;  // sentinel "no pending" is 0
+        g_reboot_deadline_ms = deadline;
+    }
+
+    void getSafetyLog(char* buf, size_t buflen) override {
+        board.getSafetyLog(buf, buflen);
+    }
+
+    void logSafetyEvent(uint8_t event_type, const char* detail) override {
+        board.appendSafetyEvent(event_type, detail);
+    }
+};
+
+// publishResponseShim: function-pointer adapter so RemoteCommandHandler can
+// publish without holding a direct reference to the transport. Avoids any
+// header-level coupling between the abstract handler and the concrete MQTT
+// transport.
+static bool publishResponseShim(const char* response_topic,
+                                 const char* response_payload,
+                                 void* /* user_data */)
+{
+    if (g_tel_transport == nullptr) return false;
+    // Use retain=false for command responses: we don't want stale responses
+    // sitting on the broker after a device reboot.
+    return g_tel_transport->publish(response_topic, response_payload, false);
+}
+
+// remoteCommandMessageCallback: receives all messages from WifiMqttTransport.
+// We filter for the cmd topic and route to the handler. Other topics are
+// not expected (we only subscribe to cmd) but defensive filter included.
+static void remoteCommandMessageCallback(const char* topic,
+                                          const uint8_t* payload,
+                                          size_t length,
+                                          void* /* user_data */)
+{
+    if (g_remote_cmd_handler == nullptr) return;
+
+    char expected_topic[64];
+    g_remote_cmd_handler->buildCmdTopic(expected_topic, sizeof(expected_topic));
+    if (strcmp(topic, expected_topic) != 0) {
+        // Not our topic; ignore. PubSubClient delivers all subscribed
+        // messages to a single callback, so future additional subscriptions
+        // would need to fan out here.
+        return;
+    }
+
+    g_remote_cmd_handler->onMessage(payload, length,
+                                     &publishResponseShim,
+                                     /* user_data */ nullptr);
+}
+
+// Constructs the remote command handler + callbacks, registers the
+// transport-level message callback. Called once from wifi_telemetry_setup().
+static void wifi_telemetry_remote_command_setup() {
+    g_remote_callbacks = new PatioRemoteCallbacks();
+    g_remote_cmd_handler = new RemoteCommandHandler(
+        WIFI_TELEMETRY_NODE_ID,
+        WIFI_TELEMETRY_MQTT_PREFIX,
+        *g_remote_callbacks
+    );
+    if (g_tel_transport) {
+        g_tel_transport->setMessageCallback(&remoteCommandMessageCallback,
+                                             /* user_data */ nullptr);
+    }
+}
 
 #endif // ENABLE_WIFI_TELEMETRY
 

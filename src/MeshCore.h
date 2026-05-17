@@ -57,6 +57,8 @@ enum SafetyEventType : uint8_t {
   EVT_OTA_PROGRESS     = 8,  // OTA upload progress milestone
   EVT_OTA_RESTART      = 9,  // OTA-triggered reset about to fire (or just fired)
   EVT_NVS_FAIL         = 10, // nvs_open or commit failed in safety codepath
+  EVT_REMOTE_CMD_ACCEPTED = 11, // MQTT remote command accepted (auth+rate-limit passed); issue #86
+  EVT_REMOTE_CMD_REJECTED = 12, // MQTT remote command rejected (auth fail, rate limit, etc.); issue #86
 };
 
 class MainBoard {
