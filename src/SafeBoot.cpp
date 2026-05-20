@@ -314,6 +314,18 @@ constexpr int kBatteryResolutionBits = 12;
 #if defined(PIN_ADC_CTRL) && !defined(NRF52_PLATFORM)
 // Some boards (e.g. Heltec V3/V4) gate the battery divider with a control
 // pin to save uA. Drive it active for the duration of the read, then back.
+//
+// Polarity handling has two paths:
+//   * Static (default): SafeBoot drives PIN_ADC_CTRL to PIN_ADC_CTRL_ENABLED
+//     (HIGH unless variant overrides). Works on Heltec V4 and V3 revisions
+//     <= 3.2.
+//   * Auto-detect (SAFEBOOT_AUTODETECT_PIN_ADC_CTRL=1): SafeBoot reads the
+//     pin's idle state as INPUT first, inverts it for the "active" polarity,
+//     then drives output. Required for Heltec V3 revisions >3.2 where the
+//     polarity was flipped from the earlier convention. Mirrors the runtime
+//     detection in HeltecV3Board::begin() but runs earlier in boot. Assumes
+//     the board hardware has an external pull resistor establishing the
+//     idle state (HeltecV3 has this).
 #ifndef PIN_ADC_CTRL_ENABLED
 #define PIN_ADC_CTRL_ENABLED HIGH
 #endif
@@ -323,8 +335,17 @@ uint16_t readVbatMillivoltsLight()
 {
 #ifdef SAFEBOOT_PIN_VBAT_READ
 #if defined(PIN_ADC_CTRL) && !defined(NRF52_PLATFORM)
+#ifdef SAFEBOOT_AUTODETECT_PIN_ADC_CTRL
+    // Read idle state (variant has an external pull), invert for active.
+    pinMode(PIN_ADC_CTRL, INPUT);
+    delay(1);
+    const int adc_ctrl_active = !digitalRead(PIN_ADC_CTRL);
+    pinMode(PIN_ADC_CTRL, OUTPUT);
+    digitalWrite(PIN_ADC_CTRL, adc_ctrl_active);
+#else
     pinMode(PIN_ADC_CTRL, OUTPUT);
     digitalWrite(PIN_ADC_CTRL, PIN_ADC_CTRL_ENABLED);
+#endif
     delay(2);
 #endif
 
@@ -371,7 +392,11 @@ uint16_t readVbatMillivoltsLight()
 #endif
 
 #if defined(PIN_ADC_CTRL) && !defined(NRF52_PLATFORM)
+#ifdef SAFEBOOT_AUTODETECT_PIN_ADC_CTRL
+    digitalWrite(PIN_ADC_CTRL, !adc_ctrl_active);
+#else
     digitalWrite(PIN_ADC_CTRL, !PIN_ADC_CTRL_ENABLED);
+#endif
 #endif
 
 #ifdef SAFEBOOT_VBAT_ENABLE_PIN
