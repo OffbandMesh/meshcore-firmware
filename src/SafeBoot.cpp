@@ -31,7 +31,19 @@
 // platforms compile to a no-op.
 //
 // The user can also force-disable SafeBoot via SAFE_BOOT_DISABLED.
-#if !defined(SAFE_BOOT_DISABLED) && (defined(ESP32) || defined(NRF52_PLATFORM)) && defined(PIN_VBAT_READ)
+//
+// SafeBoot-specific overrides (set in variant platformio.ini) for hardware
+// whose battery-read plumbing doesn't match the default MeshCore convention.
+// Each cascade falls back to the MeshCore name. Documented at the override
+// points further down (SAFEBOOT_ADC_MULTIPLIER, SAFEBOOT_AREF_VOLTAGE,
+// SAFEBOOT_VBAT_ENABLE_PIN, SAFEBOOT_VBAT_ENABLE_ACTIVE).
+#ifndef SAFEBOOT_PIN_VBAT_READ
+# ifdef PIN_VBAT_READ
+#  define SAFEBOOT_PIN_VBAT_READ PIN_VBAT_READ
+# endif
+#endif
+
+#if !defined(SAFE_BOOT_DISABLED) && (defined(ESP32) || defined(NRF52_PLATFORM)) && defined(SAFEBOOT_PIN_VBAT_READ)
 #define SAFE_BOOT_ENABLED 1
 #else
 #define SAFE_BOOT_ENABLED 0
@@ -266,10 +278,31 @@ void storePersisted(const PersistedState &s)
 // ADC_MULTIPLIER from variant.h.
 // ---------------------------------------------------------------------------
 
-#ifndef ADC_MULTIPLIER
-// Conservative fallback. Most MeshCore variants define their own multiplier
-// (e.g., HeltecV4 uses ~5.42 in HeltecV4Board::getBattMilliVolts).
-#define ADC_MULTIPLIER 2.0f
+// ADC multiplier cascade for SafeBoot's Vbat math:
+//   1) SAFEBOOT_ADC_MULTIPLIER (per-variant override; for variants whose
+//      ADC_MULTIPLIER convention is not a simple divider ratio -- e.g.,
+//      rak4631 uses composite (3*1.73*1.187*1000) with /4096 in board code)
+//   2) ADC_MULTIPLIER (MeshCore variant convention; heltec_v3/v4: 5.42)
+//   3) 2.0f fallback + compile-time warning (Vbat will read inaccurately)
+#ifndef SAFEBOOT_ADC_MULTIPLIER
+# ifdef ADC_MULTIPLIER
+#  define SAFEBOOT_ADC_MULTIPLIER ADC_MULTIPLIER
+# else
+#  warning "SafeBoot: neither SAFEBOOT_ADC_MULTIPLIER nor ADC_MULTIPLIER defined; falling back to 2.0f -- Vbat readings will be inaccurate. Define ADC_MULTIPLIER in variant.h or SAFEBOOT_ADC_MULTIPLIER in platformio.ini."
+#  define SAFEBOOT_ADC_MULTIPLIER 2.0f
+# endif
+#endif
+
+// nRF52 ADC reference voltage cascade. Variants with non-default AREF
+// (e.g., t1000-e: 3.0V instead of BSP default 3.6V) avoid ~20% Vbat error
+// by overriding this. Has no effect on ESP32 builds (which use
+// analogReadMilliVolts and the eFuse-calibrated internal Vref).
+#ifndef SAFEBOOT_AREF_VOLTAGE
+# ifdef AREF_VOLTAGE
+#  define SAFEBOOT_AREF_VOLTAGE AREF_VOLTAGE
+# else
+#  define SAFEBOOT_AREF_VOLTAGE 3.6f
+# endif
 #endif
 
 #ifdef BATTERY_SENSE_RESOLUTION_BITS
@@ -288,14 +321,26 @@ constexpr int kBatteryResolutionBits = 12;
 
 uint16_t readVbatMillivoltsLight()
 {
-#ifdef PIN_VBAT_READ
+#ifdef SAFEBOOT_PIN_VBAT_READ
 #if defined(PIN_ADC_CTRL) && !defined(NRF52_PLATFORM)
     pinMode(PIN_ADC_CTRL, OUTPUT);
     digitalWrite(PIN_ADC_CTRL, PIN_ADC_CTRL_ENABLED);
     delay(2);
 #endif
 
-    pinMode(PIN_VBAT_READ, INPUT);
+    // Optional VBAT_ENABLE pin (e.g., xiao_nrf52: GPIO 14, drive LOW to
+    // enable the on-board battery-divider). Asserted before the read,
+    // released after. No-op when SAFEBOOT_VBAT_ENABLE_PIN is undefined.
+#ifdef SAFEBOOT_VBAT_ENABLE_PIN
+# ifndef SAFEBOOT_VBAT_ENABLE_ACTIVE
+#  define SAFEBOOT_VBAT_ENABLE_ACTIVE LOW
+# endif
+    pinMode(SAFEBOOT_VBAT_ENABLE_PIN, OUTPUT);
+    digitalWrite(SAFEBOOT_VBAT_ENABLE_PIN, SAFEBOOT_VBAT_ENABLE_ACTIVE);
+    delay(2);
+#endif
+
+    pinMode(SAFEBOOT_PIN_VBAT_READ, INPUT);
 
     uint32_t sum_mv = 0;
     constexpr int kSamples = 4;
@@ -305,27 +350,22 @@ uint16_t readVbatMillivoltsLight()
     // gives us a usable absolute voltage without standing up the full
     // esp_adc_cal characterization machinery.
     for (int i = 0; i < kSamples; i++) {
-        sum_mv += analogReadMilliVolts(PIN_VBAT_READ);
+        sum_mv += analogReadMilliVolts(SAFEBOOT_PIN_VBAT_READ);
     }
     uint32_t adc_mv = sum_mv / kSamples;
-    float vbat = (float)adc_mv * (float)ADC_MULTIPLIER;
+    float vbat = (float)adc_mv * (float)SAFEBOOT_ADC_MULTIPLIER;
 #elif defined(NRF52_PLATFORM)
 #ifdef VBAT_AR_INTERNAL
     analogReference(VBAT_AR_INTERNAL);
 #else
-    analogReference(AR_INTERNAL); // 3.6 V reference
+    analogReference(AR_INTERNAL); // BSP default; SafeBoot's math uses SAFEBOOT_AREF_VOLTAGE
 #endif
     analogReadResolution(kBatteryResolutionBits);
     uint32_t raw_sum = 0;
     for (int i = 0; i < kSamples; i++)
-        raw_sum += analogRead(PIN_VBAT_READ);
+        raw_sum += analogRead(SAFEBOOT_PIN_VBAT_READ);
     uint32_t raw = raw_sum / kSamples;
-#ifndef AREF_VOLTAGE
-    constexpr float kAref = 3.6f;
-#else
-    constexpr float kAref = (float)AREF_VOLTAGE;
-#endif
-    float vbat = ((float)ADC_MULTIPLIER) * ((1000.0f * kAref) / (float)(1 << kBatteryResolutionBits)) * (float)raw;
+    float vbat = ((float)SAFEBOOT_ADC_MULTIPLIER) * ((1000.0f * (float)SAFEBOOT_AREF_VOLTAGE) / (float)(1 << kBatteryResolutionBits)) * (float)raw;
 #else
     float vbat = 0.0f;
 #endif
@@ -334,13 +374,17 @@ uint16_t readVbatMillivoltsLight()
     digitalWrite(PIN_ADC_CTRL, !PIN_ADC_CTRL_ENABLED);
 #endif
 
+#ifdef SAFEBOOT_VBAT_ENABLE_PIN
+    digitalWrite(SAFEBOOT_VBAT_ENABLE_PIN, !SAFEBOOT_VBAT_ENABLE_ACTIVE);
+#endif
+
     if (vbat < 0.0f)
         return 0;
     if (vbat > 65535.0f)
         return 65535;
     return (uint16_t)vbat;
 #else
-    return 0; // No PIN_VBAT_READ -- caller should have skipped us
+    return 0; // No SAFEBOOT_PIN_VBAT_READ -- caller should have skipped us
 #endif
 }
 
