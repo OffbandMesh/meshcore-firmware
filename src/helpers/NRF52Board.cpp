@@ -101,6 +101,11 @@ const char* NRF52Board::getResetReasonString(uint32_t reason) {
 }
 
 const char* NRF52Board::getShutdownReasonString(uint8_t reason) {
+  // SafeBoot owns bit 7 of GPREGRET2 (see src/SafeBoot.cpp, Path A
+  // coexistence). When set, this byte is SafeBoot backoff state, not a
+  // MeshCore shutdown code. Cleanup of this dual-ownership is tracked
+  // as Strycher/LoRa#144 (F12).
+  if (reason & 0x80) return "SafeBoot Backoff";
   switch (reason) {
     case SHUTDOWN_REASON_LOW_VOLTAGE:  return "Low Voltage";
     case SHUTDOWN_REASON_USER:         return "User Request";
