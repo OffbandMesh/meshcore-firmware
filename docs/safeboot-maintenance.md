@@ -237,6 +237,104 @@ If a conflict appears outside the narrow surface listed above, that's a
 signal that SafeBoot has been "leaking" into other files and should be
 refactored back to its minimal additive shape.
 
+## Workflow 1 Runbook (step-by-step checklist)
+
+Use this when upstream MeshCore tags a new release and you want to align
+`feature/safeboot` with it. The narrative sections above explain *why*;
+this checklist gives you *where am I right now*.
+
+Target wall-clock: **70-85 minutes** (excluding 24h soak). See per-section
+estimates below.
+
+### Pre-flight (~5 min)
+
+- [ ] ST-P is on the bench and accessible via USB serial (`pio device list`
+      shows ST-P's port; cross-check VID:PID and MAC against
+      `hardware-devices.yaml` per SAFELANE pre-touch checklist).
+- [ ] Bench supply present with LiIon-range current settings ready
+      (3.5V test point + 4.0V test point).
+- [ ] `meshcore-fork/` working tree clean: `git status` shows no
+      uncommitted changes on `feature/safeboot`.
+- [ ] On the right branch: `git checkout feature/safeboot &&
+      git pull origin feature/safeboot`.
+- [ ] Baseline noted for rollback:
+      `git log -1 --format='%H %s' > /tmp/safeboot-pre-rebase.txt`
+- [ ] Upstream MeshCore release tag known (e.g., `v1.10.0`); note it.
+
+### Rebase (~15-30 min, conflict-dependent)
+
+- [ ] `git fetch upstream --tags --prune`
+- [ ] Confirm target: `git log --oneline upstream/main -5` and
+      `git tag -l 'v*' --sort=-version:refname | head -5`
+- [ ] `git rebase upstream/main`
+- [ ] If conflicts: resolve manually, preserving
+      `SafeBoot::checkAndMaybeSleep()` placement before `board.begin()` in
+      every example main.cpp. See "Conflict-handling expectations" section
+      above for the narrow surface where conflicts are expected.
+- [ ] `git push --force-with-lease origin feature/safeboot`
+- [ ] Fast-forward fork main:
+      `git checkout main && git merge --ff-only upstream/main &&
+      git push origin main`
+
+### Per-variant build verification (~15 min, parallel)
+
+Build the F5/F6 variant slate. Run all 5 in parallel (separate shells or
+background) to compress wall-clock. Failures here mean SafeBoot's adapter
+overrides or thresholds need re-tuning for whatever upstream changed.
+
+- [ ] `pio run -e heltec_v4_repeater`
+- [ ] `pio run -e Heltec_v3_repeater`
+- [ ] `pio run -e RAK_4631_repeater`
+- [ ] `pio run -e Xiao_nrf52_repeater`
+- [ ] `pio run -e t1000e_repeater`
+- [ ] `firmware.bin` / `.elf` size deltas vs. pre-rebase baseline are
+      within expected band (~5 KB per variant maximum; bigger growth
+      means upstream pulled in something unexpected — investigate).
+
+### Bench validation on ST-P (~30 min, human-driven)
+
+- [ ] Flash the heltec_v4_repeater build to ST-P:
+      `python scripts/pio-flash.py flash st-p --env=heltec_v4_repeater`
+      (per SAFELANE flashing discipline, named-target only).
+- [ ] **Normal-voltage boot** (bench supply at 4.0V): SafeBoot does NOT
+      intervene; boot completes; banner observed in serial monitor.
+- [ ] **Low-voltage** (bench supply at 3.5V): SafeBoot sleeps; serial
+      shows `[SafeBoot] Vbat=... below safe threshold`; sleep current
+      ≤ 10 µA (ESP32) when measured at the supply.
+- [ ] **Recovery** (bench back to 4.0V): SafeBoot wakes on backoff timer;
+      boot continues; serial shows `[SafeBoot] ... continuing boot`.
+- [ ] **Brownout cooldown**: trigger reset via bench supply dip; observe
+      forced cooldown sleep on the next attempt even with Vbat back to
+      4.0V (anti-bootloop safeguard).
+
+### Tag + push (~5 min)
+
+- [ ] `git checkout feature/safeboot`
+- [ ] `git tag -a safeboot-v<X.Y.Z> -m "Aligned to upstream MeshCore v<X.Y.Z>"`
+      (use the actual upstream version, e.g., `safeboot-v1.10.0`).
+- [ ] `git push origin safeboot-v<X.Y.Z>`
+- [ ] When F8 release pipeline ships: confirm GitHub Actions builds +
+      publishes per-variant .bin to the GH Release page.
+
+### Soak (24h, async; do NOT block the rebase)
+
+- [ ] Leave ST-P running the rebased build. Check periodically: no
+      unexpected reboots, no SafeBoot-induced sleeps unless legitimate
+      low-V conditions, no MeshCore radio anomalies vs. pre-rebase
+      behavior.
+- [ ] After 24h clean: OTA-deploy to patio per `scripts/ota-push.py`
+      (Workflow 2 takes over from here).
+
+### If something goes wrong mid-rebase
+
+| Symptom | Action |
+|---|---|
+| Rebase conflict you can't resolve | `git rebase --abort`. Baseline tag in `/tmp/safeboot-pre-rebase.txt` is your rollback. Open a tracker issue describing the conflict; reach out to upstream PR author for context if it's in their code. |
+| Variant fails to build after rebase | Likely upstream renamed a macro SafeBoot depends on (e.g., `PIN_VBAT_READ` → something else). Update F13's adapter overrides or the affected variant's platformio.ini. File a follow-up against the relevant F5x sub-task. |
+| Bench validation regresses | SafeBoot's behavior is wrong on the new upstream main. DO NOT push the rebased branch. Open a sub-task under #96 documenting the regression; investigate which upstream change broke us before pushing. |
+| Tag push rejected | Tag already exists (`git tag -l safeboot-v<X.Y.Z>`). Either the rebase covered the same upstream version (use `-rc1` suffix or pick the next patch version) or someone else pushed first (rare; investigate). |
+| Soak surfaces issues | Roll back ST-P to the pre-rebase tag: `python scripts/pio-flash.py flash st-p --env=heltec_v4_repeater --commit=<baseline-sha>`. Don't OTA patio. Open issue documenting symptoms. |
+
 ## Reference
 
 - Source of concept: Meshtastic PR
