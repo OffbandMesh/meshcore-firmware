@@ -1,5 +1,6 @@
 #include <Arduino.h>   // needed for PlatformIO
 #include <Mesh.h>
+#include <SafeBoot.h>
 
 #include "MyMesh.h"
 
@@ -31,6 +32,11 @@ static unsigned long userBtnDownAt = 0;
 void setup() {
   Serial.begin(115200);
   delay(1000);
+
+  // SafeBoot: pre-init power guard. Must run before board.begin()
+  // (which enables LoRa TCXO, display, sensors). On low battery the
+  // MCU sleeps with exponential backoff and does not return.
+  SafeBoot::checkAndMaybeSleep();
 
   board.begin();
 

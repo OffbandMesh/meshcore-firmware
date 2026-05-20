@@ -1,4 +1,5 @@
 #include "SensorMesh.h"
+#include <SafeBoot.h>
 
 #ifdef DISPLAY_CLASS
   #include "UITask.h"
@@ -55,6 +56,9 @@ static char command[160];
 void setup() {
   Serial.begin(115200);
   delay(1000);
+
+  // SafeBoot: pre-init power guard. See src/SafeBoot.h.
+  SafeBoot::checkAndMaybeSleep();
 
   board.begin();
 

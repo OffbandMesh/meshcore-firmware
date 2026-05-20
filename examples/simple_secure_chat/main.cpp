@@ -1,5 +1,6 @@
 #include <Arduino.h>   // needed for PlatformIO
 #include <Mesh.h>
+#include <SafeBoot.h>
 
 #if defined(NRF52_PLATFORM)
   #include <InternalFileSystem.h>
@@ -557,6 +558,9 @@ void halt() {
 
 void setup() {
   Serial.begin(115200);
+
+  // SafeBoot: pre-init power guard. See src/SafeBoot.h.
+  SafeBoot::checkAndMaybeSleep();
 
   board.begin();
 

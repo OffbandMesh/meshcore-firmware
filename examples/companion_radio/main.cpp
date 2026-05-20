@@ -1,5 +1,6 @@
 #include <Arduino.h>   // needed for PlatformIO
 #include <Mesh.h>
+#include <SafeBoot.h>
 #include "MyMesh.h"
 
 // Believe it or not, this std C function is busted on some platforms!
@@ -107,6 +108,9 @@ void halt() {
 
 void setup() {
   Serial.begin(115200);
+
+  // SafeBoot: pre-init power guard. See src/SafeBoot.h.
+  SafeBoot::checkAndMaybeSleep();
 
   board.begin();
 

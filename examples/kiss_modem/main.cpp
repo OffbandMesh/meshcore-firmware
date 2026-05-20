@@ -2,6 +2,7 @@
 #include <target.h>
 #include <helpers/ArduinoHelpers.h>
 #include <helpers/IdentityStore.h>
+#include <SafeBoot.h>
 #include "KissModem.h"
 
 #if defined(NRF52_PLATFORM)
@@ -71,6 +72,12 @@ void onGetStats(uint32_t* rx, uint32_t* tx, uint32_t* errors) {
 }
 
 void setup() {
+  // SafeBoot: pre-init power guard. Runs before board.begin().
+  // Serial isn't initialized in kiss_modem (KISS uses Serial1); SafeBoot's
+  // log lines via Serial silently no-op, but the SafeBoot decision still
+  // executes correctly.
+  SafeBoot::checkAndMaybeSleep();
+
   board.begin();
 
   if (!radio_init()) {

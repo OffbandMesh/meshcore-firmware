@@ -1,5 +1,6 @@
 #include <Arduino.h>   // needed for PlatformIO
 #include <Mesh.h>
+#include <SafeBoot.h>
 
 #include "MyMesh.h"
 
@@ -21,6 +22,9 @@ static char command[MAX_POST_TEXT_LEN+1];
 void setup() {
   Serial.begin(115200);
   delay(1000);
+
+  // SafeBoot: pre-init power guard. See src/SafeBoot.h.
+  SafeBoot::checkAndMaybeSleep();
 
   board.begin();
 
