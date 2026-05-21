@@ -21,9 +21,14 @@ runs:
       run: |
         pip install --upgrade platformio
 
-    # a git tag of "room-server-v1.2.3" should set "v1.2.3" as GIT_TAG_VERSION
+    # Extract version from git tag. Supports both upstream's single-hyphen
+    # format ("room-server-v1.2.3" -> "v1.2.3") AND multi-hyphen formats
+    # with pre-release suffixes ("safeboot-simple-repeater-v1.2.3-rc1" ->
+    # "v1.2.3-rc1"). The sed regex captures the v<digits>... suffix from
+    # anywhere in the tag name.
     - name: Extract Version from Git Tag
       shell: bash
       run: |
         GIT_TAG_NAME="${GITHUB_REF#refs/tags/}"
-        echo "GIT_TAG_VERSION=${GIT_TAG_NAME##*-}" >> $GITHUB_ENV
+        GIT_TAG_VERSION=$(echo "$GIT_TAG_NAME" | sed -E 's/.*-(v[0-9].*)$/\1/')
+        echo "GIT_TAG_VERSION=${GIT_TAG_VERSION}" >> $GITHUB_ENV

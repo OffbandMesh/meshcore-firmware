@@ -7,7 +7,11 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - 'safeboot-*'
+      # Scoped to simple_repeater example builds. Future SafeBoot release
+      # types (safeboot-companion-radio-*, safeboot-simple-room-server-*,
+      # etc.) get their own workflows. See docs/safeboot-maintenance.md
+      # "Tagging a release" for the full tag-name convention.
+      - 'safeboot-simple-repeater-*'
 
 jobs:
 

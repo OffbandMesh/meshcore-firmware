@@ -86,14 +86,80 @@ git push origin main
 
 ### Tagging a release
 
-```bash
-git checkout feature/safeboot
-git tag -a safeboot-v1.10.0 -m "Aligned to upstream MeshCore v1.10.0"
-git push origin safeboot-v1.10.0
+#### Tag-name convention
+
+Tags follow the pattern:
+
+```
+safeboot-<example-dir-hyphenated>[-<build-axis>]-vX.Y.Z[-<prerelease>]
 ```
 
-GitHub Actions (per epic #96 SB8) builds and publishes the .bin to
-Releases automatically on tag push.
+- `safeboot-` — fork qualifier (distinguishes from upstream MeshCore tags)
+- `<example-dir-hyphenated>` — MeshCore example directory the release builds
+  from, with underscores converted to hyphens (e.g., `examples/simple_repeater/`
+  → `simple-repeater`)
+- `<build-axis>` — optional further scope when one example produces multiple
+  release-types (e.g., `bridge-espnow`, `tft`)
+- `vX.Y.Z` — semver aligned to the upstream MeshCore version the rebase is
+  based on (e.g., `v1.15.0` when the fork rebases onto upstream `v1.15.0`)
+- `[-<prerelease>]` — optional pre-release identifier (`-rc1`, `-rc2`, ...)
+  for unvalidated builds
+
+Examples:
+
+| Tag | Scope |
+|---|---|
+| `safeboot-simple-repeater-v1.15.0-rc1` | `simple_repeater/` × 5 hardware variants, RC pre-bench-validation |
+| `safeboot-simple-repeater-v1.15.0` | Same, post bench validation (drop `-rc1` suffix) |
+| `safeboot-simple-repeater-bridge-espnow-v1.15.0` | `simple_repeater/` + ESPNow bridge variants (future) |
+| `safeboot-simple-repeater-tft-v1.15.0` | `simple_repeater/` + TFT display variants (future) |
+| `safeboot-companion-radio-v1.15.0` | `companion_radio/` × variants (future) |
+| `safeboot-simple-room-server-v1.15.0` | `simple_room_server/` × variants (future) |
+| `safeboot-simple-sensor-v1.15.0` | `simple_sensor/` × variants (future) |
+| `safeboot-simple-secure-chat-v1.15.0` | `simple_secure_chat/` × variants (future) |
+| `safeboot-kiss-modem-v1.15.0` | `kiss_modem/` × variants (future) |
+
+Each release-type has (or will have) its own dedicated GitHub Actions
+workflow scoped to a specific tag glob. The current shipping workflow
+(`.github/workflows/build-safeboot-firmwares.yml`) triggers on
+`safeboot-simple-repeater-*` only.
+
+#### Multi-hyphen tag extraction
+
+The `setup-build-environment` composite action uses a sed regex to extract
+the version from tag names, replacing the upstream's `${GIT_TAG_NAME##*-}`
+parameter expansion which only worked for single-hyphen formats. The
+extraction:
+
+```bash
+GIT_TAG_VERSION=$(echo "$GIT_TAG_NAME" | sed -E 's/.*-(v[0-9].*)$/\1/')
+```
+
+is backwards-compatible with upstream's existing tags (`repeater-v1.15.0`
+→ `v1.15.0`) AND supports the SafeBoot multi-hyphen format
+(`safeboot-simple-repeater-v1.15.0-rc1` → `v1.15.0-rc1`).
+
+#### Cutting a release
+
+```bash
+git checkout feature/safeboot
+
+# First-RC pattern (pre-bench-validation): include the -rcN suffix
+git tag -a safeboot-simple-repeater-v1.15.0-rc1 \
+  -m "First SafeBoot RC, pre-bench-validation. Aligned to upstream
+MeshCore v1.15.0+. See Strycher/LoRa#96."
+
+# Post-bench-validation pattern: drop the -rcN suffix
+# git tag -a safeboot-simple-repeater-v1.15.0 \
+#   -m "Bench-validated. Aligned to upstream MeshCore v1.15.0."
+
+git push origin safeboot-simple-repeater-v1.15.0-rc1
+```
+
+GitHub Actions builds and publishes per-variant artifacts (as a **draft**
+release) to GitHub Releases automatically on tag push. For RC tags, leave
+the release as draft until bench validation completes (F6 sub-tasks). For
+non-RC tags, promote the draft to published after bench validation passes.
 
 ---
 
