@@ -1,3 +1,73 @@
+# Strycher/MeshCore — SafeBoot Fork
+
+This is a community fork of [MeshCore](https://github.com/meshcore-dev/MeshCore)
+that adds **SafeBoot**: a pre-init power guard for solar/battery-powered LoRa nodes.
+
+SafeBoot is ported from
+[Meshtastic PR #10391](https://github.com/meshtastic/firmware/pull/10391)
+(by Mickyleitor, commit `4c7e1ee8`). The port is filed for upstream submission;
+this fork tracks the work-in-progress branch.
+
+## What SafeBoot adds
+
+Without SafeBoot, a depleted solar/battery node boot-loops at marginal
+voltage — each failed boot burns ~100-300 mWs and risks LittleFS corruption
+during brownout. SafeBoot intercepts that very early: it reads battery
+voltage before any high-current peripheral comes up, and either continues
+boot (voltage above threshold) or sleeps with exponential backoff until
+solar recharges (LPCOMP wake on nRF52) or the user intervenes.
+
+See **[`docs/safeboot.md`](docs/safeboot.md)** for the full user guide
+(when to use, how it works, hardware support matrix, flashing, configuration,
+troubleshooting).
+
+## Quick start
+
+| Hardware | env | Status |
+|---|---|---|
+| Heltec V4 OLED | `heltec_v4_repeater` | Compile-tested; bench-validation pending |
+| Heltec V3 (≤3.2 and >3.2 revisions) | `Heltec_v3_repeater` | Compile-tested; includes runtime polarity auto-detect |
+| RAK4631 | `RAK_4631_repeater` | Compile-tested; ADC multiplier derivation pending bench validation |
+| Seeed XIAO nRF52840 (incl. Plus) | `Xiao_nrf52_repeater` | Compile-tested |
+| Seeed T1000-E | `t1000e_repeater` | Compile-tested; LPCOMP solar-wake deferred (manual button wake only) |
+
+**Pre-built firmware**: see the [Releases page](../../releases) once tagged
+SafeBoot releases are available. Each release artifact includes `.sha256`
+sidecars and per-platform flashing instructions in the release notes.
+
+**Build from source**: `git checkout feature/safeboot && pio run -e <env>`
+for the env above that matches your hardware.
+
+## Status (honest disclosure)
+
+SafeBoot is **code-complete on this branch but not yet bench-validated on
+real hardware**. Compile-testing covers all 5 supported variants; runtime
+validation is pending.
+
+**Do not deploy this firmware to production solar nodes** until the SafeBoot
+epic's bench-test sub-tasks complete. For experimental use, USB-cabled bench
+testing only.
+
+If you want to help: bench-test on hardware we don't have direct access to
+(RAK4631, XIAO nRF52840, T1000-E) and report results. The SafeBoot tracking
+epic is [Strycher/LoRa#96](https://github.com/Strycher/LoRa/issues/96).
+
+## Maintainer docs
+
+If you're contributing to the SafeBoot port (rebasing onto new upstream
+MeshCore releases, deploy-merging into a downstream branch), see
+[`docs/safeboot-maintenance.md`](docs/safeboot-maintenance.md).
+
+---
+
+# Upstream MeshCore documentation
+
+Everything below this line is the upstream MeshCore README, preserved
+verbatim from [`meshcore-dev/MeshCore`](https://github.com/meshcore-dev/MeshCore).
+It documents the broader MeshCore project that SafeBoot is built on.
+
+---
+
 ## About MeshCore
 
 MeshCore is a lightweight, portable C++ library that enables multi-hop packet routing for embedded projects using LoRa and other packet radios. It is designed for developers who want to create resilient, decentralized communication networks that work without the internet.
