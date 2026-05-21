@@ -74,6 +74,27 @@ jobs:
           - ThinkNode_M5_Repeater        # ESP32
           - ThinkNode_M6_repeater        # nRF52, PIN_ADC_CTRL gated
 
+          # ===== F27: Ikoka expansion (all nRF52, XIAO-style VBAT_ENABLE) =====
+          - ikoka_handheld_nrf_e22_30dbm_repeater
+          - ikoka_nano_nrf_22dbm_repeater
+          - ikoka_stick_nrf_22dbm_repeater
+
+          # ===== F28: Other ESP32 expansion (4 configured + 2 excluded) =====
+          - Ebyte_EoRa-S3_Repeater
+          - Generic_E22_sx1262_repeater
+          - Meshadventurer_sx1262_repeater
+          - Tenstar_C3_sx1262_repeater
+
+          # ===== F29: Other nRF52 expansion =====
+          - KeepteenLT1_repeater
+          - Mesh_pocket_repeater
+          - Minewsemi_me25ls01_repeater
+          - R1Neo_repeater                # muziworks_r1_neo, premium LPCOMP solar candidate
+          - ProMicro_repeater
+          - SenseCap_Solar_repeater       # premium LPCOMP solar candidate
+          - WioTrackerL1_repeater
+          - wio_wm1110_repeater
+
     steps:
 
       - name: Clone Repo
