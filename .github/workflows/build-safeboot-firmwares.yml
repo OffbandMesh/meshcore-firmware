@@ -51,6 +51,29 @@ jobs:
           # ===== F25: Seeed XIAO ESP32 expansion =====
           - Xiao_C3_repeater            # ESP32-C3
 
+          # ===== F20: LilyGo ESP32 expansion =====
+          - LilyGo_T3S3_sx1262_repeater  # ESP32-S3
+          - LilyGo_T3S3_sx1276_repeater  # ESP32-S3
+          - LilyGo_TBeam_1W_repeater     # ESP32
+          - LilyGo_TDeck_repeater        # ESP32-S3
+          - LilyGo_TLora_V2_1_1_6_repeater  # ESP32
+
+          # ===== F21: LilyGo nRF52 expansion =====
+          - LilyGo_T-Echo_repeater       # nRF52, button-wake only
+          - LilyGo_T-Echo-Lite_repeater  # nRF52, button-wake only
+
+          # ===== F24: GAT562 expansion (premium LPCOMP solar candidates) =====
+          - GAT562_30S_Mesh_Kit_repeater    # nRF52 + LPCOMP solar wake
+          - GAT562_Mesh_EVB_Pro_repeater    # nRF52 + LPCOMP solar wake
+          - GAT562_Mesh_Tracker_Pro_repeater  # nRF52 + LPCOMP solar wake
+
+          # ===== F26: ThinkNode expansion =====
+          - ThinkNode_M1_repeater        # nRF52
+          - ThinkNode_M2_Repeater        # ESP32
+          - ThinkNode_M3_repeater        # nRF52 (unusual AREF=2.4)
+          - ThinkNode_M5_Repeater        # ESP32
+          - ThinkNode_M6_repeater        # nRF52, PIN_ADC_CTRL gated
+
     steps:
 
       - name: Clone Repo
