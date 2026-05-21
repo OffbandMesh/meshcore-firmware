@@ -21,13 +21,35 @@ jobs:
       fail-fast: false
       matrix:
         environment:
-          # ESP32-S3
-          - heltec_v4_repeater
-          - Heltec_v3_repeater
-          # nRF52
-          - RAK_4631_repeater
-          - Xiao_nrf52_repeater
-          - t1000e_repeater
+          # ===== F5/F13/F14/F15: initial 5-variant slate =====
+          - heltec_v4_repeater          # ESP32-S3
+          - Heltec_v3_repeater          # ESP32-S3 + F14 polarity auto-detect
+          - RAK_4631_repeater           # nRF52 + F15 LPCOMP wake
+          - Xiao_nrf52_repeater         # nRF52 + F15 LPCOMP wake
+          - t1000e_repeater             # nRF52, LPCOMP deferred
+
+          # ===== F18: Heltec ESP32 expansion =====
+          - Heltec_v2_repeater          # ESP32
+          - Heltec_ct62_repeater        # ESP32-C3
+          - Heltec_E213_repeater        # ESP32-S3
+          - Heltec_E290_repeater        # ESP32-S3
+          - Heltec_T190_repeater_       # ESP32-S3 (trailing _ per upstream env name)
+          - heltec_tracker_v2_repeater  # ESP32-S3
+          - Heltec_Wireless_Paper_repeater  # ESP32
+
+          # ===== F19: Heltec nRF52 expansion =====
+          - Heltec_t096_repeater        # nRF52 + LPCOMP solar wake
+          - Heltec_t114_repeater        # nRF52 + LPCOMP solar wake
+
+          # ===== F22: RAK ESP32 expansion =====
+          - RAK_3112_repeater           # ESP32, V3-style auto-detect + composite ADC_M override
+
+          # ===== F23: RAK nRF52 expansion =====
+          - RAK_3401_repeater           # nRF52 + LPCOMP solar wake
+          - RAK_WisMesh_Tag_repeater    # nRF52, manual button wake only (no LPCOMP)
+
+          # ===== F25: Seeed XIAO ESP32 expansion =====
+          - Xiao_C3_repeater            # ESP32-C3
 
     steps:
 
