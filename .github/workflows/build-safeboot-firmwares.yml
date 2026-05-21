@@ -1,0 +1,159 @@
+name: Build SafeBoot Firmwares
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'safeboot-*'
+
+jobs:
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          # ESP32-S3
+          - heltec_v4_repeater
+          - Heltec_v3_repeater
+          # nRF52
+          - RAK_4631_repeater
+          - Xiao_nrf52_repeater
+          - t1000e_repeater
+
+    steps:
+
+      - name: Clone Repo
+        uses: actions/checkout@v4
+
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-environment
+
+      - name: Build ${{ matrix.environment }}
+        env:
+          FIRMWARE_VERSION: ${{ env.GIT_TAG_VERSION }}
+        run: /usr/bin/env bash build.sh build-firmware ${{ matrix.environment }}
+
+      - name: Compute sha256 sidecars
+        run: |
+          cd out
+          for f in *; do
+            if [ -f "$f" ] && [ "${f##*.}" != "sha256" ]; then
+              sha256sum "$f" > "$f.sha256"
+            fi
+          done
+
+      - name: Upload Workflow Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: safeboot-${{ matrix.environment }}
+          path: out/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Extract Version from Git Tag
+        run: |
+          GIT_TAG_NAME="${GITHUB_REF#refs/tags/}"
+          echo "GIT_TAG_VERSION=${GIT_TAG_NAME##*-}" >> $GITHUB_ENV
+
+      - name: Flatten artifacts into release directory
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          ls -la release/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: SafeBoot Firmware ${{ env.GIT_TAG_VERSION }}
+          draft: true
+          files: release/*
+          body: |
+            ## SafeBoot Pre-Init Power Guard Firmware
+
+            Per-variant firmware for the 5 hardware platforms in the SafeBoot
+            initial-port slate. See `docs/safeboot-maintenance.md` for the
+            upstream-rebase workflow and variant-config rationale.
+
+            ### Variants in this release
+
+            | Variant | Platform | Notes |
+            |---|---|---|
+            | `heltec_v4_repeater` | ESP32-S3 | Primary user-fleet platform |
+            | `Heltec_v3_repeater` | ESP32-S3 | Includes V3 polarity auto-detect (F14) |
+            | `RAK_4631_repeater` | nRF52 | Includes LPCOMP solar wake (F15) |
+            | `Xiao_nrf52_repeater` | nRF52 | Includes LPCOMP solar wake (F15) |
+            | `t1000e_repeater` | nRF52 | LPCOMP DEFERRED; button-wake only (see caveats) |
+
+            ### sha256 verification
+
+            Each firmware file has a corresponding `.sha256` sidecar. Verify
+            after download:
+            ```
+            sha256sum -c <filename>.sha256
+            ```
+
+            ### Flashing instructions
+
+            **ESP32-S3 variants** (`heltec_v4_repeater`, `Heltec_v3_repeater`):
+            ```
+            esptool.py --chip esp32s3 --port <PORT> write_flash 0x0 <filename>.bin
+            ```
+            Or use the `-merged.bin` variant to flash bootloader + partitions +
+            app in one shot (offset 0x0).
+
+            **nRF52 variants** (`RAK_4631_repeater`, `Xiao_nrf52_repeater`,
+            `t1000e_repeater`):
+            ```
+            adafruit-nrfutil dfu serial -pkg <filename>.zip -p <PORT> -b 115200
+            ```
+            Or drag-and-drop the `.uf2` file to the bootloader's USB mass-storage
+            device (double-tap reset button to enter bootloader mode on most
+            nRF52 boards).
+
+            ### Known caveats (in this initial-port slate)
+
+            - **`t1000e_repeater`**: SafeBoot's LPCOMP solar-recovery wake is
+              DEFERRED for t1000-e pending schematic research or bench
+              measurement to identify the correct AIN channel
+              (Strycher/LoRa#148, F15). Device wakes on USER button press but
+              does NOT auto-wake on Vbat rise from solar recharge. For solar
+              deployments, prefer `RAK_4631_repeater` or `Xiao_nrf52_repeater`.
+
+            - **`RAK_4631_repeater`**: `SAFEBOOT_ADC_MULTIPLIER=2.054` is
+              algebraically derived from the variant's existing composite
+              ADC_MULTIPLIER formula. Requires bench validation against a
+              calibrated voltage source before being treated as ground-truth
+              (Strycher/LoRa#111, F6c).
+
+            - **`Heltec_v3_repeater`**: Includes `SAFEBOOT_AUTODETECT_PIN_ADC_CTRL`
+              (Strycher/LoRa#147, F14) so one firmware works correctly on both
+              V3 hardware revisions <=3.2 and >3.2 (the polarity convention
+              changed at revision 3.2; auto-detect mirrors the runtime probe
+              that `HeltecV3Board::begin()` already does).
+
+            ### Configuration after flash
+
+            SafeBoot's thresholds are baked in at build time (`DEFAULT_SAFE_BOOT_*`
+            macros per variant). For per-deployment runtime tuning of WiFi, MQTT,
+            node identity, and other firmware settings, see the community-build
+            epic (Strycher/LoRa#101).
+
+            ### Source
+
+            Built from `Strycher/MeshCore:feature/safeboot`. Concept ported from
+            [Meshtastic PR #10391](https://github.com/meshtastic/firmware/pull/10391)
+            by Mickyleitor. Integration tracking: [Strycher/LoRa#96](https://github.com/Strycher/LoRa/issues/96).
