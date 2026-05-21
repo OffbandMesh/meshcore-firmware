@@ -161,6 +161,41 @@ release) to GitHub Releases automatically on tag push. For RC tags, leave
 the release as draft until bench validation completes (F6 sub-tasks). For
 non-RC tags, promote the draft to published after bench validation passes.
 
+#### Tag-frozen release caveat
+
+**Release artifacts are frozen at the tagged commit.** If you tag
+`safeboot-simple-repeater-v1.15.0-rc1` on commit X, then later push commits
+that add new variants to the F8 build matrix (e.g., expanding from 5 to 48
+configured variants), the existing rc1 draft release does NOT automatically
+re-build to include the new variants.
+
+The correct workflow when adding hardware or fixes after an RC tag:
+
+```bash
+# Don't try to update the existing rc1 -- cut a new RC instead.
+git tag -a safeboot-simple-repeater-v1.15.0-rc2 \
+  -m "RC2 -- expanded variant slate / additional fixes"
+git push origin safeboot-simple-repeater-v1.15.0-rc2
+
+# The new tag triggers F8, producing a fresh draft release with the
+# current (expanded) variant matrix.
+```
+
+RC progression: `rc1` -> `rc2` -> `rc3` -> ... -> final tag (drop the
+`-rcN` suffix once bench validation across the variant slate passes).
+
+Each RC's draft can be:
+- **Kept** if you want a historical record of progression
+- **Deleted** if you're cleaning up superseded RCs (e.g., `gh release delete <tag>`)
+- **Promoted** (only the final RC that passed bench validation) by flipping
+  `draft: false` via `gh release edit --draft=false`
+
+**Common mistake**: re-tagging an existing RC (force-pushing the tag to a
+new commit) so the existing draft "updates." Don't do this -- tags are
+expected to be immutable once pushed to a public remote. Re-tagging confuses
+any external tooling that already captured the old tag-to-commit mapping.
+Cut a new RC instead.
+
 ---
 
 ## Workflow 2: Deploy-merge (combining SafeBoot with our custom features)
