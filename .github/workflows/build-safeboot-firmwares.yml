@@ -70,8 +70,14 @@ jobs:
 
       - name: Extract Version from Git Tag
         run: |
+          # Same sed regex as setup-build-environment composite action --
+          # supports multi-hyphen tags with -rcN suffixes. The release job
+          # can't reuse the composite action directly (composite is for
+          # build-environment setup, not release-job setup), so duplicate
+          # the extraction logic here. Keep in sync with the composite.
           GIT_TAG_NAME="${GITHUB_REF#refs/tags/}"
-          echo "GIT_TAG_VERSION=${GIT_TAG_NAME##*-}" >> $GITHUB_ENV
+          GIT_TAG_VERSION=$(echo "$GIT_TAG_NAME" | sed -E 's/.*-(v[0-9].*)$/\1/')
+          echo "GIT_TAG_VERSION=${GIT_TAG_VERSION}" >> $GITHUB_ENV
 
       - name: Flatten artifacts into release directory
         run: |
