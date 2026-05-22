@@ -114,6 +114,7 @@ see FF2 / #179).
 ## Related references
 
 - CLAUDE-BASE §Versioning (`C:\Dev\DifferentWire\standards\CLAUDE-BASE.md`)
+- `docs/cli-and-mqtt-commands.md` — CLI + MQTT command reference (`version` command, `wifi on N`, MQTT `ota_enable`, etc.)
 - `docs/safeboot-maintenance.md` — SafeBoot-specific tag scheme details
 - Epic #176 / LoRa-edl — this versioning discipline initiative
 - FF1 (#178 / LoRa-ry7) — this file's establishment
