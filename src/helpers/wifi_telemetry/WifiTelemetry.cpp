@@ -252,6 +252,10 @@ size_t WifiTelemetry::buildStatePayload(char* buf, size_t buflen, const Telemetr
         snprintf(last_snr_str, sizeof(last_snr_str), "%.2f", d.last_snr_db);
     }
 
+    // FF4 (#181 / LoRa-8wv): state payload includes upstream + Crosswire
+    // identity fields. CROSSWIRE_* defines come from build-time injection
+    // by scripts/inject_crosswire_version.py (FF2 / #179). _fw_version and
+    // _fw_build_date were already constructor-supplied per upstream design.
     int n = snprintf(buf, buflen,
         "{\"battery_mv\":%u,"
         "\"battery_pct\":%u,"
@@ -267,7 +271,13 @@ size_t WifiTelemetry::buildStatePayload(char* buf, size_t buflen, const Telemetr
         "\"wifi_rssi_dbm\":%d,"
         "\"free_heap_b\":%lu,"
         "\"reset_reason\":\"%s\","
-        "\"timestamp\":%lu}",
+        "\"timestamp\":%lu,"
+        "\"upstream_version\":\"%s\","
+        "\"upstream_build_date\":\"%s\","
+        "\"crosswire_version\":\"%s\","
+        "\"crosswire_git_sha\":\"%s\","
+        "\"crosswire_branch\":\"%s\","
+        "\"crosswire_build_date\":\"%s\"}",
         (unsigned)d.battery_mv,
         (unsigned)d.battery_pct,
         (unsigned long)d.uptime_seconds,
@@ -282,7 +292,13 @@ size_t WifiTelemetry::buildStatePayload(char* buf, size_t buflen, const Telemetr
         (int)d.wifi_rssi_dbm,
         (unsigned long)d.free_heap_b,
         d.reset_reason ? d.reset_reason : "unknown",
-        (unsigned long)d.timestamp);
+        (unsigned long)d.timestamp,
+        _fw_version ? _fw_version : "unknown",
+        _fw_build_date ? _fw_build_date : "unknown",
+        CROSSWIRE_VERSION,
+        CROSSWIRE_GIT_SHA,
+        CROSSWIRE_BRANCH,
+        CROSSWIRE_BUILD_DATE);
 
     if (n < 0 || (size_t)n >= buflen) return 0;
     return (size_t)n;
@@ -342,13 +358,19 @@ size_t WifiTelemetry::buildScalarDiscoveryPayload(char* buf, size_t buflen,
 
     // Compose sw_version string: "v1.15.0 (12 May 2026)" if both supplied, else
     // just the version.
-    char sw_version[64];
+    // FF4 (#181 / LoRa-8wv): compose sw_version with both upstream MeshCore
+    // baseline AND Crosswire fork identity. CROSSWIRE_VERSION is injected as
+    // a build-time -D macro by scripts/inject_crosswire_version.py (FF2 / #179).
+    // See VERSIONING.md for the dual-version scheme rationale.
+    char sw_version[96];
     if (_fw_version && _fw_build_date) {
-        snprintf(sw_version, sizeof(sw_version), "%s (%s)", _fw_version, _fw_build_date);
+        snprintf(sw_version, sizeof(sw_version), "MC %s (%s) / Crosswire %s",
+                 _fw_version, _fw_build_date, CROSSWIRE_VERSION);
     } else if (_fw_version) {
-        snprintf(sw_version, sizeof(sw_version), "%s", _fw_version);
+        snprintf(sw_version, sizeof(sw_version), "MC %s / Crosswire %s",
+                 _fw_version, CROSSWIRE_VERSION);
     } else {
-        snprintf(sw_version, sizeof(sw_version), "unknown");
+        snprintf(sw_version, sizeof(sw_version), "Crosswire %s", CROSSWIRE_VERSION);
     }
 
     // Entity name is JUST the sensor's short name (e.g. "Battery Voltage").
@@ -363,7 +385,7 @@ size_t WifiTelemetry::buildScalarDiscoveryPayload(char* buf, size_t buflen,
         "%s%s%s"
         "%s%s%s"
         "%s%s%s"
-        "\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mf\":\"MeshCore\",\"mdl\":\"Repeater\",\"sw_version\":\"%s\",\"hw_version\":\"%s\"}}",
+        "\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mf\":\"Crosswire\",\"mdl\":\"Repeater\",\"sw_version\":\"%s\",\"hw_version\":\"%s\",\"cu\":\"https://github.com/Strycher/MeshCore\"}}",
         name,
         _node_id, sensor_id,
         state_topic,
@@ -408,13 +430,19 @@ size_t WifiTelemetry::buildNeighborsSummaryDiscoveryPayload(char* buf, size_t bu
     char state_topic[WIFI_TELEMETRY_TOPIC_MAX];
     buildNeighborsTopic(state_topic, sizeof(state_topic));
 
-    char sw_version[64];
+    // FF4 (#181 / LoRa-8wv): compose sw_version with both upstream MeshCore
+    // baseline AND Crosswire fork identity. CROSSWIRE_VERSION is injected as
+    // a build-time -D macro by scripts/inject_crosswire_version.py (FF2 / #179).
+    // See VERSIONING.md for the dual-version scheme rationale.
+    char sw_version[96];
     if (_fw_version && _fw_build_date) {
-        snprintf(sw_version, sizeof(sw_version), "%s (%s)", _fw_version, _fw_build_date);
+        snprintf(sw_version, sizeof(sw_version), "MC %s (%s) / Crosswire %s",
+                 _fw_version, _fw_build_date, CROSSWIRE_VERSION);
     } else if (_fw_version) {
-        snprintf(sw_version, sizeof(sw_version), "%s", _fw_version);
+        snprintf(sw_version, sizeof(sw_version), "MC %s / Crosswire %s",
+                 _fw_version, CROSSWIRE_VERSION);
     } else {
-        snprintf(sw_version, sizeof(sw_version), "unknown");
+        snprintf(sw_version, sizeof(sw_version), "Crosswire %s", CROSSWIRE_VERSION);
     }
 
     // Text-state sensor, no stat_cla (so no graph). Default entity category
@@ -425,7 +453,7 @@ size_t WifiTelemetry::buildNeighborsSummaryDiscoveryPayload(char* buf, size_t bu
         "\"uniq_id\":\"%s_neighbors_summary\","
         "\"stat_t\":\"%s\","
         "\"val_tpl\":\"{{ value_json.summary }}\","
-        "\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mf\":\"MeshCore\",\"mdl\":\"Repeater\",\"sw_version\":\"%s\",\"hw_version\":\"%s\"}}",
+        "\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mf\":\"Crosswire\",\"mdl\":\"Repeater\",\"sw_version\":\"%s\",\"hw_version\":\"%s\",\"cu\":\"https://github.com/Strycher/MeshCore\"}}",
         _node_id,
         state_topic,
         _node_id,
