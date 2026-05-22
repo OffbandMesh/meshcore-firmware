@@ -130,38 +130,35 @@ bool RemoteCommandHandler::onMessage(const uint8_t* payload, size_t len,
                                       bool (*publish_response)(const char*, const char*, void*),
                                       void* publish_user_data)
 {
-    // Size sanity. Bigger than our parse-buf max is definitely not a real
-    // command; reject without parsing.
+    // MQTT path: parse + auth check + execute. Auth check is the anti-oracle
+    // silent-fail variety appropriate for an MQTT broker where any
+    // subscriber-capable peer could publish to the cmd topic.
     if (len == 0 || len > kInPayloadMax) {
-        publishReject(RemoteCmdReject::OVERSIZED, RemoteCmd::UNKNOWN,
+        publishReject(RemoteCmdReject::OVERSIZED, RemoteCmd::UNKNOWN, 0,
                       publish_response, publish_user_data);
         return false;
     }
 
-    // Parse JSON. ArduinoJson takes care of bounds-safe parsing of the
-    // attacker-controlled input.
     RemoteCommandRequest req;
+    req.cmd_id = 0;  // MQTT path has no server-assigned cmd_id
     if (!parse(payload, len, req)) {
-        publishReject(RemoteCmdReject::PARSE_FAIL, RemoteCmd::UNKNOWN,
+        publishReject(RemoteCmdReject::PARSE_FAIL, RemoteCmd::UNKNOWN, 0,
                       publish_response, publish_user_data);
         return false;
     }
 
     if (req.action == RemoteCmd::UNKNOWN) {
-        publishReject(RemoteCmdReject::UNKNOWN_ACTION, req.action,
+        publishReject(RemoteCmdReject::UNKNOWN_ACTION, req.action, 0,
                       publish_response, publish_user_data);
         return false;
     }
 
-    // Auth check - constant-time. Auth value extracted in parse() into a
-    // local buffer; we re-extract here from the JSON since the parse return
-    // value doesn't carry the auth string out. (Auth is a security-sensitive
-    // field; keeping its handling local to a single parse-and-check makes
-    // it easier to audit.)
+    // Auth check - constant-time. Re-deserialize for the auth field; parse()
+    // doesn't carry it out (security-sensitive value, handled locally to a
+    // single parse-and-check for auditability).
     JsonDocument doc;
     if (deserializeJson(doc, payload, len)) {
-        // Should not happen - parse() already validated. Defensive.
-        publishReject(RemoteCmdReject::INTERNAL_ERROR, req.action,
+        publishReject(RemoteCmdReject::INTERNAL_ERROR, req.action, 0,
                       publish_response, publish_user_data);
         return false;
     }
@@ -171,22 +168,90 @@ bool RemoteCommandHandler::onMessage(const uint8_t* payload, size_t len,
     size_t expected_len = strlen(expected);
 
     if (!auth_ptr || !constantTimeMatch(auth_ptr, auth_len, expected, expected_len)) {
-        // SILENT to the caller - log to safety log only. Don't publish a
-        // response that would oracle "auth_fail" specifically (denies an
-        // attacker the ability to distinguish auth_fail from other reject
-        // reasons by observing whether they get a response or not).
+        // SILENT - anti-oracle. Log only.
         char detail[64];
         snprintf(detail, sizeof(detail), "auth_fail:%s", actionToString(req.action));
         _callbacks.logSafetyEvent(EVT_REMOTE_CMD_REJECTED, detail);
         return false;
     }
 
-    // Rate-limit check
+    return executeAuthenticated(req, publish_response, publish_user_data);
+}
+
+// ---------------------------------------------------------------------------
+// onHttpCmd - HTTP cmd-relay path (Strycher/LoRa#188 / H3).
+// Skips in-payload auth (HTTP layer authed via bearer header). Extracts
+// cmd_id from JSON for response correlation. publish_response callback is
+// expected to POST to /devices/<node>/responses; the response_topic
+// parameter is unused on the HTTP path.
+// ---------------------------------------------------------------------------
+bool RemoteCommandHandler::onHttpCmd(JsonObject cmd_obj,
+                                       bool (*publish_response)(const char*, const char*, void*),
+                                       void* publish_user_data)
+{
+    RemoteCommandRequest req;
+
+    if (!parseFromJson(cmd_obj, req)) {
+        // Couldn't extract action. cmd_id was populated by parseFromJson
+        // (always set first) so we can still correlate the response.
+        publishReject(RemoteCmdReject::PARSE_FAIL, RemoteCmd::UNKNOWN, req.cmd_id,
+                      publish_response, publish_user_data);
+        return false;
+    }
+
+    if (req.action == RemoteCmd::UNKNOWN) {
+        publishReject(RemoteCmdReject::UNKNOWN_ACTION, req.action, req.cmd_id,
+                      publish_response, publish_user_data);
+        return false;
+    }
+
+    // NO auth check here. HTTP transport authed via Authorization header
+    // before this cmd was delivered to us.
+    return executeAuthenticated(req, publish_response, publish_user_data);
+}
+
+// ---------------------------------------------------------------------------
+// parseFromJson - extract cmd fields from a JsonObject (HTTP path).
+// Shape from server: {cmd_id, ts_queued, action, params: {window_sec, ...}}
+// Sets out.cmd_id BEFORE any field validation so reject responses
+// downstream can correlate even on parse failure.
+// ---------------------------------------------------------------------------
+bool RemoteCommandHandler::parseFromJson(JsonObject cmd_obj, RemoteCommandRequest& out)
+{
+    out.cmd_id = cmd_obj["cmd_id"] | 0;
+    out.action = RemoteCmd::UNKNOWN;
+    out.window_sec = 600;
+
+    const char* action_str = cmd_obj["action"];
+    if (!action_str) return false;
+    out.action = parseActionString(action_str);
+
+    // window_sec preferred from params object (HTTP cmd shape); fall back
+    // to top-level for any sender that flattens.
+    JsonVariant params = cmd_obj["params"];
+    if (!params.isNull() && params.is<JsonObject>()) {
+        JsonObject params_obj = params.as<JsonObject>();
+        if (!params_obj["window_sec"].isNull()) {
+            out.window_sec = params_obj["window_sec"].as<unsigned long>();
+        }
+    } else if (!cmd_obj["window_sec"].isNull()) {
+        out.window_sec = cmd_obj["window_sec"].as<unsigned long>();
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// executeAuthenticated - shared post-auth path used by both onMessage (after
+// MQTT in-payload auth) and onHttpCmd (after HTTP-layer auth). Handles
+// rate-limit, window clamp, accept-log, dispatch.
+// ---------------------------------------------------------------------------
+bool RemoteCommandHandler::executeAuthenticated(RemoteCommandRequest& req,
+                                                   bool (*publish_response)(const char*, const char*, void*),
+                                                   void* publish_user_data)
+{
     uint32_t now = millis();
     if (!rateLimitOk(req.action, now)) {
-        // Rate-limit rejection IS published (the rate-limit's purpose is to
-        // tell the legitimate client to back off). Forensic note in safety log.
-        publishReject(RemoteCmdReject::RATE_LIMITED, req.action,
+        publishReject(RemoteCmdReject::RATE_LIMITED, req.action, req.cmd_id,
                       publish_response, publish_user_data);
         char detail[64];
         snprintf(detail, sizeof(detail), "rate_limited:%s", actionToString(req.action));
@@ -194,12 +259,9 @@ bool RemoteCommandHandler::onMessage(const uint8_t* payload, size_t len,
         return false;
     }
 
-    // Clamp window_sec to firmware-enforced range [60, 1800]. Default 600.
-    // (window_sec was already extracted in parse() with default-600 fallback.)
     if (req.window_sec < 60)     req.window_sec = 60;
     if (req.window_sec > 1800)   req.window_sec = 1800;
 
-    // Accept: record timestamp, log to safety, dispatch.
     recordAccept(req.action, now);
 
     char accept_detail[64];
@@ -382,17 +444,32 @@ void RemoteCommandHandler::dispatch(const RemoteCommandRequest& req,
         break;
     }
 
-    snprintf(out_buf, sizeof(out_buf),
-        "{\"action\":\"%s\","
-        "\"ts_unix\":%lu,"
-        "\"status\":\"%s\","
-        "\"message\":\"%s\","
-        "\"data\":%s}",
-        actionToString(req.action),
-        (unsigned long)(millis() / 1000),  // device-relative uptime ts
-        status_str,
-        message,
-        data_json);
+    // Response payload includes cmd_id when nonzero (HTTP path correlates
+    // by cmd_id; MQTT path historically didn't carry one and req.cmd_id
+    // stays 0 there).
+    if (req.cmd_id != 0) {
+        snprintf(out_buf, sizeof(out_buf),
+            "{\"cmd_id\":%lu,"
+            "\"action\":\"%s\","
+            "\"ts_unix\":%lu,"
+            "\"status\":\"%s\","
+            "\"message\":\"%s\","
+            "\"data\":%s}",
+            (unsigned long)req.cmd_id,
+            actionToString(req.action),
+            (unsigned long)(millis() / 1000),
+            status_str, message, data_json);
+    } else {
+        snprintf(out_buf, sizeof(out_buf),
+            "{\"action\":\"%s\","
+            "\"ts_unix\":%lu,"
+            "\"status\":\"%s\","
+            "\"message\":\"%s\","
+            "\"data\":%s}",
+            actionToString(req.action),
+            (unsigned long)(millis() / 1000),
+            status_str, message, data_json);
+    }
 
     if (publish_response) {
         publish_response(response_topic, out_buf, user_data);
@@ -406,6 +483,7 @@ void RemoteCommandHandler::dispatch(const RemoteCommandRequest& req,
 // path is silent (no publish), only logs.
 // ---------------------------------------------------------------------------
 void RemoteCommandHandler::publishReject(RemoteCmdReject reason, RemoteCmd action,
+                                          uint32_t cmd_id,
                                           bool (*publish_response)(const char*, const char*, void*),
                                           void* user_data)
 {
@@ -413,16 +491,32 @@ void RemoteCommandHandler::publishReject(RemoteCmdReject reason, RemoteCmd actio
     buildResponseTopic(response_topic, sizeof(response_topic));
 
     char out_buf[256];
-    snprintf(out_buf, sizeof(out_buf),
-        "{\"action\":\"%s\","
-        "\"ts_unix\":%lu,"
-        "\"status\":\"error\","
-        "\"message\":\"rejected: %s\","
-        "\"data\":{\"reject_reason\":\"%s\"}}",
-        actionToString(action),
-        (unsigned long)(millis() / 1000),
-        rejectReasonString(reason),
-        rejectReasonString(reason));
+    // Include cmd_id when nonzero (HTTP path).
+    if (cmd_id != 0) {
+        snprintf(out_buf, sizeof(out_buf),
+            "{\"cmd_id\":%lu,"
+            "\"action\":\"%s\","
+            "\"ts_unix\":%lu,"
+            "\"status\":\"error\","
+            "\"message\":\"rejected: %s\","
+            "\"data\":{\"reject_reason\":\"%s\"}}",
+            (unsigned long)cmd_id,
+            actionToString(action),
+            (unsigned long)(millis() / 1000),
+            rejectReasonString(reason),
+            rejectReasonString(reason));
+    } else {
+        snprintf(out_buf, sizeof(out_buf),
+            "{\"action\":\"%s\","
+            "\"ts_unix\":%lu,"
+            "\"status\":\"error\","
+            "\"message\":\"rejected: %s\","
+            "\"data\":{\"reject_reason\":\"%s\"}}",
+            actionToString(action),
+            (unsigned long)(millis() / 1000),
+            rejectReasonString(reason),
+            rejectReasonString(reason));
+    }
 
     if (publish_response) {
         publish_response(response_topic, out_buf, user_data);

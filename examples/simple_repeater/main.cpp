@@ -65,6 +65,17 @@ static uint32_t g_tel_persistent_until_ms = 0;
 // AsyncElegantOTA uses ESP-IDF's global Update object (Update.h), so we can
 // observe upload state from outside without monkeypatching the deprecated lib.
 #include <Update.h>
+#ifdef CMD_TRANSPORT_HTTP
+  // Issue #188 / H3: HTTP cmd-relay transport. Replaces MQTT cmd channel.
+  // Build with -D CMD_TRANSPORT_HTTP=1 to enable (default off until H6).
+  #include <HTTPClient.h>
+  #include <ArduinoJson.h>
+  // Forward declarations - definitions live in the wifi_telemetry helper
+  // block below. Needed because wifi_telemetry_collect_and_publish calls
+  // wifi_telemetry_http_cmd_poll before the definition appears in source.
+  static void wifi_telemetry_http_cmd_poll();
+  static bool publishHttpResponseShim(const char*, const char*, void*);
+#endif
 #define OTA_EXTEND_MS (5UL * 60UL * 1000UL)   // 5 minutes per chunk
 static size_t g_ota_last_progress = 0;
 // E3 #67: track byte-count milestones so we log progress every ~256 KB.
@@ -268,10 +279,18 @@ static void wifi_telemetry_collect_and_publish() {
         first_cycle_completed = true;
     }
 
-    // Issue #86: subscribe to the cmd topic once per connection cycle.
-    // Skipped if already subscribed for this cycle, or if transport not
-    // ready, or if handler not yet constructed. PubSubClient holds the
-    // subscription across publish() calls within one MQTT session.
+#ifdef CMD_TRANSPORT_HTTP
+    // Issue #188 / H3: HTTP cmd-relay poll. GETs pending cmds and dispatches
+    // them inline before the burst-mode teardown below. Any cmd that promotes
+    // us to persistent mode (ota_enable, wifi_keepalive) will set
+    // g_tel_persistent_until_ms and the teardown below will skip end().
+    wifi_telemetry_http_cmd_poll();
+#endif
+
+    // Issue #86: MQTT cmd-topic subscribe (legacy path). Kept active during
+    // the H3-to-H7 transition for compatibility. The burst-mode drain bug
+    // (#187) means cmds delivered via this path during burst are lost; the
+    // HTTP path above is the working replacement. H7 will remove this.
     if (g_remote_cmd_handler && !g_remote_cmd_subscribed && g_tel_transport->isReady()) {
         char cmd_topic[64];
         g_remote_cmd_handler->buildCmdTopic(cmd_topic, sizeof(cmd_topic));
@@ -576,6 +595,108 @@ static void remoteCommandMessageCallback(const char* topic,
                                      &publishResponseShim,
                                      /* user_data */ nullptr);
 }
+
+#ifdef CMD_TRANSPORT_HTTP
+// ----------------------------------------------------------------------------
+// HTTP cmd-relay path (Strycher/LoRa#188 / H3).
+//
+// Replaces the MQTT cmd channel with HTTP polling. During each burst window
+// (after publishing telemetry), the device GETs pending cmds from the relay
+// server, dispatches each via the existing RemoteCommandHandler::onHttpCmd
+// entry point, and POSTs responses back. Server URL injected at build time
+// as CMDRELAY_URL (from platformio.local.ini [cmdrelay] url).
+//
+// Auth: bearer token in Authorization header, same value as
+// OTA_TRIGGER_SECRET (server-side DEVICE_BEARER_TOKEN). HTTP-layer auth
+// replaces the in-payload auth check the MQTT path uses.
+//
+// Sequence per burst:
+//   GET  CMDRELAY_URL/devices/<node>/cmds              -> [array of cmds]
+//   for each cmd: onHttpCmd(cmd_json) -> calls publishHttpResponseShim
+//   POST CMDRELAY_URL/devices/<node>/responses         <- response payload
+// ----------------------------------------------------------------------------
+
+static bool publishHttpResponseShim(const char* /* response_topic_unused */,
+                                      const char* response_payload,
+                                      void* /* user_data */)
+{
+    // The response_payload is a complete JSON object built by
+    // RemoteCommandHandler::dispatch (or publishReject). For HTTP it
+    // already includes cmd_id thanks to the H3 refactor.
+    HTTPClient http;
+    String url = String(CMDRELAY_URL) + "/devices/" + String(WIFI_TELEMETRY_NODE_ID) + "/responses";
+    if (!http.begin(url)) {
+        Serial.println("[HTTP-CMD] response POST: begin() failed");
+        return false;
+    }
+    http.addHeader("Authorization", String("Bearer ") + OTA_TRIGGER_SECRET);
+    http.addHeader("Content-Type", "application/json");
+    int code = http.POST(response_payload);
+    http.end();
+    if (code < 200 || code >= 300) {
+        Serial.printf("[HTTP-CMD] response POST returned %d\n", code);
+        return false;
+    }
+    return true;
+}
+
+static void wifi_telemetry_http_cmd_poll() {
+    if (g_remote_cmd_handler == nullptr) return;
+    if (g_tel_transport == nullptr || !g_tel_transport->isReady()) return;
+
+    HTTPClient http;
+    String url = String(CMDRELAY_URL) + "/devices/" + String(WIFI_TELEMETRY_NODE_ID) + "/cmds";
+    if (!http.begin(url)) {
+        Serial.println("[HTTP-CMD] cmd poll: begin() failed");
+        return;
+    }
+    http.addHeader("Authorization", String("Bearer ") + OTA_TRIGGER_SECRET);
+    http.setTimeout(5000);
+
+    int code = http.GET();
+    if (code != 200) {
+        // 401 -> auth misconfig; >= 500 -> server problem; -1 -> network.
+        // None of these are fatal -- we just skip the poll for this burst.
+        if (code > 0) {
+            Serial.printf("[HTTP-CMD] cmd poll returned %d\n", code);
+        }
+        http.end();
+        return;
+    }
+
+    String body = http.getString();
+    http.end();
+
+    // Parse the array of pending cmds. Each cmd has shape
+    // {cmd_id, ts_queued, action, params: {...}}.
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, body);
+    if (err) {
+        Serial.printf("[HTTP-CMD] cmd response JSON parse failed: %s\n", err.c_str());
+        return;
+    }
+    if (!doc.is<JsonArray>()) {
+        Serial.println("[HTTP-CMD] cmd response not a JSON array");
+        return;
+    }
+
+    JsonArray cmds = doc.as<JsonArray>();
+    int n = 0;
+    for (JsonObject cmd : cmds) {
+        // Dispatch via the existing handler. publishHttpResponseShim posts
+        // the response back to the server (which closes the cmd in flight
+        // -> completed). Any action that needs persistent WiFi (ota_enable,
+        // wifi_keepalive) will call _callbacks.wifiOn(N) which sets
+        // g_tel_persistent_until_ms; the existing main-loop persistent-mode
+        // lifecycle (line 349-363) then keeps WiFi up beyond this burst.
+        g_remote_cmd_handler->onHttpCmd(cmd, &publishHttpResponseShim, nullptr);
+        n++;
+    }
+    if (n > 0) {
+        Serial.printf("[HTTP-CMD] processed %d cmd(s) from poll\n", n);
+    }
+}
+#endif // CMD_TRANSPORT_HTTP
 
 // Constructs the remote command handler + callbacks, registers the
 // transport-level message callback. Called once from wifi_telemetry_setup().

@@ -30,6 +30,8 @@
 
 #if defined(ENABLE_WIFI_TELEMETRY) && defined(ESP32)
 
+#include <ArduinoJson.h>
+
 #include <Arduino.h>
 #include <stdint.h>
 
@@ -55,6 +57,9 @@ struct RemoteCommandRequest {
     RemoteCmd action;
     uint32_t  window_sec;             // clamped [60, 1800] before dispatch
                                        // ignored for actions that don't take a window
+    uint32_t  cmd_id;                  // HTTP path: server-assigned cmd_id for response
+                                       // correlation. MQTT path: 0 (no correlation needed).
+                                       // Included in response payload when nonzero.
 };
 
 // ---------------------------------------------------------------------------
@@ -152,15 +157,39 @@ public:
                                             void* user_data),
                    void* publish_user_data);
 
+    // HTTP cmd-relay path entry point (Strycher/LoRa#188). The HTTP transport
+    // authenticates devices at the bearer-header layer before delivering the
+    // cmd, so this entry skips the in-payload auth check that onMessage uses
+    // for MQTT. Extracts cmd_id from the JSON for response correlation; the
+    // publish_response callback should POST to the server's /responses
+    // endpoint rather than publishing to MQTT.
+    //
+    // cmd_obj is a single cmd element from the server's GET /cmds response
+    // array, shape: {cmd_id, ts_queued, action, params: {...}}.
+    bool onHttpCmd(JsonObject cmd_obj,
+                   bool (*publish_response)(const char* response_topic_unused,
+                                            const char* response_payload,
+                                            void* user_data),
+                   void* publish_user_data);
+
 private:
     bool parse(const uint8_t* payload, size_t len, RemoteCommandRequest& out);
+    bool parseFromJson(JsonObject cmd_obj, RemoteCommandRequest& out);
     bool authMatches(const char* candidate, size_t candidate_len);
     bool rateLimitOk(RemoteCmd action, uint32_t now_ms);
     void recordAccept(RemoteCmd action, uint32_t now_ms);
+
+    // Post-auth dispatch. Both onMessage (after MQTT-layer auth) and
+    // onHttpCmd (which has no in-payload auth; HTTP-layer auth done already)
+    // converge here. Handles rate-limit, window clamp, accept-log, dispatch.
+    bool executeAuthenticated(RemoteCommandRequest& req,
+                              bool (*publish_response)(const char*, const char*, void*),
+                              void* user_data);
+
     void dispatch(const RemoteCommandRequest& req,
                   bool (*publish_response)(const char*, const char*, void*),
                   void* user_data);
-    void publishReject(RemoteCmdReject reason, RemoteCmd action,
+    void publishReject(RemoteCmdReject reason, RemoteCmd action, uint32_t cmd_id,
                        bool (*publish_response)(const char*, const char*, void*),
                        void* user_data);
 
