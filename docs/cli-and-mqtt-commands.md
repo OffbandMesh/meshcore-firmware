@@ -80,14 +80,26 @@ After persistent expires the device returns to burst mode automatically. WiFi st
 
 | Command | Behavior | Reply | Source |
 |---|---|---|---|
-| `start ota` | Bring up **SoftAP at 192.168.4.1** with `/update` endpoint | `Started: http://192.168.4.1/update` | CommonCLI.cpp:259, board.startOTAUpdate() |
+| `start ota` | Bring up **SoftAP at 192.168.4.1** with `/update` endpoint. Calls `board.startOTAUpdate()` (different from MQTT-side `startOTAUpdateOverSTA`). | `Started: http://192.168.4.1/update` | CommonCLI.cpp:259 |
 
-**CAUTION**: `start ota` puts the device in **SoftAP mode**, disconnecting
-from home WiFi (and MQTT). To OTA via this path, you must connect your
-computer's WiFi to the SoftAP that the device just brought up, then POST
-firmware to `http://192.168.4.1/update`. Inconvenient. Use the MQTT
-`ota_enable` mechanism instead unless the device has no MQTT path
-available.
+> **!! DO NOT MIX WITH ACTIVE STA TELEMETRY !!**
+>
+> `start ota` causes a **panic-loop interaction** if WiFi is currently in
+> persistent STA mode (e.g., user previously sent `wifi on N`). On
+> Heltec V4 / ESP32-S3 the simultaneous STA+SoftAP brings the chip's
+> WiFi stack into an unstable state where every subsequent serial
+> port-open re-triggers a Panic / exception reset. Recovery requires
+> USB power cycle or `pio-flash factory-reset`.
+>
+> Reproduced 2026-05-21. Tracking: #184.
+>
+> **If the device is on home WiFi**, use the MQTT `ota_enable` action
+> instead — it routes to `board.startOTAUpdateOverSTA()` which keeps
+> the STA connection alive and serves OTA on the home WiFi IP. No
+> SoftAP, no panic.
+>
+> Use CLI `start ota` ONLY when the device has no home-WiFi credentials,
+> i.e., first-time setup or recovery from a wiped data partition.
 
 After `start ota` the device typically also resets WiFi state — `mode=burst`
 on next query, persistent window lost.
@@ -131,12 +143,16 @@ Handler: `src/helpers/wifi_telemetry/RemoteCommand.cpp::handle()`. Strict action
 
 ### Available actions (#86 + #88 + later)
 
+**All 6 actions whitelisted** per `RemoteCommand.cpp::parseActionString` (line 65-75):
+
 | Action | Behavior | Required fields | Rate limit | Source |
 |---|---|---|---|---|
-| `ota_enable` | Bring up OTA endpoint on home WiFi IP (NOT SoftAP). Calls `wifiOn(window_sec)` + `otaStart()`. Response data includes `ota_url`. | `auth`, `window_sec` (optional) | 5 min between attempts | RemoteCommand.cpp:295 |
-| `ota_disable` | Stop OTA server, turn WiFi off | `auth` | (default) | RemoteCommand.cpp:318 |
-| `ota_status` | Query OTA server status | `auth` | (default) | RemoteCommand.cpp:324 |
-| `safety_log_dump` | Dump safety log to MQTT response. Used by `ota-push.py` verify_channel=mqtt. | `auth` | (default) | RemoteCommand.cpp |
+| `ota_enable` | Bring up OTA endpoint on home WiFi IP (NOT SoftAP). Calls `wifiOn(window_sec)` + `otaStart()` -> `board.startOTAUpdateOverSTA()`. Response data includes `ota_url`. | `auth`, `window_sec` (optional, default 600, clamped to [60,1800]) | **5 min** between attempts | RemoteCommand.cpp:295 |
+| `ota_disable` | Stop OTA server (`otaStop`), turn WiFi off (`wifiOff`). | `auth` | 1 min | RemoteCommand.cpp:318 |
+| `ota_status` | Query OTA server status. Response includes `status_text`. | `auth` | 1 min | RemoteCommand.cpp:324 |
+| `wifi_keepalive` | Calls `wifiOn(window_sec)` only -- no OTA setup. Useful to keep WiFi up for any other reason (e.g., upcoming MQTT cmd burst from other source). | `auth`, `window_sec` (optional, default 600, clamped to [60,1800]) | 1 min | RemoteCommand.cpp:335 |
+| `reboot` | Deferred reboot via `_callbacks.rebootAfter(2000)` -- response publishes first, then reboot fires 2s later. | `auth` | 1 min | RemoteCommand.cpp:347 |
+| `safety_log_dump` | Dump safety log to MQTT response data (truncated to fit `kOutPayloadMax`). Used by `ota-push.py` verify_channel=mqtt to confirm post-OTA boot. | `auth` | 30 sec | RemoteCommand.cpp:353 |
 
 The OTA enable action's response includes:
 
@@ -159,7 +175,11 @@ That's the URL `scripts/ota-push.py` should POST firmware to.
 
 ### Authentication failures
 
-A bad `auth` value results in `publishReject(AUTH_FAIL, ...)` on the response topic. Silent failure ONLY if response publish itself fails (e.g., MQTT disconnected mid-cmd).
+**AUTH_FAIL is SILENT by design** — no response is published on the cmd/response topic. The handler logs the failure to the safety log only. This is an anti-oracle defense: an attacker probing for valid auth values cannot distinguish "wrong auth" from "device offline" via the broker.
+
+Other reject reasons (PARSE_FAIL, UNKNOWN_ACTION, RATE_LIMITED, OVERSIZED, INTERNAL_ERROR) DO publish on cmd/response — only AUTH_FAIL is silent.
+
+**Implication for testing**: if you publish a cmd and see no response, you cannot tell whether (a) the device is offline, (b) your secret is wrong, or (c) the burst window closed before processing. Use `parse_fail`-triggering malformed JSON as a diagnostic — that confirms the cmd handler is running and processing.
 
 ---
 
@@ -206,11 +226,35 @@ mechanism per OTA session.
 | `scripts/pio-flash.py preview <device> --env <env>` | Tier A stage 1: write token, no flash | scripts/pio-flash.py:355 (cmd_preview) |
 | `scripts/pio-flash.py confirm <device> --token <path>` | Tier A stage 2: flash via pio (token-bound) | scripts/pio-flash.py:407 (cmd_confirm) |
 | `scripts/ota-push.py <device> --firmware <path>` | OTA push to home WiFi IP, verify, log to flash-history.jsonl | scripts/ota-push.py |
+| `scripts/pio-flash.py factory-reset <device> --env <env>` | Erase data partition (`0xc90000 + 0x370000`) + reflash app in one bootloader session (`--after no_reset`). Requires manual BOOT+RST entry to ROM bootloader BEFORE invocation. Wipes prefs / identity / contacts / safety log. | scripts/pio-flash.py (factory-reset subcommand, added 2026-05-21 per #185) |
 
 The wrappers do NOT auto-call `wifi on` or `ota_enable` before flashing —
 those are caller responsibilities, documented above. The wrappers
 enforce the safety + audit layer; the actual enable sequence is on the
 operator (or a higher-level script).
+
+---
+
+## Why OTA, not USB-cable flash
+
+Both mechanisms put new firmware on the device, but they're NOT equivalent.
+
+**USB-cable flash via `esptool write_flash` to slot 0 (app partition)**:
+- Writes the app partition directly, no OTA-update state transitions
+- Does NOT touch `otadata` partition → bootloader doesn't see PENDING_VERIFY
+- **Bypasses the entire boot-rollback safety stack**: no PENDING_VERIFY, no `esp_ota_mark_app_valid_cancel_rollback()`, no app-level NVS-counter D9 protection cycle
+- A bad firmware = bricked device until manual re-flash
+
+**OTA via `esp_ota_*` (which both `startOTAUpdate` SoftAP and `startOTAUpdateOverSTA` use)**:
+- Writes the OTHER (currently-non-running) app slot
+- Bootloader sets otadata to PENDING_VERIFY on next boot
+- arduino-esp32's `initArduino()` auto-validates to VALID before user `setup()` runs
+- App-level D9 NVS counter catches "alive but broken" later
+- A bad firmware that crashes early = automatic rollback to previous slot
+
+For production devices (patio), **always OTA**. For lab devices (ST-P) the safety stack is still preferable but USB-cable flash is acceptable when you need to recover from a corrupted prefs partition (see `factory-reset` workflow below).
+
+See `findings_2026-05-14_ota_rollback_actual_behavior.md` in the LoRa project memory for the full OTA boot-validation sequence.
 
 ---
 
@@ -248,6 +292,45 @@ c.disconnect()
 python scripts/ota-push.py ST-P --firmware \
     C:/Dev/LoRa/meshcore-firmware/.pio/build/heltec_v4_repeater_telemetry_stp/firmware.bin
 ```
+
+### Recover from corrupted / unwanted prefs (factory reset)
+
+Use case: device's stored prefs file overrides build-time defaults
+(e.g., LORA_FREQ, password, advert_interval), and you need the build-flag
+default to take effect — or the prefs file is corrupted and causing
+boot misbehavior. Or you need a guaranteed fresh identity.
+
+```bash
+# 1. Build the firmware you want to land on
+cd meshcore-firmware && pio run -e <env-name>
+
+# 2. Identity verify (Tier 0, free)
+python scripts/pio-flash.py list
+
+# 3. Physically: hold BOOT, tap RST, release BOOT on the device.
+#    This puts the chip in ROM bootloader. The running firmware
+#    (which may be panic-looping or otherwise unhealthy) is no
+#    longer involved.
+
+# 4. Erase data partition + flash new app in one bootloader session
+python scripts/pio-flash.py factory-reset <device-name> --env <env-name>
+```
+
+After completion:
+- Device reboots into the new firmware
+- No prefs file -> all values default to build flags
+- Fresh MeshCore identity (new pubkey, regenerated on first boot)
+- Empty contacts / safety log / OTA state
+- WiFi credentials (if they're in build flags via `platformio.local.ini`)
+  survive; if they were stored only in the data partition, they're gone too
+
+Verify via MQTT after boot:
+
+```bash
+ssh pi5 "mosquitto_sub -h localhost -t 'meshcore/<node_id>/state' -C 1 -v"
+```
+
+Look for `crosswire_version` field + low `uptime_seconds` + `reset_reason: Power-on reset` indicating a clean boot.
 
 ### Verify device identity post-flash
 
