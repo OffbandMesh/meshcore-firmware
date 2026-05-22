@@ -1,12 +1,19 @@
-# Strycher/MeshCore — SafeBoot Fork
+# Crosswire — Strycher's MeshCore fork
 
-This is a community fork of [MeshCore](https://github.com/meshcore-dev/MeshCore)
-that adds **SafeBoot**: a pre-init power guard for solar/battery-powered LoRa nodes.
+Crosswire is a community fork of [MeshCore](https://github.com/meshcore-dev/MeshCore)
+that carries feature branches not (yet) in upstream:
 
-SafeBoot is ported from
-[Meshtastic PR #10391](https://github.com/meshtastic/firmware/pull/10391)
-(by Mickyleitor, commit `4c7e1ee8`). The port is filed for upstream submission;
-this fork tracks the work-in-progress branch.
+- **SafeBoot** — pre-init power guard for solar/battery-powered LoRa nodes
+  (ported from [Meshtastic PR #10391](https://github.com/meshtastic/firmware/pull/10391)
+  by Mickyleitor, commit `4c7e1ee8`; filed for upstream submission)
+- **WiFi/MQTT telemetry** — Home Assistant-native telemetry from Repeater nodes
+- **MQTT command queue** — remote OTA trigger and other commands over MQTT
+- **OTA discipline** — pre-flight verification, audit log, rollback safety
+
+The currently-shipping feature is **SafeBoot**. The rest are at various stages
+of integration on internal feature branches. See **[`docs/safeboot.md`](docs/safeboot.md)**
+for the SafeBoot user guide (when to use, how it works, hardware support matrix,
+flashing, configuration, troubleshooting).
 
 ## What SafeBoot adds
 
