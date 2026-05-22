@@ -56,14 +56,17 @@ crosswire_branch = _git("rev-parse", "--abbrev-ref", "HEAD")
 crosswire_build_date = _build_date_utc()
 
 
-# Use BUILD_FLAGS form for explicit -D injection. The escaped backslash-quote
-# ensures the value reaches the preprocessor as a quoted C string literal.
+# Use SCons-standard CPPDEFINES variable (not the PIO build_flags equivalent).
+# CPPDEFINES is what actually reaches gcc as -D macros. BUILD_FLAGS is a
+# PlatformIO config-file variable that doesn't directly map to compiler args
+# in the SCons env. The escaped backslash-quote ensures the value reaches the
+# preprocessor as a quoted C string literal.
 env.Append(  # type: ignore[name-defined]  # noqa: F821
-    BUILD_FLAGS=[
-        f'-DCROSSWIRE_VERSION=\\"{crosswire_version}\\"',
-        f'-DCROSSWIRE_GIT_SHA=\\"{crosswire_git_sha}\\"',
-        f'-DCROSSWIRE_BRANCH=\\"{crosswire_branch}\\"',
-        f'-DCROSSWIRE_BUILD_DATE=\\"{crosswire_build_date}\\"',
+    CPPDEFINES=[
+        ("CROSSWIRE_VERSION", '\\"' + crosswire_version + '\\"'),
+        ("CROSSWIRE_GIT_SHA", '\\"' + crosswire_git_sha + '\\"'),
+        ("CROSSWIRE_BRANCH", '\\"' + crosswire_branch + '\\"'),
+        ("CROSSWIRE_BUILD_DATE", '\\"' + crosswire_build_date + '\\"'),
     ]
 )
 
