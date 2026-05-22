@@ -234,6 +234,14 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       _board->powerOff();  // doesn't return
     } else if (memcmp(command, "reboot", 6) == 0) {
       _board->reboot();  // doesn't return
+    } else if (memcmp(command, "version", 7) == 0 && (command[7] == 0 || command[7] == ' ')) {
+      // Crosswire identity (FF3 / #180). Reports both upstream MeshCore version
+      // (via callback into example's MyMesh which #defines FIRMWARE_VERSION) and
+      // the Crosswire-injected build identity from scripts/inject_crosswire_version.py
+      // (FF2 / #179). See VERSIONING.md for the dual-version scheme rationale.
+      sprintf(reply, "Upstream MeshCore: %s (%s)\nCrosswire fork: %s (sha %s, %s, built %s)",
+              _callbacks->getFirmwareVer(), _callbacks->getBuildDate(),
+              CROSSWIRE_VERSION, CROSSWIRE_GIT_SHA, CROSSWIRE_BRANCH, CROSSWIRE_BUILD_DATE);
     } else if (memcmp(command, "clkreboot", 9) == 0) {
       // Reset clock
       getRTCClock()->setCurrentTime(1715770351);  // 15 May 2024, 8:50pm
