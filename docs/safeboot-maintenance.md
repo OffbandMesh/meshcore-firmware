@@ -14,7 +14,7 @@ need to be updated, in order.
 | `main` | `Strycher/MeshCore` (fork) | Tracks upstream `meshcore-dev/MeshCore:main` exactly. No local modifications. |
 | `feature/safeboot` | `Strycher/MeshCore` (fork) | Long-lived feature branch carrying the SafeBoot port. Always rebased onto (or merged with) the latest upstream release. **Never squash, never delete.** This is the branch the upstream PR is filed from. |
 | `safeboot-vX.Y.Z` | `Strycher/MeshCore` tags | Release tags applied to `feature/safeboot` at each upstream-aligned build distributed to the community. |
-| `deploy/issues-84-86-87-combined` (or successor) | `meshcore-firmware/` working clone (origin = `meshcore-dev/MeshCore`) | Our fleet-deployment branch. Contains custom features (#84/#86/#87 today, more later). SafeBoot is **merged or cherry-picked INTO** this branch — it does NOT live on this branch as a separate concern. |
+| `crosswire` | `meshcore-firmware/` working clone (origin = `meshcore-dev/MeshCore`) | Our fleet-deployment branch (renamed from `deploy/issues-84-86-87-combined` 2026-05-23 per LoRa#212). Contains custom Crosswire features. SafeBoot is **merged or cherry-picked INTO** this branch — it does NOT live on this branch as a separate concern. Per LoRa#210, this branch is itself interim until the fork's `main` becomes the Crosswire main. |
 
 ## Remotes
 
@@ -201,7 +201,7 @@ Cut a new RC instead.
 ## Workflow 2: Deploy-merge (combining SafeBoot with our custom features)
 
 Our fleet (patio, ST-P, and future devices) runs firmware built from
-`deploy/issues-84-86-87-combined` (or its successor) in the
+`crosswire` in the
 `meshcore-firmware/` clone. That branch carries our custom features (#84
 neighbors schema, #86 MQTT remote OTA, #87 TX power tuning, future work)
 that aren't in upstream MeshCore.
@@ -225,7 +225,7 @@ cd C:/Dev/LoRa/meshcore-firmware
 git fetch strycher                               # pull latest feature/safeboot
 
 # Option A: merge (preserves history of both sides)
-git checkout deploy/issues-84-86-87-combined
+git checkout crosswire
 git merge strycher/feature/safeboot
 # Resolve conflicts if upstream changes hit the same code paths as our customs
 # Likely conflict surface: any file SafeBoot modifies (setup() in main.cpp,
@@ -233,7 +233,7 @@ git merge strycher/feature/safeboot
 # that also has our patches landed.
 
 # Option B: cherry-pick (cleaner history, more work per release)
-git checkout deploy/issues-84-86-87-combined
+git checkout crosswire
 git log strycher/feature/safeboot ^upstream/main --oneline  # see SafeBoot-only commits
 git cherry-pick <sha-range>
 ```
@@ -266,7 +266,7 @@ gets clean per-feature commits.
 ### Deploy-branch tagging
 
 ```bash
-git checkout deploy/issues-84-86-87-combined
+git checkout crosswire
 git tag -a deploy-vX.Y.Z-safeboot -m "Combined fleet build incl SafeBoot vX.Y.Z"
 # This tag stays in the meshcore-firmware/ clone; no need to push
 # unless we want shareable deploy-branch firmware artifacts.
@@ -286,7 +286,7 @@ Typical sequence after a new upstream MeshCore release:
    - Push to Strycher/MeshCore
 
 2. Workflow 2: merge feature/safeboot into deploy branch
-   - In meshcore-firmware/, on deploy/issues-84-86-87-combined
+   - In meshcore-firmware/, on crosswire
    - git fetch strycher → git merge strycher/feature/safeboot
    - Resolve conflicts (custom-vs-upstream)
    - Run bench validation on COMBINED build
