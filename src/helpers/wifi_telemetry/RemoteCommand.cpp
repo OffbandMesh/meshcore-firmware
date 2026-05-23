@@ -416,7 +416,18 @@ void RemoteCommandHandler::dispatch(const RemoteCommandRequest& req,
         // The full safety log can be large; we send it back in data_json.
         // Note: kOutSafetyLogMax is bigger than data_json buffer. We truncate.
         // A future refinement might publish the log to its own topic for size.
-        char log_buf[kOutSafetyLogMax];
+        //
+        // Issue #206: log_buf is `static` (BSS-allocated, not stack) because the
+        // arduino-esp32 loopTask default stack is only 8192 bytes. Allocating a
+        // 4096-byte buffer on the stack here, combined with ~800B of other locals
+        // in this function plus the call-chain frames above (HTTPClient + String
+        // + JsonDocument in wifi_telemetry_http_cmd_poll, RemoteCommandRequest +
+        // JsonDocument in onHttpCmd, executeAuthenticated's char detail[64]),
+        // blew the stack budget and panicked the device. This action was the only
+        // dispatch path that allocated >200 bytes locally, which is why only
+        // safety_log_dump triggered the crash. Matches the pattern of `out_buf`
+        // on line 349 which is already `static` for the same reason.
+        static char log_buf[kOutSafetyLogMax];
         _callbacks.getSafetyLog(log_buf, sizeof(log_buf));
 
         // Escape the log content for JSON. Quick escape: replace " with '
