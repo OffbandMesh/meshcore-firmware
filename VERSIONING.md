@@ -74,7 +74,8 @@ rebase — not because of the upstream change itself.
 ## Initial backfill (2026-05-21)
 
 The first Crosswire version tag is **`crosswire-v0.5.0`**, applied to
-`deploy/issues-84-86-87-combined` as of 2026-05-21.
+`crosswire` (the fork's active integration branch — renamed from
+`deploy/issues-84-86-87-combined` 2026-05-23 per LoRa#212) as of 2026-05-21.
 
 ### Why v0.5.0 (not v0.1.0 or v1.0.0)
 
