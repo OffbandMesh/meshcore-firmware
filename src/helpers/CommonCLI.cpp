@@ -4,6 +4,31 @@
 #include "AdvertDataHelpers.h"
 #include <RTClib.h>
 
+// #200 / LoRa-wek: embed the Crosswire identity blob in .rodata so the
+// flash-history parser (scripts/firmware_identity.py) can recover BUILD-time
+// identity by scanning the .bin, rather than re-running git at flash time
+// against a working tree that may have advanced past the build. CommonCLI.cpp
+// is compiled into every env via build_src_filter +<helpers/*.cpp>, so this
+// is the right place to anchor it.
+//
+// Keep-alive strategy: `__attribute__((used))` is necessary but not
+// sufficient. It keeps the symbol in the .o file but does not stop the
+// LINKER's `--gc-sections` pass (which ESP-IDF enables by default) from
+// dropping the section if no reachable code references it. Tried `retain`
+// (GCC 11+ SHF_GNU_RETAIN) - silently ignored by the xtensa toolchain in
+// use. The robust fix is to reference the symbol from already-reachable
+// code: the existing "version" CLI handler below loads its address into
+// _xwire_identity_blob_kept via a volatile global, which gives the symbol
+// a live reference in the call graph the linker walks.
+//
+// See scripts/inject_crosswire_version.py "ON-WIRE ABI WARNING" for format.
+__attribute__((used))
+static const char _xwire_identity_blob[] = CROSSWIRE_IDENTITY_BLOB;
+// volatile-extern keepalive: the assignment in the version handler below
+// forces the linker to walk to _xwire_identity_blob. volatile prevents the
+// optimizer from elising the assignment.
+const char* volatile _xwire_identity_blob_kept = nullptr;
+
 #ifndef BRIDGE_MAX_BAUD
 #define BRIDGE_MAX_BAUD 115200
 #endif
@@ -242,6 +267,8 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       sprintf(reply, "Upstream MeshCore: %s (%s)\nCrosswire fork: %s (sha %s, %s, built %s)",
               _callbacks->getFirmwareVer(), _callbacks->getBuildDate(),
               CROSSWIRE_VERSION, CROSSWIRE_GIT_SHA, CROSSWIRE_BRANCH, CROSSWIRE_BUILD_DATE);
+      // #200: keep _xwire_identity_blob reachable in the call graph.
+      _xwire_identity_blob_kept = _xwire_identity_blob;
     } else if (memcmp(command, "clkreboot", 9) == 0) {
       // Reset clock
       getRTCClock()->setCurrentTime(1715770351);  // 15 May 2024, 8:50pm

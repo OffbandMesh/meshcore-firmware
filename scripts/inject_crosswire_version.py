@@ -4,10 +4,11 @@ Inject Crosswire identity into the build as preprocessor defines.
 
 Called from platformio.ini per-platform `extra_scripts`. Sets:
 
-  CROSSWIRE_VERSION     - from `git describe --tags --match 'crosswire-v*'`
-  CROSSWIRE_GIT_SHA     - from `git rev-parse --short HEAD`
-  CROSSWIRE_BRANCH      - from `git rev-parse --abbrev-ref HEAD`
-  CROSSWIRE_BUILD_DATE  - current UTC date (YYYY-MM-DD)
+  CROSSWIRE_VERSION         - from `git describe --tags --match 'crosswire-v*'`
+  CROSSWIRE_GIT_SHA         - from `git rev-parse --short HEAD`
+  CROSSWIRE_BRANCH          - from `git rev-parse --abbrev-ref HEAD`
+  CROSSWIRE_BUILD_DATE      - current UTC date (YYYY-MM-DD)
+  CROSSWIRE_IDENTITY_BLOB   - combined marker-wrapped form for binary scanners
 
 The upstream baseline is already exposed by MeshCore's existing
 FIRMWARE_VERSION / FIRMWARE_BUILD_DATE macros (set per-example in
@@ -17,6 +18,27 @@ via the format defined in VERSIONING.md:
   "MC <FIRMWARE_VERSION> / Crosswire <CROSSWIRE_VERSION>"
 
 See VERSIONING.md for the full scheme. Epic #176 / LoRa-edl; FF2 #179.
+
+================================================================
+CROSSWIRE_IDENTITY_BLOB FORMAT  --  ON-WIRE ABI WARNING (#200)
+================================================================
+The blob is embedded in the firmware binary's .rodata and parsed back
+out by scripts/firmware_identity.py at flash time. The parser is
+deployed separately from the firmware image, so the format is an
+on-wire ABI between the build and the flash wrappers.
+
+  XWIRE_BEGIN|XWIRE_VER=<ver>|XWIRE_SHA=<sha>|XWIRE_BD=<date>|XWIRE_BR=<branch>|XWIRE_END
+
+Rules:
+  * Field order is fixed (parsers may rely on it for boundary detection).
+  * XWIRE_BR is intentionally LAST before XWIRE_END so a branch name
+    containing the (theoretically-legal) | character cannot break the
+    parser by being confused for a field boundary.
+  * Do not change the begin / end markers, field prefixes, or delimiter
+    without bumping a format version AND updating both the firmware
+    consumer (helpers/CommonCLI.cpp marker line) AND the parser
+    (scripts/firmware_identity.py).
+================================================================
 """
 import datetime
 import subprocess
@@ -56,6 +78,18 @@ crosswire_branch = _git("rev-parse", "--abbrev-ref", "HEAD")
 crosswire_build_date = _build_date_utc()
 
 
+# Combined marker-wrapped blob for binary scanners. See "ON-WIRE ABI WARNING"
+# block in the module docstring above before changing format. Field order is
+# fixed: branch is last because branch names can contain `|`.
+crosswire_identity_blob = (
+    "XWIRE_BEGIN"
+    f"|XWIRE_VER={crosswire_version}"
+    f"|XWIRE_SHA={crosswire_git_sha}"
+    f"|XWIRE_BD={crosswire_build_date}"
+    f"|XWIRE_BR={crosswire_branch}"
+    "|XWIRE_END"
+)
+
 # Use SCons-standard CPPDEFINES variable (not the PIO build_flags equivalent).
 # CPPDEFINES is what actually reaches gcc as -D macros. BUILD_FLAGS is a
 # PlatformIO config-file variable that doesn't directly map to compiler args
@@ -67,6 +101,7 @@ env.Append(  # type: ignore[name-defined]  # noqa: F821
         ("CROSSWIRE_GIT_SHA", '\\"' + crosswire_git_sha + '\\"'),
         ("CROSSWIRE_BRANCH", '\\"' + crosswire_branch + '\\"'),
         ("CROSSWIRE_BUILD_DATE", '\\"' + crosswire_build_date + '\\"'),
+        ("CROSSWIRE_IDENTITY_BLOB", '\\"' + crosswire_identity_blob + '\\"'),
     ]
 )
 
@@ -75,3 +110,4 @@ print(f"[crosswire]   CROSSWIRE_VERSION    = {crosswire_version}")
 print(f"[crosswire]   CROSSWIRE_GIT_SHA    = {crosswire_git_sha}")
 print(f"[crosswire]   CROSSWIRE_BRANCH     = {crosswire_branch}")
 print(f"[crosswire]   CROSSWIRE_BUILD_DATE = {crosswire_build_date}")
+print(f"[crosswire]   CROSSWIRE_IDENTITY_BLOB embedded ({len(crosswire_identity_blob)} bytes)")
