@@ -6,28 +6,51 @@
 
 // #200 / LoRa-wek: embed the Crosswire identity blob in .rodata so the
 // flash-history parser (scripts/firmware_identity.py) can recover BUILD-time
-// identity by scanning the .bin, rather than re-running git at flash time
-// against a working tree that may have advanced past the build. CommonCLI.cpp
-// is compiled into every env via build_src_filter +<helpers/*.cpp>, so this
-// is the right place to anchor it.
+// identity by scanning the firmware binary, rather than re-running git at
+// flash time against a working tree that may have advanced past the build.
+// CommonCLI.cpp is compiled into every env via build_src_filter
+// +<helpers/*.cpp>, so this is the right place to anchor it.
 //
-// Keep-alive strategy: `__attribute__((used))` is necessary but not
-// sufficient. It keeps the symbol in the .o file but does not stop the
-// LINKER's `--gc-sections` pass (which ESP-IDF enables by default) from
-// dropping the section if no reachable code references it. Tried `retain`
-// (GCC 11+ SHF_GNU_RETAIN) - silently ignored by the xtensa toolchain in
-// use. The robust fix is to reference the symbol from already-reachable
-// code: the existing "version" CLI handler below loads its address into
-// _xwire_identity_blob_kept via a volatile global, which gives the symbol
-// a live reference in the call graph the linker walks.
+// #213 / LoRa-x09: constructor-based keepalive (replaces an earlier
+// in-version-handler keepalive that worked on ESP32 but was dead-code-
+// eliminated on nRF52 builds where the CLI "version" handler itself is
+// unreachable from main, e.g. RAK_4631_companion_radio_ble which runs as a
+// BLE peripheral with no serial CLI loop).
+//
+// Why a constructor is universally safe:
+//   `__attribute__((used))` alone keeps the symbol in the .o file but the
+//   linker's --gc-sections pass (active on every supported platform) still
+//   drops the section if no reachable code references it. Newer toolchains
+//   support `__attribute__((retain))` (SHF_GNU_RETAIN, GCC 11+ / binutils
+//   2.36+) but our arm-none-eabi-gcc is 7.2.1 / binutils 2.29 (2017-era)
+//   which silently ignores it. Constructors instead get placed in
+//   .init_array.* sections, which are KEEP()'d by every C++ runtime's
+//   linker script (mandatory for static-init to work). Verified for nRF52:
+//   nrf52_common.ld:122-123 has KEEP(*(SORT(.init_array.*))) and
+//   KEEP(*(.init_array)); the project's boards/nrf52840_s140_v6.ld
+//   INCLUDEs that. The constructor's body references _xwire_identity_blob,
+//   so the marker section becomes reachable from the kept .init_array
+//   entry and survives --gc-sections on every platform.
 //
 // See scripts/inject_crosswire_version.py "ON-WIRE ABI WARNING" for format.
 __attribute__((used))
 static const char _xwire_identity_blob[] = CROSSWIRE_IDENTITY_BLOB;
-// volatile-extern keepalive: the assignment in the version handler below
-// forces the linker to walk to _xwire_identity_blob. volatile prevents the
-// optimizer from elising the assignment.
+
+// Volatile pointer the constructor writes to. volatile prevents the optimizer
+// from concluding the constructor body has no observable effect and elising
+// the reference (which would defeat the keepalive).
 const char* volatile _xwire_identity_blob_kept = nullptr;
+
+// File-scope constructor — runs once at static-init time before setup()/main(),
+// before any user code. The function pointer goes into .init_array.65535,
+// which the C++ runtime walks at startup and which the linker is required to
+// KEEP for static-init correctness. This creates a reachability chain from
+// the kept .init_array section all the way down to _xwire_identity_blob,
+// ensuring the marker survives --gc-sections on every supported platform.
+__attribute__((constructor))
+static void _xwire_keepalive_ctor() {
+    _xwire_identity_blob_kept = _xwire_identity_blob;
+}
 
 #ifndef BRIDGE_MAX_BAUD
 #define BRIDGE_MAX_BAUD 115200
@@ -267,8 +290,11 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       sprintf(reply, "Upstream MeshCore: %s (%s)\nCrosswire fork: %s (sha %s, %s, built %s)",
               _callbacks->getFirmwareVer(), _callbacks->getBuildDate(),
               CROSSWIRE_VERSION, CROSSWIRE_GIT_SHA, CROSSWIRE_BRANCH, CROSSWIRE_BUILD_DATE);
-      // #200: keep _xwire_identity_blob reachable in the call graph.
-      _xwire_identity_blob_kept = _xwire_identity_blob;
+      // #213: the in-handler keepalive moved to a file-scope constructor
+      // (_xwire_keepalive_ctor near top of this file). The constructor
+      // approach works on every platform; the in-handler line was
+      // dead-code-eliminated on nRF52 because this handler isn't reachable
+      // from main on BLE-companion builds.
     } else if (memcmp(command, "clkreboot", 9) == 0) {
       // Reset clock
       getRTCClock()->setCurrentTime(1715770351);  // 15 May 2024, 8:50pm
