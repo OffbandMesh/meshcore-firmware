@@ -40,12 +40,25 @@
 // LoRa#216: persistent-mode (g_tel_persistent_until_ms != 0) cmd-poll
 // cadence, decoupled from the telemetry-publish boundary. 60s is fast
 // enough for interactive admin workflows (queue cmd, get response within
-// ~90s) without hammering cmdrelay. Burst-mode cmd-poll continues to
-// share WIFI_TELEMETRY_INTERVAL_MS (transport teardown between cycles
-// makes a faster cadence pointless until #210 NVS config lets per-device
-// runtime tuning).
+// ~90s) without hammering cmdrelay.
 #ifndef WIFI_CMD_POLL_PERSISTENT_INTERVAL_MS
 #define WIFI_CMD_POLL_PERSISTENT_INTERVAL_MS (60UL * 1000UL)
+#endif
+
+// LoRa#216: burst-mode (g_tel_persistent_until_ms == 0) cmd-poll cadence.
+// Default = WIFI_TELEMETRY_INTERVAL_MS so cmd-poll aligns with publish
+// cycles and incurs zero extra WiFi-up overhead. Operator can tune lower
+// via `cmd_poll interval N` CLI to trade power for cmd-response latency.
+// Hard minimum prevents catastrophic operator misconfiguration; below
+// this, operator should be using persistent mode instead.
+#ifndef WIFI_CMD_POLL_BURST_INTERVAL_DEFAULT_MS
+#define WIFI_CMD_POLL_BURST_INTERVAL_DEFAULT_MS WIFI_TELEMETRY_INTERVAL_MS
+#endif
+#ifndef WIFI_CMD_POLL_BURST_INTERVAL_MIN_MS
+#define WIFI_CMD_POLL_BURST_INTERVAL_MIN_MS (60UL * 1000UL)  // 60s floor
+#endif
+#ifndef WIFI_CMD_POLL_BURST_INTERVAL_MAX_MS
+#define WIFI_CMD_POLL_BURST_INTERVAL_MAX_MS (24UL * 60UL * 60UL * 1000UL)  // 24h ceiling
 #endif
 
 #ifndef WIFI_TELEMETRY_QUEUE_SIZE
