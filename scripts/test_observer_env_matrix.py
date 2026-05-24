@@ -35,7 +35,7 @@ REQUIRED_FLAGS_ALL = [
     "-D CROSSWIRE_OBSERVER",
     "-D CROSSWIRE_OBSERVER_BLE_COMPANION",
 ]
-REQUIRED_SRC_FILTER = "+<../../src/helpers/wifi_observer/*.cpp>"
+REQUIRED_SRC_FILTER = "+<helpers/wifi_observer/*.cpp>"
 
 failures = []
 
