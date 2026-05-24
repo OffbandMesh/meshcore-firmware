@@ -13,7 +13,7 @@
 #include <mqtt_client.h>
 #endif
 
-struct MQTTStatusSnapshot {
+struct MqttStatusSnapshot {
   int battery_mv;
   uint32_t uptime_secs;
   uint16_t error_flags;
@@ -29,13 +29,13 @@ struct MQTTStatusSnapshot {
   bool repeat_enabled;
 };
 
-class MQTTUplink {
+class MqttUplink {
 public:
-  explicit MQTTUplink(mesh::RTCClock& rtc, mesh::LocalIdentity& identity);
+  explicit MqttUplink(mesh::RTCClock& rtc, mesh::LocalIdentity& identity);
 
   void begin(FILESYSTEM* fs);
   void end();
-  void loop(const MQTTStatusSnapshot& snapshot);
+  void loop(const MqttStatusSnapshot& snapshot);
   void publishPacket(const mesh::Packet& packet, bool is_tx, int rssi, float snr, int score = -1,
                      int duration = -1);
 
@@ -102,12 +102,12 @@ private:
   FILESYSTEM* _fs;
   mesh::RTCClock* _rtc;
   mesh::LocalIdentity* _identity;
-  MQTTPrefs _prefs;
+  MqttPrefs _prefs;
   bool _running;
   unsigned long _last_status_publish;
   uint32_t _token_refresh_count;
   unsigned long _token_refresh_active_until_ms;
-  MQTTStatusSnapshot _last_status;
+  MqttStatusSnapshot _last_status;
   char _device_id[65];
   const char* _node_name;
   NetworkStateProvider* _network;

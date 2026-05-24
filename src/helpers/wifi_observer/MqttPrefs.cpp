@@ -10,7 +10,7 @@ namespace {
 constexpr uint32_t kFixedStatusIntervalMs = 300000;
 }
 
-void MQTTPrefsStore::setDefaults(MQTTPrefs& prefs) {
+void MqttPrefsStore::setDefaults(MqttPrefs& prefs) {
   memset(&prefs, 0, sizeof(prefs));
   prefs.magic = kMagic;
   prefs.enabled_mask = 0x01;
@@ -31,7 +31,7 @@ void MQTTPrefsStore::setDefaults(MQTTPrefs& prefs) {
 #endif
 }
 
-bool MQTTPrefsStore::load(FILESYSTEM* fs, MQTTPrefs& prefs) {
+bool MqttPrefsStore::load(FILESYSTEM* fs, MqttPrefs& prefs) {
   setDefaults(prefs);
   if (fs == nullptr || !fs->exists(kFilename)) {
     return false;
@@ -46,7 +46,7 @@ bool MQTTPrefsStore::load(FILESYSTEM* fs, MQTTPrefs& prefs) {
     return false;
   }
 
-  MQTTPrefs persisted{};
+  MqttPrefs persisted{};
   size_t bytes_to_read = min(static_cast<size_t>(file.size()), sizeof(persisted));
   bool ok = bytes_to_read >= sizeof(persisted.magic) &&
             file.read(reinterpret_cast<uint8_t*>(&persisted), bytes_to_read) == bytes_to_read;
@@ -71,7 +71,7 @@ bool MQTTPrefsStore::load(FILESYSTEM* fs, MQTTPrefs& prefs) {
   return true;
 }
 
-bool MQTTPrefsStore::save(FILESYSTEM* fs, const MQTTPrefs& prefs) {
+bool MqttPrefsStore::save(FILESYSTEM* fs, const MqttPrefs& prefs) {
   if (fs == nullptr) {
     return false;
   }

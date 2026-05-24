@@ -5,7 +5,7 @@
 #include <Arduino.h>
 #include <Identity.h>
 
-class JWTHelper {
+class JwtHelper {
 public:
   static bool createAuthToken(const mesh::LocalIdentity& identity, const char* audience, time_t issued_at,
                               time_t expires_at, char* token, size_t token_size, const char* owner = nullptr,

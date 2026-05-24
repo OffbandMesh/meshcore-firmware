@@ -7,7 +7,7 @@
 #include <mbedtls/base64.h>
 #include <string.h>
 
-size_t JWTHelper::base64UrlEncode(const uint8_t* input, size_t input_len, char* output, size_t output_size) {
+size_t JwtHelper::base64UrlEncode(const uint8_t* input, size_t input_len, char* output, size_t output_size) {
   if (input == nullptr || output == nullptr || output_size < 2) {
     return 0;
   }
@@ -33,7 +33,7 @@ size_t JWTHelper::base64UrlEncode(const uint8_t* input, size_t input_len, char* 
   return encoded_len;
 }
 
-bool JWTHelper::createAuthToken(const mesh::LocalIdentity& identity, const char* audience, time_t issued_at,
+bool JwtHelper::createAuthToken(const mesh::LocalIdentity& identity, const char* audience, time_t issued_at,
                                 time_t expires_at, char* token, size_t token_size, const char* owner,
                                 const char* email) {
   if (audience == nullptr || token == nullptr || token_size < 32 || issued_at <= 0 || expires_at <= issued_at) {
