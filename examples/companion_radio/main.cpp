@@ -3,6 +3,10 @@
 #include <SafeBoot.h>
 #include "MyMesh.h"
 
+#ifdef CROSSWIRE_OBSERVER
+  #include "helpers/wifi_observer/WifiObserver.h"
+#endif
+
 // Believe it or not, this std C function is busted on some platforms!
 static uint32_t _atoi(const char* sp) {
   uint32_t n = 0;
@@ -111,6 +115,9 @@ void setup() {
 
   // SafeBoot: pre-init power guard. See src/SafeBoot.h.
   SafeBoot::checkAndMaybeSleep();
+#ifdef CROSSWIRE_OBSERVER
+  crosswire::wifiObserverBegin();
+#endif
 
   board.begin();
 
@@ -227,6 +234,9 @@ void setup() {
 }
 
 void loop() {
+#ifdef CROSSWIRE_OBSERVER
+  crosswire::wifiObserverLoop();
+#endif
   the_mesh.loop();
   sensors.loop();
 #ifdef DISPLAY_CLASS
