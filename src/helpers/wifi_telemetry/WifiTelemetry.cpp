@@ -185,6 +185,8 @@ bool WifiTelemetry::publishDiscovery() {
         { "wifi_rssi",      "WiFi RSSI",         "dBm", "signal_strength",  "measurement",      "{{ value_json.wifi_rssi_dbm }}",      "diagnostic" },
         { "free_heap",      "Free Heap",         "B",   "data_size",        "measurement",      "{{ value_json.free_heap_b }}",        "diagnostic" },
         { "reset_reason",   "Last Reset Reason", nullptr, nullptr,          nullptr,            "{{ value_json.reset_reason }}",       "diagnostic" },
+        // LoRa#216: rolling 24h % of time WiFi was associated. Power-budget signal.
+        { "wifi_on_pct_24h","WiFi On (24h)",     "%",   nullptr,            "measurement",      "{{ value_json.wifi_on_pct_24h }}",    "diagnostic" },
     };
 
     char topic[WIFI_TELEMETRY_TOPIC_MAX];
@@ -277,7 +279,8 @@ size_t WifiTelemetry::buildStatePayload(char* buf, size_t buflen, const Telemetr
         "\"crosswire_version\":\"%s\","
         "\"crosswire_git_sha\":\"%s\","
         "\"crosswire_branch\":\"%s\","
-        "\"crosswire_build_date\":\"%s\"}",
+        "\"crosswire_build_date\":\"%s\","
+        "\"wifi_on_pct_24h\":%u.%02u}",
         (unsigned)d.battery_mv,
         (unsigned)d.battery_pct,
         (unsigned long)d.uptime_seconds,
@@ -298,7 +301,9 @@ size_t WifiTelemetry::buildStatePayload(char* buf, size_t buflen, const Telemetr
         CROSSWIRE_VERSION,
         CROSSWIRE_GIT_SHA,
         CROSSWIRE_BRANCH,
-        CROSSWIRE_BUILD_DATE);
+        CROSSWIRE_BUILD_DATE,
+        (unsigned)(d.wifi_on_pct_24h_x100 / 100),
+        (unsigned)(d.wifi_on_pct_24h_x100 % 100));
 
     if (n < 0 || (size_t)n >= buflen) return 0;
     return (size_t)n;
