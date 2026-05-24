@@ -13,7 +13,7 @@
   #define MQTT_UNSET_IATA "UNSET"
 #endif
 
-struct MQTTPrefs {
+struct MqttPrefs {
   uint32_t magic;
   uint8_t enabled_mask;
   uint8_t packets_enabled;
@@ -32,11 +32,11 @@ struct MQTTPrefs {
   uint8_t reserved[3];
 };
 
-class MQTTPrefsStore {
+class MqttPrefsStore {
 public:
-  static void setDefaults(MQTTPrefs& prefs);
-  static bool load(FILESYSTEM* fs, MQTTPrefs& prefs);
-  static bool save(FILESYSTEM* fs, const MQTTPrefs& prefs);
+  static void setDefaults(MqttPrefs& prefs);
+  static bool load(FILESYSTEM* fs, MqttPrefs& prefs);
+  static bool save(FILESYSTEM* fs, const MqttPrefs& prefs);
 
 private:
   static constexpr uint32_t kMagic = 0x4D515454;

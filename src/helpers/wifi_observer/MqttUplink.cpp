@@ -121,7 +121,7 @@ void logMqttMemorySnapshot(const char*, const char* = nullptr) {
 
 }
 
-const MQTTUplink::BrokerSpec MQTTUplink::kBrokerSpecs[3] = {
+const MqttUplink::BrokerSpec MqttUplink::kBrokerSpecs[3] = {
     {"eastmesh-au", "eastmesh-au", "mqtt2.eastmesh.au", "wss://mqtt2.eastmesh.au:443/mqtt", kEastmeshBit},
     {"letsmesh-eu", "letsmesh-eu", "mqtt-eu-v1.letsmesh.net", "wss://mqtt-eu-v1.letsmesh.net:443/mqtt",
      kLetsmeshEuBit},
@@ -129,12 +129,12 @@ const MQTTUplink::BrokerSpec MQTTUplink::kBrokerSpecs[3] = {
      kLetsmeshUsBit},
 };
 
-MQTTUplink::MQTTUplink(mesh::RTCClock& rtc, mesh::LocalIdentity& identity)
+MqttUplink::MqttUplink(mesh::RTCClock& rtc, mesh::LocalIdentity& identity)
     : _fs(nullptr), _rtc(&rtc), _identity(&identity), _running(false), _last_status_publish(0),
       _token_refresh_count(0), _token_refresh_active_until_ms(0), _last_status{}, _node_name(nullptr), _network(nullptr)
        {
   memset(_device_id, 0, sizeof(_device_id));
-  MQTTPrefsStore::setDefaults(_prefs);
+  MqttPrefsStore::setDefaults(_prefs);
   for (size_t i = 0; i < 3; ++i) {
     memset(&_brokers[i], 0, sizeof(_brokers[i]));
     _brokers[i].spec = &kBrokerSpecs[i];
@@ -142,24 +142,24 @@ MQTTUplink::MQTTUplink(mesh::RTCClock& rtc, mesh::LocalIdentity& identity)
   MQTT_LOG("uplink init");
 }
 
-const char* MQTTUplink::getClientVersion() const {
+const char* MqttUplink::getClientVersion() const {
   return CLIENT_VERSION;
 }
 
-bool MQTTUplink::savePrefs() {
-  return MQTTPrefsStore::save(_fs, _prefs);
+bool MqttUplink::savePrefs() {
+  return MqttPrefsStore::save(_fs, _prefs);
 }
 
-bool MQTTUplink::isTokenRefreshInProgress() const {
+bool MqttUplink::isTokenRefreshInProgress() const {
   return _token_refresh_active_until_ms != 0 &&
          static_cast<long>(millis() - _token_refresh_active_until_ms) < 0;
 }
 
-bool MQTTUplink::hasEnabledBroker() const {
+bool MqttUplink::hasEnabledBroker() const {
   return (_prefs.enabled_mask & 0x07) != 0;
 }
 
-uint8_t MQTTUplink::countEnabledBrokers() const {
+uint8_t MqttUplink::countEnabledBrokers() const {
   uint8_t count = 0;
   for (const BrokerState& broker : _brokers) {
     if (broker.spec != nullptr && (_prefs.enabled_mask & broker.spec->bit) != 0) {
@@ -169,7 +169,7 @@ uint8_t MQTTUplink::countEnabledBrokers() const {
   return count;
 }
 
-uint8_t MQTTUplink::countConnectedBrokers() const {
+uint8_t MqttUplink::countConnectedBrokers() const {
   uint8_t count = 0;
   for (const BrokerState& broker : _brokers) {
     if (broker.spec != nullptr && broker.connected) {
@@ -179,18 +179,18 @@ uint8_t MQTTUplink::countConnectedBrokers() const {
   return count;
 }
 
-bool MQTTUplink::isUnsetIataValue(const char* iata) {
+bool MqttUplink::isUnsetIataValue(const char* iata) {
   return iata == nullptr || iata[0] == 0 || strcmp(iata, MQTT_UNSET_IATA) == 0;
 }
 
-const char* MQTTUplink::brokerCaCert(const BrokerSpec& spec) {
+const char* MqttUplink::brokerCaCert(const BrokerSpec& spec) {
   if (spec.bit == kEastmeshBit) {
     return mqtt_ca_certs::kEastmeshIsrgRootX1Pem;
   }
   return mqtt_ca_certs::kLetsmeshWe1Pem;
 }
 
-uint8_t MQTTUplink::normalizeEnabledMask(uint8_t mask) {
+uint8_t MqttUplink::normalizeEnabledMask(uint8_t mask) {
   uint8_t normalized = 0;
   uint8_t count = 0;
   for (const BrokerSpec& spec : kBrokerSpecs) {
@@ -205,7 +205,7 @@ uint8_t MQTTUplink::normalizeEnabledMask(uint8_t mask) {
   return normalized;
 }
 
-bool MQTTUplink::hasConnectHeadroom(const BrokerState& broker) const {
+bool MqttUplink::hasConnectHeadroom(const BrokerState& broker) const {
   const uint8_t enabled_count = countEnabledBrokers();
   const uint8_t connected_count = countConnectedBrokers();
   const bool dual_broker_attempt = enabled_count > 1 && connected_count > 0;
@@ -232,7 +232,7 @@ bool MQTTUplink::hasConnectHeadroom(const BrokerState& broker) const {
   return false;
 }
 
-bool MQTTUplink::preflightBroker(BrokerState& broker) const {
+bool MqttUplink::preflightBroker(BrokerState& broker) const {
   if (broker.spec == nullptr) {
     return false;
   }
@@ -324,18 +324,18 @@ bool MQTTUplink::preflightBroker(BrokerState& broker) const {
   return true;
 }
 
-void MQTTUplink::formatTopic(char* dst, size_t dst_size, const char* leaf) const {
+void MqttUplink::formatTopic(char* dst, size_t dst_size, const char* leaf) const {
   if (dst == nullptr || dst_size == 0) {
     return;
   }
   snprintf(dst, dst_size, "meshcore/%s/%s/%s", _prefs.iata, _device_id, leaf);
 }
 
-bool MQTTUplink::isActive() const {
+bool MqttUplink::isActive() const {
   return _running && hasEnabledBroker();
 }
 
-bool MQTTUplink::sendStatusNow() {
+bool MqttUplink::sendStatusNow() {
   if (!_running || _network == nullptr || !_network->hasTimeSync() || !_network->isWifiConnected()) {
     return false;
   }
@@ -356,7 +356,7 @@ bool MQTTUplink::sendStatusNow() {
   return true;
 }
 
-void MQTTUplink::makeSafeToken(const char* input, char* output, size_t output_size) {
+void MqttUplink::makeSafeToken(const char* input, char* output, size_t output_size) {
   if (output_size == 0) {
     return;
   }
@@ -372,7 +372,7 @@ void MQTTUplink::makeSafeToken(const char* input, char* output, size_t output_si
   output[oi] = 0;
 }
 
-void MQTTUplink::bytesToHexUpper(const uint8_t* src, size_t len, char* dst, size_t dst_size) {
+void MqttUplink::bytesToHexUpper(const uint8_t* src, size_t len, char* dst, size_t dst_size) {
   if (dst_size == 0) {
     return;
   }
@@ -384,7 +384,7 @@ void MQTTUplink::bytesToHexUpper(const uint8_t* src, size_t len, char* dst, size
   dst[min(di, dst_size - 1)] = 0;
 }
 
-void MQTTUplink::formatIsoTimestamp(time_t ts, char* dst, size_t dst_size) {
+void MqttUplink::formatIsoTimestamp(time_t ts, char* dst, size_t dst_size) {
   if (dst_size == 0) {
     return;
   }
@@ -397,7 +397,7 @@ void MQTTUplink::formatIsoTimestamp(time_t ts, char* dst, size_t dst_size) {
   }
 }
 
-void MQTTUplink::escapeJsonString(const char* input, char* output, size_t output_size) {
+void MqttUplink::escapeJsonString(const char* input, char* output, size_t output_size) {
   if (output_size == 0) {
     return;
   }
@@ -443,14 +443,14 @@ void MQTTUplink::escapeJsonString(const char* input, char* output, size_t output
   output[oi] = 0;
 }
 
-void MQTTUplink::refreshIdentityStrings() {
+void MqttUplink::refreshIdentityStrings() {
   bytesToHexUpper(_identity->pub_key, PUB_KEY_SIZE, _device_id, sizeof(_device_id));
   for (BrokerState& broker : _brokers) {
     refreshBrokerIdentity(broker);
   }
 }
 
-void MQTTUplink::refreshBrokerIdentity(BrokerState& broker) {
+void MqttUplink::refreshBrokerIdentity(BrokerState& broker) {
   if (broker.spec == nullptr) {
     return;
   }
@@ -459,7 +459,7 @@ void MQTTUplink::refreshBrokerIdentity(BrokerState& broker) {
   formatTopic(broker.status_topic, sizeof(broker.status_topic), "status");
 }
 
-void MQTTUplink::refreshBrokerState(BrokerState& broker) {
+void MqttUplink::refreshBrokerState(BrokerState& broker) {
   char safe_name[40];
   makeSafeToken(board.getManufacturerName(), safe_name, sizeof(safe_name));
   char origin[80];
@@ -480,7 +480,7 @@ void MQTTUplink::refreshBrokerState(BrokerState& broker) {
            _last_status.repeat_enabled ? "on" : "off");
 }
 
-bool MQTTUplink::refreshToken(BrokerState& broker) {
+bool MqttUplink::refreshToken(BrokerState& broker) {
   time_t now = time(nullptr);
   if (now < kMinSaneEpoch) {
     MQTT_LOG("%s token skipped: clock not ready (%lu)", broker.spec->label, static_cast<unsigned long>(now));
@@ -498,7 +498,7 @@ bool MQTTUplink::refreshToken(BrokerState& broker) {
   time_t expires_at = now + kTokenLifetimeSecs;
   const char* owner = _prefs.owner_public_key[0] ? _prefs.owner_public_key : nullptr;
   const char* email = _prefs.owner_email[0] ? _prefs.owner_email : nullptr;
-  if (!JWTHelper::createAuthToken(*_identity, broker.spec->host, now, expires_at, broker.token, kBrokerTokenSize,
+  if (!JwtHelper::createAuthToken(*_identity, broker.spec->host, now, expires_at, broker.token, kBrokerTokenSize,
                                   owner, email)) {
     freeScratchBuffer(broker.token);
     broker.token = nullptr;
@@ -511,7 +511,7 @@ bool MQTTUplink::refreshToken(BrokerState& broker) {
   return true;
 }
 
-void MQTTUplink::destroyBroker(BrokerState& broker, bool reset_retry_state) {
+void MqttUplink::destroyBroker(BrokerState& broker, bool reset_retry_state) {
   bool had_runtime_state = broker.client != nullptr || broker.token != nullptr || broker.connected || broker.started ||
                            broker.connect_announced || broker.reconnect_pending || broker.next_connect_attempt != 0 ||
                            broker.last_connect_attempt != 0 || broker.reconnect_failures != 0 ||
@@ -560,7 +560,7 @@ void MQTTUplink::destroyBroker(BrokerState& broker, bool reset_retry_state) {
   logMqttMemorySnapshot("destroy-post", broker.spec != nullptr ? broker.spec->label : nullptr);
 }
 
-void MQTTUplink::queuePublish(BrokerState& broker, const char* topic, const char* payload, bool retain) {
+void MqttUplink::queuePublish(BrokerState& broker, const char* topic, const char* payload, bool retain) {
   if (broker.client == nullptr || !broker.connected) {
     return;
   }
@@ -570,7 +570,7 @@ void MQTTUplink::queuePublish(BrokerState& broker, const char* topic, const char
   MQTT_LOG("%s enqueue topic=%s rc=%d connected=%d", broker.spec->label, topic, enqueue_rc, broker.connected ? 1 : 0);
 }
 
-int MQTTUplink::buildStatusJson(char* buffer, size_t buffer_size, bool online) const {
+int MqttUplink::buildStatusJson(char* buffer, size_t buffer_size, bool online) const {
   char ts[32];
   formatIsoTimestamp(time(nullptr), ts, sizeof(ts));
   char model[48];
@@ -596,7 +596,7 @@ int MQTTUplink::buildStatusJson(char* buffer, size_t buffer_size, bool online) c
                   static_cast<unsigned long>(_last_status.recv_errors));
 }
 
-int MQTTUplink::buildPacketJson(char* buffer, size_t buffer_size, const mesh::Packet& packet, bool is_tx, int rssi,
+int MqttUplink::buildPacketJson(char* buffer, size_t buffer_size, const mesh::Packet& packet, bool is_tx, int rssi,
                                 float snr, int score, int duration) const {
   uint8_t raw[256];
   int raw_len = packet.writeTo(raw);
@@ -672,7 +672,7 @@ int MQTTUplink::buildPacketJson(char* buffer, size_t buffer_size, const mesh::Pa
   return len;
 }
 
-int MQTTUplink::buildRawJson(char* buffer, size_t buffer_size, const mesh::Packet& packet, bool is_tx, int rssi,
+int MqttUplink::buildRawJson(char* buffer, size_t buffer_size, const mesh::Packet& packet, bool is_tx, int rssi,
                              float snr) const {
   (void)is_tx;
   (void)rssi;
@@ -697,7 +697,7 @@ int MQTTUplink::buildRawJson(char* buffer, size_t buffer_size, const mesh::Packe
   return len;
 }
 
-void MQTTUplink::publishBrokerStatus(BrokerState& broker, bool online) {
+void MqttUplink::publishBrokerStatus(BrokerState& broker, bool online) {
   char* payload = allocScratchBuffer(768);
   if (payload == nullptr) {
     return;
@@ -709,7 +709,7 @@ void MQTTUplink::publishBrokerStatus(BrokerState& broker, bool online) {
   freeScratchBuffer(payload);
 }
 
-void MQTTUplink::publishStatus(bool online) {
+void MqttUplink::publishStatus(bool online) {
   logMqttMemorySnapshot(online ? "status-pre" : "status-offline-pre");
   char* payload = allocScratchBuffer(768);
   if (payload == nullptr) {
@@ -729,7 +729,7 @@ void MQTTUplink::publishStatus(bool online) {
   logMqttMemorySnapshot(online ? "status-post" : "status-offline-post");
 }
 
-void MQTTUplink::scheduleBrokerRetry(BrokerState& broker, unsigned long now_ms, bool count_failure) {
+void MqttUplink::scheduleBrokerRetry(BrokerState& broker, unsigned long now_ms, bool count_failure) {
   if (count_failure && broker.reconnect_failures < 10) {
     broker.reconnect_failures++;
   }
@@ -740,7 +740,7 @@ void MQTTUplink::scheduleBrokerRetry(BrokerState& broker, unsigned long now_ms, 
            static_cast<unsigned>(broker.reconnect_failures));
 }
 
-void MQTTUplink::handleMqttEvent(void* handler_args, esp_event_base_t, int32_t event_id, void* event_data) {
+void MqttUplink::handleMqttEvent(void* handler_args, esp_event_base_t, int32_t event_id, void* event_data) {
   auto* broker = static_cast<BrokerState*>(handler_args);
   if (broker == nullptr) {
     return;
@@ -797,7 +797,7 @@ void MQTTUplink::handleMqttEvent(void* handler_args, esp_event_base_t, int32_t e
   }
 }
 
-void MQTTUplink::ensureBroker(BrokerState& broker, bool allow_new_connect) {
+void MqttUplink::ensureBroker(BrokerState& broker, bool allow_new_connect) {
   if (broker.spec == nullptr) {
     return;
   }
@@ -941,7 +941,7 @@ void MQTTUplink::ensureBroker(BrokerState& broker, bool allow_new_connect) {
   }
   logMqttMemorySnapshot("init-post", broker.spec->label);
 
-  esp_mqtt_client_register_event(broker.client, MQTT_EVENT_ANY, &MQTTUplink::handleMqttEvent, &broker);
+  esp_mqtt_client_register_event(broker.client, MQTT_EVENT_ANY, &MqttUplink::handleMqttEvent, &broker);
   if (esp_mqtt_client_start(broker.client) != ESP_OK) {
     MQTT_LOG("%s mqtt start failed", broker.spec->label);
     logMqttMemorySnapshot("start-failed", broker.spec->label);
@@ -955,9 +955,9 @@ void MQTTUplink::ensureBroker(BrokerState& broker, bool allow_new_connect) {
   }
 }
 
-void MQTTUplink::begin(FILESYSTEM* fs) {
+void MqttUplink::begin(FILESYSTEM* fs) {
   _fs = fs;
-  MQTTPrefsStore::load(_fs, _prefs);
+  MqttPrefsStore::load(_fs, _prefs);
   uint8_t normalized_mask = normalizeEnabledMask(_prefs.enabled_mask & 0x07);
   if (normalized_mask != _prefs.enabled_mask) {
     _prefs.enabled_mask = normalized_mask;
@@ -969,7 +969,7 @@ void MQTTUplink::begin(FILESYSTEM* fs) {
   MQTT_LOG("begin iata=%s enabled_mask=0x%02X", _prefs.iata, _prefs.enabled_mask);
 }
 
-void MQTTUplink::end() {
+void MqttUplink::end() {
   MQTT_LOG("end");
   publishStatus(false);
   for (BrokerState& broker : _brokers) {
@@ -978,7 +978,7 @@ void MQTTUplink::end() {
   _running = false;
 }
 
-void MQTTUplink::loop(const MQTTStatusSnapshot& snapshot) {
+void MqttUplink::loop(const MqttStatusSnapshot& snapshot) {
   if (!_running) {
     return;
   }
@@ -1016,7 +1016,7 @@ void MQTTUplink::loop(const MQTTStatusSnapshot& snapshot) {
   }
 }
 
-void MQTTUplink::publishPacket(const mesh::Packet& packet, bool is_tx, int rssi, float snr, int score, int duration) {
+void MqttUplink::publishPacket(const mesh::Packet& packet, bool is_tx, int rssi, float snr, int score, int duration) {
   if (!_running || _network == nullptr || !_network->hasTimeSync() || !_network->isWifiConnected() || !hasEnabledBroker() ||
       !_prefs.packets_enabled) {
     return;
@@ -1069,7 +1069,7 @@ void MQTTUplink::publishPacket(const mesh::Packet& packet, bool is_tx, int rssi,
   freeScratchBuffer(raw_payload);
 }
 
-void MQTTUplink::formatStatusReply(char* reply, size_t reply_size) const {
+void MqttUplink::formatStatusReply(char* reply, size_t reply_size) const {
   auto broker_state = [this](uint8_t bit) -> const char* {
     if ((_prefs.enabled_mask & bit) == 0) {
       return "off";
@@ -1110,7 +1110,7 @@ void MQTTUplink::formatStatusReply(char* reply, size_t reply_size) const {
            _prefs.status_enabled ? "on" : "off", _prefs.tx_enabled ? "on" : "off");
 }
 
-bool MQTTUplink::setEndpointEnabled(uint8_t bit, bool enabled) {
+bool MqttUplink::setEndpointEnabled(uint8_t bit, bool enabled) {
   uint8_t next_mask = _prefs.enabled_mask & 0x07;
   if (enabled) {
     next_mask = normalizeEnabledMask(next_mask | bit);
@@ -1131,31 +1131,31 @@ bool MQTTUplink::setEndpointEnabled(uint8_t bit, bool enabled) {
   return true;
 }
 
-bool MQTTUplink::isEndpointEnabled(uint8_t bit) const {
+bool MqttUplink::isEndpointEnabled(uint8_t bit) const {
   return (_prefs.enabled_mask & bit) != 0;
 }
 
-bool MQTTUplink::setPacketsEnabled(bool enabled) {
+bool MqttUplink::setPacketsEnabled(bool enabled) {
   _prefs.packets_enabled = enabled ? 1 : 0;
   return savePrefs();
 }
 
-bool MQTTUplink::setRawEnabled(bool enabled) {
+bool MqttUplink::setRawEnabled(bool enabled) {
   _prefs.raw_enabled = enabled ? 1 : 0;
   return savePrefs();
 }
 
-bool MQTTUplink::setStatusEnabled(bool enabled) {
+bool MqttUplink::setStatusEnabled(bool enabled) {
   _prefs.status_enabled = enabled ? 1 : 0;
   return savePrefs();
 }
 
-bool MQTTUplink::setTxEnabled(bool enabled) {
+bool MqttUplink::setTxEnabled(bool enabled) {
   _prefs.tx_enabled = enabled ? 1 : 0;
   return savePrefs();
 }
 
-bool MQTTUplink::setIata(const char* iata) {
+bool MqttUplink::setIata(const char* iata) {
   if (iata == nullptr || *iata == 0) {
     return false;
   }
@@ -1192,7 +1192,7 @@ bool MQTTUplink::setIata(const char* iata) {
   return saved;
 }
 
-bool MQTTUplink::setOwnerPublicKey(const char* owner_public_key) {
+bool MqttUplink::setOwnerPublicKey(const char* owner_public_key) {
   if (owner_public_key == nullptr) {
     return false;
   }
@@ -1216,7 +1216,7 @@ bool MQTTUplink::setOwnerPublicKey(const char* owner_public_key) {
   return savePrefs();
 }
 
-bool MQTTUplink::setOwnerEmail(const char* owner_email) {
+bool MqttUplink::setOwnerEmail(const char* owner_email) {
   if (owner_email == nullptr) {
     return false;
   }
@@ -1224,7 +1224,7 @@ bool MQTTUplink::setOwnerEmail(const char* owner_email) {
   return savePrefs();
 }
 
-bool MQTTUplink::isAnyBrokerConnected() const {
+bool MqttUplink::isAnyBrokerConnected() const {
   for (const BrokerState& broker : _brokers) {
     if (broker.spec != nullptr && broker.connected) {
       return true;
@@ -1233,7 +1233,7 @@ bool MQTTUplink::isAnyBrokerConnected() const {
   return false;
 }
 
-const char* MQTTUplink::getAggregateBrokerState() const {
+const char* MqttUplink::getAggregateBrokerState() const {
   uint8_t enabled_count = 0;
   uint8_t connected_count = 0;
 
@@ -1258,32 +1258,32 @@ const char* MQTTUplink::getAggregateBrokerState() const {
 
 #else
 
-MQTTUplink::MQTTUplink(mesh::RTCClock&, mesh::LocalIdentity&)
+MqttUplink::MqttUplink(mesh::RTCClock&, mesh::LocalIdentity&)
     : _fs(nullptr), _rtc(nullptr), _identity(nullptr), _running(false), _last_status_publish(0),
       _token_refresh_count(0), _token_refresh_active_until_ms(0), _last_status{}, _node_name(nullptr), _network(nullptr) {
-  MQTTPrefsStore::setDefaults(_prefs);
+  MqttPrefsStore::setDefaults(_prefs);
 }
 
-bool MQTTUplink::savePrefs() { return false; }
-void MQTTUplink::begin(FILESYSTEM*) {}
-void MQTTUplink::end() {}
-void MQTTUplink::loop(const MQTTStatusSnapshot&) {}
-void MQTTUplink::publishPacket(const mesh::Packet&, bool, int, float, int, int) {}
-void MQTTUplink::formatStatusReply(char* reply, size_t reply_size) const { snprintf(reply, reply_size, "> unsupported"); }
-bool MQTTUplink::setEndpointEnabled(uint8_t, bool) { return false; }
-bool MQTTUplink::isEndpointEnabled(uint8_t) const { return false; }
-bool MQTTUplink::setPacketsEnabled(bool) { return false; }
-bool MQTTUplink::setRawEnabled(bool) { return false; }
-bool MQTTUplink::setStatusEnabled(bool) { return false; }
-bool MQTTUplink::setTxEnabled(bool) { return false; }
-bool MQTTUplink::setIata(const char*) { return false; }
-bool MQTTUplink::isActive() const { return false; }
-bool MQTTUplink::setOwnerPublicKey(const char*) { return false; }
-bool MQTTUplink::setOwnerEmail(const char*) { return false; }
-bool MQTTUplink::sendStatusNow() { return false; }
-bool MQTTUplink::isAnyBrokerConnected() const { return false; }
-const char* MQTTUplink::getAggregateBrokerState() const { return "down"; }
-bool MQTTUplink::isTokenRefreshInProgress() const { return false; }
+bool MqttUplink::savePrefs() { return false; }
+void MqttUplink::begin(FILESYSTEM*) {}
+void MqttUplink::end() {}
+void MqttUplink::loop(const MqttStatusSnapshot&) {}
+void MqttUplink::publishPacket(const mesh::Packet&, bool, int, float, int, int) {}
+void MqttUplink::formatStatusReply(char* reply, size_t reply_size) const { snprintf(reply, reply_size, "> unsupported"); }
+bool MqttUplink::setEndpointEnabled(uint8_t, bool) { return false; }
+bool MqttUplink::isEndpointEnabled(uint8_t) const { return false; }
+bool MqttUplink::setPacketsEnabled(bool) { return false; }
+bool MqttUplink::setRawEnabled(bool) { return false; }
+bool MqttUplink::setStatusEnabled(bool) { return false; }
+bool MqttUplink::setTxEnabled(bool) { return false; }
+bool MqttUplink::setIata(const char*) { return false; }
+bool MqttUplink::isActive() const { return false; }
+bool MqttUplink::setOwnerPublicKey(const char*) { return false; }
+bool MqttUplink::setOwnerEmail(const char*) { return false; }
+bool MqttUplink::sendStatusNow() { return false; }
+bool MqttUplink::isAnyBrokerConnected() const { return false; }
+const char* MqttUplink::getAggregateBrokerState() const { return "down"; }
+bool MqttUplink::isTokenRefreshInProgress() const { return false; }
 
 #endif
 
