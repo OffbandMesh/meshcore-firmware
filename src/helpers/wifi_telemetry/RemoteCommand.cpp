@@ -413,39 +413,58 @@ void RemoteCommandHandler::dispatch(const RemoteCommandRequest& req,
         break;
     }
     case RemoteCmd::SAFETY_LOG_DUMP: {
-        // The full safety log can be large; we send it back in data_json.
-        // Note: kOutSafetyLogMax is bigger than data_json buffer. We truncate.
-        // A future refinement might publish the log to its own topic for size.
-        //
-        // Issue #206: log_buf is `static` (BSS-allocated, not stack) because the
-        // arduino-esp32 loopTask default stack is only 8192 bytes. Allocating a
-        // 4096-byte buffer on the stack here, combined with ~800B of other locals
-        // in this function plus the call-chain frames above (HTTPClient + String
-        // + JsonDocument in wifi_telemetry_http_cmd_poll, RemoteCommandRequest +
-        // JsonDocument in onHttpCmd, executeAuthenticated's char detail[64]),
-        // blew the stack budget and panicked the device. This action was the only
-        // dispatch path that allocated >200 bytes locally, which is why only
-        // safety_log_dump triggered the crash. Matches the pattern of `out_buf`
-        // on line 349 which is already `static` for the same reason.
+        // Issue #206: log_buf is `static` (BSS-allocated, not stack) because
+        // the arduino-esp32 loopTask default stack is only 8192 bytes; a 4 KB
+        // stack allocation plus ~800B of other dispatch() locals plus the
+        // call-chain frames above (HTTPClient + JsonDocument in cmd-poll path)
+        // blew the stack budget and panicked the device. See PR #5 fix.
         static char log_buf[kOutSafetyLogMax];
         _callbacks.getSafetyLog(log_buf, sizeof(log_buf));
 
-        // Escape the log content for JSON. Quick escape: replace " with '
-        // and newlines with \\n. Not full JSON-safe but good enough for
-        // human-readable content the safety log writes.
-        // FIXME: proper JSON escape would be cleaner; this is a v1 shortcut.
-        for (char* p = log_buf; *p; p++) {
-            if (*p == '"') *p = '\'';
-            if (*p == '\r') *p = ' ';
+        // Issue #217: truncate to leave headroom for JSON escape expansion +
+        // structural overhead inside the 512-byte data_json. 400 input bytes
+        // is conservative; we signal truncation via data.truncated=true so
+        // the consumer knows it's an excerpt.
+        //
+        // NOTE: this only detects truncation imposed HERE by our 400-cap. The
+        // upstream callback `_callbacks.getSafetyLog(buf, buflen)` may also
+        // truncate (per RemoteCommand.h: "Truncates if log exceeds buflen.")
+        // but its `void` return signature provides no channel for surfacing
+        // that. Detecting upstream truncation cleanly requires a callback API
+        // change (return bool / out-param) -- separate follow-up issue.
+        bool truncated = false;
+        if (strlen(log_buf) > 400) {
+            log_buf[400] = '\0';
+            truncated = true;
         }
-        // Trim to fit data_json (with " quotes plus structural chars)
-        size_t safe_max = sizeof(data_json) - 32;
-        if (strlen(log_buf) > safe_max) {
-            log_buf[safe_max] = '\0';
+
+        // Issue #217: use ArduinoJson for RFC 8259-compliant escape of the
+        // log content. The v1 manual escape only handled `"` and `\r` (the
+        // latter by lossy in-place substitution to space), leaving literal
+        // `\n` inside the resulting JSON string -- malformed JSON, rejected
+        // by cmdrelay with HTTP 422. The in-place substitution pattern can
+        // never do correct JSON escape because escapes EXPAND
+        // (`\n` -> `\\n` is a 1-byte -> 2-byte substitution).
+        //
+        // ArduinoJson is already linked in this file (line 12) for inbound
+        // parsing; using it on the output side too is the natural fix.
+        JsonDocument doc;
+        doc["log_text"] = log_buf;
+        if (truncated) doc["truncated"] = true;
+
+        size_t n = serializeJson(doc, data_json, sizeof(data_json));
+        if (n == 0) {
+            // serializeJson returns 0 if the destination buffer is too small
+            // after escape expansion. Realistically this only happens if the
+            // log content is escape-heavy (lots of control chars). Surface
+            // as an error response so the consumer doesn't see a silent fail.
+            action_ok = false;
+            strcpy(status_str, "error");
+            strcpy(message, "log dump serialization overflowed");
+            strcpy(data_json, "{}");
+        } else {
+            strcpy(message, "Safety log dump");
         }
-        snprintf(data_json, sizeof(data_json),
-                 "{\"log_text\":\"%s\"}", log_buf);
-        strcpy(message, "Safety log dump (may be truncated)");
         break;
     }
     default:
