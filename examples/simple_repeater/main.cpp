@@ -56,6 +56,28 @@ static uint32_t g_tel_persistent_until_ms = 0;
 // Even if a CLI command tries to set a longer timeout, it gets clamped here.
 #define WIFI_PERSISTENT_MAX_MS (60UL * 60UL * 1000UL)   // 60 minutes
 
+// LoRa#216: standalone cmd-poll timing for persistent mode. Decoupled from
+// g_tel_next_publish_ms so cmd response latency in persistent mode doesn't
+// wait for the 5-min telemetry publish boundary. In burst mode, cmd-poll
+// continues to piggyback on collect_and_publish (transport teardown between
+// cycles makes a faster cadence pointless without #210 NVS config).
+static uint32_t g_cmd_poll_next_ms = 0;
+
+// LoRa#216: WiFi-on-time instrumentation. Rolling-window 24h average of how
+// much wall-clock time the device had WiFi associated (transport.isReady()
+// true). Surfaced in the telemetry state payload as wifi_on_pct_24h so we
+// can calibrate cadence-vs-power tradeoffs without external hardware.
+// Strategy: on every loop iteration, if transport is ready, accumulate the
+// delta since last check; at 24h elapsed, snapshot current accum as the
+// "last-24h" value and start a new window. The published value always
+// reflects the most recently COMPLETED 24h window (never a partial one),
+// so it's a stable signal for power-budget reasoning.
+#define WIFI_ON_WINDOW_MS (24UL * 60UL * 60UL * 1000UL)
+static uint32_t g_wifi_on_window_start_ms = 0;
+static uint32_t g_wifi_on_accum_ms = 0;
+static uint32_t g_wifi_on_last_check_ms = 0;
+static uint16_t g_wifi_on_pct_last_24h_x100 = 0;  // 0-10000 = 0.00-100.00%
+
 // D6 / issue #60: OTA active-upload extension. While an OTA upload is in
 // progress, refresh the persistent-mode deadline on each chunk so a slow
 // upload doesn't get cut off when the user's original "wifi on N" window
@@ -166,6 +188,7 @@ static void wifi_telemetry_fill_scalar(TelemetryData& d) {
     d.wifi_rssi_dbm = (WiFi.status() == WL_CONNECTED) ? (int16_t)WiFi.RSSI() : 0;
     d.free_heap_b = ESP.getFreeHeap();
     d.reset_reason = g_tel_reset_reason;
+    d.wifi_on_pct_24h_x100 = g_wifi_on_pct_last_24h_x100;  // LoRa#216
 }
 
 #if MAX_NEIGHBOURS
@@ -380,6 +403,41 @@ static void wifi_telemetry_loop() {
         g_remote_cmd_subscribed = false;
         Serial.println("[WTEL] persistent timer expired, reverted to BURST");
     }
+
+    // LoRa#216: WiFi-on-time accumulator. Runs every loop iteration; cheap.
+    // Counts wall-clock time spent with transport.isReady() == true into the
+    // current 24h window. On rollover, snapshots the completed-window % into
+    // g_wifi_on_pct_last_24h_x100 (the value telemetry publishes).
+    {
+        uint32_t now = millis();
+        if (g_wifi_on_window_start_ms == 0) {
+            g_wifi_on_window_start_ms = now;
+            g_wifi_on_last_check_ms = now;
+        } else if (g_tel_transport && g_tel_transport->isReady()) {
+            g_wifi_on_accum_ms += (now - g_wifi_on_last_check_ms);
+        }
+        g_wifi_on_last_check_ms = now;
+        if ((uint32_t)(now - g_wifi_on_window_start_ms) >= WIFI_ON_WINDOW_MS) {
+            // Snapshot completed window's % (x100 for 0.01% precision).
+            g_wifi_on_pct_last_24h_x100 = (uint16_t)(
+                ((uint64_t)g_wifi_on_accum_ms * 10000ULL) / WIFI_ON_WINDOW_MS);
+            g_wifi_on_accum_ms = 0;
+            g_wifi_on_window_start_ms = now;
+        }
+    }
+
+#ifdef CMD_TRANSPORT_HTTP
+    // LoRa#216: persistent-mode standalone cmd-poll. Decoupled from the
+    // 5-min telemetry publish boundary. In burst mode (g_tel_persistent_until_ms
+    // == 0), cmd-poll still happens inside collect_and_publish per H3 (#195).
+    // wifi_telemetry_http_cmd_poll() self-aborts on !isReady() so no
+    // defensive check needed here.
+    if (g_tel_persistent_until_ms != 0 &&
+        (int32_t)(millis() - g_cmd_poll_next_ms) >= 0) {
+        wifi_telemetry_http_cmd_poll();
+        g_cmd_poll_next_ms = millis() + WIFI_CMD_POLL_PERSISTENT_INTERVAL_MS;
+    }
+#endif
 
     if ((int32_t)(millis() - g_tel_next_publish_ms) >= 0) {
         wifi_telemetry_collect_and_publish();
