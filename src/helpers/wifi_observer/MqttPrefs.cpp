@@ -13,7 +13,14 @@ constexpr uint32_t kFixedStatusIntervalMs = 300000;
 void MqttPrefsStore::setDefaults(MqttPrefs& prefs) {
   memset(&prefs, 0, sizeof(prefs));
   prefs.magic = kMagic;
-  prefs.enabled_mask = 0x01;
+  // Plan 1: ship with letsmesh-us (kLetsmeshUsBit=0x04) as the only
+  // default-enabled broker. EastMesh's default was eastmesh-au (0x01);
+  // we change it because (a) letsmesh-us is documented in our prior-art
+  // catalog as the most-likely-tried broker for US-based deployments
+  // and (b) Plan 2 replaces this whole static-array + bitmask pattern
+  // with an NVS-backed configurable list, so the default value here
+  // is short-lived.
+  prefs.enabled_mask = 0x04;  // kLetsmeshUsBit; see MqttUplink.h:118.
   prefs.packets_enabled = 1;
   prefs.raw_enabled = 0;
   prefs.status_enabled = 1;

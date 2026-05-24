@@ -121,6 +121,18 @@ void logMqttMemorySnapshot(const char*, const char* = nullptr) {
 
 }
 
+// ----------------------------------------------------------------------------
+// Plan 1 broker registry: kept as the upstream EastMesh 3-entry static
+// array so Plan 1's diff stays minimal. Plan 2 replaces this whole pattern
+// with an NVS-backed configurable list of up to CROSSWIRE_MAX_BROKERS (6)
+// entries; see docs/superpowers/specs/2026-05-24-crosswire-wifi-ble-observer-design.md
+// section "MQTT broker subsystem" + plans/2026-05-24-crosswire-observer-plan-2-
+// configurable-brokers-and-pipeline.md.
+//
+// The default `enabled_mask` set in MqttPrefsStore::setDefaults() controls
+// which of these 3 are actually attempted at runtime. Plan 1 ships with
+// 0x04 (letsmesh-us only) so smoke testing exercises one real path.
+// ----------------------------------------------------------------------------
 const MqttUplink::BrokerSpec MqttUplink::kBrokerSpecs[3] = {
     {"eastmesh-au", "eastmesh-au", "mqtt2.eastmesh.au", "wss://mqtt2.eastmesh.au:443/mqtt", kEastmeshBit},
     {"letsmesh-eu", "letsmesh-eu", "mqtt-eu-v1.letsmesh.net", "wss://mqtt-eu-v1.letsmesh.net:443/mqtt",
