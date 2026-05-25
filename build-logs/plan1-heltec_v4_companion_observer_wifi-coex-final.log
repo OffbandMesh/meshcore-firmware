@@ -1,0 +1,16 @@
+=== heltec_v4_companion_observer_wifi coex-fix build Mon May 25 03:48:37 EDT 2026 ===
+|-- FS @ 2.0.0
+|-- Adafruit GFX Library @ 1.12.6
+|-- Adafruit SSD1306 @ 2.5.16
+Building in release mode
+Retrieving maximum program size .pio\build\heltec_v4_companion_observer_wifi\firmware.elf
+Checking size .pio\build\heltec_v4_companion_observer_wifi\firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [=         ]   9.6% (used 200960 bytes from 2097152 bytes)
+Flash: [===       ]  25.4% (used 1664385 bytes from 6553600 bytes)
+========================= [SUCCESS] Took 23.52 seconds =========================
+
+Environment                        Status    Duration
+---------------------------------  --------  ------------
+heltec_v4_companion_observer_wifi  SUCCESS   00:00:23.518
+========================= 1 succeeded in 00:00:23.518 =========================
