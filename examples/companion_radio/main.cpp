@@ -129,7 +129,16 @@ void setup() {
 
 #ifdef DISPLAY_CLASS
   DisplayDriver* disp = NULL;
-  if (display.begin()) {
+  bool display_begin_ok = display.begin();
+  CW_PHASE(display_begin_ok ? "post:display.begin(OK)" : "post:display.begin(FAILED)");
+#ifdef CROSSWIRE_OBSERVER
+  // I2C bus scan: report ALL addresses that ACK on the bus that
+  // display.begin() initialized. If OLED at expected DISPLAY_ADDRESS
+  // (0x3C) doesn't appear, our pin/address assumptions are wrong for
+  // this V3 sub-variant. Run AFTER display.begin() so bus is alive.
+  crosswire::i2cScan(-1, -1, "board-bus-default-pins");
+#endif
+  if (display_begin_ok) {
     disp = &display;
     disp->startFrame();
   #ifdef ST7789
@@ -138,7 +147,6 @@ void setup() {
     disp->drawTextCentered(disp->width() / 2, 28, "Loading...");
     disp->endFrame();
   }
-  CW_PHASE("post:display.begin");
 #endif
 
   if (!radio_init()) { halt(); }
