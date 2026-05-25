@@ -364,17 +364,52 @@ static portMUX_TYPE s_hb_mux = portMUX_INITIALIZER_UNLOCKED;
 // Heartbeat timing
 static uint32_t s_last_hb_ms = 0;
 
+// NVS-backed boot counter: persists across ALL reset paths including
+// brown-out (which RTC_NOINIT does NOT survive on this CP2102 V3 SKU,
+// as evidenced by user observation correlating BLE pair attempts with
+// OLED flips that we wrongly read as "no reboot" because RTC counter
+// stayed at 1).
+//
+// Tradeoff: NVS write costs ~5-15ms per boot (single flash write) but
+// gives definitive reboot-count evidence that's survivable across the
+// brown-out reset class that BLE radio current spikes can trigger.
+
+static uint32_t s_nvs_boot_count = 0;
+static uint32_t s_prev_boot_uptime_s = 0;
+
+#include <Preferences.h>
+static Preferences s_boot_prefs;
+
 void heartbeatBegin() {
-    // Validate boot counter magic; if valid, increment; else initialize.
+    // RTC_NOINIT counter (kept for telemetry but no longer the primary truth):
     if (s_boot_state.magic == kBootCounterMagic) {
         s_boot_state.counter++;
     } else {
         s_boot_state.magic   = kBootCounterMagic;
         s_boot_state.counter = 1;
     }
-    crashLogf("[boot] counter=%u (incremented in RTC_NOINIT; survives soft reset, lost on power-on)",
-              (unsigned)s_boot_state.counter);
-    s_last_hb_ms = 0;  // emit first heartbeat ASAP after begin
+
+    // NVS-backed counter (survives ALL resets including brown-out):
+    bool ok = s_boot_prefs.begin("cw_boot", /*readOnly=*/false);
+    if (ok) {
+        s_nvs_boot_count       = s_boot_prefs.getUInt("count", 0) + 1;
+        s_prev_boot_uptime_s   = s_boot_prefs.getUInt("last_up_s", 0);
+        s_boot_prefs.putUInt("count", s_nvs_boot_count);
+        s_boot_prefs.putUInt("last_up_s", 0);  // reset; will be updated periodically
+        s_boot_prefs.end();
+    } else {
+        crashLogf("[boot] WARN: NVS cw_boot namespace open failed; falling back to RTC counter");
+        s_nvs_boot_count = bootCounterValue();
+    }
+
+    crashLogf("[boot] nvs_count=%u rtc_count=%u prev_boot_lasted=%us reset_reason=%d (%s)",
+              (unsigned)s_nvs_boot_count,
+              (unsigned)bootCounterValue(),
+              (unsigned)s_prev_boot_uptime_s,
+              (int)esp_reset_reason(),
+              resetReasonString((int)esp_reset_reason()));
+
+    s_last_hb_ms = 0;
     portENTER_CRITICAL(&s_hb_mux);
     s_subloop_flags    = 0;
     s_loop_iter_delta  = 0;
@@ -382,7 +417,24 @@ void heartbeatBegin() {
 }
 
 uint32_t bootCounterValue() {
+    // Now returns the NVS-backed count if available, else RTC fallback.
+    if (s_nvs_boot_count > 0) return s_nvs_boot_count;
     return (s_boot_state.magic == kBootCounterMagic) ? s_boot_state.counter : 0;
+}
+
+// Periodically (called from heartbeatTick) save current uptime to NVS
+// so the next boot can report "previous boot lasted Ns" - critical for
+// distinguishing "long stable run then reset" from "fast crash cycle".
+static uint32_t s_last_uptime_save_ms = 0;
+static void maybeSaveUptime(uint32_t now_ms) {
+    // Save every 5 seconds (matches stats cadence; balances flash wear)
+    if (now_ms - s_last_uptime_save_ms < 5000) return;
+    s_last_uptime_save_ms = now_ms;
+    Preferences p;
+    if (p.begin("cw_boot", /*readOnly=*/false)) {
+        p.putUInt("last_up_s", now_ms / 1000);
+        p.end();
+    }
 }
 
 void subloopMark(uint8_t which) {
@@ -420,6 +472,10 @@ void heartbeatTick(uint32_t now_ms) {
               (flags & SUBLOOP_SENSORS) ? 'Y' : 'N',
               (flags & SUBLOOP_UI)      ? 'Y' : 'N',
               (unsigned)ESP.getFreeHeap());
+
+    // Persist current uptime to NVS so next boot can report "previous
+    // boot lasted Ns" -- definitive evidence of cycle period.
+    maybeSaveUptime(now_ms);
 }
 
 void i2cScan(int sda_pin, int scl_pin, const char* label) {
