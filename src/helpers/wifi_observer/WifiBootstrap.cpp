@@ -9,6 +9,10 @@
   #include <Arduino.h>
   #include <WiFi.h>
   #include <Preferences.h>
+  #include <esp_coexist.h>   // esp_coex_preference_set() -- Meshtastic V4
+                             // coex fix pattern (issue #2, #4; verified
+                             // working on V4 with PIN 100776 pair test)
+  #include <esp_wifi.h>      // esp_wifi_set_ps() -- companion to coex tuning
 #endif
 
 namespace crosswire {
@@ -43,21 +47,30 @@ void WifiBootstrap::deriveApSsid(const uint8_t* mac_bytes, char* out,
 #ifdef ARDUINO
 
 void WifiBootstrap::begin() {
-    // TODO(Plan 1 close-out flash / future Task): wire rescue button sampling.
-    //   - Sample a board-specific GPIO pin for CROSSWIRE_CLI_RESCUE_BOOT_WINDOW_MS.
-    //   - If held: state_ = CliRescue; enter serial CLI loop.
-    // Plan 1 skeleton: skip rescue, fall through to NVS check.
+    // ----------------------------------------------------------------------
+    // WiFi/BT coexistence: apply Meshtastic V4 coex fix pattern UNCONDITIONALLY
+    // at boot, BEFORE any WiFi or BT runtime activity. Setting the arbiter
+    // preference to BALANCE early ensures that whenever the BT controller
+    // and (eventually) WiFi stack both activate, neither starves the other.
+    //
+    // Per issue #2 root cause (verified on V4):
+    //   - Default arbiter is effectively WiFi-biased on many ESP-IDF versions
+    //   - Without BALANCE preference, BLE advertisement slots get starved
+    //   - On the CP2102 V3 SKU, this manifests as BT controller crashes
+    //     once both stacks share the 2.4 GHz radio
+    //
+    // This call is safe to invoke even when WiFi is never started -- it
+    // configures the coexistence arbiter's preference, not the radio itself.
+    // ----------------------------------------------------------------------
+    esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
 
+    // TODO(future Task): wire rescue button sampling.
     Preferences prefs;
     prefs.begin("wifi", /*readOnly=*/true);
     String ssid = prefs.getString("ssid", "");
     prefs.end();
 
     if (ssid.isEmpty()) {
-        // TODO(Plan 3): start AP mode + HTTP setup form. For Plan 1,
-        // log and stay in ApMode state without serving anything.
-        // Devices flashed in Plan 1 without saved creds will sit in
-        // this state until creds are set via serial CLI.
         Serial.println("[WifiBootstrap] No saved WiFi creds; staying in "
                        "AP mode (Plan 3 will add setup form).");
         state_ = WifiBootstrapState::ApMode;
@@ -75,6 +88,10 @@ void WifiBootstrap::begin() {
         }
         // PSK redacted from logs per CLAUDE.md security note.
         WiFi.mode(WIFI_STA);
+        // Meshtastic V4 coex fix: yield 2.4 GHz radio between DTIM beacons
+        // so BT controller can schedule advertising/connection slots.
+        WiFi.setSleep(true);
+        esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
         WiFi.begin(ssid.c_str(), pwd.c_str());
     }
 }
@@ -87,8 +104,6 @@ void WifiBootstrap::loop() {
                 Serial.printf("[WifiBootstrap] STA connected; IP=%s\n",
                               WiFi.localIP().toString().c_str());
             } else if (millis() - last_attempt_ms_ > 10000) {
-                // 10s retry interval. Plan 1: retry indefinitely.
-                // Plan 2+: honor wifi.sta_retry_limit.
                 sta_retry_count_++;
                 Serial.printf("[WifiBootstrap] STA retry #%u\n",
                               sta_retry_count_);
@@ -105,7 +120,7 @@ void WifiBootstrap::loop() {
             break;
         }
         default:
-            break;  // ApMode / CliRescue / Boot / StaFailed (Plan 1 stubs)
+            break;  // ApMode / CliRescue / Boot / StaFailed
     }
 }
 
