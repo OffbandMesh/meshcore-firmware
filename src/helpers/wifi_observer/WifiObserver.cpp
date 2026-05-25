@@ -44,10 +44,10 @@ void wifiObserverBegin() {
     crashLogf("[WifiObserver] boot; reset_reason=%d (%s) version=%s",
               (int)esp_reset_reason(),
               resetReasonString((int)esp_reset_reason()),
-              CROSSWIRE_OBSERVER_VERSION);
+              CROSSWIRE_VERSION);
 #else
     crashLogf("[WifiObserver] boot (host build) version=%s",
-              CROSSWIRE_OBSERVER_VERSION);
+              CROSSWIRE_VERSION);
 #endif
 
     crashLogf("[WifiObserver] subsystem starting");
