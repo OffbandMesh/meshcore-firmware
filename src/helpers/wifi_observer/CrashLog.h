@@ -114,4 +114,13 @@ void crashLogHeapStats(const char* tag);
 // cache reads). The pointers themselves are stored in CrashLog state.
 void loopPhaseSet(volatile const char** phase_ptr, volatile uint32_t* iter_ptr);
 
+// Scan an I2C bus on specified pins, log every address (0x08-0x77)
+// that ACKs. Surfaces ground truth about what's on the bus -- critical
+// for variant identification when board-specific pin assignments may
+// differ from the env's compile-time defaults.
+//
+// Pass -1, -1 for sda/scl to use the bus's currently-configured pins.
+// label is a short string included in log lines ("board", "env", etc.).
+void i2cScan(int sda_pin, int scl_pin, const char* label);
+
 }  // namespace crosswire

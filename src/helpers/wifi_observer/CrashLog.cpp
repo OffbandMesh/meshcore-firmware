@@ -11,6 +11,7 @@
 
 #ifdef ARDUINO
   #include <Arduino.h>
+  #include <Wire.h>          // i2cScan() bus probing
   #include <esp_attr.h>      // RTC_NOINIT_ATTR
   #include <esp_system.h>    // esp_reset_reason(), esp_register_shutdown_handler()
   #include <esp_log.h>       // esp_log_set_vprintf()
@@ -336,6 +337,30 @@ void loopPhaseSet(volatile const char** phase_ptr, volatile uint32_t* iter_ptr) 
     s_loop_iter_ptr  = iter_ptr;
 }
 
+void i2cScan(int sda_pin, int scl_pin, const char* label) {
+    // Re-init Wire on the specified pins if provided (must be done from
+    // a task safe context). Don't disturb existing setup if pins are -1.
+    if (sda_pin >= 0 && scl_pin >= 0) {
+        Wire.end();
+        Wire.begin(sda_pin, scl_pin);
+    }
+    crashLogf("[i2cscan:%s] starting scan on sda=%d scl=%d",
+              label ? label : "?",
+              sda_pin >= 0 ? sda_pin : -1,
+              scl_pin >= 0 ? scl_pin : -1);
+    uint8_t found_count = 0;
+    for (uint8_t addr = 0x08; addr <= 0x77; ++addr) {
+        Wire.beginTransmission(addr);
+        uint8_t err = Wire.endTransmission();
+        if (err == 0) {
+            crashLogf("[i2cscan:%s] FOUND device at 0x%02X", label ? label : "?", addr);
+            found_count++;
+        }
+    }
+    crashLogf("[i2cscan:%s] scan complete; %u device(s) responded",
+              label ? label : "?", found_count);
+}
+
 void crashLogHeapStats(const char* tag) {
     // Snapshot loop phase + iteration if registered.
     const char* phase = "?";
@@ -361,6 +386,7 @@ void crashLogInstallEspLogHook() {}
 void crashLogInstallShutdownHandler() {}
 void crashLogHeapStats(const char*) {}
 void loopPhaseSet(volatile const char**, volatile uint32_t*) {}
+void i2cScan(int, int, const char*) {}
 
 #endif
 
