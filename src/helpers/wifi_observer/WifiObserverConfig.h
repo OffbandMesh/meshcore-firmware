@@ -62,7 +62,18 @@
 #define CROSSWIRE_CLI_RESCUE_BOOT_WINDOW_MS  8000
 
 // ---------------------------------------------------------------------------
-// Subsystem version
+// Crosswire fork version (per VERSIONING.md Pattern B)
 // ---------------------------------------------------------------------------
-// Bumped manually per plan completion. Plan 1 = 0.1.0.
-#define CROSSWIRE_OBSERVER_VERSION  "0.1.0-plan1"
+// CROSSWIRE_VERSION is injected at build time by scripts/inject_crosswire_version.py
+// from `git describe --tags --match 'crosswire-v*' --abbrev=7 --dirty`. The
+// upstream baseline lives in MeshCore's FIRMWARE_VERSION (set per-example in
+// MyMesh.h). Every Crosswire-aware log line / banner / UI surface should
+// expose BOTH identifiers per VERSIONING.md Pattern B:
+//   "MC <FIRMWARE_VERSION> / Crosswire <CROSSWIRE_VERSION>"
+//
+// Host test builds don't invoke the PIO extra_script, so provide a sentinel
+// fallback here. Real device builds always have the macro injected and this
+// branch is never taken.
+#ifndef CROSSWIRE_VERSION
+  #define CROSSWIRE_VERSION  "host-untagged"
+#endif
