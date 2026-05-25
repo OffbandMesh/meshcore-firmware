@@ -5,6 +5,9 @@
 #ifdef WIFI_SSID
   #include <WiFi.h>
 #endif
+#ifdef CROSSWIRE_OBSERVER
+  #include <helpers/wifi_observer/CrashLog.h>
+#endif
 
 #ifndef AUTO_OFF_MILLIS
   #define AUTO_OFF_MILLIS     15000   // 15 seconds
@@ -34,36 +37,80 @@
 class SplashScreen : public UIScreen {
   UITask* _task;
   unsigned long dismiss_after;
-  char _version_info[12];
+  char _mc_version[12];
+#ifdef CROSSWIRE_VERSION
+  // Crosswire fork version short form (CROSSWIRE_VERSION with the
+  // "crosswire-" prefix and any commits-since-tag suffix stripped).
+  // Per VERSIONING.md Pattern B the splash exposes BOTH the upstream
+  // MeshCore version AND the Crosswire fork version so a glance at
+  // the device unambiguously identifies what firmware is running.
+  char _crosswire_short[16];
+#endif
 
 public:
   SplashScreen(UITask* task) : _task(task) {
-    // strip off dash and commit hash by changing dash to null terminator
+    // MC baseline version: strip off dash and commit hash
     // e.g: v1.2.3-abcdef -> v1.2.3
     const char *ver = FIRMWARE_VERSION;
     const char *dash = strchr(ver, '-');
-
     int len = dash ? dash - ver : strlen(ver);
-    if (len >= sizeof(_version_info)) len = sizeof(_version_info) - 1;
-    memcpy(_version_info, ver, len);
-    _version_info[len] = 0;
+    if (len >= sizeof(_mc_version)) len = sizeof(_mc_version) - 1;
+    memcpy(_mc_version, ver, len);
+    _mc_version[len] = 0;
+
+#ifdef CROSSWIRE_VERSION
+    // Crosswire version: strip leading "crosswire-" tag prefix, then trim
+    // at the first dash so "crosswire-v0.5.0-15-g4a3b9f1" displays as
+    // "v0.5.0". The full identity (including SHA + dirty flag) is still
+    // available via the `ver` CLI command and via the CROSSWIRE_IDENTITY_BLOB
+    // embedded in .rodata -- this is just the splash-screen short form.
+    const char *cw = CROSSWIRE_VERSION;
+    static const char *cw_prefix = "crosswire-";
+    if (strncmp(cw, cw_prefix, 10) == 0) cw += 10;
+    const char *cw_dash = strchr(cw, '-');
+    int cwlen = cw_dash ? cw_dash - cw : strlen(cw);
+    if (cwlen >= (int)sizeof(_crosswire_short)) cwlen = sizeof(_crosswire_short) - 1;
+    memcpy(_crosswire_short, cw, cwlen);
+    _crosswire_short[cwlen] = 0;
+#endif
 
     dismiss_after = millis() + BOOT_SCREEN_MILLIS;
   }
 
   int render(DisplayDriver& display) override {
+#ifdef CROSSWIRE_OBSERVER
+    crosswire::crashLogf("[ui] SplashScreen.render() at %lu", (unsigned long)millis());
+#endif
     // meshcore logo
     display.setColor(DisplayDriver::BLUE);
     int logoWidth = 128;
     display.drawXbm((display.width() - logoWidth) / 2, 3, meshcore_logo, logoWidth, 13);
 
-    // version info
+#ifdef CROSSWIRE_VERSION
+    // Pattern B per VERSIONING.md: BOTH fork + baseline versions visible
+    // and FULLY LABELED with brand names so a glance at the splash is
+    // unambiguous. Size 2 won't fit the literal "Crosswire" word at our
+    // 128-px width, so we use 3 size-1 lines with the Crosswire line
+    // first (visual prominence via line order, not font size).
+    display.setColor(DisplayDriver::LIGHT);
+    display.setTextSize(1);
+    char cw_line[32];
+    snprintf(cw_line, sizeof(cw_line), "Crosswire %s", _crosswire_short);
+    display.drawTextCentered(display.width()/2, 22, cw_line);
+
+    char mc_line[24];
+    snprintf(mc_line, sizeof(mc_line), "MC %s", _mc_version);
+    display.drawTextCentered(display.width()/2, 35, mc_line);
+    display.drawTextCentered(display.width()/2, 53, FIRMWARE_BUILD_DATE);
+#else
+    // Upstream MeshCore build (no Crosswire identity injected): original layout.
     display.setColor(DisplayDriver::LIGHT);
     display.setTextSize(2);
-    display.drawTextCentered(display.width()/2, 22, _version_info);
+    display.drawTextCentered(display.width()/2, 22, _mc_version);
 
     display.setTextSize(1);
     display.drawTextCentered(display.width()/2, 42, FIRMWARE_BUILD_DATE);
+#endif
 
     return 1000;
   }
@@ -632,6 +679,9 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
 
   if (_display != NULL) {
     if (!_display->isOn() && !hasConnection()) {
+#ifdef CROSSWIRE_OBSERVER
+      crosswire::crashLogf("[ui] newMsg: display off + no conn -> turnOn");
+#endif
       _display->turnOn();
     }
     if (_display->isOn()) {
@@ -663,6 +713,22 @@ void UITask::userLedHandler() {
 }
 
 void UITask::setCurrScreen(UIScreen* c) {
+#ifdef CROSSWIRE_OBSERVER
+  // Screen transition tracing: log every change so we can see if the
+  // SplashScreen ↔ HomeScreen oscillation observed on hv3-bench is
+  // a real state-machine bug.
+  const char* from = "?";
+  const char* to   = "?";
+  if      (curr == splash)      from = "SPLASH";
+  else if (curr == home)        from = "HOME";
+  else if (curr == msg_preview) from = "MSG_PREVIEW";
+  else if (curr == nullptr)     from = "NULL";
+  if      (c == splash)         to   = "SPLASH";
+  else if (c == home)           to   = "HOME";
+  else if (c == msg_preview)    to   = "MSG_PREVIEW";
+  else if (c == nullptr)        to   = "NULL";
+  crosswire::crashLogf("[ui] setCurrScreen %s -> %s", from, to);
+#endif
   curr = c;
   _next_refresh = 100;
 }
@@ -767,6 +833,9 @@ void UITask::loop() {
 #endif
 
   if (c != 0 && curr) {
+#ifdef CROSSWIRE_OBSERVER
+    crosswire::crashLogf("[ui] button event c=0x%x dispatched to curr screen", (int)c);
+#endif
     curr->handleInput(c);
     _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
     _next_refresh = 100;  // trigger refresh

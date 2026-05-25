@@ -2,6 +2,17 @@
 #include <Mesh.h>
 #include "MyMesh.h"
 
+#ifdef CROSSWIRE_OBSERVER
+  #include "helpers/wifi_observer/WifiObserver.h"
+  #include "helpers/wifi_observer/CrashLog.h"
+  // CW_PHASE: tracing macro for setup() crash localization. With
+  // CrashLog v2's ESP_LOG hook + shutdown handler, the last phase
+  // line surviving in the ring buffer pinpoints where setup() died.
+  #define CW_PHASE(name) crosswire::crashLogf("[setup] phase: %s", name)
+#else
+  #define CW_PHASE(name) ((void)0)
+#endif
+
 // Believe it or not, this std C function is busted on some platforms!
 static uint32_t _atoi(const char* sp) {
   uint32_t n = 0;
@@ -108,24 +119,51 @@ void halt() {
 void setup() {
   Serial.begin(115200);
 
+#ifdef CROSSWIRE_OBSERVER
+  crosswire::wifiObserverBegin();
+#endif
+  CW_PHASE("post:wifiObserverBegin");
+
   board.begin();
+  CW_PHASE("post:board.begin");
 
 #ifdef DISPLAY_CLASS
   DisplayDriver* disp = NULL;
-  if (display.begin()) {
+  bool display_begin_ok = display.begin();
+  CW_PHASE(display_begin_ok ? "post:display.begin(OK)" : "post:display.begin(FAILED)");
+#ifdef CROSSWIRE_OBSERVER
+  // I2C bus scan: report ALL addresses that ACK on the bus that
+  // display.begin() initialized. If OLED at expected DISPLAY_ADDRESS
+  // (0x3C) doesn't appear, our pin/address assumptions are wrong for
+  // this V3 sub-variant. Run AFTER display.begin() so bus is alive.
+  crosswire::i2cScan(-1, -1, "board-bus-default-pins");
+#endif
+  if (display_begin_ok) {
     disp = &display;
     disp->startFrame();
   #ifdef ST7789
     disp->setTextSize(2);
   #endif
     disp->drawTextCentered(disp->width() / 2, 28, "Loading...");
+#ifdef CROSSWIRE_OBSERVER
+    // Boot counter on top-left corner. User can directly observe whether
+    // it increments without any interaction = positive proof of (or
+    // against) chip rebooting. Persists via RTC_NOINIT across soft
+    // resets; resets only on power-on / esptool reset.
+    char bootbuf[16];
+    snprintf(bootbuf, sizeof(bootbuf), "B#%u", (unsigned)crosswire::bootCounterValue());
+    disp->setTextSize(1);
+    disp->drawTextLeftAlign(0, 0, bootbuf);
+#endif
     disp->endFrame();
   }
 #endif
 
   if (!radio_init()) { halt(); }
+  CW_PHASE("post:radio_init");
 
   fast_rng.begin(radio_get_rng_seed());
+  CW_PHASE("post:fast_rng.begin");
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   InternalFS.begin();
@@ -183,8 +221,11 @@ void setup() {
   #endif
     the_mesh.startInterface(serial_interface);
 #elif defined(ESP32)
+  CW_PHASE("ESP32:before SPIFFS.begin");
   SPIFFS.begin(true);
+  CW_PHASE("ESP32:post SPIFFS.begin");
   store.begin();
+  CW_PHASE("ESP32:post store.begin");
   the_mesh.begin(
     #ifdef DISPLAY_CLASS
         disp != NULL
@@ -192,41 +233,74 @@ void setup() {
         false
     #endif
   );
+  CW_PHASE("ESP32:post the_mesh.begin");
 
 #ifdef WIFI_SSID
   board.setInhibitSleep(true);   // prevent sleep when WiFi is active
   WiFi.begin(WIFI_SSID, WIFI_PWD);
   serial_interface.begin(TCP_PORT);
+  CW_PHASE("ESP32:post WIFI_SSID serial_interface.begin");
 #elif defined(BLE_PIN_CODE)
+  CW_PHASE("ESP32:before BLE serial_interface.begin (BLE_PIN_CODE)");
   serial_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
+  CW_PHASE("ESP32:post BLE serial_interface.begin");
 #elif defined(SERIAL_RX)
   companion_serial.setPins(SERIAL_RX, SERIAL_TX);
   companion_serial.begin(115200);
   serial_interface.begin(companion_serial);
+  CW_PHASE("ESP32:post SERIAL_RX serial_interface.begin");
 #else
   serial_interface.begin(Serial);
+  CW_PHASE("ESP32:post fallback serial_interface.begin");
 #endif
   the_mesh.startInterface(serial_interface);
+  CW_PHASE("ESP32:post the_mesh.startInterface");
 #else
   #error "need to define filesystem"
 #endif
 
   sensors.begin();
+  CW_PHASE("post:sensors.begin");
 
 #if ENV_INCLUDE_GPS == 1
   the_mesh.applyGpsPrefs();
+  CW_PHASE("post:applyGpsPrefs");
 #endif
 
 #ifdef DISPLAY_CLASS
   ui_task.begin(disp, &sensors, the_mesh.getNodePrefs());  // still want to pass this in as dependency, as prefs might be moved
+  CW_PHASE("post:ui_task.begin");
 #endif
+  CW_PHASE("setup:DONE");
 }
 
 void loop() {
+#ifdef CROSSWIRE_OBSERVER
+  // CrashLog v6: per-sub-loop visit marking + heartbeat. Each sub-loop
+  // sets its bit on entry; heartbeat reads + resets every ~1s. Lets us
+  // PROVE that each sub-loop actually ran in the past 1s window.
+  crosswire::loopIterTick();
+  crosswire::subloopMark(crosswire::SUBLOOP_WIFI);
+  crosswire::wifiObserverLoop();
+  crosswire::subloopMark(crosswire::SUBLOOP_MESH);
+#endif
   the_mesh.loop();
+
+#ifdef CROSSWIRE_OBSERVER
+  crosswire::subloopMark(crosswire::SUBLOOP_SENSORS);
+#endif
   sensors.loop();
+
 #ifdef DISPLAY_CLASS
+#ifdef CROSSWIRE_OBSERVER
+  crosswire::subloopMark(crosswire::SUBLOOP_UI);
+#endif
   ui_task.loop();
+#endif
+
+#ifdef CROSSWIRE_OBSERVER
+  // Emit heartbeat if 1s elapsed since last. Cheap timestamp check.
+  crosswire::heartbeatTick(millis());
 #endif
   rtc_clock.tick();
 }

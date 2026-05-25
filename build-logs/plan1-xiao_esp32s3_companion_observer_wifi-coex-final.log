@@ -1,0 +1,16 @@
+=== xiao_esp32s3_companion_observer_wifi coex-fix build Mon May 25 03:49:01 EDT 2026 ===
+|-- ESP32 BLE Arduino @ 2.0.0
+|-- FS @ 2.0.0
+|-- Adafruit GFX Library @ 1.12.6
+Building in release mode
+Retrieving maximum program size .pio\build\xiao_esp32s3_companion_observer_wifi\firmware.elf
+Checking size .pio\build\xiao_esp32s3_companion_observer_wifi\firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [======    ]  57.5% (used 188540 bytes from 327680 bytes)
+Flash: [=====     ]  48.2% (used 1612373 bytes from 3342336 bytes)
+========================= [SUCCESS] Took 22.48 seconds =========================
+
+Environment                           Status    Duration
+------------------------------------  --------  ------------
+xiao_esp32s3_companion_observer_wifi  SUCCESS   00:00:22.480
+========================= 1 succeeded in 00:00:22.480 =========================
