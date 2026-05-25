@@ -56,6 +56,31 @@ static uint32_t g_tel_persistent_until_ms = 0;
 // Even if a CLI command tries to set a longer timeout, it gets clamped here.
 #define WIFI_PERSISTENT_MAX_MS (60UL * 60UL * 1000UL)   // 60 minutes
 
+// LoRa#216: standalone cmd-poll timing. Single timer drives both persistent
+// and burst modes; interval picked from the right config var based on
+// current mode (g_tel_persistent_until_ms). In burst mode, cmd-poll brings
+// its own WiFi up-and-down (independent of telemetry publish cycle); in
+// persistent mode, transport is already up so cmd-poll is essentially free.
+static uint32_t g_cmd_poll_next_ms = 0;
+// Runtime-tunable burst-mode interval (CLI: `cmd_poll interval N`).
+// Initialized to default; range-checked by setter.
+static uint32_t g_cmd_poll_burst_interval_ms = WIFI_CMD_POLL_BURST_INTERVAL_DEFAULT_MS;
+
+// LoRa#216: WiFi-on-time instrumentation. Rolling-window 24h average of how
+// much wall-clock time the device had WiFi associated (transport.isReady()
+// true). Surfaced in the telemetry state payload as wifi_on_pct_24h so we
+// can calibrate cadence-vs-power tradeoffs without external hardware.
+// Strategy: on every loop iteration, if transport is ready, accumulate the
+// delta since last check; at 24h elapsed, snapshot current accum as the
+// "last-24h" value and start a new window. The published value always
+// reflects the most recently COMPLETED 24h window (never a partial one),
+// so it's a stable signal for power-budget reasoning.
+#define WIFI_ON_WINDOW_MS (24UL * 60UL * 60UL * 1000UL)
+static uint32_t g_wifi_on_window_start_ms = 0;
+static uint32_t g_wifi_on_accum_ms = 0;
+static uint32_t g_wifi_on_last_check_ms = 0;
+static uint16_t g_wifi_on_pct_last_24h_x100 = 0;  // 0-10000 = 0.00-100.00%
+
 // D6 / issue #60: OTA active-upload extension. While an OTA upload is in
 // progress, refresh the persistent-mode deadline on each chunk so a slow
 // upload doesn't get cut off when the user's original "wifi on N" window
@@ -166,6 +191,7 @@ static void wifi_telemetry_fill_scalar(TelemetryData& d) {
     d.wifi_rssi_dbm = (WiFi.status() == WL_CONNECTED) ? (int16_t)WiFi.RSSI() : 0;
     d.free_heap_b = ESP.getFreeHeap();
     d.reset_reason = g_tel_reset_reason;
+    d.wifi_on_pct_24h_x100 = g_wifi_on_pct_last_24h_x100;  // LoRa#216
 }
 
 #if MAX_NEIGHBOURS
@@ -278,13 +304,12 @@ static void wifi_telemetry_collect_and_publish() {
         first_cycle_completed = true;
     }
 
-#ifdef CMD_TRANSPORT_HTTP
-    // Issue #188 / H3: HTTP cmd-relay poll. GETs pending cmds and dispatches
-    // them inline before the burst-mode teardown below. Any cmd that promotes
-    // us to persistent mode (ota_enable, wifi_keepalive) will set
-    // g_tel_persistent_until_ms and the teardown below will skip end().
-    wifi_telemetry_http_cmd_poll();
-#endif
+    // LoRa#216: HTTP cmd-poll was previously called HERE inside collect_and_publish
+    // (H3 #195). It has moved to its own standalone check in wifi_telemetry_loop()
+    // so cmd-poll cadence can be tuned independently of telemetry publish cadence.
+    // Dispatched cmds that promote to persistent mode (ota_enable, wifi_keepalive)
+    // still work the same way: dispatch sets g_tel_persistent_until_ms, then the
+    // teardown check below sees the non-zero value and skips end().
 
     // Issue #86: MQTT cmd-topic subscribe (legacy path). Kept active during
     // the H3-to-H7 transition for compatibility. The burst-mode drain bug
@@ -381,6 +406,68 @@ static void wifi_telemetry_loop() {
         Serial.println("[WTEL] persistent timer expired, reverted to BURST");
     }
 
+    // LoRa#216: WiFi-on-time accumulator. Runs every loop iteration; cheap.
+    // Counts wall-clock time spent with transport.isReady() == true into the
+    // current 24h window. On rollover, snapshots the completed-window % into
+    // g_wifi_on_pct_last_24h_x100 (the value telemetry publishes).
+    {
+        uint32_t now = millis();
+        if (g_wifi_on_window_start_ms == 0) {
+            g_wifi_on_window_start_ms = now;
+            g_wifi_on_last_check_ms = now;
+        } else if (g_tel_transport && g_tel_transport->isReady()) {
+            g_wifi_on_accum_ms += (now - g_wifi_on_last_check_ms);
+        }
+        g_wifi_on_last_check_ms = now;
+        if ((uint32_t)(now - g_wifi_on_window_start_ms) >= WIFI_ON_WINDOW_MS) {
+            // Snapshot completed window's % (x100 for 0.01% precision).
+            g_wifi_on_pct_last_24h_x100 = (uint16_t)(
+                ((uint64_t)g_wifi_on_accum_ms * 10000ULL) / WIFI_ON_WINDOW_MS);
+            g_wifi_on_accum_ms = 0;
+            g_wifi_on_window_start_ms = now;
+        }
+    }
+
+#ifdef CMD_TRANSPORT_HTTP
+    // LoRa#216: standalone cmd-poll, mode-aware.
+    // Persistent mode (g_tel_persistent_until_ms != 0): transport is already
+    //   up; we just call the poll function. Interval = PERSISTENT_INTERVAL_MS.
+    // Burst mode (g_tel_persistent_until_ms == 0): we bring up transport,
+    //   poll, and tear down (unless a dispatched cmd just promoted us to
+    //   persistent — re-check g_tel_persistent_until_ms before teardown).
+    //   Interval = g_cmd_poll_burst_interval_ms (CLI-tunable, default = telemetry interval).
+    if ((int32_t)(millis() - g_cmd_poll_next_ms) >= 0 && g_tel_transport != nullptr) {
+        bool was_persistent_before = (g_tel_persistent_until_ms != 0);
+        bool was_ready_before      = g_tel_transport->isReady();
+        // Bring transport up if it isn't (burst-mode cmd-poll cycle).
+        if (!was_ready_before) {
+            g_tel_wifi_attempts++;
+            if (!g_tel_transport->begin()) {
+                g_tel_wifi_fails++;
+            }
+        }
+        if (g_tel_transport->isReady()) {
+            wifi_telemetry_http_cmd_poll();
+        }
+        // Tear down only if (a) we brought it up, AND (b) we're STILL not in
+        // persistent mode — a dispatched cmd may have just promoted us. Use
+        // CURRENT value of g_tel_persistent_until_ms, not the pre-poll snapshot.
+        if (!was_ready_before && g_tel_persistent_until_ms == 0) {
+            g_tel_transport->end();
+            // Issue #86: cmd-topic subscription is gone with the transport;
+            // mark for re-subscribe on next connect.
+            g_remote_cmd_subscribed = false;
+        }
+        // Schedule next poll using the mode we're in NOW (also captures any
+        // mid-cycle promotion to persistent — next poll fires sooner).
+        uint32_t interval = (g_tel_persistent_until_ms != 0)
+            ? WIFI_CMD_POLL_PERSISTENT_INTERVAL_MS
+            : g_cmd_poll_burst_interval_ms;
+        g_cmd_poll_next_ms = millis() + interval;
+        (void)was_persistent_before;  // captured for potential debug logging
+    }
+#endif
+
     if ((int32_t)(millis() - g_tel_next_publish_ms) >= 0) {
         wifi_telemetry_collect_and_publish();
         g_tel_next_publish_ms = millis() + WIFI_TELEMETRY_INTERVAL_MS;
@@ -405,6 +492,35 @@ int wifi_telemetry_is_disabled(void) {
 void wifi_telemetry_force_now(void) {
     g_tel_next_publish_ms = millis();
 }
+
+#ifdef CMD_TRANSPORT_HTTP
+// LoRa#216: CLI command "cmd_poll now" — fire cmd-poll on the next loop
+// iteration regardless of cadence. Lets operators get cmd response without
+// waiting for the timer in either mode.
+void wifi_telemetry_cmd_poll_now(void) {
+    g_cmd_poll_next_ms = millis();
+}
+
+// LoRa#216: CLI command "cmd_poll interval N" — set burst-mode cmd-poll
+// cadence to N seconds. Range-checked against min (60s, prevents power
+// runaway) and max (24h, sanity). Returns the value actually set in ms
+// after clamping so the CLI can echo it. Setting in persistent mode is
+// allowed but only takes effect when burst mode resumes.
+uint32_t wifi_telemetry_set_cmd_poll_burst_interval(uint32_t seconds) {
+    uint32_t ms = (uint32_t)seconds * 1000UL;
+    if (ms < WIFI_CMD_POLL_BURST_INTERVAL_MIN_MS) {
+        ms = WIFI_CMD_POLL_BURST_INTERVAL_MIN_MS;
+    } else if (ms > WIFI_CMD_POLL_BURST_INTERVAL_MAX_MS) {
+        ms = WIFI_CMD_POLL_BURST_INTERVAL_MAX_MS;
+    }
+    g_cmd_poll_burst_interval_ms = ms;
+    return ms;
+}
+
+uint32_t wifi_telemetry_get_cmd_poll_burst_interval(void) {
+    return g_cmd_poll_burst_interval_ms;
+}
+#endif
 
 void wifi_telemetry_reset_state(void) {
     // Force clean transport state and a fresh publish on next loop pass.

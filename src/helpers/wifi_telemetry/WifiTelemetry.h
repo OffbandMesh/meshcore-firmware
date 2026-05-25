@@ -27,8 +27,38 @@
 // ---------------------------------------------------------------------------
 // Compile-time tuning. Override via build_flags if you want different values.
 // ---------------------------------------------------------------------------
+// LoRa#216 update 2026-05-24: was 15min; dropped to 5min once power-budget
+// review (~17 mAh/day burst cycles incremental) confirmed sustainable under
+// the patio CN3165 + Harbor Breeze solar input. The cmd-poll latency on
+// burst-mode patio drops from worst-case 15min to worst-case 5min as a
+// natural consequence (cmd-poll piggybacks on the publish cycle in burst
+// mode; in persistent mode it uses WIFI_CMD_POLL_PERSISTENT_INTERVAL_MS).
 #ifndef WIFI_TELEMETRY_INTERVAL_MS
-#define WIFI_TELEMETRY_INTERVAL_MS (15UL * 60UL * 1000UL)
+#define WIFI_TELEMETRY_INTERVAL_MS (5UL * 60UL * 1000UL)
+#endif
+
+// LoRa#216: persistent-mode (g_tel_persistent_until_ms != 0) cmd-poll
+// cadence, decoupled from the telemetry-publish boundary. 60s is fast
+// enough for interactive admin workflows (queue cmd, get response within
+// ~90s) without hammering cmdrelay.
+#ifndef WIFI_CMD_POLL_PERSISTENT_INTERVAL_MS
+#define WIFI_CMD_POLL_PERSISTENT_INTERVAL_MS (60UL * 1000UL)
+#endif
+
+// LoRa#216: burst-mode (g_tel_persistent_until_ms == 0) cmd-poll cadence.
+// Default = WIFI_TELEMETRY_INTERVAL_MS so cmd-poll aligns with publish
+// cycles and incurs zero extra WiFi-up overhead. Operator can tune lower
+// via `cmd_poll interval N` CLI to trade power for cmd-response latency.
+// Hard minimum prevents catastrophic operator misconfiguration; below
+// this, operator should be using persistent mode instead.
+#ifndef WIFI_CMD_POLL_BURST_INTERVAL_DEFAULT_MS
+#define WIFI_CMD_POLL_BURST_INTERVAL_DEFAULT_MS WIFI_TELEMETRY_INTERVAL_MS
+#endif
+#ifndef WIFI_CMD_POLL_BURST_INTERVAL_MIN_MS
+#define WIFI_CMD_POLL_BURST_INTERVAL_MIN_MS (60UL * 1000UL)  // 60s floor
+#endif
+#ifndef WIFI_CMD_POLL_BURST_INTERVAL_MAX_MS
+#define WIFI_CMD_POLL_BURST_INTERVAL_MAX_MS (24UL * 60UL * 60UL * 1000UL)  // 24h ceiling
 #endif
 
 #ifndef WIFI_TELEMETRY_QUEUE_SIZE
@@ -74,6 +104,7 @@ struct TelemetryData {
     int16_t  wifi_rssi_dbm;     // WiFi signal strength to the AP (valid only when WiFi up)
     uint32_t free_heap_b;       // ESP32 free heap in bytes
     const char* reset_reason;   // human-readable reset reason from last boot (static string, never free)
+    uint16_t wifi_on_pct_24h_x100;  // LoRa#216: % time WiFi was associated over last completed 24h window, x100 (0-10000)
 };
 
 // ---------------------------------------------------------------------------

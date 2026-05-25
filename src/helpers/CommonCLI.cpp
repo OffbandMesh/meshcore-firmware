@@ -70,6 +70,12 @@ extern "C" {
   void wifi_telemetry_set_persistent(uint32_t duration_ms);
   int  wifi_telemetry_is_persistent(void);
   uint32_t wifi_telemetry_persistent_remaining_ms(void);
+#ifdef CMD_TRANSPORT_HTTP
+  // LoRa#216: HTTP cmd-poll controls
+  void     wifi_telemetry_cmd_poll_now(void);
+  uint32_t wifi_telemetry_set_cmd_poll_burst_interval(uint32_t seconds);
+  uint32_t wifi_telemetry_get_cmd_poll_burst_interval(void);
+#endif
 }
 #endif
 
@@ -573,6 +579,28 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       sprintf(reply, "ok - persistent for %d min", minutes);
     } else if (memcmp(command, "wifi", 4) == 0) {
       wifi_telemetry_get_status(reply, 160);
+#ifdef CMD_TRANSPORT_HTTP
+    // LoRa#216: HTTP cmd-poll CLI commands.
+    } else if (memcmp(command, "cmd_poll now", 12) == 0) {
+      wifi_telemetry_cmd_poll_now();
+      strcpy(reply, "ok (cmd-poll scheduled for next loop pass)");
+    } else if (memcmp(command, "cmd_poll interval", 17) == 0) {
+      // "cmd_poll interval N" -> N seconds. Out-of-range gets clamped by setter.
+      uint32_t seconds = 0;
+      if (command[17] == ' ' && command[18] != 0) {
+        seconds = (uint32_t)atoi(command + 18);
+      }
+      if (seconds == 0) {
+        // Bare "cmd_poll interval" returns current value, no change
+        uint32_t cur_ms = wifi_telemetry_get_cmd_poll_burst_interval();
+        snprintf(reply, 160, "cmd_poll burst interval = %lus",
+                 (unsigned long)(cur_ms / 1000UL));
+      } else {
+        uint32_t set_ms = wifi_telemetry_set_cmd_poll_burst_interval(seconds);
+        snprintf(reply, 160, "ok - cmd_poll burst interval = %lus (requested %lus)",
+                 (unsigned long)(set_ms / 1000UL), (unsigned long)seconds);
+      }
+#endif
     // D5 / issue #59: STA-mode OTA controls. Order: "ota end" and "ota status"
     // must match before bare "ota" since memcmp(3) would otherwise swallow them.
     } else if (memcmp(command, "ota end", 7) == 0) {
