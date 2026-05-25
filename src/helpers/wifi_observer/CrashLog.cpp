@@ -12,6 +12,7 @@
 #ifdef ARDUINO
   #include <Arduino.h>
   #include <Wire.h>          // i2cScan() bus probing
+  #include <Preferences.h>   // NVS-backed boot counter
   #include <esp_attr.h>      // RTC_NOINIT_ATTR
   #include <esp_system.h>    // esp_reset_reason(), esp_register_shutdown_handler()
   #include <esp_log.h>       // esp_log_set_vprintf()
@@ -376,9 +377,7 @@ static uint32_t s_last_hb_ms = 0;
 
 static uint32_t s_nvs_boot_count = 0;
 static uint32_t s_prev_boot_uptime_s = 0;
-
-#include <Preferences.h>
-static Preferences s_boot_prefs;
+static ::Preferences s_boot_prefs;  // explicit global namespace to avoid any future conflicts
 
 void heartbeatBegin() {
     // RTC_NOINIT counter (kept for telemetry but no longer the primary truth):
@@ -430,7 +429,7 @@ static void maybeSaveUptime(uint32_t now_ms) {
     // Save every 5 seconds (matches stats cadence; balances flash wear)
     if (now_ms - s_last_uptime_save_ms < 5000) return;
     s_last_uptime_save_ms = now_ms;
-    Preferences p;
+    ::Preferences p;
     if (p.begin("cw_boot", /*readOnly=*/false)) {
         p.putUInt("last_up_s", now_ms / 1000);
         p.end();
