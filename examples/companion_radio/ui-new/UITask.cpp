@@ -55,6 +55,9 @@ public:
   }
 
   int render(DisplayDriver& display) override {
+#ifdef CROSSWIRE_OBSERVER
+    crosswire::crashLogf("[ui] SplashScreen.render() at %lu", (unsigned long)millis());
+#endif
     // meshcore logo
     display.setColor(DisplayDriver::BLUE);
     int logoWidth = 128;
@@ -635,6 +638,9 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
 
   if (_display != NULL) {
     if (!_display->isOn() && !hasConnection()) {
+#ifdef CROSSWIRE_OBSERVER
+      crosswire::crashLogf("[ui] newMsg: display off + no conn -> turnOn");
+#endif
       _display->turnOn();
     }
     if (_display->isOn()) {
@@ -786,6 +792,9 @@ void UITask::loop() {
 #endif
 
   if (c != 0 && curr) {
+#ifdef CROSSWIRE_OBSERVER
+    crosswire::crashLogf("[ui] button event c=0x%x dispatched to curr screen", (int)c);
+#endif
     curr->handleInput(c);
     _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
     _next_refresh = 100;  // trigger refresh
