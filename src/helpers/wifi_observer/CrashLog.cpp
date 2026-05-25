@@ -283,7 +283,26 @@ void crashLogInstallEspLogHook() {
     installed = true;
     // Returns the PREVIOUS vprintf; we ignore it (= replace, don't chain).
     esp_log_set_vprintf(crashlog_vprintf);
-    crashLogf("[CrashLog] ESP-IDF log capture installed");
+
+    // Boost BT-stack log levels so Bluedroid pair-state-machine events
+    // appear in our captured stream. Default arduino-esp32 ships these
+    // at WARN; bumping to DEBUG surfaces handshake/bond/disconnect
+    // events that the user-visible "drops out on connect" failure
+    // produces. esp_log_level_set("*", ...) only affects categories
+    // whose code wasn't compiled with a higher minimum level, so this
+    // is best-effort -- some BT_LOG categories are sdkconfig-gated.
+    esp_log_level_set("*", ESP_LOG_INFO);
+    esp_log_level_set("BT", ESP_LOG_DEBUG);
+    esp_log_level_set("BT_LOG", ESP_LOG_DEBUG);
+    esp_log_level_set("BT_HCI", ESP_LOG_DEBUG);
+    esp_log_level_set("BT_GATT", ESP_LOG_DEBUG);
+    esp_log_level_set("BT_BTM", ESP_LOG_DEBUG);
+    esp_log_level_set("BT_SMP", ESP_LOG_DEBUG);
+    esp_log_level_set("BT_L2CAP", ESP_LOG_DEBUG);
+    esp_log_level_set("BT_GAP", ESP_LOG_DEBUG);
+    esp_log_level_set("NimBLE", ESP_LOG_DEBUG);
+
+    crashLogf("[CrashLog] ESP-IDF log capture installed; BT log level boosted to DEBUG");
 }
 
 static void crashlog_shutdown_handler(void) {
@@ -308,12 +327,32 @@ void crashLogInstallShutdownHandler() {
     }
 }
 
+// Loop phase tracking (CrashLog v3).
+static volatile const char** s_loop_phase_ptr = nullptr;
+static volatile uint32_t*    s_loop_iter_ptr  = nullptr;
+
+void loopPhaseSet(volatile const char** phase_ptr, volatile uint32_t* iter_ptr) {
+    s_loop_phase_ptr = phase_ptr;
+    s_loop_iter_ptr  = iter_ptr;
+}
+
 void crashLogHeapStats(const char* tag) {
-    crashLogf("[stats:%s] heap_free=%u heap_min=%u stack_hw=%u",
+    // Snapshot loop phase + iteration if registered.
+    const char* phase = "?";
+    uint32_t    iter  = 0;
+    if (s_loop_phase_ptr != nullptr && *s_loop_phase_ptr != nullptr) {
+        phase = (const char*)*s_loop_phase_ptr;
+    }
+    if (s_loop_iter_ptr != nullptr) {
+        iter = *s_loop_iter_ptr;
+    }
+    crashLogf("[stats:%s] heap_free=%u heap_min=%u stack_hw=%u loop_iter=%u phase='%s'",
               tag ? tag : "?",
               (unsigned)ESP.getFreeHeap(),
               (unsigned)ESP.getMinFreeHeap(),
-              (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+              (unsigned)uxTaskGetStackHighWaterMark(nullptr),
+              (unsigned)iter,
+              phase);
 }
 
 #else  // !ARDUINO host build
@@ -321,6 +360,7 @@ void crashLogHeapStats(const char* tag) {
 void crashLogInstallEspLogHook() {}
 void crashLogInstallShutdownHandler() {}
 void crashLogHeapStats(const char*) {}
+void loopPhaseSet(volatile const char**, volatile uint32_t*) {}
 
 #endif
 
