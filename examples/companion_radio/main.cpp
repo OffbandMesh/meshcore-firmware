@@ -148,6 +148,16 @@ void setup() {
     disp->setTextSize(2);
   #endif
     disp->drawTextCentered(disp->width() / 2, 28, "Loading...");
+#ifdef CROSSWIRE_OBSERVER
+    // Boot counter on top-left corner. User can directly observe whether
+    // it increments without any interaction = positive proof of (or
+    // against) chip rebooting. Persists via RTC_NOINIT across soft
+    // resets; resets only on power-on / esptool reset.
+    char bootbuf[16];
+    snprintf(bootbuf, sizeof(bootbuf), "B#%u", (unsigned)crosswire::bootCounterValue());
+    disp->setTextSize(1);
+    disp->drawTextLeftAlign(0, 0, bootbuf);
+#endif
     disp->endFrame();
   }
 #endif
@@ -269,35 +279,31 @@ void setup() {
 
 void loop() {
 #ifdef CROSSWIRE_OBSERVER
-  // Loop-phase tracing: track which sub-loop is currently executing.
-  // Updated at each step; the periodic stats prints record the most
-  // recent value. If one sub-loop hangs (deadlock, infinite retry,
-  // blocking call), the phase string + iteration count being frozen
-  // in the next stats sample tells us exactly which one.
-  static volatile const char* s_loop_phase = "begin";
-  static volatile uint32_t s_loop_iter = 0;
-  crosswire::loopPhaseSet(&s_loop_phase, &s_loop_iter);
-  s_loop_iter++;
-
-  s_loop_phase = "wifiObserverLoop";
+  // CrashLog v6: per-sub-loop visit marking + heartbeat. Each sub-loop
+  // sets its bit on entry; heartbeat reads + resets every ~1s. Lets us
+  // PROVE that each sub-loop actually ran in the past 1s window.
+  crosswire::loopIterTick();
+  crosswire::subloopMark(crosswire::SUBLOOP_WIFI);
   crosswire::wifiObserverLoop();
-#endif
-#ifdef CROSSWIRE_OBSERVER
-  s_loop_phase = "the_mesh.loop";
+  crosswire::subloopMark(crosswire::SUBLOOP_MESH);
 #endif
   the_mesh.loop();
+
 #ifdef CROSSWIRE_OBSERVER
-  s_loop_phase = "sensors.loop";
+  crosswire::subloopMark(crosswire::SUBLOOP_SENSORS);
 #endif
   sensors.loop();
+
 #ifdef DISPLAY_CLASS
 #ifdef CROSSWIRE_OBSERVER
-  s_loop_phase = "ui_task.loop";
+  crosswire::subloopMark(crosswire::SUBLOOP_UI);
 #endif
   ui_task.loop();
 #endif
+
 #ifdef CROSSWIRE_OBSERVER
-  s_loop_phase = "end";
+  // Emit heartbeat if 1s elapsed since last. Cheap timestamp check.
+  crosswire::heartbeatTick(millis());
 #endif
   rtc_clock.tick();
 }

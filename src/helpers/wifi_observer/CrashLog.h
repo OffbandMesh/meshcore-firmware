@@ -123,4 +123,43 @@ void loopPhaseSet(volatile const char** phase_ptr, volatile uint32_t* iter_ptr);
 // label is a short string included in log lines ("board", "env", etc.).
 void i2cScan(int sda_pin, int scl_pin, const char* label);
 
+// ---------------------------------------------------------------------------
+// Heartbeat + boot counter (CrashLog v6: positive-evidence health proof)
+// ---------------------------------------------------------------------------
+// Goal: prove the main loop is actually running AND each sub-loop is
+// being reached, NOT just that "my stats line printed every 5s." Per
+// user methodology critique: absence of negative evidence != proof of
+// health. This produces POSITIVE evidence in the form of a comprehensive
+// heartbeat line every ~1 second.
+
+constexpr uint8_t SUBLOOP_WIFI    = 1 << 0;
+constexpr uint8_t SUBLOOP_MESH    = 1 << 1;
+constexpr uint8_t SUBLOOP_SENSORS = 1 << 2;
+constexpr uint8_t SUBLOOP_UI      = 1 << 3;
+
+// Initialize heartbeat state. Reads + increments the boot counter from
+// RTC_NOINIT memory. Called automatically from crashLogBegin().
+void heartbeatBegin();
+
+// Called by main.cpp loop() before each sub-loop, with the bit for that
+// sub-loop. Heartbeat-tick reads the cumulative-since-last-tick flags
+// to determine which sub-loops actually ran in the past ~1s window.
+void subloopMark(uint8_t which);
+
+// Increment loop iteration counter. Called by main.cpp loop() once per
+// outer iteration. Heartbeat reports delta-iter since last tick.
+void loopIterTick();
+
+// Emit heartbeat line if >= 1000ms since last emit. Call frequently
+// (from main loop). The line format:
+//   [hb] up=Ns iter=+N boot=N phases=[W:Y M:Y S:Y U:Y]
+// W = wifi_observer, M = the_mesh, S = sensors, U = ui_task.
+// Y/N flags reset after emit so each line covers the past 1s window.
+void heartbeatTick(uint32_t now_ms);
+
+// Boot counter value (loaded/incremented by heartbeatBegin).
+// Persists across soft resets via RTC_NOINIT; resets on power-on /
+// deep-sleep wake / esptool hard reset.
+uint32_t bootCounterValue();
+
 }  // namespace crosswire

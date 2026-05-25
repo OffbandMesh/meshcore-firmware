@@ -166,6 +166,9 @@ void crashLogBegin() {
     // are captured, and any reset path triggers a last-gasp dump.
     crashLogInstallEspLogHook();
     crashLogInstallShutdownHandler();
+
+    // v6: initialize boot counter + heartbeat state.
+    heartbeatBegin();
 #endif
 }
 
@@ -337,6 +340,88 @@ void loopPhaseSet(volatile const char** phase_ptr, volatile uint32_t* iter_ptr) 
     s_loop_iter_ptr  = iter_ptr;
 }
 
+// ---------------------------------------------------------------------------
+// Heartbeat + boot counter state
+// ---------------------------------------------------------------------------
+
+// Boot counter persisted in RTC_NOINIT. Uses its own magic separate
+// from the ring buffer's so we can validate independently.
+static constexpr uint32_t kBootCounterMagic = 0xB007C001U;
+
+struct BootCounterState {
+    uint32_t magic;
+    uint32_t counter;
+};
+
+RTC_NOINIT_ATTR static BootCounterState s_boot_state;
+
+// Sub-loop visit tracking. Each sub-loop sets its bit on entry;
+// heartbeat reads + zeroes. portMUX serialization for thread safety.
+static volatile uint8_t s_subloop_flags = 0;
+static volatile uint32_t s_loop_iter_delta = 0;
+static portMUX_TYPE s_hb_mux = portMUX_INITIALIZER_UNLOCKED;
+
+// Heartbeat timing
+static uint32_t s_last_hb_ms = 0;
+
+void heartbeatBegin() {
+    // Validate boot counter magic; if valid, increment; else initialize.
+    if (s_boot_state.magic == kBootCounterMagic) {
+        s_boot_state.counter++;
+    } else {
+        s_boot_state.magic   = kBootCounterMagic;
+        s_boot_state.counter = 1;
+    }
+    crashLogf("[boot] counter=%u (incremented in RTC_NOINIT; survives soft reset, lost on power-on)",
+              (unsigned)s_boot_state.counter);
+    s_last_hb_ms = 0;  // emit first heartbeat ASAP after begin
+    portENTER_CRITICAL(&s_hb_mux);
+    s_subloop_flags    = 0;
+    s_loop_iter_delta  = 0;
+    portEXIT_CRITICAL(&s_hb_mux);
+}
+
+uint32_t bootCounterValue() {
+    return (s_boot_state.magic == kBootCounterMagic) ? s_boot_state.counter : 0;
+}
+
+void subloopMark(uint8_t which) {
+    portENTER_CRITICAL(&s_hb_mux);
+    s_subloop_flags |= which;
+    portEXIT_CRITICAL(&s_hb_mux);
+}
+
+void loopIterTick() {
+    portENTER_CRITICAL(&s_hb_mux);
+    s_loop_iter_delta++;
+    portEXIT_CRITICAL(&s_hb_mux);
+}
+
+void heartbeatTick(uint32_t now_ms) {
+    if (now_ms - s_last_hb_ms < 1000) return;
+    s_last_hb_ms = now_ms;
+
+    // Atomic snapshot + reset.
+    uint8_t  flags;
+    uint32_t delta_iter;
+    portENTER_CRITICAL(&s_hb_mux);
+    flags        = s_subloop_flags;
+    delta_iter   = s_loop_iter_delta;
+    s_subloop_flags    = 0;
+    s_loop_iter_delta  = 0;
+    portEXIT_CRITICAL(&s_hb_mux);
+
+    crashLogf("[hb] up=%us iter=+%u boot=%u phases=[W:%c M:%c S:%c U:%c] free_heap=%u",
+              (unsigned)(now_ms / 1000),
+              (unsigned)delta_iter,
+              (unsigned)bootCounterValue(),
+              (flags & SUBLOOP_WIFI)    ? 'Y' : 'N',
+              (flags & SUBLOOP_MESH)    ? 'Y' : 'N',
+              (flags & SUBLOOP_SENSORS) ? 'Y' : 'N',
+              (flags & SUBLOOP_UI)      ? 'Y' : 'N',
+              (unsigned)ESP.getFreeHeap());
+}
+
 void i2cScan(int sda_pin, int scl_pin, const char* label) {
     // Re-init Wire on the specified pins if provided (must be done from
     // a task safe context). Don't disturb existing setup if pins are -1.
@@ -387,6 +472,11 @@ void crashLogInstallShutdownHandler() {}
 void crashLogHeapStats(const char*) {}
 void loopPhaseSet(volatile const char**, volatile uint32_t*) {}
 void i2cScan(int, int, const char*) {}
+void heartbeatBegin() {}
+void subloopMark(uint8_t) {}
+void loopIterTick() {}
+void heartbeatTick(uint32_t) {}
+uint32_t bootCounterValue() { return 0; }
 
 #endif
 
