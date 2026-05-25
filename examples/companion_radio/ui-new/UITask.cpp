@@ -5,6 +5,9 @@
 #ifdef WIFI_SSID
   #include <WiFi.h>
 #endif
+#ifdef CROSSWIRE_OBSERVER
+  #include <helpers/wifi_observer/CrashLog.h>
+#endif
 
 #ifndef AUTO_OFF_MILLIS
   #define AUTO_OFF_MILLIS     15000   // 15 seconds
@@ -663,6 +666,22 @@ void UITask::userLedHandler() {
 }
 
 void UITask::setCurrScreen(UIScreen* c) {
+#ifdef CROSSWIRE_OBSERVER
+  // Screen transition tracing: log every change so we can see if the
+  // SplashScreen ↔ HomeScreen oscillation observed on hv3-bench is
+  // a real state-machine bug.
+  const char* from = "?";
+  const char* to   = "?";
+  if      (curr == splash)      from = "SPLASH";
+  else if (curr == home)        from = "HOME";
+  else if (curr == msg_preview) from = "MSG_PREVIEW";
+  else if (curr == nullptr)     from = "NULL";
+  if      (c == splash)         to   = "SPLASH";
+  else if (c == home)           to   = "HOME";
+  else if (c == msg_preview)    to   = "MSG_PREVIEW";
+  else if (c == nullptr)        to   = "NULL";
+  crosswire::crashLogf("[ui] setCurrScreen %s -> %s", from, to);
+#endif
   curr = c;
   _next_refresh = 100;
 }

@@ -258,12 +258,35 @@ void setup() {
 
 void loop() {
 #ifdef CROSSWIRE_OBSERVER
+  // Loop-phase tracing: track which sub-loop is currently executing.
+  // Updated at each step; the periodic stats prints record the most
+  // recent value. If one sub-loop hangs (deadlock, infinite retry,
+  // blocking call), the phase string + iteration count being frozen
+  // in the next stats sample tells us exactly which one.
+  static volatile const char* s_loop_phase = "begin";
+  static volatile uint32_t s_loop_iter = 0;
+  crosswire::loopPhaseSet(&s_loop_phase, &s_loop_iter);
+  s_loop_iter++;
+
+  s_loop_phase = "wifiObserverLoop";
   crosswire::wifiObserverLoop();
 #endif
+#ifdef CROSSWIRE_OBSERVER
+  s_loop_phase = "the_mesh.loop";
+#endif
   the_mesh.loop();
+#ifdef CROSSWIRE_OBSERVER
+  s_loop_phase = "sensors.loop";
+#endif
   sensors.loop();
 #ifdef DISPLAY_CLASS
+#ifdef CROSSWIRE_OBSERVER
+  s_loop_phase = "ui_task.loop";
+#endif
   ui_task.loop();
+#endif
+#ifdef CROSSWIRE_OBSERVER
+  s_loop_phase = "end";
 #endif
   rtc_clock.tick();
 }

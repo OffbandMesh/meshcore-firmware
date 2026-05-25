@@ -104,4 +104,14 @@ void crashLogInstallShutdownHandler();
 // memory exhaustion / leak patterns building toward a crash.
 void crashLogHeapStats(const char* tag);
 
+// Register a "current loop phase" pointer + iteration counter that the
+// periodic stats printer reads. main.cpp loop() updates *phase_ptr at
+// each step and increments *iter_ptr each iteration. If a sub-loop
+// hangs, successive stats samples show the same phase string +
+// frozen iteration count = exact deadlock localization.
+//
+// Both pointers must point to volatile storage (otherwise compiler may
+// cache reads). The pointers themselves are stored in CrashLog state.
+void loopPhaseSet(volatile const char** phase_ptr, volatile uint32_t* iter_ptr);
+
 }  // namespace crosswire
