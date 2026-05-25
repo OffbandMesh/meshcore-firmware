@@ -17,9 +17,11 @@
 
 #include "WifiObserver.h"
 #include "WifiBootstrap.h"
+#include "CrashLog.h"
 
 #ifdef ARDUINO
   #include <Arduino.h>
+  #include <esp_system.h>   // esp_reset_reason()
 #endif
 
 namespace crosswire {
@@ -27,11 +29,32 @@ namespace crosswire {
 static bool s_mqtt_started = false;
 
 void wifiObserverBegin() {
+    // CrashLog FIRST: initializes RTC_NOINIT ring buffer; if the previous
+    // boot's buffer survived (= soft reset, BOR, panic, watchdog), dumps
+    // that buffer to Serial so we can see the last log lines before the
+    // reset. On fresh power-on, the dump is skipped + buffer initializes
+    // empty.
+    crashLogBegin();
+
+    // Stage A: reset-reason print. Tells us WHY the previous boot ended.
+    // POWERON = first boot since plug-in. PANIC = exception triggered.
+    // BROWNOUT = power supply dropped below ~2.8V. INT_WDT / TASK_WDT =
+    // watchdog timeout. DEEPSLEEP = woke from deep sleep.
 #ifdef ARDUINO
-    Serial.println("[WifiObserver] subsystem starting; version "
-                   CROSSWIRE_OBSERVER_VERSION);
+    crashLogf("[WifiObserver] boot; reset_reason=%d (%s) version=%s",
+              (int)esp_reset_reason(),
+              resetReasonString((int)esp_reset_reason()),
+              CROSSWIRE_OBSERVER_VERSION);
+#else
+    crashLogf("[WifiObserver] boot (host build) version=%s",
+              CROSSWIRE_OBSERVER_VERSION);
 #endif
+
+    crashLogf("[WifiObserver] subsystem starting");
     wifiBootstrap().begin();
+    crashLogf("[WifiObserver] wifiBootstrap.begin() returned; state=%d",
+              (int)wifiBootstrap().state());
+
     // TODO(Plan 2): Instantiate MqttUplink with the MeshCore-provided
     // RTCClock + LocalIdentity references. In companion_radio these are
     // available as the global `rtc_clock` (from target.h) and
@@ -45,9 +68,7 @@ void wifiObserverBegin() {
 void wifiObserverLoop() {
     wifiBootstrap().loop();
     if (wifiBootstrap().isStaConnected() && !s_mqtt_started) {
-#ifdef ARDUINO
-        Serial.println("[WifiObserver] STA up; ready for MQTT (Plan 2 wires uplink).");
-#endif
+        crashLogf("[WifiObserver] STA up; ready for MQTT (Plan 2 wires uplink)");
         s_mqtt_started = true;
     }
 }
