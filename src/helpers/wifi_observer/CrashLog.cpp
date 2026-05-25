@@ -12,9 +12,11 @@
 #ifdef ARDUINO
   #include <Arduino.h>
   #include <esp_attr.h>      // RTC_NOINIT_ATTR
-  #include <esp_system.h>    // esp_reset_reason()
+  #include <esp_system.h>    // esp_reset_reason(), esp_register_shutdown_handler()
+  #include <esp_log.h>       // esp_log_set_vprintf()
   #include <freertos/FreeRTOS.h>
   #include <freertos/portmacro.h>  // portENTER_CRITICAL
+  #include <freertos/task.h> // uxTaskGetStackHighWaterMark()
 #endif
 
 namespace crosswire {
@@ -158,6 +160,11 @@ void crashLogBegin() {
     s_header.wrapped     = 0;
     s_header.reserved    = 0;
     portEXIT_CRITICAL(&s_log_mux);
+
+    // v2: install hooks immediately so ESP-IDF logs from THIS boot onward
+    // are captured, and any reset path triggers a last-gasp dump.
+    crashLogInstallEspLogHook();
+    crashLogInstallShutdownHandler();
 #endif
 }
 
@@ -230,5 +237,91 @@ void crashLogClear() {
     s_header.wrapped     = 0;
     portEXIT_CRITICAL(&s_log_mux);
 }
+
+// ---------------------------------------------------------------------------
+// CrashLog v2: ESP-IDF log capture + shutdown handler + heap stats
+// ---------------------------------------------------------------------------
+
+#ifdef ARDUINO
+
+// Recursion guard: if ESP_LOG is called from inside our handler (e.g., a
+// driver logs while we're writing to its serial), we'd loop forever.
+// FreeRTOS task-local storage would be cleaner; thread_local on this
+// static is sufficient for the single-task setup() case + good enough
+// for the multi-task runtime case (worst harm is dropped log lines).
+static thread_local bool s_in_vprintf = false;
+
+static int crashlog_vprintf(const char* fmt, va_list ap) {
+    if (s_in_vprintf) return 0;  // recursion guard
+    s_in_vprintf = true;
+
+    char line[256];
+    int n = vsnprintf(line, sizeof(line), fmt, ap);
+    if (n < 0) { s_in_vprintf = false; return 0; }
+    size_t len = (size_t)n;
+    if (len >= sizeof(line)) len = sizeof(line) - 1;  // truncation
+
+    // Write to serial (live monitoring path).
+    Serial.write((const uint8_t*)line, len);
+
+    // Write to ring buffer (crash-survival path). Only if begin() ran;
+    // pre-begin ESP-IDF logs (during framework init) don't have a buffer
+    // to write into yet -- they still hit Serial above.
+    if (s_begin_called) {
+        portENTER_CRITICAL(&s_log_mux);
+        writeToRing(line, len);
+        portEXIT_CRITICAL(&s_log_mux);
+    }
+
+    s_in_vprintf = false;
+    return n;
+}
+
+void crashLogInstallEspLogHook() {
+    static bool installed = false;
+    if (installed) return;
+    installed = true;
+    // Returns the PREVIOUS vprintf; we ignore it (= replace, don't chain).
+    esp_log_set_vprintf(crashlog_vprintf);
+    crashLogf("[CrashLog] ESP-IDF log capture installed");
+}
+
+static void crashlog_shutdown_handler(void) {
+    // Last-gasp dump before reset finalizes. Fires on panic, watchdog,
+    // ESP.restart(), and similar soft-reset paths.
+    Serial.println();
+    Serial.println("=== CRASHLOG SHUTDOWN HANDLER FIRED ===");
+    crashLogDump();
+    Serial.println("=== END SHUTDOWN DUMP ===");
+    Serial.flush();
+}
+
+void crashLogInstallShutdownHandler() {
+    static bool installed = false;
+    if (installed) return;
+    installed = true;
+    esp_err_t err = esp_register_shutdown_handler(crashlog_shutdown_handler);
+    if (err != ESP_OK) {
+        crashLogf("[CrashLog] esp_register_shutdown_handler failed: %d", (int)err);
+    } else {
+        crashLogf("[CrashLog] shutdown handler registered");
+    }
+}
+
+void crashLogHeapStats(const char* tag) {
+    crashLogf("[stats:%s] heap_free=%u heap_min=%u stack_hw=%u",
+              tag ? tag : "?",
+              (unsigned)ESP.getFreeHeap(),
+              (unsigned)ESP.getMinFreeHeap(),
+              (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+}
+
+#else  // !ARDUINO host build
+
+void crashLogInstallEspLogHook() {}
+void crashLogInstallShutdownHandler() {}
+void crashLogHeapStats(const char*) {}
+
+#endif
 
 }  // namespace crosswire

@@ -77,4 +77,31 @@ void crashLogDump();
 // reads see nothing prior. CLI / settings command on demand.
 void crashLogClear();
 
+// ---------------------------------------------------------------------------
+// CrashLog v2 additions (SAFELANE "no silent failure" enforcement)
+// ---------------------------------------------------------------------------
+
+// Install the ESP-IDF log capture hook via esp_log_set_vprintf().
+// After this call, EVERY ESP_LOGE / ESP_LOGW / ESP_LOGI / ESP_LOGD / ESP_LOGV
+// from any ESP-IDF component, NimBLE, Bluedroid, Wire, WiFi driver, etc.
+// is routed through CrashLog's ring buffer in addition to Serial. Critical
+// for diagnosing crashes in code we don't directly own (which is the
+// majority of the stack).
+//
+// Idempotent: calling more than once does nothing after first call.
+// Called automatically by crashLogBegin().
+void crashLogInstallEspLogHook();
+
+// Register a shutdown handler that flushes the CrashLog buffer to Serial
+// on ANY reset path (panic, watchdog, ESP.restart()). Last-gasp visibility
+// before the chip resets.
+//
+// Idempotent. Called automatically by crashLogBegin().
+void crashLogInstallShutdownHandler();
+
+// Snapshot current heap + stack into CrashLog with a caller-supplied tag.
+// Use periodically (e.g., every 1-5 seconds in a loop) to detect slow
+// memory exhaustion / leak patterns building toward a crash.
+void crashLogHeapStats(const char* tag);
+
 }  // namespace crosswire

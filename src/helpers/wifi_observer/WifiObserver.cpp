@@ -71,6 +71,18 @@ void wifiObserverLoop() {
         crashLogf("[WifiObserver] STA up; ready for MQTT (Plan 2 wires uplink)");
         s_mqtt_started = true;
     }
+
+    // Periodic heap/stack snapshot every 5 seconds. Builds an in-buffer
+    // trail of memory pressure so a crash that comes from OOM / slow leak
+    // is visible in the CrashLog dump on next boot.
+#ifdef ARDUINO
+    static uint32_t s_last_stats_ms = 0;
+    uint32_t now = millis();
+    if (now - s_last_stats_ms > 5000) {
+        s_last_stats_ms = now;
+        crashLogHeapStats("loop");
+    }
+#endif
 }
 
 }  // namespace crosswire
