@@ -83,18 +83,21 @@ bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg,
 
 #if defined(ESP_PLATFORM)
     esp_mqtt_client_config_t mqcfg = {};
+#if ESP_IDF_VERSION_MAJOR >= 5
     mqcfg.broker.address.uri = cfg_.url;
-
-    // TLS / WSS: install CA cert if named.
     if (cfg_.transport == BrokerTransport::Tls ||
         cfg_.transport == BrokerTransport::Wss) {
         const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
-        if (pem != nullptr) {
-            mqcfg.broker.verification.certificate = pem;
-        }
-        // Empty / unknown ca_cert_name -> esp_mqtt uses system store
-        // (or accepts any cert if global_ca_store is not configured).
+        if (pem != nullptr) mqcfg.broker.verification.certificate = pem;
     }
+#else
+    mqcfg.uri = cfg_.url;
+    if (cfg_.transport == BrokerTransport::Tls ||
+        cfg_.transport == BrokerTransport::Wss) {
+        const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
+        if (pem != nullptr) mqcfg.cert_pem = pem;
+    }
+#endif
 
     // Apply auth strategy (sets username + password/token fields).
     if (!auth_->apply(mqcfg, /*now_ms=*/0)) {
@@ -110,7 +113,11 @@ bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg,
         rt_.last_error_class = BrokerErrorClass::Other;
         return false;
     }
-    esp_mqtt_client_register_event(client_, ESP_EVENT_ANY_ID, &MqttBroker::eventHandler, this);
+    // ESP_EVENT_ANY_ID is `-1` (int); cast to esp_mqtt_event_id_t to
+    // satisfy esp_mqtt_client_register_event's stricter signature.
+    esp_mqtt_client_register_event(client_,
+                                   (esp_mqtt_event_id_t)ESP_EVENT_ANY_ID,
+                                   &MqttBroker::eventHandler, this);
 #endif  // ESP_PLATFORM
 
     rt_.state = BrokerState::Down;  // Down until tryConnect
@@ -159,12 +166,21 @@ bool MqttBroker::tryConnect(uint32_t now_ms) {
     // time and the token may have aged out before first connect attempt.
     if (auth_ != nullptr && auth_->needsRefresh(now_ms)) {
         esp_mqtt_client_config_t mqcfg = {};
+#if ESP_IDF_VERSION_MAJOR >= 5
         mqcfg.broker.address.uri = cfg_.url;
         if (cfg_.transport == BrokerTransport::Tls ||
             cfg_.transport == BrokerTransport::Wss) {
             const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
             if (pem != nullptr) mqcfg.broker.verification.certificate = pem;
         }
+#else
+        mqcfg.uri = cfg_.url;
+        if (cfg_.transport == BrokerTransport::Tls ||
+            cfg_.transport == BrokerTransport::Wss) {
+            const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
+            if (pem != nullptr) mqcfg.cert_pem = pem;
+        }
+#endif
         if (!auth_->apply(mqcfg, now_ms)) {
             rt_.state = BrokerState::Backoff;
             rt_.retry_count++;
@@ -198,12 +214,21 @@ void MqttBroker::loop(uint32_t now_ms) {
     if (rt_.state == BrokerState::Up && client_ != nullptr) {
         if (auth_->needsRefresh(now_ms)) {
             esp_mqtt_client_config_t mqcfg = {};
+#if ESP_IDF_VERSION_MAJOR >= 5
             mqcfg.broker.address.uri = cfg_.url;
             if (cfg_.transport == BrokerTransport::Tls ||
                 cfg_.transport == BrokerTransport::Wss) {
                 const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
                 if (pem != nullptr) mqcfg.broker.verification.certificate = pem;
             }
+#else
+            mqcfg.uri = cfg_.url;
+            if (cfg_.transport == BrokerTransport::Tls ||
+                cfg_.transport == BrokerTransport::Wss) {
+                const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
+                if (pem != nullptr) mqcfg.cert_pem = pem;
+            }
+#endif
             if (auth_->apply(mqcfg, now_ms)) {
                 esp_mqtt_set_config(client_, &mqcfg);
             }

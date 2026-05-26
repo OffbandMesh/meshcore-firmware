@@ -1,0 +1,25 @@
+|-- Adafruit BME680 Library @ 2.0.6
+|-- Adafruit BMP085 Library @ 1.2.4
+|-- base64 @ 1.4.0
+|-- LittleFS @ 2.0.0
+|-- SPIFFS @ 2.0.0
+|-- WiFi @ 2.0.0
+|-- ed25519
+|-- nrf52
+|-- Preferences @ 2.0.0
+|-- ESP32 BLE Arduino @ 2.0.0
+|-- FS @ 2.0.0
+|-- Adafruit GFX Library @ 1.12.6
+|-- Adafruit SSD1306 @ 2.5.16
+Building in release mode
+Retrieving maximum program size .pio\build\heltec_v3_companion_observer_wifi\firmware.elf
+Checking size .pio\build\heltec_v3_companion_observer_wifi\firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [======    ]  64.2% (used 210476 bytes from 327680 bytes)
+Flash: [=====     ]  54.2% (used 1811561 bytes from 3342336 bytes)
+========================= [SUCCESS] Took 31.36 seconds =========================
+
+Environment                        Status    Duration
+---------------------------------  --------  ------------
+heltec_v3_companion_observer_wifi  SUCCESS   00:00:31.360
+========================= 1 succeeded in 00:00:31.360 =========================

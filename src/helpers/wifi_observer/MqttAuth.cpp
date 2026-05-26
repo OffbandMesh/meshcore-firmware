@@ -17,8 +17,13 @@ namespace crosswire {
 // ---------------------------------------------------------------------------
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
 bool MqttAuthNone::apply(esp_mqtt_client_config_t& cfg, uint32_t /*now_ms*/) {
+#if ESP_IDF_VERSION_MAJOR >= 5
     cfg.credentials.username = nullptr;
     cfg.credentials.authentication.password = nullptr;
+#else
+    cfg.username = nullptr;
+    cfg.password = nullptr;
+#endif
     return true;
 }
 #endif
@@ -41,8 +46,13 @@ MqttAuthBasic::MqttAuthBasic(const char* username, const char* password) {
 
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
 bool MqttAuthBasic::apply(esp_mqtt_client_config_t& cfg, uint32_t /*now_ms*/) {
+#if ESP_IDF_VERSION_MAJOR >= 5
     cfg.credentials.username = username_[0] ? username_ : nullptr;
     cfg.credentials.authentication.password = password_[0] ? password_ : nullptr;
+#else
+    cfg.username = username_[0] ? username_ : nullptr;
+    cfg.password = password_[0] ? password_ : nullptr;
+#endif
     return true;
 }
 #endif
@@ -93,8 +103,13 @@ bool MqttAuthJwt::apply(esp_mqtt_client_config_t& cfg, uint32_t now_ms) {
     }
 
     // JWT bearer goes in the password field (broker side parses "v1_<device_id>" + token).
-    cfg.credentials.username = nullptr;  // broker uses client_id for identity
+#if ESP_IDF_VERSION_MAJOR >= 5
+    cfg.credentials.username = nullptr;
     cfg.credentials.authentication.password = token_;
+#else
+    cfg.username = nullptr;
+    cfg.password = token_;
+#endif
     return true;
 }
 #endif
