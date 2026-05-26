@@ -1,23 +1,14 @@
 // src/helpers/wifi_observer/WifiObserver.cpp
 //
-// Top-level lifecycle coordinator for the Crosswire observer subsystem.
-//
-// MqttUplink wiring decision (Plan 1):
-//   MqttUplink requires constructor injection of mesh::RTCClock& and
-//   mesh::LocalIdentity&, plus a FILESYSTEM* at begin() time, plus a
-//   populated MqttStatusSnapshot on every loop() call (battery_mv,
-//   noise_floor, radio_freq/bw/sf/cr, etc.). Those radio telemetry
-//   fields require integrating with the companion_radio mesh object,
-//   which is outside Plan 1's "compile + WiFi up" scope.
-//
-//   DEFERRED to Plan 2: Plan 2 wires the configurable broker pool and
-//   the full MeshCore dependency injection (RTCClock&, LocalIdentity&,
-//   FILESYSTEM*, MqttStatusSnapshot assembly). Until then, Plan 1 brings
-//   WiFi STA up and logs readiness; observed packets do NOT yet publish.
+// Plan 2 v2 Task 11: WifiObserver now drives MqttBrokerPool + ObserverPipeline
+// (no more vendored MqttUplink placeholder). When WifiBootstrap reports
+// STA up AND main.cpp has called wifiObserverSetMeshContext, the pool
+// + pipeline are brought up exactly once.
 
 #include "WifiObserver.h"
 #include "WifiBootstrap.h"
 #include "CrashLog.h"
+#include "ObserverPipeline.h"
 
 #ifdef ARDUINO
   #include <Arduino.h>
@@ -26,8 +17,25 @@
 
 namespace crosswire {
 
-static bool s_mqtt_started = false;
+// Singleton pool. ObserverCli + main.cpp's status snapshot updater
+// access via wifiObserverPool().
+static MqttBrokerPool s_pool;
 
+// Mesh context cache (set by wifiObserverSetMeshContext).
+#ifdef ARDUINO
+static const mesh::LocalIdentity* s_identity = nullptr;
+#endif
+static const char* s_device_id        = "";
+static const char* s_node_name        = "";
+static const char* s_client_version   = "";
+static const char* s_firmware_version = "";
+static const char* s_model            = "";
+static bool        s_context_set      = false;
+static bool        s_pool_started     = false;
+
+// ---------------------------------------------------------------------------
+// wifiObserverBegin -- early setup. Same as Plan 1; pool comes up later.
+// ---------------------------------------------------------------------------
 void wifiObserverBegin() {
     // CrashLog FIRST: initializes RTC_NOINIT ring buffer; if the previous
     // boot's buffer survived (= soft reset, BOR, panic, watchdog), dumps
@@ -36,10 +44,7 @@ void wifiObserverBegin() {
     // empty.
     crashLogBegin();
 
-    // Stage A: reset-reason print. Tells us WHY the previous boot ended.
-    // POWERON = first boot since plug-in. PANIC = exception triggered.
-    // BROWNOUT = power supply dropped below ~2.8V. INT_WDT / TASK_WDT =
-    // watchdog timeout. DEEPSLEEP = woke from deep sleep.
+    // Stage A: reset-reason print.
 #ifdef ARDUINO
     crashLogf("[WifiObserver] boot; reset_reason=%d (%s) version=%s",
               (int)esp_reset_reason(),
@@ -55,34 +60,81 @@ void wifiObserverBegin() {
     crashLogf("[WifiObserver] wifiBootstrap.begin() returned; state=%d",
               (int)wifiBootstrap().state());
 
-    // TODO(Plan 2): Instantiate MqttUplink with the MeshCore-provided
-    // RTCClock + LocalIdentity references. In companion_radio these are
-    // available as the global `rtc_clock` (from target.h) and
-    // `the_mesh.self_id` (public LocalIdentity on Mesh). begin() also
-    // needs a FILESYSTEM* (SPIFFS on ESP32). The loop() call requires a
-    // MqttStatusSnapshot populated with live radio telemetry, which
-    // requires deeper integration with companion_radio's mesh object.
-    // Plan 2 wires all of this alongside the configurable broker pool.
+    // Plan 2 v2: pool + pipeline init deferred to first loop() tick where
+    // STA is up AND wifiObserverSetMeshContext has been called by main.cpp
+    // (after the_mesh.begin() so identity is populated).
 }
 
+// ---------------------------------------------------------------------------
+// wifiObserverSetMeshContext -- main.cpp wires identity + cached strings
+// ---------------------------------------------------------------------------
+#ifdef ARDUINO
+void wifiObserverSetMeshContext(
+    const mesh::LocalIdentity& identity,
+    const char* device_id,
+    const char* node_name,
+    const char* client_version,
+    const char* firmware_version,
+    const char* model) {
+    s_identity         = &identity;
+    s_device_id        = (device_id        != nullptr) ? device_id        : "";
+    s_node_name        = (node_name        != nullptr) ? node_name        : "";
+    s_client_version   = (client_version   != nullptr) ? client_version   : "";
+    s_firmware_version = (firmware_version != nullptr) ? firmware_version : "";
+    s_model            = (model            != nullptr) ? model            : "";
+    s_context_set      = true;
+    crashLogf("[WifiObserver] mesh context set; node=%s", s_node_name);
+}
+#endif
+
+// ---------------------------------------------------------------------------
+// wifiObserverLoop -- per-iteration driver
+// ---------------------------------------------------------------------------
 void wifiObserverLoop() {
     wifiBootstrap().loop();
-    if (wifiBootstrap().isStaConnected() && !s_mqtt_started) {
-        crashLogf("[WifiObserver] STA up; ready for MQTT (Plan 2 wires uplink)");
-        s_mqtt_started = true;
+
+#ifdef ARDUINO
+    uint32_t now = millis();
+
+    // Bring pool + pipeline up on the STA-connected transition (with
+    // mesh context). One-shot guarded by s_pool_started.
+    if (!s_pool_started && s_context_set && wifiBootstrap().isStaConnected()
+        && s_identity != nullptr) {
+        crashLogf("[WifiObserver] STA up + context set -- bringing up MqttBrokerPool");
+        s_pool.begin(*s_identity, s_device_id, s_node_name,
+                     s_client_version, s_firmware_version, s_model);
+        observerPipeline().begin(&s_pool);
+        s_pool_started = true;
+        crashLogf("[WifiObserver] pool configured=%u enabled=%u",
+                  s_pool.configuredCount(), s_pool.enabledCount());
     }
 
-    // Periodic heap/stack snapshot every 5 seconds. Builds an in-buffer
-    // trail of memory pressure so a crash that comes from OOM / slow leak
-    // is visible in the CrashLog dump on next boot.
-#ifdef ARDUINO
+    // Drive pool every iteration once it's started.
+    if (s_pool_started) {
+        s_pool.loop(now);
+    }
+
+    // Periodic heap/stack snapshot every 5 seconds.
     static uint32_t s_last_stats_ms = 0;
-    uint32_t now = millis();
     if (now - s_last_stats_ms > 5000) {
         s_last_stats_ms = now;
         crashLogHeapStats("loop");
     }
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// wifiObserverSetStatusSnapshot -- pool consumes for next publish window
+// ---------------------------------------------------------------------------
+void wifiObserverSetStatusSnapshot(const MqttStatusSnapshot& snap) {
+    s_pool.setStatusSnapshot(snap);
+}
+
+// ---------------------------------------------------------------------------
+// Pool singleton accessor
+// ---------------------------------------------------------------------------
+MqttBrokerPool& wifiObserverPool() {
+    return s_pool;
 }
 
 }  // namespace crosswire
