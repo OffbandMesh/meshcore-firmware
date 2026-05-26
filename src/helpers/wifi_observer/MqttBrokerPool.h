@@ -71,10 +71,9 @@ public:
 
     // Reload one slot from NVS (after CLI config change). Tears down the
     // old broker for that slot, re-reads config, and re-begins if enabled.
-    // Returns true if reload succeeded (or slot is now disabled).
-#ifdef ARDUINO
-    bool reloadSlot(uint8_t slot, const mesh::LocalIdentity& identity);
-#endif
+    // Uses the identity_ cached from begin(); returns false if pool was
+    // never begin()'d. Returns true if reload succeeded (or slot is now disabled).
+    bool reloadSlot(uint8_t slot);
 
     // For status / CLI reporting.
     uint8_t configuredCount() const;
