@@ -1,0 +1,15 @@
+Checking size .pio\build\xiao_esp32s3_companion_observer_wifi\firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [======    ]  64.1% (used 209900 bytes from 327680 bytes)
+Flash: [=====     ]  53.4% (used 1783273 bytes from 3342336 bytes)
+Building .pio\build\xiao_esp32s3_companion_observer_wifi\firmware.bin
+esptool.py v4.5.1
+Creating esp32s3 image...
+Merged 3 ELF sections
+Successfully created esp32s3 image.
+======================== [SUCCESS] Took 129.47 seconds ========================
+
+Environment                           Status    Duration
+------------------------------------  --------  ------------
+xiao_esp32s3_companion_observer_wifi  SUCCESS   00:02:09.472
+========================= 1 succeeded in 00:02:09.472 =========================

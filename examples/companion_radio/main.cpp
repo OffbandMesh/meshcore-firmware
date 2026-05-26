@@ -258,6 +258,29 @@ void setup() {
 #endif
   the_mesh.startInterface(serial_interface);
   CW_PHASE("ESP32:post the_mesh.startInterface");
+
+#ifdef CROSSWIRE_OBSERVER
+  // Plan 2 v2 Task 12: wire observer mesh context AFTER the_mesh.begin()
+  // populates self_id. Strings cached as borrowed pointers in WifiObserver;
+  // backing storage here must outlive the observer (static buffer +
+  // macro-defined strings = effectively process-lifetime).
+  //
+  // CLIENT_VERSION macro was vendored from EastMesh but is no longer
+  // defined post-MqttUplink retirement. Using FIRMWARE_VERSION for both
+  // firmware_version and client_version fields until a project-specific
+  // CLIENT_VERSION is established (filed as follow-up).
+  static char observer_device_id[65];
+  crosswire::bytesToHexUpper(the_mesh.self_id.pub_key, PUB_KEY_SIZE,
+                             observer_device_id, sizeof(observer_device_id));
+  crosswire::wifiObserverSetMeshContext(
+      the_mesh.self_id,
+      observer_device_id,
+      the_mesh.getNodeName(),
+      FIRMWARE_VERSION,            // client_version (TODO: distinguish)
+      FIRMWARE_VERSION,            // firmware_version
+      board.getManufacturerName());
+  CW_PHASE("ESP32:post wifiObserverSetMeshContext");
+#endif
 #else
   #error "need to define filesystem"
 #endif
