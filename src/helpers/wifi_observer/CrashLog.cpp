@@ -16,6 +16,10 @@
   #include <esp_attr.h>      // RTC_NOINIT_ATTR
   #include <esp_system.h>    // esp_reset_reason(), esp_register_shutdown_handler()
   #include <esp_log.h>       // esp_log_set_vprintf()
+  #include <esp_err.h>       // esp_err_to_name (stop-gap)
+  #include <esp_wifi.h>      // esp_wifi_stop (stop-gap auto-recovery)
+  #include <esp_bt.h>        // esp_bt_controller_disable (stop-gap auto-recovery)
+  #include <esp_phy_init.h>  // esp_phy_erase_cal_data_in_nvs (stop-gap auto-recovery)
   #include <freertos/FreeRTOS.h>
   #include <freertos/portmacro.h>  // portENTER_CRITICAL
   #include <freertos/task.h> // uxTaskGetStackHighWaterMark()
@@ -408,6 +412,21 @@ void heartbeatBegin() {
               (int)esp_reset_reason(),
               resetReasonString((int)esp_reset_reason()));
 
+    // Stop-gap rapid-reboot detection (#265). Runs AFTER the [boot] log so the
+    // diagnostic trace shows boot context first, then stop-gap decisions. If
+    // OperatorPromptMode is returned, we never return to caller -- chip is
+    // wedged and operator needs to physically power-cycle.
+    StopGapState sg_state = stopGapCheckRapidReboot(s_prev_boot_uptime_s, s_nvs_boot_count);
+    if (sg_state == StopGapState::OperatorPromptMode ||
+        sg_state == StopGapState::RapidDetected) {
+        // RapidDetected = auto-recovery disabled by build flag; same handling
+        // as OperatorPromptMode (idle indefinitely, render PROMPT).
+        stopGapEnterOperatorPromptMode();  // [[noreturn]]
+    }
+    // StopGapState::AutoRecoveryAttempted means esp_restart() was called inside
+    // stopGapCheckRapidReboot and we never reached this point. Anything else
+    // (Normal) means proceed with boot.
+
     s_last_hb_ms = 0;
     portENTER_CRITICAL(&s_hb_mux);
     s_subloop_flags    = 0;
@@ -520,6 +539,179 @@ void crashLogHeapStats(const char* tag) {
               phase);
 }
 
+// ---------------------------------------------------------------------------
+// Stop-gap rapid-reboot detection + recovery (Strycher/LoRa#265)
+// ---------------------------------------------------------------------------
+// See CrashLog.h header block for design rationale. Two NVS keys (in the
+// existing cw_boot namespace) drive a small state machine:
+//   - rapid_n     uint32  consecutive boots where prev_boot_lasted_s < RAPID_THRESH_S
+//   - recov_at    uint32  nvs_boot_count at which auto-recovery was last attempted
+//                         (sentinel kStopGapRecoveryNeverAttempted = never)
+//
+// stopGapDecide() is the PURE state-machine logic, no I/O, host-testable.
+// Defined at the BOTTOM of this file OUTSIDE the #ifdef ARDUINO blocks so
+// it's compiled for both ARDUINO and host builds.
+//
+// stopGapCheckRapidReboot() is the I/O wrapper (ARDUINO-only) that reads/writes
+// NVS, logs via crashLogf, and dispatches to recovery / operator-prompt.
+
+namespace {
+constexpr const char*   kKeyConsecutiveRapidBoots   = "rapid_n";
+constexpr const char*   kKeyRecoveryAttemptedAtBoot = "recov_at";
+}  // anonymous namespace
+
+#if CROSSWIRE_STOPGAP_AUTO_RECOVER_ENABLE
+// Internal: execute the half-empirical auto-recovery sequence. Calls
+// esp_restart() at the end and never returns. Designed to be called from
+// stopGapCheckRapidReboot AFTER the recovery-attempted flag is persisted
+// to NVS so the post-restart boot can detect "already tried recovery."
+//
+// HALF-EMPIRICAL: these ESP-IDF APIs are designed for clean teardown, not
+// for clearing wedged hardware state. May or may not clear the specific
+// wedge being seen in the field. The operator-prompt fallback covers the
+// case where this doesn't work.
+static void stopGapAttemptAutoRecovery() {
+    crashLogf("=========================================================");
+    crashLogf("[stopgap-recovery] HALF-EMPIRICAL AUTO-RECOVERY -- attempting");
+    crashLogf("[stopgap-recovery] See Strycher/LoRa#264 (root cause) + #265 (this stop-gap)");
+    crashLogf("=========================================================");
+
+    crashLogf("[stopgap-recovery] Step 1/4: esp_phy_erase_cal_data_in_nvs()");
+    esp_err_t err = esp_phy_erase_cal_data_in_nvs();
+    crashLogf("[stopgap-recovery]   result: %s (0x%x)",
+              (err == ESP_OK) ? "ESP_OK" : esp_err_to_name(err),
+              (unsigned)err);
+
+    crashLogf("[stopgap-recovery] Step 2/4: esp_wifi_stop() (safe no-op if not started)");
+    err = esp_wifi_stop();
+    crashLogf("[stopgap-recovery]   result: 0x%x", (unsigned)err);
+
+    crashLogf("[stopgap-recovery] Step 3/4: esp_bt_controller_disable() + deinit if enabled");
+    esp_bt_controller_status_t bt_st = esp_bt_controller_get_status();
+    crashLogf("[stopgap-recovery]   bt_controller_status=%d", (int)bt_st);
+    if (bt_st == ESP_BT_CONTROLLER_STATUS_ENABLED) {
+        esp_bt_controller_disable();
+        esp_bt_controller_deinit();
+    }
+
+    crashLogf("[stopgap-recovery] Step 4/4: esp_restart() with PHY cal cleared + radios torn down");
+    Serial.flush();
+    delay(100);
+    esp_restart();
+    // Never reached.
+}
+#endif  // CROSSWIRE_STOPGAP_AUTO_RECOVER_ENABLE
+
+StopGapState stopGapCheckRapidReboot(uint32_t prev_boot_lasted_s,
+                                     uint32_t nvs_boot_count) {
+#if !CROSSWIRE_STOPGAP_DETECT_ENABLE
+    (void)prev_boot_lasted_s;
+    (void)nvs_boot_count;
+    return StopGapState::Normal;
+#else
+    ::Preferences p;
+    if (!p.begin("cw_boot", /*readOnly=*/false)) {
+        crashLogf("[stopgap] WARN: NVS cw_boot open failed; skipping detection");
+        return StopGapState::Normal;
+    }
+
+    // Build inputs from NVS + build-flag thresholds, then call the PURE
+    // decision function (host-testable; see scripts/test_observer_stopgap.py).
+    StopGapDecideInputs in;
+    in.consecutive_rapid_in     = p.getUInt(kKeyConsecutiveRapidBoots, 0);
+    in.recovery_attempted_at_in = p.getUInt(kKeyRecoveryAttemptedAtBoot,
+                                            kStopGapRecoveryNeverAttempted);
+    in.prev_boot_lasted_s       = prev_boot_lasted_s;
+    in.nvs_boot_count           = nvs_boot_count;
+    in.rapid_thresh_s           = CROSSWIRE_STOPGAP_RAPID_THRESH_S;
+    in.rapid_count              = CROSSWIRE_STOPGAP_RAPID_COUNT;
+    in.fatal_count              = CROSSWIRE_STOPGAP_FATAL_COUNT;
+    in.auto_recover_enabled     = (CROSSWIRE_STOPGAP_AUTO_RECOVER_ENABLE != 0);
+
+    StopGapDecision dec = stopGapDecide(in);
+
+    // Persist decision's new state back to NVS (only on actual change to
+    // minimize flash wear).
+    if (dec.consecutive_rapid_out != in.consecutive_rapid_in) {
+        p.putUInt(kKeyConsecutiveRapidBoots, dec.consecutive_rapid_out);
+    }
+    if (dec.recovery_attempted_at_out != in.recovery_attempted_at_in) {
+        p.putUInt(kKeyRecoveryAttemptedAtBoot, dec.recovery_attempted_at_out);
+    }
+    p.end();
+
+    crashLogf("[stopgap] consecutive=%u (prev_lasted=%us thresh=%us count=%u/fatal=%u recov_at=%s state=%d)",
+              (unsigned)dec.consecutive_rapid_out,
+              (unsigned)prev_boot_lasted_s,
+              (unsigned)CROSSWIRE_STOPGAP_RAPID_THRESH_S,
+              (unsigned)CROSSWIRE_STOPGAP_RAPID_COUNT,
+              (unsigned)CROSSWIRE_STOPGAP_FATAL_COUNT,
+              (dec.recovery_attempted_at_out == kStopGapRecoveryNeverAttempted)
+                  ? "never"
+                  : "set",
+              (int)dec.state);
+
+    // Dispatch on decision.
+    switch (dec.state) {
+        case StopGapState::Normal:
+            return StopGapState::Normal;
+
+        case StopGapState::RapidDetected:
+            crashLogf("[stopgap] RAPID-REBOOT DETECTED (consecutive=%u) but AUTO_RECOVER disabled at build; falling through to operator-prompt mode.",
+                      (unsigned)dec.consecutive_rapid_out);
+            return StopGapState::RapidDetected;
+
+        case StopGapState::AutoRecoveryAttempted:
+#if CROSSWIRE_STOPGAP_AUTO_RECOVER_ENABLE
+            crashLogf("[stopgap] RAPID-REBOOT DETECTED (consecutive=%u). Attempting half-empirical auto-recovery.",
+                      (unsigned)dec.consecutive_rapid_out);
+            stopGapAttemptAutoRecovery();  // calls esp_restart(), never returns
+#endif
+            // Unreached in practice when AUTO_RECOVER_ENABLE=1; if disabled,
+            // stopGapDecide would not have returned AutoRecoveryAttempted.
+            return StopGapState::AutoRecoveryAttempted;
+
+        case StopGapState::OperatorPromptMode:
+            crashLogf("[stopgap] FATAL: rapid-reboot persists (consecutive=%u, fatal_threshold=%u, recovery_already_attempted=%s).",
+                      (unsigned)dec.consecutive_rapid_out,
+                      (unsigned)CROSSWIRE_STOPGAP_FATAL_COUNT,
+                      (in.recovery_attempted_at_in != kStopGapRecoveryNeverAttempted) ? "yes" : "no");
+            return StopGapState::OperatorPromptMode;
+    }
+    return StopGapState::Normal;  // unreachable; satisfy compiler
+#endif  // CROSSWIRE_STOPGAP_DETECT_ENABLE
+}
+
+[[noreturn]] void stopGapEnterOperatorPromptMode() {
+    crashLogf("=========================================================");
+    crashLogf("[stopgap] OPERATOR ACTION REQUIRED -- POWER-CYCLE DEVICE");
+    crashLogf("[stopgap] Continuous reboot detected. Auto-recovery: %s.",
+#if CROSSWIRE_STOPGAP_AUTO_RECOVER_ENABLE
+              "attempted, did not clear the loop"
+#else
+              "DISABLED at build time"
+#endif
+              );
+    crashLogf("[stopgap] PHYSICALLY UNPLUG AND REPLUG USB to clear the wedged peripheral state.");
+    crashLogf("[stopgap] User config (broker, BLE pairings, IATA) preserved across all recovery paths.");
+    crashLogf("[stopgap] See Strycher/LoRa#264 (root) + #265 (this stop-gap) for context.");
+    crashLogf("=========================================================");
+
+    // Idle forever. vTaskDelay() yields to FreeRTOS scheduler so watchdog
+    // is fed implicitly. Render the message every 5 seconds so the
+    // operator sees it whenever they attach a serial monitor.
+    while (true) {
+        crashLogf("[stopgap] WEDGED: POWER-CYCLE REQUIRED (uptime=%lus, free_heap=%u)",
+                  (unsigned long)(millis() / 1000),
+                  (unsigned)ESP.getFreeHeap());
+        // TODO(#265): render to OLED if available. Currently Serial-only
+        // because CrashLog doesn't have a direct OLED handle -- needs to
+        // be plumbed through (probably via a callback registration API
+        // that main.cpp invokes during setup before crashLogBegin runs).
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+}
+
 #else  // !ARDUINO host build
 
 void crashLogInstallEspLogHook() {}
@@ -532,6 +724,17 @@ void subloopMark(uint8_t) {}
 void loopIterTick() {}
 void heartbeatTick(uint32_t) {}
 uint32_t bootCounterValue() { return 0; }
+
+// Stop-gap host stubs (for host-runnable tests of detection logic)
+StopGapState stopGapCheckRapidReboot(uint32_t /*prev_boot_lasted_s*/,
+                                     uint32_t /*nvs_boot_count*/) {
+    return StopGapState::Normal;
+}
+[[noreturn]] void stopGapEnterOperatorPromptMode() {
+    // Host build: do not loop forever. Test harness will mock this.
+    // Use abort() so misbehaving tests are loud rather than silent.
+    abort();
+}
 
 #endif
 

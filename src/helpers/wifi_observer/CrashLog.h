@@ -28,6 +28,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Portable printf-format attribute. GCC/Clang understand
+// __attribute__((format(printf, fmt_idx, args_idx))); MSVC ignores it.
+// Used on crashLogf() below so the compiler validates format-string args
+// when GCC/Clang is the compiler. Defined here so it's available to any
+// future declarations in this header that need the same hint.
+#if defined(__GNUC__) || defined(__clang__)
+  #define CROSSWIRE_PRINTF_FMT(fmt_idx, args_idx) __attribute__((format(printf, fmt_idx, args_idx)))
+#else
+  #define CROSSWIRE_PRINTF_FMT(fmt_idx, args_idx)
+#endif
+
 namespace crosswire {
 
 // ---------------------------------------------------------------------------
@@ -66,7 +77,7 @@ void crashLogBegin();
 // Format string must be a string literal or PROGMEM string; format
 // args follow standard printf rules. Compiler validates via the
 // __attribute__((format(printf, 1, 2))) hint.
-void crashLogf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+void crashLogf(const char* fmt, ...) CROSSWIRE_PRINTF_FMT(1, 2);
 
 // Dump current buffer contents to Serial on demand (without clearing).
 // Useful from a CLI command or post-event inspection.
@@ -161,5 +172,111 @@ void heartbeatTick(uint32_t now_ms);
 // Persists across soft resets via RTC_NOINIT; resets on power-on /
 // deep-sleep wake / esptool hard reset.
 uint32_t bootCounterValue();
+
+// ---------------------------------------------------------------------------
+// Stop-gap rapid-reboot detection + recovery (Strycher/LoRa#265)
+// ---------------------------------------------------------------------------
+// Defense against the post-flash wedged-peripheral-state symptom documented
+// in Strycher/LoRa#264. Most ESP32-S3 peripherals are NOT reset by soft
+// reset (esp_restart, RTS-pin reset from esptool) per ESP-IDF documented
+// behavior; only physical USB power-cycle clears internal capacitance +
+// peripheral register state. After certain runtime triggers, the device
+// can enter a continuous 3-5s reboot loop that no reflash recovers.
+//
+// This stop-gap does NOT fix the root cause (separate investigation under
+// LoRa-t7i). It detects the loop pattern via NVS-tracked consecutive
+// rapid-reboot count and:
+//   1. Optionally attempts half-empirical auto-recovery (PHY cal erase +
+//      radio teardown + restart). Disabled by default until bench-validated.
+//   2. Falls back to operator-prompt mode (idle forever, render clear
+//      POWER-CYCLE message to Serial + OLED). Guaranteed to break the
+//      silent-reboot-loop symptom even if auto-recovery fails or is off.
+//
+// User config (broker URLs, BLE pairings, IATA, WiFi creds) is NEVER touched.
+// Only PHY calibration cache (recoverable, recalibrates) + stop-gap's own
+// internal counters in the cw_boot NVS namespace.
+//
+// Build flags (default values shown):
+//   CROSSWIRE_STOPGAP_DETECT_ENABLE          1   // detection + operator-prompt
+//   CROSSWIRE_STOPGAP_AUTO_RECOVER_ENABLE    0   // auto-recovery (off until bench-validated)
+//   CROSSWIRE_STOPGAP_RAPID_THRESH_S         10  // boot lasting < N seconds counts as "rapid"
+//   CROSSWIRE_STOPGAP_RAPID_COUNT            3   // N consecutive rapid boots trips detection
+//   CROSSWIRE_STOPGAP_FATAL_COUNT            6   // N consecutive rapid boots forces operator-prompt
+//
+// Set via build_flags in the env's platformio.ini, e.g.:
+//   -D CROSSWIRE_STOPGAP_AUTO_RECOVER_ENABLE=1
+//   -D CROSSWIRE_STOPGAP_RAPID_COUNT=2  (more aggressive detection)
+
+#ifndef CROSSWIRE_STOPGAP_DETECT_ENABLE
+  #define CROSSWIRE_STOPGAP_DETECT_ENABLE 1
+#endif
+#ifndef CROSSWIRE_STOPGAP_AUTO_RECOVER_ENABLE
+  #define CROSSWIRE_STOPGAP_AUTO_RECOVER_ENABLE 0
+#endif
+#ifndef CROSSWIRE_STOPGAP_RAPID_THRESH_S
+  #define CROSSWIRE_STOPGAP_RAPID_THRESH_S 10
+#endif
+#ifndef CROSSWIRE_STOPGAP_RAPID_COUNT
+  #define CROSSWIRE_STOPGAP_RAPID_COUNT 3
+#endif
+#ifndef CROSSWIRE_STOPGAP_FATAL_COUNT
+  #define CROSSWIRE_STOPGAP_FATAL_COUNT 6
+#endif
+
+// Result of stopGapCheckRapidReboot / stopGapDecide. Caller (heartbeatBegin ->
+// setup chain) MUST honor OperatorPromptMode by NOT continuing normal init.
+enum class StopGapState {
+    Normal,                 // no rapid-reboot pattern; proceed with boot
+    RapidDetected,          // detection tripped but auto-recovery DISABLED; caller falls through to OperatorPromptMode handling
+    AutoRecoveryAttempted,  // auto-recovery just executed (and called esp_restart); not normally reached by caller
+    OperatorPromptMode,     // OPERATOR ACTION REQUIRED; caller must invoke stopGapEnterOperatorPromptMode()
+};
+
+// Sentinel value for kKeyRecoveryAttemptedAtBoot meaning "never attempted."
+// Exposed so host-runnable tests can construct StopGapDecideInputs.
+constexpr uint32_t kStopGapRecoveryNeverAttempted = 0xFFFFFFFFu;
+
+// Pure inputs to the stop-gap state machine. No I/O dependency.
+struct StopGapDecideInputs {
+    // Persisted state (from NVS) at start of this boot:
+    uint32_t consecutive_rapid_in;       // current consecutive_rapid_boots counter
+    uint32_t recovery_attempted_at_in;   // kStopGapRecoveryNeverAttempted = no prior attempt
+
+    // This boot's runtime context:
+    uint32_t prev_boot_lasted_s;         // 0 = never recorded (very first boot)
+    uint32_t nvs_boot_count;             // monotonic boot-id for marking "recovery attempted at"
+
+    // Configuration thresholds (from build flags in production):
+    uint32_t rapid_thresh_s;             // boot lasting < this counts as "rapid"
+    uint32_t rapid_count;                // N consecutive rapid trips detection
+    uint32_t fatal_count;                // N consecutive rapid forces OperatorPromptMode
+    bool     auto_recover_enabled;       // true = try auto-recovery; false = jump to operator-prompt
+};
+
+// Pure outputs. Caller writes consecutive_rapid_out + recovery_attempted_at_out
+// back to NVS and then acts on state.
+struct StopGapDecision {
+    StopGapState state;                  // next action for caller
+    uint32_t     consecutive_rapid_out;  // value to persist to NVS rapid_n
+    uint32_t     recovery_attempted_at_out;  // value to persist to NVS recov_at (kStopGapRecoveryNeverAttempted to clear)
+};
+
+// PURE LOGIC -- no I/O, no globals, no Arduino dependencies. Host-testable.
+// Given the persisted state + this boot's context + thresholds, decides what
+// action the stop-gap should take and what to write back to NVS.
+StopGapDecision stopGapDecide(const StopGapDecideInputs& in);
+
+// I/O wrapper: reads NVS, calls stopGapDecide, writes back NVS, logs via
+// crashLogf, and (if auto-recovery is requested) calls esp_restart. Used from
+// heartbeatBegin AFTER the [boot] log line. Returns the caller-visible state.
+StopGapState stopGapCheckRapidReboot(uint32_t prev_boot_lasted_s,
+                                     uint32_t nvs_boot_count);
+
+// Enter operator-prompt mode. Renders POWER-CYCLE REQUIRED message to
+// Serial every 5 seconds and idles forever (vTaskDelay so watchdog feeds).
+// NEVER RETURNS. Caller MUST stop normal init when invoking this.
+//
+// Future enhancement: render to OLED if available (currently Serial-only).
+[[noreturn]] void stopGapEnterOperatorPromptMode();
 
 }  // namespace crosswire
