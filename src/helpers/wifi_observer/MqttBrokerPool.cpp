@@ -229,22 +229,23 @@ void MqttBrokerPool::publishStatusIfDue(uint32_t now_ms) {
 }
 
 // ---------------------------------------------------------------------------
-// reloadSlot
+// reloadSlot -- uses cached identity_ from begin()
 // ---------------------------------------------------------------------------
-#ifdef ARDUINO
-bool MqttBrokerPool::reloadSlot(uint8_t slot, const mesh::LocalIdentity& identity) {
+bool MqttBrokerPool::reloadSlot(uint8_t slot) {
     if (slot >= CROSSWIRE_MAX_BROKERS) return false;
+#ifdef ARDUINO
+    if (identity_ == nullptr) return false;  // pool not begin()'d yet
     BrokerConfig cfg;
     if (!readBrokerConfig(slot, cfg)) return false;
-    // shutdown is implicit in begin's first call. If the new config has
-    // an empty URL or is disabled, just shutdown and leave Down.
     if (cfg.url[0] == '\0') {
         brokers_[slot].shutdown();
         return true;
     }
-    return brokers_[slot].begin(slot, cfg, identity);
-}
+    return brokers_[slot].begin(slot, cfg, *identity_);
+#else
+    return false;  // host stub
 #endif
+}
 
 // ---------------------------------------------------------------------------
 // Counters
