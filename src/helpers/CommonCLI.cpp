@@ -4,6 +4,14 @@
 #include "AdvertDataHelpers.h"
 #include <RTClib.h>
 
+// Plan 2 v2 Task 11: ObserverCli dispatcher hooked into handleCommand's
+// fall-through. Compiles in only when CROSSWIRE_OBSERVER is defined
+// (observer envs); other envs have zero impact.
+#ifdef CROSSWIRE_OBSERVER
+  #include "wifi_observer/ObserverCli.h"
+  #include "wifi_observer/WifiObserver.h"  // wifiObserverPool() accessor
+#endif
+
 // #200 / LoRa-wek: embed the Crosswire identity blob in .rodata so the
 // flash-history parser (scripts/firmware_identity.py) can recover BUILD-time
 // identity by scanning the firmware binary, rather than re-running git at
@@ -1218,6 +1226,12 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
     if (len == 0) {
       strcpy(reply, "-none-");
     }
+#ifdef CROSSWIRE_OBSERVER
+  } else if (crosswire::dispatchObserverCli(command, reply, /*reply_size=*/1024,
+                                            crosswire::wifiObserverPool())) {
+    // handled by Plan 2 v2 observer CLI (mqtt status / enable / disable /
+    // set mqtt.iata / set mqtt.status_interval / set mqtt.broker.<N>.*).
+#endif
   } else {
     strcpy(reply, "Err - ??");
   }
