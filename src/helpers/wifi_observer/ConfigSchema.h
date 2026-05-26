@@ -47,7 +47,10 @@ constexpr const char* kKeyBrokerTransport    = "transport";    // 0=tcp,1=tls,2=
 constexpr const char* kKeyBrokerAuthType     = "auth_type";    // 0=none,1=basic,2=jwt
 constexpr const char* kKeyBrokerUsername     = "username";
 constexpr const char* kKeyBrokerPassword     = "password";     // sensitive
-constexpr const char* kKeyBrokerJwtToken     = "jwt_token";    // sensitive
+constexpr const char* kKeyBrokerJwtToken     = "jwt_token";    // sensitive (cached minted token; live-minted at connect)
+constexpr const char* kKeyBrokerJwtAudience  = "jwt_aud";      // Plan 2 v2: JWT "aud" claim per broker
+constexpr const char* kKeyBrokerJwtRefresh   = "jwt_refresh";  // Plan 2 v2: re-mint interval (seconds)
+constexpr const char* kKeyBrokerCaCertName   = "ca_cert";      // Plan 2 v2: ref into MqttCaCerts.h; "" = system store / no verify
 constexpr const char* kKeyBrokerTopicPrefix  = "topic_prefix";
 constexpr const char* kKeyBrokerIataOverride = "iata_override";
 
@@ -79,6 +82,10 @@ void     writeStatusIntervalSec(uint16_t seconds);
 // Broker-slot accessors. Slot range [0, CROSSWIRE_MAX_BROKERS).
 // Returns sensible defaults on read-miss (e.g., empty url, enabled=false,
 // transport=Tcp, port=1883).
+//
+// Plan 2 v2 additions: jwt_audience, jwt_refresh_sec, ca_cert_name model
+// the per-broker JWT claim audience + refresh cadence and the TLS CA cert
+// reference (lookup by name into MqttCaCerts.h's embedded bundle).
 struct BrokerConfig {
     bool             enabled = false;
     char             url[128] = {0};
@@ -90,9 +97,20 @@ struct BrokerConfig {
     char             jwt_token[512] = {0};
     char             topic_prefix[32] = {0};  // defaults to kDefaultTopicPrefix at read
     char             iata_override[8] = {0};
+    // ----- Plan 2 v2 additions (used only when auth_type=Jwt / transport=Tls|Wss)
+    char             jwt_audience[96] = {0};   // e.g. "https://mqtt2.eastmesh.au"
+    uint32_t         jwt_refresh_sec = 3600;   // re-mint token every N seconds
+    char             ca_cert_name[24] = {0};   // ref into MqttCaCerts.h; "" = system store / no verify
 };
 
 bool readBrokerConfig(uint8_t slot, BrokerConfig& out);
 bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg);
+
+// Plan 2 v2: populate slots 0-2 with EastMesh + LetsMesh-EU + LetsMesh-US
+// defaults ONLY if those slots are completely empty (cfg.url[0] == '\0').
+// Never overwrites user-set values. Idempotent across boots.
+// All three default-enabled=false; user explicitly enables after configuring
+// their identity (the JWT claim needs owner+email per JwtHelper).
+void populateDefaultBrokers();
 
 }  // namespace crosswire

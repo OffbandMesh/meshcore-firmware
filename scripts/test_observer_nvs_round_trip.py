@@ -62,6 +62,8 @@ class Preferences {
     uint16_t getUShort(const char* k, uint16_t def) { auto& m = kvs_[ns_]; auto it=m.find(k); return it==m.end()?def:(uint16_t)std::stoi(it->second); }
     size_t putUChar  (const char* k, uint8_t v)     { kvs_[ns_][k] = std::to_string(v); return 1; }
     uint8_t getUChar (const char* k, uint8_t def)   { auto& m = kvs_[ns_]; auto it=m.find(k); return it==m.end()?def:(uint8_t)std::stoi(it->second); }
+    size_t putULong  (const char* k, uint32_t v)    { kvs_[ns_][k] = std::to_string(v); return 4; }
+    uint32_t getULong(const char* k, uint32_t def)  { auto& m = kvs_[ns_]; auto it=m.find(k); return it==m.end()?def:(uint32_t)std::stoul(it->second); }
  private:
     static inline std::map<std::string, std::map<std::string,std::string>> kvs_;
     std::string ns_;
@@ -84,7 +86,7 @@ HARNESS = r"""
 int main() {
     using namespace crosswire;
 
-    // Fixture: realistic broker config in slot 2.
+    // Fixture: realistic broker config in slot 2 (incl Plan 2 v2 fields).
     BrokerConfig wrote;
     wrote.enabled = true;
     strcpy(wrote.url, "mqtt.example.org");
@@ -95,6 +97,10 @@ int main() {
     strcpy(wrote.password, "p4ssw0rd-with-symbols!@#");
     strcpy(wrote.topic_prefix, "meshcore");
     strcpy(wrote.iata_override, "CMH");
+    // Plan 2 v2 fields
+    strcpy(wrote.jwt_audience, "https://test.example.org");
+    wrote.jwt_refresh_sec = 1800;  // 30 min
+    strcpy(wrote.ca_cert_name, "letsencrypt");
 
     if (!writeBrokerConfig(2, wrote)) { puts("FAIL write"); return 1; }
 
@@ -103,10 +109,13 @@ int main() {
 
     #define CHK_STR(field)   if (strcmp(wrote.field, back.field) != 0) { printf("FAIL %s: '%s' != '%s'\n", #field, wrote.field, back.field); return 1; }
     #define CHK_INT(field)   if ((int)wrote.field != (int)back.field) { printf("FAIL %s: %d != %d\n", #field, (int)wrote.field, (int)back.field); return 1; }
+    #define CHK_U32(field)   if ((uint32_t)wrote.field != (uint32_t)back.field) { printf("FAIL %s: %u != %u\n", #field, (uint32_t)wrote.field, (uint32_t)back.field); return 1; }
 
     CHK_INT(enabled); CHK_STR(url); CHK_INT(port); CHK_INT(transport);
     CHK_INT(auth_type); CHK_STR(username); CHK_STR(password);
     CHK_STR(topic_prefix); CHK_STR(iata_override);
+    // Plan 2 v2 round-trip asserts
+    CHK_STR(jwt_audience); CHK_U32(jwt_refresh_sec); CHK_STR(ca_cert_name);
 
     // Also verify global keys.
     writeGlobalIata("CMH");
@@ -128,6 +137,68 @@ int main() {
     writeStatusIntervalSec(1);
     if (readStatusIntervalSec() != kMinStatusIntervalSec) {
         printf("FAIL clamp low: %u\n", readStatusIntervalSec());
+        return 1;
+    }
+
+    // -----------------------------------------------------------------------
+    // populateDefaultBrokers — Plan 2 v2 Task 3 Step 5
+    // -----------------------------------------------------------------------
+    // Slot 2 was just written above with a custom URL ("mqtt.example.org").
+    // Slots 0 + 1 are still virgin. populateDefaultBrokers should:
+    //   - fill slot 0 with EastMesh wss URL
+    //   - fill slot 1 with LetsMesh-EU wss URL
+    //   - LEAVE slot 2 alone (already has user-set URL)
+
+    populateDefaultBrokers();
+
+    BrokerConfig slot0, slot1, slot2;
+    if (!readBrokerConfig(0, slot0)) { puts("FAIL read slot 0"); return 1; }
+    if (!readBrokerConfig(1, slot1)) { puts("FAIL read slot 1"); return 1; }
+    if (!readBrokerConfig(2, slot2)) { puts("FAIL read slot 2"); return 1; }
+
+    if (strcmp(slot0.url, "wss://mqtt2.eastmesh.au:443/mqtt") != 0) {
+        printf("FAIL slot 0 url after populate: '%s'\n", slot0.url);
+        return 1;
+    }
+    if (strcmp(slot0.jwt_audience, "https://mqtt2.eastmesh.au") != 0) {
+        printf("FAIL slot 0 jwt_audience: '%s'\n", slot0.jwt_audience);
+        return 1;
+    }
+    if (slot0.transport != BrokerTransport::Wss) {
+        printf("FAIL slot 0 transport: %d\n", (int)slot0.transport);
+        return 1;
+    }
+    if (slot0.auth_type != BrokerAuthType::Jwt) {
+        printf("FAIL slot 0 auth_type: %d\n", (int)slot0.auth_type);
+        return 1;
+    }
+    if (slot0.enabled) {
+        // Defaults must ship DISABLED so user explicitly opts in after
+        // configuring owner identity for the JWT claim.
+        printf("FAIL slot 0 should default to disabled\n");
+        return 1;
+    }
+    if (strcmp(slot1.url, "wss://mqtt-eu-v1.letsmesh.net:443/mqtt") != 0) {
+        printf("FAIL slot 1 url after populate: '%s'\n", slot1.url);
+        return 1;
+    }
+    // Idempotency / no-overwrite: slot 2 STILL has the user-set URL.
+    if (strcmp(slot2.url, "mqtt.example.org") != 0) {
+        printf("FAIL slot 2 was overwritten by populateDefaultBrokers: '%s'\n", slot2.url);
+        return 1;
+    }
+    if (strcmp(slot2.jwt_audience, "https://test.example.org") != 0) {
+        printf("FAIL slot 2 jwt_audience was overwritten: '%s'\n", slot2.jwt_audience);
+        return 1;
+    }
+
+    // Idempotency: call populateDefaultBrokers twice -> slot 0 still has same value.
+    populateDefaultBrokers();
+    BrokerConfig slot0_again;
+    if (!readBrokerConfig(0, slot0_again)) { puts("FAIL re-read slot 0"); return 1; }
+    if (strcmp(slot0_again.url, slot0.url) != 0) {
+        printf("FAIL populateDefaultBrokers not idempotent: '%s' vs '%s'\n",
+               slot0_again.url, slot0.url);
         return 1;
     }
 
