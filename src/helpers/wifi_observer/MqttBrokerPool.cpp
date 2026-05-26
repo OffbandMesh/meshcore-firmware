@@ -123,6 +123,65 @@ uint8_t MqttBrokerPool::publishPacket(const uint8_t* payload, size_t payload_len
 }
 
 // ---------------------------------------------------------------------------
+// publishRawFromBytes -- /raw topic publish (Plan 2 v2 path)
+// ---------------------------------------------------------------------------
+// Builds the minimal /raw JSON (matches buildRawJson format, inlined here
+// because we receive raw bytes not a mesh::Packet). Hex-encodes the raw
+// bytes, fills origin + origin_id + timestamp + type=RAW + data, then
+// fans out to every enabled+Up broker with per-broker topic.
+uint8_t MqttBrokerPool::publishRawFromBytes(const uint8_t* raw, size_t raw_len,
+                                            float rssi, float snr) {
+    (void)rssi; (void)snr;  // not in /raw JSON envelope (consumed by ring only)
+    if (raw == nullptr || raw_len == 0) return 0;
+    if (configuredCount() == 0) return 0;
+    if (raw_len > 256) raw_len = 256;  // truncate at MeshCore packet ceiling
+
+    // Hex-encode bytes (520 bytes accommodates 256 input * 2 + NUL).
+    char raw_hex[520];
+    bytesToHexUpper(raw, raw_len, raw_hex, sizeof(raw_hex));
+
+    // Build body once -- uses shared ctx strings; iata unused for body.
+    char ts[32];
+    formatIsoTimestamp(time(nullptr), ts, sizeof(ts));
+
+    char origin[80];
+    const char* node_name = (node_name_ != nullptr && node_name_[0] != 0)
+                            ? node_name_
+                            : (device_id_ != nullptr ? device_id_ : "");
+    escapeJsonString(node_name, origin, sizeof(origin));
+
+    const char* dev_id = device_id_ != nullptr ? device_id_ : "";
+
+    char json[1024];
+    int n = snprintf(json, sizeof(json),
+        "{\"origin\":\"%s\",\"origin_id\":\"%s\",\"timestamp\":\"%s\",\"type\":\"RAW\",\"data\":\"%s\"}",
+        origin, dev_id, ts, raw_hex);
+    if (n <= 0 || static_cast<size_t>(n) >= sizeof(json)) return 0;
+
+    // Fan-out per broker with their own iata + topic_prefix.
+    uint8_t accepted = 0;
+    for (uint8_t slot = 0; slot < CROSSWIRE_MAX_BROKERS; ++slot) {
+        MqttBroker& b = brokers_[slot];
+        if (!b.isConfigured() || b.runtime().state != BrokerState::Up) continue;
+
+        MqttPayloadCtx topic_ctx;
+        b.fillPayloadCtx(topic_ctx, global_iata_, device_id_, node_name_,
+                         client_version_, firmware_version_, model_);
+        if (topic_ctx.iata == nullptr || topic_ctx.iata[0] == '\0') {
+            continue;  // silent skip per HARD RULE
+        }
+        char topic[160];
+        formatTopic(topic, sizeof(topic), "raw", topic_ctx);
+        if (topic[0] == '\0') continue;
+        if (b.publish(topic, reinterpret_cast<const uint8_t*>(json),
+                      static_cast<size_t>(n), /*retain=*/false)) {
+            accepted++;
+        }
+    }
+    return accepted;
+}
+
+// ---------------------------------------------------------------------------
 // publishStatusIfDue -- scheduled in loop()
 // ---------------------------------------------------------------------------
 void MqttBrokerPool::publishStatusIfDue(uint32_t now_ms) {

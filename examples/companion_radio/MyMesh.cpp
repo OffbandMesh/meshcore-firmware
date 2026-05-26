@@ -279,6 +279,10 @@ uint8_t MyMesh::getExtraAckTransmitCount() const {
   return _prefs.multi_acks;
 }
 
+#ifdef CROSSWIRE_OBSERVER
+  #include "helpers/wifi_observer/ObserverPipeline.h"
+#endif
+
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
   if (_serial->isConnected() && len + 3 <= MAX_FRAME_SIZE) {
     int i = 0;
@@ -290,6 +294,13 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 
     _serial->writeFrame(out_frame, i);
   }
+
+#ifdef CROSSWIRE_OBSERVER
+  // Plan 2 v2 Task 9: tee every raw RX into the observer pipeline.
+  // Non-blocking: trampoline -> ring-buffer copy + pool.publishRaw.
+  // Pool publishes are MQTT enqueue (non-blocking even if broker is Down).
+  crosswire::observerLogRxTrampoline(snr, rssi, raw, len);
+#endif
 }
 
 bool MyMesh::isAutoAddEnabled() const {
