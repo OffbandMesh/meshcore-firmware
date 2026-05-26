@@ -56,6 +56,19 @@ public:
     // Returns number of brokers that accepted the enqueue.
     uint8_t publishPacket(const uint8_t* payload, size_t payload_len);
 
+    // Pool-side /raw publish: caller hands in raw RX bytes + rssi/snr.
+    // Pool builds the minimal /raw JSON ONCE using its own cached
+    // strings, then formats per-broker topic + publishes to each
+    // enabled+Up broker. Returns number of brokers that accepted enqueue.
+    //
+    // This is the preferred entry point for ObserverPipeline -- matches
+    // MyMesh::logRxRaw's signature (raw bytes only, no parsed Packet).
+    // The /packets topic with parsed-field JSON (route, payload_type,
+    // hash, path, etc.) is deferred to a follow-up issue; requires a
+    // different hook point or RSSI/SNR side-channel through onRecvPacket.
+    uint8_t publishRawFromBytes(const uint8_t* raw, size_t raw_len,
+                                float rssi, float snr);
+
     // Reload one slot from NVS (after CLI config change). Tears down the
     // old broker for that slot, re-reads config, and re-begins if enabled.
     // Returns true if reload succeeded (or slot is now disabled).
