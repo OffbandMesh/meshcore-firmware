@@ -46,13 +46,13 @@ bool webAuthHasUserPassword();
 bool webAuthAllowInitialPassword();
 
 // Verify a user-submitted password. Returns true if matches either
-// (a) the bcrypt hash in NVS, or (b) the derived initial password
+// (a) the PBKDF2 hash in NVS, or (b) the derived initial password
 // and the device is currently in initial-password-acceptable state.
 // Sets *requires_change_out=true if the verification succeeded via
 // the initial-password path (caller MUST force password change).
 bool webAuthVerifyPassword(const char* candidate, bool* requires_change_out);
 
-// Set + persist the user's bcrypt hash. Clears
+// Set + persist the user's PBKDF2 hash. Clears
 // allow_initial_password automatically.
 bool webAuthSetPassword(const char* new_plaintext);
 

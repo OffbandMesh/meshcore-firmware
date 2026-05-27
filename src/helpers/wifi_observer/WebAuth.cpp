@@ -98,9 +98,15 @@ static bool getPubkeyPrefix(char* out, size_t out_size) {
 // Run PBKDF2-HMAC-SHA256 over (password, salt) producing kHashLen bytes
 // in out. Returns true on success. Internal mbedtls scaffolding is
 // freed before return on every path.
-static bool runPbkdf2(const char* password,
+//
+// `iters` defaults to kPbkdf2Iterations for fresh hashes (the write
+// path); the verify path passes the iteration count parsed out of
+// the stored blob so the same helper covers both directions and the
+// mbedtls API surface lives in exactly one place.
+static bool runPbkdf2(const char* password, size_t password_len,
                       const uint8_t* salt, size_t salt_len,
-                      uint8_t* out, size_t out_len) {
+                      uint8_t* out, size_t out_len,
+                      uint32_t iters = kPbkdf2Iterations) {
     if (out_len < kHashLen) return false;
     const mbedtls_md_info_t* md_info =
         mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
@@ -113,9 +119,9 @@ static bool runPbkdf2(const char* password,
         if (mbedtls_md_setup(&ctx, md_info, /*hmac=*/1) != 0) break;
         int rc = mbedtls_pkcs5_pbkdf2_hmac(
             &ctx,
-            (const unsigned char*)password, strlen(password),
+            (const unsigned char*)password, password_len,
             salt, salt_len,
-            kPbkdf2Iterations,
+            iters,
             (uint32_t)kHashLen,
             out);
         if (rc != 0) break;
@@ -285,37 +291,29 @@ bool webAuthVerifyPassword(const char* candidate, bool* requires_change_out) {
         uint8_t expected[kHashLen];
         if (loadStoredHash(&iters, salt, sizeof(salt),
                            expected, sizeof(expected))) {
-            uint8_t derived[kHashLen];
             // Honor the iteration count stored in the blob (forward-compat
             // if the constant ever increases); we currently always write
             // kPbkdf2Iterations.
-            const mbedtls_md_info_t* md_info =
-                mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-            if (md_info != nullptr) {
-                mbedtls_md_context_t ctx;
-                mbedtls_md_init(&ctx);
-                bool pbkdf_ok = false;
-                if (mbedtls_md_setup(&ctx, md_info, /*hmac=*/1) == 0) {
-                    int rc = mbedtls_pkcs5_pbkdf2_hmac(
-                        &ctx,
-                        (const unsigned char*)candidate, candidate_len,
-                        salt, kSaltLen,
-                        iters,
-                        (uint32_t)kHashLen,
-                        derived);
-                    pbkdf_ok = (rc == 0);
-                }
-                mbedtls_md_free(&ctx);
-                if (pbkdf_ok &&
-                    mbedtls_ct_memcmp(derived, expected, kHashLen) == 0) {
-                    // Stored-hash match. NOT an initial-password login,
-                    // so requires_change_out stays false.
-                    return true;
-                }
+            uint8_t derived[kHashLen];
+            if (runPbkdf2(candidate, candidate_len,
+                          salt, kSaltLen,
+                          derived, sizeof(derived),
+                          (uint32_t)iters) &&
+                mbedtls_ct_memcmp(derived, expected, kHashLen) == 0) {
+                // Stored-hash match. NOT an initial-password login,
+                // so requires_change_out stays false.
+                return true;
             }
+        } else {
+            // Stored-hash key was present (has_stored==true) but the blob
+            // would not parse. Without this breadcrumb, operators debugging
+            // "why did the initial password suddenly start working again?"
+            // see only a silent slide into the recovery-override / initial-
+            // password branch below.
+            Serial.println("[WebAuth] WARN: stored hash present but unparseable; falling through to initial-password gating");
         }
-        // Stored hash present but candidate did not match. Fall through
-        // ONLY if recovery override is set.
+        // Stored hash present but candidate did not match (or stored blob
+        // failed to parse). Fall through ONLY if recovery override is set.
         if (!webAuthAllowInitialPassword()) return false;
     }
 
@@ -369,7 +367,8 @@ bool webAuthSetPassword(const char* new_plaintext) {
     }
 
     uint8_t hash[kHashLen];
-    if (!runPbkdf2(new_plaintext, salt, kSaltLen, hash, sizeof(hash))) {
+    if (!runPbkdf2(new_plaintext, strlen(new_plaintext),
+                   salt, kSaltLen, hash, sizeof(hash))) {
         Serial.println("[WebAuth] WARN: PBKDF2 derivation failed");
         return false;
     }
