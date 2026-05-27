@@ -3,6 +3,14 @@
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
 
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+// Plan 3 Task 10 (Strycher/LoRa#272): reserved-slot CLI intercepts +
+// system-channel status posting. Build-flag-gated so the upstream
+// MyMesh translation unit is unchanged when the observer is not
+// compiled in.
+#include "helpers/wifi_observer/SystemChannelCli.h"
+#endif
+
 #define CMD_APP_START                 1
 #define CMD_SEND_TXT_MSG              2
 #define CMD_SEND_CHANNEL_TXT_MSG      3
@@ -588,6 +596,60 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
 #endif
 }
 
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+// Plan 3 Task 10 (Strycher/LoRa#272): post a status / CLI-reply
+// message onto the locked system channel slot. Same frame layout
+// as onChannelMessageRecv() so the MeshCore app renders it as a
+// normal incoming channel message; the source distinguishes only
+// in that it never traversed LoRa (RX SNR field is 0 + path_len
+// is 0xFF "direct").
+//
+// Frame layout (v>=3):
+//   [0]  RESP_CODE_CHANNEL_MSG_RECV_V3 (17)
+//   [1]  snr*4 as int8_t (0 for synthesized)
+//   [2]  reserved1
+//   [3]  reserved2
+//   [4]  channel_idx (kSystemChannelSlot)
+//   [5]  path_len (0xFF = no path, direct)
+//   [6]  TXT_TYPE_PLAIN
+//   [7..10]  timestamp (uint32 little-endian; getRTCClock seconds)
+//   [11..]   text
+//
+// Pre-v3 (RESP_CODE_CHANNEL_MSG_RECV = 8) drops the snr +
+// reserved bytes; layout is the same minus 3 bytes.
+void MyMesh::postSystemChannelText(const char* text, size_t text_len) {
+  if (text == nullptr || text_len == 0) return;
+  int i = 0;
+  if (app_target_ver >= 3) {
+    out_frame[i++] = RESP_CODE_CHANNEL_MSG_RECV_V3;
+    out_frame[i++] = 0;  // snr*4 -- synthesized (no real RX)
+    out_frame[i++] = 0;  // reserved1
+    out_frame[i++] = 0;  // reserved2
+  } else {
+    out_frame[i++] = RESP_CODE_CHANNEL_MSG_RECV;
+  }
+  out_frame[i++] = crosswire::kSystemChannelSlot;
+  out_frame[i++] = 0xFF;             // path_len: 0xFF = direct
+  out_frame[i++] = TXT_TYPE_PLAIN;
+  uint32_t ts = (uint32_t)getRTCClock()->getCurrentTime();
+  memcpy(&out_frame[i], &ts, 4);
+  i += 4;
+  // Clamp text to leave room for the header. MAX_FRAME_SIZE is
+  // the upstream cap; the per-channel-message payload limit is
+  // checked the same way in onChannelMessageRecv above.
+  size_t avail = (size_t)MAX_FRAME_SIZE - (size_t)i;
+  if (text_len > avail) text_len = avail;
+  memcpy(&out_frame[i], text, text_len);
+  i += (int)text_len;
+  addToOfflineQueue(out_frame, i);
+
+  if (_serial != nullptr && _serial->isConnected()) {
+    uint8_t frame[1] = { PUSH_CODE_MSG_WAITING };
+    _serial->writeFrame(frame, 1);
+  }
+}
+#endif
+
 void MyMesh::onChannelDataRecv(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint16_t data_type,
                                const uint8_t *data, size_t data_len) {
   if (data_len > MAX_CHANNEL_DATA_LENGTH) {
@@ -962,6 +1024,16 @@ void MyMesh::begin(bool has_display) {
   addChannel("Public", PUBLIC_GROUP_PSK); // pre-configure Andy's public channel
   _store->loadChannels(this);
 
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+  // Plan 3 Task 10 (Strycher/LoRa#272): provision the locked
+  // system CLI channel at slot 40. Idempotent: only persists
+  // when the slot actually changed (returns true), to avoid
+  // flash wear on every boot.
+  if (crosswire::systemChannelInit(self_id)) {
+    saveChannels();
+  }
+#endif
+
   radio_set_params(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_set_tx_power(_prefs.tx_power_dbm);
   radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
@@ -1000,6 +1072,18 @@ bool MyMesh::isValidClientRepeatFreq(uint32_t f) const {
 void MyMesh::startInterface(BaseSerialInterface &serial) {
   _serial = &serial;
   serial.enable();
+
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+  // Plan 3 Task 10 (Strycher/LoRa#272): wire the system-channel
+  // post callback so SystemChannelCli can push messages into the
+  // BLE offline queue without #include'ing MyMesh.h itself. The
+  // trampoline keeps SystemChannelCli ignorant of MyMesh's type;
+  // the_mesh is the file-scope singleton declared above.
+  crosswire::systemChannelSetPostFunction(
+      [](const char* text, size_t text_len) {
+        the_mesh.postSystemChannelText(text, text_len);
+      });
+#endif
 }
 
 void MyMesh::handleCmdFrame(size_t len) {
@@ -1119,6 +1203,24 @@ void MyMesh::handleCmdFrame(size_t len) {
     memcpy(&msg_timestamp, &cmd_frame[i], 4);
     i += 4;
     const char *text = (char *)&cmd_frame[i];
+
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+    // Plan 3 Task 10 intercept (Strycher/LoRa#272): slot 40 is
+    // the system CLI channel. Route the message into the local
+    // CLI passthrough instead of broadcasting it over LoRa.
+    // Reply is enqueued and posted back on the same slot via
+    // RESP_CODE_CHANNEL_MSG_RECV_V3 from systemChannelDrain().
+    if (channel_idx == crosswire::kSystemChannelSlot &&
+        txt_type == TXT_TYPE_PLAIN) {
+      size_t text_len = (len > (size_t)i) ? (len - (size_t)i) : 0;
+      if (crosswire::systemChannelInterceptMsg(text, text_len)) {
+        writeOKFrame();
+      } else {
+        writeErrFrame(ERR_CODE_BAD_STATE);
+      }
+      return;
+    }
+#endif
 
     if (txt_type != TXT_TYPE_PLAIN) {
       writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
@@ -1684,9 +1786,28 @@ void MyMesh::handleCmdFrame(size_t len) {
       writeErrFrame(ERR_CODE_NOT_FOUND);
     }
   } else if (cmd_frame[0] == CMD_SET_CHANNEL && len >= 2 + 32 + 32) {
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+    // Plan 3 Task 10 intercept: slot 40 is locked even for the
+    // (currently unsupported) 256-bit-key variant.
+    if (cmd_frame[1] == crosswire::kSystemChannelSlot &&
+        !crosswire::systemChannelAllowSet()) {
+      writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
+      return;
+    }
+#endif
     writeErrFrame(ERR_CODE_UNSUPPORTED_CMD); // not supported (yet)
   } else if (cmd_frame[0] == CMD_SET_CHANNEL && len >= 2 + 32 + 16) {
     uint8_t channel_idx = cmd_frame[1];
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+    // Plan 3 Task 10 intercept: slot 40 is the locked system
+    // channel; refuse SET so the user cannot overwrite or
+    // accidentally delete it from their MeshCore app.
+    if (channel_idx == crosswire::kSystemChannelSlot &&
+        !crosswire::systemChannelAllowSet()) {
+      writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
+      return;
+    }
+#endif
     ChannelDetails channel;
     StrHelper::strncpy(channel.name, (char *)&cmd_frame[2], 32);
     memset(channel.channel.secret, 0, sizeof(channel.channel.secret));
@@ -2176,6 +2297,14 @@ void MyMesh::loop() {
   } else {
     checkSerialInterface();
   }
+
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+  // Plan 3 Task 10 (Strycher/LoRa#272): drain any pending
+  // system-channel status / CLI-reply messages enqueued by
+  // SystemChannelCli (from WifiBootstrap, intercept dispatch,
+  // etc.). Cheap when the queue is empty (single load + branch).
+  crosswire::systemChannelDrain();
+#endif
 
   // is there are pending dirty contacts write needed?
   if (dirty_contacts_expiry && millisHasNowPassed(dirty_contacts_expiry)) {
