@@ -25,6 +25,9 @@
 
 #pragma once
 
+#include <stddef.h>
+#include <stdint.h>
+
 #ifdef ARDUINO
   #include <esp_http_server.h>
 #endif
@@ -47,13 +50,26 @@ esp_err_t handleGetWifi          (httpd_req_t* req);
 esp_err_t handleSetWifi          (httpd_req_t* req);
 esp_err_t handleScanWifi         (httpd_req_t* req);
 esp_err_t handleCli              (httpd_req_t* req);
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
 esp_err_t handleGetBle           (httpd_req_t* req);    // companion-only
 esp_err_t handleResetBlePin      (httpd_req_t* req);    // companion-only
+#endif
 esp_err_t handleFactoryReset     (httpd_req_t* req);
 esp_err_t handleRegenerateCert   (httpd_req_t* req);
 esp_err_t handleOta              (httpd_req_t* req);    // Plan 4 replaces; Plan 3 returns 501
 
 #endif  // ARDUINO
+
+// ---- One-shot init for context the handlers cannot reach themselves --------
+// Plan 3 Task 11 (WifiObserver wire-up) calls these from the
+// post-the_mesh.begin() main.cpp block (same call site that already
+// passes self_id.pub_key to webAuthInit). All pointers are borrowed;
+// the caller (MyMesh / main.cpp's globals) is responsible for keeping
+// the bytes alive for the lifetime of the process.
+
+// Identity pubkey shown by /api/ble (and used to derive the initial
+// password via WebAuth). Pass nullptr to clear (e.g., shutdown).
+void webApiInitIdentityPubkey(const uint8_t* pubkey_32_bytes);
 
 }  // namespace WebApi
 }  // namespace crosswire

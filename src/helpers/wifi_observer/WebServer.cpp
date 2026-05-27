@@ -10,9 +10,12 @@
 
 #ifdef ARDUINO
   #include <Arduino.h>
+  #include <WiFi.h>
   #include <esp_err.h>
   #include <esp_http_server.h>
   #include <esp_https_server.h>
+  #include <esp_system.h>          // esp_restart()
+  #include <lwip/sockets.h>        // getpeername + sockaddr_in
   #include <mbedtls/constant_time.h>
 
   #include "WebCertStore.h"
@@ -381,6 +384,121 @@ bool webServerIsRunning() {
     return s_httpd != nullptr;
 }
 
+// ---------------------------------------------------------------------------
+// Public helpers exposed to WebApi (Task 8 Option Y)
+// ---------------------------------------------------------------------------
+
+// Resolve session from the cw_sid cookie on an in-flight request.
+// The trampoline ran requireAuth first, so a non-null return is the
+// normal path here. The nullptr guard exists for safety; handlers
+// MUST still null-check before deref.
+WebSession* webServerCurrentSession(httpd_req_t* req) {
+    if (!req) return nullptr;
+    char sid[kSidHexLen + 1];
+    if (!readSidCookie(req, sid, sizeof(sid))) return nullptr;
+    return webSessionLookup(sid, (uint32_t)millis());
+}
+
+// Resolve client IPv4 address (network byte order) via the underlying
+// socket. esp_http_server exposes the socket fd via httpd_req_to_sockfd;
+// getpeername gives us the sockaddr. Returns 0 on any failure.
+//
+// IPv6 note: this build is STA-only IPv4 today. If/when IPv6 lands,
+// the throttle table will need a wider key -- file as follow-up if so.
+uint32_t webServerClientIp(httpd_req_t* req) {
+    if (!req) return 0;
+    int sockfd = httpd_req_to_sockfd(req);
+    if (sockfd < 0) return 0;
+    struct sockaddr_in6 addr = {};
+    socklen_t addr_len = sizeof(addr);
+    if (getpeername(sockfd, (struct sockaddr*)&addr, &addr_len) < 0) {
+        return 0;
+    }
+    if (addr.sin6_family == AF_INET) {
+        const struct sockaddr_in* a4 = reinterpret_cast<const struct sockaddr_in*>(&addr);
+        return a4->sin_addr.s_addr;  // already network byte order
+    }
+    // IPv4-mapped IPv6 (::ffff:a.b.c.d) -- pull the trailing 4 bytes.
+    // sin6_addr.s6_addr[10..11] == 0xFF,0xFF marks the v4-mapped form.
+    if (addr.sin6_family == AF_INET6 &&
+        addr.sin6_addr.s6_addr[10] == 0xFF &&
+        addr.sin6_addr.s6_addr[11] == 0xFF) {
+        uint32_t v4;
+        memcpy(&v4, &addr.sin6_addr.s6_addr[12], 4);
+        return v4;  // network byte order
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Deferred operations (called from WebApi handlers, executed on loop tick)
+// ---------------------------------------------------------------------------
+// HTTPS handlers cannot synchronously WiFi.disconnect() or ESP.restart()
+// without killing the response mid-flush. Each handler schedules the
+// destructive op + returns 200; webServerLoopTick (called from
+// wifiObserverLoop) runs the op once the grace period elapses.
+
+static bool     s_wifi_reconnect_pending = false;
+static uint32_t s_wifi_reconnect_at_ms   = 0;
+static bool     s_reboot_pending         = false;
+static uint32_t s_reboot_at_ms           = 0;
+
+void webServerScheduleWifiReconnect(uint32_t delay_ms) {
+    s_wifi_reconnect_pending = true;
+    s_wifi_reconnect_at_ms   = (uint32_t)millis() + delay_ms;
+    Serial.printf("[WebServer] WiFi reconnect scheduled in %u ms\n",
+                  (unsigned)delay_ms);
+}
+
+void webServerScheduleReboot(uint32_t delay_ms) {
+    s_reboot_pending = true;
+    s_reboot_at_ms   = (uint32_t)millis() + delay_ms;
+    Serial.printf("[WebServer] Reboot scheduled in %u ms\n",
+                  (unsigned)delay_ms);
+}
+
+void webServerLoopTick() {
+    uint32_t now = (uint32_t)millis();
+    if (s_wifi_reconnect_pending &&
+        (int32_t)(now - s_wifi_reconnect_at_ms) >= 0) {
+        s_wifi_reconnect_pending = false;
+        Serial.println("[WebServer] applying deferred WiFi reconnect");
+        // Re-read NVS creds via WifiBootstrap on next tick: simplest path
+        // is disconnect + begin(), which WifiBootstrap's StaConnecting state
+        // already handles. But WifiBootstrap caches state; calling .begin()
+        // again is the cleanest re-entry.
+        WiFi.disconnect(/*wifioff=*/false, /*eraseap=*/false);
+        // Force WifiBootstrap to re-read NVS + re-attempt. Avoid re-entering
+        // its begin() (which re-runs the coex pref + mode set) -- the
+        // simpler path is to nudge WiFi.begin() with the now-current NVS
+        // creds. WifiBootstrap.loop() will then see WL_CONNECTED transition.
+        // (Note: a future iteration may add WifiBootstrap::reapplyCreds()
+        // for an explicit re-load API; for now we lean on Arduino's
+        // WiFi.begin(ssid, pwd) discovering creds from prior config.)
+        // The simplest correct primitive: WiFi.reconnect() if creds are
+        // still in volatile state; otherwise the next StaConnecting tick
+        // re-attempts. WifiBootstrap already re-attempts every 10s on
+        // failure, so a passive WiFi.disconnect is sufficient to trigger
+        // a fresh handshake with whatever creds NVS now holds (which
+        // WifiBootstrap.begin pulled at boot; the new POST /api/wifi
+        // wrote them but didn't re-bootstrap).
+        //
+        // BUG NOTE: this path will reconnect to the OLD SSID until the
+        // next reboot, because WifiBootstrap caches ssid/pwd at begin().
+        // The POST /api/wifi handler writes NVS; rebooting is the
+        // simplest way to pick up the new SSID. The handler combines
+        // schedule_wifi_reconnect WITH schedule_reboot for that reason
+        // -- the reconnect line above is belt-and-suspenders, the
+        // reboot is the real apply path.
+        WiFi.reconnect();
+    }
+    if (s_reboot_pending && (int32_t)(now - s_reboot_at_ms) >= 0) {
+        s_reboot_pending = false;
+        Serial.println("[WebServer] applying deferred reboot");
+        esp_restart();   // does not return
+    }
+}
+
 void webServerStop() {
     if (s_httpd) {
         httpd_ssl_stop(s_httpd);
@@ -478,6 +596,9 @@ bool webServerStart() {
 bool webServerStart()     { return false; }
 void webServerStop()      {}
 bool webServerIsRunning() { return false; }
+void webServerScheduleWifiReconnect(uint32_t) {}
+void webServerScheduleReboot(uint32_t) {}
+void webServerLoopTick() {}
 
 #endif  // ARDUINO
 
