@@ -58,8 +58,26 @@ void webServerScheduleWifiReconnect(uint32_t delay_ms);
 // HTTPS handler without killing the response. Consumed by webServerLoopTick().
 void webServerScheduleReboot(uint32_t delay_ms);
 
-// Per-iteration tick the WifiObserver loop calls. Drives deferred
-// reconnect + reboot timers. No-op when nothing is scheduled.
+// ===========================================================================
+// BUILD-TIME REMINDER -- READ BEFORE WIRING TASK 11
+// ===========================================================================
+// webServerLoopTick() MUST be called from the WifiObserver main loop on
+// every iteration. The destructive admin routes below all return 200 OK
+// with a "reboot/reconnect scheduled" promise that is delivered by this
+// tick consuming the timer set by webServerScheduleReboot / WifiReconnect:
+//
+//   * POST /api/wifi                -- scheduleWifiReconnect(5000)
+//   * POST /api/factory_reset       -- scheduleReboot(2000)
+//   * POST /api/regenerate_cert     -- scheduleReboot(2000) (after server stop)
+//
+// If Task 11 fails to wire this tick into the loop, those three handlers
+// will return 200 and the promised reboot/reconnect will NEVER fire --
+// silent broken behavior with no surfaced error. There is no build-time
+// assert that can express "ensure caller invokes this from a loop";
+// this comment block is the enforcement. When Task 11 lands, audit that
+// the WifiObserver loop calls webServerLoopTick() unconditionally and
+// add a comment in the loop that references the routes above.
+// ===========================================================================
 void webServerLoopTick();
 
 #ifdef ARDUINO

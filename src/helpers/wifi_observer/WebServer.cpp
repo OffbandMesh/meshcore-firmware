@@ -147,8 +147,15 @@ static bool readCsrfHeader(httpd_req_t* req, char* out, size_t out_len) {
 static esp_err_t sendUnauthorized(httpd_req_t* req) {
     httpd_resp_set_status(req, "401 Unauthorized");
     httpd_resp_set_type(req, "application/json; charset=utf-8");
-    httpd_resp_set_hdr(req, "Set-Cookie",
-                       "cw_sid=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Strict");
+    // Cookie attributes pulled from the kCwSidCookieAttrs constant in
+    // WebSession.h so this clear stays bit-identical to the issue/clear
+    // sites in WebApi.cpp; drift here would make the browser treat the
+    // cleared cookie as a different cookie and the stale sid would
+    // survive the 401.
+    char sid_clear[128];
+    snprintf(sid_clear, sizeof(sid_clear),
+             "cw_sid=; Max-Age=0; %s", kCwSidCookieAttrs);
+    httpd_resp_set_hdr(req, "Set-Cookie", sid_clear);
     const char body[] = "{\"error\":\"unauthorized\"}\n";
     httpd_resp_send(req, body, sizeof(body) - 1);
     return ESP_OK;

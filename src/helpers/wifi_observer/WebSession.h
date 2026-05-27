@@ -38,6 +38,16 @@ constexpr uint32_t kThrottleLockoutMs   = 5 * 60 * 1000;    // 5 min
   #define CROSSWIRE_MAX_WEB_SESSIONS 4
 #endif
 
+// Shared Set-Cookie attribute strings. cw_sid is HttpOnly (server-side
+// only); cw_csrf is JS-readable so the SPA can echo it as X-Csrf-Token.
+// BOTH must stay in sync across all sites that issue/clear these cookies
+// or the browser will treat them as different cookies (different Path /
+// Secure / SameSite => different cookie identity per RFC 6265 5.3).
+// Issue/clear sites: WebApi.cpp setSessionCookies + clearSessionCookies,
+// WebServer.cpp sendUnauthorized.
+static constexpr const char* kCwSidCookieAttrs  = "Path=/; HttpOnly; Secure; SameSite=Strict";
+static constexpr const char* kCwCsrfCookieAttrs = "Path=/; Secure; SameSite=Strict";
+
 struct WebSession {
     bool     used                = false;
     char     sid[33]             = {0};   // 32 hex chars + NUL

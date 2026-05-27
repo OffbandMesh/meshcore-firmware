@@ -190,6 +190,9 @@ const char* skipWs(const char* s) {
 // "Top level" here means we ignore matches that occur inside string
 // values -- we walk the object respecting quote toggling, but we do NOT
 // validate nested braces.
+// First-wins on duplicate keys (safer; cannot be hidden by later injection).
+// Note: browser JSON.parse takes last-wins, so server and client disagree
+// on malformed input. Acceptable trade-off for an admin-auth surface.
 const char* findKey(const char* s, const char* key) {
     if (!s || !key) return nullptr;
     size_t key_len = strlen(key);
@@ -253,6 +256,11 @@ bool decodeJsonString(const char* p, char* out, size_t out_size) {
                     // Skip \uXXXX -- we don't decode UTF-16 escapes in the
                     // few config fields this handler accepts. If a future
                     // user surfaces a real \u<hex> need, add proper decoding.
+                    // TODO: Consider full UTF-16 (surrogate-pair-aware)
+                    // decoding in a future iteration; current impl loses
+                    // Unicode SSIDs / topic prefixes that arrive \u-escaped
+                    // from JSON.stringify (every char in the escaped run
+                    // collapses to a single '?').
                     if (p[1] && p[2] && p[3] && p[4]) {
                         out[oi++] = '?';
                         p += 5;
@@ -329,19 +337,28 @@ void escapeForJson(const char* input, char* output, size_t output_size) {
 // SAMESITE=Strict: this is a same-origin SPA; cross-site requests should
 // not carry the cookie at all. CSRF is the double-submit JS-readable token.
 //
-// Headers must remain valid until httpd_resp_send returns. The shared
-// static buffers below are filled once per call and copied into the
-// response by esp_http_server; safe under our single-task model.
+// Header lifetime: httpd_resp_set_hdr stores the caller's pointer; the
+// data must remain valid until httpd_resp_send returns. setSessionCookies
+// is always invoked synchronously just before httpd_resp_send within the
+// same handler frame, so stack-local buffers (lifetime = the caller's
+// stack frame, which outlives the send) are sufficient AND remove the
+// foot-gun of function-static buffers that would silently corrupt under
+// concurrent dispatch if esp_http_server's worker count were ever raised.
+//
+// Cookie attribute strings (Path/HttpOnly/Secure/SameSite) are pulled
+// from the kCw{Sid,Csrf}CookieAttrs constants in WebSession.h so all
+// issue/clear sites format identically -- otherwise the browser treats
+// them as different cookies and sessions silently break.
 
 void setSessionCookies(httpd_req_t* req, const WebSession& sess) {
-    static char sid_cookie[128];
-    static char csrf_cookie[128];
+    char sid_cookie[128];
+    char csrf_cookie[128];
     snprintf(sid_cookie, sizeof(sid_cookie),
-             "cw_sid=%s; Max-Age=1800; Path=/; HttpOnly; Secure; SameSite=Strict",
-             sess.sid);
+             "cw_sid=%s; Max-Age=1800; %s",
+             sess.sid, kCwSidCookieAttrs);
     snprintf(csrf_cookie, sizeof(csrf_cookie),
-             "cw_csrf=%s; Max-Age=1800; Path=/; Secure; SameSite=Strict",
-             sess.csrf);
+             "cw_csrf=%s; Max-Age=1800; %s",
+             sess.csrf, kCwCsrfCookieAttrs);
     httpd_resp_set_hdr(req, "Set-Cookie", sid_cookie);
     httpd_resp_set_hdr(req, "Set-Cookie", csrf_cookie);
 }
@@ -349,10 +366,14 @@ void setSessionCookies(httpd_req_t* req, const WebSession& sess) {
 // Clear both cookies (logout, post-password-change rotation when we
 // destroy without re-issuing).
 void clearSessionCookies(httpd_req_t* req) {
-    httpd_resp_set_hdr(req, "Set-Cookie",
-                       "cw_sid=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Strict");
-    httpd_resp_set_hdr(req, "Set-Cookie",
-                       "cw_csrf=; Max-Age=0; Path=/; Secure; SameSite=Strict");
+    char sid_clear[128];
+    char csrf_clear[128];
+    snprintf(sid_clear, sizeof(sid_clear),
+             "cw_sid=; Max-Age=0; %s", kCwSidCookieAttrs);
+    snprintf(csrf_clear, sizeof(csrf_clear),
+             "cw_csrf=; Max-Age=0; %s", kCwCsrfCookieAttrs);
+    httpd_resp_set_hdr(req, "Set-Cookie", sid_clear);
+    httpd_resp_set_hdr(req, "Set-Cookie", csrf_clear);
 }
 
 // Re-resolve the cw_sid cookie value (for explicit logout / rotate
@@ -701,8 +722,12 @@ esp_err_t handleSetBroker(httpd_req_t* req) {
         return send400(req, "slot_out_of_range");
     }
     uint8_t slot = (uint8_t)slot_l;
-    // Path can have a trailing slash but nothing else.
-    if (*end != '\0' && *end != '/') return send404(req, "bad_uri");
+    // Accept exactly "/api/brokers/<N>" or "/api/brokers/<N>/" -- nothing
+    // further. Trailing path segments (e.g. "/api/brokers/3/foo") would
+    // otherwise silently route to slot 3, masking client bugs.
+    if (*end != '\0' && !(*end == '/' && end[1] == '\0')) {
+        return send404(req, "bad_uri");
+    }
 
     // Read body.
     char body[kMaxBodyBytes];
@@ -800,12 +825,14 @@ esp_err_t handleSetBroker(httpd_req_t* req) {
     if (missing_required != nullptr) {
         // Two-key envelope; same shape family as the simple
         // {"error":"<code>"} the other 400 sites in this file emit.
-        char body[96];
-        int bn = snprintf(body, sizeof(body),
+        // Named err_body (not body) to avoid shadowing the outer
+        // request-body buffer declared above.
+        char err_body[96];
+        int bn = snprintf(err_body, sizeof(err_body),
                           "{\"error\":\"auth_credentials_missing\",\"required\":\"%s\"}\n",
                           missing_required);
-        if (bn < 0 || (size_t)bn >= sizeof(body)) bn = (int)sizeof(body) - 1;
-        return sendJsonStatus(req, "400 Bad Request", body, (size_t)bn);
+        if (bn < 0 || (size_t)bn >= sizeof(err_body)) bn = (int)sizeof(err_body) - 1;
+        return sendJsonStatus(req, "400 Bad Request", err_body, (size_t)bn);
     }
 
     // Persist + reload.
@@ -947,7 +974,7 @@ esp_err_t handleScanWifi(httpd_req_t* req) {
         if (stale) {
             // hidden=true so we see hidden SSIDs too; async=true returns
             // immediately. Don't block on this call.
-            WiFi.scanNetworks(/*async=*/true, /*show_hidden=*/false,
+            WiFi.scanNetworks(/*async=*/true, /*show_hidden=*/true,
                               /*passive=*/false, /*max_ms_per_chan=*/300);
             s_scan_in_flight = true;
         }
