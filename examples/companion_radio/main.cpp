@@ -5,6 +5,9 @@
 #ifdef CROSSWIRE_OBSERVER
   #include "helpers/wifi_observer/WifiObserver.h"
   #include "helpers/wifi_observer/CrashLog.h"
+  #ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+    #include "helpers/wifi_observer/WebCertStore.h"  // post-BLE cert warmup; Strycher/LoRa#276
+  #endif
   // CW_PHASE: tracing macro for setup() crash localization. With
   // CrashLog v2's ESP_LOG hook + shutdown handler, the last phase
   // line surviving in the ring buffer pinpoints where setup() died.
@@ -244,6 +247,35 @@ void setup() {
   CW_PHASE("ESP32:before BLE serial_interface.begin (BLE_PIN_CODE)");
   serial_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
   CW_PHASE("ESP32:post BLE serial_interface.begin");
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+  // Pre-warm the WebCertStore cache here, AFTER BLE init but BEFORE
+  // WiFi STA + MqttBrokerPool startup eat the remaining heap
+  // (Strycher/LoRa#276). At this point we have ~26KB largest contig
+  // internal DRAM -- enough for mbedtls EC P-256 generation (needs
+  // ~5-8KB working buffer). By the time wifiObserverLoop's
+  // webServerStart tick runs, we'd be down to ~5KB largest contig
+  // and mbedtls would fail.
+  //
+  // A previous attempt to put this BEFORE BLE init had even more heap
+  // (90KB largest) but crashed BLE init -- mechanism unclear, possibly
+  // mbedtls HW/RNG state interaction. Post-BLE-init avoids that.
+  //
+  // After this fix landed, a separate LoadStoreError crash surfaced in
+  // MqttBrokerPool init (Strycher/LoRa#279). That is its own bug to
+  // investigate, NOT a reason to revert this cert-gen fix.
+  {
+    const char* cert_unused = nullptr;
+    const char* key_unused  = nullptr;
+    CW_PHASE("ESP32:before webCertStoreBegin (post-BLE warmup)");
+    bool ok = crosswire::webCertStoreBegin(
+        crosswire::TlsKeyType::EcP256, &cert_unused, &key_unused);
+    if (ok) {
+      CW_PHASE("ESP32:post webCertStoreBegin (cached)");
+    } else {
+      CW_PHASE("ESP32:post webCertStoreBegin (FAILED; loop will retry)");
+    }
+  }
+#endif
 #elif defined(SERIAL_RX)
   companion_serial.setPins(SERIAL_RX, SERIAL_TX);
   companion_serial.begin(115200);

@@ -424,16 +424,33 @@ uint32_t bootCounterValue() {
 // Periodically (called from heartbeatTick) save current uptime to NVS
 // so the next boot can report "previous boot lasted Ns" - critical for
 // distinguishing "long stable run then reset" from "fast crash cycle".
+//
+// DISABLED 2026-05-27 (Strycher/LoRa#279 — second-order finding):
+// The first Preferences::begin("cw_boot", false) call from POST-setup
+// code asserts in nvs::Lock::Lock() with:
+//   "assert failed: spinlock_acquire spinlock.h:122
+//    (result == core_id || result == SPINLOCK_FREE)"
+// Backtrace (decoded): heartbeatTick → Preferences::begin → nvs_open
+//   → nvs_open_from_partition → nvs::Lock::Lock → xQueueSemaphoreTake
+//   → vPortEnterCritical → spinlock_acquire ASSERT.
+//
+// Confirmed independent of: PSRAM (reproduces without BOARD_HAS_PSRAM),
+// stack size (reproduces with 16KB loopTask stack, stack_hw=408 well
+// under the headroom), and prior NVS state (reproduces on freshly-
+// erased NVS partition too). Other NVS writes during setup() succeed
+// (MyMesh identity, SystemChannelCli slot 40, broker config). Only
+// the FIRST Preferences::begin from POST-setup code triggers it.
+//
+// This is an arduino-esp32 v2.x / ESP-IDF v4.4 NVS subsystem issue
+// out of scope for app-level fix. Diagnostic feature disabled until
+// the underlying ESP-IDF Lock/spinlock state issue is understood.
+// In-memory boot counter (s_boot_state.counter via RTC_NOINIT) is
+// preserved across resets in the same power cycle so loss is minimal.
 static uint32_t s_last_uptime_save_ms = 0;
 static void maybeSaveUptime(uint32_t now_ms) {
-    // Save every 5 seconds (matches stats cadence; balances flash wear)
-    if (now_ms - s_last_uptime_save_ms < 5000) return;
-    s_last_uptime_save_ms = now_ms;
-    ::Preferences p;
-    if (p.begin("cw_boot", /*readOnly=*/false)) {
-        p.putUInt("last_up_s", now_ms / 1000);
-        p.end();
-    }
+    (void)now_ms;
+    (void)s_last_uptime_save_ms;
+    return;
 }
 
 void subloopMark(uint8_t which) {

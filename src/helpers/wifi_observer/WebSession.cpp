@@ -6,12 +6,27 @@
 #ifdef ARDUINO
   #include <Arduino.h>
   #include <esp_random.h>
+  #include <esp_attr.h>   // EXT_RAM_BSS_ATTR (no-op without PSRAM)
   // See WebAuth.cpp -- mbedtls 2.x ships constant_time.h without
   // extern "C" guards; force C linkage so the C++-mangled reference
   // matches libmbedcrypto's C symbol.
   extern "C" {
   #include <mbedtls/constant_time.h>
   }
+#endif
+
+// Plan 3 v2 heap-budget fix (Strycher/LoRa#276): on boards with PSRAM
+// (XIAO S3), place the session + throttle tables in PSRAM via
+// EXT_RAM_ATTR. Internal DRAM is precious and DMA-required for
+// mbedtls/BLE/WiFi; session metadata has no DMA requirement so it
+// goes external. On boards without PSRAM (Heltec V3/V4 = ESP32-S3FN8,
+// flash-only), the attribute is a no-op and the tables stay in BSS.
+// EXT_RAM_ATTR is the arduino-esp32 v2.x / IDF v4.4 macro; the newer
+// IDF v5.x EXT_RAM_BSS_ATTR isn't available on this toolchain.
+#if defined(ARDUINO) && defined(BOARD_HAS_PSRAM)
+  #define CW_PSRAM_BSS EXT_RAM_ATTR
+#else
+  #define CW_PSRAM_BSS
 #endif
 
 namespace crosswire {
@@ -21,7 +36,7 @@ namespace crosswire {
 // ---------------------------------------------------------------------------
 // Session table
 // ---------------------------------------------------------------------------
-static WebSession s_sessions[CROSSWIRE_MAX_WEB_SESSIONS];
+static CW_PSRAM_BSS WebSession s_sessions[CROSSWIRE_MAX_WEB_SESSIONS];
 
 // ---------------------------------------------------------------------------
 // Throttle table
@@ -39,7 +54,7 @@ struct ThrottleEntry {
 };
 
 static constexpr size_t kThrottleSlots = 16;
-static ThrottleEntry s_throttle[kThrottleSlots];
+static CW_PSRAM_BSS ThrottleEntry s_throttle[kThrottleSlots];
 
 // ---------------------------------------------------------------------------
 // Helpers
