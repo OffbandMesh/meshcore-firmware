@@ -100,3 +100,15 @@
 #ifndef CROSSWIRE_VERSION
   #define CROSSWIRE_VERSION  "host-untagged"
 #endif
+
+// ---------------------------------------------------------------------------
+// Crosswire observer release line (per VERSIONING.md Plan-cycle tag)
+// ---------------------------------------------------------------------------
+// CROSSWIRE_OBSERVER_VERSION marks the WiFi+BLE Observer feature's plan
+// cycle (Plan 1 / Plan 2 / Plan 3 / Plan 4) independent of the
+// git-describe-derived CROSSWIRE_VERSION. Logged at boot + surfaced on
+// the web UI footer + /api/status so we can correlate field reports
+// with the integration milestone, not just the fork tag.
+#ifndef CROSSWIRE_OBSERVER_VERSION
+  #define CROSSWIRE_OBSERVER_VERSION  "0.3.0-plan3"
+#endif

@@ -12,7 +12,14 @@
   #include <mbedtls/md.h>
   #include <mbedtls/pkcs5.h>
   #include <mbedtls/base64.h>
+  // arduino-esp32 v2.x ships mbedtls 2.x's <mbedtls/constant_time.h>
+  // WITHOUT extern "C" guards. C++ TUs therefore mangle the symbol and
+  // fail to link against the C-linkage definition in libmbedcrypto.a.
+  // Force C linkage explicitly until we move to an mbedtls 3.x SDK
+  // where the upstream header carries its own guards.
+  extern "C" {
   #include <mbedtls/constant_time.h>
+  }
 #endif
 
 namespace crosswire {

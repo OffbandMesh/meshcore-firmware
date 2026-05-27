@@ -9,6 +9,10 @@
 #include "WifiBootstrap.h"
 #include "CrashLog.h"
 #include "ObserverPipeline.h"
+#include "WebServer.h"
+#include "WebSession.h"
+#include "WebAuth.h"
+#include "WebApi.h"
 
 #ifdef ARDUINO
   #include <Arduino.h>
@@ -84,6 +88,19 @@ void wifiObserverSetMeshContext(
     s_model            = (model            != nullptr) ? model            : "";
     s_context_set      = true;
     crashLogf("[WifiObserver] mesh context set; node=%s", s_node_name);
+
+    // Plan 3 Task 11 (Strycher/LoRa#272): hand the borrowed self-pubkey
+    // bytes to the web auth + REST surfaces. Pointer lifetime = mesh
+    // identity lifetime = process lifetime (self_id is a global member
+    // of MyMesh). Done HERE rather than from main.cpp so the wiring is
+    // co-located with the existing wifiObserverPubKey() accessor that
+    // borrows the exact same bytes.
+    //   * webAuthInit         -- enables derived-initial-password path
+    //                            (first-6-hex of pubkey + BLE PIN).
+    //   * webApiInitIdentityPubkey -- /api/ble returns the real pubkey
+    //                            hex; without this, the field is empty.
+    webAuthInit(identity.pub_key);
+    WebApi::webApiInitIdentityPubkey(identity.pub_key);
 }
 #endif
 
@@ -112,6 +129,28 @@ void wifiObserverLoop() {
     // Drive pool every iteration once it's started.
     if (s_pool_started) {
         s_pool.loop(now);
+    }
+
+    // Plan 3 Task 11 (Strycher/LoRa#272): web layer lifecycle.
+    //
+    // Ordering: pool BEFORE server. /api/brokers and /api/status read
+    // pool state; bringing the server up before the pool would briefly
+    // serve empty / "not configured" responses on the first STA-up tick.
+    //
+    // webServerStart is idempotent (re-entry tears down and re-loads
+    // cert; used by Task 8's /api/regenerate_cert handler). Guarding on
+    // webServerIsRunning here keeps the routine-loop cost at one
+    // function-call test per tick.
+    if (s_pool_started && !webServerIsRunning()) {
+        webServerStart();   // loads cert, opens :443
+    }
+    if (webServerIsRunning()) {
+        webSessionTick(now);     // sweep idle sessions / age throttle counters
+        webServerLoopTick();     // drain deferred reboot + wifi-reconnect
+                                 // scheduled by /api/wifi /api/factory_reset
+                                 // /api/regenerate_cert (Task 8). REQUIRED:
+                                 // those routes return 200 "scheduled" and
+                                 // depend on this tick to actually fire.
     }
 
     // Periodic heap/stack snapshot every 5 seconds.

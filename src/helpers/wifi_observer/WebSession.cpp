@@ -6,7 +6,12 @@
 #ifdef ARDUINO
   #include <Arduino.h>
   #include <esp_random.h>
+  // See WebAuth.cpp -- mbedtls 2.x ships constant_time.h without
+  // extern "C" guards; force C linkage so the C++-mangled reference
+  // matches libmbedcrypto's C symbol.
+  extern "C" {
   #include <mbedtls/constant_time.h>
+  }
 #endif
 
 namespace crosswire {

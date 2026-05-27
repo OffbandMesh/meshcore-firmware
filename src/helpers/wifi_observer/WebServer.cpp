@@ -16,7 +16,12 @@
   #include <esp_https_server.h>
   #include <esp_system.h>          // esp_restart()
   #include <lwip/sockets.h>        // getpeername + sockaddr_in
+  // See WebAuth.cpp -- mbedtls 2.x ships constant_time.h without
+  // extern "C" guards; force C linkage so the C++-mangled reference
+  // matches libmbedcrypto's C symbol.
+  extern "C" {
   #include <mbedtls/constant_time.h>
+  }
 
   #include "WebCertStore.h"
   #include "WebSession.h"
