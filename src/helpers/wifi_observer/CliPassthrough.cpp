@@ -19,8 +19,17 @@
 
 namespace crosswire {
 
-// Forward declarations of the two symbols this module dispatches to.
-// Definitions live in ObserverCli.cpp + WifiObserver.cpp respectively.
+// Forward declarations. These MUST stay byte-identical to:
+//   - dispatchObserverCli: declared in ObserverCli.h
+//   - wifiObserverPool: declared in WifiObserver.h
+//   - MqttBrokerPool: defined in MqttBrokerPool.h
+//
+// Forward-declared instead of #included to keep the host test
+// (scripts/test_observer_cli_allowlist.py) able to compile this
+// file standalone with linkable stubs. If those signatures change
+// upstream, update them here too -- the firmware link will catch
+// mismatches but the host test will silently link against its
+// own stubs.
 class MqttBrokerPool;  // opaque here; reference passed through.
 bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
                          MqttBrokerPool& pool);
@@ -71,24 +80,32 @@ bool cliPassthroughIsAllowed(const char* line) {
     return true;
 }
 
-CliResult cliPassthroughExecute(const char* line, char* out, size_t out_len) {
-    if (out == nullptr || out_len == 0) {
+CliResult cliPassthroughExecute(const char* line, char* out_response,
+                                size_t out_len) {
+    if (out_response == nullptr || out_len == 0) {
         // Caller bug. Nothing safe to write into; just classify.
         return cliPassthroughIsAllowed(line) ? CliResult::Unknown
                                              : CliResult::Denied;
     }
-    if (!cliPassthroughIsAllowed(line)) {
-        snprintf(out, out_len, "denied: not in allowlist");
+    // Trim ONCE at entry, then thread the trimmed pointer through both
+    // the allowlist gate and dispatch. cliPassthroughIsAllowed re-trims
+    // internally (idempotent), but dispatchObserverCli does NOT trim
+    // leading whitespace -- passing the un-trimmed pointer caused
+    // whitespace-prefixed-but-otherwise-valid commands to fall through
+    // to CliResult::Unknown despite passing the gate.
+    const char* trimmed = (line != nullptr) ? trimLeading(line) : nullptr;
+    if (!cliPassthroughIsAllowed(trimmed)) {
+        snprintf(out_response, out_len, "denied: not in allowlist");
         return CliResult::Denied;
     }
     // Try ObserverCli (Plan 2) first -- it handles mqtt.* keys + web.*
     // (Task 3 addition). Returns true if the command was recognized.
-    if (dispatchObserverCli(line, out, out_len, wifiObserverPool())) {
+    if (dispatchObserverCli(trimmed, out_response, out_len, wifiObserverPool())) {
         return CliResult::Ok;
     }
     // Fall through to wider CommonCLI dispatch deferred until Plan 3
     // Task 11 wire-up. For now, unmatched -> Unknown.
-    snprintf(out, out_len, "unknown: %s", line);
+    snprintf(out_response, out_len, "unknown: %s", trimmed);
     return CliResult::Unknown;
 }
 
