@@ -5,7 +5,7 @@
 // Companion variant: initial password is DERIVED from
 //   <6-digit BLE pairing PIN> + <first 6 hex chars of identity pubkey>
 // accepted in EITHER order (per spec). The first successful login
-// immediately forces a password change; from then on only the bcrypt
+// immediately forces a password change; from then on only the PBKDF2
 // hash of the new password is accepted.
 //
 // (Future repeater variant: reuses LoRa admin password; same WebAuth
