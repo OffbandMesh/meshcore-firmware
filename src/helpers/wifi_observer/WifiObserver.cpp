@@ -137,4 +137,16 @@ MqttBrokerPool& wifiObserverPool() {
     return s_pool;
 }
 
+// ---------------------------------------------------------------------------
+// Borrowed pubkey accessor (Plan 3 Task 10, Strycher/LoRa#272).
+// Returns nullptr until wifiObserverSetMeshContext has been called.
+// ---------------------------------------------------------------------------
+const uint8_t* wifiObserverPubKey() {
+#ifdef ARDUINO
+    return (s_identity != nullptr) ? s_identity->pub_key : nullptr;
+#else
+    return nullptr;
+#endif
+}
+
 }  // namespace crosswire

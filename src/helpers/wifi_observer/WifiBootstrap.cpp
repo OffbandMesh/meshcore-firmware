@@ -2,6 +2,14 @@
 #include "WifiBootstrap.h"
 #include "WifiObserverConfig.h"
 
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+// Plan 3 Task 10 (Strycher/LoRa#272): system channel for first-
+// contact WiFi setup (welcome message on no-creds, IP + mDNS
+// hostname on STA connect). Only compiled in for BLE-companion
+// builds where the system channel exists.
+#include "SystemChannelCli.h"
+#endif
+
 #include <cstdio>
 #include <cstring>
 
@@ -71,9 +79,23 @@ void WifiBootstrap::begin() {
     prefs.end();
 
     if (ssid.isEmpty()) {
-        Serial.println("[WifiBootstrap] No saved WiFi creds; staying in "
-                       "AP mode (Plan 3 will add setup form).");
-        state_ = WifiBootstrapState::ApMode;
+        Serial.println("[WifiBootstrap] No saved WiFi creds; awaiting "
+                       "system-channel CLI commands "
+                       "(set wifi.ssid + set wifi.pwd).");
+        state_ = WifiBootstrapState::ApMode;  // semantic kept; no softAP started
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+        // Plan 3 Task 10 replaces the originally-planned softAP +
+        // captive form path. The welcome message is enqueued and
+        // posted as soon as MyMesh::loop() runs systemChannelDrain,
+        // which happens shortly after begin() returns. No softAP,
+        // no captive portal, no Wi-Fi switching on the user's
+        // phone -- they type commands in the channel that's
+        // already paired with their MeshCore app.
+        crosswire::systemChannelPostStatus(
+            "Welcome! To set WiFi: send 'set wifi.ssid YourSSID' "
+            "then 'set wifi.pwd YourPSK' as messages in this channel. "
+            "Use 'get wifi.status' to check.");
+#endif
     } else {
         Serial.printf("[WifiBootstrap] Saved WiFi SSID=%s; attempting STA.\n",
                       ssid.c_str());
@@ -103,6 +125,19 @@ void WifiBootstrap::loop() {
                 state_ = WifiBootstrapState::StaConnected;
                 Serial.printf("[WifiBootstrap] STA connected; IP=%s\n",
                               WiFi.localIP().toString().c_str());
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+                // Plan 3 Task 10 (Strycher/LoRa#272): post the IP +
+                // mDNS hostname so the user immediately sees how to
+                // reach the web UI without having to dig through
+                // router admin. mDNS hostname format mirrors the
+                // system-channel name derivation: "meshcore-<8hex>"
+                // where the 8hex comes from the first 4 bytes of
+                // the identity pubkey. The rate limiter in
+                // systemChannelPostStatus protects against this
+                // firing on every loop iteration; the transition
+                // happens only on actual STA up.
+                postStaConnectedStatus();
+#endif
             } else if (millis() - last_attempt_ms_ > 10000) {
                 sta_retry_count_++;
                 Serial.printf("[WifiBootstrap] STA retry #%u\n",
@@ -127,6 +162,41 @@ void WifiBootstrap::loop() {
 bool WifiBootstrap::isStaConnected() const {
     return state_ == WifiBootstrapState::StaConnected;
 }
+
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+// Borrowed from WifiObserver -- the cached identity pubkey, set
+// by wifiObserverSetMeshContext (called from main.cpp after
+// the_mesh.begin). May be nullptr if STA happens to come up
+// before main.cpp finishes wiring; in that case we post an
+// IP-only message (no mDNS hint) rather than skip the post
+// entirely. Forward-declared here to avoid pulling all of
+// WifiObserver.h into the bootstrap surface.
+extern const uint8_t* wifiObserverPubKey();
+
+void WifiBootstrap::postStaConnectedStatus() {
+    const uint8_t* pk = wifiObserverPubKey();
+    if (pk != nullptr) {
+        // mDNS hostname format: "meshcore-XXXXXXXX" where the 8
+        // hex chars are the first 4 bytes of the identity pubkey.
+        // Consistent with the system-channel name suffix so the
+        // user sees the same identifier in both places.
+        char hex[9];
+        static const char H[] = "0123456789abcdef";
+        for (int i = 0; i < 4; ++i) {
+            hex[i * 2]     = H[(pk[i] >> 4) & 0x0F];
+            hex[i * 2 + 1] = H[pk[i] & 0x0F];
+        }
+        hex[8] = '\0';
+        crosswire::systemChannelPostStatus(
+            "WiFi connected. IP %s -- https://meshcore-%s.local/",
+            WiFi.localIP().toString().c_str(), hex);
+    } else {
+        crosswire::systemChannelPostStatus(
+            "WiFi connected. IP %s",
+            WiFi.localIP().toString().c_str());
+    }
+}
+#endif  // CROSSWIRE_OBSERVER_BLE_COMPANION
 
 WifiBootstrap& wifiBootstrap() {
     static WifiBootstrap inst;
