@@ -175,11 +175,12 @@ static bool loadStoredHash(unsigned int* iters_out,
         return false;
     }
 
-    // Walk the $-separated fields. We have 4 leading $ delimiters
-    // (empty, "pbkdf2-sha256", "<iters>", "<b64salt>", "<b64hash>").
+    // Walk the $-separated fields. The format has 4 total '$' separators:
+    // one leading '$' (start of kStoredPrefix) plus three between the four
+    // fields "pbkdf2-sha256", "<iters>", "<b64salt>", "<b64hash>". We anchor
+    // p1 at the leading '$' (index 0) and then find the three subsequent ones.
     const char* s = stored.c_str();
-    // Find positions of the 4 '$' after the leading one.
-    const char* p1 = strchr(s + 1, '$');             // before "pbkdf2-sha256"
+    const char* p1 = strchr(s, '$');                 // leading $ (kStoredPrefix start)
     if (!p1) return false;
     const char* p2 = strchr(p1 + 1, '$');            // before iters
     if (!p2) return false;
