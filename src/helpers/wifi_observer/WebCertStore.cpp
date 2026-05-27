@@ -164,23 +164,39 @@ cleanup:
 bool webCertStoreBegin(TlsKeyType key_type,
                        const char** cert_pem_out,
                        const char** key_pem_out) {
-    if (!LittleFS.begin(/*formatOnFail=*/true)) {
-        Serial.println("[WebCertStore] LittleFS mount failed.");
-        return false;
-    }
-
-    // Try to load existing.
-    s_cert_pem = loadPem(kCertPath);
-    s_key_pem  = loadPem(kKeyPath);
+    // Fast-path: PEMs already cached from a prior call this boot.
+    // Avoids a second cert generation if main.cpp pre-warmed the cache
+    // early in setup() (when largest contiguous heap is ~90KB) and
+    // WebServer.cpp later calls us from the wifiObserverLoop tick (when
+    // heap is fragmented down to ~5KB). Strycher/LoRa#276.
     if (s_cert_pem && s_key_pem) {
-        Serial.println("[WebCertStore] Loaded persisted cert+key.");
         *cert_pem_out = s_cert_pem;
         *key_pem_out  = s_key_pem;
         return true;
     }
-    // One side present but not the other -> drop the stray and regenerate.
-    if (s_cert_pem) { free(s_cert_pem); s_cert_pem = nullptr; }
-    if (s_key_pem)  { free(s_key_pem);  s_key_pem  = nullptr; }
+
+    // Track mount status -- savePem/loadPem on an unmounted LittleFS
+    // crashes (LoadProhibited inside the Arduino LittleFS wrapper).
+    bool fs_mounted = LittleFS.begin(/*formatOnFail=*/true);
+    if (!fs_mounted) {
+        Serial.println("[WebCertStore] LittleFS mount failed; in-RAM cert only this boot.");
+        // Don't return false -- generate an in-RAM cert anyway so the
+        // web UI works for this boot. Loss: cert regenerates on every
+        // boot. Acceptable degradation if the FS is permanently corrupt.
+    } else {
+        // Only touch the filesystem if it mounted successfully.
+        s_cert_pem = loadPem(kCertPath);
+        s_key_pem  = loadPem(kKeyPath);
+        if (s_cert_pem && s_key_pem) {
+            Serial.println("[WebCertStore] Loaded persisted cert+key.");
+            *cert_pem_out = s_cert_pem;
+            *key_pem_out  = s_key_pem;
+            return true;
+        }
+        // One side present but not the other -> drop stray, regenerate.
+        if (s_cert_pem) { free(s_cert_pem); s_cert_pem = nullptr; }
+        if (s_key_pem)  { free(s_key_pem);  s_key_pem  = nullptr; }
+    }
 
     // Generate fresh.
     Serial.printf("[WebCertStore] Generating self-signed cert (key_type=%u)...\n",
@@ -191,8 +207,15 @@ bool webCertStoreBegin(TlsKeyType key_type,
         return false;
     }
     Serial.printf("[WebCertStore] generated in %u ms.\n", (unsigned)(millis() - t0));
-    if (!savePem(kCertPath, s_cert_pem)) Serial.println("[WebCertStore] WARN: cert persist failed");
-    if (!savePem(kKeyPath,  s_key_pem))  Serial.println("[WebCertStore] WARN: key persist failed");
+
+    // Best-effort persist, ONLY if FS mounted. Calling savePem on an
+    // unmounted FS triggers LoadProhibited inside the Arduino LittleFS
+    // wrapper -- crashed the chip on xiao-bench-1 2026-05-27.
+    if (fs_mounted) {
+        if (!savePem(kCertPath, s_cert_pem)) Serial.println("[WebCertStore] WARN: cert persist failed");
+        if (!savePem(kKeyPath,  s_key_pem))  Serial.println("[WebCertStore] WARN: key persist failed");
+    }
+
     *cert_pem_out = s_cert_pem;
     *key_pem_out  = s_key_pem;
     return true;
