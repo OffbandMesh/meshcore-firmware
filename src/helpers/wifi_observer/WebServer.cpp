@@ -50,6 +50,24 @@ static httpd_handle_t s_httpd      = nullptr;
 static const char*    s_cert_pem   = nullptr;
 static const char*    s_key_pem    = nullptr;
 
+// Start-failure backoff state. Without this, a permanent cert-gen failure
+// (e.g., heap fragmentation -> mbedtls esp-sha buffer alloc fails) causes
+// the wifiObserverLoop's `if (!webServerIsRunning()) webServerStart();`
+// gate to retry every loop tick (~4-5 Hz), which:
+//   1. spams Serial with the same failure messages,
+//   2. fragments heap further on every attempt, and
+//   3. starves the BLE stack of allocator headroom -> BLE goes dead.
+// Discovered post-deploy on xiao-bench-1 2026-05-27 (Strycher/LoRa#XXX):
+// after a manual reboot the system stayed in BLE-dead state for 7+ min
+// of retry loop before user could investigate. Fix: per-failure
+// exponential backoff (30s -> 60s -> 120s -> ... cap 5min); cleared on
+// successful start OR explicit restart (regenerate-cert path).
+static bool     s_start_in_backoff      = false;
+static uint32_t s_start_next_retry_ms   = 0;     // millis() deadline
+static uint32_t s_start_retry_count     = 0;     // attempts since last success
+static const uint32_t kStartMinRetryMs  = 30000;   // 30s after first failure
+static const uint32_t kStartMaxRetryMs  = 300000;  // cap at 5 min
+
 // ---------------------------------------------------------------------------
 // Cookie + header parsing helpers
 // ---------------------------------------------------------------------------
@@ -526,11 +544,42 @@ void webServerStop() {
 
 bool webServerStart() {
     // Idempotency: a re-start (e.g., post-cert-regen) drops the running
-    // instance first. esp_https_server has no live cert swap.
+    // instance first. esp_https_server has no live cert swap. A restart
+    // also clears the start-failure backoff -- the caller has explicitly
+    // signaled "try again now" by going through the regenerate path.
     if (s_httpd) {
         Serial.println("[WebServer] restart: stopping existing instance");
         webServerStop();
+        s_start_in_backoff    = false;
+        s_start_retry_count   = 0;
+        s_start_next_retry_ms = 0;
     }
+
+    // Backoff gate: if a prior attempt failed and the retry deadline
+    // hasn't elapsed, silently bail. This prevents the wifiObserverLoop
+    // gate from chewing through heap with per-tick retries when cert gen
+    // is permanently broken. See module-static-state comment above for
+    // the failure cascade (BLE starvation) this prevents.
+    uint32_t now_ms = millis();
+    if (s_start_in_backoff && (int32_t)(now_ms - s_start_next_retry_ms) < 0) {
+        return false;
+    }
+
+    auto schedule_backoff = [&](const char* reason) {
+        // Exponential backoff with cap. retry_count is the FAILURE count
+        // before this attempt; first failure -> 30s, second -> 60s, etc.
+        uint32_t shift = s_start_retry_count > 4 ? 4 : s_start_retry_count;
+        uint32_t delay_ms = kStartMinRetryMs << shift;
+        if (delay_ms > kStartMaxRetryMs) delay_ms = kStartMaxRetryMs;
+        s_start_next_retry_ms = now_ms + delay_ms;
+        s_start_retry_count++;
+        s_start_in_backoff    = true;
+        Serial.printf("[WebServer] start failed (%s); attempt %u; "
+                      "next retry in %u ms\n",
+                      reason,
+                      (unsigned)s_start_retry_count,
+                      (unsigned)delay_ms);
+    };
 
     // Load cert+key. WebCertStore guarantees the returned pointers stay
     // valid until shutdown / regenerate is called -- a future cert swap
@@ -541,11 +590,11 @@ bool webServerStart() {
     // and small cert (~250B). Modern browsers accept it; corporate-hardening
     // iteration may add an option to choose RSA-2048.
     if (!webCertStoreBegin(TlsKeyType::EcP256, &s_cert_pem, &s_key_pem)) {
-        Serial.println("[WebServer] cert load/gen FAILED; aborting start");
+        schedule_backoff("cert load/gen");
         return false;
     }
     if (!s_cert_pem || !s_key_pem) {
-        Serial.println("[WebServer] cert store returned null pointers; aborting");
+        schedule_backoff("cert store returned null");
         return false;
     }
 
@@ -586,6 +635,7 @@ bool webServerStart() {
     if (rc != ESP_OK || !s_httpd) {
         Serial.printf("[WebServer] httpd_ssl_start failed: err=%d\n", (int)rc);
         s_httpd = nullptr;
+        schedule_backoff("httpd_ssl_start");
         return false;
     }
 
@@ -593,8 +643,14 @@ bool webServerStart() {
         Serial.println("[WebServer] route registration FAILED; stopping");
         httpd_ssl_stop(s_httpd);
         s_httpd = nullptr;
+        schedule_backoff("registerRoutes");
         return false;
     }
+
+    // Success: clear the backoff latch so future restarts are clean.
+    s_start_in_backoff    = false;
+    s_start_retry_count   = 0;
+    s_start_next_retry_ms = 0;
 
     Serial.println("[WebServer] listening on 0.0.0.0:443 (HTTPS)");
     return true;
