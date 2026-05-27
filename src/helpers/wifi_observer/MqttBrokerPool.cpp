@@ -248,6 +248,49 @@ bool MqttBrokerPool::reloadSlot(uint8_t slot) {
 }
 
 // ---------------------------------------------------------------------------
+// buildWebStatusJson -- /api/status JSON, reuses the MQTT buildStatusJson
+// ---------------------------------------------------------------------------
+// Picks the first configured broker (lowest slot) to source the ctx so the
+// per-broker iata_override / topic_prefix surfaces in the web payload the
+// same way it would in the MQTT publish. If NO broker is configured we
+// synthesize a ctx from the pool's cached strings + global_iata, so the
+// endpoint still serves something useful on a freshly-bootstrapped device
+// (only fields like topic_prefix that the broker would normally override
+// fall back to the default kDefaultTopicPrefix).
+//
+// Returns -1 if no snapshot has been built yet (first-boot case before
+// the first publishStatusIfDue tick). Caller decides 503 vs wait.
+int MqttBrokerPool::buildWebStatusJson(char* buf, size_t buf_size) const {
+    if (!have_snapshot_) return -1;
+
+    MqttPayloadCtx ctx;
+    bool filled_from_broker = false;
+    for (uint8_t slot = 0; slot < CROSSWIRE_MAX_BROKERS; ++slot) {
+        const MqttBroker& b = brokers_[slot];
+        if (!b.isConfigured()) continue;
+        b.fillPayloadCtx(ctx, global_iata_, device_id_, node_name_,
+                         client_version_, firmware_version_, model_);
+        filled_from_broker = true;
+        break;
+    }
+    if (!filled_from_broker) {
+        // Synthesize: no broker configured yet (factory-default device
+        // pre-bootstrap). Mirror MqttBroker::fillPayloadCtx's fallback
+        // defaults so the web payload looks identical to what the first
+        // broker registered later would produce.
+        ctx.iata             = global_iata_;
+        ctx.device_id        = device_id_;
+        ctx.node_name        = node_name_;
+        ctx.topic_prefix     = kDefaultTopicPrefix;
+        ctx.client_version   = client_version_;
+        ctx.firmware_version = firmware_version_;
+        ctx.model            = model_;
+    }
+
+    return buildStatusJson(buf, buf_size, last_status_snap_, ctx, /*online=*/true);
+}
+
+// ---------------------------------------------------------------------------
 // Counters
 // ---------------------------------------------------------------------------
 uint8_t MqttBrokerPool::configuredCount() const {

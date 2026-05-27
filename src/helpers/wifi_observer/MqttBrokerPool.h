@@ -75,6 +75,16 @@ public:
     // never begin()'d. Returns true if reload succeeded (or slot is now disabled).
     bool reloadSlot(uint8_t slot);
 
+    // Build a device-wide status JSON for the HTTPS /api/status endpoint.
+    // Uses the cached snapshot + the first configured broker's payload ctx
+    // (or a synthesized ctx if no broker is configured). Returns bytes
+    // written; -1 on overflow OR if no snapshot has been published yet
+    // (the caller decides whether to send "not ready" or wait).
+    //
+    // Output format matches Plan 2's MQTT /status payload byte-for-byte
+    // (built by buildStatusJson) so the two paths cannot drift.
+    int buildWebStatusJson(char* buf, size_t buf_size) const;
+
     // For status / CLI reporting.
     uint8_t configuredCount() const;
     uint8_t enabledCount()    const;

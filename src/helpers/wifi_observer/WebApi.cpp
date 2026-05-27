@@ -112,6 +112,9 @@ esp_err_t send500(httpd_req_t* req, const char* code = "internal_error") {
 esp_err_t send501(httpd_req_t* req, const char* code) {
     return sendError(req, "501 Not Implemented", code);
 }
+esp_err_t send503(httpd_req_t* req, const char* code) {
+    return sendError(req, "503 Service Unavailable", code);
+}
 
 // 423-gate: applied to every authenticated handler EXCEPT
 // /api/change_password and /api/logout. Returns true if the caller
@@ -554,74 +557,30 @@ esp_err_t handleChangePassword(httpd_req_t* req) {
 // ---------------------------------------------------------------------------
 // GET /api/status
 // ---------------------------------------------------------------------------
-// Returns the same JSON the broker pool publishes to /status, plus a
-// "brokers":[...] block summarizing the slot state for the UI.
+// Reuses MqttBrokerPool::buildWebStatusJson which calls the same
+// buildStatusJson the MQTT /status publish path uses. Output is therefore
+// byte-equivalent to what the broker pool publishes to its /status topic,
+// satisfying the Plan 3 spec ("/api/status: 200 JSON via the same
+// StatusPayload::buildStatusJson already wired in Plan 2 -- reused
+// unchanged"). The golden-test lock documented in MqttPayload.h now
+// extends to the HTTPS GET path: the two cannot drift.
 //
-// We don't have direct access to the per-broker MqttPayloadCtx without
-// a configured + Up broker; for the UI, we synthesize a ctx from the
-// pool's cached strings via a shim path. The pool already exposes
-// configuredCount / enabledCount / upCount but NOT the cached strings.
-// Adding that surface to MqttBrokerPool would be Plan-3 scope creep;
-// instead we hand-build a minimal status using the pieces that ARE
-// accessible (slot states + WiFi info + observer build version).
+// If no snapshot has been built yet (first boot, before the pool's first
+// publishStatusIfDue tick), returns 503 so the SPA can retry/poll.
 esp_err_t handleGetStatus(httpd_req_t* req) {
     WebSession* sess = webServerCurrentSession(req);
     if (!sess) return send401(req);
     if (!requirePwOkay(req, sess)) return ESP_OK;
 
-    MqttBrokerPool& pool = wifiObserverPool();
-
-    // Build a compact JSON envelope. Keep field names stable -- the
-    // SPA (Task 9) parses these.
+    // buildStatusJson realistic payload is ~600 bytes; 1 KB headroom.
     char buf[1024];
-    char ip_str[24];
-    snprintf(ip_str, sizeof(ip_str), "%s", WiFi.localIP().toString().c_str());
-
-    // Brokers array: slot, configured, enabled, up, retry_count, error_class.
-    char brokers_buf[640];
-    int bpos = 0;
-    bpos += snprintf(brokers_buf + bpos, sizeof(brokers_buf) - bpos, "[");
-    for (uint8_t i = 0; i < CROSSWIRE_MAX_BROKERS; ++i) {
-        const MqttBroker& b = pool.broker(i);
-        if (bpos > 1) {
-            bpos += snprintf(brokers_buf + bpos, sizeof(brokers_buf) - bpos, ",");
-        }
-        bpos += snprintf(brokers_buf + bpos, sizeof(brokers_buf) - bpos,
-                         "{\"slot\":%u,\"configured\":%s,\"enabled\":%s,"
-                         "\"state\":%u,\"retry\":%u,\"err_class\":%u}",
-                         (unsigned)i,
-                         b.isConfigured() ? "true" : "false",
-                         (b.isConfigured() && b.config().enabled) ? "true" : "false",
-                         (unsigned)b.runtime().state,
-                         (unsigned)b.runtime().retry_count,
-                         (unsigned)b.runtime().last_error_class);
-        if ((size_t)bpos >= sizeof(brokers_buf)) break;
+    int n = wifiObserverPool().buildWebStatusJson(buf, sizeof(buf));
+    if (n < 0) {
+        // -1 means either overflow OR no snapshot yet. Snapshot-not-yet is
+        // by far the more common case (overflow on a 1KB buffer for a
+        // ~600B payload would indicate a bug, not a runtime condition).
+        return send503(req, "status_not_ready");
     }
-    if ((size_t)bpos < sizeof(brokers_buf)) {
-        bpos += snprintf(brokers_buf + bpos, sizeof(brokers_buf) - bpos, "]");
-    }
-
-    int n = snprintf(buf, sizeof(buf),
-                     "{"
-                     "\"version\":\"%s\","
-                     "\"wifi\":{\"connected\":%s,\"ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d},"
-                     "\"brokers_configured\":%u,"
-                     "\"brokers_enabled\":%u,"
-                     "\"brokers_up\":%u,"
-                     "\"brokers\":%s,"
-                     "\"uptime_ms\":%lu"
-                     "}\n",
-                     CROSSWIRE_VERSION,
-                     (WiFi.status() == WL_CONNECTED) ? "true" : "false",
-                     WiFi.SSID().c_str(),
-                     ip_str,
-                     WiFi.RSSI(),
-                     pool.configuredCount(),
-                     pool.enabledCount(),
-                     pool.upCount(),
-                     brokers_buf,
-                     (unsigned long)millis());
-    if (n < 0 || (size_t)n >= sizeof(buf)) return send500(req, "status_truncated");
     return sendJsonStatus(req, "200 OK", buf, (size_t)n);
 }
 
@@ -814,6 +773,39 @@ esp_err_t handleSetBroker(httpd_req_t* req) {
     // Cross-field validation.
     if (cfg.enabled && cfg.url[0] == '\0') {
         return send400(req, "enabled_requires_url");
+    }
+
+    // auth_type vs credentials cross-validation. Runs against the MERGED
+    // cfg (post "***" keep-existing replacement), so a UI that resends
+    //   {auth_type: 1, username: "u", password: "***"}
+    // validates clean as long as the previously-stored password was non-
+    // empty. Returns a structured 400 naming the missing credential
+    // class so the SPA can surface a specific error.
+    const char* missing_required = nullptr;
+    switch (cfg.auth_type) {
+        case BrokerAuthType::None:
+            // No credentials required; do not enforce anything.
+            break;
+        case BrokerAuthType::Basic:
+            if (cfg.username[0] == '\0' || cfg.password[0] == '\0') {
+                missing_required = "basic_username_password";
+            }
+            break;
+        case BrokerAuthType::Jwt:
+            if (cfg.jwt_token[0] == '\0') {
+                missing_required = "jwt_token";
+            }
+            break;
+    }
+    if (missing_required != nullptr) {
+        // Two-key envelope; same shape family as the simple
+        // {"error":"<code>"} the other 400 sites in this file emit.
+        char body[96];
+        int bn = snprintf(body, sizeof(body),
+                          "{\"error\":\"auth_credentials_missing\",\"required\":\"%s\"}\n",
+                          missing_required);
+        if (bn < 0 || (size_t)bn >= sizeof(body)) bn = (int)sizeof(body) - 1;
+        return sendJsonStatus(req, "400 Bad Request", body, (size_t)bn);
     }
 
     // Persist + reload.
