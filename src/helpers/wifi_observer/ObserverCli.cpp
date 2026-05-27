@@ -4,9 +4,16 @@
 
 #include "ObserverCli.h"
 #include "ConfigSchema.h"
+#include "WifiBootstrap.h"   // Plan 3 Task 10: get wifi.status walks
+                             // WifiBootstrap::state()
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+
+#ifdef ARDUINO
+  #include <Preferences.h>
+  #include <WiFi.h>          // WiFi.localIP() for get wifi.status
+#endif
 
 namespace crosswire {
 
@@ -234,6 +241,153 @@ static bool handleSetBrokerField(char* reply, size_t reply_size,
     return true;
 }
 
+// "set wifi.ssid <s>"  / "set wifi.pwd <s>"  / "get wifi.ssid"
+// / "get wifi.status" -- Plan 3 Task 10 (Strycher/LoRa#272).
+//
+// First-contact WiFi setup is driven through the BLE system channel
+// (SystemChannelCli) by typing CLI commands as channel messages.
+// Those commands route through the cliPassthrough allowlist into
+// dispatchObserverCli, which is this function. Both set and get
+// halves write/read NVS namespace "wifi" with keys ssid + pwd; the
+// status reply enumerates WifiBootstrapState so the user can confirm
+// state after a set sequence.
+//
+// PSK redacted from reply per CLAUDE.md security note: the set-pwd
+// branch acknowledges "wifi.pwd = (set, length=N)" without echoing
+// the value, and get-pwd is unsupported.
+static bool handleSetWifiField(char* reply, size_t reply_size,
+                               const char* field, const char* value) {
+    if (field == nullptr || value == nullptr) {
+        snprintf(reply, reply_size,
+                 "ERROR: usage: set wifi.ssid <s> | set wifi.pwd <s>\n");
+        return true;
+    }
+    if (!eq(field, "ssid") && !eq(field, "pwd")) {
+        snprintf(reply, reply_size,
+                 "ERROR: unknown wifi field '%s' "
+                 "(supported: ssid, pwd)\n", field);
+        return true;
+    }
+    // Reject empty values: an empty SSID is never useful and would
+    // collide with the no-creds detection in WifiBootstrap::begin.
+    if (value[0] == '\0') {
+        snprintf(reply, reply_size,
+                 "ERROR: empty value for wifi.%s\n", field);
+        return true;
+    }
+#ifdef ARDUINO
+    Preferences p;
+    if (!p.begin("wifi", /*readOnly=*/false)) {
+        snprintf(reply, reply_size,
+                 "ERROR: cannot open NVS namespace 'wifi'\n");
+        return true;
+    }
+    p.putString(field, value);
+    p.end();
+#endif
+    if (eq(field, "pwd")) {
+        // Never echo the PSK in any code path.
+        snprintf(reply, reply_size,
+                 "wifi.pwd set (length=%u). Reboot or run 'get "
+                 "wifi.status' after STA retry.\n",
+                 (unsigned)strlen(value));
+    } else {
+        snprintf(reply, reply_size, "wifi.ssid = %s\n", value);
+    }
+    return true;
+}
+
+static bool handleGetWifi(char* reply, size_t reply_size, const char* field) {
+    if (field == nullptr) {
+        snprintf(reply, reply_size,
+                 "ERROR: usage: get wifi.ssid | get wifi.status\n");
+        return true;
+    }
+    if (eq(field, "pwd")) {
+        // Refuse to ever read the PSK back. There is no legitimate
+        // workflow where surfacing the saved PSK to a remote caller
+        // is the right answer.
+        snprintf(reply, reply_size,
+                 "ERROR: wifi.pwd is write-only\n");
+        return true;
+    }
+    if (eq(field, "ssid")) {
+#ifdef ARDUINO
+        Preferences p;
+        if (!p.begin("wifi", /*readOnly=*/true)) {
+            snprintf(reply, reply_size,
+                     "ERROR: cannot open NVS namespace 'wifi'\n");
+            return true;
+        }
+        String s = p.getString("ssid", "");
+        p.end();
+        snprintf(reply, reply_size, "wifi.ssid = %s\n",
+                 s.isEmpty() ? "(unset)" : s.c_str());
+#else
+        snprintf(reply, reply_size, "wifi.ssid = (host build)\n");
+#endif
+        return true;
+    }
+    if (eq(field, "status")) {
+#ifdef ARDUINO
+        // Reach into the WifiBootstrap state via the singleton.
+        // Render a single human-readable line summarizing the
+        // current STA state + IP when connected.
+        auto state = wifiBootstrap().state();
+        const char* st = "?";
+        switch (state) {
+            case WifiBootstrapState::Boot:          st = "Boot";          break;
+            case WifiBootstrapState::CliRescue:     st = "CliRescue";     break;
+            case WifiBootstrapState::ApMode:        st = "AwaitingSetup"; break;
+            case WifiBootstrapState::StaConnecting: st = "StaConnecting"; break;
+            case WifiBootstrapState::StaConnected:  st = "StaConnected";  break;
+            case WifiBootstrapState::StaFailed:     st = "StaFailed";     break;
+        }
+        if (state == WifiBootstrapState::StaConnected) {
+            snprintf(reply, reply_size, "wifi.status = %s ip=%s\n",
+                     st, WiFi.localIP().toString().c_str());
+        } else {
+            snprintf(reply, reply_size, "wifi.status = %s\n", st);
+        }
+#else
+        snprintf(reply, reply_size, "wifi.status = (host build)\n");
+#endif
+        return true;
+    }
+    snprintf(reply, reply_size,
+             "ERROR: unknown wifi field '%s' (supported: ssid, status)\n",
+             field);
+    return true;
+}
+
+// "set web.allow_initial <on|off>" -- recovery override that re-allows
+// the derived initial password even after the user has set their own.
+// Cleared automatically after the next successful login via
+// webAuthSetPassword(). Writes NVS namespace "web" key "allow_initial".
+static bool handleSetWebAllowInitial(char* reply, size_t reply_size,
+                                     const char* value) {
+    if (value == nullptr || (!eq(value, "on") && !eq(value, "off"))) {
+        snprintf(reply, reply_size,
+                 "ERROR: usage: set web.allow_initial <on|off>\n");
+        return true;
+    }
+    uint8_t on = eq(value, "on") ? 1 : 0;
+#ifdef ARDUINO
+    Preferences p;
+    if (!p.begin("web", /*readOnly=*/false)) {
+        snprintf(reply, reply_size,
+                 "ERROR: cannot open NVS namespace 'web'\n");
+        return true;
+    }
+    p.putUChar("allow_initial", on);
+    p.end();
+#else
+    (void)on;  // host build: no NVS
+#endif
+    snprintf(reply, reply_size, "web.allow_initial = %s\n", value);
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Top-level dispatch
 // ---------------------------------------------------------------------------
@@ -273,6 +427,33 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
         return true;
     }
 
+    // "get wifi.<field>" -- Plan 3 Task 10 (Strycher/LoRa#272). This
+    // is the first `get` verb the observer CLI handles; all earlier
+    // observer commands were `set`/`mqtt.*` only. CliPassthrough
+    // (Plan 3 Task 4) accepts any leading `get ` or `set ` line, so
+    // we can pick up the `get` branch here without changing the
+    // allowlist surface.
+    rest = skipPrefix(cmd, "get");
+    if (rest != nullptr) {
+        if (strncmp(rest, "wifi.", 5) == 0) {
+            const char* field = rest + 5;
+            // Extract just the field name; ignore any trailing args
+            // (get takes no value).
+            char fbuf[16];
+            size_t fi = 0;
+            while (field[fi] && field[fi] != ' ' && fi + 1 < sizeof(fbuf)) {
+                fbuf[fi] = field[fi];
+                ++fi;
+            }
+            fbuf[fi] = '\0';
+            return handleGetWifi(reply, reply_size, fbuf);
+        }
+        // Unknown `get` key. Return false so CliPassthrough falls
+        // through to its "unknown:" reply rather than us claiming
+        // ownership.
+        return false;
+    }
+
     // "set mqtt.<...>" commands
     rest = skipPrefix(cmd, "set");
     if (rest == nullptr) return false;  // not ours
@@ -288,6 +469,23 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
         const char* v = rest + 20;
         while (*v == ' ') v++;
         return handleSetStatusInterval(reply, reply_size, v);
+    }
+    if (strncmp(rest, "web.allow_initial", 17) == 0) {
+        const char* v = rest + 17;
+        while (*v == ' ') v++;
+        return handleSetWebAllowInitial(reply, reply_size, v);
+    }
+    // "set wifi.ssid <s>" / "set wifi.pwd <s>" -- Plan 3 Task 10.
+    if (strncmp(rest, "wifi.", 5) == 0) {
+        const char* p = rest + 5;
+        char field[16];
+        size_t fi = 0;
+        while (*p && *p != ' ' && fi + 1 < sizeof(field)) {
+            field[fi++] = *p++;
+        }
+        field[fi] = '\0';
+        while (*p == ' ') ++p;   // value starts here
+        return handleSetWifiField(reply, reply_size, field, p);
     }
     if (strncmp(rest, "mqtt.broker.", 12) == 0) {
         const char* p = rest + 12;

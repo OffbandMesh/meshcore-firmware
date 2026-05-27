@@ -55,4 +55,12 @@ void wifiObserverSetStatusSnapshot(const MqttStatusSnapshot& snap);
 // Singleton accessors -- exposed for ObserverCli + future Plan 3 web UI.
 MqttBrokerPool& wifiObserverPool();
 
+// Borrowed pointer to the cached 32-byte identity public key,
+// or nullptr if mesh context has not yet been set (i.e.
+// wifiObserverSetMeshContext has not been called this boot).
+// Used by WifiBootstrap to derive the mDNS hostname posted on
+// STA-connect. Cheaper than threading the pubkey through every
+// caller and consistent with how WebAuth borrows the same bytes.
+const uint8_t* wifiObserverPubKey();
+
 }  // namespace crosswire

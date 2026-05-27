@@ -102,6 +102,20 @@ public:
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
 
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+  // Plan 3 Task 10 (Strycher/LoRa#272): post a status message
+  // onto the locked system channel slot. Builds a
+  // RESP_CODE_CHANNEL_MSG_RECV_V3 frame (or the pre-v3
+  // RESP_CODE_CHANNEL_MSG_RECV variant if the connected app is
+  // older), enqueues it into the offline queue, and tickles the
+  // BLE client with PUSH_CODE_MSG_WAITING if currently
+  // connected. Called by SystemChannelCli::systemChannelDrain()
+  // via a registered function pointer. Public so the wifi_observer
+  // helper can reach it without #include'ing MyMesh.h (the
+  // function pointer hides the class type from the caller).
+  void postSystemChannelText(const char* text, size_t text_len);
+#endif
+
 protected:
   float getAirtimeBudgetFactor() const override;
   int getInterferenceThreshold() const override;
