@@ -10,6 +10,13 @@
 #include "SystemChannelCli.h"
 #endif
 
+#if defined(CROSSWIRE_AP_SETUP_FORM_ENABLED) && CROSSWIRE_AP_SETUP_FORM_ENABLED
+// Plan 3 Task 10b (Strycher/LoRa#272): secondary build-flag-gated
+// softAP HTTP setup form. Coexists with the BLE system channel;
+// whichever path the user uses first wins.
+#include "ApSetupForm.h"
+#endif
+
 #include <cstdio>
 #include <cstring>
 
@@ -96,6 +103,31 @@ void WifiBootstrap::begin() {
             "then 'set wifi.pwd YourPSK' as messages in this channel. "
             "Use 'get wifi.status' to check.");
 #endif
+#if defined(CROSSWIRE_AP_SETUP_FORM_ENABLED) && CROSSWIRE_AP_SETUP_FORM_ENABLED
+        // Plan 3 Task 10b: SECONDARY commissioning path. Start a
+        // softAP + plain-HTTP form on :80 in addition to the system
+        // channel post above. Both write to the same NVS keys;
+        // whichever path the user uses first wins. The two paths
+        // coexist intentionally so a user can pick whichever is
+        // more convenient (BLE app vs. phone-on-AP browser).
+        if (crosswire::apSetupFormStart()) {
+            const char* ap_ssid = crosswire::apSetupFormSsid();
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+            // Second system-channel message naming the AP SSID +
+            // URL. The 5s rate limiter MAY drop this if the first
+            // message has not yet been drained by the time we get
+            // here; that's acceptable (the AP info is also on
+            // Serial), but enqueue it anyway -- the limiter is on
+            // the post path, not the queue path.
+            if (ap_ssid != nullptr) {
+                crosswire::systemChannelPostStatus(
+                    "Alternate setup: connect to WiFi '%s' (no password) "
+                    "then open http://192.168.4.1/ in a browser.",
+                    ap_ssid);
+            }
+#endif
+        }
+#endif
     } else {
         Serial.printf("[WifiBootstrap] Saved WiFi SSID=%s; attempting STA.\n",
                       ssid.c_str());
@@ -154,8 +186,28 @@ void WifiBootstrap::loop() {
             }
             break;
         }
+        case WifiBootstrapState::ApMode: {
+#if defined(CROSSWIRE_AP_SETUP_FORM_ENABLED) && CROSSWIRE_AP_SETUP_FORM_ENABLED
+            // Plan 3 Task 10b: service the secondary HTTP form (no-op
+            // if start failed at begin()). Poll completion; on
+            // success, tear down and reboot so the no-creds branch
+            // isn't re-entered and STA bring-up runs cleanly from a
+            // fresh boot. The "rebooting in 3 seconds" HTML page
+            // returned to the browser is what this delay tracks --
+            // we want the page to render before the radio drops.
+            crosswire::apSetupFormService();
+            if (crosswire::apSetupFormCompleted()) {
+                Serial.println("[WifiBootstrap] AP form completed; "
+                               "rebooting in 3s");
+                crosswire::apSetupFormStop();
+                delay(3000);
+                ESP.restart();
+            }
+#endif
+            break;
+        }
         default:
-            break;  // ApMode / CliRescue / Boot / StaFailed
+            break;  // CliRescue / Boot / StaFailed
     }
 }
 

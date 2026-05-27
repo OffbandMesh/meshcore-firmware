@@ -54,6 +54,29 @@
 #define CROSSWIRE_AP_SSID_PREFIX  "Crosswire-Observer-"
 
 // ---------------------------------------------------------------------------
+// AP setup form (Plan 3 Task 10b, Strycher/LoRa#272)
+// ---------------------------------------------------------------------------
+// CROSSWIRE_AP_SETUP_FORM_ENABLED is the build flag for the SECONDARY
+// first-contact WiFi setup path: a softAP + plain-HTTP form on :80
+// served from src/helpers/wifi_observer/ApSetupForm.cpp.
+//
+// DEFAULT OFF. Define non-zero in an env's build_flags to opt in,
+// e.g.:
+//   build_flags = ${env:Heltec_v3_companion_radio_ble.build_flags}
+//                 -D CROSSWIRE_AP_SETUP_FORM_ENABLED=1
+//
+// When enabled, the no-creds branch in WifiBootstrap::begin() ALSO
+// starts the AP form (in addition to posting the welcome message
+// on the BLE system channel from Task 10). Both paths coexist;
+// whichever the user completes first wins. Both write the same NVS
+// keys (namespace "wifi", keys "ssid" + "pwd").
+//
+// When unset, both ApSetupForm.{h,cpp} and the call sites in
+// WifiBootstrap.cpp compile out completely (verified via firmware.elf
+// symbol grep -- no `apSetupForm*` symbols present in the default
+// build).
+
+// ---------------------------------------------------------------------------
 // Serial CLI rescue
 // ---------------------------------------------------------------------------
 // Per spec: hold a designated button for 8 seconds during boot to enter
