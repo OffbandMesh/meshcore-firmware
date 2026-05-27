@@ -8,6 +8,10 @@
 #include <cstring>
 #include <cstdlib>
 
+#ifdef ARDUINO
+  #include <Preferences.h>
+#endif
+
 namespace crosswire {
 
 // ---------------------------------------------------------------------------
@@ -234,6 +238,34 @@ static bool handleSetBrokerField(char* reply, size_t reply_size,
     return true;
 }
 
+// "set web.allow_initial <on|off>" -- recovery override that re-allows
+// the derived initial password even after the user has set their own.
+// Cleared automatically after the next successful login via
+// webAuthSetPassword(). Writes NVS namespace "web" key "allow_initial".
+static bool handleSetWebAllowInitial(char* reply, size_t reply_size,
+                                     const char* value) {
+    if (value == nullptr || (!eq(value, "on") && !eq(value, "off"))) {
+        snprintf(reply, reply_size,
+                 "ERROR: usage: set web.allow_initial <on|off>\n");
+        return true;
+    }
+    uint8_t on = eq(value, "on") ? 1 : 0;
+#ifdef ARDUINO
+    Preferences p;
+    if (!p.begin("web", /*readOnly=*/false)) {
+        snprintf(reply, reply_size,
+                 "ERROR: cannot open NVS namespace 'web'\n");
+        return true;
+    }
+    p.putUChar("allow_initial", on);
+    p.end();
+#else
+    (void)on;  // host build: no NVS
+#endif
+    snprintf(reply, reply_size, "web.allow_initial = %s\n", value);
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Top-level dispatch
 // ---------------------------------------------------------------------------
@@ -288,6 +320,11 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
         const char* v = rest + 20;
         while (*v == ' ') v++;
         return handleSetStatusInterval(reply, reply_size, v);
+    }
+    if (strncmp(rest, "web.allow_initial", 17) == 0) {
+        const char* v = rest + 17;
+        while (*v == ' ') v++;
+        return handleSetWebAllowInitial(reply, reply_size, v);
     }
     if (strncmp(rest, "mqtt.broker.", 12) == 0) {
         const char* p = rest + 12;

@@ -30,6 +30,11 @@ namespace crosswire {
 //   set mqtt.broker.<N>.iata_override <code>
 //   set mqtt.broker.<N>.topic_prefix <s>
 //   set mqtt.broker.<N>.ca_cert <name>           -- letsencrypt, eastmesh, ""
+//   set web.allow_initial <on|off>               -- re-enable derived
+//                                                   initial password
+//                                                   (recovery override;
+//                                                    auto-clears on next
+//                                                    successful set)
 //
 // All "set" commands write to NVS via ConfigSchema and call
 // pool.reloadSlot(N) if a per-slot field changed. Slot range [0,
