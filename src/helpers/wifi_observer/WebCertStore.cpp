@@ -36,9 +36,10 @@ static char* loadPem(const char* path) {
     size_t sz = f.size();
     char* buf = (char*)malloc(sz + 1);
     if (!buf) { f.close(); return nullptr; }
-    f.read((uint8_t*)buf, sz);
-    buf[sz] = '\0';
+    size_t got = f.read((uint8_t*)buf, sz);
     f.close();
+    if (got != sz) { free(buf); return nullptr; }
+    buf[got] = '\0';
     return buf;
 }
 
@@ -48,6 +49,9 @@ static bool savePem(const char* path, const char* pem) {
     size_t n = strlen(pem);
     bool ok = (f.write((const uint8_t*)pem, n) == n);
     f.close();
+    if (!ok) {
+        LittleFS.remove(path);  // don't leave a truncated file behind
+    }
     return ok;
 }
 
@@ -187,8 +191,8 @@ bool webCertStoreBegin(TlsKeyType key_type,
         return false;
     }
     Serial.printf("[WebCertStore] generated in %u ms.\n", (unsigned)(millis() - t0));
-    savePem(kCertPath, s_cert_pem);
-    savePem(kKeyPath,  s_key_pem);
+    if (!savePem(kCertPath, s_cert_pem)) Serial.println("[WebCertStore] WARN: cert persist failed");
+    if (!savePem(kKeyPath,  s_key_pem))  Serial.println("[WebCertStore] WARN: key persist failed");
     *cert_pem_out = s_cert_pem;
     *key_pem_out  = s_key_pem;
     return true;
@@ -198,8 +202,8 @@ bool webCertStoreRegenerate(TlsKeyType key_type) {
     if (s_cert_pem) { free(s_cert_pem); s_cert_pem = nullptr; }
     if (s_key_pem)  { free(s_key_pem);  s_key_pem  = nullptr; }
     if (!generateSelfSigned(key_type, &s_cert_pem, &s_key_pem)) return false;
-    savePem(kCertPath, s_cert_pem);
-    savePem(kKeyPath,  s_key_pem);
+    if (!savePem(kCertPath, s_cert_pem)) Serial.println("[WebCertStore] WARN: cert persist failed");
+    if (!savePem(kKeyPath,  s_key_pem))  Serial.println("[WebCertStore] WARN: key persist failed");
     return true;
 }
 

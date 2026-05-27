@@ -23,13 +23,25 @@ enum class TlsKeyType : uint8_t {
 // Load existing cert+key from LittleFS. If missing or invalid,
 // generate fresh ones using the configured key type and persist.
 // Returns true on success; populates cert_pem / key_pem with
-// pointers to internal buffers (lifetime = until shutdown()).
+// pointers to internal buffers.
+//
+// LIFETIME: the returned pointers are valid until EITHER
+// webCertStoreShutdown() OR webCertStoreRegenerate() is called.
+// Both operations free the buffers. The caller (or web-server lifecycle
+// owner) is responsible for ensuring no TLS handler is mid-request
+// when regenerate or shutdown fires -- this module does NOT take any
+// lock; it assumes single-task ownership of the pointers via the
+// WifiObserver loop-task discipline (Plan 1).
 bool webCertStoreBegin(TlsKeyType key_type,
                        const char** cert_pem_out,
                        const char** key_pem_out);
 
 // Force a regenerate (e.g., user pressed "regenerate cert" in
 // Settings page). Persists new pair to LittleFS.
+//
+// INVALIDATES any pointers previously returned by webCertStoreBegin.
+// Caller MUST quiesce any TLS handler holding those pointers first
+// (e.g., stop the web server, regenerate, restart the web server).
 bool webCertStoreRegenerate(TlsKeyType key_type);
 
 void webCertStoreShutdown();
