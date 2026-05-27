@@ -43,6 +43,19 @@ private:
     WifiBootstrapState state_ = WifiBootstrapState::Boot;
     uint32_t sta_retry_count_ = 0;
     uint32_t last_attempt_ms_ = 0;
+
+#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+    // Plan 3 Task 10 (Strycher/LoRa#272): post the IP + mDNS
+    // hostname onto the system channel on STA-connect transition.
+    // Pulls the pubkey from wifiObserverPubKey() so the mDNS hex
+    // matches the system-channel name derivation. No-op if the
+    // pubkey is not yet available (very early STA-up before
+    // wifiObserverSetMeshContext has been called -- vanishingly
+    // unlikely in practice because main.cpp wires context right
+    // after the_mesh.begin, well before WiFi associates, but
+    // guarded anyway).
+    void postStaConnectedStatus();
+#endif
 };
 
 // Singleton accessor. The whole subsystem assumes one instance.
