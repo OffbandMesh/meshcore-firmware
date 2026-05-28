@@ -1,15 +1,17 @@
 #pragma once
 
 #include "../BaseSerialInterface.h"
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
+#include <NimBLEDevice.h>
 
-class SerialBLEInterface : public BaseSerialInterface, BLESecurityCallbacks, BLEServerCallbacks, BLECharacteristicCallbacks {
-  BLEServer *pServer;
-  BLEService *pService;
-  BLECharacteristic * pTxCharacteristic;
+// NimBLE merges security callbacks INTO NimBLEServerCallbacks (Bluedroid had
+// a separate BLESecurityCallbacks class). Inheritance reflects that merge.
+// BLE2902 / BLEUtils includes from the Bluedroid Arduino API have no NimBLE
+// equivalent at this level -- NimBLE handles 0x2902 CCCD internally on
+// NOTIFY/INDICATE characteristics, so no explicit descriptor add is required.
+class SerialBLEInterface : public BaseSerialInterface, NimBLEServerCallbacks, NimBLECharacteristicCallbacks {
+  NimBLEServer *pServer;
+  NimBLEService *pService;
+  NimBLECharacteristic * pTxCharacteristic;
   bool deviceConnected;
   bool oldDeviceConnected;
   bool _isEnabled;
@@ -32,21 +34,35 @@ class SerialBLEInterface : public BaseSerialInterface, BLESecurityCallbacks, BLE
   void clearBuffers() { recv_queue_len = 0; send_queue_len = 0; }
 
 protected:
-  // BLESecurityCallbacks methods
-  uint32_t onPassKeyRequest() override;
-  void onPassKeyNotify(uint32_t pass_key) override;
-  bool onConfirmPIN(uint32_t pass_key) override;
-  bool onSecurityRequest() override;
-  void onAuthenticationComplete(esp_ble_auth_cmpl_t cmpl) override;
+  // Security callback methods (merged into NimBLEServerCallbacks in NimBLE).
+  // TODO(N4): port security callbacks per plan Task N4. NimBLE-Arduino v2.x
+  // signatures differ from Bluedroid BLESecurityCallbacks; N4 will finalize
+  // the exact override declarations after reading the installed library's
+  // NimBLEServerCallbacks header. Likely renames:
+  //   onPassKeyRequest()            -> onPassKeyDisplay() returning uint32_t
+  //   onPassKeyNotify(uint32_t)     -> consumed via onPassKeyDisplay() return
+  //   onConfirmPIN(uint32_t)        -> onConfirmPasskey(NimBLEConnInfo&, uint32_t)
+  //   onSecurityRequest()           -> no direct equivalent (handled by setSecurityAuth)
+  //   onAuthenticationComplete(esp_ble_auth_cmpl_t)
+  //                                 -> onAuthenticationComplete(NimBLEConnInfo&)
+  // The .cpp implementations of these are likewise N4 scope. Leaving the
+  // declarations out of the header here would prevent compilation of the
+  // existing .cpp; N3 + N4 are sequenced to land .cpp changes together.
 
-  // BLEServerCallbacks methods
-  void onConnect(BLEServer* pServer) override;
-  void onConnect(BLEServer* pServer, esp_ble_gatts_cb_param_t *param) override;
-  void onMtuChanged(BLEServer* pServer, esp_ble_gatts_cb_param_t* param) override;
-  void onDisconnect(BLEServer* pServer) override;
+  // NimBLEServerCallbacks methods
+  // TODO(N4): port connection callbacks per plan Task N4. NimBLE-Arduino v2.x
+  // signatures are roughly:
+  //   onConnect(NimBLEConnInfo& connInfo)
+  //   onDisconnect(NimBLEConnInfo& connInfo, int reason)
+  //   onMTUChange(uint16_t MTU, NimBLEConnInfo& connInfo)
+  // The Bluedroid esp_ble_gatts_cb_param_t* parameter has no NimBLE equivalent;
+  // conn_id / mtu / peer info are reachable via NimBLEConnInfo accessors.
 
-  // BLECharacteristicCallbacks methods
-  void onWrite(BLECharacteristic* pCharacteristic, esp_ble_gatts_cb_param_t* param) override;
+  // NimBLECharacteristicCallbacks methods
+  // TODO(N4): port characteristic write callback per plan Task N4. NimBLE-Arduino
+  // v2.x signature is:
+  //   onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo)
+  // The Bluedroid esp_ble_gatts_cb_param_t* parameter has no NimBLE equivalent.
 
 public:
   SerialBLEInterface() {
