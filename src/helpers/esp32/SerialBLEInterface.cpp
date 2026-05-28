@@ -186,7 +186,10 @@ void SerialBLEInterface::disable() {
 
   NimBLEDevice::getAdvertising()->stop();
   pServer->disconnect(last_conn_id);
-  pService->stop();
+  // pService->stop() removed: NimBLE-Arduino v2.x has no NimBLEService::stop().
+  // Services live for the BLE stack's lifetime; stop-advertising +
+  // disconnect (the two lines above) already accomplishes the conceptual
+  // "stop accepting on this service" intent. Surfaced by N6 V3 build (#288).
   oldDeviceConnected = deviceConnected = false;
   adv_restart_time = 0;
 }
