@@ -79,6 +79,26 @@ void WifiBootstrap::begin() {
     // ----------------------------------------------------------------------
     esp_coex_preference_set(ESP_COEX_PREFER_BALANCE);
 
+    // Plan 3 WiFi diagnostic instrumentation: log every WiFi event with
+    // code so we can see WHY association fails (ESP-IDF wifi_err_reason_t
+    // codes for STA_DISCONNECTED, IP for STA_GOT_IP). Without this we
+    // have zero visibility into the WiFi driver state. Mirrors the
+    // Meshtastic WiFiAPClient pattern that surfaced the V4 reason-15
+    // cycle. Pure logging; no behavior change.
+    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+        if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+            Serial.printf("[WifiBootstrap] event=%d disc_reason=%d\n",
+                          (int)event,
+                          info.wifi_sta_disconnected.reason);
+        } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+            Serial.printf("[WifiBootstrap] event=%d ip=%s\n",
+                          (int)event,
+                          IPAddress(info.got_ip.ip_info.ip.addr).toString().c_str());
+        } else {
+            Serial.printf("[WifiBootstrap] event=%d\n", (int)event);
+        }
+    });
+
     // TODO(future Task): wire rescue button sampling.
     Preferences prefs;
     prefs.begin("wifi", /*readOnly=*/true);

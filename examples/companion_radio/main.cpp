@@ -8,9 +8,18 @@
   #ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
     #include "helpers/wifi_observer/WebCertStore.h"  // post-BLE cert warmup; Strycher/LoRa#276
   #endif
+  #ifdef ARDUINO
+    #include <esp_heap_caps.h>   // heap_caps_check_integrity_all -- post-setup probe (#281)
+    #include <Preferences.h>     // post-setup NVS probe (#281)
+  #endif
   // CW_PHASE: tracing macro for setup() crash localization. With
   // CrashLog v2's ESP_LOG hook + shutdown handler, the last phase
   // line surviving in the ring buffer pinpoints where setup() died.
+  //
+  // NOTE: heap_caps_check_integrity_all() was tried in this macro but
+  // crashed at very early boot (before USB-Serial-JTAG enumerated, so
+  // no output). The check is now only invoked at end of setup, in a
+  // standalone block where Serial is known up.
   #define CW_PHASE(name) crosswire::crashLogf("[setup] phase: %s", name)
 #else
   #define CW_PHASE(name) ((void)0)
@@ -247,35 +256,14 @@ void setup() {
   CW_PHASE("ESP32:before BLE serial_interface.begin (BLE_PIN_CODE)");
   serial_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
   CW_PHASE("ESP32:post BLE serial_interface.begin");
-#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
-  // Pre-warm the WebCertStore cache here, AFTER BLE init but BEFORE
-  // WiFi STA + MqttBrokerPool startup eat the remaining heap
-  // (Strycher/LoRa#276). At this point we have ~26KB largest contig
-  // internal DRAM -- enough for mbedtls EC P-256 generation (needs
-  // ~5-8KB working buffer). By the time wifiObserverLoop's
-  // webServerStart tick runs, we'd be down to ~5KB largest contig
-  // and mbedtls would fail.
-  //
-  // A previous attempt to put this BEFORE BLE init had even more heap
-  // (90KB largest) but crashed BLE init -- mechanism unclear, possibly
-  // mbedtls HW/RNG state interaction. Post-BLE-init avoids that.
-  //
-  // After this fix landed, a separate LoadStoreError crash surfaced in
-  // MqttBrokerPool init (Strycher/LoRa#279). That is its own bug to
-  // investigate, NOT a reason to revert this cert-gen fix.
-  {
-    const char* cert_unused = nullptr;
-    const char* key_unused  = nullptr;
-    CW_PHASE("ESP32:before webCertStoreBegin (post-BLE warmup)");
-    bool ok = crosswire::webCertStoreBegin(
-        crosswire::TlsKeyType::EcP256, &cert_unused, &key_unused);
-    if (ok) {
-      CW_PHASE("ESP32:post webCertStoreBegin (cached)");
-    } else {
-      CW_PHASE("ESP32:post webCertStoreBegin (FAILED; loop will retry)");
-    }
-  }
-#endif
+  // 2026-05-27 diagnostic revert (#281): the pre-warmup webCertStoreBegin
+  // call that lived here in commit 17d7dcee is now suspected of corrupting
+  // the heap allocator (heap_caps_check_integrity_all returns false at
+  // setup-end; every post-setup nvs_open then crashes in nvs::HashList::find).
+  // Reverting the call restores the Task 11 (5ea7711c) behavior where cert
+  // gen only runs from webServerStart() in the wifiObserverLoop tick.
+  // The NVS probe at end of setup tells us whether removing this call
+  // restores heap_ok=1.
 #elif defined(SERIAL_RX)
   companion_serial.setPins(SERIAL_RX, SERIAL_TX);
   companion_serial.begin(115200);
@@ -327,6 +315,31 @@ void setup() {
   CW_PHASE("post:ui_task.begin");
 #endif
   CW_PHASE("setup:DONE");
+
+#if defined(CROSSWIRE_OBSERVER) && defined(ARDUINO)
+  // Plan 3 NVS Lock corruption probe (#281): deterministic post-setup
+  // NVS round-trip on a dummy namespace. If NVS state was corrupted
+  // during setup, this crashes IMMEDIATELY (rather than waiting for
+  // WiFi/BLE/heartbeat to trigger the latent failure downstream).
+  // Also runs heap_caps_check_integrity_all() here -- safe at setup-end
+  // (boot stabilized) but unsafe in early CW_PHASE markers (crashed
+  // boot pre-Serial).
+  {
+    bool heap_ok = heap_caps_check_integrity_all(false);
+    Serial.printf("[NVS_PROBE] post-setup heap_ok=%d\n", heap_ok ? 1 : 0);
+
+    ::Preferences nvs_probe;
+    Serial.println("[NVS_PROBE] attempting post-setup nvs_open...");
+    bool ok = nvs_probe.begin("__cw_probe", /*readOnly=*/false);
+    if (ok) {
+      nvs_probe.putUInt("seq", (uint32_t)millis());
+      nvs_probe.end();
+      Serial.println("[NVS_PROBE] OK -- NVS healthy at setup-end");
+    } else {
+      Serial.println("[NVS_PROBE] begin returned false -- NVS unusable");
+    }
+  }
+#endif
 }
 
 void loop() {
