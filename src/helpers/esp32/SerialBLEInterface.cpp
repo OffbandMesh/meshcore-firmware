@@ -27,25 +27,24 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
   NimBLEDevice::init(dev_name);
   NimBLEDevice::setMTU(MAX_FRAME_SIZE);
 
-  // TODO(N4): port security/pairing init per plan Task N4. Bluedroid block was:
-  //   BLEDevice::setSecurityCallbacks(this);
-  //   BLESecurity sec;
-  //   sec.setStaticPIN(pin_code);
-  //   sec.setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);
-  // NimBLE equivalent (to be implemented in N4):
-  //   NimBLEDevice::setSecurityAuth(/*bonding*/ true, /*mitm*/ true, /*sc*/ true);
-  //   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
-  //   NimBLEDevice::setSecurityPasskey(pin_code);
-  // Security callbacks are merged into NimBLEServerCallbacks (see TODO(N4) in
-  // SerialBLEInterface.h); pServer->setCallbacks(this) is also deferred to N4.
+  // Security/pairing init. Bluedroid's setSecurityCallbacks(this) + BLESecurity
+  // setStaticPIN/setAuthenticationMode combo becomes three NimBLE static calls
+  // plus a setCallbacks(this) on the server below. NimBLE merges security and
+  // server-event callbacks into NimBLEServerCallbacks, so the same `this`
+  // pointer receives both groups.
+  //   bonding=true, mitm=true, sc=true matches Bluedroid's
+  //   ESP_LE_AUTH_REQ_SC_MITM_BOND.
+  //   BLE_HS_IO_DISPLAY_ONLY matches Bluedroid's ESP_IO_CAP_OUT (display PIN,
+  //   no input on the peripheral).
+  NimBLEDevice::setSecurityAuth(/*bonding*/ true, /*mitm*/ true, /*sc*/ true);
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
+  NimBLEDevice::setSecurityPasskey(pin_code);
 
   //NimBLEDevice::setPower(ESP_PWR_LVL_N8);
 
   // Create the BLE Server
   pServer = NimBLEDevice::createServer();
-  // TODO(N4): pServer->setCallbacks(this); -- deferred because NimBLEServerCallbacks
-  // overrides (onConnect/onDisconnect/onMTUChange) are not yet declared in the
-  // header (see TODO(N4) markers in SerialBLEInterface.h).
+  pServer->setCallbacks(this);
 
   // Create the BLE Service
   pService = pServer->createService(SERVICE_UUID);
@@ -67,99 +66,98 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
       NIMBLE_PROPERTY::WRITE |
       NIMBLE_PROPERTY::WRITE_ENC | NIMBLE_PROPERTY::WRITE_AUTHEN
   );
-  // TODO(N4): pRxCharacteristic->setCallbacks(this); -- deferred because the
-  // NimBLECharacteristicCallbacks::onWrite override is not yet declared in the
-  // header (see TODO(N4) markers in SerialBLEInterface.h).
+  pRxCharacteristic->setCallbacks(this);
 
   NimBLEDevice::getAdvertising()->addServiceUUID(SERVICE_UUID);
 }
 
-// -------- Security/pairing callbacks (TODO(N4))
+// -------- NimBLEServerCallbacks: connection events
 //
-// The following Bluedroid BLESecurityCallbacks overrides are deferred to N4.
-// Their declarations have been removed from SerialBLEInterface.h (replaced
-// with TODO(N4) markers); the definitions below are commented out so they
-// do not reference Bluedroid types (esp_ble_auth_cmpl_t) that no longer
-// compile under the NimBLE stack.
-//
-// uint32_t SerialBLEInterface::onPassKeyRequest() {
-//   BLE_DEBUG_PRINTLN("onPassKeyRequest()");
-//   return _pin_code;
-// }
-//
-// void SerialBLEInterface::onPassKeyNotify(uint32_t pass_key) {
-//   BLE_DEBUG_PRINTLN("onPassKeyNotify(%u)", pass_key);
-// }
-//
-// bool SerialBLEInterface::onConfirmPIN(uint32_t pass_key) {
-//   BLE_DEBUG_PRINTLN("onConfirmPIN(%u)", pass_key);
-//   return true;
-// }
-//
-// bool SerialBLEInterface::onSecurityRequest() {
-//   BLE_DEBUG_PRINTLN("onSecurityRequest()");
-//   return true;  // allow
-// }
-//
-// void SerialBLEInterface::onAuthenticationComplete(esp_ble_auth_cmpl_t cmpl) {
-//   if (cmpl.success) {
-//     BLE_DEBUG_PRINTLN(" - SecurityCallback - Authentication Success");
-//     deviceConnected = true;
-//   } else {
-//     BLE_DEBUG_PRINTLN(" - SecurityCallback - Authentication Failure*");
-//     pServer->disconnect(pServer->getConnId());
-//     adv_restart_time = millis() + ADVERT_RESTART_DELAY;
-//   }
-// }
+// NimBLE collapses Bluedroid's two onConnect overloads (no-arg + the
+// esp_ble_gatts_cb_param_t* variant that carried conn_id) into a single
+// callback that receives a NimBLEConnInfo&. conn_id is reachable via
+// connInfo.getConnHandle(); peer MTU via pServer->getPeerMTU(handle).
 
-// -------- NimBLEServerCallbacks methods (TODO(N4))
-//
-// onConnect/onDisconnect/onMTUChange overrides deferred to N4 -- their
-// declarations are not yet present in SerialBLEInterface.h (see TODO(N4)
-// markers in that file). The Bluedroid versions referenced
-// esp_ble_gatts_cb_param_t* which has no NimBLE equivalent; the N4 port
-// will adopt NimBLEConnInfo& accessors.
-//
-// void SerialBLEInterface::onConnect(BLEServer* pServer) {
-// }
-//
-// void SerialBLEInterface::onConnect(BLEServer* pServer, esp_ble_gatts_cb_param_t *param) {
-//   BLE_DEBUG_PRINTLN("onConnect(), conn_id=%d, mtu=%d", param->connect.conn_id, pServer->getPeerMTU(param->connect.conn_id));
-//   last_conn_id = param->connect.conn_id;
-// }
-//
-// void SerialBLEInterface::onMtuChanged(BLEServer* pServer, esp_ble_gatts_cb_param_t* param) {
-//   BLE_DEBUG_PRINTLN("onMtuChanged(), mtu=%d", pServer->getPeerMTU(param->mtu.conn_id));
-// }
-//
-// void SerialBLEInterface::onDisconnect(BLEServer* pServer) {
-//   BLE_DEBUG_PRINTLN("onDisconnect()");
-//   if (_isEnabled) {
-//     adv_restart_time = millis() + ADVERT_RESTART_DELAY;
-//     // loop() will detect this on next loop, and set deviceConnected to false
-//   }
-// }
+void SerialBLEInterface::onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) {
+  uint16_t conn_id = connInfo.getConnHandle();
+  BLE_DEBUG_PRINTLN("onConnect(), conn_id=%d, mtu=%d", conn_id, pServer->getPeerMTU(conn_id));
+  last_conn_id = conn_id;
+}
 
-// -------- NimBLECharacteristicCallbacks methods (TODO(N4))
+void SerialBLEInterface::onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
+  BLE_DEBUG_PRINTLN("onDisconnect(), reason=%d", reason);
+  if (_isEnabled) {
+    adv_restart_time = millis() + ADVERT_RESTART_DELAY;
+    // loop() will detect this on next loop, and set deviceConnected to false
+  }
+}
+
+void SerialBLEInterface::onMTUChange(uint16_t MTU, NimBLEConnInfo& connInfo) {
+  BLE_DEBUG_PRINTLN("onMTUChange(), mtu=%d", MTU);
+}
+
+// -------- NimBLEServerCallbacks: security/pairing events
 //
-// onWrite override deferred to N4 (declaration not yet present in
-// SerialBLEInterface.h). N4 will adopt the NimBLE v2.x signature:
-//   onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo)
+// NimBLE merges what Bluedroid split between BLESecurityCallbacks and
+// BLEServerCallbacks. Specific mappings:
+//   - onPassKeyRequest (return PIN) + onPassKeyNotify (notify of PIN being
+//     displayed) collapse into onPassKeyDisplay() which returns the PIN to
+//     show.
+//   - onSecurityRequest has no NimBLE equivalent; the peripheral side handles
+//     security requests internally via the setSecurityAuth configuration done
+//     in begin().
+//   - onConfirmPIN(uint32_t) becomes onConfirmPassKey(NimBLEConnInfo&, uint32_t)
+//     and is a void return; previously the bool return signalled accept/reject.
+//     We continue to accept any value the peer presents (matches prior
+//     behavior of returning true unconditionally).
+//   - onAuthenticationComplete now takes a NimBLEConnInfo&; success is
+//     determined from connInfo.isEncrypted() && connInfo.isAuthenticated()
+//     rather than esp_ble_auth_cmpl_t::success.
+
+uint32_t SerialBLEInterface::onPassKeyDisplay() {
+  BLE_DEBUG_PRINTLN("onPassKeyDisplay()");
+  return _pin_code;
+}
+
+void SerialBLEInterface::onConfirmPassKey(NimBLEConnInfo& connInfo, uint32_t pin) {
+  BLE_DEBUG_PRINTLN("onConfirmPassKey(%u)", pin);
+  // Accept the displayed key (matches prior Bluedroid onConfirmPIN -> true).
+  NimBLEDevice::injectConfirmPasskey(connInfo, true);
+}
+
+void SerialBLEInterface::onAuthenticationComplete(NimBLEConnInfo& connInfo) {
+  if (connInfo.isEncrypted() && connInfo.isAuthenticated()) {
+    BLE_DEBUG_PRINTLN(" - SecurityCallback - Authentication Success");
+    deviceConnected = true;
+  } else {
+    BLE_DEBUG_PRINTLN(" - SecurityCallback - Authentication Failure*");
+    pServer->disconnect(connInfo.getConnHandle());
+    adv_restart_time = millis() + ADVERT_RESTART_DELAY;
+  }
+}
+
+// -------- NimBLECharacteristicCallbacks: characteristic write
 //
-// void SerialBLEInterface::onWrite(BLECharacteristic* pCharacteristic, esp_ble_gatts_cb_param_t* param) {
-//   uint8_t* rxValue = pCharacteristic->getData();
-//   int len = pCharacteristic->getLength();
-//
-//   if (len > MAX_FRAME_SIZE) {
-//     BLE_DEBUG_PRINTLN("ERROR: onWrite(), frame too big, len=%d", len);
-//   } else if (recv_queue_len >= FRAME_QUEUE_SIZE) {
-//     BLE_DEBUG_PRINTLN("ERROR: onWrite(), recv_queue is full!");
-//   } else {
-//     recv_queue[recv_queue_len].len = len;
-//     memcpy(recv_queue[recv_queue_len].buf, rxValue, len);
-//     recv_queue_len++;
-//   }
-// }
+// NimBLE merges Bluedroid's two onWrite overloads into a single callback that
+// receives a NimBLEConnInfo& alongside the characteristic pointer. Written
+// bytes come from getValue() (NimBLEAttValue, implicit-convertible to
+// std::string / raw pointer); length from getValue().length().
+
+void SerialBLEInterface::onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
+  NimBLEAttValue value = pCharacteristic->getValue();
+  size_t len = value.length();
+  const uint8_t* rxValue = value.data();
+
+  if (len > MAX_FRAME_SIZE) {
+    BLE_DEBUG_PRINTLN("ERROR: onWrite(), frame too big, len=%d", (int)len);
+  } else if (recv_queue_len >= FRAME_QUEUE_SIZE) {
+    BLE_DEBUG_PRINTLN("ERROR: onWrite(), recv_queue is full!");
+  } else {
+    recv_queue[recv_queue_len].len = (uint8_t)len;
+    memcpy(recv_queue[recv_queue_len].buf, rxValue, len);
+    recv_queue_len++;
+  }
+}
 
 // ---------- public methods
 
