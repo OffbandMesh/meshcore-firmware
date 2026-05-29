@@ -15,12 +15,15 @@
 
 #ifdef ARDUINO
   #include <Arduino.h>
-  #include <WiFi.h>
+  #include <WiFi.h>          // still used for WiFi.mode(WIFI_OFF) teardown safety
   #include <Preferences.h>
   #include <esp_coexist.h>   // esp_coex_preference_set() -- Meshtastic V4
                              // coex fix pattern (issue #2, #4; verified
                              // working on V4 with PIN 100776 pair test)
-  #include <esp_wifi.h>      // esp_wifi_set_ps() -- companion to coex tuning
+  #include <esp_wifi.h>      // esp_wifi_init/start/connect/set_ps/sta_get_ap_info
+  #include <esp_netif.h>     // esp_netif_init/create_default_wifi_sta/get_ip_info
+  #include <esp_event.h>     // esp_event_loop_create_default()
+  #include <esp_err.h>       // ESP_ERR_INVALID_STATE
 #endif
 
 namespace crosswire {
@@ -109,48 +112,133 @@ void WifiBootstrap::begin() {
             p2.end();
         }
         // PSK redacted from logs per CLAUDE.md security note.
-        WiFi.mode(WIFI_STA);
-        // Meshtastic V4 coex fix: yield 2.4 GHz radio between DTIM beacons
-        // so BT controller can schedule advertising/connection slots.
-        WiFi.setSleep(true);
-        esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
-        WiFi.begin(ssid.c_str(), pwd.c_str());
+        startStaDirect(ssid.c_str(), pwd.c_str());
     }
 }
 
+// ---------------------------------------------------------------------------
+// startStaDirect -- bring up WiFi STA via esp_wifi DIRECTLY, bypassing
+// arduino's WiFi.mode()/WiFi.begin() (Strycher/LoRa#318).
+//
+// WHY bypass arduino: arduino-esp32's wifiLowLevelInit() (WiFiGeneric.cpp:
+// 674-681) hardcodes dynamic_rx_buf_num=32 + dynamic_tx_buf_num=32 at
+// esp_wifi_init(), IGNORING sdkconfig. Those pools balloon under traffic to
+// a high-water that stays mapped -- ~77 KB consumed at STA bringup on the
+// internal-SRAM-only V3, starving NimBLE + observer + mbedTLS. arduino
+// exposes no API to lower the counts (useStaticBuffers only flips to STATIC
+// buffers, which need contiguous DMA RAM unavailable after NimBLE+observer
+// fragment the heap -- verified crash-loop). The only path to a low DYNAMIC
+// ceiling is to call esp_wifi_init() ourselves with a custom config.
+//
+// We KEEP dynamic buffers (tx_buf_type=1, fragmentation-tolerant) and just
+// lower the counts 32 -> 8. esp_netif_create_default_wifi_sta() wires the
+// DHCP client automatically via the default event loop, so no custom event
+// handlers are needed -- loop() polls esp_wifi_sta_get_ap_info() +
+// esp_netif_get_ip_info() for connection state.
+//
+// Tradeoff: arduino's WiFi.localIP()/WiFi.status() no longer work (they key
+// off arduino's own lowLevelInitDone/_esp_wifi_started flags). All such
+// callers in the observer env route through staLocalIp() / the
+// WifiBootstrapState machine instead. The other WiFi.* call sites in the
+// codebase (main.cpp:WiFi.begin, UITask:WiFi.localIP) are inside
+// #ifdef WIFI_SSID, which the observer env does not define.
+// ---------------------------------------------------------------------------
+void WifiBootstrap::startStaDirect(const char* ssid, const char* pwd) {
+    // Bring up the TCP/IP + event-loop substrate that arduino's tcpipInit()
+    // would normally provide. Idempotent: ESP_ERR_INVALID_STATE means
+    // something already initialized it (tolerated, not fatal).
+    esp_err_t e = esp_netif_init();
+    if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) {
+        Serial.printf("[WifiBootstrap] esp_netif_init failed: %d\n", (int)e);
+        state_ = WifiBootstrapState::StaFailed;
+        return;
+    }
+    e = esp_event_loop_create_default();
+    if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) {
+        Serial.printf("[WifiBootstrap] esp_event_loop_create_default failed: %d\n", (int)e);
+        state_ = WifiBootstrapState::StaFailed;
+        return;
+    }
+    if (sta_netif_ == nullptr) {
+        sta_netif_ = (void*)esp_netif_create_default_wifi_sta();
+        if (sta_netif_ == nullptr) {
+            Serial.println("[WifiBootstrap] create_default_wifi_sta failed");
+            state_ = WifiBootstrapState::StaFailed;
+            return;
+        }
+    }
+
+    // Custom init config: dynamic buffers (fragmentation-tolerant) capped at
+    // 8 instead of arduino's 32. See function header for full rationale.
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    cfg.static_rx_buf_num  = 4;
+    cfg.dynamic_rx_buf_num = 8;    // was 32 (arduino hardcode)
+    cfg.tx_buf_type        = 1;    // DYNAMIC -- not static (static crashes)
+    cfg.static_tx_buf_num  = 0;    // must be 0 when tx_buf_type=1
+    cfg.dynamic_tx_buf_num = 8;    // was 32 (arduino hardcode)
+    cfg.cache_tx_buf_num   = 4;    // arduino's dynamic-mode value
+    e = esp_wifi_init(&cfg);
+    if (e != ESP_OK) {
+        Serial.printf("[WifiBootstrap] esp_wifi_init failed: %d\n", (int)e);
+        state_ = WifiBootstrapState::StaFailed;
+        return;
+    }
+
+    // Store creds in RAM (not flash NVS -- we manage persistence via our own
+    // "wifi" namespace; WIFI_STORAGE_RAM avoids a second copy in the wifi NVS).
+    esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    esp_wifi_set_mode(WIFI_MODE_STA);
+
+    wifi_config_t wc = {};
+    strncpy((char*)wc.sta.ssid,     ssid, sizeof(wc.sta.ssid) - 1);
+    strncpy((char*)wc.sta.password, pwd,  sizeof(wc.sta.password) - 1);
+    esp_wifi_set_config(WIFI_IF_STA, &wc);
+
+    esp_wifi_start();
+    // Meshtastic V4 coex fix: yield 2.4 GHz radio between DTIM beacons so the
+    // BT controller can schedule advertising/connection slots. Must be set
+    // after esp_wifi_start(). (Equivalent to arduino WiFi.setSleep(true).)
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    esp_wifi_connect();
+}
+
 void WifiBootstrap::loop() {
+    // Poll-based connection tracking (Strycher/LoRa#318): since we drive
+    // esp_wifi directly (no arduino WiFi class), WiFi.status() is unusable.
+    // "Connected" = STA has a DHCP-bound IP (what MQTT actually needs);
+    // staLocalIp() returns false until then. Loss-of-link is detected via
+    // esp_wifi_sta_get_ap_info(). esp_netif_create_default_wifi_sta() runs
+    // the DHCP client automatically; no custom event handlers required.
     switch (state_) {
         case WifiBootstrapState::StaConnecting: {
-            if (WiFi.status() == WL_CONNECTED) {
+            char ipbuf[16];
+            if (staLocalIp(ipbuf, sizeof(ipbuf))) {
                 state_ = WifiBootstrapState::StaConnected;
-                Serial.printf("[WifiBootstrap] STA connected; IP=%s\n",
-                              WiFi.localIP().toString().c_str());
+                Serial.printf("[WifiBootstrap] STA connected; IP=%s\n", ipbuf);
 #ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
-                // Plan 3 Task 10 (Strycher/LoRa#272): post the IP +
-                // mDNS hostname so the user immediately sees how to
-                // reach the web UI without having to dig through
-                // router admin. mDNS hostname format mirrors the
-                // system-channel name derivation: "meshcore-<8hex>"
-                // where the 8hex comes from the first 4 bytes of
-                // the identity pubkey. The rate limiter in
-                // systemChannelPostStatus protects against this
-                // firing on every loop iteration; the transition
-                // happens only on actual STA up.
+                // Plan 3 Task 10 (Strycher/LoRa#272): post IP + mDNS
+                // hostname to the system channel so the user sees how to
+                // reach the web UI. Rate-limited inside systemChannelPostStatus;
+                // fires only on this StaConnecting->StaConnected transition.
                 postStaConnectedStatus();
 #endif
             } else if (millis() - last_attempt_ms_ > 10000) {
                 sta_retry_count_++;
                 Serial.printf("[WifiBootstrap] STA retry #%u\n",
                               sta_retry_count_);
-                WiFi.reconnect();
+                esp_wifi_connect();   // re-initiate association
                 last_attempt_ms_ = millis();
             }
             break;
         }
         case WifiBootstrapState::StaConnected: {
-            if (WiFi.status() != WL_CONNECTED) {
+            wifi_ap_record_t ap;
+            if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+                // Lost association. Drop back to connecting + re-initiate
+                // (no auto-reconnect without arduino's WiFi class).
                 state_ = WifiBootstrapState::StaConnecting;
                 last_attempt_ms_ = millis();
+                esp_wifi_connect();
             }
             break;
         }
@@ -174,6 +262,8 @@ bool WifiBootstrap::isStaConnected() const {
 extern const uint8_t* wifiObserverPubKey();
 
 void WifiBootstrap::postStaConnectedStatus() {
+    char ipbuf[16];
+    if (!staLocalIp(ipbuf, sizeof(ipbuf))) return;  // no IP yet; skip
     const uint8_t* pk = wifiObserverPubKey();
     if (pk != nullptr) {
         // mDNS hostname format: "meshcore-XXXXXXXX" where the 8
@@ -189,14 +279,31 @@ void WifiBootstrap::postStaConnectedStatus() {
         hex[8] = '\0';
         crosswire::systemChannelPostStatus(
             "WiFi connected. IP %s -- https://meshcore-%s.local/",
-            WiFi.localIP().toString().c_str(), hex);
+            ipbuf, hex);
     } else {
-        crosswire::systemChannelPostStatus(
-            "WiFi connected. IP %s",
-            WiFi.localIP().toString().c_str());
+        crosswire::systemChannelPostStatus("WiFi connected. IP %s", ipbuf);
     }
 }
 #endif  // CROSSWIRE_OBSERVER_BLE_COMPANION
+
+// ---------------------------------------------------------------------------
+// staLocalIp -- format the STA's DHCP-bound IPv4 as "a.b.c.d". Returns false
+// (out untouched) if no netif or no bound address yet. Strycher/LoRa#318:
+// replaces arduino WiFi.localIP() now that we drive esp_netif directly.
+// esp_ip4_addr_t.addr is network byte order with the first octet in the low
+// byte; format manually to avoid depending on lwip IP2STR/IPSTR macros.
+// ---------------------------------------------------------------------------
+bool WifiBootstrap::staLocalIp(char* out, size_t out_len) const {
+    if (sta_netif_ == nullptr || out == nullptr || out_len < 8) return false;
+    esp_netif_ip_info_t info;
+    if (esp_netif_get_ip_info((esp_netif_t*)sta_netif_, &info) != ESP_OK) return false;
+    uint32_t a = info.ip.addr;
+    if (a == 0) return false;
+    snprintf(out, out_len, "%u.%u.%u.%u",
+             (unsigned)(a & 0xFF), (unsigned)((a >> 8) & 0xFF),
+             (unsigned)((a >> 16) & 0xFF), (unsigned)((a >> 24) & 0xFF));
+    return true;
+}
 
 WifiBootstrap& wifiBootstrap() {
     static WifiBootstrap inst;
@@ -208,6 +315,7 @@ WifiBootstrap& wifiBootstrap() {
 void WifiBootstrap::begin() {}
 void WifiBootstrap::loop() {}
 bool WifiBootstrap::isStaConnected() const { return false; }
+bool WifiBootstrap::staLocalIp(char*, size_t) const { return false; }
 WifiBootstrap& wifiBootstrap() {
     static WifiBootstrap inst;
     return inst;

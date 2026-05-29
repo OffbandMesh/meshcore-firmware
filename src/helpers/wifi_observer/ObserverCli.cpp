@@ -344,8 +344,16 @@ static bool handleGetWifi(char* reply, size_t reply_size, const char* field) {
             case WifiBootstrapState::StaFailed:     st = "StaFailed";     break;
         }
         if (state == WifiBootstrapState::StaConnected) {
-            snprintf(reply, reply_size, "wifi.status = %s ip=%s\n",
-                     st, WiFi.localIP().toString().c_str());
+            // Strycher/LoRa#318: IP comes from WifiBootstrap's esp_netif
+            // (we drive esp_wifi directly now; arduino WiFi.localIP() is
+            // dead in the observer env). staLocalIp() formats the bound
+            // IPv4; falls back to no-ip if somehow unbound.
+            char ipbuf[16];
+            if (wifiBootstrap().staLocalIp(ipbuf, sizeof(ipbuf))) {
+                snprintf(reply, reply_size, "wifi.status = %s ip=%s\n", st, ipbuf);
+            } else {
+                snprintf(reply, reply_size, "wifi.status = %s\n", st);
+            }
         } else {
             snprintf(reply, reply_size, "wifi.status = %s\n", st);
         }
