@@ -449,6 +449,19 @@ public:
         display.drawTextCentered(display.width() / 2, 64 - 11, "hibernate:" PRESS_LABEL);
       }
     }
+
+    // Diagnostic: free_heap on every home page so it is visible without
+    // serial monitor (CP2102 monitor-connect DTR/RTS toggle resets the
+    // chip on V3 hardware, which can throw the device into a crash-cycle
+    // when heap is already tight). Same value as the [hb] heartbeat log
+    // line in CrashLog.cpp (ESP.getFreeHeap()), refreshed at the screen's
+    // native 5-second cadence (return 5000 below).
+    char heap_tmp[24];
+    snprintf(heap_tmp, sizeof(heap_tmp), "Heap:%u", (unsigned)ESP.getFreeHeap());
+    display.setTextSize(1);
+    display.setColor(DisplayDriver::LIGHT);
+    display.drawTextCentered(display.width() / 2, 56, heap_tmp);
+
     return 5000;   // next render after 5000 ms
   }
 
