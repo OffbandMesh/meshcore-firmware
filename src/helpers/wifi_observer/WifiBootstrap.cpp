@@ -108,6 +108,19 @@ void WifiBootstrap::begin() {
             pwd = p2.getString("pwd", "");
             p2.end();
         }
+        // Heap-budget fix (Strycher/LoRa#318): switch arduino-esp32 to
+        // static WiFi buffers BEFORE the first WiFi.mode() triggers
+        // wifiLowLevelInit(). In the default (dynamic) profile, arduino
+        // hardcodes dynamic_rx_buf_num=32 + dynamic_tx_buf_num=32
+        // (WiFiGeneric.cpp:674-681) regardless of sdkconfig, and the TX
+        // pool balloons under traffic to a high-water that stays mapped --
+        // ~77 KB consumed at STA bringup on internal-SRAM-only V3, starving
+        // NimBLE + observer + mbedTLS. useStaticBuffers(true) makes arduino
+        // skip that block and use the bounded WIFI_INIT_CONFIG_DEFAULT()
+        // counts instead (static_tx capped at 8, tx_buf_type=static). Must
+        // be set before WiFi.mode(); logs a warning + no-ops if WiFi already
+        // started. WifiBootstrap owns WiFi, so this IS the first WiFi call.
+        WiFi.useStaticBuffers(true);
         // PSK redacted from logs per CLAUDE.md security note.
         WiFi.mode(WIFI_STA);
         // Meshtastic V4 coex fix: yield 2.4 GHz radio between DTIM beacons
