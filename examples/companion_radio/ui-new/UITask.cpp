@@ -44,7 +44,7 @@ class SplashScreen : public UIScreen {
   // Per VERSIONING.md Pattern B the splash exposes BOTH the upstream
   // MeshCore version AND the Crosswire fork version so a glance at
   // the device unambiguously identifies what firmware is running.
-  char _crosswire_short[16];
+  char _crosswire_short[24];
 #endif
 
 public:
@@ -59,19 +59,38 @@ public:
     _mc_version[len] = 0;
 
 #ifdef CROSSWIRE_VERSION
-    // Crosswire version: strip leading "crosswire-" tag prefix, then trim
-    // at the first dash so "crosswire-v0.5.0-15-g4a3b9f1" displays as
-    // "v0.5.0". The full identity (including SHA + dirty flag) is still
-    // available via the `ver` CLI command and via the CROSSWIRE_IDENTITY_BLOB
-    // embedded in .rodata -- this is just the splash-screen short form.
+    // Crosswire version: strip leading "crosswire-" tag prefix, then render
+    // a COMPACT build-identity that distinguishes test builds from the
+    // tagged release (Strycher/LoRa#319). git describe form is
+    // "<tag>-<N>-g<sha>[-dirty]"; we render:
+    //   crosswire-v0.12.0                   -> v0.12.0     (clean release)
+    //   crosswire-v0.12.0-4-g369714e        -> v0.12.0+4   (4 commits past tag)
+    //   crosswire-v0.12.0-4-g369714e-dirty  -> v0.12.0+4*  (+ dirty work tree)
+    // The full identity (SHA included) stays available via the `ver` CLI
+    // command + the CROSSWIRE_IDENTITY_BLOB in .rodata; this is just the
+    // at-a-glance form. "Crosswire v0.12.0+4*" is 20 chars, fits 128px size-1.
+    // Prior behavior trimmed at the first dash, collapsing every test build
+    // to the bare tag -- three distinct binaries all showed "v0.12.0",
+    // which actively caused confusion during #318 bench testing.
     const char *cw = CROSSWIRE_VERSION;
     static const char *cw_prefix = "crosswire-";
     if (strncmp(cw, cw_prefix, 10) == 0) cw += 10;
-    const char *cw_dash = strchr(cw, '-');
-    int cwlen = cw_dash ? cw_dash - cw : strlen(cw);
-    if (cwlen >= (int)sizeof(_crosswire_short)) cwlen = sizeof(_crosswire_short) - 1;
-    memcpy(_crosswire_short, cw, cwlen);
-    _crosswire_short[cwlen] = 0;
+    const char *cw_dash  = strchr(cw, '-');
+    bool        cw_dirty = (strstr(cw, "-dirty") != nullptr);
+    if (cw_dash == nullptr) {
+      // Clean tagged release: no commits-since suffix.
+      int cwlen = strlen(cw);
+      if (cwlen >= (int)sizeof(_crosswire_short)) cwlen = sizeof(_crosswire_short) - 1;
+      memcpy(_crosswire_short, cw, cwlen);
+      _crosswire_short[cwlen] = 0;
+    } else {
+      // <tag>+<commits-since>[*]. atoi reads the integer right after the
+      // first dash; stops at the next non-digit ('-g...' or '-dirty').
+      int taglen  = (int)(cw_dash - cw);
+      int commits = atoi(cw_dash + 1);
+      snprintf(_crosswire_short, sizeof(_crosswire_short), "%.*s+%d%s",
+               taglen, cw, commits, cw_dirty ? "*" : "");
+    }
 #endif
 
     dismiss_after = millis() + BOOT_SCREEN_MILLIS;
