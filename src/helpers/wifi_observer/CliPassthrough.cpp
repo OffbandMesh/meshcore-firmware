@@ -64,13 +64,55 @@ static const char* trimLeading(const char* s) {
     return s;
 }
 
+// Normalize the first 2 whitespace-separated tokens (verb + field-name) to
+// lowercase. Everything after the second token is case-preserved because
+// values (URLs, passwords, hostnames, IATA codes) can legitimately contain
+// mixed case.
+//
+// Motivation: phone keyboards auto-capitalize the first letter of every
+// message by default, which broke the strcmp-based verb matching in
+// dispatchObserverCli. Users typing `set mqtt.broker.0.url ...` would have
+// `Set mqtt.broker.0.url ...` actually sent, and dispatch would reject it
+// silently. Same for `Mqtt status`. Strycher/LoRa#313.
+//
+// Bounded copy with NUL-termination; safe against unterminated `src`.
+static void normalizeVerbAndFieldToLower(char* buf, size_t buf_size,
+                                         const char* src) {
+    if (buf == nullptr || buf_size == 0) return;
+    if (src == nullptr) { buf[0] = '\0'; return; }
+    strncpy(buf, src, buf_size - 1);
+    buf[buf_size - 1] = '\0';
+    int tokens_completed = 0;
+    bool in_token = false;
+    for (char* c = buf; *c; ++c) {
+        if (*c == ' ' || *c == '\t') {
+            if (in_token) {
+                tokens_completed++;
+                in_token = false;
+                if (tokens_completed >= 2) break;
+            }
+        } else {
+            in_token = true;
+            if (*c >= 'A' && *c <= 'Z') *c += ('a' - 'A');
+        }
+    }
+}
+
 bool cliPassthroughIsAllowed(const char* line) {
     if (line == nullptr) return false;
     const char* p = trimLeading(line);
-    // Allowlist: must start with "get " or "set ".
-    if (strncmp(p, "get ", 4) != 0 && strncmp(p, "set ", 4) != 0) return false;
-    // Deny scan against the tail (after "get "/"set ").
-    const char* tail = p + 4;
+    // Allowlist: must start with "get ", "set ", or "mqtt ". Verb is
+    // already-lowercased by the caller via normalizeVerbAndFieldToLower
+    // (Strycher/LoRa#313 phone auto-capitalize fix). "mqtt " covers the
+    // status/enable/disable subcommands documented in ObserverCli.h that
+    // were previously unreachable via _sys channel (Strycher/LoRa#313).
+    size_t skip = 0;
+    if      (strncmp(p, "get ", 4) == 0)  skip = 4;
+    else if (strncmp(p, "set ", 4) == 0)  skip = 4;
+    else if (strncmp(p, "mqtt ", 5) == 0) skip = 5;
+    else return false;
+    // Deny scan against the tail (after the verb + its trailing space).
+    const char* tail = p + skip;
     tail = trimLeading(tail);
     for (size_t i = 0; kDenyPrefixes[i] != nullptr; ++i) {
         if (strncmp(tail, kDenyPrefixes[i], strlen(kDenyPrefixes[i])) == 0) {
@@ -83,29 +125,37 @@ bool cliPassthroughIsAllowed(const char* line) {
 CliResult cliPassthroughExecute(const char* line, char* out_response,
                                 size_t out_len) {
     if (out_response == nullptr || out_len == 0) {
-        // Caller bug. Nothing safe to write into; just classify.
+        // Caller bug. Nothing safe to write into; just classify. Note that
+        // cliPassthroughIsAllowed(line) is called BEFORE normalization here,
+        // so a phone-capitalized verb would classify as Denied -- but this
+        // is the bug-handling fast path, not the user-facing path, so
+        // strict classification is acceptable.
         return cliPassthroughIsAllowed(line) ? CliResult::Unknown
                                              : CliResult::Denied;
     }
-    // Trim ONCE at entry, then thread the trimmed pointer through both
-    // the allowlist gate and dispatch. cliPassthroughIsAllowed re-trims
-    // internally (idempotent), but dispatchObserverCli does NOT trim
-    // leading whitespace -- passing the un-trimmed pointer caused
-    // whitespace-prefixed-but-otherwise-valid commands to fall through
-    // to CliResult::Unknown despite passing the gate.
-    const char* trimmed = (line != nullptr) ? trimLeading(line) : nullptr;
-    if (!cliPassthroughIsAllowed(trimmed)) {
+    // Normalize verb + field to lowercase BEFORE allowlist gate or dispatch.
+    // Values (after the second whitespace) are case-preserved. See
+    // normalizeVerbAndFieldToLower docstring for full motivation; tl;dr
+    // phone auto-capitalize tolerance, Strycher/LoRa#313.
+    //
+    // 512 bytes covers expected longest command surface (password,
+    // long URL, etc.) with comfortable headroom over the channel-message
+    // byte limit imposed upstream by SystemChannelCli.
+    char normalized[512];
+    normalizeVerbAndFieldToLower(normalized, sizeof(normalized),
+                                  line ? trimLeading(line) : nullptr);
+    if (!cliPassthroughIsAllowed(normalized)) {
         snprintf(out_response, out_len, "denied: not in allowlist");
         return CliResult::Denied;
     }
     // Try ObserverCli (Plan 2) first -- it handles mqtt.* keys + web.*
     // (Task 3 addition). Returns true if the command was recognized.
-    if (dispatchObserverCli(trimmed, out_response, out_len, wifiObserverPool())) {
+    if (dispatchObserverCli(normalized, out_response, out_len, wifiObserverPool())) {
         return CliResult::Ok;
     }
     // Fall through to wider CommonCLI dispatch deferred until Plan 3
     // Task 11 wire-up. For now, unmatched -> Unknown.
-    snprintf(out_response, out_len, "unknown: %s", trimmed);
+    snprintf(out_response, out_len, "unknown: %s", normalized);
     return CliResult::Unknown;
 }
 
