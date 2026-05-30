@@ -68,7 +68,21 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
   );
   pRxCharacteristic->setCallbacks(this);
 
-  NimBLEDevice::getAdvertising()->addServiceUUID(SERVICE_UUID);
+  // Advertise the service UUID + the device name. Bluedroid folded the
+  // GAP device name into the advert/scan-response automatically on
+  // BLEDevice::init(name); NimBLE does NOT -- the advertising payload is
+  // fully explicit. The #288 1:1 port dropped the name, so observer
+  // devices advertised nameless (Strycher/LoRa#322). The 128-bit NUS
+  // UUID + flags already fills most of the 31-byte main adv packet, so
+  // the name must ride in the scan-response. enableScanResponse(true)
+  // MUST precede setName(): setName() routes into the scan-response data
+  // only when m_scanResp is already true at call time (NimBLE v2.5.0
+  // NimBLEAdvertising.cpp::setName), otherwise it targets the full main
+  // packet and the name silently fails to fit.
+  NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->enableScanResponse(true);
+  pAdvertising->setName(dev_name);
 }
 
 // -------- NimBLEServerCallbacks: connection events
