@@ -21,8 +21,18 @@ A standalone MIT fork of [MeshCore](https://github.com/meshcore-dev/MeshCore) fo
 | `BUILD_COMMAND` | `pio run -e <env>` (once firmware migrates here; see Migration status) |
 | `DEPLOY_TARGET` | Device flash over USB / OTA (no SCP deploy; firmware is flashed, not server-deployed) |
 | `CITADEL_PROJECT` | `Crosswire` (Strycher/Crosswire) |
-| `GITHUB_PROJECT_ID` | TBD -- Projects-v2 board deferred until after initial bootstrap |
+| `GITHUB_PROJECT_ID` | `PVT_kwHODGcOBc4BZuj8` (Project #14, "Crosswire Project Board") |
 | `AGENT_MAIL_STATUS` | Canonical git hooks installed (preflight, pre-commit, post-commit, pre-push, commit-msg, block-direct-citadel-db). Firmware flash/OTA/agent-mail PreToolUse hooks PORTED (P5.2): block-raw-flash, block-raw-curl-ota, require-agent-mail-check (registered in `.claude/settings.json`). |
+
+## Project board field IDs (project #14)
+
+Recorded per REPOCONFIG (board field IDs captured in project CLAUDE.md). Consumed by `.github/workflows/sync-labels-to-board.yml`.
+
+- `PROJECT_ID` = `PVT_kwHODGcOBc4BZuj8`
+- Status field `PVTSSF_lAHODGcOBc4BZuj8zhUrOWo`: backlog `21424ffd`, todo `e440428b`, ready `1bbb2e8b`, in-progress `7f81218e`, testing `8275aca6`, deferred `c6ce415d`, done `da0f8be7`
+- Priority field `PVTSSF_lAHODGcOBc4BZuj8zhUrPDQ`: P0 `4c4b0f45`, P1 `48f7b50e`, P2 `1a66b940`, P3 `a5ffd218`
+
+**Required secret:** the sync workflow needs repo secret `PROJECT_PAT` (PAT with `project` + `repo` scope) — the default `GITHUB_TOKEN` cannot mutate a user-owned Projects v2 board. Not yet set as of board creation (2026-06-04).
 
 ## Migration status (IMPORTANT for agents)
 
@@ -41,7 +51,7 @@ The firmware currently lives on the **`crosswire` branch of `Strycher/MeshCore`*
 ## Follow-ups (bootstrap gaps to close)
 
 - `/work` slash command (`work.md`) and `session-state` compaction-recovery hook: not present in the canonical templates at bootstrap time; add when available.
-- Projects-v2 board + `sync-labels-to-board.yml` workflow: deferred (per owner) until after initial bootstrap.
+- Projects-v2 board + `sync-labels-to-board.yml` workflow: **DONE (2026-06-04)** — board #14 created, `board:*`/`priority:*` labels created, workflow committed. Remaining: set repo secret `PROJECT_PAT` (workflow inert until then); board-view column grouping is a one-click UI step.
 - `ci.yml`: still deferred -- firmware code has now migrated here, so CI is the next standup step. Firmware flash/OTA hooks: **PORTED (P5.2).**
 
 ---

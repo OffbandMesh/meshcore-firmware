@@ -1,0 +1,177 @@
+name: Sync Labels to Project Board
+
+# Maps board: and priority: labels → Project V2 board fields via GraphQL.
+# Agents set labels via REST (zero GraphQL cost from agent side).
+# This Action translates those labels into board field updates.
+#
+# Requires repo secret PROJECT_PAT: a PAT with `project` + `repo` scope that can
+# write to the user-level Crosswire Project Board (#14). The default GITHUB_TOKEN
+# is repo-scoped and CANNOT mutate a user-owned Projects v2 board.
+on:
+  issues:
+    types: [labeled, closed]
+
+jobs:
+  # Safety net: auto-apply board:done when issue is closed without it
+  auto-done:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    if: github.event.action == 'closed'
+    steps:
+      - name: Apply board:done to closed issue
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_PAT }}
+        run: |
+          labels=$(gh issue view ${{ github.event.issue.number }} --repo ${{ github.repository }} --json labels -q '.labels[].name')
+          if ! echo "$labels" | grep -q "board:done"; then
+            gh issue edit ${{ github.event.issue.number }} --repo ${{ github.repository }} --add-label "board:done"
+          fi
+
+  sync:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.action == 'labeled' && (
+      startsWith(github.event.label.name, 'board:') ||
+      startsWith(github.event.label.name, 'priority:'))
+    steps:
+      - name: Sync label to project board
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECT_PAT }}
+          script: |
+            // ── Project field IDs (Crosswire Project Board, project #14) ──
+            const PROJECT_ID = 'PVT_kwHODGcOBc4BZuj8';
+
+            const STATUS_FIELD_ID = 'PVTSSF_lAHODGcOBc4BZuj8zhUrOWo';
+            const STATUS_OPTIONS = {
+              'board:backlog':     '21424ffd',  // Backlog
+              'board:todo':        'e440428b',  // Todo
+              'board:ready':       '1bbb2e8b',  // Ready
+              'board:in-progress': '7f81218e',  // In Progress
+              'board:testing':     '8275aca6',  // Testing
+              'board:deferred':    'c6ce415d',  // Deferred
+              'board:done':        'da0f8be7',  // Done
+            };
+
+            const PRIORITY_FIELD_ID = 'PVTSSF_lAHODGcOBc4BZuj8zhUrPDQ';
+            const PRIORITY_OPTIONS = {
+              'priority:P0': '4c4b0f45',
+              'priority:P1': '48f7b50e',
+              'priority:P2': '1a66b940',
+              'priority:P3': 'a5ffd218',
+            };
+
+            // ── Determine what triggered us ─────────────────────────
+            const triggerLabel = context.payload.label.name;
+            const issueNumber = context.payload.issue.number;
+            const issueNodeId = context.payload.issue.node_id;
+            const issueLabels = context.payload.issue.labels.map(l => l.name);
+
+            core.info(`Label "${triggerLabel}" added to #${issueNumber}`);
+
+            let triggerPrefix;
+            if (triggerLabel.startsWith('board:'))    triggerPrefix = 'board:';
+            else if (triggerLabel.startsWith('priority:')) triggerPrefix = 'priority:';
+            else {
+              core.info('Not a board/priority label — skipping');
+              return;
+            }
+
+            // ── Mutual exclusion: remove other labels in the same group ─
+            const conflicting = issueLabels.filter(
+              l => l.startsWith(triggerPrefix) && l !== triggerLabel
+            );
+            for (const oldLabel of conflicting) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  name: oldLabel,
+                });
+                core.info(`Removed conflicting label: ${oldLabel}`);
+              } catch (e) {
+                core.warning(`Could not remove label "${oldLabel}": ${e.message}`);
+              }
+            }
+
+            // ── Add issue to project board (idempotent) ─────────────
+            const addMutation = `
+              mutation($projectId: ID!, $contentId: ID!) {
+                addProjectV2ItemById(input: {
+                  projectId: $projectId
+                  contentId: $contentId
+                }) {
+                  item { id }
+                }
+              }
+            `;
+
+            let itemId;
+            try {
+              const addResult = await github.graphql(addMutation, {
+                projectId: PROJECT_ID,
+                contentId: issueNodeId,
+              });
+              itemId = addResult.addProjectV2ItemById.item.id;
+              core.info(`Project item: ${itemId}`);
+            } catch (e) {
+              core.setFailed(`Failed to add #${issueNumber} to project: ${e.message}`);
+              return;
+            }
+
+            // ── Update field mutation ───────────────────────────────
+            const updateMutation = `
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId
+                  itemId: $itemId
+                  fieldId: $fieldId
+                  value: { singleSelectOptionId: $optionId }
+                }) {
+                  projectV2Item { id }
+                }
+              }
+            `;
+
+            // ── Sync ALL board/priority labels ──────────────────────
+            // Use the trigger label directly when it matches — the payload's
+            // label array is a stale snapshot and find() may return the old
+            // label instead of the one that triggered this workflow run.
+            const boardLabel = triggerPrefix === 'board:'
+              ? triggerLabel
+              : issueLabels.find(l => l.startsWith('board:') && STATUS_OPTIONS[l]);
+            const priorityLabel = triggerPrefix === 'priority:'
+              ? triggerLabel
+              : issueLabels.find(l => l.startsWith('priority:') && PRIORITY_OPTIONS[l]);
+
+            if (boardLabel) {
+              try {
+                await github.graphql(updateMutation, {
+                  projectId: PROJECT_ID,
+                  itemId: itemId,
+                  fieldId: STATUS_FIELD_ID,
+                  optionId: STATUS_OPTIONS[boardLabel],
+                });
+                core.info(`✅ Status → ${boardLabel}`);
+              } catch (e) {
+                core.setFailed(`Failed to set status: ${e.message}`);
+              }
+            }
+
+            if (priorityLabel) {
+              try {
+                await github.graphql(updateMutation, {
+                  projectId: PROJECT_ID,
+                  itemId: itemId,
+                  fieldId: PRIORITY_FIELD_ID,
+                  optionId: PRIORITY_OPTIONS[priorityLabel],
+                });
+                core.info(`✅ Priority → ${priorityLabel}`);
+              } catch (e) {
+                core.setFailed(`Failed to set priority: ${e.message}`);
+              }
+            }
+
+            core.info(`Done syncing #${issueNumber}`);
