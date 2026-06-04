@@ -90,20 +90,30 @@ crosswire_identity_blob = (
     "|XWIRE_END"
 )
 
-# Use SCons-standard CPPDEFINES variable (not the PIO build_flags equivalent).
-# CPPDEFINES is what actually reaches gcc as -D macros. BUILD_FLAGS is a
-# PlatformIO config-file variable that doesn't directly map to compiler args
-# in the SCons env. The escaped backslash-quote ensures the value reaches the
-# preprocessor as a quoted C string literal.
-env.Append(  # type: ignore[name-defined]  # noqa: F821
-    CPPDEFINES=[
-        ("CROSSWIRE_VERSION", '\\"' + crosswire_version + '\\"'),
-        ("CROSSWIRE_GIT_SHA", '\\"' + crosswire_git_sha + '\\"'),
-        ("CROSSWIRE_BRANCH", '\\"' + crosswire_branch + '\\"'),
-        ("CROSSWIRE_BUILD_DATE", '\\"' + crosswire_build_date + '\\"'),
-        ("CROSSWIRE_IDENTITY_BLOB", '\\"' + crosswire_identity_blob + '\\"'),
-    ]
-)
+# Emit the version macros via a GENERATED HEADER that we force-include (-include),
+# rather than command-line -D macros. CROSSWIRE_IDENTITY_BLOB contains '|'
+# delimiters; as a -D value those are word-split by POSIX sh on Linux CI and
+# break the compile (xtensa/arm g++ "no input files", Error 127). Inside a header
+# the pipes are ordinary string-literal bytes -> portable on Windows + Linux.
+# Macro names + values are unchanged, so consumers and the in-binary marker that
+# firmware_identity.py scans are identical. (#334 -- CI portability fix)
+def _cstr(s):  # minimal C string-literal escape
+    return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+import os
+_build_dir = env.subst("$BUILD_DIR")  # type: ignore[name-defined]  # noqa: F821
+os.makedirs(_build_dir, exist_ok=True)
+_hdr = os.path.join(_build_dir, "crosswire_version.h")
+with open(_hdr, "w", encoding="utf-8") as _f:
+    _f.write(
+        "#pragma once\n"
+        f"#define CROSSWIRE_VERSION {_cstr(crosswire_version)}\n"
+        f"#define CROSSWIRE_GIT_SHA {_cstr(crosswire_git_sha)}\n"
+        f"#define CROSSWIRE_BRANCH {_cstr(crosswire_branch)}\n"
+        f"#define CROSSWIRE_BUILD_DATE {_cstr(crosswire_build_date)}\n"
+        f"#define CROSSWIRE_IDENTITY_BLOB {_cstr(crosswire_identity_blob)}\n"
+    )
+env.Append(CCFLAGS=["-include", _hdr])  # type: ignore[name-defined]  # noqa: F821
 
 print("[crosswire] embedded identity:")
 print(f"[crosswire]   CROSSWIRE_VERSION    = {crosswire_version}")
