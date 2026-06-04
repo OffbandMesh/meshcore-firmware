@@ -1,0 +1,328 @@
+#!/usr/bin/env bash
+# =============================================================================
+# DifferentWire Standard Pre-Commit Hook
+# =============================================================================
+# Blocks commits unless the agent has an active (in_progress) task in Citadel.
+# By default, the active task must ALSO have a linked GitHub issue — this
+# prevents:
+#   - Coding without a claimed task
+#   - Tasks without GitHub issue linkage
+#
+# Per-project relaxation: if the project has `require_issue_link=false` in
+# Citadel, the issue-link check is skipped and a claimed task alone suffices.
+# Default is strict (TRUE) for every project; relaxation is an explicit
+# human-approved opt-out via `dw project-update <name> --require-issue-link false`.
+# See DifferentWire/citadel#48.
+#
+# Exit codes:
+#   0 = commit allowed
+#   1 = commit blocked
+#
+# Override: set DW_SKIP_CITADEL_CHECK=1 for emergency commits (logged).
+# =============================================================================
+
+# Allow emergency bypass with explicit env var
+if [ "${DW_SKIP_CITADEL_CHECK:-0}" = "1" ]; then
+  echo "⚠ CITADEL CHECK BYPASSED — DW_SKIP_CITADEL_CHECK=1" >&2
+  echo "  This bypass is logged. Use only for emergencies." >&2
+  exit 0
+fi
+
+# ─── 0.5. Safe Lane: HEAD/main branch block (agent commits only) ────────
+# Per SAFELANE §3, agents must work on feature branches in worktrees, never
+# directly on HEAD or main/master. The .agent-identity file distinguishes
+# agent commits from human commits — humans may legitimately commit on
+# main for CLAUDE.md edits, README updates, etc.
+#
+# Source incident: 2026-03-19 calendar OAuth (SAFELANE §7). Agent wrote
+# OAuth implementation on detached HEAD with no branch, then ignored
+# multiple STOP commands. Pre-commit fix was supposed to be canonical;
+# was orphan in Unfocused/Rossum until DifferentWire/standards#91 (epic #90 A.1)
+# promoted it.
+
+REPO_ROOT_FOR_AGENT_CHECK=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -n "$REPO_ROOT_FOR_AGENT_CHECK" ] && [ -f "$REPO_ROOT_FOR_AGENT_CHECK/.agent-identity" ]; then
+  if [ "${DW_SKIP_BRANCH_CHECK:-0}" = "1" ]; then
+    echo "⚠ BRANCH CHECK BYPASSED — DW_SKIP_BRANCH_CHECK=1" >&2
+    echo "  This bypass is logged. Use only for emergencies." >&2
+  else
+    BRANCH=$(git branch --show-current 2>/dev/null)
+    if [ -z "$BRANCH" ]; then
+      echo "✗ Safe Lane: detached HEAD — agents must commit on a feature branch." >&2
+      echo "  Create a worktree + branch first:" >&2
+      echo "    git worktree add ../<repo>-feat-N -b feat/N-desc origin/main" >&2
+      echo "  Emergency bypass: DW_SKIP_BRANCH_CHECK=1 git commit ... (logged)" >&2
+      exit 1
+    fi
+    if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
+      echo "✗ Safe Lane: agent commits to '$BRANCH' branch are blocked." >&2
+      echo "  Agents must work on feature branches in worktrees." >&2
+      echo "  Create one:" >&2
+      echo "    git worktree add ../<repo>-feat-N -b feat/N-desc origin/$BRANCH" >&2
+      echo "  Emergency bypass: DW_SKIP_BRANCH_CHECK=1 git commit ... (logged)" >&2
+      exit 1
+    fi
+  fi
+fi
+
+CITADEL_API="https://getunfocused.app/citadel"
+
+# Detect project name from DW_PROJECT env var or directory name
+PROJECT="${DW_PROJECT:-$(basename "$(git rev-parse --show-toplevel 2>/dev/null)")}"
+
+if [ -z "$PROJECT" ]; then
+  echo "✗ Cannot determine project name. Set DW_PROJECT or run from a git repo." >&2
+  exit 1
+fi
+
+# ─── 1. Fetch project config (for require_issue_link flag) ──────────────
+# Fail closed on any error: if we can't determine the flag, assume strict.
+# This keeps the default-strict invariant intact even during Citadel blips.
+PROJECT_RESP=$(curl -s --max-time 5 "${CITADEL_API}/projects/${PROJECT}" 2>/dev/null)
+REQUIRE_ISSUE_LINK=$(echo "$PROJECT_RESP" | python3 -c "
+import json, sys
+try:
+    p = json.load(sys.stdin)
+    # Default TRUE if field missing (older API version or corrupted response)
+    print('true' if p.get('require_issue_link', True) else 'false')
+except Exception:
+    print('true')
+" 2>/dev/null)
+
+# ─── 2. Check for in_progress tasks (with optional issue-link check) ────
+RESPONSE=$(curl -s --max-time 5 "${CITADEL_API}/projects/${PROJECT}/tasks?status=in_progress" 2>/dev/null)
+
+if [ -z "$RESPONSE" ]; then
+  echo "✗ Citadel unreachable — cannot verify task claim." >&2
+  echo "  Fix Citadel connectivity or set DW_SKIP_CITADEL_CHECK=1 for emergency." >&2
+  exit 1
+fi
+
+HAS_CLAIMED=$(echo "$RESPONSE" | REQUIRE_ISSUE_LINK="$REQUIRE_ISSUE_LINK" python3 -c "
+import json, os, sys
+require = os.environ.get('REQUIRE_ISSUE_LINK', 'true') == 'true'
+try:
+    tasks = json.load(sys.stdin)
+    claimed = [t for t in tasks if t.get('status') == 'in_progress']
+    if not claimed:
+        print('NO_TASK')
+    elif not require:
+        # Relaxed: any claimed task is sufficient. Report issue link if
+        # present for informational purposes, but don't require it.
+        t = claimed[0]
+        iss = t.get('external_issue_number')
+        if iss:
+            print(f'OK:{t[\"short_id\"]}:#{iss}')
+        else:
+            print(f'OK_RELAXED:{t[\"short_id\"]}')
+    else:
+        # Strict (default): at least one claimed task must have an issue link
+        linked = [t for t in claimed if t.get('external_issue_number')]
+        if linked:
+            print(f'OK:{linked[0][\"short_id\"]}:#{linked[0][\"external_issue_number\"]}')
+        else:
+            print(f'NO_ISSUE:{claimed[0][\"short_id\"]}')
+except Exception:
+    print('ERROR')
+" 2>/dev/null)
+
+case "$HAS_CLAIMED" in
+  OK:*)
+    TASK_ID=$(echo "$HAS_CLAIMED" | cut -d: -f2)
+    ISSUE=$(echo "$HAS_CLAIMED" | cut -d: -f3)
+    echo "✓ Citadel: active task ${TASK_ID} (${ISSUE})" >&2
+    ;;
+  OK_RELAXED:*)
+    TASK_ID=$(echo "$HAS_CLAIMED" | cut -d: -f2)
+    echo "✓ Citadel: active task ${TASK_ID} (project '${PROJECT}' has issue-link requirement relaxed)" >&2
+    ;;
+  NO_TASK)
+    echo "✗ No claimed task in Citadel for project '${PROJECT}'." >&2
+    echo "  Run: dw --project ${PROJECT} claim <task-id>" >&2
+    echo "  You must claim a task before committing code." >&2
+    exit 1
+    ;;
+  NO_ISSUE:*)
+    TASK_ID=$(echo "$HAS_CLAIMED" | cut -d: -f2)
+    echo "✗ Task ${TASK_ID} has no GitHub issue link." >&2
+    echo "  Every task must be linked to a GitHub issue before work begins." >&2
+    echo "  (Project '${PROJECT}' requires issue linkage — if this project doesn't" >&2
+    echo "   need it, have an admin run:" >&2
+    echo "     dw project-update ${PROJECT} --require-issue-link false)" >&2
+    exit 1
+    ;;
+  *)
+    echo "✗ Could not verify Citadel task status." >&2
+    echo "  Set DW_SKIP_CITADEL_CHECK=1 for emergency bypass." >&2
+    exit 1
+    ;;
+esac
+
+# ─── 3. Agent Mail file-reservation check (agent commits only) ──────────
+# Block commits when another agent holds exclusive reservations on staged
+# files. Detects multi-agent file collisions at the commit gate. Originally
+# in Unfocused's orphan pre-commit-reservation.sh; promoted to canonical
+# via DifferentWire/standards#95 (epic #90 A.3).
+#
+# Pass-through scenarios:
+#   - No .agent-identity file → human commit, skip
+#   - DW_SKIP_RESERVATION_CHECK=1 → bypass with stderr log
+#   - AGENT_MAIL_TOKEN env var unset → fail-OPEN with strong warning
+#       (gradual rollout; flip to fail-CLOSED after users configure)
+#   - No files staged → already exited above
+#   - Agent Mail unreachable → fail-OPEN with warning (network issue ≠ violation)
+#
+# Block scenario:
+#   - Agent Mail returns conflicts → BLOCK with informative stderr identifying
+#       which agent holds each conflicting reservation
+
+REPO_ROOT_FOR_RESERVATION=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -n "$REPO_ROOT_FOR_RESERVATION" ] && [ -f "$REPO_ROOT_FOR_RESERVATION/.agent-identity" ]; then
+  if [ "${DW_SKIP_RESERVATION_CHECK:-0}" = "1" ]; then
+    echo "⚠ RESERVATION CHECK BYPASSED — DW_SKIP_RESERVATION_CHECK=1" >&2
+    echo "  This bypass is logged. Use only for emergencies." >&2
+    exit 0
+  fi
+
+  AGENT_NAME=$(cat "$REPO_ROOT_FOR_RESERVATION/.agent-identity" 2>/dev/null | tr -d '[:space:]')
+  if [ -z "$AGENT_NAME" ]; then
+    # Empty identity file — treat as no-agent-identity, pass
+    exit 0
+  fi
+
+  if [ -z "${AGENT_MAIL_TOKEN:-}" ]; then
+    echo "⚠ Agent Mail reservation check SKIPPED — AGENT_MAIL_TOKEN env var not set." >&2
+    echo "  Configure to enable multi-agent file-reservation enforcement:" >&2
+    echo "    PowerShell: [System.Environment]::SetEnvironmentVariable(\"AGENT_MAIL_TOKEN\", \"<token>\", \"User\")" >&2
+    echo "  Commit allowed for now (gradual rollout)." >&2
+    exit 0
+  fi
+
+  STAGED=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)
+  if [ -z "$STAGED" ]; then
+    exit 0  # No files staged (rare — pre-commit usually has staged files; defensive)
+  fi
+
+  # Build JSON paths array from staged files (one path per line).
+  PATHS_JSON=$(echo "$STAGED" | python3 -c "
+import json, sys
+paths = [line.strip() for line in sys.stdin if line.strip()]
+print(json.dumps(paths))
+" 2>/dev/null)
+  if [ -z "$PATHS_JSON" ]; then
+    echo "⚠ Reservation check: could not build paths JSON. Allowing commit." >&2
+    exit 0
+  fi
+
+  # Use the repo's git toplevel as project_key (matches Agent Mail's per-workspace convention).
+  PROJECT_KEY="$REPO_ROOT_FOR_RESERVATION"
+
+  AM_RESPONSE=$(curl -s --connect-timeout 5 --max-time 10 \
+    -X POST "https://getunfocused.app/mcp/" \
+    -H "Authorization: Bearer $AGENT_MAIL_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"jsonrpc\": \"2.0\",
+      \"id\": \"pre-commit-check\",
+      \"method\": \"tools/call\",
+      \"params\": {
+        \"name\": \"file_reservation_paths\",
+        \"arguments\": {
+          \"project_key\": \"${PROJECT_KEY}\",
+          \"agent_name\": \"${AGENT_NAME}\",
+          \"paths\": ${PATHS_JSON},
+          \"ttl_seconds\": 60,
+          \"exclusive\": true,
+          \"reason\": \"pre-commit-check (auto, will release)\"
+        }
+      }
+    }" 2>/dev/null || echo "UNREACHABLE")
+
+  if [ "$AM_RESPONSE" = "UNREACHABLE" ] || [ -z "$AM_RESPONSE" ]; then
+    echo "⚠ Agent Mail unreachable — skipping reservation check." >&2
+    echo "  Commit allowed; reservation conflicts (if any) NOT verified." >&2
+    exit 0
+  fi
+
+  RESERVATION_RESULT=$(echo "$AM_RESPONSE" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    result = data.get('result', {})
+    content = result.get('content', [{}])
+    if isinstance(content, list) and len(content) > 0:
+        text = content[0].get('text', '{}')
+        parsed = json.loads(text)
+        conflicts = parsed.get('conflicts', [])
+        if conflicts:
+            print('CONFLICT')
+            for c in conflicts:
+                path = c.get('path', 'unknown')
+                holders = c.get('holders', [])
+                for h in holders:
+                    agent = h.get('agent_name', 'unknown')
+                    print(f'  {path} — held by {agent}')
+        else:
+            granted = parsed.get('granted', [])
+            if granted:
+                print('GRANTED')
+            else:
+                print('OK')
+    else:
+        print('OK')
+except Exception as e:
+    print(f'PARSE_ERROR: {e}')
+" 2>/dev/null || echo "NO_PYTHON")
+
+  FIRST_LINE=$(echo "$RESERVATION_RESULT" | head -1)
+  case "$FIRST_LINE" in
+    CONFLICT)
+      echo "" >&2
+      echo "✗ COMMIT BLOCKED — file reservation conflict" >&2
+      echo "" >&2
+      echo "Another agent holds exclusive reservations on files you're committing:" >&2
+      echo "$RESERVATION_RESULT" | grep "^  " >&2
+      echo "" >&2
+      echo "Coordinate via Agent Mail before editing these files." >&2
+      echo "Emergency bypass: DW_SKIP_RESERVATION_CHECK=1 git commit ... (logged)" >&2
+      echo "" >&2
+      exit 1
+      ;;
+    GRANTED)
+      # Temp reservations were granted to us — means we hadn't reserved
+      # these files before. Release the temp reservations + warn.
+      curl -s --connect-timeout 5 --max-time 10 \
+        -X POST "https://getunfocused.app/mcp/" \
+        -H "Authorization: Bearer $AGENT_MAIL_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{
+          \"jsonrpc\": \"2.0\",
+          \"id\": \"pre-commit-release\",
+          \"method\": \"tools/call\",
+          \"params\": {
+            \"name\": \"release_file_reservations\",
+            \"arguments\": {
+              \"project_key\": \"${PROJECT_KEY}\",
+              \"agent_name\": \"${AGENT_NAME}\",
+              \"paths\": ${PATHS_JSON}
+            }
+          }
+        }" >/dev/null 2>&1 || true
+      echo "⚠ Reservation check: committed files without reserving them first." >&2
+      echo "  Best practice: call file_reservation_paths() before editing." >&2
+      echo "  Commit allowed; consider reserving going forward." >&2
+      exit 0
+      ;;
+    NO_PYTHON|PARSE_ERROR*)
+      echo "⚠ Reservation check: could not parse Agent Mail response (${FIRST_LINE})." >&2
+      echo "  Commit allowed." >&2
+      exit 0
+      ;;
+    OK|*)
+      echo "✓ Agent Mail: no file reservation conflicts." >&2
+      exit 0
+      ;;
+  esac
+fi
+
+exit 0

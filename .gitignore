@@ -17,3 +17,33 @@ compile_commands.json
 .venv/
 venv/
 platformio.local.ini
+
+# --- Crosswire repo additions (folded in from bootstrap) ---
+# PlatformIO / Arduino build
+.pio/
+.pioenvs/
+.piolibdeps/
+*.bin
+*.elf
+*.map
+build-logs/
+
+# Per-host build secrets (WiFi/MQTT creds, OTA tokens) — never commit
+platformio.local.ini
+platformio.secrets.ini
+.env
+!.env.example
+.credentials.env
+
+# Claude Code
+.claude/settings.local.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

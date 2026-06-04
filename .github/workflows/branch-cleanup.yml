@@ -1,0 +1,58 @@
+# Branch Cleanup: Weekly deletion of stale branches
+# Removes branches older than 7 days with no open PR and not merged.
+
+name: Branch Cleanup
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 6:00 UTC
+  workflow_dispatch:  # Manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    if: github.repository == 'Strycher/LoRa'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete stale branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "=== Branch Cleanup ==="
+          CUTOFF=$(date -d '7 days ago' --iso-8601=seconds 2>/dev/null || date -v-7d +%Y-%m-%dT%H:%M:%S)
+          DELETED=0
+
+          for BRANCH in $(git branch -r --no-merged origin/main | grep -v HEAD | sed 's/origin\///'); do
+            # Skip protected branches
+            if [[ "$BRANCH" == "main" || "$BRANCH" == "develop" ]]; then
+              continue
+            fi
+
+            # Check last commit date
+            LAST_COMMIT=$(git log -1 --format=%aI "origin/$BRANCH" 2>/dev/null)
+            if [[ -z "$LAST_COMMIT" ]]; then
+              continue
+            fi
+
+            # Check if branch has an open PR
+            PR_COUNT=$(gh pr list --head "$BRANCH" --state open --json number --jq length 2>/dev/null || echo "0")
+            if [[ "$PR_COUNT" != "0" ]]; then
+              echo "SKIP: $BRANCH (has open PR)"
+              continue
+            fi
+
+            # Delete if older than cutoff
+            if [[ "$LAST_COMMIT" < "$CUTOFF" ]]; then
+              echo "DELETE: $BRANCH (last commit: $LAST_COMMIT)"
+              git push origin --delete "$BRANCH" 2>/dev/null && DELETED=$((DELETED + 1))
+            fi
+          done
+
+          echo "=== Deleted $DELETED stale branches ==="

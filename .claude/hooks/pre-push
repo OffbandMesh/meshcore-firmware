@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# =============================================================================
+# DifferentWire Standard Pre-Push Hook
+# =============================================================================
+# Scans all commits being pushed for issue references (#N). Blocks the push
+# if any referenced issues are still open in Citadel or GitHub. This is the
+# hard enforcement gate — you cannot push code for issues you haven't closed.
+#
+# Portable: auto-detects project name from git repo basename.
+# Deploy: copy to .claude/hooks/pre-push in any DW project.
+#
+# Override: set DW_SKIP_CLOSE_CHECK=1 for emergency pushes (logged).
+# =============================================================================
+
+if [ "${DW_SKIP_CLOSE_CHECK:-0}" = "1" ]; then
+  echo "⚠ CLOSE CHECK BYPASSED — DW_SKIP_CLOSE_CHECK=1" >&2
+  exit 0
+fi
+
+CITADEL_API="https://getunfocused.app/citadel"
+PROJECT="${DW_PROJECT:-$(basename "$(git rev-parse --show-toplevel 2>/dev/null)")}"
+
+# Read the push refs from stdin (provided by git)
+while read local_ref local_sha remote_ref remote_sha; do
+  # Get commits being pushed
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    # New branch — check all commits
+    COMMITS=$(git log --format=%s "$local_sha" --not --remotes 2>/dev/null)
+  else
+    COMMITS=$(git log --format=%s "${remote_sha}..${local_sha}" 2>/dev/null)
+  fi
+
+  # Extract all unique issue numbers from commit messages
+  ISSUE_NUMS=$(echo "$COMMITS" | grep -oE '#[0-9]+' | tr -d '#' | sort -u)
+
+  if [ -z "$ISSUE_NUMS" ]; then
+    continue  # No issue references in these commits
+  fi
+
+  OPEN_ISSUES=""
+
+  for ISSUE_NUM in $ISSUE_NUMS; do
+    # Check Citadel
+    TASK_JSON=$(curl -s --max-time 5 "${CITADEL_API}/projects/${PROJECT}/tasks?external_issue_number=${ISSUE_NUM}" 2>/dev/null)
+
+    # Lenient multi-task rule: if ANY matching task is done, the issue has been
+    # resolved at least once — allow. Only block when zero tasks are done.
+    # See DifferentWire/standards#19 for the decision rationale.
+    STATUS=$(echo "$TASK_JSON" | python3 -c "
+import json, sys
+try:
+    tasks = json.load(sys.stdin)
+    if not tasks:
+        print('not_found|?')
+    else:
+        done_tasks = [t for t in tasks if t.get('status') in ('done', 'closed')]
+        if done_tasks:
+            primary = done_tasks[0]
+            print(f\"done|{primary.get('short_id','?')}\")
+        else:
+            summary = ','.join(
+                f\"{t.get('short_id','?')}={t.get('status','unknown')}\"
+                for t in tasks
+            )
+            print(f'open|{summary}')
+except: print('error|?')
+" 2>/dev/null)
+
+    TASK_STATUS=$(echo "$STATUS" | cut -d'|' -f1)
+    TASK_DETAIL=$(echo "$STATUS" | cut -d'|' -f2-)
+
+    case "$TASK_STATUS" in
+      done|not_found|error)
+        ;; # OK or can't check — don't block
+      *)
+        OPEN_ISSUES="${OPEN_ISSUES}  #${ISSUE_NUM} (Citadel: ${TASK_DETAIL})\n"
+        ;;
+    esac
+  done
+
+  if [ -n "$OPEN_ISSUES" ]; then
+    echo "=======================================================" >&2
+    echo "BLOCKED: Push contains commits referencing open issues." >&2
+    echo "" >&2
+    echo -e "$OPEN_ISSUES" >&2
+    echo "Close these in Citadel AND GitHub before pushing:" >&2
+    echo "  dw --project ${PROJECT} close <task-id> --reason \"...\"" >&2
+    echo "  gh issue close <number>" >&2
+    echo "" >&2
+    echo "Emergency bypass: DW_SKIP_CLOSE_CHECK=1 git push" >&2
+    echo "=======================================================" >&2
+    exit 1
+  fi
+done
+
+exit 0

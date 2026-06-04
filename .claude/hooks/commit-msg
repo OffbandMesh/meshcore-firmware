@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# =============================================================================
+# DifferentWire Standard Commit-Msg Hook
+# =============================================================================
+# Requires agent commit subjects to reference at least one GitHub issue (#N).
+# Without an issue reference, the post-commit reminder, pre-push closure
+# check, and audit-trail traceability all lose their anchor.
+#
+# Humans are exempt (pass-through silently) — humans may legitimately make
+# small commits (CLAUDE.md tweaks, README typos) without a corresponding
+# GitHub issue. The .agent-identity file distinguishes agent commits from
+# human commits.
+#
+# Source: promoted from Unfocused's orphan pre-commit-safe-lane.sh
+# (second half — see DifferentWire/standards#91 for the first half,
+# HEAD/main branch check). Pre-canonical regression in
+# Unfocused#1190 + Rossum#292; promoted to canonical via
+# DifferentWire/standards#93 (epic #90 A.2).
+#
+# Exit codes:
+#   0 = commit message accepted
+#   1 = BLOCKED (no #N reference and not exempt)
+#
+# Override: set DW_SKIP_MSG_CHECK=1 (logged to stderr).
+# Override scope: only the #N requirement. Branch + Citadel checks have
+# their own bypasses (DW_SKIP_BRANCH_CHECK, DW_SKIP_CITADEL_CHECK).
+# =============================================================================
+
+# Allow emergency bypass with explicit env var
+if [ "${DW_SKIP_MSG_CHECK:-0}" = "1" ]; then
+  echo "⚠ MSG CHECK BYPASSED — DW_SKIP_MSG_CHECK=1" >&2
+  echo "  This bypass is logged. Use only for emergencies." >&2
+  exit 0
+fi
+
+# $1 is the path to the commit message file (git contract)
+MSG_FILE="$1"
+if [ -z "$MSG_FILE" ] || [ ! -f "$MSG_FILE" ]; then
+  # Defensive: if git didn't pass a message file, don't block (treat as
+  # missing-data, exit 0 — pre-commit's other checks will have caught
+  # other invariants).
+  exit 0
+fi
+
+# Only enforce for agent commits — humans commit on CLAUDE.md, README,
+# etc. without filing an issue for every change.
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -z "$REPO_ROOT" ] || [ ! -f "$REPO_ROOT/.agent-identity" ]; then
+  exit 0
+fi
+
+# Read the subject line — first non-comment line (git stores comments
+# starting with '#' as scratch in the message file; the actual subject
+# is the first non-comment line).
+SUBJECT=$(grep -v '^#' "$MSG_FILE" | head -1)
+
+# Exempt mechanical commits — merge has no work content, revert
+# references the original commit's #N in its title.
+case "$SUBJECT" in
+  Merge\ *|Revert\ \"*)
+    exit 0
+    ;;
+esac
+
+# Check for at least one #N reference (GitHub issue number).
+if echo "$SUBJECT" | grep -qE '#[0-9]+'; then
+  exit 0
+fi
+
+# BLOCK: no issue reference found.
+echo "✗ Safe Lane: agent commit subject must reference at least one GitHub issue (#N)." >&2
+echo "" >&2
+echo "  Subject was: $SUBJECT" >&2
+echo "" >&2
+echo "  Acceptable formats include:" >&2
+echo "    feat: add caching (#42)" >&2
+echo "    fix(#42): correct token expiration" >&2
+echo "    docs: update README (#42, #43)" >&2
+echo "" >&2
+echo "  Why this matters:" >&2
+echo "    - post-commit hook's open-issue reminder needs an anchor" >&2
+echo "    - pre-push hook's closure check needs an anchor" >&2
+echo "    - audit-trail traceability — every change tied to its issue" >&2
+echo "" >&2
+echo "  Exempt: merge commits (Merge ...) and revert commits (Revert \"...\")" >&2
+echo "" >&2
+echo "  Emergency bypass: DW_SKIP_MSG_CHECK=1 git commit ... (logged)" >&2
+exit 1
