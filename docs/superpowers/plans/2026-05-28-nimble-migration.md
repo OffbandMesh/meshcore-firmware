@@ -604,7 +604,7 @@ git fetch strycher main
 git rebase strycher/main
 # resolve conflicts in main.cpp / SerialBLEInterface usage if any
 # (none expected since SerialBLEInterface public API was preserved)
-pio run -e xiao_esp32s3_companion_observer_wifi    # Tier 2
+pio run -e Xiao_S3_WIO_companion_observer_wifi    # Tier 2
 ```
 
 This is NOT part of Epic D. It's a follow-up step on the Plan 3 work. File as a new task at that time.

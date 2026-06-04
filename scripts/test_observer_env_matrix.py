@@ -20,11 +20,11 @@ from pathlib import Path
 # 3 companion envs Plan 1 introduces.
 EXPECTED = [
     ("variants/heltec_v3/platformio.ini",
-     ["env:heltec_v3_companion_observer_wifi"]),
+     ["env:Heltec_v3_companion_observer_wifi"]),
     ("variants/heltec_v4/platformio.ini",
      ["env:heltec_v4_companion_observer_wifi"]),
     ("variants/xiao_s3_wio/platformio.ini",
-     ["env:xiao_esp32s3_companion_observer_wifi"]),
+     ["env:Xiao_S3_WIO_companion_observer_wifi"]),
 ]
 
 # Every Plan-1 env MUST set both flags (Plan 1 = companion-only,
