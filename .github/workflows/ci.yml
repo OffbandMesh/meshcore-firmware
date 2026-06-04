@@ -1,0 +1,56 @@
+name: CI
+
+# Crosswire firmware build verification. Builds a curated representative env
+# set on every push to the canonical branch + PRs. NOT the full 407-env matrix
+# (that is a publish concern); this proves the Crosswire differentiators
+# (observer, repeater-telemetry) and SafeBoot (ESP32 + nRF52) compile.
+#
+# This repo's platformio.ini requires PIO_SECRETS_FILE (LoRa#209). Real secrets
+# never live in CI; we generate a dummy stub so config interpolation succeeds.
+# The dummy values become baked-in build-flag string constants -- they compile
+# fine and are never flashed (build-only CI).
+
+on:
+  push:
+    branches: [firmware-base]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env:
+          - Heltec_v3_companion_observer_wifi
+          - Xiao_S3_WIO_companion_observer_wifi
+          - heltec_v4_companion_observer_wifi
+          - heltec_v4_repeater_telemetry
+          - heltec_v4_companion_radio_ble
+          - RAK_4631_repeater
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache PlatformIO toolchains/packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'variants/**/*.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Generate dummy secrets stub (build-only; never flashed)
+        run: |
+          printf '[node_secrets]\nadmin_password = ci-dummy\n[wifi_secrets]\nssid = ci-dummy\npassword = ci-dummy\n[mqtt_secrets]\nhost = mqtt.example.com\nport = 1883\nuser = ci-dummy\npassword = ci-dummy\n[ota_secrets]\ntrigger_secret = ci-dummy\n[cmdrelay]\nurl = http://cmdrelay.example.com/cmd\n' > "$RUNNER_TEMP/ci-secrets.ini"
+          echo "PIO_SECRETS_FILE=$RUNNER_TEMP/ci-secrets.ini" >> "$GITHUB_ENV"
+
+      - name: Build ${{ matrix.env }}
+        run: pio run -e ${{ matrix.env }}
