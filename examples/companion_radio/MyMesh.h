@@ -208,6 +208,9 @@ private:
 
   void checkCLIRescueCmd();
   void checkSerialInterface();
+#ifdef CROSSWIRE_OBSERVER
+  void checkObserverSerialCli();   // Strycher/LoRa#325: USB-serial -> observer CLI
+#endif
   bool isValidClientRepeatFreq(uint32_t f) const;
 
   // helpers, short-cuts
@@ -230,6 +233,14 @@ private:
   bool _iter_started;
   bool _cli_rescue;
   char cli_command[80];
+#ifdef CROSSWIRE_OBSERVER
+  // Strycher/LoRa#325: USB-serial observer-CLI line accumulator.
+  // Initialized in the MyMesh constructor body (matching the convention
+  // of the other members here), NOT via in-class initializers.
+  char _obs_cli_buf[128];
+  uint8_t _obs_cli_len;
+  bool _obs_cli_redact;   // true once "set wifi.pwd " seen -> stop echoing the PSK
+#endif
   uint8_t app_target_ver;
   uint8_t *sign_data;
   uint32_t sign_data_len;

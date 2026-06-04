@@ -11,6 +11,17 @@
 #include "helpers/wifi_observer/SystemChannelCli.h"
 #endif
 
+#ifdef CROSSWIRE_OBSERVER
+// Strycher/LoRa#325: the observer config CLI must be reachable over
+// ANY connection type, not just the BLE _sys channel. cliPassthrough
+// is the same allowlist+dispatch surface the _sys channel uses; here
+// we feed it plain-text lines typed into the USB serial console so a
+// USB-cabled observer can be configured without a phone. Gated on the
+// broad CROSSWIRE_OBSERVER flag (not the BLE-companion flag) so it is
+// present on every observer build, including future BLE-disabled ones.
+#include "helpers/wifi_observer/CliPassthrough.h"
+#endif
+
 #define CMD_APP_START                 1
 #define CMD_SEND_TXT_MSG              2
 #define CMD_SEND_CHANNEL_TXT_MSG      3
@@ -921,6 +932,14 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
       _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store), _ui(ui) {
   _iter_started = false;
   _cli_rescue = false;
+#ifdef CROSSWIRE_OBSERVER
+  // Strycher/LoRa#325: init the USB-serial observer-CLI accumulator here
+  // (matching this constructor's body-init convention) so _obs_cli_len is
+  // guaranteed zero before the first checkObserverSerialCli() call.
+  _obs_cli_len = 0;
+  _obs_cli_redact = false;
+  _obs_cli_buf[0] = 0;
+#endif
   offline_queue_len = 0;
   app_target_ver = 0;
   clearPendingReqs();
@@ -2289,6 +2308,77 @@ void MyMesh::checkSerialInterface() {
   }
 }
 
+#ifdef CROSSWIRE_OBSERVER
+// Strycher/LoRa#325: USB-serial path to the observer config CLI.
+// Accumulates a line from the USB Serial console and dispatches it
+// through cliPassthroughExecute -- the SAME allowlist + dispatch the
+// BLE _sys channel uses (crosswire::cliPassthroughExecute), so the
+// command set, allowlist, and security are identical regardless of
+// transport. The reply is echoed back to Serial. Non-blocking: reads
+// only what is already buffered each call.
+//
+// Echo discipline: each typed char is echoed so the operator sees
+// what they type, EXCEPT once the accumulated line is recognized as
+// "set wifi.pwd " -- from that point the remaining chars (the PSK)
+// are NOT echoed, so the secret never lands in the serial log. The
+// reply path already redacts the PSK ("wifi.pwd set (length=N)").
+//
+// Strycher/LoRa#325 (Gemini review finding): the prefix match below
+// MUST mirror both input tolerances that cliPassthroughExecute applies
+// before it runs the command, or the PSK leaks to the echo on inputs
+// the dispatcher still accepts:
+//   1. leading whitespace -- dispatcher calls trimLeading() (CliPassthrough.cpp)
+//   2. verb/field case     -- dispatcher lowercases the first two tokens via
+//      normalizeVerbAndFieldToLower() (the Strycher/LoRa#313 phone
+//      auto-capitalize fix). A bare case-sensitive index-0 strncmp would
+//      execute "Set wifi.pwd hunter2" yet fail to redact, echoing the PSK.
+// obsCliIsPwdSetPrefix() skips leading spaces/tabs then case-insensitively
+// matches the lowercase literal prefix. (Internal-whitespace-collapsed or
+// tab-separated forms are not matched here; the dispatcher's reply-side
+// redaction is the authoritative second layer for those rare shapes.)
+static bool obsCliIsPwdSetPrefix(const char* s) {
+  while (*s == ' ' || *s == '\t') ++s;             // mirror trimLeading()
+  static const char* kPrefix = "set wifi.pwd ";    // lowercase, single-spaced
+  for (const char* p = kPrefix; *p != 0; ++p, ++s) {
+    char a = *s;
+    if (a == 0) return false;                       // buffer shorter than prefix
+    if (a >= 'A' && a <= 'Z') a += ('a' - 'A');     // fold to lower (mirror #313)
+    if (a != *p) return false;
+  }
+  return true;
+}
+
+void MyMesh::checkObserverSerialCli() {
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\r' || c == '\n') {
+      if (_obs_cli_len == 0) continue;          // ignore blank lines / CRLF pair
+      _obs_cli_buf[_obs_cli_len] = 0;
+      Serial.println();                          // finish the echoed line
+      char reply[256];
+      crosswire::cliPassthroughExecute(_obs_cli_buf, reply, sizeof(reply));
+      Serial.println(reply);
+      _obs_cli_len = 0;
+      _obs_cli_redact = false;
+      continue;
+    }
+    if (_obs_cli_len < sizeof(_obs_cli_buf) - 1) {
+      _obs_cli_buf[_obs_cli_len++] = c;
+      _obs_cli_buf[_obs_cli_len] = 0;
+      // Once the line is unambiguously "set wifi.pwd " (case- and
+      // leading-whitespace-tolerant, matching the dispatcher), stop
+      // echoing so the PSK that follows is not written to the serial log.
+      if (!_obs_cli_redact && obsCliIsPwdSetPrefix(_obs_cli_buf)) {
+        _obs_cli_redact = true;
+      }
+      if (!_obs_cli_redact) Serial.print(c);     // echo (suppressed after the pwd prefix)
+    }
+    // else: line overflow -- silently drop extra chars until a newline
+    // resets the buffer. cliPassthrough bounds the meaningful surface.
+  }
+}
+#endif
+
 void MyMesh::loop() {
   BaseChatMesh::loop();
 
@@ -2296,6 +2386,13 @@ void MyMesh::loop() {
     checkCLIRescueCmd();
   } else {
     checkSerialInterface();
+#ifdef CROSSWIRE_OBSERVER
+    // Strycher/LoRa#325: also accept observer config commands typed on
+    // the USB serial console (independent of the compiled transport, so
+    // a USB-cabled observer is configurable without a phone). Only runs
+    // in normal mode; the _cli_rescue branch above owns Serial when active.
+    checkObserverSerialCli();
+#endif
   }
 
 #ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
