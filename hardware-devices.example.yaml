@@ -1,0 +1,70 @@
+# hardware-devices.example.yaml
+# =============================================================================
+# TEMPLATE for the per-host USB-device registry consumed by scripts/pio-flash.
+#
+# Copy this to `hardware-devices.yaml` (gitignored) and populate with YOUR
+# devices. NEVER commit the populated file -- it contains LAN IPs, MAC
+# addresses, and node identifiers (SAFELANE redaction discipline). This
+# example contains only placeholders.
+#
+# The wrapper (scripts/pio-flash) + the block-raw-flash / block-raw-curl-ota
+# PreToolUse hooks read this registry to:
+#   - identity-verify a device (VID:PID + DeviceID hash) before any Tier-A op
+#   - hard-refuse foreign (never-touch) devices
+#   - resolve OTA targets (lan_ip, verify channel)
+#
+# Schema
+# ------
+# devices:
+#   <short-name>:
+#     mac:    "aa:bb:cc:dd:ee:ff"           lowercase hex, colons
+#     role:   human description
+#     vid_pid: ["VID:PID", ...]             uppercase hex; one per USB mode
+#     discriminators:
+#       windows:
+#         runtime_deviceid_instance:    "8&XXXXXXXX"
+#         bootloader_deviceid_instance: "8&XXXXXXXX"   (optional)
+#     ota:                                  (optional; only for OTA-capable nodes)
+#       lan_ip:                    "10.0.0.x" | null   (null => wrapper refuses to push)
+#       admin_password_secret_key: "<section>.<key>"   pointer into a gitignored secrets file
+#       node_id:                   "your-node-id"
+#       mqtt_topic_prefix:         "meshcore"
+#       verify_channel:            serial | mqtt | telemetry
+#
+# foreign_devices:                          same schema; NEVER-touch (hard refuse)
+# =============================================================================
+
+devices:
+
+  example-esp32s3:
+    mac: "00:00:00:00:00:00"
+    role: "EXAMPLE ESP32-S3 bench device (Heltec V4 / XIAO). Replace with yours."
+    vid_pid:
+      - "303A:1001"     # ESP32-S3 native USB-CDC (runtime)
+      - "303A:0002"     # ESP32-S3 USB-Serial-JTAG (ROM bootloader)
+    discriminators:
+      windows:
+        runtime_deviceid_instance: "8&XXXXXXXX"
+    notes: |
+      Placeholder. Register a real device with:
+        python scripts/pio-flash.py bootstrap <name> --port=<COMx>
+      (one authorized esptool read_mac + MAC collision cross-check).
+    ota:
+      lan_ip: null
+      admin_password_secret_key: "node_secrets.admin_password"
+      node_id: "example-node"
+      mqtt_topic_prefix: "meshcore"
+      verify_channel: "serial"
+
+foreign_devices:
+
+  example-foreign:
+    mac: "00:00:00:00:00:01"
+    role: "EXAMPLE non-target device that must NEVER be flashed. Replace/remove."
+    vid_pid:
+      - "1A86:7522"     # e.g. a CH340 device that is NOT part of the fleet
+    notes: |
+      Any present port whose VID:PID matches a foreign_devices entry is
+      hard-refused by the wrapper AND the block-raw-flash hook, citing this
+      entry's name. Use this for always-connected devices that share a USB
+      bridge chip with your fleet but must never be touched.

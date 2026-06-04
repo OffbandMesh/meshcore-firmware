@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# =============================================================================
+# scripts/pio-flash - LoRa flash-discipline wrapper (bash entry point)
+# =============================================================================
+# Thin shim that exec's the Python body with the same arguments. Keeps the
+# user-facing command name short and stable (`scripts/pio-flash <args>`) so
+# the .claude/hooks/block-raw-flash.sh hook (A3 #48) can recognize this as
+# the authorized invocation path.
+#
+# Tracks: Strycher/LoRa#47 (A2, sub-task of Epic A #44)
+# =============================================================================
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python "${SCRIPT_DIR}/pio-flash.py" "$@"

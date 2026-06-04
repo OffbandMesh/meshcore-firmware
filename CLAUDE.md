@@ -22,7 +22,7 @@ A standalone MIT fork of [MeshCore](https://github.com/meshcore-dev/MeshCore) fo
 | `DEPLOY_TARGET` | Device flash over USB / OTA (no SCP deploy; firmware is flashed, not server-deployed) |
 | `CITADEL_PROJECT` | `Crosswire` (Strycher/Crosswire) |
 | `GITHUB_PROJECT_ID` | TBD -- Projects-v2 board deferred until after initial bootstrap |
-| `AGENT_MAIL_STATUS` | Canonical hooks installed (preflight, pre-commit, post-commit, pre-push, commit-msg, block-direct-citadel-db). Firmware flash/OTA/agent-mail PreToolUse hooks are NOT yet installed -- see Migration status. |
+| `AGENT_MAIL_STATUS` | Canonical git hooks installed (preflight, pre-commit, post-commit, pre-push, commit-msg, block-direct-citadel-db). Firmware flash/OTA/agent-mail PreToolUse hooks PORTED (P5.2): block-raw-flash, block-raw-curl-ota, require-agent-mail-check (registered in `.claude/settings.json`). |
 
 ## Migration status (IMPORTANT for agents)
 
@@ -30,7 +30,7 @@ The firmware currently lives on the **`crosswire` branch of `Strycher/MeshCore`*
 
 - **Code/build/flash work happens in the MeshCore fork** under the LoRa workspace (`C:\Dev\LoRa\meshcore-firmware`), tracked under the **LoRa** Citadel project + Strycher/LoRa issues.
 - **This repo is the home for new requests, issues, and design-of-record.** New Crosswire feature requests / bugs filed here are tracked under the **Crosswire** Citadel project.
-- **Flash discipline** (the `hardware-devices.yaml` registry, the `pio-flash` wrapper, the `block-raw-flash` / `block-raw-curl-ota` / `require-agent-mail-check` PreToolUse hooks) currently lives in the LoRa project. Those hooks MUST be ported into this repo when the firmware + flash workflow migrate. Do not flash hardware from this repo until that discipline is installed here.
+- **Flash discipline PORTED (P5.2):** `scripts/pio-flash` (+`.py`), `scripts/ota-push.py`, and the `block-raw-flash` / `block-raw-curl-ota` / `require-agent-mail-check` PreToolUse hooks now live in this repo. The device registry `hardware-devices.yaml` is **gitignored** (per-host; holds LAN IPs/MACs) — copy `hardware-devices.example.yaml` to `hardware-devices.yaml` and populate it before flashing from this repo.
 
 ## Security
 
@@ -42,7 +42,7 @@ The firmware currently lives on the **`crosswire` branch of `Strycher/MeshCore`*
 
 - `/work` slash command (`work.md`) and `session-state` compaction-recovery hook: not present in the canonical templates at bootstrap time; add when available.
 - Projects-v2 board + `sync-labels-to-board.yml` workflow: deferred (per owner) until after initial bootstrap.
-- `ci.yml` + firmware flash/OTA hooks: deferred until the firmware code migrates into this repo.
+- `ci.yml`: still deferred -- firmware code has now migrated here, so CI is the next standup step. Firmware flash/OTA hooks: **PORTED (P5.2).**
 
 ---
 

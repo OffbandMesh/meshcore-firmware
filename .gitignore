@@ -47,3 +47,6 @@ platformio.secrets.ini
 # OS
 .DS_Store
 Thumbs.db
+
+# per-host device registry (LAN IPs/MACs) -- never commit; use hardware-devices.example.yaml
+hardware-devices.yaml

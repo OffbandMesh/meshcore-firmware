@@ -20,6 +20,21 @@
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-direct-citadel-db.py\"",
             "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-raw-flash.py\"",
+            "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-raw-curl-ota.py\"",
+            "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/require-agent-mail-check.py\"",
+            "timeout": 5000
           }
         ]
       }
