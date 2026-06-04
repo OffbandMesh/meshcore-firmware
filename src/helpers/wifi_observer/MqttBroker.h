@@ -99,6 +99,11 @@ private:
 
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     esp_mqtt_client_handle_t client_ = nullptr;
+    // LoRa#327: tracks whether esp_mqtt_client_start() has been called since the
+    // last stop/destroy, so tryConnect() can pair a stop() before each re-start.
+    // esp-mqtt expects start() once; re-calling it on an already-started client
+    // (after a dropped/failed connection) leaks transport + mbedTLS allocations.
+    bool started_ = false;
 
     // C-style event dispatch -- esp_mqtt requires a static function.
     // The handler_args is the MqttBroker* registered via

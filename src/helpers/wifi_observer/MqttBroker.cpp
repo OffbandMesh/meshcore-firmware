@@ -59,6 +59,7 @@ void MqttBroker::shutdown() {
         esp_mqtt_client_destroy(client_);
         client_ = nullptr;
     }
+    started_ = false;  // LoRa#327: client gone -> next start() is a fresh first start
 #endif
     if (auth_ != nullptr) {
         delete auth_;
@@ -189,6 +190,24 @@ bool MqttBroker::tryConnect(uint32_t now_ms) {
         }
         esp_mqtt_set_config(client_, &mqcfg);
     }
+    // LoRa#327: pair start with a preceding stop on retries. esp-mqtt expects a
+    // single start(); re-calling esp_mqtt_client_start() on an already-started
+    // client (after a dropped/failed connection that left it in Backoff) leaks
+    // the transport + mbedTLS allocations -- ~68KB bled to exhaustion in the
+    // field, which then starves WiFi/lwIP and takes the whole device down.
+    // Stop here in the pool-task context, NOT in onDisconnected: that runs in
+    // the mqtt event-handler/task context, where stop() self-joins the calling
+    // task and deadlocks. Each attempt is now a clean stop->start cycle; the
+    // JWT was already re-applied above so the fresh start uses a current token.
+    if (started_) {
+        esp_mqtt_client_stop(client_);
+        started_ = false;
+        // LoRa#327 (Gemini review): re-assert Connecting AFTER stop(). stop()
+        // joins the old mqtt task, so by here a late onDisconnected from the
+        // dying task can no longer fire and clobber state to Backoff while we
+        // are actually reconnecting (which would cause reconnect stutter).
+        rt_.state = BrokerState::Connecting;
+    }
     esp_err_t err = esp_mqtt_client_start(client_);
     if (err != ESP_OK) {
         rt_.state = BrokerState::Backoff;
@@ -196,6 +215,7 @@ bool MqttBroker::tryConnect(uint32_t now_ms) {
         rt_.last_error_class = BrokerErrorClass::Other;
         return false;
     }
+    started_ = true;
 #endif
     return true;
 }
