@@ -322,6 +322,25 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 #endif
 }
 
+#ifdef CROSSWIRE_OBSERVER
+// Strycher/LoRa#335: tee every PARSED RX packet into the observer pipeline's
+// /packets path. Dispatcher::checkRecv calls logRx (Dispatcher.cpp:237) for
+// every successfully-parsed packet BEFORE routing, so it is promiscuous (sees
+// all heard traffic) and -- unlike logRxRaw -- hands us the parsed mesh::Packet,
+// which the /packets JSON needs for route/payload_type/path + the dedupe hash
+// CoreScope keys on. RSSI/SNR/airtime are still valid here: same checkRecv
+// iteration, no new RX between the radio read and this call. Score is scaled to
+// MeshCore's milli convention (matches the serial RX log + processRecvPacket).
+void MyMesh::logRx(mesh::Packet* pkt, int len, float score) {
+  if (pkt == nullptr) return;
+  int   rssi        = (int)_radio->getLastRSSI();
+  float snr         = _radio->getLastSNR();
+  int   score_milli = (int)(score * 1000.0f);
+  int   duration    = (int)_radio->getEstAirtimeFor(len);
+  crosswire::observerLogRxParsedTrampoline(*pkt, rssi, snr, score_milli, duration);
+}
+#endif
+
 bool MyMesh::isAutoAddEnabled() const {
   return (_prefs.manual_add_contacts & 1) == 0;
 }

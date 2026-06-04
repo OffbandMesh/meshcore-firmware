@@ -182,6 +182,38 @@ uint8_t MqttBrokerPool::publishRawFromBytes(const uint8_t* raw, size_t raw_len,
 }
 
 // ---------------------------------------------------------------------------
+// publishParsedPacket -- /packets topic publish (Strycher/LoRa#335)
+// ---------------------------------------------------------------------------
+// Builds the parsed-field /packets JSON via buildPacketJson (which computes
+// the SHA256 dedupe hash + route/path/payload_type from the parsed packet),
+// then fans out to every enabled+Up broker via publishPacket. The body is
+// broker-independent (origin/origin_id come from the cached identity;
+// iata/topic_prefix only affect the per-broker TOPIC, set inside
+// publishPacket), so it is built once.
+uint8_t MqttBrokerPool::publishParsedPacket(const mesh::Packet& packet,
+                                            int rssi, float snr,
+                                            int score, int duration) {
+    if (configuredCount() == 0) return 0;
+
+    MqttPayloadCtx ctx;
+    ctx.iata             = global_iata_;
+    ctx.device_id        = device_id_;
+    ctx.node_name        = node_name_;
+    ctx.topic_prefix     = "meshcore";   // body ignores this; topic set per-broker
+    ctx.client_version   = client_version_;
+    ctx.firmware_version = firmware_version_;
+    ctx.model            = model_;
+
+    char json[1024];
+    int n = buildPacketJson(json, sizeof(json), packet, /*is_tx=*/false,
+                            rssi, snr, score, duration, ctx);
+    if (n <= 0 || static_cast<size_t>(n) >= sizeof(json)) return 0;
+
+    return publishPacket(reinterpret_cast<const uint8_t*>(json),
+                         static_cast<size_t>(n));
+}
+
+// ---------------------------------------------------------------------------
 // publishStatusIfDue -- scheduled in loop()
 // ---------------------------------------------------------------------------
 void MqttBrokerPool::publishStatusIfDue(uint32_t now_ms) {

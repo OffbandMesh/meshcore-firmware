@@ -41,6 +41,17 @@ void ObserverPipeline::onRawReceived(const uint8_t* raw, int len, float rssi, fl
 #endif
 }
 
+void ObserverPipeline::onParsedReceived(const mesh::Packet& packet, int rssi,
+                                        float snr, int score, int duration) {
+    if (pool_ == nullptr) return;
+#ifdef ARDUINO
+    // Fan-out via pool's /packets path (parsed-field JSON + dedupe hash).
+    pool_->publishParsedPacket(packet, rssi, snr, score, duration);
+#else
+    (void)packet; (void)rssi; (void)snr; (void)score; (void)duration;
+#endif
+}
+
 const ObservedPacket& ObserverPipeline::recent(uint8_t idx) const {
     uint8_t base = (head_ + CROSSWIRE_MAX_RECENT_PACKETS - count_) % CROSSWIRE_MAX_RECENT_PACKETS;
     uint8_t real = (base + idx) % CROSSWIRE_MAX_RECENT_PACKETS;
@@ -57,6 +68,11 @@ ObserverPipeline& observerPipeline() {
 
 void observerLogRxTrampoline(float snr, float rssi, const uint8_t* raw, int len) {
     observerPipeline().onRawReceived(raw, len, rssi, snr);
+}
+
+void observerLogRxParsedTrampoline(const mesh::Packet& packet, int rssi,
+                                   float snr, int score, int duration) {
+    observerPipeline().onParsedReceived(packet, rssi, snr, score, duration);
 }
 
 }  // namespace crosswire

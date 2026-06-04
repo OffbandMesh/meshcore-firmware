@@ -12,6 +12,12 @@
   #include <Identity.h>
 #endif
 
+// Forward-declare so the /packets publish entry point can take a parsed
+// packet by reference without pulling Mesh.h into this header (mirrors
+// MqttPayload.h). The .cpp only passes the reference through to
+// buildPacketJson, so the forward declaration is sufficient here.
+namespace mesh { class Packet; }
+
 namespace crosswire {
 
 class MqttBrokerPool {
@@ -68,6 +74,16 @@ public:
     // different hook point or RSSI/SNR side-channel through onRecvPacket.
     uint8_t publishRawFromBytes(const uint8_t* raw, size_t raw_len,
                                 float rssi, float snr);
+
+    // Pool-side /packets publish (Strycher/LoRa#335): caller hands in a
+    // PARSED mesh::Packet + rssi/snr/score/duration. Pool builds the
+    // parsed-field JSON ONCE via buildPacketJson (route, payload_type,
+    // dedupe hash, path, ...) then fans out per-broker via publishPacket.
+    // This is the CoreScope/EastMesh-ingested topic. Fed by MyMesh::logRx
+    // (the post-parse hook) -- unlike publishRawFromBytes which is fed by
+    // the pre-parse logRxRaw hook and can only emit /raw.
+    uint8_t publishParsedPacket(const mesh::Packet& packet, int rssi,
+                                float snr, int score, int duration);
 
     // Reload one slot from NVS (after CLI config change). Tears down the
     // old broker for that slot, re-reads config, and re-begins if enabled.

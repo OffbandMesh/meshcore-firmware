@@ -45,6 +45,13 @@ public:
     // Captures the packet in the ring + fans out via the pool's /raw publish.
     void onRawReceived(const uint8_t* raw, int len, float rssi, float snr);
 
+    // Called via the parsed trampoline below from MyMesh::logRx (Strycher/
+    // LoRa#335). Fans the PARSED packet out via the pool's /packets publish
+    // (route/payload_type/dedupe-hash JSON -- the topic CoreScope ingests).
+    // Does not touch the ring (that mirrors the raw RX stream).
+    void onParsedReceived(const mesh::Packet& packet, int rssi, float snr,
+                          int score, int duration);
+
     // Ring accessors (Plan 3 web UI will read these).
     uint8_t recentCount() const { return count_; }
     const ObservedPacket& recent(uint8_t idx) const;
@@ -65,5 +72,11 @@ ObserverPipeline& observerPipeline();
 // Signature deliberately matches the logRxRaw shape so the wiring at the
 // call site is a one-liner.
 void observerLogRxTrampoline(float snr, float rssi, const uint8_t* raw, int len);
+
+// C-style trampoline that MyMesh::logRx calls under #ifdef CROSSWIRE_OBSERVER
+// (Strycher/LoRa#335). Delegates to observerPipeline().onParsedReceived for
+// the /packets publish path.
+void observerLogRxParsedTrampoline(const mesh::Packet& packet, int rssi,
+                                   float snr, int score, int duration);
 
 }  // namespace crosswire

@@ -131,6 +131,9 @@ protected:
   void sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis=0) override;
 
   void logRxRaw(float snr, float rssi, const uint8_t raw[], int len) override;
+#ifdef CROSSWIRE_OBSERVER
+  void logRx(mesh::Packet* pkt, int len, float score) override;   // Strycher/LoRa#335: /packets path
+#endif
   bool isAutoAddEnabled() const override;
   bool shouldAutoAddContactType(uint8_t type) const override;
   bool shouldOverwriteWhenFull() const override;
