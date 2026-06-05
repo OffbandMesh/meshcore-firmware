@@ -4,6 +4,14 @@
 
 #include "MyMesh.h"
 
+#ifdef PIN_STATUS_LED
+  // Repeater heartbeat status LED (Strycher/Crosswire#9). Active-high default;
+  // variants override LED_STATE_ON for active-low boards.
+  #ifndef LED_STATE_ON
+    #define LED_STATE_ON HIGH
+  #endif
+#endif
+
 #ifdef DISPLAY_CLASS
   #include "UITask.h"
   static UITask ui_task(display);
@@ -862,6 +870,11 @@ void setup() {
 
   board.begin();
 
+#ifdef PIN_STATUS_LED
+  pinMode(PIN_STATUS_LED, OUTPUT);
+  digitalWrite(PIN_STATUS_LED, !LED_STATE_ON);   // start off
+#endif
+
   // D9 / issue #63: app-level boot-rollback safety. Runs AFTER Serial.begin()
   // (so we can log) and AFTER board.begin() (so platform init is settled), but
   // BEFORE any radio/mesh/WiFi work (those are the things that can crash). If
@@ -945,6 +958,21 @@ void setup() {
 }
 
 void loop() {
+#ifdef PIN_STATUS_LED
+  // Heartbeat: brief blip = alive (Strycher/Crosswire#9). No unread-message
+  // logic (repeaters carry none). Cadence follows the loop rate; under nRF52
+  // powersave it blips on each wake.
+  {
+    static unsigned long s_led_next = 0;
+    static bool s_led_on = false;
+    unsigned long led_now = millis();
+    if ((long)(led_now - s_led_next) >= 0) {
+      s_led_on = !s_led_on;
+      s_led_next = led_now + (s_led_on ? 40UL : 2960UL);   // ~40ms on / ~3s off
+      digitalWrite(PIN_STATUS_LED, s_led_on ? LED_STATE_ON : !LED_STATE_ON);
+    }
+  }
+#endif
   int len = strlen(command);
   while (Serial.available() && len < sizeof(command)-1) {
     char c = Serial.read();
