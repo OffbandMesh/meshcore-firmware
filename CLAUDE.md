@@ -42,6 +42,16 @@ The firmware currently lives on the **`crosswire` branch of `Strycher/MeshCore`*
 - **This repo is the home for new requests, issues, and design-of-record.** New Crosswire feature requests / bugs filed here are tracked under the **Crosswire** Citadel project.
 - **Flash discipline PORTED (P5.2):** `scripts/pio-flash` (+`.py`), `scripts/ota-push.py`, and the `block-raw-flash` / `block-raw-curl-ota` / `require-agent-mail-check` PreToolUse hooks now live in this repo. The device registry `hardware-devices.yaml` is **gitignored** (per-host; holds LAN IPs/MACs) — copy `hardware-devices.example.yaml` to `hardware-devices.yaml` and populate it before flashing from this repo.
 
+## Preserved artifacts / test fixtures
+
+Intentionally-kept tags/branches that are **NOT on the build line** and must **NOT** be flagged as stranded or cleanup. CI never builds these; they are off `firmware-base` by design. Tags (not branches) are used so stale-branch tooling never touches them.
+
+| Artifact | Type | What it is | Revive |
+|---|---|---|---|
+| `archive/plan3-web-ui-crash-fixture` | tag (→ `447cf206`) | Plan 3 observer web UI / HTTPS / web auth / AP setup — 7 file-pairs (WebServer, WebApi, WebUiAssets, WebAuth, WebSession, WebCertStore, ApSetupForm) + the `Strycher/LoRa#282` heap fix. Deferred dead-path (heap/TLS instability, `Strycher/LoRa#281/#282/#312`). Kept for salvageable code **and** as a deliberate crash/boot-cycle fixture for SafeBoot / rapid-reboot recovery testing (`Strycher/LoRa#264/#265/#267`). | `git checkout -b plan3-revive archive/plan3-web-ui-crash-fixture` |
+
+Decision record: **Strycher/Crosswire#5** (closed, preserved-by-design). Do not casually merge any of these into `firmware-base`.
+
 ## Security
 
 - MIT fork: preserve upstream copyright in `LICENSE.txt`.
