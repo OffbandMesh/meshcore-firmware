@@ -482,11 +482,16 @@ public:
     // when heap is already tight). Same value as the [hb] heartbeat log
     // line in CrashLog.cpp (ESP.getFreeHeap()), refreshed at the screen's
     // native 5-second cadence (return 5000 below).
+#if defined(ESP32) || defined(ESP_PLATFORM)
+    // Heap readout was added for the ESP32 V3/V4 heap crisis; ESP.* is
+    // ESP32-only, so guard it -- nRF52 companions otherwise fail to compile
+    // ('ESP' not declared). Strycher/Crosswire#8.
     char heap_tmp[24];
     snprintf(heap_tmp, sizeof(heap_tmp), "Heap:%u", (unsigned)ESP.getFreeHeap());
     display.setTextSize(1);
     display.setColor(DisplayDriver::LIGHT);
     display.drawTextCentered(display.width() / 2, 56, heap_tmp);
+#endif
 
     return 5000;   // next render after 5000 ms
   }
