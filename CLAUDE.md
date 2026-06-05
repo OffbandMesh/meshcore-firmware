@@ -18,7 +18,7 @@ A standalone MIT fork of [MeshCore](https://github.com/meshcore-dev/MeshCore) fo
 | `PROJECT_NAME` | Crosswire |
 | `PROJECT_DIR` | `C:\Dev\LoRa\Crosswire` (nested under the LoRa workspace, gitignored by LoRa) |
 | `INFRA_PROFILE` | Maker |
-| `BUILD_COMMAND` | `pio run -e <env>` (once firmware migrates here; see Migration status) |
+| `BUILD_COMMAND` | `pio run -e <env>` (firmware now lives here; built from the `meshcore-firmware` clone — see Migration status) |
 | `DEPLOY_TARGET` | Device flash over USB / OTA (no SCP deploy; firmware is flashed, not server-deployed) |
 | `CITADEL_PROJECT` | `Crosswire` (Strycher/Crosswire) |
 | `GITHUB_PROJECT_ID` | `PVT_kwHODGcOBc4BZuj8` (Project #14, "Crosswire Project Board") |
@@ -36,11 +36,12 @@ Recorded per REPOCONFIG (board field IDs captured in project CLAUDE.md). Consume
 
 ## Migration status (IMPORTANT for agents)
 
-The firmware currently lives on the **`crosswire` branch of `Strycher/MeshCore`**, not in this repo yet. It migrates here after the compose-not-inherit architecture refactor (design-of-record: `docs/architecture/2026-06-01-observer-architecture-review.md`). Until then:
+**Firmware has migrated here.** `firmware-base` (this repo's default branch) is the canonical Crosswire firmware tree. The old `crosswire` branch of `Strycher/MeshCore` is retired and that **fork is archived** (2026-06-04, read-only; reversible via `gh repo unarchive`). Full history is preserved in this repo: branches (patch-id verified), all `crosswire-v*` release tags + `archive/*` tags, and Plan 3 (see Preserved artifacts). Design-of-record: `docs/architecture/2026-06-01-observer-architecture-review.md`.
 
-- **Code/build/flash work happens in the MeshCore fork** under the LoRa workspace (`C:\Dev\LoRa\meshcore-firmware`), tracked under the **LoRa** Citadel project + Strycher/LoRa issues.
-- **This repo is the home for new requests, issues, and design-of-record.** New Crosswire feature requests / bugs filed here are tracked under the **Crosswire** Citadel project.
-- **Flash discipline PORTED (P5.2):** `scripts/pio-flash` (+`.py`), `scripts/ota-push.py`, and the `block-raw-flash` / `block-raw-curl-ota` / `require-agent-mail-check` PreToolUse hooks now live in this repo. The device registry `hardware-devices.yaml` is **gitignored** (per-host; holds LAN IPs/MACs) — copy `hardware-devices.example.yaml` to `hardware-devices.yaml` and populate it before flashing from this repo.
+Current hybrid state (until a true Strycher/Crosswire working clone replaces the fork clone):
+- **Build/flash still happen from the `meshcore-firmware` clone** under the LoRa workspace (`C:\Dev\LoRa\meshcore-firmware`). That clone now pushes **only** to `crosswire`; the `strycher` (MeshCore-fork) remote is removed, and `origin` (meshcore-dev) + `iotthinks` are **fetch-only** (`no-push`). In-flight firmware work there is still tracked under the **LoRa** Citadel project + Strycher/LoRa issues. The Citadel-home flip (LoRa → Crosswire) is gated on the working-tree cutover.
+- **Net-new Crosswire requests / bugs / design-of-record are filed here** under the **Crosswire** Citadel project.
+- **Flash discipline PORTED (P5.2):** `scripts/pio-flash` (+`.py`), `scripts/ota-push.py`, and the `block-raw-flash` / `block-raw-curl-ota` / `require-agent-mail-check` PreToolUse hooks live in this repo. The device registry `hardware-devices.yaml` is **gitignored** (per-host; holds LAN IPs/MACs) — copy `hardware-devices.example.yaml` to `hardware-devices.yaml` and populate it before flashing from this repo.
 
 ## Preserved artifacts / test fixtures
 
@@ -60,10 +61,10 @@ Decision record: **Strycher/Crosswire#5** (closed, preserved-by-design). Do not 
 
 ## Follow-ups (bootstrap gaps to close)
 
-- `/work` slash command (`work.md`) and `session-state` compaction-recovery hook: not present in the canonical templates at bootstrap time; add when available.
-- Projects-v2 board + `sync-labels-to-board.yml` workflow: **DONE (2026-06-04)** — board #14 created, `board:*`/`priority:*` labels created, workflow committed. Remaining: set repo secret `PROJECT_PAT` (workflow inert until then); board-view column grouping is a one-click UI step.
-- `ci.yml`: still deferred -- firmware code has now migrated here, so CI is the next standup step. Firmware flash/OTA hooks: **PORTED (P5.2).**
+- `/work` slash command + `session-state.py` compaction-recovery hook: **now published canonically** (standards @27b3ec7 — `/work` #112, `session-state.py` #107). `/work` auto-syncs into `.claude/commands/` via preflight; `session-state.py` is a hook copy-in (not auto-synced). Port deferred by owner — do when picked up.
+- Projects-v2 board + `sync-labels-to-board.yml` workflow: **DONE (2026-06-04)** — board #14 created, `board:*`/`priority:*` labels created, workflow committed + validated. Remaining: set repo secret `PROJECT_PAT` (workflow inert until then); board-view column grouping is a one-click UI step.
+- `ci.yml`: **DONE (2026-06-04)** — matrix CI added + green (6 envs). Firmware flash/OTA hooks: **PORTED (P5.2).**
 
 ---
 
-**Last updated:** 2026-06-03 (repo establishment; code migration pending the architecture refactor).
+**Last updated:** 2026-06-04 (firmware migration complete; Strycher/MeshCore fork archived; board + CI + flash-discipline landed).
