@@ -23,12 +23,24 @@ Increments per CLAUDE-BASE §Versioning:
 
 | Increment | When |
 |-----------|------|
-| **PATCH** | Every successful compile of fork code (bug fixes, small changes) |
-| **MINOR** | When a fork feature lands on a deploy branch (e.g., MQTT command queue ships, SafeBoot bench-validates) |
-| **MAJOR** | Release milestones (e.g., first public release, breaking compatibility changes) |
+| **PATCH** | Bug fixes, small changes, a landing that adds no user-facing capability (incl. docs) |
+| **MINOR** | A fork feature lands (e.g., a new LED behavior, MQTT command queue, SafeBoot bench-validates) |
+| **MAJOR** | Release milestones (first public release, breaking compatibility changes) |
 
-Tags are pushed to the Strycher/MeshCore remote and are accessible to all
-working trees of the fork.
+### Cadence (when each thing happens)
+
+| Action | Trigger | Result |
+|---|---|---|
+| **Commit** | Each completed task, **and after every successful compile** | granular history + clean rollback; shows as the `+N` suffix in `git describe` |
+| **PR** | A confirmed-working iteration of a **closed epic** | review surface + merge to `firmware-base` |
+| **Version bump (tag)** | Each landing on `firmware-base` (the epic PR) | a `crosswire-vX.Y.Z` tag; `CHANGELOG.md` `[Unreleased]` rolls into the new version section |
+
+Between version tags, commits accumulate as `+N` dev builds (e.g.
+`crosswire-v0.13.1-4-gABCDEF` = 4 commits past the tag); each epic landing cuts a
+new tag. **Every landing updates `CHANGELOG.md`.**
+
+Tags are pushed to the **`crosswire` remote** (`Strycher/Crosswire`) and are
+accessible to all working trees of the fork.
 
 ### Feature-scoped release tags
 
@@ -49,6 +61,25 @@ the table for feature-specific Crosswire releases that are intentionally NOT
 upstream-bound — i.e., features that only make sense under Crosswire branding
 (deployment-config, MQTT topic conventions tied to SWOH infrastructure, etc.).
 Not used yet; will be defined when the first such release ships.
+
+## Release channels (community availability)
+
+A *version tag* is an internal milestone; a *release* is the subset of tags
+published to the community. The split uses GitHub's native flags — no custom
+labels:
+
+| Channel | Mechanism | Audience |
+|---|---|---|
+| **dev** | CI build **artifact** only (downloadable from the Actions run); no GitHub Release | maintainer only |
+| **pre-release (`-rcN`)** | tag `crosswire-vX.Y.Z-rc1` → GitHub Release with the **pre-release** flag set | community testers; shown as "Pre-release", not "Latest" |
+| **stable** | tag `crosswire-vX.Y.Z` → GitHub Release marked **"Latest"** | everyone; the recommended download |
+
+Publishing a GitHub Release is the deliberate "make this available to the
+community" action. The **release gate is hardware validation** (the maintainer's
+hands-on test on real devices), not CI-green — CI-green only means "worth
+flashing to test." `-rc` is the single pre-release tier for now: testers arrive
+after the internal minimum bar, so they're already past "alpha". Add `-beta` only
+if a rougher tier below `-rc` is ever needed.
 
 ## Upstream baseline tracking
 
@@ -96,16 +127,21 @@ exceeds the tagging cost. Not done by default; case-by-case.
 
 ## How to increment the Crosswire version
 
-After landing a fork-side commit on the deploy branch:
+After an epic lands on `firmware-base` (and `CHANGELOG.md` `[Unreleased]` has been
+rolled into the new version section):
 
 ```bash
-# PATCH (most common: build artifact, small fix)
-git tag -a crosswire-v0.5.1 -m "PATCH: <one-line description>"
-git push strycher crosswire-v0.5.1
+# PATCH (small fix / docs / non-feature landing)
+git tag -a crosswire-v0.13.2 -m "PATCH: <one-line description>"
+git push crosswire crosswire-v0.13.2
 
 # MINOR (a feature lands)
-git tag -a crosswire-v0.6.0 -m "MINOR: <feature> landed"
-git push strycher crosswire-v0.6.0
+git tag -a crosswire-v0.14.0 -m "MINOR: <feature> landed"
+git push crosswire crosswire-v0.14.0
+
+# Pre-release for community testers (then publish a GitHub Release, pre-release flag)
+git tag -a crosswire-v0.14.0-rc1 -m "RC1: <feature> -- community test"
+git push crosswire crosswire-v0.14.0-rc1
 ```
 
 The firmware build picks up the latest matching tag via
