@@ -13,15 +13,17 @@ A [MeshCore](https://github.com/meshcore-dev/MeshCore) fork for **cross-role fir
 
 Cross-cutting work used by multiple roles: a NimBLE migration off Bluedroid, a CrashLog / boot-survival diagnostics layer, and ongoing heap and power optimization for memory-constrained ESP32-S3 boards (Heltec V3 / V4, XIAO).
 
-## Status: code migration in progress
+## Status
 
-> The firmware currently lives on the `crosswire` branch of the [Strycher/MeshCore](https://github.com/Strycher/MeshCore) fork. It is **migrating into this repository** after an in-progress architecture refactor (moving the observer from inheriting the full MeshCore messenger to composing MeshCore as a dependency). Until that lands, this repo is the **home for issues, requests, and design-of-record** -- the code follows.
-
-The design-of-record for that refactor is in [`docs/architecture/`](docs/architecture/).
+The firmware lives here: **`firmware-base`** is the canonical Crosswire tree (the old `Strycher/MeshCore` fork is archived). Design-of-record for the observer architecture is in [`docs/architecture/`](docs/architecture/).
 
 ## Filing requests
 
 Requests and bug reports are welcome now -- use the issue templates (Bug report / Feature request). When reporting a bug, include the role, board, and the Crosswire version from the OLED splash or serial banner, and **never paste WiFi/MQTT credentials**.
+
+## Releases & versioning
+
+Crosswire uses an independent `crosswire-vMAJOR.MINOR.PATCH` version (see [VERSIONING.md](VERSIONING.md)); every build self-identifies on the OLED splash + serial banner. Changes are tracked in [CHANGELOG.md](CHANGELOG.md). Releases come in three channels: **dev** (CI artifacts, untested on hardware), **`-rc` pre-releases** (community testing), and **stable** (the "Latest" GitHub Release). The release gate is hardware validation, not just a green build.
 
 ## License
 
