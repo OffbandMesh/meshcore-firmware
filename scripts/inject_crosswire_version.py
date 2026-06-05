@@ -71,6 +71,12 @@ crosswire_version = _git(
     "describe", "--tags",
     "--match", "crosswire-v*",
     "--abbrev=7", "--dirty",
+    # --always: when no crosswire-v* tag is reachable (e.g. the unified
+    # firmware-base line before its first release tag), fall back to the
+    # abbreviated commit SHA instead of a non-distinguishing "untagged"
+    # string, so every build self-identifies on the OLED splash + CLI
+    # (Strycher/LoRa#319). `default` only fires if git itself is unavailable.
+    "--always",
     default="crosswire-untagged",
 )
 crosswire_git_sha = _git("rev-parse", "--short=7", "HEAD")

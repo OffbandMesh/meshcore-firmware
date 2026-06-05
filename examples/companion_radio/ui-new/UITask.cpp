@@ -115,6 +115,13 @@ public:
     display.setTextSize(1);
     char cw_line[32];
     snprintf(cw_line, sizeof(cw_line), "Crosswire %s", _crosswire_short);
+    // drawTextCentered does NOT wrap or clip: a line wider than the panel
+    // spills off both edges invisibly. Clamp to the chars that fit at size-1
+    // (~6px/char) so the version can never run off-screen (Strycher/LoRa#319).
+    {
+      int cw_max = display.width() / 6;
+      if (cw_max > 0 && (int)strlen(cw_line) > cw_max) cw_line[cw_max] = '\0';
+    }
     display.drawTextCentered(display.width()/2, 22, cw_line);
 
     char mc_line[24];
