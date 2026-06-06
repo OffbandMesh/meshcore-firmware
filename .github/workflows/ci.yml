@@ -54,3 +54,19 @@ jobs:
 
       - name: Build ${{ matrix.env }}
         run: pio run -e ${{ matrix.env }}
+
+      # Dev-channel artifact (epic #14 / T2, #16). Built with the placeholder
+      # secrets stub above -- these are dev/test builds, NOT releases. Configure
+      # WiFi/MQTT at runtime, or rebuild with real secrets.
+      - name: Upload firmware artifact (dev channel)
+        uses: actions/upload-artifact@v4
+        with:
+          name: crosswire-dev-${{ matrix.env }}
+          path: |
+            .pio/build/${{ matrix.env }}/firmware.bin
+            .pio/build/${{ matrix.env }}/firmware.elf
+            .pio/build/${{ matrix.env }}/firmware.hex
+            .pio/build/${{ matrix.env }}/firmware.zip
+            .pio/build/${{ matrix.env }}/firmware.uf2
+          if-no-files-found: warn
+          retention-days: 90
