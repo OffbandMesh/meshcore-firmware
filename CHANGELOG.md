@@ -18,6 +18,23 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 _Nothing yet._
 
+## [0.14.0] - 2026-06-07
+
+### Added
+- CI release pipeline (epic #14): dev-channel firmware artifacts on every
+  `firmware-base` push / PR (`ci.yml`), and a `release.yml` workflow that builds
+  the curated community board set from `crosswire-v*` tags and publishes a
+  GitHub Release (pre-release for `-rc*`, "Latest" for stable). Curated env set
+  in `.github/release-envs.txt` (72 envs; `heltec_v4_repeater_telemetry` gated on
+  #20). Design of record: `docs/architecture/2026-06-06-ci-release-pipeline.md`.
+  (#15, #16, #17)
+
+### Changed
+- Reconciled inherited CI workflows: removed 7 dead/superseded
+  (`pr-build-check`, `auto-promote`, `github-pages`, the three upstream-tag
+  `build-*-firmwares`, `branch-cleanup`); kept `build-safeboot-firmwares` +
+  `sync-labels-to-board`. (#18)
+
 ## [0.13.2] - 2026-06-05
 
 ### Added
