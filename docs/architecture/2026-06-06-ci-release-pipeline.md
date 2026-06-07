@@ -187,3 +187,23 @@ Cost: GitHub-hosted minutes; matrix parallel. Mitigation if too slow: the env li
 2. Release notes: **CHANGELOG section + auto** (proposed) vs auto-only.
 3. Publish ELF in releases: **no** (proposed) vs yes.
 4. Otherwise: accept the plan -> T2 begins.
+
+## 12. Plan updates (accepted 2026-06-06; restructured 2026-06-07)
+
+- **Accepted** with the three defaults: publish-partial-and-flag, CHANGELOG section + auto notes,
+  no ELF in releases. Observer/telemetry inclusion confirmed.
+- **T5 restructured -> T6.** The in-branch integration test (old T5, #19) was closed; the live
+  integration test is now a separate POST-MERGE task **T6 (#23 / Crosswire-nyj)**. Reason: an
+  in-branch integration test is infeasible -- a feature-branch push is blocked by the pre-push hook
+  while the test task is in_progress, and `ci.yml`/`release.yml` trigger on `firmware-base` + tags,
+  not feature branches. The pipeline can only be exercised on merged code.
+- **Deliberate deviation from CLAUDE-BASE Sec. Branch&PR** ("integration test passes BEFORE the
+  PR"): T6 runs AFTER merge. Justified -- the pipeline under test triggers only on `firmware-base`
+  + tags and cannot run on the pre-merge feature branch. User-directed (2026-06-07).
+- **T4 `branch-cleanup.yml` -> DELETED** (was "REVIEW"). It was inert here (guarded to
+  `Strycher/LoRa`) and pruned UNMERGED stale branches (unsafe for the one-epic-one-branch model).
+  Not repurposed: branch hygiene is handled canonically in SAFELANE/standards, not by a
+  project-local auto-delete.
+- **Status:** T1/T2/T3/T4 done (local validation per task: YAML parse + logic review). Final
+  workflow set: `ci.yml`, `release.yml`, `build-safeboot-firmwares.yml`, `sync-labels-to-board.yml`.
+  Next: epic PR (human tollgate) -> merge -> T6 post-merge live test -> human sign-off closes #14.
