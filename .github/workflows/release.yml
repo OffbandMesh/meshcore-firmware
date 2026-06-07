@@ -1,0 +1,121 @@
+name: Release
+
+# Builds the curated community board set (.github/release-envs.txt) and publishes
+# a GitHub Release. Triggers on crosswire-v* tags (stable + -rc pre-releases) and
+# workflow_dispatch (build-only test run; no Release published on dispatch).
+# Public binaries carry placeholder secrets, configured at runtime.
+# Design of record: docs/architecture/2026-06-06-ci-release-pipeline.md (epic #14 / T3 / #17).
+
+on:
+  push:
+    tags:
+      - 'crosswire-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version for a build-only test run (e.g. v0.0.0-dev). No Release is published on dispatch.'
+        required: false
+        default: 'v0.0.0-dev'
+
+permissions:
+  contents: write
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    outputs:
+      envs: ${{ steps.read.outputs.envs }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: read
+        name: Read curated env list
+        run: |
+          envs=$(grep -vE '^[[:space:]]*#' .github/release-envs.txt \
+                 | grep -vE '^[[:space:]]*$' \
+                 | jq -R . | jq -cs .)
+          echo "envs=$envs" >> "$GITHUB_OUTPUT"
+          echo "Selected $(echo "$envs" | jq 'length') env(s) for release."
+
+  build:
+    needs: list
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: ${{ fromJSON(needs.list.outputs.envs) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-build-environment
+
+      - name: Resolve firmware version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "version=${GITHUB_REF_NAME#crosswire-}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate dummy secrets stub (public build; configured at runtime)
+        run: |
+          printf '[node_secrets]\nadmin_password = ci-dummy\n[wifi_secrets]\nssid = ci-dummy\npassword = ci-dummy\n[mqtt_secrets]\nhost = mqtt.example.com\nport = 1883\nuser = ci-dummy\npassword = ci-dummy\n[ota_secrets]\ntrigger_secret = ci-dummy\n[cmdrelay]\nurl = http://cmdrelay.example.com/cmd\n' > "$RUNNER_TEMP/ci-secrets.ini"
+          echo "PIO_SECRETS_FILE=$RUNNER_TEMP/ci-secrets.ini" >> "$GITHUB_ENV"
+
+      - name: Build ${{ matrix.env }}
+        env:
+          FIRMWARE_VERSION: ${{ steps.ver.outputs.version }}
+        run: /usr/bin/env bash build.sh build-firmware ${{ matrix.env }}
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.env }}
+          path: out/*
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    needs: [list, build]
+    # Publish only on tag pushes (not on dispatch test runs). always() so a partial
+    # build failure still publishes the envs that succeeded (publish-partial-and-flag).
+    if: ${{ always() && github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Collect firmware files
+        run: |
+          mkdir -p out
+          find dist -type f -exec cp {} out/ \;
+          echo "Collected $(find out -type f | wc -l) firmware file(s)."
+
+      - name: Extract CHANGELOG section for release body
+        run: |
+          ver="${GITHUB_REF_NAME#crosswire-}"   # e.g. v0.14.0
+          num="${ver#v}"                         # e.g. 0.14.0
+          awk -v v="$num" '
+            $0 ~ "^## \\[" v "\\]" { grab=1; next }
+            grab && /^## \[/ { grab=0 }
+            grab { print }
+          ' CHANGELOG.md > body.md || true
+          if [ ! -s body.md ]; then
+            echo "(No CHANGELOG entry for ${ver}.)" > body.md
+          fi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Crosswire ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          make_latest: ${{ !contains(github.ref_name, '-rc') }}
+          body_path: body.md
+          generate_release_notes: true
+          files: out/*
+          fail_on_unmatched_files: false
