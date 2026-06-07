@@ -1,0 +1,113 @@
+# Curated release env set for release.yml (epic #14 / T3 / #17).
+# One PlatformIO env per line. Lines starting with # and blank lines are ignored.
+# 72 active envs; heltec_v4_repeater_telemetry is gated on #20 (runtime-config
+# secrets) -- uncomment it once #20 lands. Verified against variants/*/platformio.ini.
+
+# RAK4631 (nRF52)
+RAK_4631_companion_radio_ble
+RAK_4631_companion_radio_usb
+RAK_4631_repeater
+RAK_4631_room_server
+
+# WisMesh -- RAK 3401 (nRF52)
+RAK_3401_companion_radio_ble
+RAK_3401_companion_radio_usb
+RAK_3401_repeater
+RAK_3401_room_server
+
+# WisMesh Tag (nRF52)
+RAK_WisMesh_Tag_companion_radio_ble
+RAK_WisMesh_Tag_companion_radio_usb
+RAK_WisMesh_Tag_repeater
+RAK_WisMesh_Tag_room_server
+
+# Seeed Wio Tracker L1 (nRF52)
+WioTrackerL1_companion_radio_ble
+WioTrackerL1_companion_radio_usb
+WioTrackerL1_repeater
+WioTrackerL1_room_server
+
+# Seeed XIAO S3 WIO (ESP32-S3) -- includes observer
+Xiao_S3_WIO_companion_observer_wifi
+Xiao_S3_WIO_companion_radio_ble
+Xiao_S3_WIO_companion_radio_usb
+Xiao_S3_WIO_repeater
+Xiao_S3_WIO_room_server
+
+# Seeed XIAO C3 (ESP32-C3)
+Xiao_C3_companion_radio_ble
+Xiao_C3_companion_radio_usb
+Xiao_C3_repeater
+Xiao_C3_room_server
+
+# Seeed XIAO C6 (ESP32-C6) -- only these two envs exist (trailing underscore is intentional)
+Xiao_C6_companion_radio_ble_
+Xiao_C6_repeater_
+
+# Seeed XIAO nRF52
+Xiao_nrf52_companion_radio_ble
+Xiao_nrf52_companion_radio_usb
+Xiao_nrf52_repeater
+Xiao_nrf52_room_server
+
+# Seeed Solar SenseCap (ESP32)
+SenseCap_Solar_companion_radio_ble
+SenseCap_Solar_companion_radio_usb
+SenseCap_Solar_repeater
+SenseCap_Solar_room_server
+
+# SenseCap T1000E (nRF52)
+t1000e_companion_radio_ble
+t1000e_companion_radio_usb
+t1000e_repeater
+t1000e_room_server
+
+# Heltec T096 (nRF52)
+Heltec_t096_companion_radio_ble
+Heltec_t096_companion_radio_usb
+Heltec_t096_repeater
+Heltec_t096_room_server
+
+# Heltec T1114 (nRF52)
+Heltec_t114_companion_radio_ble
+Heltec_t114_companion_radio_usb
+Heltec_t114_repeater
+Heltec_t114_room_server
+
+# Heltec V2 (ESP32)
+Heltec_v2_companion_radio_ble
+Heltec_v2_companion_radio_usb
+Heltec_v2_repeater
+Heltec_v2_room_server
+
+# Heltec V3 (ESP32-S3) -- includes observer
+Heltec_v3_companion_observer_wifi
+Heltec_v3_companion_radio_ble
+Heltec_v3_companion_radio_usb
+Heltec_v3_repeater
+Heltec_v3_room_server
+
+# Heltec V4 OLED (ESP32-S3) -- includes observer; telemetry gated on #20
+heltec_v4_companion_observer_wifi
+heltec_v4_companion_radio_ble
+heltec_v4_companion_radio_usb
+heltec_v4_repeater
+#heltec_v4_repeater_telemetry   # GATED: uncomment after #20 (runtime-config secrets)
+heltec_v4_room_server
+
+# Heltec V4 TFT (ESP32-S3)
+heltec_v4_tft_companion_radio_ble
+heltec_v4_tft_companion_radio_usb
+heltec_v4_tft_repeater
+heltec_v4_tft_room_server
+
+# LILYGO T-Echo (nRF52)
+LilyGo_T-Echo_companion_radio_ble
+LilyGo_T-Echo_companion_radio_usb
+LilyGo_T-Echo_repeater
+LilyGo_T-Echo_room_server
+
+# LILYGO T-Deck (ESP32-S3) -- no room_server env
+LilyGo_TDeck_companion_radio_ble
+LilyGo_TDeck_companion_radio_usb
+LilyGo_TDeck_repeater
