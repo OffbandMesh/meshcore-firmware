@@ -64,12 +64,14 @@ REGISTRY_PATH = PROJECT_ROOT / "hardware-devices.yaml"
 FLASH_HISTORY_PATH = PROJECT_ROOT / "flash-history.jsonl"
 TOKEN_TTL_SEC = 300   # 5 min per Standards design note #1
 
-# Directory holding the firmware repo / pio.ini for upload + monitor invocations.
-# Per CLAUDE.md BUILD_COMMAND, the firmware lives at meshcore-firmware/ within
-# the LoRa project. Override at runtime if needed via PIO_FLASH_FIRMWARE_DIR.
+# Directory holding the firmware tree (platformio.ini + variants/) for build +
+# upload + monitor invocations. Post-migration the Crosswire repo root IS the
+# firmware tree, so the default is PROJECT_ROOT. Override per-host via the
+# PIO_FLASH_FIRMWARE_DIR env var, or per-invocation via --firmware-dir.
+# Precedence: --firmware-dir > PIO_FLASH_FIRMWARE_DIR > default. See #27.
 FIRMWARE_DIR = Path(os.environ.get(
     "PIO_FLASH_FIRMWARE_DIR",
-    str(PROJECT_ROOT / "meshcore-firmware"),
+    str(PROJECT_ROOT),
 ))
 
 
@@ -1065,6 +1067,14 @@ def build_parser() -> argparse.ArgumentParser:
         prog="pio-flash",
         description="LoRa flash-discipline wrapper (Epic A #44 / A2 #47).",
     )
+    p.add_argument(
+        "--firmware-dir",
+        default=None,
+        help="override the firmware tree (platformio.ini location) for this "
+             "invocation; must precede the subcommand. Precedence: "
+             "--firmware-dir > PIO_FLASH_FIRMWARE_DIR env > default "
+             "(Crosswire repo root). See #27.",
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("list", help="enumerate present ports vs registry (Tier 0)")
@@ -1130,7 +1140,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    global FIRMWARE_DIR
     args = build_parser().parse_args()
+    if getattr(args, "firmware_dir", None):
+        FIRMWARE_DIR = Path(args.firmware_dir).resolve()
     registry = load_registry()
     dispatch = {
         "list": cmd_list,
