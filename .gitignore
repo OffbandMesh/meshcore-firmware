@@ -50,3 +50,7 @@ Thumbs.db
 
 # per-host device registry (LAN IPs/MACs) -- never commit; use hardware-devices.example.yaml
 hardware-devices.yaml
+
+# per-host flash audit log + full-flash backups (device MACs/DeviceIDs) -- never commit
+flash-history.jsonl
+flash-backups/
