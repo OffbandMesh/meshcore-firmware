@@ -84,6 +84,15 @@ ESP32_APP0_OFFSET = 0x10000      # ota_0 (app) partition start
 ESP32_OTADATA_OFFSET = 0xe000    # boot selector
 ESP32_OTADATA_SIZE = 0x2000
 
+# Bootloader-discovery (Strycher/Crosswire#34): native-USB boards change USB
+# identity + COM number entering bootloader (ESP32-S3 303A:0002->303A:1001;
+# nRF52/Adafruit 239A:8029->239A:00xx). After triggering bootloader entry on the
+# verified running port, the wrapper re-enumerates and discovers the new port by
+# vendor VID + a changed PID.
+ESP32S3_VENDOR = "303A"
+NRF52_VENDOR = "239A"
+BOOTLOADER_DISCOVER_TIMEOUT = 20   # seconds to wait for re-enumeration
+
 
 # ---------------------------------------------------------------------------
 # Output helpers - uniform formatting so the agent can parse refusal messages.
@@ -516,75 +525,196 @@ def _preview_artifact(args, port: dict, entry: dict) -> int:
     return 2
 
 
-def _flash_esp32_app_slot(artifact: Path, com: str, env_d: dict) -> int:
-    """NVS-preserving ESP32 update: write the app image to app0, then erase
-    otadata so the bootloader deterministically boots the image just written
-    (regardless of which OTA slot was previously active). NVS is never touched.
+def env_with_auth() -> dict:
+    """os.environ copy with the wrapper-authorization marker the future
+    pass-through hook keys on."""
+    e = os.environ.copy()
+    e["PIO_FLASH_AUTHORIZED"] = "1"
+    return e
 
-    ESP32-S3 native-USB (Strycher/Crosswire#29): the chip must ALREADY be in
-    ROM download mode (USB-Serial-JTAG identity) when this runs - the COM port
-    changes on reset, so the wrapper cannot reliably auto-enter download from
-    the running app. The write uses --after no_reset so the chip STAYS in
-    download for the otadata erase; the erase then resets it (default hard
-    reset) so it boots app0. Same download-chaining the factory-reset uses."""
-    out(f"[1/2] write-flash 0x{ESP32_APP0_OFFSET:x} {artifact.name} (app0 / ota_0; stay in download)")
-    rc1 = subprocess.call(
-        ["python", "-m", "esptool", "--port", com, "--after", "no-reset",
-         "write-flash", hex(ESP32_APP0_OFFSET), str(artifact)],
-        env=env_d,
+
+# esptool / adafruit-nrfutil output markers for output-parsed verification
+# (Strycher/Crosswire#34). Markers are matched case-insensitively.
+_ESPTOOL_WRITE_OK = ["hash of data verified"]
+_ESPTOOL_ERASE_OK = ["erased successfully", "erased in"]
+_ESPTOOL_FAIL = ["a fatal error", "serial exception", "failed", "traceback (most recent call"]
+_NRFUTIL_OK = ["device programmed"]
+_NRFUTIL_FAIL = ["failed to upgrade", "traceback (most recent call", "could not open port", "exception"]
+
+
+def _run_flasher(cmd: list, env_d: dict, success_markers: list,
+                 failure_markers: list) -> tuple[int, bool]:
+    """Run a flasher subprocess, capture + print its output, and decide success
+    by PARSING that output - never by exit code alone.
+
+    Rationale (Strycher/Crosswire#34): adafruit-nrfutil exits 0 even on a fatal
+    "Failed to upgrade target", which reported false success (the OTA-incident
+    class of bug). A flash is "ok" only when exit code 0 AND a positive success
+    marker is present AND no failure marker is present. Conservative by design:
+    anything ambiguous reads as FAILURE."""
+    proc = subprocess.run(cmd, env=env_d, capture_output=True, text=True)
+    output = (proc.stdout or "") + (proc.stderr or "")
+    if output.strip():
+        print(output)
+    low = output.lower()
+    failed = any(m in low for m in failure_markers)
+    succeeded = any(m in low for m in success_markers)
+    ok = (proc.returncode == 0) and succeeded and not failed
+    if not ok:
+        err(f"flasher result NOT verified (rc={proc.returncode}, "
+            f"success_marker={'yes' if succeeded else 'NO'}, "
+            f"failure_marker={'YES' if failed else 'no'})")
+    return proc.returncode, ok
+
+
+def _touch_1200(com: str) -> None:
+    """Pulse a serial port at 1200 baud to trigger reset-into-bootloader (the
+    Arduino / Adafruit auto-reset convention). The device re-enumerates as its
+    bootloader identity shortly after; the port dropping mid-touch is normal."""
+    try:
+        import serial
+    except ImportError:
+        refuse("pyserial not available; pip install pyserial")
+    try:
+        s = serial.Serial(com, baudrate=1200)
+        try:
+            s.dtr = False
+            time.sleep(0.15)
+        finally:
+            s.close()
+    except Exception as e:
+        out(f"  (1200-baud touch on {com} raised, normal on reset: {e})")
+
+
+def _esp32_trigger_download(com: str) -> None:
+    """Reset an ESP32-S3 into ROM download mode via esptool's default reset.
+    The connect then fails because the running USB-CDC port vanishes on reset -
+    that is expected; the reset is the point. The download port is discovered by
+    re-enumeration afterward."""
+    out(f"  (esptool default-reset {com} into download; connect failure is expected)")
+    try:
+        subprocess.run(
+            ["python", "-m", "esptool", "--port", com,
+             "--before", "default-reset", "--after", "no-reset",
+             "--connect-attempts", "1", "chip-id"],
+            env=env_with_auth(), capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        pass
+
+
+def _discover_bootloader_port(before: list, vendor: str, running_pid: str,
+                              timeout: int) -> dict:
+    """After a bootloader-entry trigger, poll enumeration until exactly one NEW
+    port appears with the device's vendor VID and a PID different from the
+    running PID (i.e. it transitioned to a bootloader identity). Returns that
+    port. Refuses on zero (timeout) or more than one (ambiguous) - this is what
+    keeps the discovery from ever flashing the wrong device."""
+    before_coms = {p["com"] for p in before}
+    vendor = vendor.upper()
+    running_pid = running_pid.upper()
+    deadline = time.time() + timeout
+    last_seen: list = []
+    while time.time() < deadline:
+        now = enumerate_ports()
+        new = [p for p in now if p["com"] not in before_coms]
+        cands = [
+            p for p in new
+            if p["vid_pid"].split(":")[0].upper() == vendor
+            and p["vid_pid"].split(":")[1].upper() != running_pid
+        ]
+        last_seen = cands
+        if len(cands) == 1:
+            return cands[0]
+        if len(cands) > 1:
+            coms = ", ".join(f"{p['com']}({p['vid_pid']})" for p in cands)
+            refuse(
+                f"multiple new {vendor} bootloader ports appeared ({coms}); "
+                "refusing rather than guessing. Disconnect other devices and retry."
+            )
+        time.sleep(0.5)
+    refuse(
+        f"no bootloader port appeared within {timeout}s after the trigger "
+        f"(expected a new {vendor} port with PID != {running_pid}). The device "
+        "may not have entered bootloader mode. Last candidates: "
+        + (", ".join(p["com"] for p in last_seen) or "none")
     )
-    if rc1 != 0:
-        err(f"app write-flash failed (rc={rc1}); not touching otadata.")
-        return rc1
+
+
+def _enter_bootloader_and_discover(running_port: dict, platform: str) -> dict:
+    """Trigger bootloader entry on the verified running port, then discover the
+    device on its new (bootloader) COM. Unified for both chip families - they
+    all change identity + COM entering bootloader (Strycher/Crosswire#34)."""
+    vendor = NRF52_VENDOR if platform == "nrf52" else ESP32S3_VENDOR
+    running_pid = running_port["vid_pid"].split(":")[1]
+    out(f"Triggering bootloader entry on {running_port['com']} "
+        f"({running_port['vid_pid']}, {platform})...")
+    before = enumerate_ports()
+    if platform == "nrf52":
+        _touch_1200(running_port["com"])
+    else:
+        _esp32_trigger_download(running_port["com"])
+    bl = _discover_bootloader_port(before, vendor, running_pid,
+                                   BOOTLOADER_DISCOVER_TIMEOUT)
+    out(f"Discovered bootloader port: {bl['com']} "
+        f"({bl['vid_pid']}, hash {bl['instance_hash']})")
+    return bl
+
+
+def _flash_esp32_app_slot(artifact: Path, bl_com: str, env_d: dict) -> bool:
+    """NVS-preserving ESP32 update on the DISCOVERED download port: write the app
+    to app0 (--after no-reset, stay in download), then erase otadata so the
+    bootloader deterministically boots the written app. NVS (0x9000) untouched.
+    Each step verified by output, not exit code."""
+    out(f"[1/2] write-flash 0x{ESP32_APP0_OFFSET:x} {artifact.name} (app0; stay in download)")
+    _, ok1 = _run_flasher(
+        ["python", "-m", "esptool", "--port", bl_com, "--after", "no-reset",
+         "write-flash", hex(ESP32_APP0_OFFSET), str(artifact)],
+        env_d, _ESPTOOL_WRITE_OK, _ESPTOOL_FAIL,
+    )
+    if not ok1:
+        err("app write-flash did not verify; aborting before otadata erase.")
+        return False
     out(f"[2/2] erase-region 0x{ESP32_OTADATA_OFFSET:x} 0x{ESP32_OTADATA_SIZE:x} "
         "(otadata reset -> boot app0; chip resets after)")
-    rc2 = subprocess.call(
-        ["python", "-m", "esptool", "--port", com,
+    _, ok2 = _run_flasher(
+        ["python", "-m", "esptool", "--port", bl_com,
          "erase-region", hex(ESP32_OTADATA_OFFSET), hex(ESP32_OTADATA_SIZE)],
-        env=env_d,
+        env_d, _ESPTOOL_ERASE_OK, _ESPTOOL_FAIL,
     )
-    if rc2 != 0:
-        err(f"otadata erase failed (rc={rc2}). App is written but the boot "
-            "selector was not reset; the device may boot the OTHER slot. "
-            "Re-run, or use --erase for a clean factory flash.")
-    return rc2
+    return ok2
 
 
-def _flash_esp32_merged_full(artifact: Path, com: str, env_d: dict) -> int:
-    """Factory ESP32 flash: write the full merged image at 0x0. This spans the
-    NVS region, so it WIPES NVS and all stored config (intentional, --erase).
-    Chip must be in ROM download mode (see _flash_esp32_app_slot note)."""
+def _flash_esp32_merged_full(artifact: Path, bl_com: str, env_d: dict) -> bool:
+    """Factory ESP32 flash on the discovered download port: write the full merged
+    image at 0x0 (spans NVS -> WIPES it; intentional, --erase). Verified by output."""
     out(f"[1/1] write-flash 0x0 {artifact.name} (FULL merged - WIPES NVS)")
-    return subprocess.call(
-        ["python", "-m", "esptool", "--port", com,
+    _, ok = _run_flasher(
+        ["python", "-m", "esptool", "--port", bl_com,
          "write-flash", "0x0", str(artifact)],
-        env=env_d,
+        env_d, _ESPTOOL_WRITE_OK, _ESPTOOL_FAIL,
     )
+    return ok
 
 
-def _flash_nrf52_dfu(artifact: Path, com: str, env_d: dict) -> int:
-    """nRF52 serial DFU of the .zip via adafruit-nrfutil. --touch 1200 pulses
-    the port at 1200 baud to drop the running app into the UF2 bootloader, then
-    flashes. A normal app DFU preserves the internal config filesystem.
-
-    NOTE (Strycher/Crosswire#29): the ESP32 paths are hardware-validated; this
-    nRF52 path is implemented to the standard Adafruit invocation but is
-    UNVALIDATED on hardware until an nRF52 device is available. If the
-    bootloader re-enumerates on a different COM after the 1200-baud touch,
-    flash from an already-in-DFU device (double-tap reset) with its bootloader
-    identity registered instead."""
-    out(f"[1/1] adafruit-nrfutil dfu serial {artifact.name} -> {com} (--touch 1200)")
-    return subprocess.call(
+def _flash_nrf52_dfu(artifact: Path, bl_com: str, env_d: dict) -> bool:
+    """nRF52 serial DFU of the .zip on the DISCOVERED DFU port (no --touch - the
+    device is already in the bootloader). Success is decided by PARSING output:
+    adafruit-nrfutil exits 0 even when it fails (Strycher/Crosswire#34). A normal
+    app DFU preserves the internal config filesystem."""
+    out(f"[1/1] adafruit-nrfutil dfu serial {artifact.name} -> {bl_com}")
+    _, ok = _run_flasher(
         ["adafruit-nrfutil", "--verbose", "dfu", "serial",
-         "--package", str(artifact), "-p", com, "-b", "115200", "--touch", "1200"],
-        env=env_d,
+         "--package", str(artifact), "-p", bl_com, "-b", "115200"],
+        env_d, _NRFUTIL_OK, _NRFUTIL_FAIL,
     )
+    return ok
 
 
 def _confirm_artifact(args, token: dict, port: dict) -> int:
-    """Tier A stage 2 for an artifact flash: re-verify sha, then flash by the
-    method captured at preview. resolve_device + port/DeviceID re-checks have
-    ALREADY passed in cmd_confirm before this is called."""
+    """Tier A stage 2 for an artifact flash. The running identity has ALREADY
+    been re-verified in cmd_confirm. Here: re-check sha, trigger bootloader entry
+    + discover the bootloader port, flash it, verify by output, record."""
     artifact = Path(token["artifact_path"])
     if not artifact.exists():
         refuse(f"artifact {artifact} missing since preview")
@@ -596,19 +726,23 @@ def _confirm_artifact(args, token: dict, port: dict) -> int:
         )
 
     method = token.get("flash_method")
+    platform = token.get("platform")
     out("============================================================")
-    out(f"FLASHING {args.device} on {port['com']} (artifact: {method})")
+    out(f"FLASHING {args.device} (artifact: {method})")
+    out(f"Verified running identity: {port['com']} ({port['vid_pid']})")
     out("============================================================")
 
-    env_d = os.environ.copy()
-    env_d["PIO_FLASH_AUTHORIZED"] = "1"
+    # Trigger bootloader entry on the verified running port, then discover the
+    # device on its new bootloader COM (it changes identity + port).
+    bl = _enter_bootloader_and_discover(port, platform)
 
+    env_d = env_with_auth()
     if method == "esptool_app_slot":
-        rc = _flash_esp32_app_slot(artifact, port["com"], env_d)
+        ok = _flash_esp32_app_slot(artifact, bl["com"], env_d)
     elif method == "esptool_merged_full":
-        rc = _flash_esp32_merged_full(artifact, port["com"], env_d)
+        ok = _flash_esp32_merged_full(artifact, bl["com"], env_d)
     elif method == "nrfutil_dfu":
-        rc = _flash_nrf52_dfu(artifact, port["com"], env_d)
+        ok = _flash_nrf52_dfu(artifact, bl["com"], env_d)
     else:
         refuse(f"unknown flash_method in token: {method!r}")
 
@@ -616,20 +750,24 @@ def _confirm_artifact(args, token: dict, port: dict) -> int:
         "ts_unix": int(time.time()),
         "mode": "artifact-flash",
         "flash_method": method,
-        "platform": token.get("platform"),
+        "platform": platform,
         "erase": token.get("erase", False),
         "device": args.device,
-        "port": port["com"],
-        "deviceid_full": port["deviceid_full"],
-        "vid_pid": port["vid_pid"],
-        "instance_hash": port["instance_hash"],
+        "running_port": port["com"],
+        "running_vid_pid": port["vid_pid"],
+        "running_instance_hash": port["instance_hash"],
+        "bootloader_port": bl["com"],
+        "bootloader_vid_pid": bl["vid_pid"],
+        "bootloader_instance_hash": bl["instance_hash"],
+        "deviceid_full": bl["deviceid_full"],
         "artifact_path": token.get("artifact_path"),
         "firmware_sha256": token.get("firmware_sha256"),
         "firmware_size": token.get("firmware_size"),
         "crosswire_version": token.get("crosswire_version", "unknown"),
         "crosswire_git_sha": token.get("crosswire_git_sha", "unknown"),
         "firmware_identity_source": token.get("firmware_identity_source", "unknown"),
-        "exit_code": rc,
+        "verified_ok": ok,
+        "exit_code": 0 if ok else 1,
         "user_confirmation": args.device,
     })
 
@@ -638,8 +776,13 @@ def _confirm_artifact(args, token: dict, port: dict) -> int:
     except OSError:
         pass
 
-    out(f"artifact-flash exit code: {rc}")
-    return rc
+    if ok:
+        out("artifact-flash VERIFIED OK (output-parsed). Device should be "
+            "booting the new firmware.")
+        return 0
+    err("artifact-flash FAILED or NOT VERIFIED. See output above. The device "
+        "may still be in bootloader mode; reset it to recover.")
+    return 1
 
 
 def cmd_preview(args, registry):
