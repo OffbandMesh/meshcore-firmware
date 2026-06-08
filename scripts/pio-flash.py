@@ -18,6 +18,7 @@ Proposal: C:\\Dev\\LoRa\\proposal-flash-discipline.md
 Usage:
     pio-flash list
     pio-flash preview  <device> --env <pio-env>
+    pio-flash preview  <device> --artifact <path> [--erase]
     pio-flash confirm  <device> --token <token-file>
     pio-flash monitor  <device> [--env <env>] [--baud 115200]
     pio-flash info     <device>
@@ -73,6 +74,15 @@ FIRMWARE_DIR = Path(os.environ.get(
     "PIO_FLASH_FIRMWARE_DIR",
     str(PROJECT_ROOT),
 ))
+
+# ESP32 OTA partition offsets. Universal across this repo's ESP32 partition
+# tables (default*.csv / min_spiffs.csv / max_app_*.csv place the low region
+# identically; only the high-region app/spiffs sizes vary). Verified against
+# the partition table embedded in CI -merged.bin images (Strycher/Crosswire#29):
+# nvs@0x9000, otadata@0xe000, app0(ota_0)@0x10000.
+ESP32_APP0_OFFSET = 0x10000      # ota_0 (app) partition start
+ESP32_OTADATA_OFFSET = 0xe000    # boot selector
+ESP32_OTADATA_SIZE = 0x2000
 
 
 # ---------------------------------------------------------------------------
@@ -359,9 +369,287 @@ def cmd_list(args, registry):
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Artifact-flash (Strycher/Crosswire#29): flash a downloaded CI release
+# artifact through the SAME resolve_device identity gate as an env flash.
+# ESP32 default = NVS-preserving app-slot update (write app0 + reset otadata);
+# --erase = full factory write of the -merged.bin at 0x0. nRF52 = serial DFU
+# of the .zip (preserves the config filesystem).
+# ---------------------------------------------------------------------------
+ARTIFACT_RE = re.compile(
+    r"-(v\d+\.\d+\.\d+(?:-rc\d+)?)-([0-9a-fA-F]{7,40})(?:-merged)?\.(?:bin|zip|uf2)$"
+)
+
+
+def _artifact_identity(artifact: Path) -> dict:
+    """Identity from the CI artifact filename (<env>-<version>-<gitsha>[-merged].ext).
+
+    Deliberately does NOT fall back to the current repo's git state - an
+    artifact's identity is whatever the CI stamped into its name, never the
+    checkout the wrapper happens to run from.
+    """
+    m = ARTIFACT_RE.search(artifact.name)
+    if m:
+        return {
+            "crosswire_version": m.group(1),
+            "crosswire_git_sha": m.group(2),
+            "crosswire_branch": "unknown",
+            "crosswire_build_date": "unknown",
+            "firmware_identity_source": "ci-artifact-filename",
+        }
+    return {
+        "crosswire_version": "unknown",
+        "crosswire_git_sha": "unknown",
+        "crosswire_branch": "unknown",
+        "crosswire_build_date": "unknown",
+        "firmware_identity_source": "artifact-filename-unparsed",
+    }
+
+
+def _classify_artifact(path: Path, erase: bool) -> tuple[str, str]:
+    """Map an artifact path + --erase to (platform, flash_method). Refuses on
+    unsupported combinations rather than guessing."""
+    name = path.name.lower()
+    suffix = path.suffix.lower()
+    if suffix == ".zip":
+        if erase:
+            refuse(
+                "nRF52 --erase is not supported: serial DFU cannot wipe the "
+                "config filesystem. Re-run without --erase (DFU preserves it)."
+            )
+        return ("nrf52", "nrfutil_dfu")
+    if suffix == ".uf2":
+        refuse(
+            "nRF52 .uf2 drive-copy is not supported through the wrapper (it "
+            "bypasses the identity gate). Use the .zip DFU package instead."
+        )
+    if suffix == ".bin":
+        is_merged = "merged" in name
+        if erase:
+            if not is_merged:
+                refuse(
+                    f"--erase requires the full -merged.bin, but '{path.name}' "
+                    "looks like an app-only bin. Pass the *-merged.bin, or drop "
+                    "--erase for an NVS-preserving app-slot update."
+                )
+            return ("esp32", "esptool_merged_full")
+        if is_merged:
+            refuse(
+                f"default (NVS-preserving) mode expects the app-only .bin, not "
+                f"'{path.name}'. Pass the non-merged *.bin, or add --erase to "
+                "factory-flash the -merged.bin (this WIPES NVS)."
+            )
+        return ("esp32", "esptool_app_slot")
+    refuse(
+        f"unrecognized artifact type '{suffix}'. Expected .bin (ESP32) or "
+        ".zip (nRF52 DFU package)."
+    )
+
+
+def _preview_artifact(args, port: dict, entry: dict) -> int:
+    """Tier A stage 1 for an artifact flash: validate + write token, exit 2.
+    resolve_device (the identity gate) has ALREADY run before this is called."""
+    artifact = Path(args.artifact).resolve()
+    if not artifact.exists():
+        refuse(f"artifact {artifact} not found")
+    platform, method = _classify_artifact(artifact, args.erase)
+    sha = sha256_of(artifact)
+    size = artifact.stat().st_size
+    ident = _artifact_identity(artifact)
+
+    if method == "esptool_app_slot":
+        mode_desc = (
+            f"app-slot update: write app0 @ 0x{ESP32_APP0_OFFSET:x}, "
+            f"erase otadata @ 0x{ESP32_OTADATA_OFFSET:x} -> PRESERVES NVS"
+        )
+    elif method == "esptool_merged_full":
+        mode_desc = "FULL FACTORY: merged @ 0x0 -> ERASES NVS and all data"
+    else:
+        mode_desc = "nRF52 serial DFU (.zip) -> PRESERVES config filesystem"
+
+    out("============================================================")
+    out("PREVIEW (Tier A artifact-flash) - no device touch yet")
+    out("============================================================")
+    out(f"Target device : {args.device}")
+    out(f"Registered MAC: {entry.get('mac')}")
+    out(f"Resolved port : {port['com']}")
+    out(f"Port VID:PID  : {port['vid_pid']}")
+    out(f"Port DeviceID : {port['deviceid_full']}")
+    out(f"Hash match    : {port['instance_hash']}")
+    out(f"Artifact      : {artifact}")
+    out(f"Artifact sha256: {sha}")
+    out(f"Artifact size : {size} bytes")
+    out(f"Platform      : {platform}")
+    out(f"Flash method  : {method}")
+    out(f"Mode          : {mode_desc}")
+    out(f"Crosswire ver : {ident['crosswire_version']}")
+    out(f"Crosswire SHA : {ident['crosswire_git_sha']}")
+    out(f"Identity src  : {ident['firmware_identity_source']}")
+    out("------------------------------------------------------------")
+    out("To proceed, get explicit user GO in chat naming the device, then run:")
+    out(f"  scripts/pio-flash confirm {args.device} --token {token_path(args.device)}")
+    out(f"Token TTL: {TOKEN_TTL_SEC}s. Token invalidates if port/DeviceID/")
+    out("artifact sha changes before confirm.")
+    out("============================================================")
+
+    payload = {
+        "device": args.device,
+        "mode": "artifact",
+        "platform": platform,
+        "flash_method": method,
+        "erase": bool(args.erase),
+        "port": port["com"],
+        "deviceid_full": port["deviceid_full"],
+        "vid_pid": port["vid_pid"],
+        "instance_hash": port["instance_hash"],
+        "artifact_path": str(artifact),
+        "firmware_sha256": sha,
+        "firmware_size": size,
+        "crosswire_version": ident["crosswire_version"],
+        "crosswire_git_sha": ident["crosswire_git_sha"],
+        "crosswire_branch": ident["crosswire_branch"],
+        "crosswire_build_date": ident["crosswire_build_date"],
+        "firmware_identity_source": ident["firmware_identity_source"],
+    }
+    p = write_token(args.device, payload)
+    out(f"Token written: {p}")
+    return 2
+
+
+def _flash_esp32_app_slot(artifact: Path, com: str, env_d: dict) -> int:
+    """NVS-preserving ESP32 update: write the app image to app0, then erase
+    otadata so the bootloader deterministically boots the image just written
+    (regardless of which OTA slot was previously active). NVS is never touched.
+
+    ESP32-S3 native-USB (Strycher/Crosswire#29): the chip must ALREADY be in
+    ROM download mode (USB-Serial-JTAG identity) when this runs - the COM port
+    changes on reset, so the wrapper cannot reliably auto-enter download from
+    the running app. The write uses --after no_reset so the chip STAYS in
+    download for the otadata erase; the erase then resets it (default hard
+    reset) so it boots app0. Same download-chaining the factory-reset uses."""
+    out(f"[1/2] write-flash 0x{ESP32_APP0_OFFSET:x} {artifact.name} (app0 / ota_0; stay in download)")
+    rc1 = subprocess.call(
+        ["python", "-m", "esptool", "--port", com, "--after", "no-reset",
+         "write-flash", hex(ESP32_APP0_OFFSET), str(artifact)],
+        env=env_d,
+    )
+    if rc1 != 0:
+        err(f"app write-flash failed (rc={rc1}); not touching otadata.")
+        return rc1
+    out(f"[2/2] erase-region 0x{ESP32_OTADATA_OFFSET:x} 0x{ESP32_OTADATA_SIZE:x} "
+        "(otadata reset -> boot app0; chip resets after)")
+    rc2 = subprocess.call(
+        ["python", "-m", "esptool", "--port", com,
+         "erase-region", hex(ESP32_OTADATA_OFFSET), hex(ESP32_OTADATA_SIZE)],
+        env=env_d,
+    )
+    if rc2 != 0:
+        err(f"otadata erase failed (rc={rc2}). App is written but the boot "
+            "selector was not reset; the device may boot the OTHER slot. "
+            "Re-run, or use --erase for a clean factory flash.")
+    return rc2
+
+
+def _flash_esp32_merged_full(artifact: Path, com: str, env_d: dict) -> int:
+    """Factory ESP32 flash: write the full merged image at 0x0. This spans the
+    NVS region, so it WIPES NVS and all stored config (intentional, --erase).
+    Chip must be in ROM download mode (see _flash_esp32_app_slot note)."""
+    out(f"[1/1] write-flash 0x0 {artifact.name} (FULL merged - WIPES NVS)")
+    return subprocess.call(
+        ["python", "-m", "esptool", "--port", com,
+         "write-flash", "0x0", str(artifact)],
+        env=env_d,
+    )
+
+
+def _flash_nrf52_dfu(artifact: Path, com: str, env_d: dict) -> int:
+    """nRF52 serial DFU of the .zip via adafruit-nrfutil. --touch 1200 pulses
+    the port at 1200 baud to drop the running app into the UF2 bootloader, then
+    flashes. A normal app DFU preserves the internal config filesystem.
+
+    NOTE (Strycher/Crosswire#29): the ESP32 paths are hardware-validated; this
+    nRF52 path is implemented to the standard Adafruit invocation but is
+    UNVALIDATED on hardware until an nRF52 device is available. If the
+    bootloader re-enumerates on a different COM after the 1200-baud touch,
+    flash from an already-in-DFU device (double-tap reset) with its bootloader
+    identity registered instead."""
+    out(f"[1/1] adafruit-nrfutil dfu serial {artifact.name} -> {com} (--touch 1200)")
+    return subprocess.call(
+        ["adafruit-nrfutil", "--verbose", "dfu", "serial",
+         "--package", str(artifact), "-p", com, "-b", "115200", "--touch", "1200"],
+        env=env_d,
+    )
+
+
+def _confirm_artifact(args, token: dict, port: dict) -> int:
+    """Tier A stage 2 for an artifact flash: re-verify sha, then flash by the
+    method captured at preview. resolve_device + port/DeviceID re-checks have
+    ALREADY passed in cmd_confirm before this is called."""
+    artifact = Path(token["artifact_path"])
+    if not artifact.exists():
+        refuse(f"artifact {artifact} missing since preview")
+    sha_now = sha256_of(artifact)
+    if sha_now != token["firmware_sha256"]:
+        refuse(
+            f"artifact sha256 changed since preview "
+            f"({token['firmware_sha256']} -> {sha_now}). Re-run preview."
+        )
+
+    method = token.get("flash_method")
+    out("============================================================")
+    out(f"FLASHING {args.device} on {port['com']} (artifact: {method})")
+    out("============================================================")
+
+    env_d = os.environ.copy()
+    env_d["PIO_FLASH_AUTHORIZED"] = "1"
+
+    if method == "esptool_app_slot":
+        rc = _flash_esp32_app_slot(artifact, port["com"], env_d)
+    elif method == "esptool_merged_full":
+        rc = _flash_esp32_merged_full(artifact, port["com"], env_d)
+    elif method == "nrfutil_dfu":
+        rc = _flash_nrf52_dfu(artifact, port["com"], env_d)
+    else:
+        refuse(f"unknown flash_method in token: {method!r}")
+
+    log_history({
+        "ts_unix": int(time.time()),
+        "mode": "artifact-flash",
+        "flash_method": method,
+        "platform": token.get("platform"),
+        "erase": token.get("erase", False),
+        "device": args.device,
+        "port": port["com"],
+        "deviceid_full": port["deviceid_full"],
+        "vid_pid": port["vid_pid"],
+        "instance_hash": port["instance_hash"],
+        "artifact_path": token.get("artifact_path"),
+        "firmware_sha256": token.get("firmware_sha256"),
+        "firmware_size": token.get("firmware_size"),
+        "crosswire_version": token.get("crosswire_version", "unknown"),
+        "crosswire_git_sha": token.get("crosswire_git_sha", "unknown"),
+        "firmware_identity_source": token.get("firmware_identity_source", "unknown"),
+        "exit_code": rc,
+        "user_confirmation": args.device,
+    })
+
+    try:
+        Path(args.token).unlink()
+    except OSError:
+        pass
+
+    out(f"artifact-flash exit code: {rc}")
+    return rc
+
+
 def cmd_preview(args, registry):
     """Tier A stage 1: resolve target, validate firmware, write token, exit 2."""
     port, entry = resolve_device(args.device, registry)
+    if getattr(args, "artifact", None):
+        return _preview_artifact(args, port, entry)
+    if getattr(args, "erase", False):
+        refuse("--erase only applies to --artifact flashes (the --env path "
+               "uses pio upload, which does not erase).")
     env = args.env
     firmware_bin = FIRMWARE_DIR / ".pio" / "build" / env / "firmware.bin"
     if not firmware_bin.exists():
@@ -450,6 +738,9 @@ def cmd_confirm(args, registry):
             f"({token['deviceid_full']} -> {port['deviceid_full']}). "
             "Re-run preview."
         )
+
+    if token.get("mode") == "artifact":
+        return _confirm_artifact(args, token, port)
 
     firmware_bin = Path(token["firmware_bin"])
     if not firmware_bin.exists():
@@ -1081,7 +1372,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("preview", help="stage a Tier A flash (writes token, no flash)")
     s.add_argument("device", help="registered device name (e.g. ST-P)")
-    s.add_argument("--env", required=True, help="pio env (e.g. heltec_v4_repeater_telemetry)")
+    g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--env", help="pio env to build + upload (e.g. heltec_v4_companion_radio_ble)")
+    g.add_argument("--artifact", help="path to a downloaded CI firmware artifact to flash "
+                   "through the identity gate. ESP32: app '.bin' (default, NVS-preserving) "
+                   "or '-merged.bin' with --erase (factory wipe). nRF52: '.zip' DFU package. "
+                   "Mutually exclusive with --env.")
+    s.add_argument("--erase", action="store_true",
+                   help="ESP32 artifact-flash only: write the full -merged.bin at 0x0 "
+                        "including NVS (factory wipe). Without it, an app .bin is written "
+                        "to app0 and otadata is reset, preserving NVS.")
 
     s = sub.add_parser("confirm", help="execute the staged Tier A flash")
     s.add_argument("device", help="must match the device in the token")
