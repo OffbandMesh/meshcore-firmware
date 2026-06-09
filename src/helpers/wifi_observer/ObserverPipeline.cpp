@@ -13,8 +13,6 @@ namespace crosswire {
 
 void ObserverPipeline::begin(MqttBrokerPool* pool) {
     pool_  = pool;
-    head_  = 0;
-    count_ = 0;
 }
 
 void ObserverPipeline::onRawReceived(const uint8_t* raw, int len, float rssi, float snr) {
@@ -22,19 +20,7 @@ void ObserverPipeline::onRawReceived(const uint8_t* raw, int len, float rssi, fl
     if (pool_ == nullptr) return;
 
 #ifdef ARDUINO
-    // 1. Capture into ring at head_, advance + saturate count.
-    ObservedPacket& slot = ring_[head_];
-    slot.recv_at_ms = millis();
-    slot.rssi       = rssi;
-    slot.snr        = snr;
-    int copy_len = len;
-    if (copy_len > (int)sizeof(slot.raw)) copy_len = sizeof(slot.raw);
-    memcpy(slot.raw, raw, copy_len);
-    slot.raw_len = (uint8_t)copy_len;
-    head_ = (head_ + 1) % CROSSWIRE_MAX_RECENT_PACKETS;
-    if (count_ < CROSSWIRE_MAX_RECENT_PACKETS) count_++;
-
-    // 2. Fan-out via pool (pool handles cached strings + per-broker ctx).
+    // Fan-out via pool (pool handles cached strings + per-broker ctx).
     pool_->publishRawFromBytes(raw, (size_t)len, rssi, snr);
 #else
     (void)raw; (void)len; (void)rssi; (void)snr;
@@ -50,12 +36,6 @@ void ObserverPipeline::onParsedReceived(const mesh::Packet& packet, int rssi,
 #else
     (void)packet; (void)rssi; (void)snr; (void)score; (void)duration;
 #endif
-}
-
-const ObservedPacket& ObserverPipeline::recent(uint8_t idx) const {
-    uint8_t base = (head_ + CROSSWIRE_MAX_RECENT_PACKETS - count_) % CROSSWIRE_MAX_RECENT_PACKETS;
-    uint8_t real = (base + idx) % CROSSWIRE_MAX_RECENT_PACKETS;
-    return ring_[real];
 }
 
 // ---------------------------------------------------------------------------

@@ -37,16 +37,6 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// Observer ring buffer
-// ---------------------------------------------------------------------------
-// Most-recent LoRa packets retained for web UI display. Memory budget
-// sized for V3 (no PSRAM, ~280KB free heap). Plan 1 does not exercise
-// this buffer; Plan 2 wires the LoRa observer pipeline.
-#ifndef CROSSWIRE_MAX_RECENT_PACKETS
-  #define CROSSWIRE_MAX_RECENT_PACKETS 50
-#endif
-
-// ---------------------------------------------------------------------------
 // AP-mode SSID prefix
 // ---------------------------------------------------------------------------
 // SSID broadcast in first-boot AP mode: <prefix>-<MAC last 6 hex chars>.

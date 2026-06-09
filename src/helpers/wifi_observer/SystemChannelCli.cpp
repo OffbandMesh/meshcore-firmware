@@ -236,7 +236,7 @@ bool systemChannelInit(const mesh::Identity& self_id) {
             if (existing.channel.secret[i] != 0) { upper_zero = false; break; }
         }
         if (name_match && psk_match && upper_zero) {
-            Serial.println("[SystemChannelCli] slot 40 already provisioned; no-op.");
+            Serial.printf("[SystemChannelCli] slot %u already provisioned; no-op.\n", (unsigned)kSystemChannelSlot);
             return false;
         }
     }
@@ -251,14 +251,15 @@ bool systemChannelInit(const mesh::Identity& self_id) {
     // Upper 16 bytes already zero from memset; setChannel will
     // detect the zero tail and compute the 128-bit hash.
     if (!mesh_ptr->setChannel(kSystemChannelSlot, want)) {
-        Serial.printf("[SystemChannelCli] setChannel(%u) failed -- "
-                      "MAX_GROUP_CHANNELS probably not 41 in this env\n",
-                      (unsigned)kSystemChannelSlot);
+        Serial.printf("[SystemChannelCli] setChannel(%u) failed -- slot >= "
+                      "MAX_GROUP_CHANNELS (%u)?\n",
+                      (unsigned)kSystemChannelSlot,
+                      (unsigned)MAX_GROUP_CHANNELS);
         return false;
     }
-    Serial.printf("[SystemChannelCli] slot 40 provisioned: name='%s' "
+    Serial.printf("[SystemChannelCli] slot %u provisioned: name='%s' "
                   "(caller should persist via saveChannels)\n",
-                  want_name);
+                  (unsigned)kSystemChannelSlot, want_name);
     return true;
 }
 
