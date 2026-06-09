@@ -64,12 +64,6 @@ constexpr uint16_t kDefaultWssPort = 9001;
 constexpr const char* kDefaultTopicPrefix = "meshcore";
 
 // ---------------------------------------------------------------------------
-// observer.* keys (in "observer" namespace)
-// ---------------------------------------------------------------------------
-constexpr const char* kKeyRecentPacketsBuf = "ring_size";
-constexpr uint8_t kDefaultRecentPacketsBuf = CROSSWIRE_MAX_RECENT_PACKETS;
-
-// ---------------------------------------------------------------------------
 // Typed accessors (in ConfigSchema.cpp)
 // ---------------------------------------------------------------------------
 // Returns false if NVS error / missing. Defaults applied at call site.

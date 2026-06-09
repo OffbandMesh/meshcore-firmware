@@ -1,8 +1,9 @@
 // src/helpers/wifi_observer/SystemChannelCli.h
 //
-// BLE-side first-contact CLI exposed as a locked group channel at
-// slot kSystemChannelSlot (40). On first boot, this module writes
-// a deterministic name + PSK into slot 40 derived from the device
+// BLE-side first-contact CLI exposed as a locked group channel at slot
+// kSystemChannelSlot (the LAST slot, MAX_GROUP_CHANNELS-1). On first boot,
+// this module writes a deterministic name + PSK into that slot, derived
+// from the device
 // identity public key. The slot is "locked": MyMesh refuses
 // CMD_SET_CHANNEL targeting it so the user cannot accidentally
 // delete it from their MeshCore Companion / Open Web app.
@@ -45,9 +46,16 @@ class Identity;
 
 namespace crosswire {
 
-// Reserved slot index. MAX_GROUP_CHANNELS for the companion
-// observer envs is bumped to 41 (user slots 0-39, system slot 40).
-constexpr uint8_t kSystemChannelSlot = 40;
+// Reserved _sys slot = the LAST channel slot (MAX_GROUP_CHANNELS - 1).
+// Observer envs set MAX_GROUP_CHANNELS via -D (Phase-1 strip #42: =11 ->
+// user slots 0-9 + system slot 10; pre-strip was 41 -> slot 40). Deriving
+// keeps this in lockstep with the env's -D; the #else covers pure-logic
+// host builds compiled without the -D (matches the stripped observer value).
+#ifdef MAX_GROUP_CHANNELS
+constexpr uint8_t kSystemChannelSlot = MAX_GROUP_CHANNELS - 1;
+#else
+constexpr uint8_t kSystemChannelSlot = 10;
+#endif
 
 // Rate-limit window for systemChannelPostStatus(), in
 // milliseconds. Status messages dropped silently when called

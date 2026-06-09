@@ -37,6 +37,17 @@ REQUIRED_FLAGS_ALL = [
 ]
 REQUIRED_SRC_FILTER = "+<helpers/wifi_observer/*.cpp>"
 
+# Phase-1 strip (Strycher/Crosswire#42): observer envs override the inherited
+# companion defaults down to observer minima to free static .bss. The strings
+# below must match the platformio.ini byte-for-byte -- MAX_GROUP_CHANNELS uses
+# the no-space second-D form; MAX_CONTACTS / OFFLINE_QUEUE_SIZE use the spaced
+# form (matching the _ble base flags they override).
+REQUIRED_STRIP_FLAGS = [
+    "-D MAX_CONTACTS=50",
+    "-DMAX_GROUP_CHANNELS=11",
+    "-D OFFLINE_QUEUE_SIZE=16",
+]
+
 failures = []
 
 for ini_path, env_names in EXPECTED:
@@ -56,6 +67,10 @@ for ini_path, env_names in EXPECTED:
             if flag not in flags:
                 failures.append(
                     f"{ini_path} [{env}]: missing build_flag '{flag}'")
+        for flag in REQUIRED_STRIP_FLAGS:
+            if flag not in flags:
+                failures.append(
+                    f"{ini_path} [{env}]: missing strip flag '{flag}' (#42)")
         if REQUIRED_SRC_FILTER not in src_filter:
             failures.append(
                 f"{ini_path} [{env}]: build_src_filter missing "
