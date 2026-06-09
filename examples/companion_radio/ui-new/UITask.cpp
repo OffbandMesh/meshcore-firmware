@@ -62,34 +62,49 @@ public:
     // Crosswire version: strip leading "crosswire-" tag prefix, then render
     // a COMPACT build-identity that distinguishes test builds from the
     // tagged release (Strycher/LoRa#319). git describe form is
-    // "<tag>-<N>-g<sha>[-dirty]"; we render:
-    //   crosswire-v0.12.0                   -> v0.12.0     (clean release)
-    //   crosswire-v0.12.0-4-g369714e        -> v0.12.0+4   (4 commits past tag)
-    //   crosswire-v0.12.0-4-g369714e-dirty  -> v0.12.0+4*  (+ dirty work tree)
-    // The full identity (SHA included) stays available via the `ver` CLI
-    // command + the CROSSWIRE_IDENTITY_BLOB in .rodata; this is just the
-    // at-a-glance form. "Crosswire v0.12.0+4*" is 20 chars, fits 128px size-1.
-    // Prior behavior trimmed at the first dash, collapsing every test build
-    // to the bare tag -- three distinct binaries all showed "v0.12.0",
-    // which actively caused confusion during #318 bench testing.
+    // "<tag>[-<N>-g<sha>][-dirty]", where <tag> may ITSELF contain dashes for
+    // a pre-release (e.g. v0.14.0-rc1). We render:
+    //   crosswire-v0.14.0                  -> v0.14.0        (clean release)
+    //   crosswire-v0.14.0-rc1              -> v0.14.0-rc1    (clean pre-release)
+    //   crosswire-v0.14.0-rc1-4-g369714e   -> v0.14.0-rc1+4  (4 past pre-release)
+    //   crosswire-v0.14.0-4-g369714e       -> v0.14.0+4      (4 past release)
+    //   ...-dirty                          -> ...*           (dirty work tree)
+    // Full identity (SHA included) stays in the `ver` CLI + the
+    // CROSSWIRE_IDENTITY_BLOB in .rodata; this is just the at-a-glance form.
+    // Spec + fixtures: scripts/test_crosswire_version_splash.py.
+    //
+    // The commits-since suffix is identified by git's "-g<sha>" marker, NOT the
+    // first dash. Splitting on the first dash (prior behavior) mis-read a
+    // pre-release tag's "-rcN" as the commits field -> it dropped "-rcN" and
+    // showed a spurious "+0" (Strycher/Crosswire#33).
     const char *cw = CROSSWIRE_VERSION;
     static const char *cw_prefix = "crosswire-";
     if (strncmp(cw, cw_prefix, 10) == 0) cw += 10;
-    const char *cw_dash  = strchr(cw, '-');
     bool        cw_dirty = (strstr(cw, "-dirty") != nullptr);
-    if (cw_dash == nullptr) {
-      // Clean tagged release: no commits-since suffix.
-      int cwlen = strlen(cw);
-      if (cwlen >= (int)sizeof(_crosswire_short)) cwlen = sizeof(_crosswire_short) - 1;
-      memcpy(_crosswire_short, cw, cwlen);
-      _crosswire_short[cwlen] = 0;
+    const char *gmark    = strstr(cw, "-g");   // start of "-g<sha>" iff commits>0
+    int commits = 0;
+    int taglen;
+    if (gmark != nullptr) {
+      // commits = the integer immediately before "-g"; the tag ends at the
+      // dash that precedes that integer.
+      const char *nstart = gmark;
+      while (nstart > cw && nstart[-1] >= '0' && nstart[-1] <= '9') nstart--;
+      commits = atoi(nstart);
+      taglen  = (int)(((nstart > cw) && (nstart[-1] == '-')) ? (nstart - 1 - cw)
+                                                             : (nstart - cw));
     } else {
-      // <tag>+<commits-since>[*]. atoi reads the integer right after the
-      // first dash; stops at the next non-digit ('-g...' or '-dirty').
-      int taglen  = (int)(cw_dash - cw);
-      int commits = atoi(cw_dash + 1);
+      // No commits suffix: exact tag (may be a pre-release). Trim a trailing
+      // "-dirty" so it is not counted as part of the tag.
+      const char *d = strstr(cw, "-dirty");
+      taglen = d ? (int)(d - cw) : (int)strlen(cw);
+    }
+    if (taglen >= (int)sizeof(_crosswire_short)) taglen = (int)sizeof(_crosswire_short) - 1;
+    if (commits > 0) {
       snprintf(_crosswire_short, sizeof(_crosswire_short), "%.*s+%d%s",
                taglen, cw, commits, cw_dirty ? "*" : "");
+    } else {
+      snprintf(_crosswire_short, sizeof(_crosswire_short), "%.*s%s",
+               taglen, cw, cw_dirty ? "*" : "");
     }
 #endif
 
