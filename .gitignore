@@ -28,6 +28,9 @@ platformio.local.ini
 *.map
 build-logs/
 
+# Python bytecode (host tests + script imports under scripts/)
+__pycache__/
+
 # Per-host build secrets (WiFi/MQTT creds, OTA tokens) — never commit
 platformio.local.ini
 platformio.secrets.ini
