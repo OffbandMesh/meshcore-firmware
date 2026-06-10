@@ -11,6 +11,19 @@ These two documents are the canonical inheritance for this project. Anything bel
 
 A standalone MIT fork of [MeshCore](https://github.com/meshcore-dev/MeshCore) for cross-role firmware enhancements and optimization (companion/observer + repeater active; room/bridge not yet). See `README.md`.
 
+## Project identity (READ FIRST -- do NOT conflate with LoRa)
+
+Crosswire is its **own** project. `Strycher/LoRa` is the **separate personal origin** repo; the Crosswire fork is no longer part of LoRa. For ALL work in `C:\Dev\LoRa\Crosswire` (including worktrees under `.worktrees/*`):
+
+| Channel | Value |
+|---|---|
+| Citadel | `DW_PROJECT=Crosswire` (Strycher/Crosswire). **Never** `LoRa`. |
+| GitHub issues/PRs | `Strycher/Crosswire` |
+| Agent Mail `project_key` | **`app-c-dev-lora-crosswire`** (path slug of `C:\Dev\LoRa\Crosswire`). Register + send + read HERE. NOT `app-c-dev-lora` (the LoRa workspace), NOT `app-crosswire` (stray). |
+| Active agents (2026-06-10) | DustyFox, RedCreek |
+
+Worktrees coordinate in the SAME `app-c-dev-lora-crosswire` (resolve from the repo common dir, not the worktree path). The stale "in-flight firmware work tracked under the LoRa Citadel project" note in Migration status below is RETIRED: net-new Crosswire work is tracked under Crosswire (Citadel) + Strycher/Crosswire (issues) + `app-c-dev-lora-crosswire` (Agent Mail).
+
 ## Project Parameters
 
 | Parameter | Value |
