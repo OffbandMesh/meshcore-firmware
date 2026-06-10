@@ -131,36 +131,61 @@ bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg) {
 // ---------------------------------------------------------------------------
 // populateDefaultBrokers — Plan 2 v2 Task 3 Step 4
 // ---------------------------------------------------------------------------
-// Seeds slots 0-2 with EastMesh + LetsMesh-EU + LetsMesh-US defaults ONLY
-// if those slots are currently empty (cfg.url is "\0"). User-set values are
-// never overwritten. All three defaults ship with enabled=false; the user
-// explicitly enables after configuring their owner identity for the JWT
-// claim. Idempotent across boots.
+// Seeds the owner's intended 6-slot broker registry, but ONLY into slots
+// whose url is currently empty (cfg.url[0] == '\0'). User-set or
+// previously-defaulted values are never overwritten -- so the new defaults
+// only affect fresh-NVS devices, and the function is idempotent across boots.
 //
-// Pre-Plan-2-execution callers: invoke this once at WifiObserver::begin()
-// before MqttBrokerPool::begin().
+//   slot 0  CoreScope Dayton   mqtt://mqtt.w8oof.net:1883   tcp / anon   ENABLED
+//   slot 1  LetsMesh-US        wss ... :443 /mqtt           wss / jwt    disabled
+//   slot 2  Eastme.sh          wss ... :443 /mqtt           wss / jwt    disabled
+//   slot 3  LetsMesh-EU        wss ... :443 /mqtt           wss / jwt    disabled
+//   slot 4  Eastmesh.au        wss ... :443 /mqtt           wss / jwt    disabled
+//   slot 5  (MQTT Custom)      left empty for the owner to fill
 //
-// Cert name convention: "letsencrypt" matches MqttCaCerts.h's ISRG Root X1
-// (Let's Encrypt root) which currently signs all three vendored brokers'
-// certificates. Task 7 (MqttBroker) establishes the canonical cert-name
-// lookup; this function uses the documented EastMesh-isrg-x1 reference.
+// CoreScope is plaintext + anonymous, so it is the only slot enabled by
+// default: no TLS cert, no JWT identity (validated live on HV3 -- #42/#48).
+// The wss brokers stay disabled until the owner configures JWT identity AND
+// the GTS WE1 cert lands (Item 2). They reference ca_cert "gts-we1", whose
+// PEM is added + mapped in Item 2 after openssl-verifying each broker's
+// actual chain; while disabled they never connect, so the forward-referenced
+// cert name is harmless.
+//
+// Invoke once at WifiObserver::begin() before MqttBrokerPool::begin().
 
 namespace {
 struct DefaultBrokerSpec {
-    const char* url;
-    const char* audience;
-    const char* ca_cert_name;
+    bool             enabled;
+    const char*      url;
+    BrokerTransport  transport;
+    uint16_t         port;
+    BrokerAuthType   auth_type;
+    const char*      jwt_audience;   // "" when not JWT
+    const char*      ca_cert_name;   // "" when no TLS cert (tcp)
 };
 
-constexpr DefaultBrokerSpec kDefaultBrokerSpecs[3] = {
-    {"wss://mqtt2.eastmesh.au:443/mqtt",       "https://mqtt2.eastmesh.au",       "letsencrypt"},
-    {"wss://mqtt-eu-v1.letsmesh.net:443/mqtt", "https://mqtt-eu-v1.letsmesh.net", "letsencrypt"},
-    {"wss://mqtt-us-v1.letsmesh.net:443/mqtt", "https://mqtt-us-v1.letsmesh.net", "letsencrypt"},
+// Slots 0-4. Slot 5 (MQTT Custom) is intentionally absent so it stays empty.
+constexpr DefaultBrokerSpec kDefaultBrokerSpecs[] = {
+    {true,  "mqtt://mqtt.w8oof.net:1883",            BrokerTransport::Tcp, 1883, BrokerAuthType::None, "",                                ""},
+    {false, "wss://mqtt-us-v1.letsmesh.net:443/mqtt", BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "https://mqtt-us-v1.letsmesh.net", "gts-we1"},
+    {false, "wss://mqtt.eastme.sh:443/mqtt",          BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "https://mqtt.eastme.sh",          "gts-we1"},
+    {false, "wss://mqtt-eu-v1.letsmesh.net:443/mqtt", BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "https://mqtt-eu-v1.letsmesh.net", "gts-we1"},
+    {false, "wss://mqtt2.eastmesh.au:443/mqtt",       BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "https://mqtt2.eastmesh.au",       "gts-we1"},
 };
+constexpr uint8_t kNumDefaultBrokers =
+    sizeof(kDefaultBrokerSpecs) / sizeof(kDefaultBrokerSpecs[0]);
 }  // namespace
 
 void populateDefaultBrokers() {
-    for (uint8_t slot = 0; slot < 3 && slot < CROSSWIRE_MAX_BROKERS; ++slot) {
+    // Seed the owner's IATA (HAO) if unset -- SWOH default to simplify setup
+    // for most operators; non-SWOH operators override via the global mqtt iata.
+    char iata[8] = {0};
+    if (!readGlobalIata(iata, sizeof(iata)) || iata[0] == '\0') {
+        writeGlobalIata("HAO");
+    }
+
+    for (uint8_t slot = 0;
+         slot < kNumDefaultBrokers && slot < CROSSWIRE_MAX_BROKERS; ++slot) {
         BrokerConfig cur;
         readBrokerConfig(slot, cur);
         if (cur.url[0] != '\0') {
@@ -169,16 +194,16 @@ void populateDefaultBrokers() {
         }
         const DefaultBrokerSpec& spec = kDefaultBrokerSpecs[slot];
         BrokerConfig def;  // default-constructed sentinel values
-        def.enabled       = false;  // user explicitly enables after configuring identity
-        strncpy(def.url,           spec.url,           sizeof(def.url));           def.url[sizeof(def.url)-1] = '\0';
-        def.transport     = BrokerTransport::Wss;
-        def.port          = 443;
-        def.auth_type     = BrokerAuthType::Jwt;
-        strncpy(def.jwt_audience,  spec.audience,      sizeof(def.jwt_audience));  def.jwt_audience[sizeof(def.jwt_audience)-1] = '\0';
+        def.enabled   = spec.enabled;
+        strncpy(def.url, spec.url, sizeof(def.url)); def.url[sizeof(def.url)-1] = '\0';
+        def.transport = spec.transport;
+        def.port      = spec.port;
+        def.auth_type = spec.auth_type;
+        strncpy(def.jwt_audience, spec.jwt_audience, sizeof(def.jwt_audience)); def.jwt_audience[sizeof(def.jwt_audience)-1] = '\0';
         def.jwt_refresh_sec = 3600;
-        strncpy(def.ca_cert_name,  spec.ca_cert_name,  sizeof(def.ca_cert_name));  def.ca_cert_name[sizeof(def.ca_cert_name)-1] = '\0';
-        strncpy(def.topic_prefix,  kDefaultTopicPrefix, sizeof(def.topic_prefix));  def.topic_prefix[sizeof(def.topic_prefix)-1] = '\0';
-        // username + password + jwt_token + iata_override stay empty -- user fills in
+        strncpy(def.ca_cert_name, spec.ca_cert_name, sizeof(def.ca_cert_name)); def.ca_cert_name[sizeof(def.ca_cert_name)-1] = '\0';
+        strncpy(def.topic_prefix, kDefaultTopicPrefix, sizeof(def.topic_prefix)); def.topic_prefix[sizeof(def.topic_prefix)-1] = '\0';
+        // username + password + jwt_token + iata_override stay empty -- owner fills in
         writeBrokerConfig(slot, def);
     }
 }
