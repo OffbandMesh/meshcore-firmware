@@ -6,7 +6,7 @@ A [MeshCore](https://github.com/meshcore-dev/MeshCore) fork for **cross-role fir
 
 | Role | Status | What Crosswire adds |
 |------|--------|---------------------|
-| **Companion / Observer** | Active | WiFi + MQTT publishing of LoRa-mesh observations to public brokers, NimBLE BLE stack, configurable broker pool, web UI |
+| **Companion / Observer** | Active | WiFi + MQTT publishing of LoRa-mesh observations to public brokers, NimBLE BLE stack, configurable multi-broker pool with TLS + JWT auth (validated against CoreScope, eastme.sh, LetsMesh) |
 | **Repeater** | Active | MQTT telemetry bridging (to Mosquitto and other brokers), burst-WiFi telemetry, heap and power tuning |
 | **Room server** | Not yet | -- |
 | **Bridge** | Not yet | -- |
