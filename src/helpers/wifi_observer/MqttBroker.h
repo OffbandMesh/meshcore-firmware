@@ -14,6 +14,8 @@
 #endif
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
   #include <mqtt_client.h>
+  #include "freertos/FreeRTOS.h"
+  #include "freertos/semphr.h"
 #endif
 
 namespace crosswire {
@@ -64,6 +66,12 @@ public:
     // Tear down: stop client, destroy client, free auth. Idempotent.
     void shutdown();
 
+    // Create the per-broker client mutex. Call ONCE from the pool on
+    // loopTask, before the lifecycle worker task starts (Strycher/Crosswire#53),
+    // so worker create/destroy and loopTask publish/connect serialize on the
+    // same handle. Idempotent; no-op on host builds.
+    void initLock();
+
     // Initiate connection if not already up/connecting. Honors backoff.
     // Returns true if a connect attempt is in progress after this call,
     // false if disabled or backoff window unexpired.
@@ -99,6 +107,10 @@ private:
 
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     esp_mqtt_client_handle_t client_ = nullptr;
+    // Serializes ALL client_ ops (publish/start/stop/destroy) so the lifecycle
+    // worker's blocking stop/destroy never races a loopTask publish/connect on
+    // the same handle (Strycher/Crosswire#53). Recursive: begin() -> shutdown().
+    SemaphoreHandle_t        client_lock_ = nullptr;
     // LoRa#327: tracks whether esp_mqtt_client_start() has been called since the
     // last stop/destroy, so tryConnect() can pair a stop() before each re-start.
     // esp-mqtt expects start() once; re-calling it on an already-started client

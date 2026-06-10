@@ -40,14 +40,35 @@ void MqttBrokerPool::begin(const mesh::LocalIdentity& identity,
     status_interval_sec_ = readStatusIntervalSec();
     status_interval_check_ms_ = 30000;  // re-read NVS every 30s in case CLI changed it
 
-    // Initialize each slot. begin() returns false if cfg.url is empty,
-    // which is OK -- means that slot is intentionally unused.
+    // Create per-broker client locks + clear reconcile flags BEFORE the
+    // worker task starts -- runs single-threaded on loopTask here (#53).
+    for (uint8_t slot = 0; slot < CROSSWIRE_MAX_BROKERS; ++slot) {
+        brokers_[slot].initLock();
+        reconciling_[slot] = false;
+    }
+
+    // Initialize each configured slot. begin() stores config always and
+    // creates a live client ONLY if the slot is enabled (#53); disabled or
+    // url-empty slots stay client-less.
     for (uint8_t slot = 0; slot < CROSSWIRE_MAX_BROKERS; ++slot) {
         BrokerConfig cfg;
         if (!readBrokerConfig(slot, cfg)) continue;
         if (cfg.url[0] == '\0') continue;  // skip unused slots
         brokers_[slot].begin(slot, cfg, identity);
     }
+
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    // Start the lifecycle worker. It owns ALL blocking esp_mqtt ops --
+    // create/destroy AND the connect/retry loop -- so loopTask never stalls
+    // on MQTT for any reason (Strycher/Crosswire#53). Created once; lives for
+    // the device's life (pool.begin() is one-shot, guarded upstream).
+    worker_run_  = true;
+    reconcile_q_ = xQueueCreate(CROSSWIRE_MAX_BROKERS * 2, sizeof(uint8_t));
+    if (reconcile_q_ != nullptr) {
+        xTaskCreatePinnedToCore(&MqttBrokerPool::workerTrampoline, "mqtt_worker",
+                                6144, this, 5, &worker_task_, tskNO_AFFINITY);
+    }
+#endif
 }
 #endif
 
@@ -55,6 +76,16 @@ void MqttBrokerPool::begin(const mesh::LocalIdentity& identity,
 // shutdown
 // ---------------------------------------------------------------------------
 void MqttBrokerPool::shutdown() {
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    // Stop the worker first so it is not mid-reconcile during teardown.
+    // (Defensive: pool.begin() is one-shot and nothing calls pool.shutdown()
+    // at runtime, but keep it correct.)
+    worker_run_ = false;
+    if (reconcile_q_ != nullptr) {
+        uint8_t sentinel = 0xFF;
+        xQueueSend(reconcile_q_, &sentinel, 0);  // wake worker so it can exit
+    }
+#endif
     for (uint8_t slot = 0; slot < CROSSWIRE_MAX_BROKERS; ++slot) {
         brokers_[slot].shutdown();
     }
@@ -64,26 +95,15 @@ void MqttBrokerPool::shutdown() {
 // loop
 // ---------------------------------------------------------------------------
 void MqttBrokerPool::loop(uint32_t now_ms) {
-    for (uint8_t slot = 0; slot < CROSSWIRE_MAX_BROKERS; ++slot) {
-        MqttBroker& b = brokers_[slot];
-        if (!b.isConfigured()) continue;
-
-        // Drive auth refresh + housekeeping.
-        b.loop(now_ms);
-
-        // Initiate a connect if Down/Backoff and eligible. Stagger by
-        // slot index to prevent all-brokers-thunder on simultaneous
-        // WiFi recovery (slot 0 immediate; slot 5 after 5s slot bias).
-        if (b.runtime().state == BrokerState::Down ||
-            b.runtime().state == BrokerState::Backoff) {
-            // tryConnect itself checks backoff window; the slot * 1000ms
-            // bias on the staleness sample shifts the effective deadline.
-            uint32_t biased_now = now_ms + static_cast<uint32_t>(slot) * 1000U;
-            (void)b.tryConnect(biased_now);
-        }
-    }
-
-    // Status publish on schedule.
+    // #53: the per-slot connect/backoff drive + auth refresh moved to the
+    // lifecycle worker task (workerLoop) so a blocking esp_mqtt stop/start can
+    // never stall loopTask / the BLE command channel. loopTask keeps only the
+    // status publish here -- non-blocking: it publishes only to Up brokers
+    // (never a slot the worker is connect-blocking on) and skips slots that are
+    // mid-reconcile, with the per-broker lock as the in-flight backstop.
+    //
+    // On host builds (no worker) nothing drives connects; the host stubs never
+    // connect anyway, so this is correct for tests.
     publishStatusIfDue(now_ms);
 }
 
@@ -102,6 +122,7 @@ uint8_t MqttBrokerPool::publishPacket(const uint8_t* payload, size_t payload_len
     if (payload == nullptr || payload_len == 0) return 0;
     uint8_t accepted = 0;
     for (uint8_t slot = 0; slot < CROSSWIRE_MAX_BROKERS; ++slot) {
+        if (reconciling_[slot]) continue;  // #53: skip slots mid-reconcile
         MqttBroker& b = brokers_[slot];
         if (!b.isConfigured() || b.runtime().state != BrokerState::Up) continue;
 
@@ -161,6 +182,7 @@ uint8_t MqttBrokerPool::publishRawFromBytes(const uint8_t* raw, size_t raw_len,
     // Fan-out per broker with their own iata + topic_prefix.
     uint8_t accepted = 0;
     for (uint8_t slot = 0; slot < CROSSWIRE_MAX_BROKERS; ++slot) {
+        if (reconciling_[slot]) continue;  // #53: skip slots mid-reconcile
         MqttBroker& b = brokers_[slot];
         if (!b.isConfigured() || b.runtime().state != BrokerState::Up) continue;
 
@@ -238,6 +260,7 @@ void MqttBrokerPool::publishStatusIfDue(uint32_t now_ms) {
 
     char status_buf[1024];
     for (uint8_t slot = 0; slot < CROSSWIRE_MAX_BROKERS; ++slot) {
+        if (reconciling_[slot]) continue;  // #53: skip slots mid-reconcile
         MqttBroker& b = brokers_[slot];
         if (!b.isConfigured() || b.runtime().state != BrokerState::Up) continue;
 
@@ -265,19 +288,81 @@ void MqttBrokerPool::publishStatusIfDue(uint32_t now_ms) {
 // ---------------------------------------------------------------------------
 bool MqttBrokerPool::reloadSlot(uint8_t slot) {
     if (slot >= CROSSWIRE_MAX_BROKERS) return false;
-#ifdef ARDUINO
-    if (identity_ == nullptr) return false;  // pool not begin()'d yet
-    BrokerConfig cfg;
-    if (!readBrokerConfig(slot, cfg)) return false;
-    if (cfg.url[0] == '\0') {
-        brokers_[slot].shutdown();
-        return true;
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    // #53: NON-BLOCKING. Mark the slot reconciling (loopTask skips it from
+    // here on) and hand it to the worker, which does the actual begin/shutdown
+    // (potentially multi-second esp_mqtt teardown) OFF loopTask.
+    if (identity_ == nullptr || reconcile_q_ == nullptr) return false;
+    reconciling_[slot] = true;
+    uint8_t s = slot;
+    if (xQueueSend(reconcile_q_, &s, 0) != pdTRUE) {
+        reconciling_[slot] = false;  // couldn't queue; release the guard
+        return false;
     }
-    return brokers_[slot].begin(slot, cfg, *identity_);
+    return true;
 #else
+    (void)slot;
     return false;  // host stub
 #endif
 }
+
+// ---------------------------------------------------------------------------
+// Lifecycle worker (#53): owns ALL blocking esp_mqtt ops off loopTask.
+// ---------------------------------------------------------------------------
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+void MqttBrokerPool::workerTrampoline(void* arg) {
+    static_cast<MqttBrokerPool*>(arg)->workerLoop();
+}
+
+// Reconcile one slot's live client to its NVS desired-state. Blocking
+// (begin() may stop+destroy+recreate the esp_mqtt client); runs ONLY on the
+// worker task. begin() creates a client only if the slot is enabled.
+void MqttBrokerPool::reconcileSlot(uint8_t slot) {
+    if (slot >= CROSSWIRE_MAX_BROKERS || identity_ == nullptr) return;
+    BrokerConfig cfg;
+    if (!readBrokerConfig(slot, cfg) || cfg.url[0] == '\0') {
+        brokers_[slot].shutdown();   // no/empty config -> ensure no client
+        return;
+    }
+    brokers_[slot].begin(slot, cfg, *identity_);
+}
+
+void MqttBrokerPool::workerLoop() {
+    for (;;) {
+        // Block for a reconcile request, but wake every 500ms to drive the
+        // connect/backoff state machine + JWT refresh (relocated from loopTask
+        // -- #53). 500ms is fine: backoff windows are seconds.
+        uint8_t slot = 0xFF;
+        bool got = (xQueueReceive(reconcile_q_, &slot, pdMS_TO_TICKS(500)) == pdTRUE);
+        if (!worker_run_) break;
+
+        if (got && slot < CROSSWIRE_MAX_BROKERS) {
+            reconcileSlot(slot);
+            reconciling_[slot] = false;  // hand the slot back to loopTask
+        }
+
+        // Periodic drive for all configured, non-reconciling slots. tryConnect
+        // honors backoff internally; the slot*1000ms bias staggers reconnect
+        // storms. These calls take the per-broker lock; a loopTask publish on
+        // the same slot serializes safely (and loopTask only publishes to Up
+        // slots, never one the worker is connect-blocking on).
+        uint32_t now = millis();
+        for (uint8_t s = 0; s < CROSSWIRE_MAX_BROKERS; ++s) {
+            if (reconciling_[s]) continue;
+            MqttBroker& b = brokers_[s];
+            if (!b.isConfigured()) continue;
+            b.loop(now);
+            if (b.runtime().state == BrokerState::Down ||
+                b.runtime().state == BrokerState::Backoff) {
+                uint32_t biased = now + static_cast<uint32_t>(s) * 1000U;
+                (void)b.tryConnect(biased);
+            }
+        }
+    }
+    worker_task_ = nullptr;
+    vTaskDelete(nullptr);
+}
+#endif  // ARDUINO && ESP_PLATFORM
 
 // ---------------------------------------------------------------------------
 // Counters
