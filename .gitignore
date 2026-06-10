@@ -40,6 +40,7 @@ platformio.secrets.ini
 
 # Claude Code
 .claude/settings.local.json
+.claude/agent-session.json
 
 # IDE
 .idea/

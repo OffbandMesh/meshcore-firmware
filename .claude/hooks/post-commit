@@ -54,4 +54,16 @@ except: print('error')
   esac
 done
 
+# ─── Refresh session-state snapshot (standards#107) ──────────────────────
+# Keep .claude/agent-session.json fresh without requiring agent discipline.
+# Best-effort; never blocks the commit. Snapshot includes claimed Citadel
+# tasks, active worktree, open PRs, last Tier 2 approval, agent notes.
+# Read at next SessionStart by preflight.sh §6 (via the session-state.sh shim).
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SESSION_STATE_SCRIPT="$HOOK_DIR/session-state.py"
+PYTHON_BIN="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+if [ -f "$SESSION_STATE_SCRIPT" ] && [ -n "$PYTHON_BIN" ]; then
+  "$PYTHON_BIN" "$SESSION_STATE_SCRIPT" write >/dev/null 2>&1 || true
+fi
+
 exit 0  # Never block — commit already happened
