@@ -27,7 +27,7 @@ Crosswire uses an independent `crosswire-vMAJOR.MINOR.PATCH` version (see [VERSI
 
 ## License
 
-MIT, inherited from upstream MeshCore (Copyright (c) 2025 Scott Powell / rippleradios.com). See [`LICENSE.txt`](LICENSE.txt). Crosswire's additions are released under the same terms.
+MIT, inherited from upstream MeshCore (Copyright (c) 2025 Scott Powell / rippleradios.com). See [`license.txt`](license.txt). Crosswire's additions are released under the same terms.
 
 ## Hardware
 
