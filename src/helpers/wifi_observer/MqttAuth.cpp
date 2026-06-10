@@ -102,12 +102,26 @@ bool MqttAuthJwt::apply(esp_mqtt_client_config_t& cfg, uint32_t now_ms) {
         last_mint_ms_ = now_ms;
     }
 
-    // JWT bearer goes in the password field (broker side parses "v1_<device_id>" + token).
+    // #68: build the MQTT CONNECT username once -- "v1_" + UPPERCASE hex of the
+    // device pubkey. The broker strips "v1_" and verifies the token's publicKey
+    // claim against it; a null username is rejected (CONNACK rc=5) even with a
+    // valid token -- proven live against mqtt.eastme.sh. Same convention for
+    // LetsMesh. The pubkey is constant, so build it only on first apply().
+    if (username_[0] == '\0' && identity_ != nullptr) {
+        char hex[2 * PUB_KEY_SIZE + 1];
+        for (size_t i = 0; i < PUB_KEY_SIZE; ++i) {
+            snprintf(&hex[i * 2], 3, "%02X", identity_->pub_key[i]);
+        }
+        hex[2 * PUB_KEY_SIZE] = '\0';
+        snprintf(username_, sizeof(username_), "v1_%s", hex);
+    }
+
+    // JWT bearer goes in the password field; username = v1_<pubkey> (#68).
 #if ESP_IDF_VERSION_MAJOR >= 5
-    cfg.credentials.username = nullptr;
+    cfg.credentials.username = username_;
     cfg.credentials.authentication.password = token_;
 #else
-    cfg.username = nullptr;
+    cfg.username = username_;
     cfg.password = token_;
 #endif
     return true;
