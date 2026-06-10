@@ -64,15 +64,21 @@ constexpr uint32_t kSystemChannelStatusMinIntervalMs = 5000;
 
 // Internal queue depth for pending status messages between
 // systemChannelPostStatus() (any context, including pre-boot
-// WifiBootstrap) and the MyMesh-side drain. 4 slots is enough
-// for the burst at "STA connected" + the welcome message + a
-// couple of safety-margin entries; over-queue drops oldest.
-constexpr uint8_t kSystemChannelQueueDepth = 4;
+// WifiBootstrap) and the MyMesh-side drain. 8 slots: the old burst
+// (STA-connected + welcome) plus headroom for a multi-frame reply
+// chunked one frame per line -- `mqtt status` is up to 6 brokers +
+// a header = 7 frames (#48 Item 3). Over-queue drops oldest.
+constexpr uint8_t kSystemChannelQueueDepth = 8;
 
 // Maximum payload length per status message. Chosen to fit
 // comfortably in the v3 channel-msg-recv frame (MAX_FRAME_SIZE
 // upstream is 184) after the header overhead.
 constexpr size_t kSystemChannelMaxTextLen = 140;
+
+// Work-buffer for a full CLI reply before it is chunked into
+// per-line _sys frames (<= kSystemChannelMaxTextLen each). Sized to
+// hold `mqtt status` across all 6 brokers (header + 6 lines). #48 Item 3.
+constexpr size_t kSystemChannelReplyBufLen = 768;
 
 // ---------------------------------------------------------------------------
 // Lifecycle (called from main.cpp wiring; ARDUINO-only impl).
