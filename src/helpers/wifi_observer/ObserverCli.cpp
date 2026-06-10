@@ -174,6 +174,7 @@ static bool handleSetBrokerField(char* reply, size_t reply_size,
         snprintf(reply, reply_size, "ERROR: cannot read slot %d\n", slot);
         return true;
     }
+    const bool was_enabled = cfg.enabled;  // #53: auto-disable if currently live
 
     bool sensitive = false;  // password/jwt fields elided from reply
     if (eq(key, "url")) {
@@ -231,13 +232,27 @@ static bool handleSetBrokerField(char* reply, size_t reply_size,
         return true;
     }
 
+    // #53: never reconfigure a LIVE broker. If the slot was enabled, force it
+    // disabled so the change lands on a quiescent slot; the user re-enables
+    // explicitly. A set on an already-disabled slot just writes NVS (there is
+    // no live client to touch -- instant, no worker round-trip).
+    if (was_enabled) cfg.enabled = false;
+
     if (!writeBrokerConfig((uint8_t)slot, cfg)) {
         snprintf(reply, reply_size, "ERROR: write slot %d failed\n", slot);
         return true;
     }
-    pool.reloadSlot((uint8_t)slot);
-    snprintf(reply, reply_size, "mqtt.broker.%d.%s = %s\n",
-             slot, key, sensitive ? "<redacted>" : value);
+
+    if (was_enabled) {
+        // Tear the live client down OFF loopTask (async; returns immediately).
+        pool.reloadSlot((uint8_t)slot);
+        snprintf(reply, reply_size,
+                 "mqtt.broker.%d.%s set; slot disabled -- 'mqtt enable %d' to apply\n",
+                 slot, key, slot);
+    } else {
+        snprintf(reply, reply_size, "mqtt.broker.%d.%s = %s\n",
+                 slot, key, sensitive ? "<redacted>" : value);
+    }
     return true;
 }
 

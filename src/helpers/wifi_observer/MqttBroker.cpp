@@ -13,6 +13,23 @@
 
 namespace crosswire {
 
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+namespace {
+// RAII guard for the per-broker recursive client mutex. Take on
+// construction, give on destruction -- covers all early-return paths
+// (Strycher/Crosswire#53).
+struct ClientLockGuard {
+    SemaphoreHandle_t m_;
+    explicit ClientLockGuard(SemaphoreHandle_t m) : m_(m) {
+        if (m_ != nullptr) xSemaphoreTakeRecursive(m_, portMAX_DELAY);
+    }
+    ~ClientLockGuard() { if (m_ != nullptr) xSemaphoreGiveRecursive(m_); }
+    ClientLockGuard(const ClientLockGuard&) = delete;
+    ClientLockGuard& operator=(const ClientLockGuard&) = delete;
+};
+}  // namespace
+#endif
+
 // ---------------------------------------------------------------------------
 // Backoff schedule -- shared free function.
 // ---------------------------------------------------------------------------
@@ -52,8 +69,17 @@ MqttBroker::~MqttBroker() {
     shutdown();
 }
 
+void MqttBroker::initLock() {
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    if (client_lock_ == nullptr) {
+        client_lock_ = xSemaphoreCreateRecursiveMutex();
+    }
+#endif
+}
+
 void MqttBroker::shutdown() {
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
+    ClientLockGuard _g(client_lock_);
     if (client_ != nullptr) {
         esp_mqtt_client_stop(client_);
         esp_mqtt_client_destroy(client_);
@@ -71,12 +97,22 @@ void MqttBroker::shutdown() {
 #ifdef ARDUINO
 bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg,
                        const mesh::LocalIdentity& identity) {
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    ClientLockGuard _g(client_lock_);
+#endif
     shutdown();  // idempotent re-init
     if (cfg.url[0] == '\0') {
         return false;  // disabled-by-config
     }
     slot_ = slot;
     cfg_  = cfg;
+    // #53: a DISABLED slot is "configured" (status reflects cfg_) but holds
+    // NO live client/auth -- the esp_mqtt client exists only while enabled.
+    // Enabling later routes through reloadSlot()->begin() which creates it.
+    if (!cfg.enabled) {
+        rt_ = BrokerRuntimeState{};
+        return true;
+    }
     auth_ = makeAuth(cfg, identity);
     if (auth_ == nullptr) {
         return false;  // bad auth config (e.g., Jwt without audience)
@@ -142,6 +178,9 @@ bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg) {
 // if the broker is eligible (enabled + Down + backoff window expired).
 // ---------------------------------------------------------------------------
 bool MqttBroker::tryConnect(uint32_t now_ms) {
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    ClientLockGuard _g(client_lock_);
+#endif
     if (!isConfigured() || !cfg_.enabled) {
         rt_.state = BrokerState::Down;
         return false;
@@ -225,6 +264,9 @@ bool MqttBroker::tryConnect(uint32_t now_ms) {
 // driven via eventHandler, so this is mostly a token-refresh poke point.
 // ---------------------------------------------------------------------------
 void MqttBroker::loop(uint32_t now_ms) {
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    ClientLockGuard _g(client_lock_);
+#endif
     if (!isConfigured() || auth_ == nullptr) return;
 
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
@@ -264,6 +306,9 @@ void MqttBroker::loop(uint32_t now_ms) {
 // ---------------------------------------------------------------------------
 bool MqttBroker::publish(const char* topic, const uint8_t* payload, size_t len,
                          bool retain) {
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    ClientLockGuard _g(client_lock_);
+#endif
     if (rt_.state != BrokerState::Up) return false;
     if (topic == nullptr || payload == nullptr) return false;
 

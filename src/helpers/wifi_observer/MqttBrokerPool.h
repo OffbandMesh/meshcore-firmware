@@ -11,6 +11,11 @@
 #ifdef ARDUINO
   #include <Identity.h>
 #endif
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+  #include "freertos/FreeRTOS.h"
+  #include "freertos/task.h"
+  #include "freertos/queue.h"
+#endif
 
 // Forward-declare so the /packets publish entry point can take a parsed
 // packet by reference without pulling Mesh.h into this header (mirrors
@@ -85,10 +90,12 @@ public:
     uint8_t publishParsedPacket(const mesh::Packet& packet, int rssi,
                                 float snr, int score, int duration);
 
-    // Reload one slot from NVS (after CLI config change). Tears down the
-    // old broker for that slot, re-reads config, and re-begins if enabled.
-    // Uses the identity_ cached from begin(); returns false if pool was
-    // never begin()'d. Returns true if reload succeeded (or slot is now disabled).
+    // Request an ASYNC reload of one slot after a CLI config change.
+    // NON-BLOCKING: marks the slot "reconciling" + posts it to the lifecycle
+    // worker task, which performs the (possibly multi-second) esp_mqtt client
+    // create/destroy OFF loopTask so the BLE command channel never stalls
+    // (Strycher/Crosswire#53). Returns false if the pool/worker isn't up or
+    // the request couldn't be queued; true if the reload was queued.
     bool reloadSlot(uint8_t slot);
 
     // For status / CLI reporting.
@@ -102,6 +109,22 @@ private:
     const mesh::LocalIdentity* identity_ = nullptr;
 #endif
     MqttBroker brokers_[CROSSWIRE_MAX_BROKERS];
+
+    // Per-slot guard: true while the lifecycle worker is creating/destroying
+    // that slot's client. loopTask publish/status paths SKIP reconciling slots
+    // so they never wait on the worker's blocking teardown (#53).
+    volatile bool reconciling_[CROSSWIRE_MAX_BROKERS] = {false};
+
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    // Lifecycle worker: owns ALL blocking esp_mqtt ops so loopTask never
+    // stalls on MQTT (#53). Created once in begin(); lives for the device's life.
+    TaskHandle_t  worker_task_ = nullptr;
+    QueueHandle_t reconcile_q_ = nullptr;
+    volatile bool worker_run_  = false;
+    static void   workerTrampoline(void* arg);
+    void          workerLoop();
+    void          reconcileSlot(uint8_t slot);  // worker-only; blocking begin/shutdown
+#endif
 
     // Cached strings for ctx fills (caller owns lifetime).
     const char* device_id_        = "";
