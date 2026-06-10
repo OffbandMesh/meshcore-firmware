@@ -50,6 +50,8 @@ constexpr const char* kKeyBrokerPassword     = "password";     // sensitive
 constexpr const char* kKeyBrokerJwtToken     = "jwt_token";    // sensitive (cached minted token; live-minted at connect)
 constexpr const char* kKeyBrokerJwtAudience  = "jwt_aud";      // Plan 2 v2: JWT "aud" claim per broker
 constexpr const char* kKeyBrokerJwtRefresh   = "jwt_refresh";  // Plan 2 v2: re-mint interval (seconds)
+constexpr const char* kKeyBrokerJwtOwner     = "jwt_owner";    // #63: JWT "owner" claim (owner pubkey, 64 hex)
+constexpr const char* kKeyBrokerJwtEmail     = "jwt_email";    // #63: JWT "email" claim
 constexpr const char* kKeyBrokerCaCertName   = "ca_cert";      // Plan 2 v2: ref into MqttCaCerts.h; "" = system store / no verify
 constexpr const char* kKeyBrokerTopicPrefix  = "topic_prefix";
 constexpr const char* kKeyBrokerIataOverride = "iata_override";
@@ -95,6 +97,9 @@ struct BrokerConfig {
     char             jwt_audience[96] = {0};   // e.g. "https://mqtt2.eastmesh.au"
     uint32_t         jwt_refresh_sec = 3600;   // re-mint token every N seconds
     char             ca_cert_name[24] = {0};   // ref into MqttCaCerts.h; "" = system store / no verify
+    // ----- #63 additions: per-broker JWT identity claims
+    char             jwt_owner[65] = {0};      // "owner" claim: owner pubkey, exactly 64 hex chars
+    char             jwt_email[96] = {0};      // "email" claim (matches MqttAuthJwt::email_[96])
 };
 
 bool readBrokerConfig(uint8_t slot, BrokerConfig& out);

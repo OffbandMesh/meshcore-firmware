@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <cctype>   // #63: isxdigit/toupper for jwt_owner validation
 
 #ifdef ARDUINO
   #include <Preferences.h>
@@ -105,11 +106,21 @@ static bool handleStatus(char* reply, size_t reply_size, MqttBrokerPool& pool) {
         const BrokerConfig& cfg = b.config();
         const BrokerRuntimeState& rt = b.runtime();
         n += snprintf(reply + n, reply_size - (size_t)n,
-                      "  [%u] %s %s/%s url=%s state=%s retries=%u\n",
+                      "  [%u] %s %s/%s url=%s state=%s retries=%u",
                       slot,
                       cfg.enabled ? "ENABLED" : "disabled",
                       transportStr(cfg.transport), authStr(cfg.auth_type),
                       cfg.url, stateStr(rt.state), (unsigned)rt.retry_count);
+        // #63: jwt slots show whether the owner/email identity claims are set
+        // (Y/N only -- values via the set echo; keeps the line frame-sized).
+        if (cfg.auth_type == BrokerAuthType::Jwt && n >= 0 && (size_t)n < reply_size) {
+            n += snprintf(reply + n, reply_size - (size_t)n, " own=%c eml=%c",
+                          cfg.jwt_owner[0] ? 'Y' : 'N',
+                          cfg.jwt_email[0] ? 'Y' : 'N');
+        }
+        if (n >= 0 && (size_t)n < reply_size) {
+            n += snprintf(reply + n, reply_size - (size_t)n, "\n");
+        }
     }
     return true;
 }
@@ -218,6 +229,35 @@ static bool handleSetBrokerField(char* reply, size_t reply_size,
             return true;
         }
         cfg.jwt_refresh_sec = (uint32_t)v;
+    } else if (eq(key, "jwt_owner")) {
+        // #63: JWT "owner" claim -- owner pubkey, exactly 64 hex chars.
+        // "" clears the claim. Normalized to uppercase (broker convention,
+        // matches the device publicKey claim).
+        size_t len = strlen(value);
+        if (len != 0 && len != 64) {
+            snprintf(reply, reply_size, "ERROR: jwt_owner must be 64 hex chars (got %u)\n",
+                     (unsigned)len);
+            return true;
+        }
+        for (size_t i = 0; i < len; ++i) {
+            if (!isxdigit((unsigned char)value[i])) {
+                snprintf(reply, reply_size, "ERROR: jwt_owner must be 64 hex chars\n");
+                return true;
+            }
+        }
+        for (size_t i = 0; i < len; ++i) {
+            cfg.jwt_owner[i] = (char)toupper((unsigned char)value[i]);
+        }
+        cfg.jwt_owner[len] = '\0';
+    } else if (eq(key, "jwt_email")) {
+        // #63: JWT "email" claim. "" clears it.
+        if (strlen(value) >= sizeof(cfg.jwt_email)) {
+            snprintf(reply, reply_size, "ERROR: jwt_email too long (max %u)\n",
+                     (unsigned)(sizeof(cfg.jwt_email) - 1));
+            return true;
+        }
+        strncpy(cfg.jwt_email, value, sizeof(cfg.jwt_email) - 1);
+        cfg.jwt_email[sizeof(cfg.jwt_email) - 1] = '\0';
     } else if (eq(key, "iata_override")) {
         strncpy(cfg.iata_override, value, sizeof(cfg.iata_override) - 1);
         cfg.iata_override[sizeof(cfg.iata_override) - 1] = '\0';

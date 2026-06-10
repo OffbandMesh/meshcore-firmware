@@ -27,6 +27,9 @@ namespace crosswire {
 //   set mqtt.broker.<N>.username <s>
 //   set mqtt.broker.<N>.password <s>             -- reply elides value
 //   set mqtt.broker.<N>.jwt_audience <url>
+//   set mqtt.broker.<N>.jwt_refresh <60..86400>  -- re-mint interval (sec)
+//   set mqtt.broker.<N>.jwt_owner <64-hex>       -- #63 JWT "owner" claim; "" clears
+//   set mqtt.broker.<N>.jwt_email <s>            -- #63 JWT "email" claim; "" clears
 //   set mqtt.broker.<N>.iata_override <code>
 //   set mqtt.broker.<N>.topic_prefix <s>
 //   set mqtt.broker.<N>.ca_cert <name>           -- letsencrypt, eastmesh, ""

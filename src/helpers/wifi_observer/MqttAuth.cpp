@@ -136,9 +136,14 @@ MqttAuth* makeAuth(const BrokerConfig& cfg
         case BrokerAuthType::Jwt:
 #ifdef ARDUINO
             if (cfg.jwt_audience[0] == '\0') return nullptr;
+            // #63: owner claim prefers the dedicated jwt_owner field; falls
+            // back to username for configs predating it (username[64] cannot
+            // hold a full 64-hex owner key -- the fallback is best-effort
+            // legacy compat, not the supported path).
             return new MqttAuthJwt(identity, cfg.jwt_audience, cfg.jwt_refresh_sec,
-                                   cfg.username[0] ? cfg.username : nullptr,
-                                   nullptr);
+                                   cfg.jwt_owner[0] ? cfg.jwt_owner
+                                                    : (cfg.username[0] ? cfg.username : nullptr),
+                                   cfg.jwt_email[0] ? cfg.jwt_email : nullptr);
 #else
             return nullptr;
 #endif

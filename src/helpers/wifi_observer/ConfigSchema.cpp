@@ -100,6 +100,11 @@ bool readBrokerConfig(uint8_t slot, BrokerConfig& out) {
     String cc = p.getString(kKeyBrokerCaCertName, "");
     strncpy(out.jwt_audience,  ja.c_str(), sizeof(out.jwt_audience));  out.jwt_audience[sizeof(out.jwt_audience)-1]  = '\0';
     strncpy(out.ca_cert_name,  cc.c_str(), sizeof(out.ca_cert_name));  out.ca_cert_name[sizeof(out.ca_cert_name)-1]  = '\0';
+    // #63 additions: JWT identity claims
+    String jo = p.getString(kKeyBrokerJwtOwner, "");
+    String je = p.getString(kKeyBrokerJwtEmail, "");
+    strncpy(out.jwt_owner,     jo.c_str(), sizeof(out.jwt_owner));     out.jwt_owner[sizeof(out.jwt_owner)-1]         = '\0';
+    strncpy(out.jwt_email,     je.c_str(), sizeof(out.jwt_email));     out.jwt_email[sizeof(out.jwt_email)-1]         = '\0';
     p.end();
     return true;
 }
@@ -124,6 +129,9 @@ bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg) {
     p.putString (kKeyBrokerJwtAudience,  cfg.jwt_audience);
     p.putULong  (kKeyBrokerJwtRefresh,   cfg.jwt_refresh_sec);
     p.putString (kKeyBrokerCaCertName,   cfg.ca_cert_name);
+    // #63 additions: JWT identity claims
+    p.putString (kKeyBrokerJwtOwner,     cfg.jwt_owner);
+    p.putString (kKeyBrokerJwtEmail,     cfg.jwt_email);
     p.end();
     return true;
 }
@@ -203,7 +211,9 @@ void populateDefaultBrokers() {
         def.jwt_refresh_sec = 3600;
         strncpy(def.ca_cert_name, spec.ca_cert_name, sizeof(def.ca_cert_name)); def.ca_cert_name[sizeof(def.ca_cert_name)-1] = '\0';
         strncpy(def.topic_prefix, kDefaultTopicPrefix, sizeof(def.topic_prefix)); def.topic_prefix[sizeof(def.topic_prefix)-1] = '\0';
-        // username + password + jwt_token + iata_override stay empty -- owner fills in
+        // username + password + jwt_token + jwt_owner + jwt_email +
+        // iata_override stay empty -- owner fills in (jwt_owner/jwt_email
+        // via `set mqtt.broker.<N>.jwt_owner|jwt_email`, #63)
         writeBrokerConfig(slot, def);
     }
 }
