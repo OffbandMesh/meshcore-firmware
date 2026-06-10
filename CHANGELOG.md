@@ -18,6 +18,31 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 _Nothing yet._
 
+## [0.15.0] - 2026-06-10
+
+Observer MQTT connectivity -- hardware-validated against three brokers
+(CoreScope / W8OOF tcp-anon, eastme.sh wss/jwt, LetsMesh-US wss/jwt).
+
+### Added
+- Owner broker registry: seed the default 6-slot broker set with an `iata=HAO`
+  default; per-broker GTS Root R4 + ISRG Root X2 CA certificates added and
+  mapped, registry cert-names corrected. (#48)
+- Per-broker JWT identity claims `jwt_owner` / `jwt_email`
+  (`set mqtt.broker.<N>.jwt_owner|jwt_email`), surfaced in `mqtt status`. (#63)
+- Multi-frame `mqtt status` over the BLE `_sys` channel: the per-slot broker
+  table spans multiple frames instead of truncating. (#48)
+
+### Fixed
+- BLE `_sys` command channel no longer hangs when `set mqtt.broker.*` runs. The
+  blocking `esp_mqtt` lifecycle ops (connect / destroy) moved off `loopTask` to a
+  dedicated `mqtt_worker` task with a per-broker lock and a per-slot reconcile
+  flag. (#53)
+- wss/JWT broker authentication: send the MQTT CONNECT username
+  `v1_<UPPERCASE pubkey>` (was a null username) so eastme.sh / LetsMesh accept
+  the connection -- the broker verifies the token's `publicKey` claim against it
+  and rejects a null username (CONNACK rc=5) even with an otherwise-valid token.
+  (#68)
+
 ## [0.14.0] - 2026-06-07
 
 ### Added
@@ -28,12 +53,28 @@ _Nothing yet._
   in `.github/release-envs.txt` (72 envs; `heltec_v4_repeater_telemetry` gated on
   #20). Design of record: `docs/architecture/2026-06-06-ci-release-pipeline.md`.
   (#15, #16, #17)
+- `pio-flash` artifact-flash mode: flash a prebuilt `.bin` through the same
+  device-identity gate (ESP32 + nRF52). (#29)
 
 ### Changed
 - Reconciled inherited CI workflows: removed 7 dead/superseded
   (`pr-build-check`, `auto-promote`, `github-pages`, the three upstream-tag
   `build-*-firmwares`, `branch-cleanup`); kept `build-safeboot-firmwares` +
   `sync-labels-to-board`. (#18)
+- Observer firmware stripped to its minimum footprint; removed the dead RX ring
+  buffer. (#42)
+
+### Fixed
+- `pio-flash`: default `firmware_dir` to the repo root with a `--firmware-dir`
+  override; bootloader-port discovery + output-parsed flash verification.
+  (#27, #34)
+- OLED splash version carries the pre-release identifier (e.g. `-rc1`). (#33)
+- Guard `_serial` in `onContactOverwrite` (was NULL during boot-load). (#42)
+
+### Internal
+- MeshCore 1.16.0 base-update impact assessment, position-to-map pipeline
+  architecture draft, project-identity pinning, and the `/work` + `session-state`
+  compaction-recovery tooling port. (#54, #32, #55, #59, #61)
 
 ## [0.13.2] - 2026-06-05
 
