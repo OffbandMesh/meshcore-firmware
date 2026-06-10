@@ -31,7 +31,7 @@ Worktrees coordinate in the SAME `app-c-dev-lora-crosswire` (resolve from the re
 | `PROJECT_NAME` | Crosswire |
 | `PROJECT_DIR` | `C:\Dev\LoRa\Crosswire` (nested under the LoRa workspace, gitignored by LoRa) |
 | `INFRA_PROFILE` | Maker |
-| `BUILD_COMMAND` | `pio run -e <env>` (firmware now lives here; built from the `meshcore-firmware` clone — see Migration status) |
+| `BUILD_COMMAND` | `pio run -e <env>` (run from this repo's working tree at `C:\Dev\LoRa\Crosswire`) |
 | `DEPLOY_TARGET` | Device flash over USB / OTA (no SCP deploy; firmware is flashed, not server-deployed) |
 | `CITADEL_PROJECT` | `Crosswire` (Strycher/Crosswire) |
 | `GITHUB_PROJECT_ID` | `PVT_kwHODGcOBc4BZuj8` (Project #14, "Crosswire Project Board") |
@@ -51,8 +51,8 @@ Recorded per REPOCONFIG (board field IDs captured in project CLAUDE.md). Consume
 
 **Firmware has migrated here.** `firmware-base` (this repo's default branch) is the canonical Crosswire firmware tree. The old `crosswire` branch of `Strycher/MeshCore` is retired and that **fork is archived** (2026-06-04, read-only; reversible via `gh repo unarchive`). Full history is preserved in this repo: branches (patch-id verified), all `crosswire-v*` release tags + `archive/*` tags, and Plan 3 (see Preserved artifacts). Design-of-record: `docs/architecture/2026-06-01-observer-architecture-review.md`.
 
-Current hybrid state (until a true Strycher/Crosswire working clone replaces the fork clone):
-- **Build/flash still happen from the `meshcore-firmware` clone** under the LoRa workspace (`C:\Dev\LoRa\meshcore-firmware`). That clone now pushes **only** to `crosswire`; the `strycher` (MeshCore-fork) remote is removed, and `origin` (meshcore-dev) + `iotthinks` are **fetch-only** (`no-push`). In-flight firmware work there is still tracked under the **LoRa** Citadel project + Strycher/LoRa issues. The Citadel-home flip (LoRa → Crosswire) is gated on the working-tree cutover.
+Working-tree cutover COMPLETE (Strycher/Crosswire#10, 2026-06-10) -- the legacy `meshcore-firmware` clone is **retired/deleted**:
+- **Build/flash run from THIS repo's working tree** (`C:\Dev\LoRa\Crosswire`). Upstream MeshCore remotes live here: `upstream` = meshcore-dev/MeshCore and `iotthinks`, both **fetch-only** (`no-push`); `origin` = Strycher/Crosswire (push). `firmware-base` is a self-contained MeshCore fork (full `src/` tree), so future upstream merges (e.g. the deferred 1.16.0 base-update) fetch + merge directly here. Firmware work is tracked under the **Crosswire** Citadel project + Strycher/Crosswire issues (legacy Strycher/LoRa firmware issues are being migrated).
 - **Net-new Crosswire requests / bugs / design-of-record are filed here** under the **Crosswire** Citadel project.
 - **Flash discipline PORTED (P5.2):** `scripts/pio-flash` (+`.py`), `scripts/ota-push.py`, and the `block-raw-flash` / `block-raw-curl-ota` / `require-agent-mail-check` PreToolUse hooks live in this repo. The device registry `hardware-devices.yaml` is **gitignored** (per-host; holds LAN IPs/MACs) — copy `hardware-devices.example.yaml` to `hardware-devices.yaml` and populate it before flashing from this repo.
 
