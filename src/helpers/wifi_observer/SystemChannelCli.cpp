@@ -278,16 +278,23 @@ bool systemChannelInterceptMsg(const char* msg_text, size_t msg_len) {
     // Dispatch through the same allowlist + dispatcher as the web
     // Console. Reuses Plan 3 Task 4's logic, so the deny list and
     // verb coverage stay consistent across the two surfaces.
-    char reply[kSystemChannelMaxTextLen];
+    char reply[kSystemChannelReplyBufLen];
     reply[0] = '\0';
     (void)cliPassthroughExecute(line, reply, sizeof(reply));
 
-    // The reply (Ok / Denied / Unknown variant) goes back to the
-    // user as a channel message. Enqueue directly (no rate-limit
-    // gate -- a deliberate user-initiated command deserves an
-    // immediate response; the rate limiter applies only to
-    // unsolicited status posts).
-    enqueue(reply, strlen(reply));
+    // The reply goes back as channel message(s). A long reply (e.g.
+    // `mqtt status` across 6 brokers) exceeds one 140-byte _sys frame,
+    // so split on newlines and enqueue each line as its own frame
+    // rather than truncating to one (#48 Item 3). No rate-limit gate --
+    // a deliberate user-initiated command deserves an immediate reply;
+    // the rate limiter applies only to unsolicited status posts.
+    for (const char* p = reply; *p; ) {
+        const char* nl = strchr(p, '\n');
+        size_t seg = nl ? (size_t)(nl - p) : strlen(p);
+        if (seg > 0) enqueue(p, seg);  // enqueue clamps to kSystemChannelMaxTextLen-1
+        if (!nl) break;
+        p = nl + 1;
+    }
     return true;
 }
 
