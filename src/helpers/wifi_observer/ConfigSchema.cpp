@@ -167,10 +167,10 @@ struct DefaultBrokerSpec {
 // Slots 0-4. Slot 5 (MQTT Custom) is intentionally absent so it stays empty.
 constexpr DefaultBrokerSpec kDefaultBrokerSpecs[] = {
     {true,  "mqtt://mqtt.w8oof.net:1883",            BrokerTransport::Tcp, 1883, BrokerAuthType::None, "",                                ""},
-    {false, "wss://mqtt-us-v1.letsmesh.net:443/mqtt", BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "https://mqtt-us-v1.letsmesh.net", "gts-we1"},
-    {false, "wss://mqtt.eastme.sh:443/mqtt",          BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "https://mqtt.eastme.sh",          "gts-we1"},
-    {false, "wss://mqtt-eu-v1.letsmesh.net:443/mqtt", BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "https://mqtt-eu-v1.letsmesh.net", "gts-we1"},
-    {false, "wss://mqtt2.eastmesh.au:443/mqtt",       BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "https://mqtt2.eastmesh.au",       "gts-we1"},
+    {false, "wss://mqtt-us-v1.letsmesh.net:443/mqtt", BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "https://mqtt-us-v1.letsmesh.net", "gts-r4"},
+    {false, "wss://mqtt.eastme.sh:443/mqtt",          BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "https://mqtt.eastme.sh",          "letsencrypt"},
+    {false, "wss://mqtt-eu-v1.letsmesh.net:443/mqtt", BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "https://mqtt-eu-v1.letsmesh.net", "gts-r4"},
+    {false, "wss://mqtt2.eastmesh.au:443/mqtt",       BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "https://mqtt2.eastmesh.au",       "letsencrypt"},
 };
 constexpr uint8_t kNumDefaultBrokers =
     sizeof(kDefaultBrokerSpecs) / sizeof(kDefaultBrokerSpecs[0]);

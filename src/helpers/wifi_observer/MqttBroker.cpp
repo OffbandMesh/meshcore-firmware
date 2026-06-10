@@ -47,8 +47,10 @@ uint32_t brokerBackoffMs(uint32_t retry_count) {
 // (ISRG Root X1) so one cert covers all three vendored brokers.
 //
 // Naming convention exposed to operators: "letsencrypt", "eastmesh"
-// (alias), or "isrg-x1" (alias). All three map to the same PEM. Future
-// brokers add a new entry here and a corresponding PEM in MqttCaCerts.h.
+// (alias), or "isrg-x1" (alias) all map to ISRG Root X1 (Let's Encrypt RSA;
+// covers EastMesh). "isrg-x2" = Let's Encrypt ECDSA root; "gts-r4" = Google
+// Trust Services Root R4 (covers LetsMesh). New brokers add a name here +
+// a PEM in MqttCaCerts.h. #48 Item 2.
 const char* lookupCaCertPem(const char* name) {
     if (name == nullptr || name[0] == '\0') return nullptr;
 #ifdef ARDUINO
@@ -56,6 +58,8 @@ const char* lookupCaCertPem(const char* name) {
     if (strcmp(name, "eastmesh")    == 0) return mqtt_ca_certs::kEastmeshIsrgRootX1Pem;
     if (strcmp(name, "isrg-x1")     == 0) return mqtt_ca_certs::kEastmeshIsrgRootX1Pem;
     if (strcmp(name, "isrg_root_x1")== 0) return mqtt_ca_certs::kEastmeshIsrgRootX1Pem;
+    if (strcmp(name, "isrg-x2")     == 0) return mqtt_ca_certs::kIsrgRootX2Pem;
+    if (strcmp(name, "gts-r4")      == 0) return mqtt_ca_certs::kGtsRootR4Pem;
 #else
     (void)name;
 #endif
