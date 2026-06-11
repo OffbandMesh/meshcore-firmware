@@ -20,7 +20,7 @@ Crosswire is its **own** project. `Strycher/LoRa` is the **separate personal ori
 | Citadel | `DW_PROJECT=Crosswire` (Strycher/Crosswire). **Never** `LoRa`. |
 | GitHub issues/PRs | `Strycher/Crosswire` |
 | Agent Mail `project_key` | **`app-c-dev-crosswire`** (path slug of `C:\Dev\Crosswire`). Register + send + read HERE. NOT `app-c-dev-lora` (the LoRa workspace), NOT `app-crosswire` (stray), NOT `app-c-dev-lora-crosswire` (RETIRED 2026-06-10 — pitched in the relocation). |
-| Active agents (2026-06-10) | DustyFox, RedCreek |
+| Active agents (2026-06-10) | RedCreek (active). DustyFox archived after its 1.16.0 base-update assessment merged. HazyForest is on the separate `Strycher/meshcore-open` client fork, not this project. |
 
 Worktrees coordinate in the SAME `app-c-dev-crosswire` (resolve from the repo common dir, not the worktree path). The stale "in-flight firmware work tracked under the LoRa Citadel project" note in Migration status below is RETIRED: net-new Crosswire work is tracked under Crosswire (Citadel) + Strycher/Crosswire (issues) + `app-c-dev-crosswire` (Agent Mail).
 
@@ -80,4 +80,4 @@ Decision record: **Strycher/Crosswire#5** (closed, preserved-by-design). Do not 
 
 ---
 
-**Last updated:** 2026-06-04 (firmware migration complete; Strycher/MeshCore fork archived; board + CI + flash-discipline landed).
+**Last updated:** 2026-06-10 (active-agents roster corrected post-relocation: RedCreek active in `app-c-dev-crosswire`, DustyFox archived, HazyForest on the separate meshcore-open fork).
