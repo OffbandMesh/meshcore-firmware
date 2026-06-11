@@ -366,8 +366,8 @@ static bool handleSetWifiField(char* reply, size_t reply_size,
     if (eq(field, "pwd")) {
         // Never echo the PSK in any code path.
         snprintf(reply, reply_size,
-                 "wifi.pwd set (length=%u). Reboot or run 'get "
-                 "wifi.status' after STA retry.\n",
+                 "wifi.pwd set (length=%u). Reboot or run "
+                 "'wifi status' after STA retry.\n",
                  (unsigned)strlen(value));
     } else {
         snprintf(reply, reply_size, "wifi.ssid = %s\n", value);
@@ -378,7 +378,7 @@ static bool handleSetWifiField(char* reply, size_t reply_size,
 static bool handleGetWifi(char* reply, size_t reply_size, const char* field) {
     if (field == nullptr) {
         snprintf(reply, reply_size,
-                 "ERROR: usage: get wifi.ssid | get wifi.status\n");
+                 "ERROR: usage: get wifi.ssid | wifi status\n");
         return true;
     }
     if (eq(field, "pwd")) {
@@ -470,6 +470,64 @@ static bool handleSetWebAllowInitial(char* reply, size_t reply_size,
 // Top-level dispatch
 // ---------------------------------------------------------------------------
 
+// "wifi enable" / "wifi disable" -- Strycher/Crosswire#45. Persists an NVS
+// policy flag in namespace "wifi" (key "enabled", default true) that
+// WifiBootstrap::begin() honors at boot. Reboot-to-apply by design: we do
+// NOT tear down a live STA here, because the observer's MQTT uplink and this
+// very _sys channel ride that WiFi link -- the flag only gates the next
+// boot's STA attempt.
+static bool handleSetWifiEnabled(char* reply, size_t reply_size, bool enabled) {
+#ifdef ARDUINO
+    Preferences p;
+    if (!p.begin("wifi", /*readOnly=*/false)) {
+        snprintf(reply, reply_size, "ERROR: cannot open NVS namespace 'wifi'\n");
+        return true;
+    }
+    p.putBool("enabled", enabled);
+    p.end();
+#endif
+    snprintf(reply, reply_size, "wifi.enabled = %d (reboot to apply)\n",
+             enabled ? 1 : 0);
+    return true;
+}
+
+// "get mqtt.broker.<N>.<key>" -- Strycher/Crosswire#45: symmetric read for the
+// existing "set mqtt.broker.<N>.<key>". Key vocabulary mirrors
+// handleSetBrokerField. Secret fields (password) are write-only and refused
+// here, per the wifi.pwd policy + the CLAUDE.md "never echo a secret" rule.
+static bool handleGetBrokerField(char* reply, size_t reply_size,
+                                 int slot, const char* key) {
+    if (slot < 0 || key == nullptr) {
+        snprintf(reply, reply_size, "ERROR: usage: get mqtt.broker.<N>.<key>\n");
+        return true;
+    }
+    BrokerConfig cfg;
+    if (!readBrokerConfig((uint8_t)slot, cfg)) {
+        snprintf(reply, reply_size, "ERROR: cannot read slot %d\n", slot);
+        return true;
+    }
+    if (eq(key, "password")) {
+        snprintf(reply, reply_size,
+                 "ERROR: mqtt.broker.%d.password is write-only\n", slot);
+        return true;
+    }
+    if      (eq(key, "url"))           snprintf(reply, reply_size, "mqtt.broker.%d.url = %s\n", slot, cfg.url);
+    else if (eq(key, "port"))          snprintf(reply, reply_size, "mqtt.broker.%d.port = %u\n", slot, (unsigned)cfg.port);
+    else if (eq(key, "transport"))     snprintf(reply, reply_size, "mqtt.broker.%d.transport = %s\n", slot, transportStr(cfg.transport));
+    else if (eq(key, "auth_type"))     snprintf(reply, reply_size, "mqtt.broker.%d.auth_type = %s\n", slot, authStr(cfg.auth_type));
+    else if (eq(key, "username"))      snprintf(reply, reply_size, "mqtt.broker.%d.username = %s\n", slot, cfg.username);
+    else if (eq(key, "enabled"))       snprintf(reply, reply_size, "mqtt.broker.%d.enabled = %d\n", slot, cfg.enabled ? 1 : 0);
+    else if (eq(key, "topic_prefix"))  snprintf(reply, reply_size, "mqtt.broker.%d.topic_prefix = %s\n", slot, cfg.topic_prefix);
+    else if (eq(key, "iata_override")) snprintf(reply, reply_size, "mqtt.broker.%d.iata_override = %s\n", slot, cfg.iata_override);
+    else if (eq(key, "ca_cert"))       snprintf(reply, reply_size, "mqtt.broker.%d.ca_cert = %s\n", slot, cfg.ca_cert_name);
+    else if (eq(key, "jwt_audience"))  snprintf(reply, reply_size, "mqtt.broker.%d.jwt_audience = %s\n", slot, cfg.jwt_audience);
+    else if (eq(key, "jwt_refresh"))   snprintf(reply, reply_size, "mqtt.broker.%d.jwt_refresh = %u\n", slot, (unsigned)cfg.jwt_refresh_sec);
+    else if (eq(key, "jwt_owner"))     snprintf(reply, reply_size, "mqtt.broker.%d.jwt_owner = %s\n", slot, cfg.jwt_owner);
+    else if (eq(key, "jwt_email"))     snprintf(reply, reply_size, "mqtt.broker.%d.jwt_email = %s\n", slot, cfg.jwt_email);
+    else snprintf(reply, reply_size, "ERROR: unknown broker field '%s'\n", key);
+    return true;
+}
+
 bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
                          MqttBrokerPool& pool) {
     if (cmd == nullptr || reply == nullptr || reply_size == 0) return false;
@@ -505,6 +563,22 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
         return true;
     }
 
+    // "wifi ..." commands -- Strycher/Crosswire#45: namespace-subcommand
+    // grammar aligned with "mqtt status/enable/disable". `status` moves from
+    // the verb-first "get wifi.status" to "wifi status"; the dotted form is
+    // kept as a backward-compat alias in the `get` branch below.
+    rest = skipPrefix(cmd, "wifi");
+    if (rest != nullptr) {
+        if (eq(rest, "status") || *rest == '\0') {
+            return handleGetWifi(reply, reply_size, "status");
+        }
+        if (eq(rest, "enable"))  return handleSetWifiEnabled(reply, reply_size, true);
+        if (eq(rest, "disable")) return handleSetWifiEnabled(reply, reply_size, false);
+        snprintf(reply, reply_size,
+                 "ERROR: unknown wifi subcommand (status | enable | disable)\n");
+        return true;
+    }
+
     // "get wifi.<field>" -- Plan 3 Task 10 (Strycher/LoRa#272). This
     // is the first `get` verb the observer CLI handles; all earlier
     // observer commands were `set`/`mqtt.*` only. CliPassthrough
@@ -525,6 +599,30 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
             }
             fbuf[fi] = '\0';
             return handleGetWifi(reply, reply_size, fbuf);
+        }
+        // "get mqtt.broker.<N>.<key>" -- #45 symmetric read (mirrors the
+        // "set mqtt.broker.<N>.<key>" parse below).
+        if (strncmp(rest, "mqtt.broker.", 12) == 0) {
+            const char* p = rest + 12;
+            int slot = parseSlot(p);
+            if (slot < 0) {
+                snprintf(reply, reply_size,
+                         "ERROR: usage: get mqtt.broker.<0..%d>.<key>\n",
+                         CROSSWIRE_MAX_BROKERS - 1);
+                return true;
+            }
+            while (*p >= '0' && *p <= '9') p++;  // past slot digit(s)
+            if (*p != '.') {
+                snprintf(reply, reply_size,
+                         "ERROR: missing .<key> after broker slot\n");
+                return true;
+            }
+            p++;  // past '.'
+            char key[32];
+            size_t ki = 0;
+            while (*p && *p != ' ' && ki + 1 < sizeof(key)) key[ki++] = *p++;
+            key[ki] = '\0';
+            return handleGetBrokerField(reply, reply_size, slot, key);
         }
         // Unknown `get` key. Return false so CliPassthrough falls
         // through to its "unknown:" reply rather than us claiming

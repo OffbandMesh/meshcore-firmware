@@ -76,6 +76,9 @@ void WifiBootstrap::begin() {
     Preferences prefs;
     prefs.begin("wifi", /*readOnly=*/true);
     String ssid = prefs.getString("ssid", "");
+    // #45: "wifi enable"/"wifi disable" policy flag (default enabled). Read
+    // alongside the creds so a disabled node skips STA without losing creds.
+    bool wifi_enabled = prefs.getBool("enabled", true);
     prefs.end();
 
     if (ssid.isEmpty()) {
@@ -94,8 +97,14 @@ void WifiBootstrap::begin() {
         crosswire::systemChannelPostStatus(
             "Welcome! To set WiFi: send 'set wifi.ssid YourSSID' "
             "then 'set wifi.pwd YourPSK' as messages in this channel. "
-            "Use 'get wifi.status' to check.");
+            "Use 'wifi status' to check.");
 #endif
+    } else if (!wifi_enabled) {
+        // #45: creds present but WiFi disabled by policy ("wifi disable").
+        // Skip STA; re-enable via "wifi enable" + reboot. Idle, no STA.
+        Serial.println("[WifiBootstrap] WiFi disabled by policy "
+                       "(send 'wifi enable' then reboot to connect).");
+        state_ = WifiBootstrapState::ApMode;  // idle; no STA attempt
     } else {
         Serial.printf("[WifiBootstrap] Saved WiFi SSID=%s; attempting STA.\n",
                       ssid.c_str());
