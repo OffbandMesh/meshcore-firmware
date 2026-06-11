@@ -33,6 +33,14 @@ static const char* s_firmware_version = "";
 static const char* s_model            = "";
 static bool        s_context_set      = false;
 static bool        s_pool_started     = false;
+#ifdef ARDUINO
+// #69: SNTP bring-up tracking. Wall clock is "sane" (SNTP or BLE set real time)
+// once past 2025-01-01 UTC; below that TLS certs read "not yet valid" and JWT
+// iat/exp are garbage, so the pool waits for it before enabling brokers.
+static bool        s_sntp_started     = false;
+static uint32_t    s_sntp_started_ms  = 0;
+static bool wallClockSane() { return time(nullptr) > 1735689600; }
+#endif
 
 // ---------------------------------------------------------------------------
 // wifiObserverBegin -- early setup. Same as Plan 1; pool comes up later.
@@ -99,14 +107,28 @@ void wifiObserverLoop() {
 
     // Bring pool + pipeline up on the STA-connected transition (with
     // mesh context). One-shot guarded by s_pool_started.
-    if (!s_pool_started && s_context_set && wifiBootstrap().isStaConnected()
-        && s_identity != nullptr) {
-        crashLogf("[WifiObserver] STA up + context set -- bringing up MqttBrokerPool");
-        // #69: start SNTP so wss/jwt brokers get a valid wall clock (needed for
-        // TLS cert-validity checks + JWT iat/exp) without a phone. Non-blocking;
-        // the system clock ESP32RTCClock reads via time() updates on first sync.
+    // #69: Phase 1 -- start SNTP the moment STA is up, before any MQTT, so the
+    // wall clock is being set before broker logic runs.
+    if (!s_sntp_started && s_context_set && wifiBootstrap().isStaConnected()) {
         configTime(0, 0, "pool.ntp.org", "time.nist.gov", "time.google.com");
-        crashLogf("[WifiObserver] SNTP started; pre-sync wall=%lu",
+        s_sntp_started    = true;
+        s_sntp_started_ms = now;
+        crashLogf("[WifiObserver] SNTP started (pre-sync wall=%lu)",
+                  (unsigned long)time(nullptr));
+    }
+
+    // #69: Phase 2 -- bring up the MQTT pool once we have a real wall clock, so
+    // wss/jwt brokers connect on their first attempt instead of failing TLS into
+    // backoff. Bounded wait: if NTP is blocked, the tcp brokers still come up
+    // rather than MQTT never starting.
+    constexpr uint32_t kClockWaitMs = 30000;
+    if (!s_pool_started && s_sntp_started && s_identity != nullptr &&
+        (wallClockSane() || (now - s_sntp_started_ms >= kClockWaitMs))) {
+        if (!wallClockSane()) {
+            crashLogf("[WifiObserver] clock not synced after %us -- pool up anyway "
+                      "(wss brokers will wait)", (unsigned)(kClockWaitMs / 1000));
+        }
+        crashLogf("[WifiObserver] clock ready -- bringing up MqttBrokerPool (wall=%lu)",
                   (unsigned long)time(nullptr));
         s_pool.begin(*s_identity, s_device_id, s_node_name,
                      s_client_version, s_firmware_version, s_model);
@@ -124,7 +146,7 @@ void wifiObserverLoop() {
     // #69: one-shot log the moment SNTP gives us a real wall clock, so serial
     // captures show exactly when the TLS brokers became eligible to connect.
     static bool s_clock_synced_logged = false;
-    if (!s_clock_synced_logged && time(nullptr) > 1735689600) {
+    if (!s_clock_synced_logged && wallClockSane()) {
         s_clock_synced_logged = true;
         crashLogf("[WifiObserver] wall clock synced via SNTP: %lu",
                   (unsigned long)time(nullptr));
