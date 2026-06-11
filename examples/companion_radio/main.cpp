@@ -332,6 +332,47 @@ void loop() {
   }
 #endif
 
+#ifdef CROSSWIRE_OBSERVER
+  // #31 Task C: push status snapshot to observer ~30 s so the pool's
+  // publishStatusIfDue() can emit /status.  Throttled here to avoid
+  // snapshot-build cost every iteration; the pool applies its own
+  // status_interval_sec_ gate before actually publishing.
+  //
+  // Field sources:
+  //   battery_mv     -- board.getBattMilliVolts()
+  //   uptime_secs    -- millis() / 1000
+  //   error_flags    -- 0 (no public accessor on Dispatcher; benign default)
+  //   queue_len      -- 0 (Dispatcher::_mgr is protected; benign default)
+  //   noise_floor    -- radio_driver.getNoiseFloor() (RadioLibWrapper)
+  //   tx_air_secs    -- the_mesh.getTotalAirTime() / 1000
+  //   rx_air_secs    -- the_mesh.getReceiveAirTime() / 1000
+  //   recv_errors    -- radio_driver.getPacketsRecvErrors()
+  //   radio_freq/bw/sf/cr -- compile-time LORA_* macros (runtime prefs TODO)
+  //   repeat_enabled -- getNodePrefs()->client_repeat != 0
+  {
+    static uint32_t s_status_snap_ms = 0;
+    uint32_t _now = millis();
+    if (_now - s_status_snap_ms >= 30000U) {
+      s_status_snap_ms = _now;
+      crosswire::MqttStatusSnapshot snap = {};
+      snap.battery_mv     = static_cast<int>(board.getBattMilliVolts());
+      snap.uptime_secs    = static_cast<uint32_t>(_now / 1000UL);
+      snap.error_flags    = 0;   // no public Dispatcher accessor
+      snap.queue_len      = 0;   // no public Dispatcher accessor
+      snap.noise_floor    = radio_driver.getNoiseFloor();
+      snap.tx_air_secs    = static_cast<uint32_t>(the_mesh.getTotalAirTime() / 1000UL);
+      snap.rx_air_secs    = static_cast<uint32_t>(the_mesh.getReceiveAirTime() / 1000UL);
+      snap.recv_errors    = static_cast<uint32_t>(radio_driver.getPacketsRecvErrors());
+      snap.radio_freq     = static_cast<float>(LORA_FREQ);
+      snap.radio_bw       = static_cast<float>(LORA_BW);
+      snap.radio_sf       = static_cast<uint8_t>(LORA_SF);
+      snap.radio_cr       = static_cast<uint8_t>(LORA_CR);
+      snap.repeat_enabled = (the_mesh.getNodePrefs()->client_repeat != 0);
+      crosswire::wifiObserverSetStatusSnapshot(snap);
+    }
+  }
+#endif
+
 #ifdef DISPLAY_CLASS
 #ifdef CROSSWIRE_OBSERVER
   crosswire::subloopMark(crosswire::SUBLOOP_UI);
