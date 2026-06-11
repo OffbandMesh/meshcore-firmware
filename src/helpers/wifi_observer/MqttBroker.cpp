@@ -5,6 +5,7 @@
 #include "MqttBroker.h"
 #include <cstring>
 #include <cstdio>
+#include <ctime>          // #69: std::time() for the wall-clock sanity gate
 
 #ifdef ARDUINO
   #include <Arduino.h>
@@ -37,6 +38,14 @@ uint32_t brokerBackoffMs(uint32_t retry_count) {
     static const uint32_t kSchedule[] = {5000, 15000, 30000, 60000, 120000};
     const size_t n = sizeof(kSchedule) / sizeof(kSchedule[0]);
     return retry_count < n ? kSchedule[retry_count] : kSchedule[n - 1];
+}
+
+// #69: the wall clock is "sane" (SNTP or BLE has set real time) once it is past
+// this epoch. Below it -- e.g. the build-time placeholder of May 2024 -- TLS
+// server certs read "not yet valid" and JWT iat/exp are garbage, so a wss/TLS
+// connect only burns backoff cycles. Threshold = 2025-01-01 UTC.
+static bool wallClockSane() {
+    return std::time(nullptr) > 1735689600;
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +207,16 @@ bool MqttBroker::tryConnect(uint32_t now_ms) {
             return false;
         }
     }
+
+    // #69: wss/TLS brokers can't complete the TLS handshake until the wall clock
+    // is valid (server certs read "not yet valid"; JWT iat/exp would be wrong
+    // too). Hold off -- without burning a backoff cycle -- until SNTP sets a sane
+    // clock; we retry on the next drive tick. tcp brokers are unaffected.
+    if ((cfg_.transport == BrokerTransport::Tls ||
+         cfg_.transport == BrokerTransport::Wss) && !wallClockSane()) {
+        return false;
+    }
+
     rt_.last_attempt_ms = now_ms;
     rt_.state = BrokerState::Connecting;
 

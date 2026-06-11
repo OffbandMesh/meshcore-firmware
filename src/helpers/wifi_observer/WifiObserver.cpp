@@ -121,6 +121,15 @@ void wifiObserverLoop() {
         s_pool.loop(now);
     }
 
+    // #69: one-shot log the moment SNTP gives us a real wall clock, so serial
+    // captures show exactly when the TLS brokers became eligible to connect.
+    static bool s_clock_synced_logged = false;
+    if (!s_clock_synced_logged && time(nullptr) > 1735689600) {
+        s_clock_synced_logged = true;
+        crashLogf("[WifiObserver] wall clock synced via SNTP: %lu",
+                  (unsigned long)time(nullptr));
+    }
+
     // Periodic heap/stack snapshot every 5 seconds.
     static uint32_t s_last_stats_ms = 0;
     if (now - s_last_stats_ms > 5000) {
