@@ -9,20 +9,19 @@
 # Portable: auto-detects project name from git repo basename.
 # Deploy: copy to .claude/hooks/pre-push in any DW project.
 #
-# Override: set DW_SKIP_CLOSE_CHECK=1 for emergency pushes (logged).
+# Overrides (each gates ONE check; bypasses are NOT composable into a
+# global skip — set the specific one for the specific gate you mean to
+# bypass):
+#   DW_SKIP_CLOSE_CHECK=1                  # skip the open-issue check (the original behavior of this hook)
+#   DW_SKIP_INCIDENT_AUTOCLOSE_CHECK=1     # skip the type:incident auto-close-keyword check (standards#100)
 # =============================================================================
-
-if [ "${DW_SKIP_CLOSE_CHECK:-0}" = "1" ]; then
-  echo "⚠ CLOSE CHECK BYPASSED — DW_SKIP_CLOSE_CHECK=1" >&2
-  exit 0
-fi
 
 CITADEL_API="https://getunfocused.app/citadel"
 PROJECT="${DW_PROJECT:-$(basename "$(git rev-parse --show-toplevel 2>/dev/null)")}"
 
 # Read the push refs from stdin (provided by git)
 while read local_ref local_sha remote_ref remote_sha; do
-  # Get commits being pushed
+  # Get commits being pushed (subjects only; new check below also reads bodies)
   if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
     # New branch — check all commits
     COMMITS=$(git log --format=%s "$local_sha" --not --remotes 2>/dev/null)
@@ -30,23 +29,24 @@ while read local_ref local_sha remote_ref remote_sha; do
     COMMITS=$(git log --format=%s "${remote_sha}..${local_sha}" 2>/dev/null)
   fi
 
-  # Extract all unique issue numbers from commit messages
-  ISSUE_NUMS=$(echo "$COMMITS" | grep -oE '#[0-9]+' | tr -d '#' | sort -u)
+  # ─── Check 1: Open-issue check (original close-check behavior) ───────
+  if [ "${DW_SKIP_CLOSE_CHECK:-0}" = "1" ]; then
+    echo "⚠ CLOSE CHECK BYPASSED — DW_SKIP_CLOSE_CHECK=1" >&2
+  else
+    # Extract all unique issue numbers from commit subjects
+    ISSUE_NUMS=$(echo "$COMMITS" | grep -oE '#[0-9]+' | tr -d '#' | sort -u)
 
-  if [ -z "$ISSUE_NUMS" ]; then
-    continue  # No issue references in these commits
-  fi
+    if [ -n "$ISSUE_NUMS" ]; then
+      OPEN_ISSUES=""
 
-  OPEN_ISSUES=""
+      for ISSUE_NUM in $ISSUE_NUMS; do
+        # Check Citadel
+        TASK_JSON=$(curl -s --max-time 5 "${CITADEL_API}/projects/${PROJECT}/tasks?external_issue_number=${ISSUE_NUM}" 2>/dev/null)
 
-  for ISSUE_NUM in $ISSUE_NUMS; do
-    # Check Citadel
-    TASK_JSON=$(curl -s --max-time 5 "${CITADEL_API}/projects/${PROJECT}/tasks?external_issue_number=${ISSUE_NUM}" 2>/dev/null)
-
-    # Lenient multi-task rule: if ANY matching task is done, the issue has been
-    # resolved at least once — allow. Only block when zero tasks are done.
-    # See DifferentWire/standards#19 for the decision rationale.
-    STATUS=$(echo "$TASK_JSON" | python3 -c "
+        # Lenient multi-task rule: if ANY matching task is done, the issue has been
+        # resolved at least once — allow. Only block when zero tasks are done.
+        # See DifferentWire/standards#19 for the decision rationale.
+        STATUS=$(echo "$TASK_JSON" | python3 -c "
 import json, sys
 try:
     tasks = json.load(sys.stdin)
@@ -66,30 +66,107 @@ try:
 except: print('error|?')
 " 2>/dev/null)
 
-    TASK_STATUS=$(echo "$STATUS" | cut -d'|' -f1)
-    TASK_DETAIL=$(echo "$STATUS" | cut -d'|' -f2-)
+        TASK_STATUS=$(echo "$STATUS" | cut -d'|' -f1)
+        TASK_DETAIL=$(echo "$STATUS" | cut -d'|' -f2-)
 
-    case "$TASK_STATUS" in
-      done|not_found|error)
-        ;; # OK or can't check — don't block
-      *)
-        OPEN_ISSUES="${OPEN_ISSUES}  #${ISSUE_NUM} (Citadel: ${TASK_DETAIL})\n"
-        ;;
-    esac
-  done
+        case "$TASK_STATUS" in
+          done|not_found|error)
+            ;; # OK or can't check — don't block
+          *)
+            OPEN_ISSUES="${OPEN_ISSUES}  #${ISSUE_NUM} (Citadel: ${TASK_DETAIL})\n"
+            ;;
+        esac
+      done
 
-  if [ -n "$OPEN_ISSUES" ]; then
-    echo "=======================================================" >&2
-    echo "BLOCKED: Push contains commits referencing open issues." >&2
-    echo "" >&2
-    echo -e "$OPEN_ISSUES" >&2
-    echo "Close these in Citadel AND GitHub before pushing:" >&2
-    echo "  dw --project ${PROJECT} close <task-id> --reason \"...\"" >&2
-    echo "  gh issue close <number>" >&2
-    echo "" >&2
-    echo "Emergency bypass: DW_SKIP_CLOSE_CHECK=1 git push" >&2
-    echo "=======================================================" >&2
-    exit 1
+      if [ -n "$OPEN_ISSUES" ]; then
+        echo "=======================================================" >&2
+        echo "BLOCKED: Push contains commits referencing open issues." >&2
+        echo "" >&2
+        echo -e "$OPEN_ISSUES" >&2
+        echo "Close these in Citadel AND GitHub before pushing:" >&2
+        echo "  dw --project ${PROJECT} close <task-id> --reason \"...\"" >&2
+        echo "  gh issue close <number>" >&2
+        echo "" >&2
+        echo "Emergency bypass: DW_SKIP_CLOSE_CHECK=1 git push" >&2
+        echo "=======================================================" >&2
+        exit 1
+      fi
+    fi
+  fi
+
+  # ─── Incident auto-close keyword check (standards#100) ────────────────
+  # Block commits whose messages contain `Closes/Fixes/Resolves #N` for
+  # a GH issue labeled `type:incident`. Incident closure is a human-
+  # judgment gate (root cause + immediate fix + defense in depth +
+  # follow-ups tracked + post-incident write-up), not a side effect of
+  # PR merge. Use `Refs #N` or `Part of #N` instead — keeps the issue
+  # open until a human explicitly decides the incident is resolved.
+  #
+  # Source: citadel#70 — incident auto-closed via PR `Closes #N` keyword
+  # before user was aware. See standards#100 for the rationale.
+  #
+  # Scope: covers commit-message keywords only. PR-body keywords are NOT
+  # caught here (they're created via `gh pr create` after push); a
+  # server-side GH Actions workflow is the next layer. See follow-up
+  # issue when filed.
+  #
+  # Fail-OPEN with strong warning on GH API failure — matches the
+  # existing canonical hook fail-safety convention so a brief GH blip
+  # doesn't block legitimate pushes.
+
+  if [ "${DW_SKIP_INCIDENT_AUTOCLOSE_CHECK:-0}" = "1" ]; then
+    echo "⚠ INCIDENT AUTOCLOSE CHECK BYPASSED — DW_SKIP_INCIDENT_AUTOCLOSE_CHECK=1" >&2
+    echo "  Only use when the incident really is resolved by THIS PR AND" >&2
+    echo "  you have explicit user approval to close it via the PR merge." >&2
+  else
+    # Get full commit messages (subject + body) for the keyword search.
+    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+      COMMITS_FULL=$(git log --format='%B%n---END-COMMIT---' "$local_sha" --not --remotes 2>/dev/null)
+    else
+      COMMITS_FULL=$(git log --format='%B%n---END-COMMIT---' "${remote_sha}..${local_sha}" 2>/dev/null)
+    fi
+
+    # GitHub-recognized auto-close keywords (case insensitive):
+    #   close, closes, closed, fix, fixes, fixed, resolve, resolves, resolved
+    AUTOCLOSE_NUMS=$(echo "$COMMITS_FULL" \
+      | grep -ohiE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?) +#[0-9]+' \
+      | grep -oE '#[0-9]+' \
+      | tr -d '#' \
+      | sort -u)
+
+    if [ -n "$AUTOCLOSE_NUMS" ]; then
+      BLOCKED_INCIDENTS=""
+      for ISSUE_NUM in $AUTOCLOSE_NUMS; do
+        LABELS=$(gh issue view "$ISSUE_NUM" --json labels --jq '.labels[].name' 2>/dev/null)
+        if [ -z "$LABELS" ]; then
+          echo "⚠ Could not query GH for issue #${ISSUE_NUM} labels — failing OPEN (push allowed)" >&2
+          echo "  Network blip? gh auth issue? Set DW_SKIP_INCIDENT_AUTOCLOSE_CHECK=1 to silence." >&2
+          continue
+        fi
+        if echo "$LABELS" | grep -qFx 'type:incident'; then
+          BLOCKED_INCIDENTS="${BLOCKED_INCIDENTS}  #${ISSUE_NUM}\n"
+        fi
+      done
+
+      if [ -n "$BLOCKED_INCIDENTS" ]; then
+        echo "=======================================================" >&2
+        echo "BLOCKED: Auto-close keyword targets type:incident issue(s)." >&2
+        echo "" >&2
+        echo -e "$BLOCKED_INCIDENTS" >&2
+        echo "Incident closure requires explicit human judgment, not a" >&2
+        echo "PR-merge side effect. Use 'Refs #N' or 'Part of #N' in the" >&2
+        echo "commit message instead so the issue stays open until a" >&2
+        echo "human explicitly closes it after verifying full resolution" >&2
+        echo "(root cause + immediate fix + defense in depth + follow-ups" >&2
+        echo "tracked + post-incident write-up)." >&2
+        echo "" >&2
+        echo "To override (only if THIS PR really resolves the incident" >&2
+        echo "AND you have explicit user approval to close):" >&2
+        echo "  DW_SKIP_INCIDENT_AUTOCLOSE_CHECK=1 git push" >&2
+        echo "=======================================================" >&2
+        exit 1
+      fi
+    fi
   fi
 done
 
