@@ -369,6 +369,24 @@ void loop() {
       snap.radio_sf       = static_cast<uint8_t>(LORA_SF);
       snap.radio_cr       = static_cast<uint8_t>(LORA_CR);
       snap.repeat_enabled = (the_mesh.getNodePrefs()->client_repeat != 0);
+      // #31 Task D: publish position in /status, selected EXACTLY as the
+      // companion advert path selects its location, so the MQTT position always
+      // agrees with the advert (design D4: reuse the existing advert_loc_policy,
+      // no separate MQTT knob).  This firmware's NodePrefs (NodePrefs.h) defines
+      // only ADVERT_LOC_NONE and ADVERT_LOC_SHARE -- there is NO ADVERT_LOC_PREFS
+      // and NO prefs node_lat/lon here (that 3-policy split lives in the repeater's
+      // CommonCLI::buildAdvertData, a different NodePrefs).  Mirror MyMesh::advert()
+      // / CMD_SEND_SELF_ADVERT exactly: NONE => no location; otherwise (SHARE) use
+      // sensors.node_lat/lon.  sensors.node_lat/lon are doubles already in decimal
+      // degrees -- the same units createSelfAdvert/AdvertDataBuilder consume before
+      // their internal *1E6 micro-degree scaling -- so they are emitted as-is.
+      if (the_mesh.getNodePrefs()->advert_loc_policy == ADVERT_LOC_NONE) {
+        snap.loc_valid = false;  // advert carries no location
+      } else {                   // ADVERT_LOC_SHARE: live GPS, as createSelfAdvert(name, sensors.node_lat, sensors.node_lon)
+        snap.node_lat  = sensors.node_lat;
+        snap.node_lon  = sensors.node_lon;
+        snap.loc_valid = sensors.gpsHasFix();
+      }
       crosswire::wifiObserverSetStatusSnapshot(snap);
     }
   }

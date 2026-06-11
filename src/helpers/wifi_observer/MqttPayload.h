@@ -41,6 +41,14 @@ struct MqttStatusSnapshot {
     uint8_t  radio_sf;
     uint8_t  radio_cr;
     bool     repeat_enabled;
+    // #31 Task D: observer position, selected in main.cpp by advert_loc_policy
+    // EXACTLY as the companion advert path selects its location (MyMesh::advert()
+    // / createSelfAdvert), so the MQTT /status position always agrees with the
+    // advert. Decimal degrees (same double units createSelfAdvert/AdvertDataBuilder
+    // consume before their internal *1E6 micro-degree scaling).
+    double   node_lat;   // decimal degrees; valid only when loc_valid
+    double   node_lon;   // decimal degrees; valid only when loc_valid
+    bool     loc_valid;  // false => omit lat/lon from JSON
 };
 
 // Per-broker payload context. Filled by MqttBrokerPool when fanning out.
