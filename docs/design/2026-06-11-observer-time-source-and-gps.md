@@ -1,98 +1,89 @@
 # Observer time-source arbitration + GPS (time & position) — design
 
-**Status:** draft for review · **Date:** 2026-06-11 · **Owner:** Strycher
+**Status:** draft for review (rev 2) · **Date:** 2026-06-11 · **Owner:** Strycher
 **Tracks:** #69 (NTP/SNTP), #31 (position-to-map) · **Prototype HW:** HV4 / ST-P (GPS attached)
+
+> **rev 2 corrects rev 1's wrong premise.** The sensor/GPS layer is **not** dropped from the
+> observer — it's compiled and the GPS provider is instantiated. The real gaps are narrower.
 
 ---
 
-## 1. Problem
+## 1. What's actually there (verified)
 
-Building the observer on the **companion** base threw out the sensor/GPS layer:
+The observer is GPS-capable **today**:
 
-- Observer envs extend `*_companion_radio_*`, whose `build_src_filter` does **not** include
-  `helpers/sensors/`. The observer only adds `+<helpers/wifi_observer/*.cpp>`
-  ([variants/heltec_v3/platformio.ini:438](../../variants/heltec_v3/platformio.ini)). So
-  `LocationProvider` / `SensorManager` / `MicroNMEALocationProvider` are **not compiled** into
-  the observer at all.
-- `wifi_observer` references **none** of the GPS/location code.
+- `[Heltec_lora32_v3]` defines `PIN_GPS_RX/TX/EN` and adds `+<helpers/sensors>` to the source
+  filter; `sensor_base` sets `-D ENV_INCLUDE_GPS=1`; `Heltec_v3_companion_radio_ble` and the observer
+  env both inherit all of it
+  ([variants/heltec_v3/platformio.ini:1-48,184,416](../../variants/heltec_v3/platformio.ini)).
+- The board **instantiates** it: `MicroNMEALocationProvider(Serial1, &rtc_clock)` +
+  `EnvironmentSensorManager(nmea)` under `#if ENV_INCLUDE_GPS`
+  ([variants/heltec_v3/target.cpp:20](../../variants/heltec_v3/target.cpp)).
+- So on a board with a GPS module (ST-P):
+  - **GPS time sets the RTC directly** — `_clock->setCurrentTime(getTimestamp())`
+    ([MicroNMEALocationProvider.h:154](../../src/helpers/sensors/MicroNMEALocationProvider.h)).
+  - **GPS updates `node_lat/lon`**
+    ([EnvironmentSensorManager.cpp:768](../../src/helpers/sensors/EnvironmentSensorManager.cpp)).
 
-Upstream MeshCore already has the pieces — they just don't reach the observer:
+Only `wifi_observer`'s **own** code references no GPS — which is the source of the real gaps below,
+not the firmware "dropping" GPS.
 
-- **GPS → time:** `MicroNMEALocationProvider` sets the RTC from the fix:
-  `_clock->setCurrentTime(getTimestamp())`
-  ([MicroNMEALocationProvider.h:154](../../src/helpers/sensors/MicroNMEALocationProvider.h)).
-- **GPS → position:** `EnvironmentSensorManager` sets `node_lat/lon` from `_location->getLatitude()`
-  when the fix is valid ([EnvironmentSensorManager.cpp:768](../../src/helpers/sensors/EnvironmentSensorManager.cpp)).
-- `LocationProvider` exposes both: `getTimestamp()`, `getLatitude/Longitude/Altitude()`,
-  `isValid()`, `satellitesCount()`, `isEnabled()`, plus a `syncTime()`/`waitingTimeSync()` latch
-  ([LocationProvider.h](../../src/helpers/sensors/LocationProvider.h)).
+## 2. The actual gaps
 
-Consequences on an observer with GPS attached (ST-P):
-1. GPS coordinates never update — the observer reads no live `LocationProvider`; position can only
-   come from static `node_lat/lon` prefs.
-2. GPS time never reaches the clock — not wired.
-3. The in-flight **SNTP slice (#69) ignores GPS** and would *clobber* it: a blind, periodic
-   `configTime()` overwrites whatever the clock holds, including a more-accurate GPS time. The SNTP
-   work is really just the **NTP arm** of a missing multi-source arbiter.
-4. Even where GPS time exists upstream, it's coupled to positioning via `isEnabled()` (the provider
-   is enabled/disabled as a unit; time is only set inside the GPS loop).
+1. **Observer payload carries no position.** `MqttPayload` has no lat/lon/alt fields, so the
+   GPS-updated `node_lat/lon` is never published. *Root of "coords never update" — a payload gap, not
+   a GPS-read gap.* → #31.
+2. **The in-flight SNTP slice (#69) would clobber GPS time.** `configTime()` writes the same system
+   clock MicroNMEA sets via `settimeofday`. With no arbitration, NTP overwrites a more-accurate GPS
+   clock — on a GPS observer (ST-P) the slice would **break working GPS time**. Worse than incomplete.
+3. **GPS time is coupled to positioning** via `isEnabled()` (the provider is enabled/disabled as a
+   unit; time only updates while the GPS loop runs).
 
-## 2. Operating context (sets the priorities)
+## 3. Operating context (sets the priorities)
 
-The observer's job: detect mesh messages → queue → publish over MQTT (WiFi). An observer that is
-detecting messages **essentially always has WiFi** — otherwise the queue/publish premise collapses.
-So:
+The observer detects mesh messages → queues → publishes over MQTT (WiFi). An observer that is
+detecting messages **essentially always has WiFi** (else the queue/publish premise collapses). So we
+practically always have **either GPS or NTP, usually both**; GPS additionally gives **rich position
+data** and **better time** than NTP.
 
-- WiFi (→ NTP) is ~always available. A "GPS-only, no-WiFi" observer is a near-nonexistent case.
-- In practice we have **either GPS or NTP, usually both**.
-- GPS additionally yields **rich data** (position) and **better time** than NTP.
-
-## 3. Decisions
+## 4. Decisions
 
 | # | Decision |
 |---|---|
-| D1 | **Time-source priority: GPS > NTP > BLE.** GPS authoritative on any valid fix (network-independent, more accurate). |
-| D2 | **Never block on GPS.** Cold fix can exceed 30s (sometimes minutes). NTP provides the *fast initial* clock (WiFi ~always present) so MQTT/TLS come up promptly; GPS **corrects/overrides** the clock when it acquires — a "heartbeat catch-up", not a gate. |
-| D3 | **Bring the sensor/GPS layer back into the (HV4) observer build** and wire `LocationProvider` for both time and position. |
-| D4 | **Position → observer payload** (the #31 pipeline): refresh lat/lon/alt from live GPS, not static prefs. |
-| D5 | **`isEnabled` gating — prefer to decouple** time acquisition from positioning (run GPS for time even when not reporting position). **But** keep the upstream `isEnabled` gating if decoupling makes consuming upstream MeshCore changes materially harder. If we keep it gated: when GPS is enabled, GPS time is top priority over any other source. (Decide at implementation; flag the upstream-divergence cost.) |
-| D6 | **Prototype on HV4 / ST-P** (GPS attached). HV3 and XIAO have no GPS. |
+| D1 | Time-source priority **GPS > NTP > BLE**. GPS authoritative on any valid fix. |
+| D2 | **Never block on GPS** (cold fix can exceed 30s). NTP gives the fast initial clock on cold boot / no-GPS boards; GPS corrects on fix ("heartbeat catch-up"). |
+| D3 | **SNTP must defer to GPS, not overwrite it** — a source arbiter so NTP only sets the clock when GPS has no fix. This is the corrective fix to the in-flight slice. |
+| D4 | **Add position (lat/lon[/alt]) to the observer MQTT payload**, fed from `node_lat/lon` → #31. |
+| D5 | `isEnabled`: prefer decoupling time from positioning (GPS time even when not reporting position); keep the upstream gating if decoupling makes consuming MeshCore updates materially harder; if kept gated, GPS time is top priority. |
+| D6 | Prototype on **HV4 / ST-P** (GPS attached). HV3 / XIAO have none. |
 
-## 4. Design
+## 5. Design
 
-### 4.1 Time-source arbiter
-A single arbiter owns "who set the clock and how recently", so sources don't fight:
+### 5.1 Time-source arbiter
+- GPS already owns the RTC whenever it has a fix. The arbiter's job is to keep **NTP from stomping
+  it**: NTP/`configTime` is only applied when there is no GPS provider or no fix (and optionally
+  after a long GPS-lost window). Simplest first cut: enable the NTP path only when the board has no
+  GPS provider / no recent fix.
+- BLE (`CMD_SET_DEVICE_TIME`) stays lowest priority — accepted only before GPS/NTP have set the clock.
+- The existing `wallClockSane()` TLS gate (no wss/TLS connect until the clock passes ~2025-01-01)
+  stays as the source-agnostic safety net.
 
-- Track `current_source ∈ {none, ble, ntp, gps}` and a freshness timestamp.
-- **GPS:** on a valid fix, set the RTC and mark source=GPS. Once GPS is the source, NTP must **not**
-  overwrite it (only GPS resyncs from then on, or after a long GPS-lost timeout fall back to NTP).
-- **NTP:** allowed to set the clock when source is `none`/`ble`, or when GPS has not produced a fix.
-  This is the fast path that unblocks TLS/MQTT (replaces the current blind `configTime` write).
-- **BLE (`CMD_SET_DEVICE_TIME`):** lowest priority; accepted only before NTP/GPS have set the clock.
-- The existing `wallClockSane()` gate (TLS/wss won't connect until the clock passes ~2025-01-01)
-  stays as the safety net — it's source-agnostic.
+### 5.2 Position into the observer payload
+- Extend `MqttPayload` (+ the status snapshot) to carry lat/lon (alt optional), fed from the
+  SensorManager's `node_lat/lon`. This is the missing leg of the #31 position-to-map pipeline.
 
-### 4.2 GPS wiring on the observer (HV4)
-- Add `+<helpers/sensors/...>` to the HV4 observer env's `build_src_filter` (and a `heltec_v4`
-  observer env if one doesn't exist yet) + the GPS lib (`MicroNMEA`).
-- Instantiate a `MicroNMEALocationProvider` on ST-P's GPS UART (pins TBD), handing it the RTC.
-- Run the provider's `loop()` from the observer loop; feed `getTimestamp()` to the arbiter and
-  `getLatitude/Longitude/Altitude()` to the MQTT payload.
-- Per D5, ideally run the read for **time** independent of the positioning-enable flag.
+### 5.3 Impact on the in-flight #69 SNTP slice
+- **HOLD + rework — do not flash/PR.** As-is it clobbers GPS time on ST-P. It becomes the
+  **no-GPS / fallback** arm under D3, never an unconditional clock write.
 
-### 4.3 Impact on the in-flight #69 SNTP slice
-- The SNTP commits (`89e99b90`, `99d9303c`, `2042d9e5` on `feat/69-ntp-sync`) become the **NTP arm**
-  of §4.1 — they must defer to GPS rather than write blindly.
-- **HOLD: do not flash or PR the slice as-is.** It compiles, but shipping it standalone bakes in the
-  "NTP clobbers GPS" bug.
+## 6. Open questions / verify on hardware (ST-P)
+- Confirm GPS is actually **detected/active** on ST-P (`gps_detected`/`gps_active`) and setting the
+  RTC — verify at runtime rather than by code-read.
+- D5 decouple-vs-upstream cost (measure against the next MeshCore base-update).
+- ST-P GPS specifics (module, UART = Serial1 per target.cpp, pins, power).
+- Scope: expand #69, or split a new "observer GPS time+position" issue under #31?
 
-## 5. Open questions
-- D5: decouple vs. upstream-compat — measure the divergence cost against the next MeshCore base-update.
-- ST-P GPS specifics: module, UART, pins, power.
-- Scope: extend #69, or split a new "observer GPS time+position" issue linked to #31?
-
-## 6. Acceptance (target)
-- On ST-P with GPS: cold boot → NTP gives a clock within seconds (TLS/wss connect) → GPS acquires →
-  clock switches to GPS authority; serial shows the source transitions.
+## 7. Acceptance (target)
+- ST-P with GPS: GPS holds the clock; NTP never overwrites it while a fix is held; serial shows the
+  source. No-GPS observers fall back to NTP (the existing slice).
 - Observer MQTT payload carries live GPS lat/lon (feeds #31).
-- No source fights another; GPS time is never overwritten by NTP while a fix is held.
