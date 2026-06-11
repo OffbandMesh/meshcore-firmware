@@ -113,6 +113,7 @@ if [ -d "$CANONICAL_CMDS" ]; then
   mkdir -p "$PROJECT_CMDS"
   synced=0
   installed=0
+  backed_up=0
   # Guard against `set -e` aborting on the cmp/cp non-zero returns
   for canonical in "$CANONICAL_CMDS"/*.md; do
     [ -f "$canonical" ] || continue
@@ -121,11 +122,26 @@ if [ -d "$CANONICAL_CMDS" ]; then
     if [ ! -f "$local" ]; then
       cp "$canonical" "$local" && installed=$((installed + 1)) || true
     elif ! cmp -s "$canonical" "$local"; then
+      # First-install backup for commands that were project-local before
+      # becoming canonical (e.g., work.md prior to standards#112). If a
+      # ".pre-canonical.bak" doesn't already exist for this command, the
+      # current local file is a project-local hand-roll — preserve it
+      # before the sync overwrites with canonical. Subsequent updates to
+      # the synced file are overwritten without backup (canonical owns
+      # the file once installed).
+      backup="$PROJECT_CMDS/${name}.pre-canonical.bak"
+      if [ ! -f "$backup" ]; then
+        cp "$local" "$backup" 2>/dev/null && backed_up=$((backed_up + 1)) || true
+      fi
       cp "$canonical" "$local" && synced=$((synced + 1)) || true
     fi
   done
-  if [ "$installed" -gt 0 ] || [ "$synced" -gt 0 ]; then
-    pass "Canonical commands: $installed installed, $synced updated"
+  if [ "$installed" -gt 0 ] || [ "$synced" -gt 0 ] || [ "$backed_up" -gt 0 ]; then
+    if [ "$backed_up" -gt 0 ]; then
+      pass "Canonical commands: $installed installed, $synced updated, $backed_up pre-canonical backup(s) saved (.pre-canonical.bak)"
+    else
+      pass "Canonical commands: $installed installed, $synced updated"
+    fi
   else
     pass "Canonical commands: up to date"
   fi
@@ -134,12 +150,38 @@ else
 fi
 
 # ─── 6. Session State Recovery ───────────────────────────────────────────
+#
+# Hook-point for the session-state script — a per-project tool that writes
+# a snapshot of the agent's volatile state (claimed Citadel tasks, active
+# worktree, Agent Mail identity, open PRs, last Tier 2 approval, in-flight
+# notes) to .claude/agent-session.json. Preflight reads it here so post-
+# compaction sessions resume with structured handoff.
+#
+# Canonical writer (as of standards#107): hooks/session-state.py. Lifted
+# from the Strycher/LoRa#260 prototype on 2026-06-04. Projects install via
+# copy + post-commit wire-up (REPOCONFIG.md §Enforcement Hooks); future
+# auto-propagation tracked at standards#76.
+#
+# This block tries .py FIRST (canonical), then .sh as transition fallback
+# for any project still on a hand-rolled bash variant.
+#
 PREFLIGHT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SESSION_STATE_SCRIPT="$PREFLIGHT_DIR/session-state.sh"
 SESSION_STATE_FILE="$PROJECT_DIR/.claude/agent-session.json"
+SESSION_STATE_SCRIPT_PY="$PREFLIGHT_DIR/session-state.py"
+SESSION_STATE_SCRIPT_SH="$PREFLIGHT_DIR/session-state.sh"
 
-if [ -f "$SESSION_STATE_FILE" ] && [ -f "$SESSION_STATE_SCRIPT" ]; then
-  SESSION_OUTPUT=$(bash "$SESSION_STATE_SCRIPT" read 2>/dev/null || true)
+if [ -f "$SESSION_STATE_FILE" ]; then
+  SESSION_OUTPUT=""
+  if [ -f "$SESSION_STATE_SCRIPT_PY" ]; then
+    # Prefer python3 if present, else python.
+    if command -v python3 >/dev/null 2>&1; then
+      SESSION_OUTPUT=$(python3 "$SESSION_STATE_SCRIPT_PY" read 2>/dev/null || true)
+    elif command -v python >/dev/null 2>&1; then
+      SESSION_OUTPUT=$(python "$SESSION_STATE_SCRIPT_PY" read 2>/dev/null || true)
+    fi
+  elif [ -f "$SESSION_STATE_SCRIPT_SH" ]; then
+    SESSION_OUTPUT=$(bash "$SESSION_STATE_SCRIPT_SH" read 2>/dev/null || true)
+  fi
   if [ -n "$SESSION_OUTPUT" ]; then
     log ""
     log "═══ Active Agent Session ═══"
