@@ -353,7 +353,7 @@ void loop() {
   {
     static uint32_t s_status_snap_ms = 0;
     uint32_t _now = millis();
-    if (_now - s_status_snap_ms >= kMinStatusIntervalSec * 1000U) {
+    if (_now - s_status_snap_ms >= crosswire::kMinStatusIntervalSec * 1000U) {
       s_status_snap_ms = _now;
       crosswire::MqttStatusSnapshot snap = {};
       snap.battery_mv     = static_cast<int>(board.getBattMilliVolts());
