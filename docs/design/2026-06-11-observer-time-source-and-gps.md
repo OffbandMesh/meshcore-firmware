@@ -34,9 +34,9 @@ The observer is GPS-capable and the layer is compiled — but it's gated, and po
 
 1. **MQTT publishes no position** (`MqttPayload` has no lat/lon). → #31.
 2. **The in-flight SNTP slice would clobber GPS-set time** (both write the same RTC, no arbitration).
-3. **GPS is OFF by default at boot** (`initBasicGPS` forces `gps_active=false`), and the saved
-   `gps_enabled` pref does not appear to be re-applied at startup — so GPS is lost on every power cycle.
-   Fatal for an unattended observer. *(Must verify + fix — see §5.3.)*
+3. ~~GPS off after reboot~~ **RESOLVED (verified in code):** `sensors.begin()` forces GPS off, then
+   `applyGpsPrefs()` re-applies the saved `gps_enabled` ([main.cpp:288-292](../../examples/companion_radio/main.cpp)),
+   so GPS *does* persist across reboots. No code needed — runtime-verify on ST-P only.
 4. **No user-facing documentation.** The upstream app exposes enable / `advert_loc_policy` / `gps setloc`
    poorly, so operators can't tell what to configure — to the point a GPS "might as well not be attached."
 
@@ -54,7 +54,7 @@ GPS adds rich position + better time.
 | D2 | **Never block on GPS** (cold fix can exceed 30s). NTP gives the fast initial clock; GPS corrects on fix ("catch-up"). |
 | D3 | **SNTP defers to GPS** via a source arbiter — NTP only sets the clock when GPS is disabled or has no fix. (Corrective fix to the in-flight slice.) |
 | D4 | **MQTT position follows `advert_loc_policy`** — `share`→live `_sensors->node_lat/lon`, `prefs`→`_prefs->node_lat/lon`, `none`→omit. **Reuse the existing policy; do NOT invent a separate MQTT knob.** |
-| D5 | **Keep GPS gated behind `isEnabled`/`gps_active`** (upstream-compatible — eases consuming MeshCore base-updates). When enabled, GPS time outranks NTP/BLE. **GPS must auto-enable at boot from the saved `gps_enabled` pref** so an unattended observer keeps GPS across reboots. |
+| D5 | **Keep GPS gated behind `isEnabled`/`gps_active`** (upstream-compatible — eases consuming MeshCore base-updates). When enabled, GPS time outranks NTP/BLE. GPS already auto-enables at boot from the saved `gps_enabled` pref (`applyGpsPrefs()` after `sensors.begin()`, main.cpp:288-292) — verified, no new code. |
 | D6 | Prototype on **HV4 / ST-P** (GPS attached). HV3 / XIAO have none. |
 | D7 | **Ship a user-facing GPS/location config doc** — enable GPS, `advert_loc_policy` (`none`/`share`/`prefs`), `gps setloc`, the `_sensors` (live) vs `_prefs` (manual) split, and the recommended observer setup. |
 
@@ -72,16 +72,16 @@ GPS adds rich position + better time.
 - Add lat/lon (alt optional) to the observer payload, **selected exactly as `buildAdvertData` does**:
   `share`→`_sensors`, `prefs`→`_prefs`, `none`→omit. One policy drives both advert and MQTT.
 
-### 5.3 GPS enable persistence
-- Re-apply `_prefs->gps_enabled` at boot (call `start_gps()` when set) so GPS survives power cycles.
-  Verify the current behavior first; fix if absent. This is what makes the gated model viable unattended.
+### 5.3 GPS enable persistence — already handled (verified)
+- `main.cpp` calls `applyGpsPrefs()` right after `sensors.begin()` ([:288-292](../../examples/companion_radio/main.cpp)),
+  re-applying the saved `gps_enabled` so GPS auto-enables at boot. **No new code** — runtime-verify on ST-P only.
 
 ### 5.4 Impact on the in-flight #69 SNTP slice
 - **HOLD + rework — do not flash/PR.** As-is it clobbers GPS time on a GPS-enabled board. It becomes the
   GPS-disabled / no-fix arm under D3.
 
 ## 6. Open / verify on hardware (ST-P)
-- **Boot-restore of `gps_enabled`** — verify, and fix per D5/§5.3 (now a requirement, not a nicety).
+- Boot-restore of `gps_enabled` — **verified in code** (`applyGpsPrefs()`); confirm at runtime on ST-P.
 - Confirm GPS detect/fix on ST-P at runtime (`gps_detected`/`gps_active`/`isValid`).
 - ST-P GPS specifics (UART = `Serial1`, pins, power).
 - Scope: expand #69 vs. split a new "observer GPS time+position" issue under #31.
