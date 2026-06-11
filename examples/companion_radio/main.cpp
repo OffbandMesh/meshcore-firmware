@@ -333,16 +333,17 @@ void loop() {
 #endif
 
 #ifdef CROSSWIRE_OBSERVER
-  // #31 Task C: push status snapshot to observer ~30 s so the pool's
-  // publishStatusIfDue() can emit /status.  Throttled here to avoid
-  // snapshot-build cost every iteration; the pool applies its own
-  // status_interval_sec_ gate before actually publishing.
+  // #31 Task C: push status snapshot to observer so the pool's
+  // publishStatusIfDue() can emit /status.  Throttled to
+  // kMinStatusIntervalSec (10 s = min legal status_interval; keeps the
+  // pushed snapshot fresh for any configured pool cadence) to avoid
+  // snapshot-build cost every iteration.
   //
   // Field sources:
   //   battery_mv     -- board.getBattMilliVolts()
   //   uptime_secs    -- millis() / 1000
-  //   error_flags    -- 0 (no public accessor on Dispatcher; benign default)
-  //   queue_len      -- 0 (Dispatcher::_mgr is protected; benign default)
+  //   error_flags    -- the_mesh.getErrFlags() (Dispatcher::_err_flags)
+  //   queue_len      -- the_mesh.getOutboundQueueLen() (_mgr->getOutboundTotal())
   //   noise_floor    -- radio_driver.getNoiseFloor() (RadioLibWrapper)
   //   tx_air_secs    -- the_mesh.getTotalAirTime() / 1000
   //   rx_air_secs    -- the_mesh.getReceiveAirTime() / 1000
@@ -352,13 +353,13 @@ void loop() {
   {
     static uint32_t s_status_snap_ms = 0;
     uint32_t _now = millis();
-    if (_now - s_status_snap_ms >= 30000U) {
+    if (_now - s_status_snap_ms >= kMinStatusIntervalSec * 1000U) {
       s_status_snap_ms = _now;
       crosswire::MqttStatusSnapshot snap = {};
       snap.battery_mv     = static_cast<int>(board.getBattMilliVolts());
       snap.uptime_secs    = static_cast<uint32_t>(_now / 1000UL);
-      snap.error_flags    = 0;   // no public Dispatcher accessor
-      snap.queue_len      = 0;   // no public Dispatcher accessor
+      snap.error_flags    = the_mesh.getErrFlags();
+      snap.queue_len      = static_cast<uint16_t>(the_mesh.getOutboundQueueLen());
       snap.noise_floor    = radio_driver.getNoiseFloor();
       snap.tx_air_secs    = static_cast<uint32_t>(the_mesh.getTotalAirTime() / 1000UL);
       snap.rx_air_secs    = static_cast<uint32_t>(the_mesh.getReceiveAirTime() / 1000UL);

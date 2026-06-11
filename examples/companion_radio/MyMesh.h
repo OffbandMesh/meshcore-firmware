@@ -102,6 +102,14 @@ public:
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
 
+  // #31 Task C: live Dispatcher stats for the /status snapshot.
+  // _err_flags and _mgr are protected on Dispatcher; MyMesh can read them
+  // directly as a subclass. _mgr is initialised from a reference in the
+  // Dispatcher constructor and is guaranteed non-null for the lifetime of
+  // the mesh object.
+  uint16_t getErrFlags()         const { return _err_flags; }
+  int      getOutboundQueueLen() const { return _mgr->getOutboundTotal(); }
+
 #ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
   // Plan 3 Task 10 (Strycher/LoRa#272): post a status message
   // onto the locked system channel slot. Builds a
