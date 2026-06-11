@@ -383,9 +383,13 @@ void loop() {
       if (the_mesh.getNodePrefs()->advert_loc_policy == ADVERT_LOC_NONE) {
         snap.loc_valid = false;  // advert carries no location
       } else {                   // ADVERT_LOC_SHARE: live GPS, as createSelfAdvert(name, sensors.node_lat, sensors.node_lon)
+#if ENV_INCLUDE_GPS == 1
         snap.node_lat  = sensors.node_lat;
         snap.node_lon  = sensors.node_lon;
         snap.loc_valid = sensors.gpsHasFix();
+#else
+        snap.loc_valid = false;  // no GPS compiled in (e.g. XIAO) => no live position
+#endif
       }
       crosswire::wifiObserverSetStatusSnapshot(snap);
     }
