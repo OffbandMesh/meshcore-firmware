@@ -47,7 +47,6 @@ public:
   #else
   EnvironmentSensorManager(){};
   #endif
-  bool gpsIsActive() const { return gps_active; }
   #if ENV_INCLUDE_GPS
   bool gpsHasFix() { return gps_active && _location != nullptr && _location->isValid(); }
   #endif

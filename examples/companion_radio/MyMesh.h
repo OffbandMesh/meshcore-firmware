@@ -199,7 +199,7 @@ public:
   void applyGpsPrefs() {
     sensors.setSettingValue("gps", _prefs.gps_enabled ? "1" : "0");
     if (_prefs.gps_interval > 0) {
-      char interval_str[12];  // Max: 24 hours = 86400 seconds (5 digits + null)
+      char interval_str[12];  // uint32_t gps_interval: up to 10 digits + null
       snprintf(interval_str, sizeof(interval_str), "%u", _prefs.gps_interval);
       sensors.setSettingValue("gps_interval", interval_str);
     }
