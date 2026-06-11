@@ -382,14 +382,16 @@ void loop() {
       // their internal *1E6 micro-degree scaling -- so they are emitted as-is.
       if (the_mesh.getNodePrefs()->advert_loc_policy == ADVERT_LOC_NONE) {
         snap.loc_valid = false;  // advert carries no location
-      } else {                   // ADVERT_LOC_SHARE: live GPS, as createSelfAdvert(name, sensors.node_lat, sensors.node_lon)
-#if ENV_INCLUDE_GPS == 1
+      } else {                   // ADVERT_LOC_SHARE: publish sensors.node_lat/lon
+        // exactly as the advert does -- whether the position came from GPS or was
+        // set manually via CMD_SET_ADVERT_LATLON (both write sensors.node_lat/lon).
+        // NOT gated on a live GPS fix (the advert isn't), so a manual or last-known
+        // position publishes too. Suppress only the 0,0 null-island (our sole, safer
+        // divergence from the advert). node_lat/lon are unconditional SensorManager
+        // members, so no ENV_INCLUDE_GPS guard is needed -- compiles on no-GPS boards.
         snap.node_lat  = sensors.node_lat;
         snap.node_lon  = sensors.node_lon;
-        snap.loc_valid = sensors.gpsHasFix();
-#else
-        snap.loc_valid = false;  // no GPS compiled in (e.g. XIAO) => no live position
-#endif
+        snap.loc_valid = (sensors.node_lat != 0.0 || sensors.node_lon != 0.0);
       }
       crosswire::wifiObserverSetStatusSnapshot(snap);
     }
