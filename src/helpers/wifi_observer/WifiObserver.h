@@ -52,6 +52,13 @@ void wifiObserverLoop();
 // radio_freq, etc.). Pool re-reads on each status publish window.
 void wifiObserverSetStatusSnapshot(const MqttStatusSnapshot& snap);
 
+// Push current GPS time-state into the observer so the SNTP arbiter
+// (next task) can defer to GPS when the fix is locked.
+// enabled: true when GPS is configured on (prefs.gps_enabled).
+// locked:  true when the GPS provider reports a valid fix.
+// Call from loop() at ~1 Hz inside ENV_INCLUDE_GPS + CROSSWIRE_OBSERVER guards.
+void wifiObserverSetGpsTimeState(bool enabled, bool locked);
+
 // Singleton accessors -- exposed for ObserverCli + future Plan 3 web UI.
 MqttBrokerPool& wifiObserverPool();
 

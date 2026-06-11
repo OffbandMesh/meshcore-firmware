@@ -317,6 +317,21 @@ void loop() {
 #endif
   sensors.loop();
 
+#if defined(CROSSWIRE_OBSERVER) && ENV_INCLUDE_GPS == 1
+  // #69 Task A: push GPS time-state to observer ~1 Hz so the SNTP arbiter
+  // (next task) can see whether GPS currently owns the clock.
+  {
+    static uint32_t s_gps_state_ms = 0;
+    uint32_t _now = millis();
+    if (_now - s_gps_state_ms >= 1000) {
+      s_gps_state_ms = _now;
+      crosswire::wifiObserverSetGpsTimeState(
+          the_mesh.getNodePrefs()->gps_enabled != 0,
+          sensors.gpsHasFix());
+    }
+  }
+#endif
+
 #ifdef DISPLAY_CLASS
 #ifdef CROSSWIRE_OBSERVER
   crosswire::subloopMark(crosswire::SUBLOOP_UI);

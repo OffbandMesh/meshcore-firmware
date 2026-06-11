@@ -33,6 +33,11 @@ static const char* s_firmware_version = "";
 static const char* s_model            = "";
 static bool        s_context_set      = false;
 static bool        s_pool_started     = false;
+// #69 Task A: GPS time-state pushed by main.cpp each loop tick (~1 Hz).
+// Read by the SNTP arbiter (next task). No ARDUINO guard needed: the
+// setter is only called in the ARDUINO build (guarded at call site).
+static bool        s_gps_time_enabled = false;
+static bool        s_gps_time_locked  = false;
 #ifdef ARDUINO
 // #69: SNTP bring-up tracking. Wall clock is "sane" (SNTP or BLE set real time)
 // once past 2025-01-01 UTC; below that TLS certs read "not yet valid" and JWT
@@ -166,6 +171,14 @@ void wifiObserverLoop() {
 // ---------------------------------------------------------------------------
 void wifiObserverSetStatusSnapshot(const MqttStatusSnapshot& snap) {
     s_pool.setStatusSnapshot(snap);
+}
+
+// ---------------------------------------------------------------------------
+// wifiObserverSetGpsTimeState -- #69 Task A: GPS time-state push from main.cpp
+// ---------------------------------------------------------------------------
+void wifiObserverSetGpsTimeState(bool enabled, bool locked) {
+    s_gps_time_enabled = enabled;
+    s_gps_time_locked  = locked;
 }
 
 // ---------------------------------------------------------------------------
