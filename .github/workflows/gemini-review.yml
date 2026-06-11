@@ -1,0 +1,314 @@
+name: Gemini Review (general code review, warn-only)
+
+# General-purpose Gemini 2.5 Pro code review on PRs that touch real
+# code (Dart, tests, migrations, workflows). Sends the diff plus a
+# comprehensive review prompt and posts the response as a PR comment.
+#
+#
+# WARN-ONLY: every step uses continue-on-error and the final step always
+# exits 0. Failures (missing secret, API errors, missing prompt) surface
+# as a transparent PR comment so reviewers know the automated check did
+# not run — never as silent success.
+
+on:
+  pull_request:
+    # main = promote-to-prod, develop = validate-on-dev. Both get
+    # the same review so dev cycles do not waste time discovering
+    # issues only at the final promotion step.
+    branches: [main, develop]
+    types: [opened, synchronize, reopened]
+    # Path filter scopes the gate to real code worth reviewing.
+    # Excluded by omission: docs (reviewed by humans), pubspec.lock
+    # (auto-generated), assets, build artifacts. The filter is
+    # intentionally broad — Gemini decides what to flag, the workflow
+    # just decides what to send.
+    # CUSTOMIZE per project: scope to your real source paths. Broad is fine —
+    # Gemini decides what to flag; this filter just decides what to send.
+    paths:
+      - "src/**"
+      - "variants/**"
+      - "boards/**"
+      - "lib/**"
+      - "**/*.cpp"
+      - "**/*.h"
+      - "**/*.hpp"
+      - "**/*.ino"
+      - "platformio.ini"
+      - "**/platformio.ini"
+      - ".github/workflows/**"
+      - ".github/gemini-prompts/**"
+
+concurrency:
+  group: gemini-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Collect PR diff
+        id: diff
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          mkdir -p .gemini-review
+          gh pr diff "${{ github.event.pull_request.number }}" \
+            > .gemini-review/diff.patch || true
+          bytes=$(wc -c < .gemini-review/diff.patch | tr -d ' ')
+          echo "diff_bytes=${bytes}" >> "$GITHUB_OUTPUT"
+          # Cap the diff at ~200KB to stay under Gemini's token limits.
+          head -c 200000 .gemini-review/diff.patch \
+            > .gemini-review/diff.capped.patch
+          if [ "${bytes}" -gt 200000 ]; then
+            echo "TRUNCATED=true" >> "$GITHUB_ENV"
+          else
+            echo "TRUNCATED=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Load review prompt
+        id: prompt
+        continue-on-error: true
+        run: |
+          set -u
+          PROMPT_FILE=".github/gemini-prompts/meshcore-firmware.md"
+          if [ -f "$PROMPT_FILE" ]; then
+            echo "prompt_found=true" >> "$GITHUB_OUTPUT"
+            cp "$PROMPT_FILE" .gemini-review/prompt.md
+          else
+            echo "prompt_found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Call Gemini API
+        id: gemini
+        continue-on-error: true
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -u
+          if [ -z "${GEMINI_API_KEY:-}" ]; then
+            echo "status=missing_secret" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ ! -f .gemini-review/prompt.md ]; then
+            echo "status=missing_prompt" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ ! -s .gemini-review/diff.capped.patch ]; then
+            echo "status=empty_diff" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Build the request body: prompt as system-ish context, diff as user content.
+          #
+          # maxOutputTokens=32768 rationale:
+          # Gemini 2.5 Pro is a thinking model. Internal
+          # reasoning tokens come out of maxOutputTokens along
+          # with the visible response. The previous 4096 was
+          # too small for non-trivial diffs: in the first PR
+          # 1167 run, 4093 tokens went to thinking before any
+          # visible output (finishReason MAX_TOKENS, no parts
+          # field). 32768 leaves comfortable headroom while
+          # staying half of the model per-call ceiling of
+          # 65536. Token cost is per-used, not per-budgeted,
+          # so headroom does not bill unless the model uses it.
+          #
+          # NOTE: keep all explanatory comments outside the
+          # single-quoted jq argument below. Apostrophes inside
+          # bash single quotes terminate the quote prematurely
+          # (chore #1175 fixed exactly that regression).
+          jq -n \
+            --rawfile prompt .gemini-review/prompt.md \
+            --rawfile diff   .gemini-review/diff.capped.patch \
+            --arg truncated  "${TRUNCATED:-false}" \
+            '{
+              contents: [{
+                role: "user",
+                parts: [
+                  { text: $prompt },
+                  { text: ("\n\n---\n\nPR diff (truncated=" + $truncated + "):\n\n```diff\n" + $diff + "\n```") }
+                ]
+              }],
+              generationConfig: { temperature: 0.2, maxOutputTokens: 32768 }
+            }' > .gemini-review/request.json
+
+          http_status=$(curl -sS -o .gemini-review/response.json -w '%{http_code}' \
+            -X POST \
+            -H 'Content-Type: application/json' \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}" \
+            --data-binary @.gemini-review/request.json || echo "000")
+
+          echo "http_status=${http_status}" >> "$GITHUB_OUTPUT"
+
+          # Always capture a 4KB raw snippet for diagnostics —
+          # truncated so the PR comment never balloons. Used by
+          # both api_error and unparseable_response paths in the
+          # comment step below. Sensitive content from the API
+          # is unlikely (Gemini doesn't echo secrets), and the
+          # snippet is in a collapsed <details> block.
+          head -c 4096 .gemini-review/response.json \
+            > .gemini-review/response.snippet.json 2>/dev/null \
+            || echo "{}" > .gemini-review/response.snippet.json
+
+          if [ "${http_status}" != "200" ]; then
+            echo "status=api_error" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Extract the response text. If structure unexpected,
+          # capture a structured diagnostic object so the PR
+          # comment can show why parsing failed (safety block,
+          # empty candidates, shape change, etc.) instead of a
+          # canned "could not be parsed" message that hides the
+          # real cause.
+          if jq -e '.candidates[0].content.parts[0].text' \
+               .gemini-review/response.json > /dev/null 2>&1; then
+            jq -r '.candidates[0].content.parts[0].text' \
+              .gemini-review/response.json > .gemini-review/review.md
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=unparseable_response" >> "$GITHUB_OUTPUT"
+            # Build a small diagnostic object capturing the most
+            # informative fields. `// empty` defaults keep the
+            # extractor robust against any missing key.
+            jq -c '{
+              has_candidates: ((.candidates // []) | length > 0),
+              candidate_count: ((.candidates // []) | length),
+              candidate_finish_reasons: [(.candidates // [])[].finishReason // "n/a"],
+              prompt_block_reason: (.promptFeedback.blockReason // null),
+              prompt_safety_ratings: [(.promptFeedback.safetyRatings // [])[] |
+                {category: .category, probability: .probability}],
+              candidate_safety_ratings: [(.candidates // [])[]?.safetyRatings // [] | .[] |
+                {category: .category, probability: .probability}],
+              error_code: (.error.code // null),
+              error_message: (.error.message // null),
+              top_level_keys: ([. | keys[]])
+            }' .gemini-review/response.json \
+              > .gemini-review/diagnostic.json 2>/dev/null \
+              || echo '{"diagnostic_extract_failed": true}' \
+                > .gemini-review/diagnostic.json
+          fi
+
+      - name: Post PR comment
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS: ${{ steps.gemini.outputs.status }}
+          HTTP: ${{ steps.gemini.outputs.http_status }}
+          PROMPT_FOUND: ${{ steps.prompt.outputs.prompt_found }}
+          DIFF_BYTES: ${{ steps.diff.outputs.diff_bytes }}
+        run: |
+          set -u
+          body_file=.gemini-review/comment.md
+          header="### 🤖 Gemini Review (warn-only)"
+
+          case "${STATUS:-unknown}" in
+            ok)
+              {
+                echo "$header"
+                echo ""
+                cat .gemini-review/review.md
+                echo ""
+                echo "<sub>Warn-only — this check never blocks merge. Prompt: \`.github/gemini-prompts/meshcore-firmware.md\`.</sub>"
+              } > "$body_file"
+              ;;
+            missing_secret)
+              {
+                echo "$header"
+                echo ""
+                echo "⚠️ \`GEMINI_API_KEY\` secret is not configured for this repo. Automated review did not run — please review the changes manually."
+              } > "$body_file"
+              ;;
+            missing_prompt)
+              {
+                echo "$header"
+                echo ""
+                echo "⚠️ Prompt file \`.github/gemini-prompts/meshcore-firmware.md\` not found. Automated review did not run — please review changes manually."
+              } > "$body_file"
+              ;;
+            empty_diff)
+              {
+                echo "$header"
+                echo ""
+                echo "_No diff to review (PR contains no changes to reviewed code paths)._"
+              } > "$body_file"
+              ;;
+            api_error)
+              {
+                echo "$header"
+                echo ""
+                echo "⚠️ Gemini API call failed (HTTP ${HTTP:-n/a}). Automated review did not run — please review the changes manually."
+                echo ""
+                if [ -s .gemini-review/response.snippet.json ]; then
+                  echo "<details><summary>Response snippet (first 4KB)</summary>"
+                  echo ""
+                  echo "\`\`\`json"
+                  cat .gemini-review/response.snippet.json
+                  echo ""
+                  echo "\`\`\`"
+                  echo ""
+                  echo "</details>"
+                fi
+              } > "$body_file"
+              ;;
+            unparseable_response)
+              {
+                echo "$header"
+                echo ""
+                echo "⚠️ Gemini returned a response that could not be parsed. Automated review did not run — please review the changes manually."
+                echo ""
+                echo "Common causes — read the diagnostic to know which:"
+                echo "- Safety filter block — \`prompt_block_reason\` or any \`finish_reason: SAFETY\`"
+                echo "- Empty candidates — \`has_candidates: false\` (model returned no completions)"
+                echo "- Shape mismatch — Gemini API envelope changed (\`top_level_keys\` differs from expected)"
+                echo "- Quota / rate limit — \`error_code\` or \`error_message\` populated"
+                echo ""
+                if [ -s .gemini-review/diagnostic.json ]; then
+                  echo "<details><summary>Diagnostic (parsed fields)</summary>"
+                  echo ""
+                  echo "\`\`\`json"
+                  cat .gemini-review/diagnostic.json
+                  echo ""
+                  echo "\`\`\`"
+                  echo ""
+                  echo "</details>"
+                fi
+                if [ -s .gemini-review/response.snippet.json ]; then
+                  echo ""
+                  echo "<details><summary>Raw response snippet (first 4KB)</summary>"
+                  echo ""
+                  echo "\`\`\`json"
+                  cat .gemini-review/response.snippet.json
+                  echo ""
+                  echo "\`\`\`"
+                  echo ""
+                  echo "</details>"
+                fi
+              } > "$body_file"
+              ;;
+            *)
+              {
+                echo "$header"
+                echo ""
+                echo "⚠️ Review step did not complete (status=${STATUS:-unknown}). Please review the changes manually."
+              } > "$body_file"
+              ;;
+          esac
+
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --body-file "$body_file" || true
+
+      - name: Warn-only exit
+        run: exit 0

@@ -1,0 +1,123 @@
+name: Gemini Review Override (audit-only)
+
+# Audit-only parser for repo-maintainer `/gemini override: <reason>` PR comments.
+# Parses repo-maintainer PR comments of the form
+#
+#     /gemini override: <reason>
+#
+# and records an audit entry (PR comment + workflow summary). This is
+# scaffolding for a later phase, when the Gemini review promotes to a required
+# check and the override actually unblocks merge. In Phase 1 the Gemini
+# review is warn-only, so this workflow does NOT change merge gating —
+# it only produces an audit trail so Phase 3 can be turned on with
+# confidence about how the override command has been used historically.
+#
+# Trigger scope:
+#   - issue_comment / created only (edits are ignored so each audit event
+#     is tied to a distinct, immutable comment).
+#   - PR comments only (not plain issues).
+#   - Comment body's first line must start with "/gemini override:".
+#   - Bot users are ignored defensively.
+#
+# Maintainer check: author_association ∈ {OWNER, MEMBER, COLLABORATOR}.
+# Non-maintainer overrides are still logged (as rejected) so misuse is
+# visible in the audit record.
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: gemini-override-${{ github.event.issue.number }}-${{ github.event.comment.id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  audit-override:
+    if: >-
+      github.event.issue.pull_request != null &&
+      github.event.comment.user.type != 'Bot' &&
+      startsWith(github.event.comment.body, '/gemini override:')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Parse and audit override
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOC: ${{ github.event.comment.author_association }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+          TIMESTAMP: ${{ github.event.comment.created_at }}
+        run: |
+          set -u
+
+          # Extract the reason from the first line. Everything after the
+          # marker (with surrounding whitespace trimmed) is the reason.
+          first_line=$(printf '%s' "$COMMENT_BODY" | head -n1)
+          reason=$(printf '%s' "$first_line" \
+            | sed -E 's|^/gemini override:[[:space:]]*||' \
+            | sed -E 's|[[:space:]]+$||')
+          if [ -z "$reason" ]; then
+            reason_display="_(none provided)_"
+          else
+            reason_display="$reason"
+          fi
+
+          # Classify the commenter. Only repo maintainers may record an
+          # authorized override; anyone else is logged as rejected so the
+          # audit surface still captures misuse attempts.
+          case "$AUTHOR_ASSOC" in
+            OWNER|MEMBER|COLLABORATOR)
+              is_maintainer=true
+              ;;
+            *)
+              is_maintainer=false
+              ;;
+          esac
+
+          # Workflow-summary audit record (searchable via the Actions run
+          # history — no repo commit required, no extra permissions).
+          {
+            echo "## Gemini Review Override — Audit Record"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| PR | #${PR_NUMBER} |"
+            echo "| Commenter | @${COMMENTER} |"
+            echo "| Author association | \`${AUTHOR_ASSOC}\` |"
+            echo "| Authorized maintainer | ${is_maintainer} |"
+            echo "| Timestamp | ${TIMESTAMP} |"
+            echo "| Reason | ${reason_display} |"
+            echo "| Comment | ${COMMENT_URL} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Acknowledgment comment on the PR (the primary audit surface —
+          # searchable via GitHub issue search and visible in-thread to
+          # reviewers evaluating the override).
+          body_file=$(mktemp)
+          if [ "$is_maintainer" = "true" ]; then
+            {
+              echo "### 🟢 Gemini override acknowledged (audit-only, Phase 1)"
+              echo ""
+              echo "**Overridden by:** @${COMMENTER} (\`${AUTHOR_ASSOC}\`)"
+              echo "**Reason:** ${reason_display}"
+              echo "**Logged at:** ${TIMESTAMP}"
+              echo ""
+              echo "<sub>Phase 1 is warn-only — the Gemini review never blocks merge, so this override has no gating effect. Recorded here as audit scaffolding for Phase 3 (required-mode promotion). See a later phase (required-mode).</sub>"
+            } > "$body_file"
+          else
+            {
+              echo "### ⚠️ Gemini override ignored — not a repo maintainer"
+              echo ""
+              echo "@${COMMENTER} has \`author_association=${AUTHOR_ASSOC}\`. Only \`OWNER\`, \`MEMBER\`, or \`COLLABORATOR\` may record an override."
+              echo ""
+              echo "<sub>Audit-only — this comment does not affect merge gating. Logged so maintainers can review misuse attempts. See a later phase (required-mode).</sub>"
+            } > "$body_file"
+          fi
+
+          gh pr comment "${PR_NUMBER}" --body-file "$body_file"
