@@ -13,6 +13,7 @@
 #ifdef ARDUINO
   #include <Arduino.h>
   #include <esp_system.h>   // esp_reset_reason()
+  #include <time.h>         // #69: configTime() + time() for the SNTP wall clock
 #endif
 
 namespace crosswire {
@@ -101,6 +102,12 @@ void wifiObserverLoop() {
     if (!s_pool_started && s_context_set && wifiBootstrap().isStaConnected()
         && s_identity != nullptr) {
         crashLogf("[WifiObserver] STA up + context set -- bringing up MqttBrokerPool");
+        // #69: start SNTP so wss/jwt brokers get a valid wall clock (needed for
+        // TLS cert-validity checks + JWT iat/exp) without a phone. Non-blocking;
+        // the system clock ESP32RTCClock reads via time() updates on first sync.
+        configTime(0, 0, "pool.ntp.org", "time.nist.gov", "time.google.com");
+        crashLogf("[WifiObserver] SNTP started; pre-sync wall=%lu",
+                  (unsigned long)time(nullptr));
         s_pool.begin(*s_identity, s_device_id, s_node_name,
                      s_client_version, s_firmware_version, s_model);
         observerPipeline().begin(&s_pool);
