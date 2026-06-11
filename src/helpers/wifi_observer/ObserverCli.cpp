@@ -118,21 +118,6 @@ static bool handleStatus(char* reply, size_t reply_size, MqttBrokerPool& pool) {
                           cfg.jwt_owner[0] ? 'Y' : 'N',
                           cfg.jwt_email[0] ? 'Y' : 'N');
         }
-        // #66: on TLS/WSS slots surface the trust source (and JWT audience
-        // presence). cert=NONE on a wss slot is the smoking gun for a missing
-        // CA -- TLS handshakes then fail into permanent backoff while every
-        // other visible field looks correct.
-        if ((cfg.transport == BrokerTransport::Tls ||
-             cfg.transport == BrokerTransport::Wss) &&
-            n >= 0 && (size_t)n < reply_size) {
-            n += snprintf(reply + n, reply_size - (size_t)n, " cert=%s",
-                          cfg.ca_cert_name[0] ? cfg.ca_cert_name : "NONE");
-            if (cfg.auth_type == BrokerAuthType::Jwt &&
-                n >= 0 && (size_t)n < reply_size) {
-                n += snprintf(reply + n, reply_size - (size_t)n, " aud=%c",
-                              cfg.jwt_audience[0] ? 'Y' : 'N');
-            }
-        }
         if (n >= 0 && (size_t)n < reply_size) {
             n += snprintf(reply + n, reply_size - (size_t)n, "\n");
         }
@@ -298,17 +283,9 @@ static bool handleSetBrokerField(char* reply, size_t reply_size,
         return true;
     }
 
-    // #70/#67: refresh the broker's cached cfg_ so `mqtt status` reflects the
-    // new value immediately. Previously only the was_enabled path reloaded (via
-    // the live-client teardown); a set on an already-DISABLED slot wrote NVS but
-    // never refreshed cfg_, so status kept showing the boot-time config until the
-    // slot was enabled or the device rebooted. reloadSlot() is async + worker-
-    // owned (the reconciling_[] guard serializes it against loopTask), so this is
-    // race-safe; for a disabled slot the worker just re-reads NVS into cfg_ with
-    // no client touch.
-    pool.reloadSlot((uint8_t)slot);
-
     if (was_enabled) {
+        // Tear the live client down OFF loopTask (async; returns immediately).
+        pool.reloadSlot((uint8_t)slot);
         snprintf(reply, reply_size,
                  "mqtt.broker.%d.%s set; slot disabled -- 'mqtt enable %d' to apply\n",
                  slot, key, slot);
