@@ -54,6 +54,7 @@ class Preferences {
  public:
     bool begin(const char* ns, bool /*ro*/) { ns_ = ns; return true; }
     void end() {}
+    bool clear() { kvs_[ns_].clear(); return true; }
     bool   putBool   (const char* k, bool v)        { kvs_[ns_][k] = v ? "1":"0"; return true; }
     bool   getBool   (const char* k, bool def)      { auto& m = kvs_[ns_]; auto it=m.find(k); return it==m.end()?def:(it->second=="1"); }
     size_t putString (const char* k, const char* v) { kvs_[ns_][k] = v; return strlen(v); }

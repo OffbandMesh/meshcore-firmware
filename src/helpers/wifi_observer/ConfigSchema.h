@@ -104,6 +104,9 @@ struct BrokerConfig {
 
 bool readBrokerConfig(uint8_t slot, BrokerConfig& out);
 bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg);
+// #98: wipe slot N's NVS namespace entirely (definitive clear for
+// `mqtt clear <N>` -- putString("") does NOT reliably clear an ESP32 NVS key).
+bool clearBrokerConfig(uint8_t slot);
 
 // Phase 2 (#48): seed the owner's 6-slot broker registry into empty slots
 // only (cfg.url[0] == '\0'); never overwrites user-set values; idempotent.

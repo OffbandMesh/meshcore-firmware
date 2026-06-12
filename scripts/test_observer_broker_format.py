@@ -139,6 +139,18 @@ int main() {
     if (!strstr(abuf, "auth_type=none")) return fail("anon: auth_type=none missing", abuf);
     if (strstr(abuf, "mqtt.broker.0:")) return fail("anon: header colon (will mangle)", abuf);
 
+    // 8. clearBrokerConfig wipes a slot's NVS namespace (the `mqtt clear` fix).
+    //    Writing an empty config was not enough on real ESP32 NVS; clearing the
+    //    namespace makes readBrokerConfig return defaults (empty url).
+    BrokerConfig w;
+    strcpy(w.url, "wss://x.example:443/mqtt");
+    if (!writeBrokerConfig(7, w))  { puts("FAIL: clear precond write slot 7"); return 1; }
+    BrokerConfig r1; readBrokerConfig(7, r1);
+    if (r1.url[0] == '\0')         { puts("FAIL: clear precond - write didn't persist"); return 1; }
+    if (!clearBrokerConfig(7))     { puts("FAIL: clearBrokerConfig returned false"); return 1; }
+    BrokerConfig r2; readBrokerConfig(7, r2);
+    if (r2.url[0] != '\0') { printf("FAIL: clearBrokerConfig left url '%s'\n", r2.url); return 1; }
+
     puts("OK");
     return 0;
 }

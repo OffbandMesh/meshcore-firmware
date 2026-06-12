@@ -552,8 +552,7 @@ static bool handleViewBroker(char* reply, size_t reply_size, int slot) {
 // empty slots); a custom slot (6-9) stays empty until reconfigured.
 static bool handleClearBroker(char* reply, size_t reply_size,
                               MqttBrokerPool& pool, int slot) {
-    BrokerConfig empty;  // default-constructed: url + all fields blank, disabled
-    if (!writeBrokerConfig((uint8_t)slot, empty)) {
+    if (!clearBrokerConfig((uint8_t)slot)) {
         snprintf(reply, reply_size, "ERROR: cannot clear slot %d\n", slot);
         return true;
     }

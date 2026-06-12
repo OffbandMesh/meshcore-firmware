@@ -136,6 +136,23 @@ bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg) {
     return true;
 }
 
+// #98: clear a broker slot by WIPING its NVS namespace (every key removed), so
+// readBrokerConfig returns defaults (empty url) and populateDefaultBrokers
+// re-seeds a default slot at the next boot. Writing an empty BrokerConfig is
+// NOT sufficient: ESP32 NVS does not reliably clear a key via putString("")
+// (the old value persists), which left `mqtt clear` ineffective -- the slot
+// re-appeared in `mqtt status` and survived a reboot. Wiping is definitive.
+bool clearBrokerConfig(uint8_t slot) {
+    if (slot >= CROSSWIRE_MAX_BROKERS) return false;
+    char ns[16];
+    mqttBrokerNamespace(slot, ns, sizeof(ns));
+    Preferences p;
+    if (!p.begin(ns, /*readOnly=*/false)) return false;
+    bool ok = p.clear();   // remove ALL keys in this broker's namespace
+    p.end();
+    return ok;
+}
+
 // ---------------------------------------------------------------------------
 // populateDefaultBrokers — Plan 2 v2 Task 3 Step 4
 // ---------------------------------------------------------------------------
