@@ -40,8 +40,8 @@ device-state verbs like `reboot`/`format`/`erase`/`factory`/`ota.`).
 
 | Command | Effect |
 |---|---|
-| `mqtt status` | pool summary + per-slot live state |
-| `mqtt view <N>` | full stored config for slot N (all fields, secrets redacted) |
+| `mqtt status` | pool summary + per-slot live state (**configured slots only**) |
+| `mqtt view <N>` | full stored config for slot N, configured or empty (secrets redacted) |
 | `mqtt enable <N>` / `mqtt disable <N>` | enable/disable broker slot N |
 | `set mqtt.broker.<N>.<key> <value>` | set a broker field |
 | `get mqtt.broker.<N>.<key>` | read a broker field (secrets redacted) |
@@ -56,12 +56,21 @@ Broker fields (`<key>`): `url`, `port`, `transport` (tcp\|tls\|wss),
 Setting a field on a **live** (enabled) broker slot auto-disables that slot;
 re-enable explicitly with `mqtt enable <N>` once the config is complete.
 
-`mqtt view <N>` (#98) dumps every stored field for one slot in a single reply —
-the fast way to confirm a slot is configured correctly without querying each
-field. Secrets are redacted (`password` / `jwt_token` show only
-`(set, len=N)` / `(cached, len=N)`), and a JWT slot's `username` is reported as
-auto-derived (`v1_<pubkey>` minted at connect). Live state (up / backoff /
-retries) stays in `mqtt status`; `view` is the stored **config**.
+**`mqtt status` lists only *configured* slots** — a slot appears only once it
+has a URL. An empty / unconfigured slot is **not** shown, so the highest number
+you see is your last configured slot, not the slot ceiling (currently 10, slots
+0–9). To inspect a specific slot regardless of whether it's configured, use
+`mqtt view <N>`: an empty slot reads `url=(unset)`.
+
+`mqtt view <N>` (#98) dumps every stored field for one slot in a few packed
+lines, in the familiar order: `url, port, transport, auth_type, username,
+jwt_audience, jwt_owner, jwt_email, jwt_refresh, ca_cert, iata`. Secrets are
+never echoed — a basic-auth `password` shows `(set)` / `(unset)`, and the JWT
+bearer token (auto-minted at connect) is omitted entirely. A JWT slot's
+`username` and `jwt_owner` show their auto-derived defaults when unset
+(`auto(v1_+pubkey)` and `auto(device-pubkey)` — the device's own pubkey, #95).
+Live state (up / backoff / retries) stays in `mqtt status`; `view` is the
+stored **config**.
 
 ## Broker auth — wss/jwt (the real recipe)
 
