@@ -43,6 +43,7 @@ device-state verbs like `reboot`/`format`/`erase`/`factory`/`ota.`).
 | `mqtt status` | pool summary + per-slot live state (**configured slots only**) |
 | `mqtt view <N>` | full stored config for slot N, configured or empty (secrets redacted) |
 | `mqtt enable <N>` / `mqtt disable <N>` | enable/disable broker slot N |
+| `mqtt clear <N>` | wipe slot N's stored config back to empty |
 | `set mqtt.broker.<N>.<key> <value>` | set a broker field |
 | `get mqtt.broker.<N>.<key>` | read a broker field (secrets redacted) |
 | `set mqtt.iata <code>` | global IATA / location code |
@@ -55,6 +56,13 @@ Broker fields (`<key>`): `url`, `port`, `transport` (tcp\|tls\|wss),
 
 Setting a field on a **live** (enabled) broker slot auto-disables that slot;
 re-enable explicitly with `mqtt enable <N>` once the config is complete.
+
+`mqtt clear <N>` wipes a slot's stored config back to empty (URL + every field
+blank, disabled) — it clears the *fields*, not the device. A **default** slot
+(0–5) is re-seeded to its default on the next reboot (the boot seed fills empty
+slots — this is the recovery path); a **custom** slot (6–9) stays empty until
+you reconfigure it. Handy for migrating a slot to the current seed: `mqtt clear
+3` then reboot re-seeds slot 3 to the new default (MeshMapper).
 
 **`mqtt status` lists only *configured* slots** — a slot appears only once it
 has a URL. An empty / unconfigured slot is **not** shown, so the highest number
