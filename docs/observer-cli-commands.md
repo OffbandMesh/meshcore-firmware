@@ -40,7 +40,8 @@ device-state verbs like `reboot`/`format`/`erase`/`factory`/`ota.`).
 
 | Command | Effect |
 |---|---|
-| `mqtt status` | pool summary + per-slot state |
+| `mqtt status` | pool summary + per-slot live state |
+| `mqtt view <N>` | full stored config for slot N (all fields, secrets redacted) |
 | `mqtt enable <N>` / `mqtt disable <N>` | enable/disable broker slot N |
 | `set mqtt.broker.<N>.<key> <value>` | set a broker field |
 | `get mqtt.broker.<N>.<key>` | read a broker field (secrets redacted) |
@@ -54,6 +55,13 @@ Broker fields (`<key>`): `url`, `port`, `transport` (tcp\|tls\|wss),
 
 Setting a field on a **live** (enabled) broker slot auto-disables that slot;
 re-enable explicitly with `mqtt enable <N>` once the config is complete.
+
+`mqtt view <N>` (#98) dumps every stored field for one slot in a single reply —
+the fast way to confirm a slot is configured correctly without querying each
+field. Secrets are redacted (`password` / `jwt_token` show only
+`(set, len=N)` / `(cached, len=N)`), and a JWT slot's `username` is reported as
+auto-derived (`v1_<pubkey>` minted at connect). Live state (up / backoff /
+retries) stays in `mqtt status`; `view` is the stored **config**.
 
 ## Broker auth — wss/jwt (the real recipe)
 
