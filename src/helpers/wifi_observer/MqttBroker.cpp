@@ -105,6 +105,14 @@ void MqttBroker::shutdown() {
         auth_ = nullptr;
     }
     rt_ = BrokerRuntimeState{};
+    // #98: reset to UNCONFIGURED (slot_ = 0xFF) so isConfigured() goes false and
+    // `mqtt status` drops the slot immediately after a clear/empty reload, rather
+    // than showing its stale cached cfg_ until the next reboot. begin() re-sets
+    // slot_ + cfg_ for any (re)configured slot, so this is safe on the re-init
+    // path. Protected by the reconciling_[] guard (loopTask skips a slot mid-
+    // reconcile), same as the rt_ reset above.
+    slot_ = 0xFF;
+    cfg_  = BrokerConfig{};
 }
 
 #ifdef ARDUINO
