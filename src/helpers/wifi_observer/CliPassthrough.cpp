@@ -101,15 +101,18 @@ static void normalizeVerbAndFieldToLower(char* buf, size_t buf_size,
 bool cliPassthroughIsAllowed(const char* line) {
     if (line == nullptr) return false;
     const char* p = trimLeading(line);
-    // Allowlist: must start with "get ", "set ", or "mqtt ". Verb is
-    // already-lowercased by the caller via normalizeVerbAndFieldToLower
+    // Allowlist: must start with "get ", "set ", "mqtt ", or "wifi ". Verb
+    // is already-lowercased by the caller via normalizeVerbAndFieldToLower
     // (Strycher/LoRa#313 phone auto-capitalize fix). "mqtt " covers the
-    // status/enable/disable subcommands documented in ObserverCli.h that
-    // were previously unreachable via _sys channel (Strycher/LoRa#313).
+    // status/enable/disable subcommands documented in ObserverCli.h; "wifi "
+    // covers the aligned "wifi status/enable/disable" grammar
+    // (Strycher/Crosswire#45) -- without it, "wifi status" was denied here
+    // before ever reaching dispatchObserverCli.
     size_t skip = 0;
     if      (strncmp(p, "get ", 4) == 0)  skip = 4;
     else if (strncmp(p, "set ", 4) == 0)  skip = 4;
     else if (strncmp(p, "mqtt ", 5) == 0) skip = 5;
+    else if (strncmp(p, "wifi ", 5) == 0) skip = 5;
     else return false;
     // Deny scan against the tail (after the verb + its trailing space).
     const char* tail = p + skip;

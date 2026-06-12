@@ -102,6 +102,18 @@ public:
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
 
+#ifdef CROSSWIRE_OBSERVER
+  // #31 Task C: live Dispatcher stats for the /status snapshot. Observer-only,
+  // so guarded to keep this shared-lineage header's diff minimal against
+  // upstream MeshCore (the only callers are observer-gated in main.cpp).
+  // _err_flags and _mgr are protected on Dispatcher; MyMesh can read them
+  // directly as a subclass. _mgr is initialised from a reference in the
+  // Dispatcher constructor and is guaranteed non-null for the lifetime of
+  // the mesh object.
+  uint16_t getErrFlags()         const { return _err_flags; }
+  int      getOutboundQueueLen() const { return _mgr->getOutboundTotal(); }
+#endif
+
 #ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
   // Plan 3 Task 10 (Strycher/LoRa#272): post a status message
   // onto the locked system channel slot. Builds a
@@ -187,8 +199,8 @@ public:
   void applyGpsPrefs() {
     sensors.setSettingValue("gps", _prefs.gps_enabled ? "1" : "0");
     if (_prefs.gps_interval > 0) {
-      char interval_str[12];  // Max: 24 hours = 86400 seconds (5 digits + null)
-      sprintf(interval_str, "%u", _prefs.gps_interval);
+      char interval_str[12];  // uint32_t gps_interval: up to 10 digits + null
+      snprintf(interval_str, sizeof(interval_str), "%u", _prefs.gps_interval);
       sensors.setSettingValue("gps_interval", interval_str);
     }
   }

@@ -75,6 +75,9 @@ int main() {
     snap.radio_sf       = 11;
     snap.radio_cr       = 5;
     snap.repeat_enabled = false;
+    snap.node_lat       = 0.0;     // Task D: position fields. loc_valid=false
+    snap.node_lon       = 0.0;     // => lat/lon omitted, output byte-identical
+    snap.loc_valid      = false;   // to the pre-position golden fixture.
 
     MqttPayloadCtx ctx;
     ctx.iata             = "CMH";

@@ -5,8 +5,8 @@ scripts/test_observer_cli_allowlist.py
 Host-runnable test for CliPassthrough. Compiles CliPassthrough.cpp +
 a driver harness + a stub for the two symbols CliPassthrough
 forward-declares (dispatchObserverCli + wifiObserverPool) and asserts:
-  - 16 allowlist-gate cases (cliPassthroughIsAllowed)
-  - 2 end-to-end cases (cliPassthroughExecute) covering the
+  - 19 allowlist-gate cases (cliPassthroughIsAllowed)
+  - 3 end-to-end cases (cliPassthroughExecute) covering the
     trim-before-dispatch fix: whitespace-prefixed valid commands must
     classify as CliResult::Ok, not CliResult::Unknown.
 
@@ -98,6 +98,9 @@ static const GateCase kGateCases[] = {
     {"cat /etc/passwd",              false},
     {"rm -rf",                       false},
     {"get factory.reset",            false},
+    {"wifi status",                  true},   // #45: was "denied: not in allowlist"
+    {"wifi enable",                  true},   // #45
+    {"wifi disable",                 true},   // #45
 };
 
 // End-to-end cases: exercise cliPassthroughExecute, which must trim
@@ -116,6 +119,7 @@ struct ExecCase {
 static const ExecCase kExecCases[] = {
     {"  set mqtt.iata CMH", crosswire::CliResult::Ok},  // I1 regression
     {"get mqtt.iata",       crosswire::CliResult::Ok},  // baseline
+    {"  Wifi status",       crosswire::CliResult::Ok},  // #45: trim+lowercase+allow (screenshot)
 };
 
 static const char* resultName(crosswire::CliResult r) {
@@ -288,7 +292,7 @@ def main() -> int:
         out = (r.stdout or "").rstrip()
         # Echo full per-case output for visibility.
         print(out)
-        if r.returncode == 0 and "OK: 18 cases pass." in out:
+        if r.returncode == 0 and "OK: 22 cases pass." in out:
             return 0
         print(f"FAIL (rc={r.returncode})")
         if r.stderr:

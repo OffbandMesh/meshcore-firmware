@@ -171,11 +171,24 @@ int buildStatusJson(char* buf, size_t buf_size,
     const char* firmware_version = ctx.firmware_version != nullptr ? ctx.firmware_version : "";
     const char* device_id        = ctx.device_id        != nullptr ? ctx.device_id        : "";
 
+    // #31 Task D: optional top-level lat/lon (siblings of "stats"), emitted only
+    // when snapshot.loc_valid. The fragment is spliced in via a single "%s" placed
+    // immediately before the outer closing brace, so every existing field stays
+    // byte-identical and the offline (loc_valid==false => empty fragment) payload
+    // is unchanged. Decimal degrees, matching the advert (see MqttPayload.h).
+    char pos[48];
+    if (snapshot.loc_valid) {
+        snprintf(pos, sizeof(pos), ",\"lat\":%.6f,\"lon\":%.6f",
+                 snapshot.node_lat, snapshot.node_lon);
+    } else {
+        pos[0] = '\0';
+    }
+
     return snprintf(buf, buf_size,
                     "{\"status\":\"%s\",\"timestamp\":\"%s\",\"origin\":\"%s\",\"origin_id\":\"%s\","
                     "\"model\":\"%s\",\"firmware_version\":\"%s\",\"radio\":\"%s\",\"client_version\":\"%s\","
                     "\"repeat\":\"%s\",\"stats\":{\"battery_mv\":%d,\"uptime_secs\":%lu,\"errors\":%u,\"queue_len\":%u,"
-                    "\"noise_floor\":%d,\"tx_air_secs\":%lu,\"rx_air_secs\":%lu,\"recv_errors\":%lu}}",
+                    "\"noise_floor\":%d,\"tx_air_secs\":%lu,\"rx_air_secs\":%lu,\"recv_errors\":%lu}%s}",
                     online ? "online" : "offline", ts, origin, device_id, model,
                     firmware_version, radio_info, client_version,
                     snapshot.repeat_enabled ? "on" : "off",
@@ -185,7 +198,8 @@ int buildStatusJson(char* buf, size_t buf_size,
                     snapshot.noise_floor,
                     static_cast<unsigned long>(snapshot.tx_air_secs),
                     static_cast<unsigned long>(snapshot.rx_air_secs),
-                    static_cast<unsigned long>(snapshot.recv_errors));
+                    static_cast<unsigned long>(snapshot.recv_errors),
+                    pos);
 }
 
 #ifdef ARDUINO

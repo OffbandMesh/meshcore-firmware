@@ -317,6 +317,87 @@ void loop() {
 #endif
   sensors.loop();
 
+#if defined(CROSSWIRE_OBSERVER) && ENV_INCLUDE_GPS == 1
+  // #69 Task A: push GPS time-state to observer ~1 Hz so the SNTP arbiter
+  // (next task) can see whether GPS currently owns the clock.
+  {
+    static uint32_t s_gps_state_ms = 0;
+    uint32_t _now = millis();
+    if (_now - s_gps_state_ms >= 1000) {
+      s_gps_state_ms = _now;
+      crosswire::wifiObserverSetGpsTimeState(
+          the_mesh.getNodePrefs()->gps_enabled != 0,
+          sensors.gpsHasFix());
+    }
+  }
+#endif
+
+#ifdef CROSSWIRE_OBSERVER
+  // #31 Task C: push status snapshot to observer so the pool's
+  // publishStatusIfDue() can emit /status.  Throttled to
+  // kMinStatusIntervalSec (10 s = min legal status_interval; keeps the
+  // pushed snapshot fresh for any configured pool cadence) to avoid
+  // snapshot-build cost every iteration.
+  //
+  // Field sources:
+  //   battery_mv     -- board.getBattMilliVolts()
+  //   uptime_secs    -- millis() / 1000
+  //   error_flags    -- the_mesh.getErrFlags() (Dispatcher::_err_flags)
+  //   queue_len      -- the_mesh.getOutboundQueueLen() (_mgr->getOutboundTotal())
+  //   noise_floor    -- radio_driver.getNoiseFloor() (RadioLibWrapper)
+  //   tx_air_secs    -- the_mesh.getTotalAirTime() / 1000
+  //   rx_air_secs    -- the_mesh.getReceiveAirTime() / 1000
+  //   recv_errors    -- radio_driver.getPacketsRecvErrors()
+  //   radio_freq/bw/sf/cr -- compile-time LORA_* macros (runtime prefs TODO)
+  //   repeat_enabled -- getNodePrefs()->client_repeat != 0
+  {
+    static uint32_t s_status_snap_ms = 0;
+    uint32_t _now = millis();
+    if (_now - s_status_snap_ms >= crosswire::kMinStatusIntervalSec * 1000U) {
+      s_status_snap_ms = _now;
+      crosswire::MqttStatusSnapshot snap = {};
+      snap.battery_mv     = static_cast<int>(board.getBattMilliVolts());
+      snap.uptime_secs    = static_cast<uint32_t>(_now / 1000UL);
+      snap.error_flags    = the_mesh.getErrFlags();
+      snap.queue_len      = static_cast<uint16_t>(the_mesh.getOutboundQueueLen());
+      snap.noise_floor    = radio_driver.getNoiseFloor();
+      snap.tx_air_secs    = static_cast<uint32_t>(the_mesh.getTotalAirTime() / 1000UL);
+      snap.rx_air_secs    = static_cast<uint32_t>(the_mesh.getReceiveAirTime() / 1000UL);
+      snap.recv_errors    = static_cast<uint32_t>(radio_driver.getPacketsRecvErrors());
+      snap.radio_freq     = static_cast<float>(LORA_FREQ);
+      snap.radio_bw       = static_cast<float>(LORA_BW);
+      snap.radio_sf       = static_cast<uint8_t>(LORA_SF);
+      snap.radio_cr       = static_cast<uint8_t>(LORA_CR);
+      snap.repeat_enabled = (the_mesh.getNodePrefs()->client_repeat != 0);
+      // #31 Task D: publish position in /status, selected EXACTLY as the
+      // companion advert path selects its location, so the MQTT position always
+      // agrees with the advert (design D4: reuse the existing advert_loc_policy,
+      // no separate MQTT knob).  This firmware's NodePrefs (NodePrefs.h) defines
+      // only ADVERT_LOC_NONE and ADVERT_LOC_SHARE -- there is NO ADVERT_LOC_PREFS
+      // and NO prefs node_lat/lon here (that 3-policy split lives in the repeater's
+      // CommonCLI::buildAdvertData, a different NodePrefs).  Mirror MyMesh::advert()
+      // / CMD_SEND_SELF_ADVERT exactly: NONE => no location; otherwise (SHARE) use
+      // sensors.node_lat/lon.  sensors.node_lat/lon are doubles already in decimal
+      // degrees -- the same units createSelfAdvert/AdvertDataBuilder consume before
+      // their internal *1E6 micro-degree scaling -- so they are emitted as-is.
+      if (the_mesh.getNodePrefs()->advert_loc_policy == ADVERT_LOC_NONE) {
+        snap.loc_valid = false;  // advert carries no location
+      } else {                   // ADVERT_LOC_SHARE: publish sensors.node_lat/lon
+        // exactly as the advert does -- whether the position came from GPS or was
+        // set manually via CMD_SET_ADVERT_LATLON (both write sensors.node_lat/lon).
+        // NOT gated on a live GPS fix (the advert isn't), so a manual or last-known
+        // position publishes too. Suppress only the 0,0 null-island (our sole, safer
+        // divergence from the advert). node_lat/lon are unconditional SensorManager
+        // members, so no ENV_INCLUDE_GPS guard is needed -- compiles on no-GPS boards.
+        snap.node_lat  = sensors.node_lat;
+        snap.node_lon  = sensors.node_lon;
+        snap.loc_valid = (sensors.node_lat != 0.0 || sensors.node_lon != 0.0);
+      }
+      crosswire::wifiObserverSetStatusSnapshot(snap);
+    }
+  }
+#endif
+
 #ifdef DISPLAY_CLASS
 #ifdef CROSSWIRE_OBSERVER
   crosswire::subloopMark(crosswire::SUBLOOP_UI);

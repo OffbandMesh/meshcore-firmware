@@ -47,6 +47,9 @@ public:
   #else
   EnvironmentSensorManager(){};
   #endif
+  #if ENV_INCLUDE_GPS
+  bool gpsHasFix() { return gps_active && _location != nullptr && _location->isValid(); }
+  #endif
   bool begin() override;
   bool querySensors(uint8_t requester_permissions, CayenneLPP& telemetry) override;
   #if ENV_INCLUDE_GPS
