@@ -220,4 +220,96 @@ void populateDefaultBrokers() {
 
 #endif  // ARDUINO
 
+// ---------------------------------------------------------------------------
+// formatBrokerConfig — #98 (mqtt view <N>) + reusable by #96 (export)
+// ---------------------------------------------------------------------------
+// Pure renderer (no NVS/Arduino deps) so it compiles + host-tests on both the
+// device and the bench harness. Lives outside the ARDUINO guard.
+//
+// Small enum->name helpers are file-local here; ObserverCli.cpp has its own
+// transportStr/authStr for its status line (minor dup, noted for #97).
+namespace {
+const char* brokerTransportName(BrokerTransport t) {
+    switch (t) {
+        case BrokerTransport::Tcp: return "tcp";
+        case BrokerTransport::Tls: return "tls";
+        case BrokerTransport::Wss: return "wss";
+        default:                   return "?";
+    }
+}
+const char* brokerAuthName(BrokerAuthType a) {
+    switch (a) {
+        case BrokerAuthType::None:  return "none";
+        case BrokerAuthType::Basic: return "basic";
+        case BrokerAuthType::Jwt:   return "jwt";
+        default:                    return "?";
+    }
+}
+}  // namespace
+
+// Bounded append: only writes if room remains; a field that would overflow is
+// simply skipped (graceful truncation -- never overruns out_size).
+#define CW_VIEW_APPEND(...) do {                                       \
+    if (n >= 0 && (size_t)n < out_size) {                             \
+        int added = snprintf(out + n, out_size - (size_t)n, __VA_ARGS__); \
+        if (added > 0) n += added;                                    \
+    }                                                                 \
+} while (0)
+
+size_t formatBrokerConfig(uint8_t slot, const BrokerConfig& cfg,
+                          char* out, size_t out_size) {
+    if (out == nullptr || out_size == 0) return 0;
+    out[0] = '\0';
+    int n = 0;
+
+    CW_VIEW_APPEND("mqtt.broker.%u:\n", (unsigned)slot);
+    CW_VIEW_APPEND("  enabled = %d\n", cfg.enabled ? 1 : 0);
+    CW_VIEW_APPEND("  url = %s\n", cfg.url[0] ? cfg.url : "(unset)");
+    CW_VIEW_APPEND("  port = %u\n", (unsigned)cfg.port);
+    CW_VIEW_APPEND("  transport = %s\n", brokerTransportName(cfg.transport));
+    CW_VIEW_APPEND("  auth_type = %s\n", brokerAuthName(cfg.auth_type));
+    CW_VIEW_APPEND("  topic_prefix = %s\n",
+                   cfg.topic_prefix[0] ? cfg.topic_prefix : "(unset)");
+    CW_VIEW_APPEND("  iata_override = %s\n",
+                   cfg.iata_override[0] ? cfg.iata_override : "(global)");
+    CW_VIEW_APPEND("  ca_cert = %s\n",
+                   cfg.ca_cert_name[0] ? cfg.ca_cert_name : "(none)");
+    CW_VIEW_APPEND("  jwt_audience = %s\n",
+                   cfg.jwt_audience[0] ? cfg.jwt_audience : "(unset)");
+    CW_VIEW_APPEND("  jwt_refresh = %u\n", (unsigned)cfg.jwt_refresh_sec);
+    CW_VIEW_APPEND("  jwt_owner = %s\n",
+                   cfg.jwt_owner[0] ? cfg.jwt_owner : "(unset)");
+    CW_VIEW_APPEND("  jwt_email = %s\n",
+                   cfg.jwt_email[0] ? cfg.jwt_email : "(unset)");
+    // username: for jwt brokers it auto-derives at connect (v1_<pubkey>), so
+    // the stored field is normally empty -- say so rather than show blank.
+    if (cfg.username[0]) {
+        CW_VIEW_APPEND("  username = %s\n", cfg.username);
+    } else if (cfg.auth_type == BrokerAuthType::Jwt) {
+        CW_VIEW_APPEND("  username = (auto: v1_<pubkey> at connect)\n");
+    } else {
+        CW_VIEW_APPEND("  username = (unset)\n");
+    }
+    // SECRETS -- never emit the value, only a derived property (CLAUDE.md).
+    if (cfg.password[0]) {
+        CW_VIEW_APPEND("  password = (set, len=%u)\n",
+                       (unsigned)strlen(cfg.password));
+    } else {
+        CW_VIEW_APPEND("  password = (unset)\n");
+    }
+    if (cfg.jwt_token[0]) {
+        CW_VIEW_APPEND("  jwt_token = (cached, len=%u)\n",
+                       (unsigned)strlen(cfg.jwt_token));
+    } else {
+        CW_VIEW_APPEND("  jwt_token = (none; minted live at connect)\n");
+    }
+
+    // snprintf returns the would-be length, so on truncation n can exceed
+    // out_size; report the ACTUAL bytes written (== strlen(out)), capped.
+    if (n < 0) return 0;
+    return ((size_t)n >= out_size) ? (out_size - 1) : (size_t)n;
+}
+
+#undef CW_VIEW_APPEND
+
 }  // namespace crosswire

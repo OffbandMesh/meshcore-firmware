@@ -112,4 +112,15 @@ bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg);
 // is left empty for a custom broker.
 void populateDefaultBrokers();
 
+// #98: render a broker slot's stored config to a human-readable, multi-line
+// text block (one "  key = value" per line) for `mqtt view <N>`. SECRETS ARE
+// REDACTED -- password and jwt_token are never emitted; only derived
+// properties ("(set, len=N)" / "(unset)" / "(cached, len=N)") appear, per the
+// CLAUDE.md "never echo a secret" rule. Pure: no NVS/Arduino deps -- the caller
+// passes a cfg already read via readBrokerConfig, so this is host-testable and
+// reusable by #96 (config export). Writes at most out_size-1 bytes + NUL,
+// truncating gracefully; returns bytes written (excluding NUL).
+size_t formatBrokerConfig(uint8_t slot, const BrokerConfig& cfg,
+                          char* out, size_t out_size);
+
 }  // namespace crosswire
