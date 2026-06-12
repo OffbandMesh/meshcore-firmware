@@ -262,51 +262,54 @@ size_t formatBrokerConfig(uint8_t slot, const BrokerConfig& cfg,
     out[0] = '\0';
     int n = 0;
 
-    // PACKED layout (multiple fields per line). The observer _sys channel sends
-    // each reply LINE as its own frame through an 8-deep ring buffer
-    // (kSystemChannelQueueDepth, SystemChannelCli.h) that DROPS THE OLDEST when
-    // full -- and interceptMsg enqueues a reply's lines synchronously, so a
-    // reply longer than the queue silently loses its EARLIEST lines before they
-    // flush. A one-field-per-line dump (16 lines) lost url/port/transport/etc.
-    // So pack like `mqtt status` and keep this <= 6 lines: 3 common + up to 3
-    // jwt-only. JWT-specific fields render ONLY for jwt brokers (a tcp/anon
-    // slot has no owner/aud/token).
+    // Field ORDER matches the operator's familiar layout: url, port, transport,
+    // auth_type, username, jwt_audience, jwt_owner, jwt_email, jwt_refresh,
+    // ca_cert, iata. PACKED so the whole view stays <= 6 lines: the observer
+    // _sys channel sends each reply LINE as its own frame through an 8-deep ring
+    // buffer that DROPS THE OLDEST when full (kSystemChannelQueueDepth,
+    // SystemChannelCli.h), and interceptMsg enqueues a reply's lines
+    // synchronously -- a reply longer than the queue silently loses its EARLIEST
+    // lines. The header avoids a leading "<word>: " because the MeshCore
+    // companion renders "<word>: <text>" as sender:message (which mangled the
+    // old "mqtt.broker.N:" header). JWT fields render only for jwt brokers.
     const bool is_jwt = (cfg.auth_type == BrokerAuthType::Jwt);
 
-    CW_VIEW_APPEND("mqtt.broker.%u: %s %s/%s port=%u\n",
-                   (unsigned)slot,
-                   cfg.enabled ? "ENABLED" : "disabled",
+    CW_VIEW_APPEND("mqtt.broker.%u  %s\n",
+                   (unsigned)slot, cfg.enabled ? "ENABLED" : "disabled");
+    CW_VIEW_APPEND("url=%s\n", cfg.url[0] ? cfg.url : "(unset)");
+    CW_VIEW_APPEND("port=%u transport=%s auth_type=%s\n",
+                   (unsigned)cfg.port,
                    brokerTransportName(cfg.transport),
-                   brokerAuthName(cfg.auth_type),
-                   (unsigned)cfg.port);
-    CW_VIEW_APPEND("  url=%s\n", cfg.url[0] ? cfg.url : "(unset)");
-    CW_VIEW_APPEND("  topic=%s iata=%s cert=%s\n",
-                   cfg.topic_prefix[0]  ? cfg.topic_prefix  : "(unset)",
-                   cfg.iata_override[0] ? cfg.iata_override : "(global)",
-                   cfg.ca_cert_name[0]  ? cfg.ca_cert_name  : "(none)");
+                   brokerAuthName(cfg.auth_type));
 
     if (is_jwt) {
-        CW_VIEW_APPEND("  aud=%s refresh=%us\n",
-                       cfg.jwt_audience[0] ? cfg.jwt_audience : "(unset)",
-                       (unsigned)cfg.jwt_refresh_sec);
-        // owner: explicit jwt_owner, else the connect-time default = this
-        // device's own pubkey (#95). email: operator-optional.
-        CW_VIEW_APPEND("  owner=%s email=%s\n",
-                       cfg.jwt_owner[0] ? cfg.jwt_owner : "auto(device-pubkey)",
-                       cfg.jwt_email[0] ? cfg.jwt_email : "(unset)");
-        // username auto-derives at connect (v1_+pubkey) when unset. The minted
-        // bearer token is the credential (not password); shown only as a
-        // derived property -- never the value (CLAUDE.md never-echo-a-secret).
-        CW_VIEW_APPEND("  user=%s tok=%s\n",
+        // username auto-derives at connect (v1_+pubkey) when unset.
+        CW_VIEW_APPEND("username=%s jwt_audience=%s\n",
                        cfg.username[0] ? cfg.username : "auto(v1_+pubkey)",
-                       cfg.jwt_token[0] ? "cached" : "none");
+                       cfg.jwt_audience[0] ? cfg.jwt_audience : "(unset)");
+        // jwt_owner: explicit value, else the connect-time default = this
+        // device's own pubkey (#95). Own line (64 hex).
+        CW_VIEW_APPEND("jwt_owner=%s\n",
+                       cfg.jwt_owner[0] ? cfg.jwt_owner : "auto(device-pubkey)");
+        CW_VIEW_APPEND("jwt_email=%s jwt_refresh=%u ca_cert=%s iata=%s\n",
+                       cfg.jwt_email[0]     ? cfg.jwt_email     : "(unset)",
+                       (unsigned)cfg.jwt_refresh_sec,
+                       cfg.ca_cert_name[0]  ? cfg.ca_cert_name  : "(none)",
+                       cfg.iata_override[0] ? cfg.iata_override : "(global)");
     } else if (cfg.auth_type == BrokerAuthType::Basic) {
-        // Basic: username + password (password redacted to set/unset).
-        CW_VIEW_APPEND("  user=%s pw=%s\n",
+        // password redacted to set/unset -- never the value (CLAUDE.md).
+        CW_VIEW_APPEND("username=%s password=%s\n",
                        cfg.username[0] ? cfg.username : "(unset)",
                        cfg.password[0] ? "(set)" : "(unset)");
+        CW_VIEW_APPEND("ca_cert=%s iata=%s\n",
+                       cfg.ca_cert_name[0]  ? cfg.ca_cert_name  : "(none)",
+                       cfg.iata_override[0] ? cfg.iata_override : "(global)");
+    } else {
+        // None (anon, e.g. CoreScope): no credentials.
+        CW_VIEW_APPEND("ca_cert=%s iata=%s\n",
+                       cfg.ca_cert_name[0]  ? cfg.ca_cert_name  : "(none)",
+                       cfg.iata_override[0] ? cfg.iata_override : "(global)");
     }
-    // auth==None (anon, e.g. CoreScope): no credential line.
 
     // snprintf returns the would-be length, so on truncation n can exceed
     // out_size; report the ACTUAL bytes written (== strlen(out)), capped.

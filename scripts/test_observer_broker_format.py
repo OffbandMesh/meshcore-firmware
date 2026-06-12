@@ -75,27 +75,43 @@ int main() {
     char buf[768];
     size_t len = formatBrokerConfig(3, cfg, buf, sizeof(buf));
 
-    // 1. Secrets MUST NOT leak verbatim.
+    // 1. Secrets MUST NOT leak (jwt view shows neither password nor token).
     if (strstr(buf, "p4ssw0rd-with-symbols!@#")) return fail("password value leaked", buf);
     if (strstr(buf, "SECRETPAYLOAD"))            return fail("jwt_token value leaked", buf);
 
-    // 2. Token redaction: a derived marker only, never the value.
-    if (!strstr(buf, "tok=cached")) return fail("jwt token redaction marker missing", buf);
+    // 2. Header must NOT use a leading "label: " -- the MeshCore companion
+    //    renders "<word>: <text>" as sender:message and mangles it.
+    if (strstr(buf, "mqtt.broker.3:")) return fail("header uses a colon (will mangle in app)", buf);
 
-    // 3. The fields the OLD 16-line dump used to lose (they were the earliest
-    //    lines, dropped by the 8-deep _sys ring buffer) MUST be present now.
-    if (!strstr(buf, "wss/jwt"))                                return fail("transport/auth header missing", buf);
-    if (!strstr(buf, "port=443"))                               return fail("port missing", buf);
+    // 3. All operator-layout fields present (full names).
     if (!strstr(buf, "url=wss://mqtt.meshmapper.net:443/mqtt")) return fail("url missing", buf);
-    if (!strstr(buf, "cert=isrg-x2"))                          return fail("ca_cert missing", buf);
-    if (!strstr(buf, "aud=mqtt.meshmapper.net"))               return fail("audience missing", buf);
-    if (!strstr(buf, "owner=18315E8B"))                        return fail("owner missing", buf);
-    if (!strstr(buf, "strycher@gmail.com"))                    return fail("email missing", buf);
-    if (!strstr(buf, "user=auto(v1_+pubkey)"))                 return fail("username auto note missing", buf);
+    if (!strstr(buf, "port=443"))                       return fail("port missing", buf);
+    if (!strstr(buf, "transport=wss"))                  return fail("transport missing", buf);
+    if (!strstr(buf, "auth_type=jwt"))                  return fail("auth_type missing", buf);
+    if (!strstr(buf, "username=auto(v1_+pubkey)"))      return fail("username missing", buf);
+    if (!strstr(buf, "jwt_audience=mqtt.meshmapper.net")) return fail("jwt_audience missing", buf);
+    if (!strstr(buf, "jwt_owner=18315E8B"))             return fail("jwt_owner missing", buf);
+    if (!strstr(buf, "jwt_email=strycher@gmail.com"))   return fail("jwt_email missing", buf);
+    if (!strstr(buf, "jwt_refresh=3600"))               return fail("jwt_refresh missing", buf);
+    if (!strstr(buf, "ca_cert=isrg-x2"))                return fail("ca_cert missing", buf);
+    if (!strstr(buf, "iata=(global)"))                  return fail("iata missing", buf);
 
-    // 4. Line budget -- the whole point of the repack. The _sys queue is 8 deep
-    //    and drops the OLDEST when full, so a per-slot view must stay well under
-    //    that or its earliest fields vanish in delivery.
+    // 4. Fields appear in the operator's familiar order.
+    {
+        const char* order[] = {"url=","port=","transport=","auth_type=",
+            "username=","jwt_audience=","jwt_owner=","jwt_email=",
+            "jwt_refresh=","ca_cert=","iata="};
+        long prev = -1;
+        for (int i = 0; i < 11; i++) {
+            const char* pos = strstr(buf, order[i]);
+            if (!pos) { printf("FAIL: %s missing (order check)\n%s\n", order[i], buf); return 1; }
+            long off = (long)(pos - buf);
+            if (off < prev) { printf("FAIL: %s out of order\n%s\n", order[i], buf); return 1; }
+            prev = off;
+        }
+    }
+
+    // 5. Line budget -- the _sys queue is 8 deep and drops the OLDEST when full.
     {
         int lines = 0;
         for (const char* q = buf; *q; ++q) if (*q == '\n') lines++;
@@ -105,26 +121,23 @@ int main() {
         }
     }
 
-    // 5. Return value invariant: len == strlen(buf), non-empty, bounded.
-    if (len == 0 || len != strlen(buf) || len >= sizeof(buf))
-        return fail("bad return length", buf);
-
-    // 6. Truncation safety: tiny buffer must NUL-terminate, never overrun.
+    // 6. Return value invariant + truncation safety.
+    if (len == 0 || len != strlen(buf) || len >= sizeof(buf)) return fail("bad return length", buf);
     char tiny[16];
     size_t tlen = formatBrokerConfig(3, cfg, tiny, sizeof(tiny));
-    if (tlen >= sizeof(tiny))     return fail("tiny: len not clamped", tiny);
-    if (tlen != strlen(tiny))     return fail("tiny: len != strlen", tiny);
+    if (tlen >= sizeof(tiny)) return fail("tiny: len not clamped", tiny);
+    if (tlen != strlen(tiny)) return fail("tiny: len != strlen", tiny);
 
     // 7. tcp/anon slot (the slot-0 bug): NO jwt-specific fields or auto-notes.
     BrokerConfig anon;  // default-constructed: tcp / none, all empty
     char abuf[768];
     formatBrokerConfig(0, anon, abuf, sizeof(abuf));
-    if (strstr(abuf, "owner="))     return fail("anon: jwt owner shown on tcp/none", abuf);
-    if (strstr(abuf, "aud="))       return fail("anon: jwt aud shown on tcp/none", abuf);
-    if (strstr(abuf, "tok="))       return fail("anon: jwt token shown on tcp/none", abuf);
-    if (strstr(abuf, "auto("))      return fail("anon: auto note shown on tcp/none", abuf);
-    if (!strstr(abuf, "tcp/none"))  return fail("anon: tcp/none header missing", abuf);
-    if (!strstr(abuf, "url=(unset)")) return fail("anon: url(unset) missing", abuf);
+    if (strstr(abuf, "jwt_owner="))     return fail("anon: jwt_owner shown on tcp/none", abuf);
+    if (strstr(abuf, "jwt_audience="))  return fail("anon: jwt_audience shown on tcp/none", abuf);
+    if (strstr(abuf, "auto("))          return fail("anon: auto note shown on tcp/none", abuf);
+    if (!strstr(abuf, "transport=tcp")) return fail("anon: transport=tcp missing", abuf);
+    if (!strstr(abuf, "auth_type=none")) return fail("anon: auth_type=none missing", abuf);
+    if (strstr(abuf, "mqtt.broker.0:")) return fail("anon: header colon (will mangle)", abuf);
 
     puts("OK");
     return 0;
