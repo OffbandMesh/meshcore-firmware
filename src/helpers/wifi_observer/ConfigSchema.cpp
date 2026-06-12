@@ -278,7 +278,8 @@ size_t formatBrokerConfig(uint8_t slot, const BrokerConfig& cfg,
                    cfg.jwt_audience[0] ? cfg.jwt_audience : "(unset)");
     CW_VIEW_APPEND("  jwt_refresh = %u\n", (unsigned)cfg.jwt_refresh_sec);
     CW_VIEW_APPEND("  jwt_owner = %s\n",
-                   cfg.jwt_owner[0] ? cfg.jwt_owner : "(unset)");
+                   cfg.jwt_owner[0] ? cfg.jwt_owner
+                                    : "(auto: device pubkey at connect)");
     CW_VIEW_APPEND("  jwt_email = %s\n",
                    cfg.jwt_email[0] ? cfg.jwt_email : "(unset)");
     // username: for jwt brokers it auto-derives at connect (v1_<pubkey>), so
