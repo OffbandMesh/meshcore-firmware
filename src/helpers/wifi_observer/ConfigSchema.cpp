@@ -137,27 +137,47 @@ bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg) {
 }
 
 // ---------------------------------------------------------------------------
-// populateDefaultBrokers — Plan 2 v2 Task 3 Step 4
+// populateDefaultBrokers — Plan 2 v2 Task 3 Step 4 (layout revised in #95)
 // ---------------------------------------------------------------------------
-// Seeds the owner's intended 6-slot broker registry, but ONLY into slots
-// whose url is currently empty (cfg.url[0] == '\0'). User-set or
-// previously-defaulted values are never overwritten -- so the new defaults
-// only affect fresh-NVS devices, and the function is idempotent across boots.
+// Seeds the public-broker registry, but ONLY into slots whose url is currently
+// empty (cfg.url[0] == '\0'). User-set or previously-defaulted values are
+// never overwritten -- so the new defaults only affect fresh-NVS devices, and
+// the function is idempotent across boots. (Because seeding is skip-if-present,
+// changing this layout does NOT re-shuffle slots on a device already seeded
+// under an older layout; it takes effect only on a fresh NVS.)
 //
-//   slot 0  CoreScope Dayton   mqtt://mqtt.w8oof.net:1883   tcp / anon   ENABLED
-//   slot 1  LetsMesh-US        wss ... :443 /mqtt           wss / jwt    disabled
-//   slot 2  Eastme.sh          wss ... :443 /mqtt           wss / jwt    disabled
-//   slot 3  LetsMesh-EU        wss ... :443 /mqtt           wss / jwt    disabled
-//   slot 4  Eastmesh.au        wss ... :443 /mqtt           wss / jwt    disabled
-//   slot 5  (MQTT Custom)      left empty for the owner to fill
+//   slot 0  CoreScope Dayton   mqtt://mqtt.w8oof.net:1883       tcp / anon   ENABLED
+//   slot 1  LetsMesh-US        wss://mqtt-us-v1.letsmesh.net    wss / jwt    disabled
+//   slot 2  Eastme.sh          wss://mqtt.eastme.sh             wss / jwt    disabled
+//   slot 3  MeshMapper         wss://mqtt.meshmapper.net        wss / jwt    disabled
+//   slot 4  LetsMesh-EU        wss://mqtt-eu-v1.letsmesh.net    wss / jwt    disabled
+//   slot 5  Eastmesh.au        wss://mqtt2.eastmesh.au          wss / jwt    disabled
+//   slots 6-9  (MQTT Custom)   left empty for the operator to fill
 //
 // CoreScope is plaintext + anonymous, so it is the only slot enabled by
 // default: no TLS cert, no JWT identity (validated live on HV3 -- #42/#48).
-// The wss brokers stay disabled until the owner configures JWT identity AND
-// the GTS WE1 cert lands (Item 2). They reference ca_cert "gts-we1", whose
-// PEM is added + mapped in Item 2 after openssl-verifying each broker's
-// actual chain; while disabled they never connect, so the forward-referenced
-// cert name is harmless.
+// The wss brokers stay disabled until the operator opts in; their ca_cert
+// names ("gts-r4", "letsencrypt", "isrg-x2") all resolve in MqttBroker.cpp's
+// lookupCaCertPem(), and while disabled they never connect anyway.
+//
+// JWT identity (#95 / #63 / #68) -- the seed deliberately leaves username,
+// jwt_owner, jwt_email EMPTY because none of them is device-derivable here:
+//   * The MQTT CONNECT username is auto-built at connect time as
+//     "v1_<UPPERCASE hex(device pubkey)>" (MqttAuth.cpp); it is NOT read from
+//     the config for JWT brokers, so seeding it would be dead config.
+//   * jwt_owner / jwt_email are the OPERATOR's identity claims (their broker
+//     account pubkey + email), distinct from the device's own pubkey -- which
+//     is already carried as the JWT "publicKey" claim (JwtHelper.cpp). The
+//     device cannot synthesize the operator's account, so the operator sets
+//     these once via `set mqtt.broker.<N>.jwt_owner|jwt_email` (#63). Whether
+//     jwt_owner may simply equal the device's own pubkey for self-owned nodes
+//     is a per-broker policy question -- do NOT auto-fill it speculatively
+//     (tracked in #95; owner decision pending).
+//
+// Audiences are the BARE host (e.g. "mqtt-us-v1.letsmesh.net"), NOT the
+// scheme-qualified "https://..." form: LetsMesh validates the "aud" claim
+// strictly and rejects the scheme form; Eastme.sh is lenient (#95, verified
+// live 2026-06-11).
 //
 // Invoke once at WifiObserver::begin() before MqttBrokerPool::begin().
 
@@ -172,13 +192,15 @@ struct DefaultBrokerSpec {
     const char*      ca_cert_name;   // "" when no TLS cert (tcp)
 };
 
-// Slots 0-4. Slot 5 (MQTT Custom) is intentionally absent so it stays empty.
+// Slots 0-5. Slots 6-9 (MQTT Custom) are intentionally absent so they stay empty.
+// jwt_audience is the BARE host (#95); ca_cert names resolve in MqttBroker.cpp.
 constexpr DefaultBrokerSpec kDefaultBrokerSpecs[] = {
-    {true,  "mqtt://mqtt.w8oof.net:1883",            BrokerTransport::Tcp, 1883, BrokerAuthType::None, "",                                ""},
-    {false, "wss://mqtt-us-v1.letsmesh.net:443/mqtt", BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "https://mqtt-us-v1.letsmesh.net", "gts-r4"},
-    {false, "wss://mqtt.eastme.sh:443/mqtt",          BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "https://mqtt.eastme.sh",          "letsencrypt"},
-    {false, "wss://mqtt-eu-v1.letsmesh.net:443/mqtt", BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "https://mqtt-eu-v1.letsmesh.net", "gts-r4"},
-    {false, "wss://mqtt2.eastmesh.au:443/mqtt",       BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "https://mqtt2.eastmesh.au",       "letsencrypt"},
+    {true,  "mqtt://mqtt.w8oof.net:1883",             BrokerTransport::Tcp, 1883, BrokerAuthType::None, "",                        ""},
+    {false, "wss://mqtt-us-v1.letsmesh.net:443/mqtt", BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt-us-v1.letsmesh.net", "gts-r4"},
+    {false, "wss://mqtt.eastme.sh:443/mqtt",          BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt.eastme.sh",          "letsencrypt"},
+    {false, "wss://mqtt.meshmapper.net:443/mqtt",     BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt.meshmapper.net",     "isrg-x2"},
+    {false, "wss://mqtt-eu-v1.letsmesh.net:443/mqtt", BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt-eu-v1.letsmesh.net", "gts-r4"},
+    {false, "wss://mqtt2.eastmesh.au:443/mqtt",       BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt2.eastmesh.au",       "letsencrypt"},
 };
 constexpr uint8_t kNumDefaultBrokers =
     sizeof(kDefaultBrokerSpecs) / sizeof(kDefaultBrokerSpecs[0]);
@@ -212,8 +234,10 @@ void populateDefaultBrokers() {
         strncpy(def.ca_cert_name, spec.ca_cert_name, sizeof(def.ca_cert_name)); def.ca_cert_name[sizeof(def.ca_cert_name)-1] = '\0';
         strncpy(def.topic_prefix, kDefaultTopicPrefix, sizeof(def.topic_prefix)); def.topic_prefix[sizeof(def.topic_prefix)-1] = '\0';
         // username + password + jwt_token + jwt_owner + jwt_email +
-        // iata_override stay empty -- owner fills in (jwt_owner/jwt_email
-        // via `set mqtt.broker.<N>.jwt_owner|jwt_email`, #63)
+        // iata_override stay empty by design (see header): the CONNECT username
+        // is auto-built at connect, and jwt_owner/jwt_email are the operator's
+        // identity claims, set via `set mqtt.broker.<N>.jwt_owner|jwt_email`
+        // (#63). NOT device-derivable here -- see header comment (#95).
         writeBrokerConfig(slot, def);
     }
 }

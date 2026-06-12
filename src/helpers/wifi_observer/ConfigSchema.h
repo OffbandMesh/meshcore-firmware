@@ -105,11 +105,12 @@ struct BrokerConfig {
 bool readBrokerConfig(uint8_t slot, BrokerConfig& out);
 bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg);
 
-// Phase 2 (#48): seed the owner's 6-slot broker registry into empty slots
-// only (cfg.url[0] == '\0'); never overwrites user-set values; idempotent.
-// Slot 0 = CoreScope (tcp/anon) ships ENABLED; slots 1-4 (wss/jwt) ship
-// disabled pending owner JWT identity + the GTS WE1 cert (Item 2); slot 5
-// is left empty for a custom broker.
+// Phase 2 (#48; layout revised in #95): seed the public-broker registry into
+// empty slots only (cfg.url[0] == '\0'); never overwrites user-set values;
+// idempotent. Slot 0 = CoreScope (tcp/anon) ships ENABLED; slots 1-5 (wss/jwt:
+// LetsMesh-US, Eastme.sh, MeshMapper, LetsMesh-EU, Eastmesh.au) ship disabled
+// pending operator opt-in + JWT identity claims; slots 6-9 are left empty for
+// operator-custom brokers.
 void populateDefaultBrokers();
 
 }  // namespace crosswire
