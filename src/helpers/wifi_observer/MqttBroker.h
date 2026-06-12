@@ -21,10 +21,13 @@
 namespace crosswire {
 
 enum class BrokerState : uint8_t {
-    Down       = 0,  // disabled OR not yet attempted
-    Connecting = 1,  // tcp connect / TLS handshake in progress
-    Up         = 2,  // healthy
-    Backoff    = 3,  // failed; waiting for backoff window
+    Down        = 0,  // disabled OR not yet attempted
+    Connecting  = 1,  // tcp connect / TLS handshake in progress
+    Up          = 2,  // healthy
+    Backoff     = 3,  // failed; waiting for backoff window
+    HeldNoClock = 4,  // #87: wss/TLS deferred pending a sane wall clock (NTP/GPS).
+                      // NOT a failure -- no retry burned; released automatically on
+                      // the next drive tick once wallClockSane() becomes true.
 };
 
 enum class BrokerErrorClass : uint8_t {

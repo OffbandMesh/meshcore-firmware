@@ -214,6 +214,12 @@ bool MqttBroker::tryConnect(uint32_t now_ms) {
     // clock; we retry on the next drive tick. tcp brokers are unaffected.
     if ((cfg_.transport == BrokerTransport::Tls ||
          cfg_.transport == BrokerTransport::Wss) && !wallClockSane()) {
+        // #87: surface the clock-hold as a distinct state so `mqtt status` reads
+        // "held(no-clock)" instead of "down"/"backoff" (which look like a failure).
+        // No retry_count bump -- nothing was attempted. The pool keeps driving
+        // tryConnect for HeldNoClock slots, so this releases on the first tick
+        // after wallClockSane() becomes true (NTP sync or GPS lock).
+        rt_.state = BrokerState::HeldNoClock;
         return false;
     }
 

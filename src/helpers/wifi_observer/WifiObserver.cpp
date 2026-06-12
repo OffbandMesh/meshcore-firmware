@@ -14,6 +14,7 @@
   #include <Arduino.h>
   #include <esp_system.h>   // esp_reset_reason()
   #include <time.h>         // #69: configTime() + time() for the SNTP wall clock
+  #include <esp_sntp.h>     // #87: esp_sntp_stop() once GPS owns the clock
 #endif
 
 namespace crosswire {
@@ -44,9 +45,9 @@ static bool        s_gps_time_locked  = false;
 // iat/exp are garbage, so the pool waits for it before enabling brokers.
 static bool        s_sntp_started     = false;
 static uint32_t    s_sntp_started_ms  = 0;
-// #69 Task B: STA-up timestamp used by the GPS grace-window calculation.
-// Set once on the first loop iteration where STA becomes connected.
-static uint32_t    s_sta_up_ms        = 0;
+// #87: one-shot guard -- stop SNTP once GPS has locked (GPS > NTP) so a later
+// NTP poll cannot overwrite GPS-accurate time.
+static bool        s_sntp_stopped_for_gps = false;
 static bool wallClockSane() { return time(nullptr) > 1735689600; }
 #endif
 
@@ -116,53 +117,40 @@ void wifiObserverLoop() {
     // Bring pool + pipeline up on the STA-connected transition (with
     // mesh context). One-shot guarded by s_pool_started.
 
-    // #69 Task B: Phase 1 -- time-source arbiter. Record STA-up timestamp once
-    // (for the GPS grace window), then start SNTP only when GPS will NOT serve
-    // the clock.
-    //
-    // Decision tree (D1/D3 -- GPS > NTP > BLE):
-    //   - GPS locked:         GPS owns the clock; do NOT start SNTP.
-    //   - GPS enabled+unlocked, within cold-fix budget: wait for GPS first.
-    //   - GPS enabled+unlocked, grace expired: fall back to NTP.
-    //   - GPS disabled:       start NTP immediately (existing behavior).
-    //
-    // GPS sets the RTC directly via MicroNMEA on each fix, so wallClockSane()
-    // is satisfied by either source -- Phase 2 remains source-agnostic.
-    constexpr uint32_t kGpsGraceMs = 60000;  // GPS cold-fix budget before NTP fallback
-    if (wifiBootstrap().isStaConnected() && s_sta_up_ms == 0) {
-        s_sta_up_ms = now;  // record once; used for grace-window math below
-    }
-    {
-        bool gps_will_serve = s_gps_time_enabled &&
-                              (s_gps_time_locked ||
-                               (s_sta_up_ms != 0 && (now - s_sta_up_ms) < kGpsGraceMs));
-        if (!s_sntp_started && s_context_set &&
-            wifiBootstrap().isStaConnected() && !gps_will_serve) {
-            configTime(0, 0, "pool.ntp.org", "time.nist.gov", "time.google.com");
-            s_sntp_started    = true;
-            s_sntp_started_ms = now;
-            crashLogf("[WifiObserver] SNTP started (gps_en=%d gps_lock=%d pre-sync wall=%lu)",
-                      (int)s_gps_time_enabled, (int)s_gps_time_locked,
-                      (unsigned long)time(nullptr));
-        }
+    // #69/#87 Task B: time-source arbiter. GPS > NTP > BLE for *accuracy*, but
+    // we never block MQTT on GPS acquisition (#87). SNTP starts immediately on
+    // STA-connect; the pool comes up as soon as SNTP is kicked off. GPS runs in
+    // parallel (it writes the RTC directly via MicroNMEA on each fix) and, once
+    // it locks, takes over the clock -- we then stop SNTP so a later NTP poll
+    // cannot overwrite GPS-accurate time. wss/TLS brokers self-defer
+    // (BrokerState::HeldNoClock) until wallClockSane(); tcp brokers publish now.
+
+    // Phase 1 -- start SNTP immediately (no GPS pre-grace).
+    if (!s_sntp_started && s_context_set && wifiBootstrap().isStaConnected()) {
+        configTime(0, 0, "pool.ntp.org", "time.nist.gov", "time.google.com");
+        s_sntp_started    = true;
+        s_sntp_started_ms = now;
+        crashLogf("[WifiObserver] SNTP started immediately (gps_en=%d gps_lock=%d pre-sync wall=%lu)",
+                  (int)s_gps_time_enabled, (int)s_gps_time_locked,
+                  (unsigned long)time(nullptr));
     }
 
-    // #69: Phase 2 -- bring up the MQTT pool once we have a real wall clock, so
-    // wss/jwt brokers connect on their first attempt instead of failing TLS into
-    // backoff. Source-agnostic: wallClockSane() is true whether GPS or NTP set
-    // the clock. Bounded wait (NTP path only): if NTP is blocked and GPS has
-    // not locked, the tcp brokers still come up rather than MQTT never starting.
-    constexpr uint32_t kClockWaitMs = 30000;
-    bool clock_wait_expired = s_sntp_started &&
-                              (now - s_sntp_started_ms >= kClockWaitMs);
+    // #87: GPS > NTP after the fact -- once GPS owns the clock, stop SNTP so a
+    // later poll cannot overwrite GPS-accurate time. One-shot.
+    if (s_gps_time_locked && s_sntp_started && !s_sntp_stopped_for_gps) {
+        esp_sntp_stop();
+        s_sntp_stopped_for_gps = true;
+        crashLogf("[WifiObserver] GPS locked -- SNTP stopped (GPS>NTP)");
+    }
+
+    // Phase 2 -- bring the pool up as soon as SNTP is running (or GPS locked).
+    // No clock gate here (#87): tcp brokers publish immediately; wss/TLS brokers
+    // self-defer to HeldNoClock until wallClockSane() and release the instant the
+    // clock arrives. A clockless start no longer blocks the tcp feed.
     if (!s_pool_started && s_identity != nullptr &&
-        (s_gps_time_locked || s_sntp_started) &&
-        (wallClockSane() || clock_wait_expired)) {
-        if (!wallClockSane()) {
-            crashLogf("[WifiObserver] clock not synced after %us -- pool up anyway "
-                      "(wss brokers will wait)", (unsigned)(kClockWaitMs / 1000));
-        }
-        crashLogf("[WifiObserver] clock ready -- bringing up MqttBrokerPool (wall=%lu)",
+        wifiBootstrap().isStaConnected() &&
+        (s_gps_time_locked || s_sntp_started)) {
+        crashLogf("[WifiObserver] bringing up MqttBrokerPool (tcp now; wss held until clock; wall=%lu)",
                   (unsigned long)time(nullptr));
         s_pool.begin(*s_identity, s_device_id, s_node_name,
                      s_client_version, s_firmware_version, s_model);

@@ -348,7 +348,7 @@ void loop() {
   //   tx_air_secs    -- the_mesh.getTotalAirTime() / 1000
   //   rx_air_secs    -- the_mesh.getReceiveAirTime() / 1000
   //   recv_errors    -- radio_driver.getPacketsRecvErrors()
-  //   radio_freq/bw/sf/cr -- compile-time LORA_* macros (runtime prefs TODO)
+  //   radio_freq/bw/sf/cr -- runtime NodePrefs freq/bw/sf/cr (#88)
   //   repeat_enabled -- getNodePrefs()->client_repeat != 0
   {
     static uint32_t s_status_snap_ms = 0;
@@ -364,10 +364,14 @@ void loop() {
       snap.tx_air_secs    = static_cast<uint32_t>(the_mesh.getTotalAirTime() / 1000UL);
       snap.rx_air_secs    = static_cast<uint32_t>(the_mesh.getReceiveAirTime() / 1000UL);
       snap.recv_errors    = static_cast<uint32_t>(radio_driver.getPacketsRecvErrors());
-      snap.radio_freq     = static_cast<float>(LORA_FREQ);
-      snap.radio_bw       = static_cast<float>(LORA_BW);
-      snap.radio_sf       = static_cast<uint8_t>(LORA_SF);
-      snap.radio_cr       = static_cast<uint8_t>(LORA_CR);
+      // #88: report the ACTUAL runtime radio config from NodePrefs (set via
+      // companion-API CMD_SET_RADIO_PARAMS, surfaced to HA/HACS through
+      // SELF_INFO) -- NOT the compile-time LORA_* macros, which on the observer
+      // env default to esp32_base 869.618/SF8 and never reflect a runtime re-tune.
+      snap.radio_freq     = the_mesh.getNodePrefs()->freq;
+      snap.radio_bw       = the_mesh.getNodePrefs()->bw;
+      snap.radio_sf       = the_mesh.getNodePrefs()->sf;
+      snap.radio_cr       = the_mesh.getNodePrefs()->cr;
       snap.repeat_enabled = (the_mesh.getNodePrefs()->client_repeat != 0);
       // #31 Task D: publish position in /status, selected EXACTLY as the
       // companion advert path selects its location, so the MQTT position always

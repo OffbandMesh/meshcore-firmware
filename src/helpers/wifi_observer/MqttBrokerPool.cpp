@@ -353,7 +353,8 @@ void MqttBrokerPool::workerLoop() {
             if (!b.isConfigured()) continue;
             b.loop(now);
             if (b.runtime().state == BrokerState::Down ||
-                b.runtime().state == BrokerState::Backoff) {
+                b.runtime().state == BrokerState::Backoff ||
+                b.runtime().state == BrokerState::HeldNoClock) {  // #87: re-check the clock gate each tick so held wss slots release the moment the clock is sane
                 uint32_t biased = now + static_cast<uint32_t>(s) * 1000U;
                 (void)b.tryConnect(biased);
             }

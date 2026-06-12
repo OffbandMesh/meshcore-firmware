@@ -83,11 +83,12 @@ static const char* authStr(BrokerAuthType a) {
 
 static const char* stateStr(BrokerState s) {
     switch (s) {
-        case BrokerState::Down:       return "down";
-        case BrokerState::Connecting: return "connecting";
-        case BrokerState::Up:         return "up";
-        case BrokerState::Backoff:    return "backoff";
-        default:                      return "?";
+        case BrokerState::Down:        return "down";
+        case BrokerState::Connecting:  return "connecting";
+        case BrokerState::Up:          return "up";
+        case BrokerState::Backoff:     return "backoff";
+        case BrokerState::HeldNoClock: return "held(no-clock)";
+        default:                       return "?";
     }
 }
 
