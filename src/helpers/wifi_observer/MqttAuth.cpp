@@ -86,6 +86,19 @@ MqttAuthJwt::MqttAuthJwt(const mesh::LocalIdentity& identity,
 bool MqttAuthJwt::apply(esp_mqtt_client_config_t& cfg, uint32_t now_ms) {
     if (identity_ == nullptr || audience_[0] == '\0') return false;
 
+    // #95: default the JWT "owner" claim to THIS device's own pubkey (UPPERCASE
+    // hex -- the same form as the token's publicKey claim) when no jwt_owner was
+    // configured. owner==device-pubkey is the verified-working convention across
+    // every target broker (eastme.sh / LetsMesh), so this makes wss zero-touch:
+    // no per-slot jwt_owner entry needed. An explicit jwt_owner still overrides.
+    // Built once (pubkey is constant); owner_[65] holds exactly 64 hex + NUL.
+    if (owner_[0] == '\0') {
+        for (size_t i = 0; i < PUB_KEY_SIZE; ++i) {
+            snprintf(&owner_[i * 2], 3, "%02X", identity_->pub_key[i]);
+        }
+        owner_[2 * PUB_KEY_SIZE] = '\0';
+    }
+
     // Mint if never minted OR refresh window elapsed.
     bool need_mint = (last_mint_ms_ == 0) || needsRefresh(now_ms);
     if (need_mint) {
@@ -96,7 +109,7 @@ bool MqttAuthJwt::apply(esp_mqtt_client_config_t& cfg, uint32_t now_ms) {
             audience_,
             issued, expires,
             token_, sizeof(token_),
-            owner_[0] ? owner_ : nullptr,
+            owner_,  // #95: always set -- configured jwt_owner, else device pubkey (above)
             email_[0] ? email_ : nullptr);
         if (!ok) return false;
         last_mint_ms_ = now_ms;
@@ -150,13 +163,13 @@ MqttAuth* makeAuth(const BrokerConfig& cfg
         case BrokerAuthType::Jwt:
 #ifdef ARDUINO
             if (cfg.jwt_audience[0] == '\0') return nullptr;
-            // #63: owner claim prefers the dedicated jwt_owner field; falls
-            // back to username for configs predating it (username[64] cannot
-            // hold a full 64-hex owner key -- the fallback is best-effort
-            // legacy compat, not the supported path).
+            // #95/#63: the "owner" claim is the dedicated jwt_owner field when
+            // set; otherwise MqttAuthJwt::apply() defaults it to this device's
+            // own pubkey (owner==device, the verified-working convention). The
+            // old username fallback is dropped -- username[64] can't hold a
+            // 64-hex key and the device-pubkey default supersedes it.
             return new MqttAuthJwt(identity, cfg.jwt_audience, cfg.jwt_refresh_sec,
-                                   cfg.jwt_owner[0] ? cfg.jwt_owner
-                                                    : (cfg.username[0] ? cfg.username : nullptr),
+                                   cfg.jwt_owner[0] ? cfg.jwt_owner : nullptr,
                                    cfg.jwt_email[0] ? cfg.jwt_email : nullptr);
 #else
             return nullptr;

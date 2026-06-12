@@ -161,18 +161,18 @@ bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg) {
 // lookupCaCertPem(), and while disabled they never connect anyway.
 //
 // JWT identity (#95 / #63 / #68) -- the seed deliberately leaves username,
-// jwt_owner, jwt_email EMPTY because none of them is device-derivable here:
-//   * The MQTT CONNECT username is auto-built at connect time as
+// jwt_owner, jwt_email EMPTY; the connect-time auth layer fills what it can:
+//   * The MQTT CONNECT username is auto-built at connect as
 //     "v1_<UPPERCASE hex(device pubkey)>" (MqttAuth.cpp); it is NOT read from
 //     the config for JWT brokers, so seeding it would be dead config.
-//   * jwt_owner / jwt_email are the OPERATOR's identity claims (their broker
-//     account pubkey + email), distinct from the device's own pubkey -- which
-//     is already carried as the JWT "publicKey" claim (JwtHelper.cpp). The
-//     device cannot synthesize the operator's account, so the operator sets
-//     these once via `set mqtt.broker.<N>.jwt_owner|jwt_email` (#63). Whether
-//     jwt_owner may simply equal the device's own pubkey for self-owned nodes
-//     is a per-broker policy question -- do NOT auto-fill it speculatively
-//     (tracked in #95; owner decision pending).
+//   * jwt_owner -- RESOLVED in #95: defaults to THIS device's own pubkey
+//     (owner==device, the verified-working convention) at connect, in
+//     MqttAuthJwt::apply(). Applied at connect (not seeded) so it covers every
+//     JWT slot on every device, fresh NVS or not. The seed leaves it empty so
+//     that default takes effect; `set mqtt.broker.<N>.jwt_owner <64-hex>` still
+//     overrides per slot if a broker ever needs a different owner.
+//   * jwt_email is the operator's email claim -- optional, not device-derivable;
+//     set via `set mqtt.broker.<N>.jwt_email` only if a broker requires it.
 //
 // Audiences are the BARE host (e.g. "mqtt-us-v1.letsmesh.net"), NOT the
 // scheme-qualified "https://..." form: LetsMesh validates the "aud" claim
