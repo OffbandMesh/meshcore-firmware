@@ -6,7 +6,7 @@ A [MeshCore](https://github.com/meshcore-dev/MeshCore) fork for **cross-role fir
 
 | Role | Status | What Crosswire adds |
 |------|--------|---------------------|
-| **Companion / Observer** | Active | WiFi + MQTT publishing of LoRa-mesh observations to public brokers, NimBLE BLE stack, configurable multi-broker pool with TLS + JWT auth (validated against CoreScope, eastme.sh, LetsMesh) |
+| **Companion / Observer** | Active | WiFi + MQTT publishing of LoRa-mesh observations to public brokers (CoreScope, eastme.sh, LetsMesh), NimBLE BLE stack, multi-broker pool with TLS + JWT auth, a GPS&nbsp;>&nbsp;NTP phone-free wall clock for unattended JWT auth, position in the MQTT `/status`, and a `_sys`-channel CLI for WiFi/broker config |
 | **Repeater** | Active | MQTT telemetry bridging (to Mosquitto and other brokers), burst-WiFi telemetry, heap and power tuning |
 | **Room server** | Not yet | -- |
 | **Bridge** | Not yet | -- |
@@ -15,7 +15,7 @@ Cross-cutting work used by multiple roles: a NimBLE migration off Bluedroid, a C
 
 ## Status
 
-The firmware lives here: **`firmware-base`** is the canonical Crosswire tree (the old `Strycher/MeshCore` fork is archived). Design-of-record for the observer architecture is in [`docs/architecture/`](docs/architecture/).
+The firmware lives here: **`firmware-base`** is the canonical Crosswire tree (the old `Strycher/MeshCore` fork is archived). Design-of-record for the observer architecture is in [`docs/architecture/`](docs/architecture/). Operator setup for the observer is in [`docs/observer-cli-commands.md`](docs/observer-cli-commands.md) (the `_sys` CLI) and [`docs/observer-gps-location-config.md`](docs/observer-gps-location-config.md) (GPS / location).
 
 ## Filing requests
 

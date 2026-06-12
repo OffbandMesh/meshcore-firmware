@@ -18,6 +18,38 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 _Nothing yet._
 
+## [0.16.0] - 2026-06-12
+
+Observer time/clock + `_sys` CLI + reporting hardening. Hardware-validated on
+ST-P (Heltec V4): three brokers connected, a valid phone-free wall clock, and
+correct radio + position reporting on CoreScope.
+
+### Added
+- Observer `_sys` CLI grammar standardization: `wifi status` / `wifi enable` /
+  `wifi disable` (namespace-subcommand, aligned with `mqtt status/enable/disable`)
+  and symmetric `get mqtt.broker.<N>.<key>` (read mirror of `set`, secrets
+  redacted). `get wifi.status` kept as a backward-compat alias. (#45)
+- Observer time-source arbiter, GPS > NTP > BLE: SNTP provides a fast clock and
+  GPS takes over on lock (SNTP stopped once GPS owns the clock) -- a JWT-grade
+  wall clock with no phone dependency. (#69)
+- Position in the observer MQTT `/status` payload, selected by `advert_loc_policy`
+  exactly as the LoRa advert (0,0 null-island suppressed). (#31)
+- `mqtt status` broker state `held(no-clock)`: a wss/TLS slot deferred pending a
+  sane wall clock now reads as *held* (no retry burn) instead of looking like a
+  failure, and releases automatically once the clock syncs. (#87)
+
+### Changed
+- Observer MQTT pool no longer blocks on GPS acquisition: SNTP starts immediately
+  on STA-connect and the pool comes up regardless, so tcp brokers publish at once
+  while wss/TLS brokers self-defer to `held(no-clock)`. (#87)
+- `/status` radio fields (`freq/bw/sf/cr`) now report the **runtime** radio config
+  (`NodePrefs`, set via the companion API) instead of the compile-time `LORA_*`
+  build macros. (#88)
+
+### Docs
+- `docs/observer-cli-commands.md` -- `_sys` CLI command reference. (#45)
+- `docs/observer-gps-location-config.md` -- GPS / location operator guide. (#31/#69)
+
 ## [0.15.0] - 2026-06-10
 
 Observer MQTT connectivity -- hardware-validated against three brokers
