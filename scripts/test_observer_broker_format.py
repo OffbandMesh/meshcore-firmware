@@ -79,40 +79,52 @@ int main() {
     if (strstr(buf, "p4ssw0rd-with-symbols!@#")) return fail("password value leaked", buf);
     if (strstr(buf, "SECRETPAYLOAD"))            return fail("jwt_token value leaked", buf);
 
-    // 2. Redaction markers (derived properties only).
-    if (!strstr(buf, "password = (set, len=24)")) return fail("password redaction marker missing", buf);
-    if (!strstr(buf, "jwt_token = (cached"))      return fail("jwt_token redaction marker missing", buf);
+    // 2. Token redaction: a derived marker only, never the value.
+    if (!strstr(buf, "tok=cached")) return fail("jwt token redaction marker missing", buf);
 
-    // 3. Non-secret config values ARE shown.
-    if (!strstr(buf, "url = wss://mqtt.meshmapper.net:443/mqtt")) return fail("url missing", buf);
-    if (!strstr(buf, "transport = wss"))                         return fail("transport missing", buf);
-    if (!strstr(buf, "auth_type = jwt"))                         return fail("auth_type missing", buf);
-    if (!strstr(buf, "jwt_audience = mqtt.meshmapper.net"))      return fail("audience missing", buf);
-    if (!strstr(buf, "ca_cert = isrg-x2"))                       return fail("ca_cert missing", buf);
-    if (!strstr(buf, "jwt_owner = 18315E8B"))                    return fail("jwt_owner missing", buf);
-    if (!strstr(buf, "jwt_email = strycher@gmail.com"))          return fail("jwt_email missing", buf);
+    // 3. The fields the OLD 16-line dump used to lose (they were the earliest
+    //    lines, dropped by the 8-deep _sys ring buffer) MUST be present now.
+    if (!strstr(buf, "wss/jwt"))                                return fail("transport/auth header missing", buf);
+    if (!strstr(buf, "port=443"))                               return fail("port missing", buf);
+    if (!strstr(buf, "url=wss://mqtt.meshmapper.net:443/mqtt")) return fail("url missing", buf);
+    if (!strstr(buf, "cert=isrg-x2"))                          return fail("ca_cert missing", buf);
+    if (!strstr(buf, "aud=mqtt.meshmapper.net"))               return fail("audience missing", buf);
+    if (!strstr(buf, "owner=18315E8B"))                        return fail("owner missing", buf);
+    if (!strstr(buf, "strycher@gmail.com"))                    return fail("email missing", buf);
+    if (!strstr(buf, "user=auto(v1_+pubkey)"))                 return fail("username auto note missing", buf);
 
-    // 4. JWT slot w/ empty username -> auto-derive note.
-    if (!strstr(buf, "username = (auto")) return fail("username auto note missing", buf);
+    // 4. Line budget -- the whole point of the repack. The _sys queue is 8 deep
+    //    and drops the OLDEST when full, so a per-slot view must stay well under
+    //    that or its earliest fields vanish in delivery.
+    {
+        int lines = 0;
+        for (const char* q = buf; *q; ++q) if (*q == '\n') lines++;
+        if (lines > 7) {
+            printf("FAIL: too many lines (%d > 7) -- _sys queue is only 8 deep\n%s\n", lines, buf);
+            return 1;
+        }
+    }
 
     // 5. Return value invariant: len == strlen(buf), non-empty, bounded.
     if (len == 0 || len != strlen(buf) || len >= sizeof(buf))
         return fail("bad return length", buf);
 
-    // 6. Truncation safety: tiny buffer must NUL-terminate, never overrun,
-    //    and return the actual (clamped) content length.
+    // 6. Truncation safety: tiny buffer must NUL-terminate, never overrun.
     char tiny[16];
     size_t tlen = formatBrokerConfig(3, cfg, tiny, sizeof(tiny));
     if (tlen >= sizeof(tiny))     return fail("tiny: len not clamped", tiny);
     if (tlen != strlen(tiny))     return fail("tiny: len != strlen", tiny);
 
-    // 7. unset/none fallbacks render for an empty slot.
-    BrokerConfig empty;  // default-constructed: all empty, tcp/none
-    char ebuf[768];
-    formatBrokerConfig(0, empty, ebuf, sizeof(ebuf));
-    if (!strstr(ebuf, "password = (unset)"))   return fail("empty: password unset missing", ebuf);
-    if (!strstr(ebuf, "jwt_token = (none"))    return fail("empty: jwt_token none missing", ebuf);
-    if (!strstr(ebuf, "ca_cert = (none)"))     return fail("empty: ca_cert none missing", ebuf);
+    // 7. tcp/anon slot (the slot-0 bug): NO jwt-specific fields or auto-notes.
+    BrokerConfig anon;  // default-constructed: tcp / none, all empty
+    char abuf[768];
+    formatBrokerConfig(0, anon, abuf, sizeof(abuf));
+    if (strstr(abuf, "owner="))     return fail("anon: jwt owner shown on tcp/none", abuf);
+    if (strstr(abuf, "aud="))       return fail("anon: jwt aud shown on tcp/none", abuf);
+    if (strstr(abuf, "tok="))       return fail("anon: jwt token shown on tcp/none", abuf);
+    if (strstr(abuf, "auto("))      return fail("anon: auto note shown on tcp/none", abuf);
+    if (!strstr(abuf, "tcp/none"))  return fail("anon: tcp/none header missing", abuf);
+    if (!strstr(abuf, "url=(unset)")) return fail("anon: url(unset) missing", abuf);
 
     puts("OK");
     return 0;
