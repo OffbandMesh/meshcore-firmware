@@ -45,8 +45,11 @@ Time priority is: **GPS > NTP > BLE**.
   faster warm).
 - **BLE (app):** Lowest priority. Only accepted before GPS or NTP have set the clock.
 
-A valid clock is required for TLS connections (`wss://`, JWT brokers). If your broker rejects the
-connection, check that the node has time (NTP needs WiFi; GPS needs to be enabled and have a fix).
+A valid clock is required for TLS connections (`wss://`, JWT brokers). The observer never blocks MQTT
+waiting for GPS — SNTP syncs immediately on WiFi connect, and a wss broker still waiting on the clock
+shows `state=held(no-clock)` in `mqtt status` (deferred, **not** failing — it connects on its own once
+the clock is sane). tcp brokers don't wait on time at all. See
+[`observer-cli-commands.md`](observer-cli-commands.md) for broker setup + the `mqtt status` reference.
 
 ---
 

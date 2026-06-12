@@ -55,17 +55,57 @@ Broker fields (`<key>`): `url`, `port`, `transport` (tcp\|tls\|wss),
 Setting a field on a **live** (enabled) broker slot auto-disables that slot;
 re-enable explicitly with `mqtt enable <N>` once the config is complete.
 
-## First-time bring-up
+## Broker auth — wss/jwt (the real recipe)
+
+The public MeshCore brokers (LetsMesh, eastme.sh) use `wss` + JWT. The credential
+is your node's **own Ed25519 public key** — the firmware mints the token; there's
+no separate registration. Configure a wss/jwt slot like this:
+
+```
+set mqtt.broker.1.url           wss://mqtt-us-v1.letsmesh.net:443/mqtt
+set mqtt.broker.1.transport     wss
+set mqtt.broker.1.auth_type     jwt
+set mqtt.broker.1.ca_cert       gts-r4
+set mqtt.broker.1.jwt_audience  mqtt-us-v1.letsmesh.net
+set mqtt.broker.1.username      <your node pubkey>
+set mqtt.broker.1.jwt_owner     <your node pubkey>
+set mqtt.broker.1.jwt_email     you@example.com
+mqtt enable 1
+mqtt status
+```
+
+- **`username` + `jwt_owner` = your node's pubkey.** The firmware mints the JWT
+  (the password — you do **not** set it) and normalizes `jwt_owner` case
+  internally, so the input case doesn't matter.
+- **The exact `username` form is broker-dependent.** A **bare pubkey** works on
+  eastme.sh; some brokers expect a `v1_<pubkey>` prefix. If a wss slot won't
+  authenticate, try the other form. (Defaulting this per broker is Crosswire#95.)
+
+### Known broker values
+| Broker | url | ca_cert | jwt_audience |
+|---|---|---|---|
+| CoreScope | `mqtt://mqtt.w8oof.net:1883` | — (tcp / anon) | — |
+| LetsMesh-US | `wss://mqtt-us-v1.letsmesh.net:443/mqtt` | `gts-r4` | `mqtt-us-v1.letsmesh.net` (bare) |
+| eastme.sh | `wss://mqtt.eastme.sh:443/mqtt` | `letsencrypt` | `mqtt.eastme.sh` |
+
+## Gotchas
+
+- **A `set` on a *disabled* slot may not apply immediately, and `mqtt status`
+  shows the broker's *cached* config, not NVS** — so a slot can look
+  mis-configured right after a `set` (Crosswire#67). Do your `set`s, then
+  `mqtt enable <N>` (which reloads), or reboot. If a field looks wrong, re-apply
+  it while the slot is enabled.
+- **wss/TLS brokers need a valid wall clock** (cert validity + JWT `exp`). Until
+  the clock syncs (NTP, or a GPS fix), such a slot reads `state=held(no-clock)`
+  in `mqtt status` — that's *deferred, not failing*; it connects on its own once
+  the clock is sane. tcp brokers (CoreScope) never wait on the clock.
+
+## First-time bring-up (minimal)
 
 ```
 set wifi.ssid YourSSID
 set wifi.pwd  YourPSK
 wifi status                       # confirm StaConnected + IP
-set mqtt.broker.0.url  mqtts://broker.example:8883
-set mqtt.broker.0.transport tls
-set mqtt.broker.0.auth_type basic
-set mqtt.broker.0.username obs-node
-set mqtt.broker.0.password ******
-mqtt enable 0
-mqtt status                       # confirm the slot is up
+# ...configure a broker slot (see "Broker auth — wss/jwt" above)...
+mqtt status                       # wss reads held(no-clock) until the clock syncs, then up
 ```
