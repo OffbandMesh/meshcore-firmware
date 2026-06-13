@@ -136,6 +136,23 @@ bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg) {
     return true;
 }
 
+// #98: clear a broker slot by WIPING its NVS namespace (every key removed), so
+// readBrokerConfig returns defaults (empty url) and populateDefaultBrokers
+// re-seeds a default slot at the next boot. Writing an empty BrokerConfig is
+// NOT sufficient: ESP32 NVS does not reliably clear a key via putString("")
+// (the old value persists), which left `mqtt clear` ineffective -- the slot
+// re-appeared in `mqtt status` and survived a reboot. Wiping is definitive.
+bool clearBrokerConfig(uint8_t slot) {
+    if (slot >= CROSSWIRE_MAX_BROKERS) return false;
+    char ns[16];
+    mqttBrokerNamespace(slot, ns, sizeof(ns));
+    Preferences p;
+    if (!p.begin(ns, /*readOnly=*/false)) return false;
+    bool ok = p.clear();   // remove ALL keys in this broker's namespace
+    p.end();
+    return ok;
+}
+
 // ---------------------------------------------------------------------------
 // populateDefaultBrokers — Plan 2 v2 Task 3 Step 4 (layout revised in #95)
 // ---------------------------------------------------------------------------
@@ -243,5 +260,104 @@ void populateDefaultBrokers() {
 }
 
 #endif  // ARDUINO
+
+// ---------------------------------------------------------------------------
+// formatBrokerConfig — #98 (mqtt view <N>) + reusable by #96 (export)
+// ---------------------------------------------------------------------------
+// Pure renderer (no NVS/Arduino deps) so it compiles + host-tests on both the
+// device and the bench harness. Lives outside the ARDUINO guard.
+//
+// Small enum->name helpers are file-local here; ObserverCli.cpp has its own
+// transportStr/authStr for its status line (minor dup, noted for #97).
+namespace {
+const char* brokerTransportName(BrokerTransport t) {
+    switch (t) {
+        case BrokerTransport::Tcp: return "tcp";
+        case BrokerTransport::Tls: return "tls";
+        case BrokerTransport::Wss: return "wss";
+        default:                   return "?";
+    }
+}
+const char* brokerAuthName(BrokerAuthType a) {
+    switch (a) {
+        case BrokerAuthType::None:  return "none";
+        case BrokerAuthType::Basic: return "basic";
+        case BrokerAuthType::Jwt:   return "jwt";
+        default:                    return "?";
+    }
+}
+}  // namespace
+
+// Bounded append: only writes if room remains; a field that would overflow is
+// simply skipped (graceful truncation -- never overruns out_size).
+#define CW_VIEW_APPEND(...) do {                                       \
+    if (n >= 0 && (size_t)n < out_size) {                             \
+        int added = snprintf(out + n, out_size - (size_t)n, __VA_ARGS__); \
+        if (added > 0) n += added;                                    \
+    }                                                                 \
+} while (0)
+
+size_t formatBrokerConfig(uint8_t slot, const BrokerConfig& cfg,
+                          char* out, size_t out_size) {
+    if (out == nullptr || out_size == 0) return 0;
+    out[0] = '\0';
+    int n = 0;
+
+    // Field ORDER matches the operator's familiar layout: url, port, transport,
+    // auth_type, username, jwt_audience, jwt_owner, jwt_email, jwt_refresh,
+    // ca_cert, iata. PACKED so the whole view stays <= 6 lines: the observer
+    // _sys channel sends each reply LINE as its own frame through an 8-deep ring
+    // buffer that DROPS THE OLDEST when full (kSystemChannelQueueDepth,
+    // SystemChannelCli.h), and interceptMsg enqueues a reply's lines
+    // synchronously -- a reply longer than the queue silently loses its EARLIEST
+    // lines. The header avoids a leading "<word>: " because the MeshCore
+    // companion renders "<word>: <text>" as sender:message (which mangled the
+    // old "mqtt.broker.N:" header). JWT fields render only for jwt brokers.
+    const bool is_jwt = (cfg.auth_type == BrokerAuthType::Jwt);
+
+    CW_VIEW_APPEND("mqtt.broker.%u  %s\n",
+                   (unsigned)slot, cfg.enabled ? "ENABLED" : "disabled");
+    CW_VIEW_APPEND("url=%s\n", cfg.url[0] ? cfg.url : "(unset)");
+    CW_VIEW_APPEND("port=%u transport=%s auth_type=%s\n",
+                   (unsigned)cfg.port,
+                   brokerTransportName(cfg.transport),
+                   brokerAuthName(cfg.auth_type));
+
+    if (is_jwt) {
+        // username auto-derives at connect (v1_+pubkey) when unset.
+        CW_VIEW_APPEND("username=%s jwt_audience=%s\n",
+                       cfg.username[0] ? cfg.username : "auto(v1_+pubkey)",
+                       cfg.jwt_audience[0] ? cfg.jwt_audience : "(unset)");
+        // jwt_owner: explicit value, else the connect-time default = this
+        // device's own pubkey (#95). Own line (64 hex).
+        CW_VIEW_APPEND("jwt_owner=%s\n",
+                       cfg.jwt_owner[0] ? cfg.jwt_owner : "auto(device-pubkey)");
+        CW_VIEW_APPEND("jwt_email=%s jwt_refresh=%u ca_cert=%s iata=%s\n",
+                       cfg.jwt_email[0]     ? cfg.jwt_email     : "(unset)",
+                       (unsigned)cfg.jwt_refresh_sec,
+                       cfg.ca_cert_name[0]  ? cfg.ca_cert_name  : "(none)",
+                       cfg.iata_override[0] ? cfg.iata_override : "(global)");
+    } else if (cfg.auth_type == BrokerAuthType::Basic) {
+        // password redacted to set/unset -- never the value (CLAUDE.md).
+        CW_VIEW_APPEND("username=%s password=%s\n",
+                       cfg.username[0] ? cfg.username : "(unset)",
+                       cfg.password[0] ? "(set)" : "(unset)");
+        CW_VIEW_APPEND("ca_cert=%s iata=%s\n",
+                       cfg.ca_cert_name[0]  ? cfg.ca_cert_name  : "(none)",
+                       cfg.iata_override[0] ? cfg.iata_override : "(global)");
+    } else {
+        // None (anon, e.g. CoreScope): no credentials.
+        CW_VIEW_APPEND("ca_cert=%s iata=%s\n",
+                       cfg.ca_cert_name[0]  ? cfg.ca_cert_name  : "(none)",
+                       cfg.iata_override[0] ? cfg.iata_override : "(global)");
+    }
+
+    // snprintf returns the would-be length, so on truncation n can exceed
+    // out_size; report the ACTUAL bytes written (== strlen(out)), capped.
+    if (n < 0) return 0;
+    return ((size_t)n >= out_size) ? (out_size - 1) : (size_t)n;
+}
+
+#undef CW_VIEW_APPEND
 
 }  // namespace crosswire

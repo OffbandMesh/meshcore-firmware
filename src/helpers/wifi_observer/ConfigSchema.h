@@ -104,6 +104,9 @@ struct BrokerConfig {
 
 bool readBrokerConfig(uint8_t slot, BrokerConfig& out);
 bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg);
+// #98: wipe slot N's NVS namespace entirely (definitive clear for
+// `mqtt clear <N>` -- putString("") does NOT reliably clear an ESP32 NVS key).
+bool clearBrokerConfig(uint8_t slot);
 
 // Phase 2 (#48; layout revised in #95): seed the public-broker registry into
 // empty slots only (cfg.url[0] == '\0'); never overwrites user-set values;
@@ -112,5 +115,16 @@ bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg);
 // pending operator opt-in + JWT identity claims; slots 6-9 are left empty for
 // operator-custom brokers.
 void populateDefaultBrokers();
+
+// #98: render a broker slot's stored config to a human-readable, multi-line
+// text block (one "  key = value" per line) for `mqtt view <N>`. SECRETS ARE
+// REDACTED -- password and jwt_token are never emitted; only derived
+// properties ("(set, len=N)" / "(unset)" / "(cached, len=N)") appear, per the
+// CLAUDE.md "never echo a secret" rule. Pure: no NVS/Arduino deps -- the caller
+// passes a cfg already read via readBrokerConfig, so this is host-testable and
+// reusable by #96 (config export). Writes at most out_size-1 bytes + NUL,
+// truncating gracefully; returns bytes written (excluding NUL).
+size_t formatBrokerConfig(uint8_t slot, const BrokerConfig& cfg,
+                          char* out, size_t out_size);
 
 }  // namespace crosswire

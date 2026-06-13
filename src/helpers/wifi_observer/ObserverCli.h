@@ -15,9 +15,12 @@ namespace crosswire {
 // observer command (caller falls through to its own unknown-command path).
 //
 // Commands handled:
-//   mqtt status                                  -- pool summary
+//   mqtt status                                  -- pool summary (live state)
+//   mqtt view <N>                                -- full stored config for slot N (secrets redacted)
 //   mqtt enable <N>                              -- slot N: enabled=true + reload
 //   mqtt disable <N>                             -- slot N: enabled=false + reload
+//   mqtt clear <N>                               -- wipe slot N to empty (default slots re-seed at reboot)
+//   get mqtt.broker.<N>.<key>                    -- read one stored field (#45; password write-only)
 //   set mqtt.iata <code>                         -- global IATA
 //   set mqtt.status_interval <sec>               -- 10..3600
 //   set mqtt.broker.<N>.url <uri>

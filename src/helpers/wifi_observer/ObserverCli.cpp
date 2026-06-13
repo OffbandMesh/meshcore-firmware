@@ -529,6 +529,40 @@ static bool handleGetBrokerField(char* reply, size_t reply_size,
     return true;
 }
 
+// "mqtt view <N>" -- Strycher/Crosswire#98: dump ALL stored config for one
+// slot in a single reply (secrets redacted), so an operator can verify a slot
+// without querying each field via `get mqtt.broker.<N>.<key>`. The rendering +
+// redaction live in ConfigSchema::formatBrokerConfig (host-tested,
+// test_observer_broker_format.py); this is just the NVS read + glue. Runtime
+// state (state/retries) stays in `mqtt status` -- view is the stored CONFIG.
+static bool handleViewBroker(char* reply, size_t reply_size, int slot) {
+    BrokerConfig cfg;
+    if (!readBrokerConfig((uint8_t)slot, cfg)) {
+        snprintf(reply, reply_size, "ERROR: cannot read slot %d\n", slot);
+        return true;
+    }
+    formatBrokerConfig((uint8_t)slot, cfg, reply, reply_size);
+    return true;
+}
+
+// "mqtt clear <N>" -- Strycher/Crosswire#98: wipe one slot's stored config back
+// to empty (url + every field blank, disabled), tearing down any live client.
+// It clears the FIELDS, not the device. RECOVERY: a default slot (0-5) is
+// re-seeded to its default on the NEXT reboot (populateDefaultBrokers fills
+// empty slots); a custom slot (6-9) stays empty until reconfigured.
+static bool handleClearBroker(char* reply, size_t reply_size,
+                              MqttBrokerPool& pool, int slot) {
+    if (!clearBrokerConfig((uint8_t)slot)) {
+        snprintf(reply, reply_size, "ERROR: cannot clear slot %d\n", slot);
+        return true;
+    }
+    pool.reloadSlot((uint8_t)slot);  // empty url -> worker tears down any client
+    snprintf(reply, reply_size,
+             "mqtt slot %d cleared. Default slots re-seed at next reboot; "
+             "custom slots stay empty.\n", slot);
+    return true;
+}
+
 bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
                          MqttBrokerPool& pool) {
     if (cmd == nullptr || reply == nullptr || reply_size == 0) return false;
@@ -560,7 +594,29 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
             }
             return handleEnableSet(reply, reply_size, pool, slot, false);
         }
-        snprintf(reply, reply_size, "ERROR: unknown mqtt subcommand\n");
+        const char* view_rest = skipPrefix(rest, "view");
+        if (view_rest != nullptr) {
+            int slot = parseSlot(view_rest);
+            if (slot < 0) {
+                snprintf(reply, reply_size, "ERROR: usage: mqtt view <0..%d>\n",
+                         CROSSWIRE_MAX_BROKERS - 1);
+                return true;
+            }
+            return handleViewBroker(reply, reply_size, slot);
+        }
+        const char* clr_rest = skipPrefix(rest, "clear");
+        if (clr_rest != nullptr) {
+            int slot = parseSlot(clr_rest);
+            if (slot < 0) {
+                snprintf(reply, reply_size, "ERROR: usage: mqtt clear <0..%d>\n",
+                         CROSSWIRE_MAX_BROKERS - 1);
+                return true;
+            }
+            return handleClearBroker(reply, reply_size, pool, slot);
+        }
+        snprintf(reply, reply_size,
+                 "ERROR: unknown mqtt subcommand "
+                 "(status | view <N> | enable <N> | disable <N> | clear <N>)\n");
         return true;
     }
 
