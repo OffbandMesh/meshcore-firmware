@@ -141,14 +141,16 @@ int main() {
 
     // 8. clearBrokerConfig wipes a slot's NVS namespace (the `mqtt clear` fix).
     //    Writing an empty config was not enough on real ESP32 NVS; clearing the
-    //    namespace makes readBrokerConfig return defaults (empty url).
+    //    namespace makes readBrokerConfig return defaults (empty url). Use the
+    //    LAST valid slot so this holds regardless of CROSSWIRE_MAX_BROKERS.
+    const uint8_t cslot = (uint8_t)(CROSSWIRE_MAX_BROKERS - 1);
     BrokerConfig w;
     strcpy(w.url, "wss://x.example:443/mqtt");
-    if (!writeBrokerConfig(7, w))  { puts("FAIL: clear precond write slot 7"); return 1; }
-    BrokerConfig r1; readBrokerConfig(7, r1);
-    if (r1.url[0] == '\0')         { puts("FAIL: clear precond - write didn't persist"); return 1; }
-    if (!clearBrokerConfig(7))     { puts("FAIL: clearBrokerConfig returned false"); return 1; }
-    BrokerConfig r2; readBrokerConfig(7, r2);
+    if (!writeBrokerConfig(cslot, w)) { puts("FAIL: clear precond write"); return 1; }
+    BrokerConfig r1; readBrokerConfig(cslot, r1);
+    if (r1.url[0] == '\0')            { puts("FAIL: clear precond - write didn't persist"); return 1; }
+    if (!clearBrokerConfig(cslot))    { puts("FAIL: clearBrokerConfig returned false"); return 1; }
+    BrokerConfig r2; readBrokerConfig(cslot, r2);
     if (r2.url[0] != '\0') { printf("FAIL: clearBrokerConfig left url '%s'\n", r2.url); return 1; }
 
     puts("OK");
