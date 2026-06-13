@@ -9,8 +9,8 @@
 //     raw RX, BEFORE Packet construction. Already virtual on Dispatcher
 //     (declared empty default) -- MyMesh overrides at MyMesh.cpp:282 to
 //     forward to the serial interface.
-//   * We extend MyMesh::logRxRaw to ALSO invoke crosswire's trampoline
-//     when CROSSWIRE_OBSERVER is defined. Non-observer builds unaffected.
+//   * We extend MyMesh::logRxRaw to ALSO invoke offband's trampoline
+//     when OFFBAND_OBSERVER is defined. Non-observer builds unaffected.
 //   * Hook point gives us raw bytes + rssi + snr cleanly. Does NOT give
 //     us a parsed mesh::Packet -- the Dispatcher constructs Packet AFTER
 //     logRxRaw. So Plan 2 v2 publishes via /raw topic only (buildRawJson
@@ -23,7 +23,7 @@
 #include "WifiObserverConfig.h"
 #include "MqttBrokerPool.h"
 
-namespace crosswire {
+namespace offband {
 
 class ObserverPipeline {
 public:
@@ -50,15 +50,15 @@ private:
 ObserverPipeline& observerPipeline();
 
 // C-style trampoline that MyMesh::logRxRaw calls under
-// #ifdef CROSSWIRE_OBSERVER. Delegates to observerPipeline().onRawReceived.
+// #ifdef OFFBAND_OBSERVER. Delegates to observerPipeline().onRawReceived.
 // Signature deliberately matches the logRxRaw shape so the wiring at the
 // call site is a one-liner.
 void observerLogRxTrampoline(float snr, float rssi, const uint8_t* raw, int len);
 
-// C-style trampoline that MyMesh::logRx calls under #ifdef CROSSWIRE_OBSERVER
+// C-style trampoline that MyMesh::logRx calls under #ifdef OFFBAND_OBSERVER
 // (Strycher/LoRa#335). Delegates to observerPipeline().onParsedReceived for
 // the /packets publish path.
 void observerLogRxParsedTrampoline(const mesh::Packet& packet, int rssi,
                                    float snr, int score, int duration);
 
-}  // namespace crosswire
+}  // namespace offband

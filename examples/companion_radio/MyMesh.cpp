@@ -3,7 +3,7 @@
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
 
-#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+#ifdef OFFBAND_OBSERVER_BLE_COMPANION
 // Plan 3 Task 10 (Strycher/LoRa#272): reserved-slot CLI intercepts +
 // system-channel status posting. Build-flag-gated so the upstream
 // MyMesh translation unit is unchanged when the observer is not
@@ -11,13 +11,13 @@
 #include "helpers/wifi_observer/SystemChannelCli.h"
 #endif
 
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
 // Strycher/LoRa#325: the observer config CLI must be reachable over
 // ANY connection type, not just the BLE _sys channel. cliPassthrough
 // is the same allowlist+dispatch surface the _sys channel uses; here
 // we feed it plain-text lines typed into the USB serial console so a
 // USB-cabled observer can be configured without a phone. Gated on the
-// broad CROSSWIRE_OBSERVER flag (not the BLE-companion flag) so it is
+// broad OFFBAND_OBSERVER flag (not the BLE-companion flag) so it is
 // present on every observer build, including future BLE-disabled ones.
 #include "helpers/wifi_observer/CliPassthrough.h"
 #endif
@@ -298,7 +298,7 @@ uint8_t MyMesh::getExtraAckTransmitCount() const {
   return _prefs.multi_acks;
 }
 
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   #include "helpers/wifi_observer/ObserverPipeline.h"
 #endif
 
@@ -314,15 +314,15 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
     _serial->writeFrame(out_frame, i);
   }
 
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   // Plan 2 v2 Task 9: tee every raw RX into the observer pipeline.
   // Non-blocking: trampoline -> ring-buffer copy + pool.publishRaw.
   // Pool publishes are MQTT enqueue (non-blocking even if broker is Down).
-  crosswire::observerLogRxTrampoline(snr, rssi, raw, len);
+  offband::observerLogRxTrampoline(snr, rssi, raw, len);
 #endif
 }
 
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
 // Strycher/LoRa#335: tee every PARSED RX packet into the observer pipeline's
 // /packets path. Dispatcher::checkRecv calls logRx (Dispatcher.cpp:237) for
 // every successfully-parsed packet BEFORE routing, so it is promiscuous (sees
@@ -337,7 +337,7 @@ void MyMesh::logRx(mesh::Packet* pkt, int len, float score) {
   float snr         = _radio->getLastSNR();
   int   score_milli = (int)(score * 1000.0f);
   int   duration    = (int)_radio->getEstAirtimeFor(len);
-  crosswire::observerLogRxParsedTrampoline(*pkt, rssi, snr, score_milli, duration);
+  offband::observerLogRxParsedTrampoline(*pkt, rssi, snr, score_milli, duration);
 }
 #endif
 
@@ -629,7 +629,7 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
 #endif
 }
 
-#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+#ifdef OFFBAND_OBSERVER_BLE_COMPANION
 // Plan 3 Task 10 (Strycher/LoRa#272): post a status / CLI-reply
 // message onto the locked system channel slot. Same frame layout
 // as onChannelMessageRecv() so the MeshCore app renders it as a
@@ -661,7 +661,7 @@ void MyMesh::postSystemChannelText(const char* text, size_t text_len) {
   } else {
     out_frame[i++] = RESP_CODE_CHANNEL_MSG_RECV;
   }
-  out_frame[i++] = crosswire::kSystemChannelSlot;
+  out_frame[i++] = offband::kSystemChannelSlot;
   out_frame[i++] = 0xFF;             // path_len: 0xFF = direct
   out_frame[i++] = TXT_TYPE_PLAIN;
   uint32_t ts = (uint32_t)getRTCClock()->getCurrentTime();
@@ -954,7 +954,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
       _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store), _ui(ui) {
   _iter_started = false;
   _cli_rescue = false;
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   // Strycher/LoRa#325: init the USB-serial observer-CLI accumulator here
   // (matching this constructor's body-init convention) so _obs_cli_len is
   // guaranteed zero before the first checkObserverSerialCli() call.
@@ -1065,12 +1065,12 @@ void MyMesh::begin(bool has_display) {
   addChannel("Public", PUBLIC_GROUP_PSK); // pre-configure Andy's public channel
   _store->loadChannels(this);
 
-#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+#ifdef OFFBAND_OBSERVER_BLE_COMPANION
   // Plan 3 Task 10 (Strycher/LoRa#272): provision the locked
   // system CLI channel at slot 40. Idempotent: only persists
   // when the slot actually changed (returns true), to avoid
   // flash wear on every boot.
-  if (crosswire::systemChannelInit(self_id)) {
+  if (offband::systemChannelInit(self_id)) {
     saveChannels();
   }
 #endif
@@ -1114,13 +1114,13 @@ void MyMesh::startInterface(BaseSerialInterface &serial) {
   _serial = &serial;
   serial.enable();
 
-#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+#ifdef OFFBAND_OBSERVER_BLE_COMPANION
   // Plan 3 Task 10 (Strycher/LoRa#272): wire the system-channel
   // post callback so SystemChannelCli can push messages into the
   // BLE offline queue without #include'ing MyMesh.h itself. The
   // trampoline keeps SystemChannelCli ignorant of MyMesh's type;
   // the_mesh is the file-scope singleton declared above.
-  crosswire::systemChannelSetPostFunction(
+  offband::systemChannelSetPostFunction(
       [](const char* text, size_t text_len) {
         the_mesh.postSystemChannelText(text, text_len);
       });
@@ -1245,16 +1245,16 @@ void MyMesh::handleCmdFrame(size_t len) {
     i += 4;
     const char *text = (char *)&cmd_frame[i];
 
-#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+#ifdef OFFBAND_OBSERVER_BLE_COMPANION
     // Plan 3 Task 10 intercept (Strycher/LoRa#272): slot 40 is
     // the system CLI channel. Route the message into the local
     // CLI passthrough instead of broadcasting it over LoRa.
     // Reply is enqueued and posted back on the same slot via
     // RESP_CODE_CHANNEL_MSG_RECV_V3 from systemChannelDrain().
-    if (channel_idx == crosswire::kSystemChannelSlot &&
+    if (channel_idx == offband::kSystemChannelSlot &&
         txt_type == TXT_TYPE_PLAIN) {
       size_t text_len = (len > (size_t)i) ? (len - (size_t)i) : 0;
-      if (crosswire::systemChannelInterceptMsg(text, text_len)) {
+      if (offband::systemChannelInterceptMsg(text, text_len)) {
         writeOKFrame();
       } else {
         writeErrFrame(ERR_CODE_BAD_STATE);
@@ -1827,11 +1827,11 @@ void MyMesh::handleCmdFrame(size_t len) {
       writeErrFrame(ERR_CODE_NOT_FOUND);
     }
   } else if (cmd_frame[0] == CMD_SET_CHANNEL && len >= 2 + 32 + 32) {
-#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+#ifdef OFFBAND_OBSERVER_BLE_COMPANION
     // Plan 3 Task 10 intercept: slot 40 is locked even for the
     // (currently unsupported) 256-bit-key variant.
-    if (cmd_frame[1] == crosswire::kSystemChannelSlot &&
-        !crosswire::systemChannelAllowSet()) {
+    if (cmd_frame[1] == offband::kSystemChannelSlot &&
+        !offband::systemChannelAllowSet()) {
       writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
       return;
     }
@@ -1839,12 +1839,12 @@ void MyMesh::handleCmdFrame(size_t len) {
     writeErrFrame(ERR_CODE_UNSUPPORTED_CMD); // not supported (yet)
   } else if (cmd_frame[0] == CMD_SET_CHANNEL && len >= 2 + 32 + 16) {
     uint8_t channel_idx = cmd_frame[1];
-#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+#ifdef OFFBAND_OBSERVER_BLE_COMPANION
     // Plan 3 Task 10 intercept: slot 40 is the locked system
     // channel; refuse SET so the user cannot overwrite or
     // accidentally delete it from their MeshCore app.
-    if (channel_idx == crosswire::kSystemChannelSlot &&
-        !crosswire::systemChannelAllowSet()) {
+    if (channel_idx == offband::kSystemChannelSlot &&
+        !offband::systemChannelAllowSet()) {
       writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
       return;
     }
@@ -2330,11 +2330,11 @@ void MyMesh::checkSerialInterface() {
   }
 }
 
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
 // Strycher/LoRa#325: USB-serial path to the observer config CLI.
 // Accumulates a line from the USB Serial console and dispatches it
 // through cliPassthroughExecute -- the SAME allowlist + dispatch the
-// BLE _sys channel uses (crosswire::cliPassthroughExecute), so the
+// BLE _sys channel uses (offband::cliPassthroughExecute), so the
 // command set, allowlist, and security are identical regardless of
 // transport. The reply is echoed back to Serial. Non-blocking: reads
 // only what is already buffered each call.
@@ -2378,7 +2378,7 @@ void MyMesh::checkObserverSerialCli() {
       _obs_cli_buf[_obs_cli_len] = 0;
       Serial.println();                          // finish the echoed line
       char reply[256];
-      crosswire::cliPassthroughExecute(_obs_cli_buf, reply, sizeof(reply));
+      offband::cliPassthroughExecute(_obs_cli_buf, reply, sizeof(reply));
       Serial.println(reply);
       _obs_cli_len = 0;
       _obs_cli_redact = false;
@@ -2408,7 +2408,7 @@ void MyMesh::loop() {
     checkCLIRescueCmd();
   } else {
     checkSerialInterface();
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
     // Strycher/LoRa#325: also accept observer config commands typed on
     // the USB serial console (independent of the compiled transport, so
     // a USB-cabled observer is configurable without a phone). Only runs
@@ -2417,12 +2417,12 @@ void MyMesh::loop() {
 #endif
   }
 
-#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+#ifdef OFFBAND_OBSERVER_BLE_COMPANION
   // Plan 3 Task 10 (Strycher/LoRa#272): drain any pending
   // system-channel status / CLI-reply messages enqueued by
   // SystemChannelCli (from WifiBootstrap, intercept dispatch,
   // etc.). Cheap when the queue is empty (single load + branch).
-  crosswire::systemChannelDrain();
+  offband::systemChannelDrain();
 #endif
 
   // is there are pending dirty contacts write needed?

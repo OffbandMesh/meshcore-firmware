@@ -767,7 +767,7 @@ def run_push(args) -> int:
     # #200 (LoRa-wek): identity is read from the firmware binary's embedded
     # XWIRE marker blob, NOT re-derived from git. The .bin was built at one
     # point in time; the working tree may have advanced since. firmware_sha256
-    # is still the authoritative artifact ID; the crosswire_* fields are the
+    # is still the authoritative artifact ID; the offband_* fields are the
     # human-readable label. firmware_identity_source records which path won.
     fw_identity = get_firmware_identity(firmware_path, FIRMWARE_DIR)
 
@@ -782,10 +782,10 @@ def run_push(args) -> int:
         "firmware_sha256": upload_result["firmware_sha256"],
         "firmware_md5": upload_result["firmware_md5"],
         "firmware_size": upload_result["firmware_size"],
-        "crosswire_version": fw_identity["crosswire_version"],
-        "crosswire_git_sha": fw_identity["crosswire_git_sha"],
-        "crosswire_branch": fw_identity["crosswire_branch"],
-        "crosswire_build_date": fw_identity["crosswire_build_date"],
+        "offband_version": fw_identity["offband_version"],
+        "offband_git_sha": fw_identity["offband_git_sha"],
+        "offband_branch": fw_identity["offband_branch"],
+        "offband_build_date": fw_identity["offband_build_date"],
         "firmware_identity_source": fw_identity["firmware_identity_source"],
         "upload_status_code": upload_result["status_code"],
         "upload_exception": upload_result["exception_class"],

@@ -66,7 +66,7 @@ FLASH_HISTORY_PATH = PROJECT_ROOT / "flash-history.jsonl"
 TOKEN_TTL_SEC = 300   # 5 min per Standards design note #1
 
 # Directory holding the firmware tree (platformio.ini + variants/) for build +
-# upload + monitor invocations. Post-migration the Crosswire repo root IS the
+# upload + monitor invocations. Post-migration the Offband repo root IS the
 # firmware tree, so the default is PROJECT_ROOT. Override per-host via the
 # PIO_FLASH_FIRMWARE_DIR env var, or per-invocation via --firmware-dir.
 # Precedence: --firmware-dir > PIO_FLASH_FIRMWARE_DIR > default. See #27.
@@ -400,17 +400,17 @@ def _artifact_identity(artifact: Path) -> dict:
     m = ARTIFACT_RE.search(artifact.name)
     if m:
         return {
-            "crosswire_version": m.group(1),
-            "crosswire_git_sha": m.group(2),
-            "crosswire_branch": "unknown",
-            "crosswire_build_date": "unknown",
+            "offband_version": m.group(1),
+            "offband_git_sha": m.group(2),
+            "offband_branch": "unknown",
+            "offband_build_date": "unknown",
             "firmware_identity_source": "ci-artifact-filename",
         }
     return {
-        "crosswire_version": "unknown",
-        "crosswire_git_sha": "unknown",
-        "crosswire_branch": "unknown",
-        "crosswire_build_date": "unknown",
+        "offband_version": "unknown",
+        "offband_git_sha": "unknown",
+        "offband_branch": "unknown",
+        "offband_build_date": "unknown",
         "firmware_identity_source": "artifact-filename-unparsed",
     }
 
@@ -491,8 +491,8 @@ def _preview_artifact(args, port: dict, entry: dict) -> int:
     out(f"Platform      : {platform}")
     out(f"Flash method  : {method}")
     out(f"Mode          : {mode_desc}")
-    out(f"Crosswire ver : {ident['crosswire_version']}")
-    out(f"Crosswire SHA : {ident['crosswire_git_sha']}")
+    out(f"Offband ver : {ident['offband_version']}")
+    out(f"Offband SHA : {ident['offband_git_sha']}")
     out(f"Identity src  : {ident['firmware_identity_source']}")
     out("------------------------------------------------------------")
     out("To proceed, get explicit user GO in chat naming the device, then run:")
@@ -514,10 +514,10 @@ def _preview_artifact(args, port: dict, entry: dict) -> int:
         "artifact_path": str(artifact),
         "firmware_sha256": sha,
         "firmware_size": size,
-        "crosswire_version": ident["crosswire_version"],
-        "crosswire_git_sha": ident["crosswire_git_sha"],
-        "crosswire_branch": ident["crosswire_branch"],
-        "crosswire_build_date": ident["crosswire_build_date"],
+        "offband_version": ident["offband_version"],
+        "offband_git_sha": ident["offband_git_sha"],
+        "offband_branch": ident["offband_branch"],
+        "offband_build_date": ident["offband_build_date"],
         "firmware_identity_source": ident["firmware_identity_source"],
     }
     p = write_token(args.device, payload)
@@ -763,8 +763,8 @@ def _confirm_artifact(args, token: dict, port: dict) -> int:
         "artifact_path": token.get("artifact_path"),
         "firmware_sha256": token.get("firmware_sha256"),
         "firmware_size": token.get("firmware_size"),
-        "crosswire_version": token.get("crosswire_version", "unknown"),
-        "crosswire_git_sha": token.get("crosswire_git_sha", "unknown"),
+        "offband_version": token.get("offband_version", "unknown"),
+        "offband_git_sha": token.get("offband_git_sha", "unknown"),
         "firmware_identity_source": token.get("firmware_identity_source", "unknown"),
         "verified_ok": ok,
         "exit_code": 0 if ok else 1,
@@ -830,9 +830,9 @@ def cmd_preview(args, registry):
     # cmd_confirm logs the same identity it previewed - no second source of
     # truth between preview and confirm.
     fw_identity = get_firmware_identity(firmware_bin, FIRMWARE_DIR)
-    out(f"Crosswire version : {fw_identity['crosswire_version']}")
-    out(f"Crosswire SHA     : {fw_identity['crosswire_git_sha']}")
-    out(f"Crosswire branch  : {fw_identity['crosswire_branch']}")
+    out(f"Offband version : {fw_identity['offband_version']}")
+    out(f"Offband SHA     : {fw_identity['offband_git_sha']}")
+    out(f"Offband branch  : {fw_identity['offband_branch']}")
     out(f"Identity source   : {fw_identity['firmware_identity_source']}")
     out("------------------------------------------------------------")
 
@@ -847,10 +847,10 @@ def cmd_preview(args, registry):
         "firmware_size": size,
         "pio_env": env,
         "firmware_dir": str(FIRMWARE_DIR),
-        "crosswire_version": fw_identity["crosswire_version"],
-        "crosswire_git_sha": fw_identity["crosswire_git_sha"],
-        "crosswire_branch": fw_identity["crosswire_branch"],
-        "crosswire_build_date": fw_identity["crosswire_build_date"],
+        "offband_version": fw_identity["offband_version"],
+        "offband_git_sha": fw_identity["offband_git_sha"],
+        "offband_branch": fw_identity["offband_branch"],
+        "offband_build_date": fw_identity["offband_build_date"],
         "firmware_identity_source": fw_identity["firmware_identity_source"],
     }
     p = write_token(args.device, payload)
@@ -926,10 +926,10 @@ def cmd_confirm(args, registry):
         "pio_env": token["pio_env"],
         "firmware_sha256": token["firmware_sha256"],
         "firmware_size": token["firmware_size"],
-        "crosswire_version": token.get("crosswire_version", "unknown"),
-        "crosswire_git_sha": token.get("crosswire_git_sha", "unknown"),
-        "crosswire_branch": token.get("crosswire_branch", "unknown"),
-        "crosswire_build_date": token.get("crosswire_build_date", "unknown"),
+        "offband_version": token.get("offband_version", "unknown"),
+        "offband_git_sha": token.get("offband_git_sha", "unknown"),
+        "offband_branch": token.get("offband_branch", "unknown"),
+        "offband_build_date": token.get("offband_build_date", "unknown"),
         "firmware_identity_source": token.get("firmware_identity_source", "git-fallback"),
         "exit_code": rc,
         "user_confirmation": args.device,
@@ -1507,7 +1507,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="override the firmware tree (platformio.ini location) for this "
              "invocation; must precede the subcommand. Precedence: "
              "--firmware-dir > PIO_FLASH_FIRMWARE_DIR env > default "
-             "(Crosswire repo root). See #27.",
+             "(Offband repo root). See #27.",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 

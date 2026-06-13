@@ -13,14 +13,14 @@
 
 import sys
 
-AP_SSID_PREFIX = "Crosswire-Observer-"
+AP_SSID_PREFIX = "Offband-Observer-"
 
 
 def derive_ap_ssid(mac_bytes: bytes) -> str:
     """
     Python equivalent of WifiBootstrap::deriveApSsid().
 
-    Format: "Crosswire-Observer-XXXXXX" where XXXXXX = last 6 hex chars
+    Format: "Offband-Observer-XXXXXX" where XXXXXX = last 6 hex chars
     of MAC (last 3 bytes, upper-case). Mirrors the C++ bit-shift logic:
 
         hex[i*2]     = H[(tail[i] >> 4) & 0x0F];
@@ -46,22 +46,22 @@ FIXTURES = [
     (
         "ST-P MAC (88:56:A6:96:0D:0C)",
         bytes([0x88, 0x56, 0xA6, 0x96, 0x0D, 0x0C]),
-        "Crosswire-Observer-960D0C",
+        "Offband-Observer-960D0C",
     ),
     (
         "all-zeros MAC",
         bytes([0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
-        "Crosswire-Observer-000000",
+        "Offband-Observer-000000",
     ),
     (
         "all-0xFF MAC",
         bytes([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
-        "Crosswire-Observer-FFFFFF",
+        "Offband-Observer-FFFFFF",
     ),
     (
         "mixed-nibble MAC (AB:CD:EF:12:34:56)",
         bytes([0xAB, 0xCD, 0xEF, 0x12, 0x34, 0x56]),
-        "Crosswire-Observer-123456",
+        "Offband-Observer-123456",
     ),
 ]
 

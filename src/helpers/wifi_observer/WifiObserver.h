@@ -1,9 +1,9 @@
 // src/helpers/wifi_observer/WifiObserver.h
 //
-// Top-level entry point for the Crosswire observer subsystem. Owns
+// Top-level entry point for the Offband observer subsystem. Owns
 // the WifiBootstrap state machine and (Plan 2 v2) the MqttBrokerPool +
 // ObserverPipeline that publish observed LoRa traffic to up to
-// CROSSWIRE_MAX_BROKERS configured brokers.
+// OFFBAND_MAX_BROKERS configured brokers.
 //
 // Lifecycle on companion_radio/main.cpp:
 //   1. wifiObserverBegin()           -- from setup(), after Serial.begin().
@@ -25,7 +25,7 @@
   #include <Identity.h>          // mesh::LocalIdentity
 #endif
 
-namespace crosswire {
+namespace offband {
 
 // Call from setup(), after Serial.begin() but before any user-facing
 // operation. Does NOT block.
@@ -56,7 +56,7 @@ void wifiObserverSetStatusSnapshot(const MqttStatusSnapshot& snap);
 // (next task) can defer to GPS when the fix is locked.
 // enabled: true when GPS is configured on (prefs.gps_enabled).
 // locked:  true when the GPS provider reports a valid fix.
-// Call from loop() at ~1 Hz inside ENV_INCLUDE_GPS + CROSSWIRE_OBSERVER guards.
+// Call from loop() at ~1 Hz inside ENV_INCLUDE_GPS + OFFBAND_OBSERVER guards.
 void wifiObserverSetGpsTimeState(bool enabled, bool locked);
 
 // Singleton accessors -- exposed for ObserverCli + future Plan 3 web UI.
@@ -70,4 +70,4 @@ MqttBrokerPool& wifiObserverPool();
 // caller and consistent with how WebAuth borrows the same bytes.
 const uint8_t* wifiObserverPubKey();
 
-}  // namespace crosswire
+}  // namespace offband

@@ -1,6 +1,6 @@
 // src/helpers/wifi_observer/WifiBootstrap.h
 //
-// Boot-time WiFi bootstrap for the Crosswire observer. Owns the
+// Boot-time WiFi bootstrap for the Offband observer. Owns the
 // AP-mode-vs-STA-vs-CLI-rescue decision and the AP-mode HTTP setup
 // form. Once WiFi is up, signals readiness via isStaConnected().
 
@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-namespace crosswire {
+namespace offband {
 
 enum class WifiBootstrapState : uint8_t {
     Boot,           // before begin() called
@@ -32,7 +32,7 @@ public:
     // True once STA is connected and the MQTT subsystem may start.
     bool isStaConnected() const;
 
-    // Returns "Crosswire-Observer-XXXXXX" using the last 6 hex chars
+    // Returns "Offband-Observer-XXXXXX" using the last 6 hex chars
     // of the device MAC. Static so it can be unit-tested without WiFi.
     // mac_bytes must point to 6 bytes (BSSID / WiFi.macAddress() raw).
     static void deriveApSsid(const uint8_t* mac_bytes, char* out, size_t out_len);
@@ -44,7 +44,7 @@ private:
     uint32_t sta_retry_count_ = 0;
     uint32_t last_attempt_ms_ = 0;
 
-#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+#ifdef OFFBAND_OBSERVER_BLE_COMPANION
     // Plan 3 Task 10 (Strycher/LoRa#272): post the IP + mDNS
     // hostname onto the system channel on STA-connect transition.
     // Pulls the pubkey from wifiObserverPubKey() so the mDNS hex
@@ -61,4 +61,4 @@ private:
 // Singleton accessor. The whole subsystem assumes one instance.
 WifiBootstrap& wifiBootstrap();
 
-}  // namespace crosswire
+}  // namespace offband

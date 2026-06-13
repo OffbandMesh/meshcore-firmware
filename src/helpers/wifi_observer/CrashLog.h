@@ -28,7 +28,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-namespace crosswire {
+namespace offband {
 
 // ---------------------------------------------------------------------------
 // Reset-reason string mapping (Stage A)
@@ -162,4 +162,4 @@ void heartbeatTick(uint32_t now_ms);
 // deep-sleep wake / esptool hard reset.
 uint32_t bootCounterValue();
 
-}  // namespace crosswire
+}  // namespace offband

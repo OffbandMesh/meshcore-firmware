@@ -1,7 +1,7 @@
 name: Release
 
 # Builds the curated community board set (.github/release-envs.txt) and publishes
-# a GitHub Release. Triggers on crosswire-v* tags (stable + -rc pre-releases) and
+# a GitHub Release. Triggers on offband-v* (and legacy crosswire-v*) tags (stable + -rc pre-releases) and
 # workflow_dispatch (build-only test run; no Release published on dispatch).
 # Public binaries carry placeholder secrets, configured at runtime.
 # Design of record: docs/architecture/2026-06-06-ci-release-pipeline.md (epic #14 / T3 / #17).
@@ -9,7 +9,8 @@ name: Release
 on:
   push:
     tags:
-      - 'crosswire-v*'
+      - 'offband-v*'
+      - 'crosswire-v*'   # legacy fork tags (pre-rebrand; kept for historical re-pushes)
   workflow_dispatch:
     inputs:
       version:
@@ -52,7 +53,8 @@ jobs:
         id: ver
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
-            echo "version=${GITHUB_REF_NAME#crosswire-}" >> "$GITHUB_OUTPUT"
+            ref="${GITHUB_REF_NAME#offband-}"; ref="${ref#crosswire-}"
+            echo "version=${ref}" >> "$GITHUB_OUTPUT"
           else
             echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
           fi
@@ -97,7 +99,7 @@ jobs:
 
       - name: Extract CHANGELOG section for release body
         run: |
-          ver="${GITHUB_REF_NAME#crosswire-}"   # e.g. v0.14.0
+          ver="${GITHUB_REF_NAME#offband-}"; ver="${ver#crosswire-}"   # e.g. v0.16.0
           num="${ver#v}"                         # e.g. 0.14.0
           awk -v v="$num" '
             $0 ~ "^## \\[" v "\\]" { grab=1; next }
@@ -111,7 +113,7 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Crosswire ${{ github.ref_name }}
+          name: Offband ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
           prerelease: ${{ contains(github.ref_name, '-rc') }}
           make_latest: ${{ !contains(github.ref_name, '-rc') }}

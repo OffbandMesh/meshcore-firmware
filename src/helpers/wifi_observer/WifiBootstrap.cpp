@@ -2,7 +2,7 @@
 #include "WifiBootstrap.h"
 #include "WifiObserverConfig.h"
 
-#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+#ifdef OFFBAND_OBSERVER_BLE_COMPANION
 // Plan 3 Task 10 (Strycher/LoRa#272): system channel for first-
 // contact WiFi setup (welcome message on no-creds, IP + mDNS
 // hostname on STA connect). Only compiled in for BLE-companion
@@ -23,14 +23,14 @@
   #include <esp_wifi.h>      // esp_wifi_set_ps() -- companion to coex tuning
 #endif
 
-namespace crosswire {
+namespace offband {
 
 // -------------------------------------------------------------------------
 // SSID derivation -- pure function, host-testable.
 // -------------------------------------------------------------------------
 void WifiBootstrap::deriveApSsid(const uint8_t* mac_bytes, char* out,
                                  size_t out_len) {
-    // Format: "Crosswire-Observer-XXXXXX" where XXXXXX = last 6 hex
+    // Format: "Offband-Observer-XXXXXX" where XXXXXX = last 6 hex
     // chars of MAC. Total: 19 (prefix) + 6 (hex) + 1 (NUL) = 26 bytes.
     const size_t needed = 26;
     if (out_len < needed) {
@@ -46,7 +46,7 @@ void WifiBootstrap::deriveApSsid(const uint8_t* mac_bytes, char* out,
         hex[i * 2 + 1] = H[tail[i] & 0x0F];
     }
     hex[6] = '\0';
-    snprintf(out, out_len, "%s%s", CROSSWIRE_AP_SSID_PREFIX, hex);
+    snprintf(out, out_len, "%s%s", OFFBAND_AP_SSID_PREFIX, hex);
 }
 
 // -------------------------------------------------------------------------
@@ -86,7 +86,7 @@ void WifiBootstrap::begin() {
                        "system-channel CLI commands "
                        "(set wifi.ssid + set wifi.pwd).");
         state_ = WifiBootstrapState::ApMode;  // semantic kept; no softAP started
-#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+#ifdef OFFBAND_OBSERVER_BLE_COMPANION
         // Plan 3 Task 10 replaces the originally-planned softAP +
         // captive form path. The welcome message is enqueued and
         // posted as soon as MyMesh::loop() runs systemChannelDrain,
@@ -94,7 +94,7 @@ void WifiBootstrap::begin() {
         // no captive portal, no Wi-Fi switching on the user's
         // phone -- they type commands in the channel that's
         // already paired with their MeshCore app.
-        crosswire::systemChannelPostStatus(
+        offband::systemChannelPostStatus(
             "Welcome! To set WiFi: send 'set wifi.ssid YourSSID' "
             "then 'set wifi.pwd YourPSK' as messages in this channel. "
             "Use 'wifi status' to check.");
@@ -134,7 +134,7 @@ void WifiBootstrap::loop() {
                 state_ = WifiBootstrapState::StaConnected;
                 Serial.printf("[WifiBootstrap] STA connected; IP=%s\n",
                               WiFi.localIP().toString().c_str());
-#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+#ifdef OFFBAND_OBSERVER_BLE_COMPANION
                 // Plan 3 Task 10 (Strycher/LoRa#272): post the IP +
                 // mDNS hostname so the user immediately sees how to
                 // reach the web UI without having to dig through
@@ -172,7 +172,7 @@ bool WifiBootstrap::isStaConnected() const {
     return state_ == WifiBootstrapState::StaConnected;
 }
 
-#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+#ifdef OFFBAND_OBSERVER_BLE_COMPANION
 // Borrowed from WifiObserver -- the cached identity pubkey, set
 // by wifiObserverSetMeshContext (called from main.cpp after
 // the_mesh.begin). May be nullptr if STA happens to come up
@@ -196,16 +196,16 @@ void WifiBootstrap::postStaConnectedStatus() {
             hex[i * 2 + 1] = H[pk[i] & 0x0F];
         }
         hex[8] = '\0';
-        crosswire::systemChannelPostStatus(
+        offband::systemChannelPostStatus(
             "WiFi connected. IP %s -- https://meshcore-%s.local/",
             WiFi.localIP().toString().c_str(), hex);
     } else {
-        crosswire::systemChannelPostStatus(
+        offband::systemChannelPostStatus(
             "WiFi connected. IP %s",
             WiFi.localIP().toString().c_str());
     }
 }
-#endif  // CROSSWIRE_OBSERVER_BLE_COMPANION
+#endif  // OFFBAND_OBSERVER_BLE_COMPANION
 
 WifiBootstrap& wifiBootstrap() {
     static WifiBootstrap inst;
@@ -224,4 +224,4 @@ WifiBootstrap& wifiBootstrap() {
 
 #endif  // ARDUINO
 
-}  // namespace crosswire
+}  // namespace offband

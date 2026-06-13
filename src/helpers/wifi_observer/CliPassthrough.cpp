@@ -17,7 +17,7 @@
 #include <cstdio>
 #include <cstring>
 
-namespace crosswire {
+namespace offband {
 
 // Forward declarations. These MUST stay byte-identical to:
 //   - dispatchObserverCli: declared in ObserverCli.h
@@ -162,4 +162,4 @@ CliResult cliPassthroughExecute(const char* line, char* out_response,
     return CliResult::Unknown;
 }
 
-}  // namespace crosswire
+}  // namespace offband

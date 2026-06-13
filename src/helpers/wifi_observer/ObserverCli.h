@@ -2,13 +2,13 @@
 //
 // Plan 2 v2 Task 10: serial CLI commands for mqtt config.
 // Single entry point dispatchObserverCli(); CommonCLI calls it from its
-// fall-through under #ifdef CROSSWIRE_OBSERVER.
+// fall-through under #ifdef OFFBAND_OBSERVER.
 
 #pragma once
 #include "MqttBrokerPool.h"
 #include <stddef.h>
 
-namespace crosswire {
+namespace offband {
 
 // Parses + dispatches "mqtt"-prefixed commands. Returns true if handled
 // (reply populated with result/error), false if the command wasn't an
@@ -39,8 +39,8 @@ namespace crosswire {
 //
 // All "set" commands write to NVS via ConfigSchema and call
 // pool.reloadSlot(N) if a per-slot field changed. Slot range [0,
-// CROSSWIRE_MAX_BROKERS).
+// OFFBAND_MAX_BROKERS).
 bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
                          MqttBrokerPool& pool);
 
-}  // namespace crosswire
+}  // namespace offband

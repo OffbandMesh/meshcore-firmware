@@ -5,7 +5,7 @@
 #ifdef WIFI_SSID
   #include <WiFi.h>
 #endif
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   #include <helpers/wifi_observer/CrashLog.h>
 #endif
 
@@ -38,13 +38,13 @@ class SplashScreen : public UIScreen {
   UITask* _task;
   unsigned long dismiss_after;
   char _mc_version[12];
-#ifdef CROSSWIRE_VERSION
-  // Crosswire fork version short form (CROSSWIRE_VERSION with the
-  // "crosswire-" prefix and any commits-since-tag suffix stripped).
+#ifdef OFFBAND_VERSION
+  // Offband fork version short form (OFFBAND_VERSION with the
+  // "offband-" prefix and any commits-since-tag suffix stripped).
   // Per VERSIONING.md Pattern B the splash exposes BOTH the upstream
-  // MeshCore version AND the Crosswire fork version so a glance at
+  // MeshCore version AND the Offband fork version so a glance at
   // the device unambiguously identifies what firmware is running.
-  char _crosswire_short[24];
+  char _offband_short[24];
 #endif
 
 public:
@@ -58,28 +58,28 @@ public:
     memcpy(_mc_version, ver, len);
     _mc_version[len] = 0;
 
-#ifdef CROSSWIRE_VERSION
-    // Crosswire version: strip leading "crosswire-" tag prefix, then render
+#ifdef OFFBAND_VERSION
+    // Offband version: strip leading "offband-" tag prefix, then render
     // a COMPACT build-identity that distinguishes test builds from the
     // tagged release (Strycher/LoRa#319). git describe form is
     // "<tag>[-<N>-g<sha>][-dirty]", where <tag> may ITSELF contain dashes for
     // a pre-release (e.g. v0.14.0-rc1). We render:
-    //   crosswire-v0.14.0                  -> v0.14.0        (clean release)
-    //   crosswire-v0.14.0-rc1              -> v0.14.0-rc1    (clean pre-release)
-    //   crosswire-v0.14.0-rc1-4-g369714e   -> v0.14.0-rc1+4  (4 past pre-release)
-    //   crosswire-v0.14.0-4-g369714e       -> v0.14.0+4      (4 past release)
+    //   offband-v0.14.0                  -> v0.14.0        (clean release)
+    //   offband-v0.14.0-rc1              -> v0.14.0-rc1    (clean pre-release)
+    //   offband-v0.14.0-rc1-4-g369714e   -> v0.14.0-rc1+4  (4 past pre-release)
+    //   offband-v0.14.0-4-g369714e       -> v0.14.0+4      (4 past release)
     //   ...-dirty                          -> ...*           (dirty work tree)
     // Full identity (SHA included) stays in the `ver` CLI + the
-    // CROSSWIRE_IDENTITY_BLOB in .rodata; this is just the at-a-glance form.
-    // Spec + fixtures: scripts/test_crosswire_version_splash.py.
+    // OFFBAND_IDENTITY_BLOB in .rodata; this is just the at-a-glance form.
+    // Spec + fixtures: scripts/test_offband_version_splash.py.
     //
     // The commits-since suffix is identified by git's "-g<sha>" marker, NOT the
     // first dash. Splitting on the first dash (prior behavior) mis-read a
     // pre-release tag's "-rcN" as the commits field -> it dropped "-rcN" and
     // showed a spurious "+0" (Strycher/Crosswire#33).
-    const char *cw = CROSSWIRE_VERSION;
-    static const char *cw_prefix = "crosswire-";
-    if (strncmp(cw, cw_prefix, 10) == 0) cw += 10;
+    const char *cw = OFFBAND_VERSION;
+    static const char *cw_prefix = "offband-";
+    if (strncmp(cw, cw_prefix, 8) == 0) cw += 8;
     bool        cw_dirty = (strstr(cw, "-dirty") != nullptr);
     const char *gmark    = strstr(cw, "-g");   // start of "-g<sha>" iff commits>0
     int commits = 0;
@@ -98,12 +98,12 @@ public:
       const char *d = strstr(cw, "-dirty");
       taglen = d ? (int)(d - cw) : (int)strlen(cw);
     }
-    if (taglen >= (int)sizeof(_crosswire_short)) taglen = (int)sizeof(_crosswire_short) - 1;
+    if (taglen >= (int)sizeof(_offband_short)) taglen = (int)sizeof(_offband_short) - 1;
     if (commits > 0) {
-      snprintf(_crosswire_short, sizeof(_crosswire_short), "%.*s+%d%s",
+      snprintf(_offband_short, sizeof(_offband_short), "%.*s+%d%s",
                taglen, cw, commits, cw_dirty ? "*" : "");
     } else {
-      snprintf(_crosswire_short, sizeof(_crosswire_short), "%.*s%s",
+      snprintf(_offband_short, sizeof(_offband_short), "%.*s%s",
                taglen, cw, cw_dirty ? "*" : "");
     }
 #endif
@@ -112,24 +112,24 @@ public:
   }
 
   int render(DisplayDriver& display) override {
-#ifdef CROSSWIRE_OBSERVER
-    crosswire::crashLogf("[ui] SplashScreen.render() at %lu", (unsigned long)millis());
+#ifdef OFFBAND_OBSERVER
+    offband::crashLogf("[ui] SplashScreen.render() at %lu", (unsigned long)millis());
 #endif
     // meshcore logo
     display.setColor(DisplayDriver::BLUE);
     int logoWidth = 128;
     display.drawXbm((display.width() - logoWidth) / 2, 3, meshcore_logo, logoWidth, 13);
 
-#ifdef CROSSWIRE_VERSION
+#ifdef OFFBAND_VERSION
     // Pattern B per VERSIONING.md: BOTH fork + baseline versions visible
     // and FULLY LABELED with brand names so a glance at the splash is
-    // unambiguous. Size 2 won't fit the literal "Crosswire" word at our
-    // 128-px width, so we use 3 size-1 lines with the Crosswire line
+    // unambiguous. Size 2 won't fit the literal "Offband" word at our
+    // 128-px width, so we use 3 size-1 lines with the Offband line
     // first (visual prominence via line order, not font size).
     display.setColor(DisplayDriver::LIGHT);
     display.setTextSize(1);
     char cw_line[32];
-    snprintf(cw_line, sizeof(cw_line), "Crosswire %s", _crosswire_short);
+    snprintf(cw_line, sizeof(cw_line), "Offband %s", _offband_short);
     // drawTextCentered does NOT wrap or clip: a line wider than the panel
     // spills off both edges invisibly. Clamp to the chars that fit at size-1
     // (~6px/char) so the version can never run off-screen (Strycher/LoRa#319).
@@ -144,7 +144,7 @@ public:
     display.drawTextCentered(display.width()/2, 35, mc_line);
     display.drawTextCentered(display.width()/2, 53, FIRMWARE_BUILD_DATE);
 #else
-    // Upstream MeshCore build (no Crosswire identity injected): original layout.
+    // Upstream MeshCore build (no Offband identity injected): original layout.
     display.setColor(DisplayDriver::LIGHT);
     display.setTextSize(2);
     display.drawTextCentered(display.width()/2, 22, _mc_version);
@@ -738,8 +738,8 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
 
   if (_display != NULL) {
     if (!_display->isOn() && !hasConnection()) {
-#ifdef CROSSWIRE_OBSERVER
-      crosswire::crashLogf("[ui] newMsg: display off + no conn -> turnOn");
+#ifdef OFFBAND_OBSERVER
+      offband::crashLogf("[ui] newMsg: display off + no conn -> turnOn");
 #endif
       _display->turnOn();
     }
@@ -772,7 +772,7 @@ void UITask::userLedHandler() {
 }
 
 void UITask::setCurrScreen(UIScreen* c) {
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   // Screen transition tracing: log every change so we can see if the
   // SplashScreen ↔ HomeScreen oscillation observed on hv3-bench is
   // a real state-machine bug.
@@ -786,7 +786,7 @@ void UITask::setCurrScreen(UIScreen* c) {
   else if (c == home)           to   = "HOME";
   else if (c == msg_preview)    to   = "MSG_PREVIEW";
   else if (c == nullptr)        to   = "NULL";
-  crosswire::crashLogf("[ui] setCurrScreen %s -> %s", from, to);
+  offband::crashLogf("[ui] setCurrScreen %s -> %s", from, to);
 #endif
   curr = c;
   _next_refresh = 100;
@@ -892,8 +892,8 @@ void UITask::loop() {
 #endif
 
   if (c != 0 && curr) {
-#ifdef CROSSWIRE_OBSERVER
-    crosswire::crashLogf("[ui] button event c=0x%x dispatched to curr screen", (int)c);
+#ifdef OFFBAND_OBSERVER
+    offband::crashLogf("[ui] button event c=0x%x dispatched to curr screen", (int)c);
 #endif
     curr->handleInput(c);
     _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer

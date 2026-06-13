@@ -21,7 +21,7 @@
   #include <freertos/task.h> // uxTaskGetStackHighWaterMark()
 #endif
 
-namespace crosswire {
+namespace offband {
 
 // ---------------------------------------------------------------------------
 // Reset-reason mapping
@@ -535,4 +535,4 @@ uint32_t bootCounterValue() { return 0; }
 
 #endif
 
-}  // namespace crosswire
+}  // namespace offband

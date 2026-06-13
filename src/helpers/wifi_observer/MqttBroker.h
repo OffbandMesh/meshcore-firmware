@@ -18,7 +18,7 @@
   #include "freertos/semphr.h"
 #endif
 
-namespace crosswire {
+namespace offband {
 
 enum class BrokerState : uint8_t {
     Down        = 0,  // disabled OR not yet attempted
@@ -145,4 +145,4 @@ uint32_t brokerBackoffMs(uint32_t retry_count);
 // uses system trust store or skips TLS verify).
 const char* lookupCaCertPem(const char* name);
 
-}  // namespace crosswire
+}  // namespace offband

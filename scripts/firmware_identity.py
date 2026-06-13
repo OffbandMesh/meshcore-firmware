@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-scripts/firmware_identity.py - Extract Crosswire identity from firmware .bin
+scripts/firmware_identity.py - Extract Offband identity from firmware .bin
 
 #200 / LoRa-wek: closes the audit-log integrity bug where
 get_firmware_identity() in scripts/pio-flash.py + scripts/ota-push.py
@@ -9,20 +9,20 @@ snapshotting newer HEAD instead of the commit that produced the .bin sitting
 on disk. The .bin can sit for hours or days between build and push; the
 working tree advances; the audit log records the wrong commit.
 
-Fix: at build time, scripts/inject_crosswire_version.py embeds a marker-
+Fix: at build time, scripts/inject_offband_version.py embeds a marker-
 wrapped identity blob in the firmware binary's .rodata via a
-CROSSWIRE_IDENTITY_BLOB CPPDEFINE consumed by an __attribute__((used))
+OFFBAND_IDENTITY_BLOB CPPDEFINE consumed by an __attribute__((used))
 static in helpers/CommonCLI.cpp. At flash time, this parser scans the .bin
 for those markers and recovers the BUILD-time identity. The previous git-
 derived behavior is kept as a fallback for pre-#200 builds, but tagged
 with firmware_identity_source="git-fallback" in the audit log so stale-
 format entries are visible.
 
-Marker format (ON-WIRE ABI, see inject_crosswire_version.py docstring):
+Marker format (ON-WIRE ABI, see inject_offband_version.py docstring):
 
-  XWIRE_BEGIN|XWIRE_VER=<ver>|XWIRE_SHA=<sha>|XWIRE_BD=<date>|XWIRE_BR=<branch>|XWIRE_END
+  OBND_BEGIN|OBND_VER=<ver>|OBND_SHA=<sha>|OBND_BD=<date>|OBND_BR=<branch>|OBND_END
 
-Field order is fixed; XWIRE_BR is last so a branch containing | cannot
+Field order is fixed; OBND_BR is last so a branch containing | cannot
 break boundary detection.
 """
 from __future__ import annotations
@@ -33,22 +33,22 @@ from typing import Optional
 
 
 # ---------------------------------------------------------------------------
-# Marker constants - must match scripts/inject_crosswire_version.py
+# Marker constants - must match scripts/inject_offband_version.py
 # ---------------------------------------------------------------------------
-_BEGIN = b"XWIRE_BEGIN"
-_END = b"XWIRE_END"
+_BEGIN = b"OBND_BEGIN"
+_END = b"OBND_END"
 
 # Field prefixes in their fixed order. Each prefix appears EXACTLY ONCE in a
 # valid blob. The parser uses these as boundaries (looking for the *next*
 # prefix to find where the current field's value ends), which is what lets a
 # branch name like "feat/foo|bar" still parse correctly: the | inside the
-# value is bounded by the literal `|XWIRE_<next>=` marker, not by a naive
+# value is bounded by the literal `|OBND_<next>=` marker, not by a naive
 # split on `|`.
 _FIELDS_IN_ORDER = [
-    ("crosswire_version", b"|XWIRE_VER="),
-    ("crosswire_git_sha", b"|XWIRE_SHA="),
-    ("crosswire_build_date", b"|XWIRE_BD="),
-    ("crosswire_branch", b"|XWIRE_BR="),
+    ("offband_version", b"|OBND_VER="),
+    ("offband_git_sha", b"|OBND_SHA="),
+    ("offband_build_date", b"|OBND_BD="),
+    ("offband_branch", b"|OBND_BR="),
 ]
 
 
@@ -57,10 +57,10 @@ _FIELDS_IN_ORDER = [
 # ---------------------------------------------------------------------------
 def parse_identity_from_binary(firmware_path: Path) -> Optional[dict]:
     """
-    Scan firmware .bin for the Crosswire identity blob.
+    Scan firmware .bin for the Offband identity blob.
 
-    Returns a dict with crosswire_version / crosswire_git_sha /
-    crosswire_branch / crosswire_build_date on success, or None if the
+    Returns a dict with offband_version / offband_git_sha /
+    offband_branch / offband_build_date on success, or None if the
     file exists and is readable but contains no marker / a malformed
     marker (pre-#200 build, or corruption).
 
@@ -103,7 +103,7 @@ def parse_identity_from_binary(firmware_path: Path) -> Optional[dict]:
 
     # Slice the blob exclusive of BEGIN/END markers themselves. Each field
     # value runs from end-of-its-prefix to start-of-next-prefix (or to the
-    # final | before XWIRE_END for the last field).
+    # final | before OBND_END for the last field).
     blob = data[begin + len(_BEGIN):end]
 
     fields: dict[str, str] = {}
@@ -120,7 +120,7 @@ def parse_identity_from_binary(firmware_path: Path) -> Optional[dict]:
             if value_end < 0:
                 return None
         else:
-            # Last field: value runs to the trailing | (right before XWIRE_END,
+            # Last field: value runs to the trailing | (right before OBND_END,
             # which we sliced out above). If no trailing | found, fall back to
             # end-of-blob.
             value_end = blob.rfind(b"|", value_start)
@@ -159,14 +159,14 @@ def git_fallback_identity(firmware_dir: Path) -> dict:
         return default
 
     return {
-        "crosswire_version": _git(
-            "describe", "--tags", "--match", "crosswire-v*",
+        "offband_version": _git(
+            "describe", "--tags", "--match", "offband-v*",
             "--abbrev=7", "--dirty",
-            default="crosswire-untagged",
+            default="offband-untagged",
         ),
-        "crosswire_git_sha": _git("rev-parse", "--short=7", "HEAD"),
-        "crosswire_branch": _git("rev-parse", "--abbrev-ref", "HEAD"),
-        "crosswire_build_date": _git(
+        "offband_git_sha": _git("rev-parse", "--short=7", "HEAD"),
+        "offband_branch": _git("rev-parse", "--abbrev-ref", "HEAD"),
+        "offband_build_date": _git(
             "log", "-1", "--format=%cd", "--date=format:%Y-%m-%d",
             default="unknown",
         ),
@@ -176,7 +176,7 @@ def git_fallback_identity(firmware_dir: Path) -> dict:
 # ---------------------------------------------------------------------------
 # Orchestrator - what the wrappers actually call
 # ---------------------------------------------------------------------------
-_WEAK_FIELD_VALUES = frozenset({"", "unknown", "crosswire-untagged"})
+_WEAK_FIELD_VALUES = frozenset({"", "unknown", "offband-untagged"})
 
 
 def _is_binary_parse_trustworthy(parsed: dict) -> bool:
@@ -184,8 +184,8 @@ def _is_binary_parse_trustworthy(parsed: dict) -> bool:
     Validity gate for a non-None parse_identity_from_binary() result.
 
     Defends against the realistic threat: a build host where git is missing
-    or has no history, causing inject_crosswire_version.py to silently emit
-    its fallback strings ("unknown" / "crosswire-untagged") into all four
+    or has no history, causing inject_offband_version.py to silently emit
+    its fallback strings ("unknown" / "offband-untagged") into all four
     fields. Without this gate, those bogus values would be recorded in the
     audit log as firmware_identity_source="binary-markers" - structurally
     valid but semantically useless for post-incident reconstruction.
@@ -195,8 +195,8 @@ def _is_binary_parse_trustworthy(parsed: dict) -> bool:
     working tree (the pre-#200 behavior we're replacing) instead of a row
     of "unknown"s.
     """
-    for key in ("crosswire_version", "crosswire_git_sha",
-                "crosswire_branch", "crosswire_build_date"):
+    for key in ("offband_version", "offband_git_sha",
+                "offband_branch", "offband_build_date"):
         if parsed.get(key, "") in _WEAK_FIELD_VALUES:
             return False
     return True
@@ -208,10 +208,10 @@ def get_firmware_identity(firmware_path: Path, firmware_dir: Path) -> dict:
 
     Returns a dict shaped:
       {
-        "crosswire_version":        str,
-        "crosswire_git_sha":        str,
-        "crosswire_branch":         str,
-        "crosswire_build_date":     str,
+        "offband_version":        str,
+        "offband_git_sha":        str,
+        "offband_branch":         str,
+        "offband_build_date":     str,
         "firmware_identity_source": "binary-markers" | "git-fallback",
       }
 

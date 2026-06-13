@@ -11,7 +11,7 @@
   #include <Arduino.h>
 #endif
 
-namespace crosswire {
+namespace offband {
 
 // ---------------------------------------------------------------------------
 // begin
@@ -42,7 +42,7 @@ void MqttBrokerPool::begin(const mesh::LocalIdentity& identity,
 
     // Create per-broker client locks + clear reconcile flags BEFORE the
     // worker task starts -- runs single-threaded on loopTask here (#53).
-    for (uint8_t slot = 0; slot < CROSSWIRE_MAX_BROKERS; ++slot) {
+    for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
         brokers_[slot].initLock();
         reconciling_[slot] = false;
     }
@@ -50,7 +50,7 @@ void MqttBrokerPool::begin(const mesh::LocalIdentity& identity,
     // Initialize each configured slot. begin() stores config always and
     // creates a live client ONLY if the slot is enabled (#53); disabled or
     // url-empty slots stay client-less.
-    for (uint8_t slot = 0; slot < CROSSWIRE_MAX_BROKERS; ++slot) {
+    for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
         BrokerConfig cfg;
         if (!readBrokerConfig(slot, cfg)) continue;
         if (cfg.url[0] == '\0') continue;  // skip unused slots
@@ -63,7 +63,7 @@ void MqttBrokerPool::begin(const mesh::LocalIdentity& identity,
     // on MQTT for any reason (Strycher/Crosswire#53). Created once; lives for
     // the device's life (pool.begin() is one-shot, guarded upstream).
     worker_run_  = true;
-    reconcile_q_ = xQueueCreate(CROSSWIRE_MAX_BROKERS * 2, sizeof(uint8_t));
+    reconcile_q_ = xQueueCreate(OFFBAND_MAX_BROKERS * 2, sizeof(uint8_t));
     if (reconcile_q_ != nullptr) {
         xTaskCreatePinnedToCore(&MqttBrokerPool::workerTrampoline, "mqtt_worker",
                                 6144, this, 5, &worker_task_, tskNO_AFFINITY);
@@ -86,7 +86,7 @@ void MqttBrokerPool::shutdown() {
         xQueueSend(reconcile_q_, &sentinel, 0);  // wake worker so it can exit
     }
 #endif
-    for (uint8_t slot = 0; slot < CROSSWIRE_MAX_BROKERS; ++slot) {
+    for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
         brokers_[slot].shutdown();
     }
 }
@@ -121,7 +121,7 @@ void MqttBrokerPool::setStatusSnapshot(const MqttStatusSnapshot& snap) {
 uint8_t MqttBrokerPool::publishPacket(const uint8_t* payload, size_t payload_len) {
     if (payload == nullptr || payload_len == 0) return 0;
     uint8_t accepted = 0;
-    for (uint8_t slot = 0; slot < CROSSWIRE_MAX_BROKERS; ++slot) {
+    for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
         if (reconciling_[slot]) continue;  // #53: skip slots mid-reconcile
         MqttBroker& b = brokers_[slot];
         if (!b.isConfigured() || b.runtime().state != BrokerState::Up) continue;
@@ -181,7 +181,7 @@ uint8_t MqttBrokerPool::publishRawFromBytes(const uint8_t* raw, size_t raw_len,
 
     // Fan-out per broker with their own iata + topic_prefix.
     uint8_t accepted = 0;
-    for (uint8_t slot = 0; slot < CROSSWIRE_MAX_BROKERS; ++slot) {
+    for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
         if (reconciling_[slot]) continue;  // #53: skip slots mid-reconcile
         MqttBroker& b = brokers_[slot];
         if (!b.isConfigured() || b.runtime().state != BrokerState::Up) continue;
@@ -259,7 +259,7 @@ void MqttBrokerPool::publishStatusIfDue(uint32_t now_ms) {
     }
 
     char status_buf[1024];
-    for (uint8_t slot = 0; slot < CROSSWIRE_MAX_BROKERS; ++slot) {
+    for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
         if (reconciling_[slot]) continue;  // #53: skip slots mid-reconcile
         MqttBroker& b = brokers_[slot];
         if (!b.isConfigured() || b.runtime().state != BrokerState::Up) continue;
@@ -287,7 +287,7 @@ void MqttBrokerPool::publishStatusIfDue(uint32_t now_ms) {
 // reloadSlot -- uses cached identity_ from begin()
 // ---------------------------------------------------------------------------
 bool MqttBrokerPool::reloadSlot(uint8_t slot) {
-    if (slot >= CROSSWIRE_MAX_BROKERS) return false;
+    if (slot >= OFFBAND_MAX_BROKERS) return false;
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     // #53: NON-BLOCKING. Mark the slot reconciling (loopTask skips it from
     // here on) and hand it to the worker, which does the actual begin/shutdown
@@ -318,7 +318,7 @@ void MqttBrokerPool::workerTrampoline(void* arg) {
 // (begin() may stop+destroy+recreate the esp_mqtt client); runs ONLY on the
 // worker task. begin() creates a client only if the slot is enabled.
 void MqttBrokerPool::reconcileSlot(uint8_t slot) {
-    if (slot >= CROSSWIRE_MAX_BROKERS || identity_ == nullptr) return;
+    if (slot >= OFFBAND_MAX_BROKERS || identity_ == nullptr) return;
     BrokerConfig cfg;
     if (!readBrokerConfig(slot, cfg) || cfg.url[0] == '\0') {
         brokers_[slot].shutdown();   // no/empty config -> ensure no client
@@ -336,7 +336,7 @@ void MqttBrokerPool::workerLoop() {
         bool got = (xQueueReceive(reconcile_q_, &slot, pdMS_TO_TICKS(500)) == pdTRUE);
         if (!worker_run_) break;
 
-        if (got && slot < CROSSWIRE_MAX_BROKERS) {
+        if (got && slot < OFFBAND_MAX_BROKERS) {
             reconcileSlot(slot);
             reconciling_[slot] = false;  // hand the slot back to loopTask
         }
@@ -347,7 +347,7 @@ void MqttBrokerPool::workerLoop() {
         // the same slot serializes safely (and loopTask only publishes to Up
         // slots, never one the worker is connect-blocking on).
         uint32_t now = millis();
-        for (uint8_t s = 0; s < CROSSWIRE_MAX_BROKERS; ++s) {
+        for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
             if (reconciling_[s]) continue;
             MqttBroker& b = brokers_[s];
             if (!b.isConfigured()) continue;
@@ -370,7 +370,7 @@ void MqttBrokerPool::workerLoop() {
 // ---------------------------------------------------------------------------
 uint8_t MqttBrokerPool::configuredCount() const {
     uint8_t n = 0;
-    for (uint8_t i = 0; i < CROSSWIRE_MAX_BROKERS; ++i) {
+    for (uint8_t i = 0; i < OFFBAND_MAX_BROKERS; ++i) {
         if (brokers_[i].isConfigured()) n++;
     }
     return n;
@@ -378,7 +378,7 @@ uint8_t MqttBrokerPool::configuredCount() const {
 
 uint8_t MqttBrokerPool::enabledCount() const {
     uint8_t n = 0;
-    for (uint8_t i = 0; i < CROSSWIRE_MAX_BROKERS; ++i) {
+    for (uint8_t i = 0; i < OFFBAND_MAX_BROKERS; ++i) {
         if (brokers_[i].isConfigured() && brokers_[i].config().enabled) n++;
     }
     return n;
@@ -386,10 +386,10 @@ uint8_t MqttBrokerPool::enabledCount() const {
 
 uint8_t MqttBrokerPool::upCount() const {
     uint8_t n = 0;
-    for (uint8_t i = 0; i < CROSSWIRE_MAX_BROKERS; ++i) {
+    for (uint8_t i = 0; i < OFFBAND_MAX_BROKERS; ++i) {
         if (brokers_[i].runtime().state == BrokerState::Up) n++;
     }
     return n;
 }
 
-}  // namespace crosswire
+}  // namespace offband

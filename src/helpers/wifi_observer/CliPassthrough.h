@@ -21,7 +21,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-namespace crosswire {
+namespace offband {
 
 enum class CliResult : uint8_t {
     Ok      = 0,
@@ -47,4 +47,4 @@ CliResult cliPassthroughExecute(const char* line,
 // accepted by the allowlist (without executing).
 bool cliPassthroughIsAllowed(const char* line);
 
-}  // namespace crosswire
+}  // namespace offband

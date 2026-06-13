@@ -1,4 +1,4 @@
-# scripts/test_crosswire_version_splash.py
+# scripts/test_offband_version_splash.py
 #
 # Verifies the companion OLED splash compact-version derivation
 # (SplashScreen in examples/companion_radio/ui-new/UITask.cpp) by implementing
@@ -7,17 +7,17 @@
 # The C++ implementation is a direct translation of this algorithm; this test
 # is the executable specification (Strycher/Crosswire#33). Portable: no g++.
 #
-# Run with:  python scripts/test_crosswire_version_splash.py
+# Run with:  python scripts/test_offband_version_splash.py
 
 import sys
 
-CW_PREFIX = "crosswire-"
+CW_PREFIX = "offband-"
 
 
-def compact_crosswire_version(cw: str) -> str:
-    """Python equivalent of the SplashScreen _crosswire_short derivation.
+def compact_offband_version(cw: str) -> str:
+    """Python equivalent of the SplashScreen _offband_short derivation.
 
-    CROSSWIRE_VERSION is `git describe` output: "<tag>[-<N>-g<sha>][-dirty]"
+    OFFBAND_VERSION is `git describe` output: "<tag>[-<N>-g<sha>][-dirty]"
     where <tag> may itself contain dashes for a pre-release (e.g. v0.14.0-rc1).
     The commits-since suffix is identified by git's "-g<sha>" marker, NOT the
     first dash (which on a pre-release tag is the "-rcN" separator).
@@ -45,20 +45,20 @@ def compact_crosswire_version(cw: str) -> str:
 
 
 FIXTURES = [
-    # (label, CROSSWIRE_VERSION, expected compact form)
-    ("exact release tag",        "crosswire-v0.14.0",                  "v0.14.0"),
-    ("exact pre-release tag",    "crosswire-v0.14.0-rc1",              "v0.14.0-rc1"),
-    ("rc2 exact pre-release",    "crosswire-v1.2.3-rc2",              "v1.2.3-rc2"),
-    ("commits past release",     "crosswire-v0.14.0-4-g369714e",       "v0.14.0+4"),
-    ("commits past pre-release", "crosswire-v0.14.0-rc1-4-g369714e",   "v0.14.0-rc1+4"),
-    ("dirty exact pre-release",  "crosswire-v0.14.0-rc1-dirty",        "v0.14.0-rc1*"),
-    ("dirty commits past tag",   "crosswire-v0.14.0-4-g369714e-dirty", "v0.14.0+4*"),
+    # (label, OFFBAND_VERSION, expected compact form)
+    ("exact release tag",        "offband-v0.14.0",                  "v0.14.0"),
+    ("exact pre-release tag",    "offband-v0.14.0-rc1",              "v0.14.0-rc1"),
+    ("rc2 exact pre-release",    "offband-v1.2.3-rc2",              "v1.2.3-rc2"),
+    ("commits past release",     "offband-v0.14.0-4-g369714e",       "v0.14.0+4"),
+    ("commits past pre-release", "offband-v0.14.0-rc1-4-g369714e",   "v0.14.0-rc1+4"),
+    ("dirty exact pre-release",  "offband-v0.14.0-rc1-dirty",        "v0.14.0-rc1*"),
+    ("dirty commits past tag",   "offband-v0.14.0-4-g369714e-dirty", "v0.14.0+4*"),
     ("untagged SHA fallback",    "369714e",                            "369714e"),
 ]
 
 failures = []
 for label, cw, expected in FIXTURES:
-    got = compact_crosswire_version(cw)
+    got = compact_offband_version(cw)
     if got == expected:
         print(f"OK: '{cw}' -> '{got}' ({label})")
     else:
@@ -67,7 +67,7 @@ for label, cw, expected in FIXTURES:
 
 # Explicit regression guard for the #33 bug: a clean pre-release tag must NOT
 # collapse to "v0.14.0+0".
-if compact_crosswire_version("crosswire-v0.14.0-rc1") == "v0.14.0+0":
+if compact_offband_version("offband-v0.14.0-rc1") == "v0.14.0+0":
     print("FAIL: regression -- pre-release tag still renders the spurious '+0'")
     failures.append("rc1-plus0-regression")
 

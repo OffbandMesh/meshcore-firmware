@@ -1,8 +1,8 @@
 name: CI
 
-# Crosswire firmware build verification. Builds a curated representative env
+# Offband firmware build verification. Builds a curated representative env
 # set on every push to the canonical branch + PRs. NOT the full 407-env matrix
-# (that is a publish concern); this proves the Crosswire differentiators
+# (that is a publish concern); this proves the Offband differentiators
 # (observer, repeater-telemetry) and SafeBoot (ESP32 + nRF52) compile.
 #
 # This repo's platformio.ini requires PIO_SECRETS_FILE (LoRa#209). Real secrets
@@ -61,7 +61,7 @@ jobs:
       - name: Upload firmware artifact (dev channel)
         uses: actions/upload-artifact@v4
         with:
-          name: crosswire-dev-${{ matrix.env }}
+          name: offband-dev-${{ matrix.env }}
           path: |
             .pio/build/${{ matrix.env }}/firmware.bin
             .pio/build/${{ matrix.env }}/firmware.elf

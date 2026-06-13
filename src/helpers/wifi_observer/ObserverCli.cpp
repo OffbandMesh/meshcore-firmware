@@ -16,7 +16,7 @@
   #include <WiFi.h>          // WiFi.localIP() for get wifi.status
 #endif
 
-namespace crosswire {
+namespace offband {
 
 // ---------------------------------------------------------------------------
 // Small utilities
@@ -44,7 +44,7 @@ static const char* skipPrefix(const char* s, const char* prefix) {
 static int parseSlot(const char* s) {
     if (s == nullptr || *s < '0' || *s > '9') return -1;
     int v = (int)strtol(s, nullptr, 10);
-    if (v < 0 || v >= CROSSWIRE_MAX_BROKERS) return -1;
+    if (v < 0 || v >= OFFBAND_MAX_BROKERS) return -1;
     return v;
 }
 
@@ -100,7 +100,7 @@ static const char* stateStr(BrokerState s) {
 static bool handleStatus(char* reply, size_t reply_size, MqttBrokerPool& pool) {
     int n = snprintf(reply, reply_size, "mqtt: configured=%u enabled=%u up=%u\n",
                      pool.configuredCount(), pool.enabledCount(), pool.upCount());
-    for (uint8_t slot = 0; slot < CROSSWIRE_MAX_BROKERS; ++slot) {
+    for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
         const MqttBroker& b = pool.broker(slot);
         if (!b.isConfigured()) continue;
         if (n < 0 || (size_t)n >= reply_size) break;
@@ -579,7 +579,7 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
             int slot = parseSlot(en_rest);
             if (slot < 0) {
                 snprintf(reply, reply_size, "ERROR: usage: mqtt enable <0..%d>\n",
-                         CROSSWIRE_MAX_BROKERS - 1);
+                         OFFBAND_MAX_BROKERS - 1);
                 return true;
             }
             return handleEnableSet(reply, reply_size, pool, slot, true);
@@ -589,7 +589,7 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
             int slot = parseSlot(dis_rest);
             if (slot < 0) {
                 snprintf(reply, reply_size, "ERROR: usage: mqtt disable <0..%d>\n",
-                         CROSSWIRE_MAX_BROKERS - 1);
+                         OFFBAND_MAX_BROKERS - 1);
                 return true;
             }
             return handleEnableSet(reply, reply_size, pool, slot, false);
@@ -599,7 +599,7 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
             int slot = parseSlot(view_rest);
             if (slot < 0) {
                 snprintf(reply, reply_size, "ERROR: usage: mqtt view <0..%d>\n",
-                         CROSSWIRE_MAX_BROKERS - 1);
+                         OFFBAND_MAX_BROKERS - 1);
                 return true;
             }
             return handleViewBroker(reply, reply_size, slot);
@@ -609,7 +609,7 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
             int slot = parseSlot(clr_rest);
             if (slot < 0) {
                 snprintf(reply, reply_size, "ERROR: usage: mqtt clear <0..%d>\n",
-                         CROSSWIRE_MAX_BROKERS - 1);
+                         OFFBAND_MAX_BROKERS - 1);
                 return true;
             }
             return handleClearBroker(reply, reply_size, pool, slot);
@@ -665,7 +665,7 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
             if (slot < 0) {
                 snprintf(reply, reply_size,
                          "ERROR: usage: get mqtt.broker.<0..%d>.<key>\n",
-                         CROSSWIRE_MAX_BROKERS - 1);
+                         OFFBAND_MAX_BROKERS - 1);
                 return true;
             }
             while (*p >= '0' && *p <= '9') p++;  // past slot digit(s)
@@ -725,7 +725,7 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
         int slot = parseSlot(p);
         if (slot < 0) {
             snprintf(reply, reply_size, "ERROR: usage: set mqtt.broker.<0..%d>.<key> <value>\n",
-                     CROSSWIRE_MAX_BROKERS - 1);
+                     OFFBAND_MAX_BROKERS - 1);
             return true;
         }
         // Skip past the slot digit(s)
@@ -748,4 +748,4 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
     return false;
 }
 
-}  // namespace crosswire
+}  // namespace offband

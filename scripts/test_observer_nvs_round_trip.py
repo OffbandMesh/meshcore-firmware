@@ -73,11 +73,11 @@ class Preferences {
 
 HARNESS = r"""
 // Define BOTH ARDUINO (so ConfigSchema.cpp picks the real branch) AND
-// CROSSWIRE_OBSERVER (so the transitive include of WifiObserverConfig.h
+// OFFBAND_OBSERVER (so the transitive include of WifiObserverConfig.h
 // doesn't trip its "missing define" #error guard). Both defines must
 // precede every include.
 #define ARDUINO 1
-#define CROSSWIRE_OBSERVER 1
+#define OFFBAND_OBSERVER 1
 #include "prefs_mock.h"
 #include "src/helpers/wifi_observer/ConfigSchema.cpp"
 
@@ -85,7 +85,7 @@ HARNESS = r"""
 #include <cstring>
 
 int main() {
-    using namespace crosswire;
+    using namespace offband;
 
     // Fixture: realistic broker config in slot 2 (incl Plan 2 v2 fields).
     BrokerConfig wrote;

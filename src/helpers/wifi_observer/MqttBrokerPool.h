@@ -1,6 +1,6 @@
 // src/helpers/wifi_observer/MqttBrokerPool.h
 //
-// Plan 2 v2 Task 8: owns up to CROSSWIRE_MAX_BROKERS MqttBroker instances.
+// Plan 2 v2 Task 8: owns up to OFFBAND_MAX_BROKERS MqttBroker instances.
 // Loads each from NVS via ConfigSchema. Schedules connect attempts
 // (staggered by slot index). Fan-out publish + periodic /status.
 
@@ -23,7 +23,7 @@
 // buildPacketJson, so the forward declaration is sufficient here.
 namespace mesh { class Packet; }
 
-namespace crosswire {
+namespace offband {
 
 class MqttBrokerPool {
 public:
@@ -108,12 +108,12 @@ private:
 #ifdef ARDUINO
     const mesh::LocalIdentity* identity_ = nullptr;
 #endif
-    MqttBroker brokers_[CROSSWIRE_MAX_BROKERS];
+    MqttBroker brokers_[OFFBAND_MAX_BROKERS];
 
     // Per-slot guard: true while the lifecycle worker is creating/destroying
     // that slot's client. loopTask publish/status paths SKIP reconciling slots
     // so they never wait on the worker's blocking teardown (#53).
-    volatile bool reconciling_[CROSSWIRE_MAX_BROKERS] = {false};
+    volatile bool reconciling_[OFFBAND_MAX_BROKERS] = {false};
 
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     // Lifecycle worker: owns ALL blocking esp_mqtt ops so loopTask never
@@ -148,4 +148,4 @@ private:
     void publishStatusIfDue(uint32_t now_ms);
 };
 
-}  // namespace crosswire
+}  // namespace offband
