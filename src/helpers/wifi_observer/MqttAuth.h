@@ -17,7 +17,7 @@
   #include <mqtt_client.h>       // esp_mqtt_client_config_t
 #endif
 
-namespace crosswire {
+namespace offband {
 
 // Abstract auth strategy. Two methods:
 //   apply() -- mutate the esp_mqtt config to install credentials.
@@ -104,4 +104,4 @@ MqttAuth* makeAuth(const BrokerConfig& cfg
 #endif
                   );
 
-}  // namespace crosswire
+}  // namespace offband

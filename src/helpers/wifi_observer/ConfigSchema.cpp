@@ -11,11 +11,11 @@
   #include <cstring>
 #endif
 
-namespace crosswire {
+namespace offband {
 
 void mqttBrokerNamespace(uint8_t broker_index, char* out, size_t out_len) {
     // "mqtt_b0".."mqtt_b5" -- 7 chars, well under 15-char NVS limit.
-    if (broker_index >= CROSSWIRE_MAX_BROKERS || out_len < 8) {
+    if (broker_index >= OFFBAND_MAX_BROKERS || out_len < 8) {
         if (out_len > 0) out[0] = '\0';
         return;
     }
@@ -66,7 +66,7 @@ void writeStatusIntervalSec(uint16_t seconds) {
 }
 
 bool readBrokerConfig(uint8_t slot, BrokerConfig& out) {
-    if (slot >= CROSSWIRE_MAX_BROKERS) return false;
+    if (slot >= OFFBAND_MAX_BROKERS) return false;
     char ns[16];
     mqttBrokerNamespace(slot, ns, sizeof(ns));
     Preferences p;
@@ -110,7 +110,7 @@ bool readBrokerConfig(uint8_t slot, BrokerConfig& out) {
 }
 
 bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg) {
-    if (slot >= CROSSWIRE_MAX_BROKERS) return false;
+    if (slot >= OFFBAND_MAX_BROKERS) return false;
     char ns[16];
     mqttBrokerNamespace(slot, ns, sizeof(ns));
     Preferences p;
@@ -143,7 +143,7 @@ bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg) {
 // (the old value persists), which left `mqtt clear` ineffective -- the slot
 // re-appeared in `mqtt status` and survived a reboot. Wiping is definitive.
 bool clearBrokerConfig(uint8_t slot) {
-    if (slot >= CROSSWIRE_MAX_BROKERS) return false;
+    if (slot >= OFFBAND_MAX_BROKERS) return false;
     char ns[16];
     mqttBrokerNamespace(slot, ns, sizeof(ns));
     Preferences p;
@@ -232,7 +232,7 @@ void populateDefaultBrokers() {
     }
 
     for (uint8_t slot = 0;
-         slot < kNumDefaultBrokers && slot < CROSSWIRE_MAX_BROKERS; ++slot) {
+         slot < kNumDefaultBrokers && slot < OFFBAND_MAX_BROKERS; ++slot) {
         BrokerConfig cur;
         readBrokerConfig(slot, cur);
         if (cur.url[0] != '\0') {
@@ -360,4 +360,4 @@ size_t formatBrokerConfig(uint8_t slot, const BrokerConfig& cfg,
 
 #undef CW_VIEW_APPEND
 
-}  // namespace crosswire
+}  // namespace offband

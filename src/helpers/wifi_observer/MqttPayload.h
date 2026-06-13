@@ -1,6 +1,6 @@
 // src/helpers/wifi_observer/MqttPayload.h
 //
-// Shared payload + topic builders for the Crosswire observer broker pool.
+// Shared payload + topic builders for the Offband observer broker pool.
 // All brokers (vendored + custom) call these same functions; per-broker
 // variation is via the MqttPayloadCtx argument, not via class state.
 //
@@ -22,7 +22,7 @@ namespace mesh {
     class Packet;
 }
 
-namespace crosswire {
+namespace offband {
 
 // Re-export the same status snapshot shape the vendored MqttUplink used,
 // to keep MeshCore main.cpp's snapshot-build code unchanged when Task 11
@@ -117,4 +117,4 @@ void escapeJsonString(const char* input, char* output, size_t output_size);
 // Used for the "model" field in status JSON.
 void makeSafeToken(const char* input, char* output, size_t output_size);
 
-}  // namespace crosswire
+}  // namespace offband

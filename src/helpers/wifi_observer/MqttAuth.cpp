@@ -10,7 +10,7 @@
   #include <ctime>
 #endif
 
-namespace crosswire {
+namespace offband {
 
 // ---------------------------------------------------------------------------
 // MqttAuthNone -- no credentials, no refresh.
@@ -179,4 +179,4 @@ MqttAuth* makeAuth(const BrokerConfig& cfg
     }
 }
 
-}  // namespace crosswire
+}  // namespace offband

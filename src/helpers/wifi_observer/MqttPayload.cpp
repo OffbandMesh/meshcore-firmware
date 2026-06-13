@@ -20,7 +20,7 @@
   #include <target.h>        // `board` global (getManufacturerName())
 #endif
 
-namespace crosswire {
+namespace offband {
 
 // ---------------------------------------------------------------------------
 // Helpers — ported verbatim from MqttUplink.cpp:371-456
@@ -346,4 +346,4 @@ int buildRawJson(char* buf, size_t buf_size,
 
 #endif  // ARDUINO
 
-}  // namespace crosswire
+}  // namespace offband

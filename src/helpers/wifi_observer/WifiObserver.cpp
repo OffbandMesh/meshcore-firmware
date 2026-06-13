@@ -17,7 +17,7 @@
   #include <esp_sntp.h>     // #87: esp_sntp_stop() once GPS owns the clock
 #endif
 
-namespace crosswire {
+namespace offband {
 
 // Singleton pool. ObserverCli + main.cpp's status snapshot updater
 // access via wifiObserverPool().
@@ -67,10 +67,10 @@ void wifiObserverBegin() {
     crashLogf("[WifiObserver] boot; reset_reason=%d (%s) version=%s",
               (int)esp_reset_reason(),
               resetReasonString((int)esp_reset_reason()),
-              CROSSWIRE_VERSION);
+              OFFBAND_VERSION);
 #else
     crashLogf("[WifiObserver] boot (host build) version=%s",
-              CROSSWIRE_VERSION);
+              OFFBAND_VERSION);
 #endif
 
     crashLogf("[WifiObserver] subsystem starting");
@@ -218,4 +218,4 @@ const uint8_t* wifiObserverPubKey() {
 #endif
 }
 
-}  // namespace crosswire
+}  // namespace offband

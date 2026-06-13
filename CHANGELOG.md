@@ -1,10 +1,10 @@
 # Changelog
 
-All notable changes to Crosswire are documented here.
+All notable changes to Offband are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This
 project uses **Pattern B fork versioning** -- an independent
-`crosswire-vMAJOR.MINOR.PATCH` line with the upstream MeshCore baseline tracked
+`offband-vMAJOR.MINOR.PATCH` line (historically `crosswire-v*`) with the upstream MeshCore baseline tracked
 separately. See [VERSIONING.md](VERSIONING.md) for the cadence (commit per task /
 compile, PR per epic, tag per landing), the `+N` dev-build suffix, and the
 dev / `-rc` / stable release channels.
@@ -16,7 +16,15 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
-_Nothing yet._
+### Changed
+- **Rebranded the fork from Crosswire to Offband** (GitHub org `OffbandMesh`):
+  the C++ namespace, build macros, embedded identity blob, version prefix
+  (`offband-v*`), MQTT / flash-audit identity fields (`offband_*`), brand
+  strings (serial banner, `version` command, OLED splash, Home Assistant
+  manufacturer), and the WiFi setup-AP SSID (`Offband-Observer-`). Historical
+  `crosswire-v*` release tags are preserved; the `_sys` PSK domain separator
+  and the MeshCore interop topic namespace are intentionally unchanged.
+  Repo / board / working-dir moves to follow. (#100)
 
 ## [0.16.0] - 2026-06-12
 

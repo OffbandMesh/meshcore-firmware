@@ -42,7 +42,7 @@
   #include <helpers/ChannelDetails.h>
 #endif
 
-namespace crosswire {
+namespace offband {
 
 // ---------------------------------------------------------------------------
 // Pure logic. Always compiled.
@@ -198,7 +198,7 @@ void systemChannelDrain() {
 
 #ifdef ARDUINO
 
-}  // namespace crosswire
+}  // namespace offband
 
 // External reference to the global MyMesh instance defined in
 // examples/companion_radio/MyMesh.cpp at translation-unit scope
@@ -208,7 +208,7 @@ void systemChannelDrain() {
 // channel API which the cast below reaches through.
 extern class MyMesh the_mesh;
 
-namespace crosswire {
+namespace offband {
 
 bool systemChannelInit(const mesh::Identity& self_id) {
     // Derive what we WANT slot 40 to look like.
@@ -342,4 +342,4 @@ void systemChannelPostStatus(const char* /*fmt*/, ...) {}
 
 #endif  // ARDUINO
 
-}  // namespace crosswire
+}  // namespace offband

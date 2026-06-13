@@ -254,9 +254,9 @@ size_t WifiTelemetry::buildStatePayload(char* buf, size_t buflen, const Telemetr
         snprintf(last_snr_str, sizeof(last_snr_str), "%.2f", d.last_snr_db);
     }
 
-    // FF4 (#181 / LoRa-8wv): state payload includes upstream + Crosswire
-    // identity fields. CROSSWIRE_* defines come from build-time injection
-    // by scripts/inject_crosswire_version.py (FF2 / #179). _fw_version and
+    // FF4 (#181 / LoRa-8wv): state payload includes upstream + Offband
+    // identity fields. OFFBAND_* defines come from build-time injection
+    // by scripts/inject_offband_version.py (FF2 / #179). _fw_version and
     // _fw_build_date were already constructor-supplied per upstream design.
     int n = snprintf(buf, buflen,
         "{\"battery_mv\":%u,"
@@ -276,10 +276,10 @@ size_t WifiTelemetry::buildStatePayload(char* buf, size_t buflen, const Telemetr
         "\"timestamp\":%lu,"
         "\"upstream_version\":\"%s\","
         "\"upstream_build_date\":\"%s\","
-        "\"crosswire_version\":\"%s\","
-        "\"crosswire_git_sha\":\"%s\","
-        "\"crosswire_branch\":\"%s\","
-        "\"crosswire_build_date\":\"%s\","
+        "\"offband_version\":\"%s\","
+        "\"offband_git_sha\":\"%s\","
+        "\"offband_branch\":\"%s\","
+        "\"offband_build_date\":\"%s\","
         "\"wifi_on_pct_24h\":%u.%02u}",
         (unsigned)d.battery_mv,
         (unsigned)d.battery_pct,
@@ -298,10 +298,10 @@ size_t WifiTelemetry::buildStatePayload(char* buf, size_t buflen, const Telemetr
         (unsigned long)d.timestamp,
         _fw_version ? _fw_version : "unknown",
         _fw_build_date ? _fw_build_date : "unknown",
-        CROSSWIRE_VERSION,
-        CROSSWIRE_GIT_SHA,
-        CROSSWIRE_BRANCH,
-        CROSSWIRE_BUILD_DATE,
+        OFFBAND_VERSION,
+        OFFBAND_GIT_SHA,
+        OFFBAND_BRANCH,
+        OFFBAND_BUILD_DATE,
         (unsigned)(d.wifi_on_pct_24h_x100 / 100),
         (unsigned)(d.wifi_on_pct_24h_x100 % 100));
 
@@ -364,18 +364,18 @@ size_t WifiTelemetry::buildScalarDiscoveryPayload(char* buf, size_t buflen,
     // Compose sw_version string: "v1.15.0 (12 May 2026)" if both supplied, else
     // just the version.
     // FF4 (#181 / LoRa-8wv): compose sw_version with both upstream MeshCore
-    // baseline AND Crosswire fork identity. CROSSWIRE_VERSION is injected as
-    // a build-time -D macro by scripts/inject_crosswire_version.py (FF2 / #179).
+    // baseline AND Offband fork identity. OFFBAND_VERSION is injected as
+    // a build-time -D macro by scripts/inject_offband_version.py (FF2 / #179).
     // See VERSIONING.md for the dual-version scheme rationale.
     char sw_version[96];
     if (_fw_version && _fw_build_date) {
-        snprintf(sw_version, sizeof(sw_version), "MC %s (%s) / Crosswire %s",
-                 _fw_version, _fw_build_date, CROSSWIRE_VERSION);
+        snprintf(sw_version, sizeof(sw_version), "MC %s (%s) / Offband %s",
+                 _fw_version, _fw_build_date, OFFBAND_VERSION);
     } else if (_fw_version) {
-        snprintf(sw_version, sizeof(sw_version), "MC %s / Crosswire %s",
-                 _fw_version, CROSSWIRE_VERSION);
+        snprintf(sw_version, sizeof(sw_version), "MC %s / Offband %s",
+                 _fw_version, OFFBAND_VERSION);
     } else {
-        snprintf(sw_version, sizeof(sw_version), "Crosswire %s", CROSSWIRE_VERSION);
+        snprintf(sw_version, sizeof(sw_version), "Offband %s", OFFBAND_VERSION);
     }
 
     // Entity name is JUST the sensor's short name (e.g. "Battery Voltage").
@@ -390,7 +390,7 @@ size_t WifiTelemetry::buildScalarDiscoveryPayload(char* buf, size_t buflen,
         "%s%s%s"
         "%s%s%s"
         "%s%s%s"
-        "\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mf\":\"Crosswire\",\"mdl\":\"Repeater\",\"sw_version\":\"%s\",\"hw_version\":\"%s\",\"cu\":\"https://github.com/Strycher/MeshCore\"}}",
+        "\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mf\":\"Offband\",\"mdl\":\"Repeater\",\"sw_version\":\"%s\",\"hw_version\":\"%s\",\"cu\":\"https://github.com/Strycher/MeshCore\"}}",
         name,
         _node_id, sensor_id,
         state_topic,
@@ -436,18 +436,18 @@ size_t WifiTelemetry::buildNeighborsSummaryDiscoveryPayload(char* buf, size_t bu
     buildNeighborsTopic(state_topic, sizeof(state_topic));
 
     // FF4 (#181 / LoRa-8wv): compose sw_version with both upstream MeshCore
-    // baseline AND Crosswire fork identity. CROSSWIRE_VERSION is injected as
-    // a build-time -D macro by scripts/inject_crosswire_version.py (FF2 / #179).
+    // baseline AND Offband fork identity. OFFBAND_VERSION is injected as
+    // a build-time -D macro by scripts/inject_offband_version.py (FF2 / #179).
     // See VERSIONING.md for the dual-version scheme rationale.
     char sw_version[96];
     if (_fw_version && _fw_build_date) {
-        snprintf(sw_version, sizeof(sw_version), "MC %s (%s) / Crosswire %s",
-                 _fw_version, _fw_build_date, CROSSWIRE_VERSION);
+        snprintf(sw_version, sizeof(sw_version), "MC %s (%s) / Offband %s",
+                 _fw_version, _fw_build_date, OFFBAND_VERSION);
     } else if (_fw_version) {
-        snprintf(sw_version, sizeof(sw_version), "MC %s / Crosswire %s",
-                 _fw_version, CROSSWIRE_VERSION);
+        snprintf(sw_version, sizeof(sw_version), "MC %s / Offband %s",
+                 _fw_version, OFFBAND_VERSION);
     } else {
-        snprintf(sw_version, sizeof(sw_version), "Crosswire %s", CROSSWIRE_VERSION);
+        snprintf(sw_version, sizeof(sw_version), "Offband %s", OFFBAND_VERSION);
     }
 
     // Text-state sensor, no stat_cla (so no graph). Default entity category
@@ -458,7 +458,7 @@ size_t WifiTelemetry::buildNeighborsSummaryDiscoveryPayload(char* buf, size_t bu
         "\"uniq_id\":\"%s_neighbors_summary\","
         "\"stat_t\":\"%s\","
         "\"val_tpl\":\"{{ value_json.summary }}\","
-        "\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mf\":\"Crosswire\",\"mdl\":\"Repeater\",\"sw_version\":\"%s\",\"hw_version\":\"%s\",\"cu\":\"https://github.com/Strycher/MeshCore\"}}",
+        "\"dev\":{\"ids\":[\"%s\"],\"name\":\"%s\",\"mf\":\"Offband\",\"mdl\":\"Repeater\",\"sw_version\":\"%s\",\"hw_version\":\"%s\",\"cu\":\"https://github.com/Strycher/MeshCore\"}}",
         _node_id,
         state_topic,
         _node_id,

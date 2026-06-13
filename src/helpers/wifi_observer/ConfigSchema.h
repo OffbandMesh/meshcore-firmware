@@ -1,6 +1,6 @@
 // src/helpers/wifi_observer/ConfigSchema.h
 //
-// Single source of truth for Crosswire observer NVS keys. All
+// Single source of truth for Offband observer NVS keys. All
 // observer-subsystem reads/writes flow through the typed accessors
 // below; raw Preferences calls are forbidden in observer code so
 // typos in key names cannot drift across files.
@@ -13,7 +13,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-namespace crosswire {
+namespace offband {
 
 // ---------------------------------------------------------------------------
 // Namespaces
@@ -75,7 +75,7 @@ void writeGlobalIata(const char* iata);
 uint16_t readStatusIntervalSec();
 void     writeStatusIntervalSec(uint16_t seconds);
 
-// Broker-slot accessors. Slot range [0, CROSSWIRE_MAX_BROKERS).
+// Broker-slot accessors. Slot range [0, OFFBAND_MAX_BROKERS).
 // Returns sensible defaults on read-miss (e.g., empty url, enabled=false,
 // transport=Tcp, port=1883).
 //
@@ -127,4 +127,4 @@ void populateDefaultBrokers();
 size_t formatBrokerConfig(uint8_t slot, const BrokerConfig& cfg,
                           char* out, size_t out_size);
 
-}  // namespace crosswire
+}  // namespace offband

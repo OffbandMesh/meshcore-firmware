@@ -2,7 +2,7 @@
 """
 scripts/test_observer_status_payload.py
 
-Plan 2 v2 Task 5: golden-JSON contract test for crosswire::buildStatusJson.
+Plan 2 v2 Task 5: golden-JSON contract test for offband::buildStatusJson.
 
 Compiles MqttPayload.cpp on the host (MSVC or g++), runs the status
 builder with a deterministic snapshot + ctx, captures the output, and
@@ -49,17 +49,17 @@ from pathlib import Path
 # Mirrors the snapshot fields used by the vendored MqttUplink in production.
 # Values chosen to be obvious in the JSON output for human review.
 HARNESS = r"""
-// Host-side test harness for crosswire::buildStatusJson.
+// Host-side test harness for offband::buildStatusJson.
 // We do NOT #define ARDUINO -- this exercises the host-portable branch
-// of MqttPayload.cpp. CROSSWIRE_OBSERVER is required by WifiObserverConfig.h.
-#define CROSSWIRE_OBSERVER 1
+// of MqttPayload.cpp. OFFBAND_OBSERVER is required by WifiObserverConfig.h.
+#define OFFBAND_OBSERVER 1
 #include "src/helpers/wifi_observer/MqttPayload.cpp"
 
 #include <cstdio>
 #include <cstring>
 
 int main() {
-    using namespace crosswire;
+    using namespace offband;
 
     MqttStatusSnapshot snap;
     snap.battery_mv     = 4100;

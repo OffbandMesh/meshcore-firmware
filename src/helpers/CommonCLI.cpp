@@ -5,14 +5,14 @@
 #include <RTClib.h>
 
 // Plan 2 v2 Task 11: ObserverCli dispatcher hooked into handleCommand's
-// fall-through. Compiles in only when CROSSWIRE_OBSERVER is defined
+// fall-through. Compiles in only when OFFBAND_OBSERVER is defined
 // (observer envs); other envs have zero impact.
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   #include "wifi_observer/ObserverCli.h"
   #include "wifi_observer/WifiObserver.h"  // wifiObserverPool() accessor
 #endif
 
-// #200 / LoRa-wek: embed the Crosswire identity blob in .rodata so the
+// #200 / LoRa-wek: embed the Offband identity blob in .rodata so the
 // flash-history parser (scripts/firmware_identity.py) can recover BUILD-time
 // identity by scanning the firmware binary, rather than re-running git at
 // flash time against a working tree that may have advanced past the build.
@@ -40,9 +40,9 @@
 //   so the marker section becomes reachable from the kept .init_array
 //   entry and survives --gc-sections on every platform.
 //
-// See scripts/inject_crosswire_version.py "ON-WIRE ABI WARNING" for format.
+// See scripts/inject_offband_version.py "ON-WIRE ABI WARNING" for format.
 __attribute__((used))
-static const char _xwire_identity_blob[] = CROSSWIRE_IDENTITY_BLOB;
+static const char _xwire_identity_blob[] = OFFBAND_IDENTITY_BLOB;
 
 // Volatile pointer the constructor writes to. volatile prevents the optimizer
 // from concluding the constructor body has no observable effect and elising
@@ -297,13 +297,13 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
     } else if (memcmp(command, "reboot", 6) == 0) {
       _board->reboot();  // doesn't return
     } else if (memcmp(command, "version", 7) == 0 && (command[7] == 0 || command[7] == ' ')) {
-      // Crosswire identity (FF3 / #180). Reports both upstream MeshCore version
+      // Offband identity (FF3 / #180). Reports both upstream MeshCore version
       // (via callback into example's MyMesh which #defines FIRMWARE_VERSION) and
-      // the Crosswire-injected build identity from scripts/inject_crosswire_version.py
+      // the Offband-injected build identity from scripts/inject_offband_version.py
       // (FF2 / #179). See VERSIONING.md for the dual-version scheme rationale.
-      sprintf(reply, "Upstream MeshCore: %s (%s)\nCrosswire fork: %s (sha %s, %s, built %s)",
+      sprintf(reply, "Upstream MeshCore: %s (%s)\nOffband fork: %s (sha %s, %s, built %s)",
               _callbacks->getFirmwareVer(), _callbacks->getBuildDate(),
-              CROSSWIRE_VERSION, CROSSWIRE_GIT_SHA, CROSSWIRE_BRANCH, CROSSWIRE_BUILD_DATE);
+              OFFBAND_VERSION, OFFBAND_GIT_SHA, OFFBAND_BRANCH, OFFBAND_BUILD_DATE);
       // #213: the in-handler keepalive moved to a file-scope constructor
       // (_xwire_keepalive_ctor near top of this file). The constructor
       // approach works on every platform; the in-handler line was
@@ -1226,9 +1226,9 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
     if (len == 0) {
       strcpy(reply, "-none-");
     }
-#ifdef CROSSWIRE_OBSERVER
-  } else if (crosswire::dispatchObserverCli(command, reply, /*reply_size=*/1024,
-                                            crosswire::wifiObserverPool())) {
+#ifdef OFFBAND_OBSERVER
+  } else if (offband::dispatchObserverCli(command, reply, /*reply_size=*/1024,
+                                            offband::wifiObserverPool())) {
     // handled by Plan 2 v2 observer CLI (mqtt status / enable / disable /
     // set mqtt.iata / set mqtt.status_interval / set mqtt.broker.<N>.*).
 #endif

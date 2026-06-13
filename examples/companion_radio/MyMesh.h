@@ -102,7 +102,7 @@ public:
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
 
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   // #31 Task C: live Dispatcher stats for the /status snapshot. Observer-only,
   // so guarded to keep this shared-lineage header's diff minimal against
   // upstream MeshCore (the only callers are observer-gated in main.cpp).
@@ -114,7 +114,7 @@ public:
   int      getOutboundQueueLen() const { return _mgr->getOutboundTotal(); }
 #endif
 
-#ifdef CROSSWIRE_OBSERVER_BLE_COMPANION
+#ifdef OFFBAND_OBSERVER_BLE_COMPANION
   // Plan 3 Task 10 (Strycher/LoRa#272): post a status message
   // onto the locked system channel slot. Builds a
   // RESP_CODE_CHANNEL_MSG_RECV_V3 frame (or the pre-v3
@@ -143,7 +143,7 @@ protected:
   void sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis=0) override;
 
   void logRxRaw(float snr, float rssi, const uint8_t raw[], int len) override;
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   void logRx(mesh::Packet* pkt, int len, float score) override;   // Strycher/LoRa#335: /packets path
 #endif
   bool isAutoAddEnabled() const override;
@@ -223,7 +223,7 @@ private:
 
   void checkCLIRescueCmd();
   void checkSerialInterface();
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   void checkObserverSerialCli();   // Strycher/LoRa#325: USB-serial -> observer CLI
 #endif
   bool isValidClientRepeatFreq(uint32_t f) const;
@@ -248,7 +248,7 @@ private:
   bool _iter_started;
   bool _cli_rescue;
   char cli_command[80];
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   // Strycher/LoRa#325: USB-serial observer-CLI line accumulator.
   // Initialized in the MyMesh constructor body (matching the convention
   // of the other members here), NOT via in-class initializers.

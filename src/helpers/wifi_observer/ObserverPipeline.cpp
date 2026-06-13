@@ -9,7 +9,7 @@
   #include <Arduino.h>
 #endif
 
-namespace crosswire {
+namespace offband {
 
 void ObserverPipeline::begin(MqttBrokerPool* pool) {
     pool_  = pool;
@@ -55,4 +55,4 @@ void observerLogRxParsedTrampoline(const mesh::Packet& packet, int rssi,
     observerPipeline().onParsedReceived(packet, rssi, snr, score, duration);
 }
 
-}  // namespace crosswire
+}  // namespace offband

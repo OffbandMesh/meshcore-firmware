@@ -1,6 +1,6 @@
 #include "SSD1306Display.h"
 
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   #include <helpers/wifi_observer/CrashLog.h>
 #endif
 
@@ -22,8 +22,8 @@ bool SSD1306Display::begin() {
 }
 
 void SSD1306Display::turnOn() {
-#ifdef CROSSWIRE_OBSERVER
-  crosswire::crashLogf("[oled] turnOn() called; was_on=%d", (int)_isOn);
+#ifdef OFFBAND_OBSERVER
+  offband::crashLogf("[oled] turnOn() called; was_on=%d", (int)_isOn);
 #endif
   if (!_isOn) {
     if (_peripher_power) _peripher_power->claim();
@@ -34,8 +34,8 @@ void SSD1306Display::turnOn() {
 }
 
 void SSD1306Display::turnOff() {
-#ifdef CROSSWIRE_OBSERVER
-  crosswire::crashLogf("[oled] turnOff() called; was_on=%d", (int)_isOn);
+#ifdef OFFBAND_OBSERVER
+  offband::crashLogf("[oled] turnOff() called; was_on=%d", (int)_isOn);
 #endif
   display.ssd1306_command(SSD1306_DISPLAYOFF);
   if (_isOn) {

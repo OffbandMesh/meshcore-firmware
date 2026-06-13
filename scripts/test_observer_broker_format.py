@@ -2,7 +2,7 @@
 """
 scripts/test_observer_broker_format.py
 
-Host-runnable test for crosswire::formatBrokerConfig (#98, `mqtt view <N>`).
+Host-runnable test for offband::formatBrokerConfig (#98, `mqtt view <N>`).
 Compiles ConfigSchema.cpp against the in-memory Preferences mock and asserts
 that the rendered per-slot view:
 
@@ -39,7 +39,7 @@ from test_observer_nvs_round_trip import (  # noqa: E402
 
 HARNESS = r"""
 #define ARDUINO 1
-#define CROSSWIRE_OBSERVER 1
+#define OFFBAND_OBSERVER 1
 #include "prefs_mock.h"
 #include "src/helpers/wifi_observer/ConfigSchema.cpp"
 
@@ -52,7 +52,7 @@ static int fail(const char* why, const char* buf) {
 }
 
 int main() {
-    using namespace crosswire;
+    using namespace offband;
 
     BrokerConfig cfg;
     cfg.enabled   = false;
@@ -142,8 +142,8 @@ int main() {
     // 8. clearBrokerConfig wipes a slot's NVS namespace (the `mqtt clear` fix).
     //    Writing an empty config was not enough on real ESP32 NVS; clearing the
     //    namespace makes readBrokerConfig return defaults (empty url). Use the
-    //    LAST valid slot so this holds regardless of CROSSWIRE_MAX_BROKERS.
-    const uint8_t cslot = (uint8_t)(CROSSWIRE_MAX_BROKERS - 1);
+    //    LAST valid slot so this holds regardless of OFFBAND_MAX_BROKERS.
+    const uint8_t cslot = (uint8_t)(OFFBAND_MAX_BROKERS - 1);
     BrokerConfig w;
     strcpy(w.url, "wss://x.example:443/mqtt");
     if (!writeBrokerConfig(cslot, w)) { puts("FAIL: clear precond write"); return 1; }

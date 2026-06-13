@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Request an enhancement or optimization for Crosswire (any MeshCore role)
+about: Request an enhancement or optimization for Offband (any MeshCore role)
 title: "feat: "
 labels: ["type:feature", "board:backlog"]
 ---

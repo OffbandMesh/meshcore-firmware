@@ -3,13 +3,13 @@
 #include <SafeBoot.h>
 #include "MyMesh.h"
 
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   #include "helpers/wifi_observer/WifiObserver.h"
   #include "helpers/wifi_observer/CrashLog.h"
   // CW_PHASE: tracing macro for setup() crash localization. With
   // CrashLog v2's ESP_LOG hook + shutdown handler, the last phase
   // line surviving in the ring buffer pinpoints where setup() died.
-  #define CW_PHASE(name) crosswire::crashLogf("[setup] phase: %s", name)
+  #define CW_PHASE(name) offband::crashLogf("[setup] phase: %s", name)
 #else
   #define CW_PHASE(name) ((void)0)
 #endif
@@ -122,8 +122,8 @@ void setup() {
 
   // SafeBoot: pre-init power guard. See src/SafeBoot.h.
   SafeBoot::checkAndMaybeSleep();
-#ifdef CROSSWIRE_OBSERVER
-  crosswire::wifiObserverBegin();
+#ifdef OFFBAND_OBSERVER
+  offband::wifiObserverBegin();
 #endif
   CW_PHASE("post:wifiObserverBegin");
 
@@ -134,12 +134,12 @@ void setup() {
   DisplayDriver* disp = NULL;
   bool display_begin_ok = display.begin();
   CW_PHASE(display_begin_ok ? "post:display.begin(OK)" : "post:display.begin(FAILED)");
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   // I2C bus scan: report ALL addresses that ACK on the bus that
   // display.begin() initialized. If OLED at expected DISPLAY_ADDRESS
   // (0x3C) doesn't appear, our pin/address assumptions are wrong for
   // this V3 sub-variant. Run AFTER display.begin() so bus is alive.
-  crosswire::i2cScan(-1, -1, "board-bus-default-pins");
+  offband::i2cScan(-1, -1, "board-bus-default-pins");
 #endif
   if (display_begin_ok) {
     disp = &display;
@@ -148,13 +148,13 @@ void setup() {
     disp->setTextSize(2);
   #endif
     disp->drawTextCentered(disp->width() / 2, 28, "Loading...");
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
     // Boot counter on top-left corner. User can directly observe whether
     // it increments without any interaction = positive proof of (or
     // against) chip rebooting. Persists via RTC_NOINIT across soft
     // resets; resets only on power-on / esptool reset.
     char bootbuf[16];
-    snprintf(bootbuf, sizeof(bootbuf), "B#%u", (unsigned)crosswire::bootCounterValue());
+    snprintf(bootbuf, sizeof(bootbuf), "B#%u", (unsigned)offband::bootCounterValue());
     disp->setTextSize(1);
     disp->drawTextLeftAlign(0, 0, bootbuf);
 #endif
@@ -259,7 +259,7 @@ void setup() {
   the_mesh.startInterface(serial_interface);
   CW_PHASE("ESP32:post the_mesh.startInterface");
 
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   // Plan 2 v2 Task 12: wire observer mesh context AFTER the_mesh.begin()
   // populates self_id. Strings cached as borrowed pointers in WifiObserver;
   // backing storage here must outlive the observer (static buffer +
@@ -270,9 +270,9 @@ void setup() {
   // firmware_version and client_version fields until a project-specific
   // CLIENT_VERSION is established (filed as follow-up).
   static char observer_device_id[65];
-  crosswire::bytesToHexUpper(the_mesh.self_id.pub_key, PUB_KEY_SIZE,
+  offband::bytesToHexUpper(the_mesh.self_id.pub_key, PUB_KEY_SIZE,
                              observer_device_id, sizeof(observer_device_id));
-  crosswire::wifiObserverSetMeshContext(
+  offband::wifiObserverSetMeshContext(
       the_mesh.self_id,
       observer_device_id,
       the_mesh.getNodeName(),
@@ -301,23 +301,23 @@ void setup() {
 }
 
 void loop() {
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   // CrashLog v6: per-sub-loop visit marking + heartbeat. Each sub-loop
   // sets its bit on entry; heartbeat reads + resets every ~1s. Lets us
   // PROVE that each sub-loop actually ran in the past 1s window.
-  crosswire::loopIterTick();
-  crosswire::subloopMark(crosswire::SUBLOOP_WIFI);
-  crosswire::wifiObserverLoop();
-  crosswire::subloopMark(crosswire::SUBLOOP_MESH);
+  offband::loopIterTick();
+  offband::subloopMark(offband::SUBLOOP_WIFI);
+  offband::wifiObserverLoop();
+  offband::subloopMark(offband::SUBLOOP_MESH);
 #endif
   the_mesh.loop();
 
-#ifdef CROSSWIRE_OBSERVER
-  crosswire::subloopMark(crosswire::SUBLOOP_SENSORS);
+#ifdef OFFBAND_OBSERVER
+  offband::subloopMark(offband::SUBLOOP_SENSORS);
 #endif
   sensors.loop();
 
-#if defined(CROSSWIRE_OBSERVER) && ENV_INCLUDE_GPS == 1
+#if defined(OFFBAND_OBSERVER) && ENV_INCLUDE_GPS == 1
   // #69 Task A: push GPS time-state to observer ~1 Hz so the SNTP arbiter
   // (next task) can see whether GPS currently owns the clock.
   {
@@ -325,14 +325,14 @@ void loop() {
     uint32_t _now = millis();
     if (_now - s_gps_state_ms >= 1000) {
       s_gps_state_ms = _now;
-      crosswire::wifiObserverSetGpsTimeState(
+      offband::wifiObserverSetGpsTimeState(
           the_mesh.getNodePrefs()->gps_enabled != 0,
           sensors.gpsHasFix());
     }
   }
 #endif
 
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   // #31 Task C: push status snapshot to observer so the pool's
   // publishStatusIfDue() can emit /status.  Throttled to
   // kMinStatusIntervalSec (10 s = min legal status_interval; keeps the
@@ -353,9 +353,9 @@ void loop() {
   {
     static uint32_t s_status_snap_ms = 0;
     uint32_t _now = millis();
-    if (_now - s_status_snap_ms >= crosswire::kMinStatusIntervalSec * 1000U) {
+    if (_now - s_status_snap_ms >= offband::kMinStatusIntervalSec * 1000U) {
       s_status_snap_ms = _now;
-      crosswire::MqttStatusSnapshot snap = {};
+      offband::MqttStatusSnapshot snap = {};
       snap.battery_mv     = static_cast<int>(board.getBattMilliVolts());
       snap.uptime_secs    = static_cast<uint32_t>(_now / 1000UL);
       snap.error_flags    = the_mesh.getErrFlags();
@@ -397,21 +397,21 @@ void loop() {
         snap.node_lon  = sensors.node_lon;
         snap.loc_valid = (sensors.node_lat != 0.0 || sensors.node_lon != 0.0);
       }
-      crosswire::wifiObserverSetStatusSnapshot(snap);
+      offband::wifiObserverSetStatusSnapshot(snap);
     }
   }
 #endif
 
 #ifdef DISPLAY_CLASS
-#ifdef CROSSWIRE_OBSERVER
-  crosswire::subloopMark(crosswire::SUBLOOP_UI);
+#ifdef OFFBAND_OBSERVER
+  offband::subloopMark(offband::SUBLOOP_UI);
 #endif
   ui_task.loop();
 #endif
 
-#ifdef CROSSWIRE_OBSERVER
+#ifdef OFFBAND_OBSERVER
   // Emit heartbeat if 1s elapsed since last. Cheap timestamp check.
-  crosswire::heartbeatTick(millis());
+  offband::heartbeatTick(millis());
 #endif
   rtc_clock.tick();
 }

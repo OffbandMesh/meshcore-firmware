@@ -12,7 +12,7 @@
   #include "MqttCaCerts.h"  // embedded CA PEMs (Plan 1 vendored, retained)
 #endif
 
-namespace crosswire {
+namespace offband {
 
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
 namespace {
@@ -453,4 +453,4 @@ void MqttBroker::onError(uint32_t now_ms, BrokerErrorClass err) {
 
 #endif  // ARDUINO && ESP_PLATFORM
 
-}  // namespace crosswire
+}  // namespace offband

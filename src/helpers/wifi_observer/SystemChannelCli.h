@@ -44,7 +44,7 @@ namespace mesh {
 class Identity;
 }  // namespace mesh
 
-namespace crosswire {
+namespace offband {
 
 // Reserved _sys slot = the LAST channel slot (MAX_GROUP_CHANNELS - 1).
 // Observer envs set MAX_GROUP_CHANNELS via -D (Phase-1 strip #42: =11 ->
@@ -118,7 +118,7 @@ void systemChannelDrain();
 
 // ---------------------------------------------------------------------------
 // Intercepts (called from MyMesh::handleCmdFrame() under
-// CROSSWIRE_OBSERVER_BLE_COMPANION).
+// OFFBAND_OBSERVER_BLE_COMPANION).
 // ---------------------------------------------------------------------------
 
 // Handle a CMD_SEND_CHANNEL_TXT_MSG whose channel_idx is
@@ -195,4 +195,4 @@ void deriveSystemChannelName(const uint8_t pubkey[32], char* out_name,
 bool systemChannelRateAllows(uint32_t last_post_ms, uint32_t now_ms,
                              uint32_t min_interval_ms);
 
-}  // namespace crosswire
+}  // namespace offband

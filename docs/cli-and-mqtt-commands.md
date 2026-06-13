@@ -1,6 +1,6 @@
-# Crosswire CLI + MQTT Command Reference
+# Offband CLI + MQTT Command Reference
 
-Catalog of commands exposed by Crosswire firmware over (a) serial CLI and
+Catalog of commands exposed by Offband firmware over (a) serial CLI and
 (b) MQTT command channel. Source-of-truth references in parentheses point
 at the actual handlers; this doc summarizes behavior.
 
@@ -41,7 +41,7 @@ reads the response for ~5s, prints it.)
 
 | Command | Behavior | Reply | Source |
 |---|---|---|---|
-| `version` | Print upstream + Crosswire identity | `Upstream MeshCore: vX.Y.Z (date)\nCrosswire fork: crosswire-vA.B.C (sha, branch, date)` | CommonCLI.cpp:237 (FF3 / #180) |
+| `version` | Print upstream + Offband identity | `Upstream MeshCore: vX.Y.Z (date)\nOffband fork: offband-vA.B.C (sha, branch, date)` | CommonCLI.cpp:237 (FF3 / #180) |
 | `reboot` | Reboot device | does not return | CommonCLI.cpp:235 |
 | `poweroff` / `shutdown` | Power off (deep sleep) | does not return | CommonCLI.cpp:233 |
 | `clkreboot` | Reset RTC to 2024-05-15 + reboot | does not return | CommonCLI.cpp:237 |
@@ -330,7 +330,7 @@ Verify via MQTT after boot:
 ssh pi5 "mosquitto_sub -h localhost -t 'meshcore/<node_id>/state' -C 1 -v"
 ```
 
-Look for `crosswire_version` field + low `uptime_seconds` + `reset_reason: Power-on reset` indicating a clean boot.
+Look for `offband_version` field + low `uptime_seconds` + `reset_reason: Power-on reset` indicating a clean boot.
 
 ### Verify device identity post-flash
 

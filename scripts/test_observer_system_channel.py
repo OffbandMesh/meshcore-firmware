@@ -192,7 +192,7 @@ static void sha256(const uint8_t* msg, size_t len, uint8_t out[32]) {
 // be unresolved. To fix: the .cpp's forward declaration is
 // `static void sysch_sha256(...)` -- "static" means internal
 // linkage, so we can supply the body inside the SAME TU after the
-// declaration. The trick: include the .cpp INSIDE the crosswire
+// declaration. The trick: include the .cpp INSIDE the offband
 // namespace so we can then add the host body right after.
 
 #include "src/helpers/wifi_observer/SystemChannelCli.cpp"
@@ -202,7 +202,7 @@ static void sha256(const uint8_t* msg, size_t len, uint8_t out[32]) {
 // scope, so we extend with a definition in the same translation
 // unit. The #ifdef ARDUINO body is compiled out for this host
 // build, so this is the only definition.
-namespace crosswire {
+namespace offband {
 static void sysch_sha256(uint8_t* out_hash, size_t out_len,
                          const uint8_t* msg, size_t msg_len) {
   uint8_t full[32];
@@ -210,20 +210,20 @@ static void sysch_sha256(uint8_t* out_hash, size_t out_len,
   if (out_len > 32) out_len = 32;
   memcpy(out_hash, full, out_len);
 }
-}  // namespace crosswire
+}  // namespace offband
 
 // Stub for cliPassthroughExecute since SystemChannelCli.cpp links
 // against it. Not exercised by any of the 5 pure-logic tests, but
 // the symbol must resolve. The .cpp's ARDUINO-only call site is
 // compiled out, but the include of CliPassthrough.h still
 // declares it.
-namespace crosswire {
+namespace offband {
 CliResult cliPassthroughExecute(const char* /*line*/,
                                 char* out, size_t out_len) {
   if (out && out_len) out[0] = '\0';
   return CliResult::Unknown;
 }
-}  // namespace crosswire
+}  // namespace offband
 
 // ---------------------------------------------------------------------------
 // Test harness.
@@ -273,7 +273,7 @@ static int hamming_bits(const uint8_t* a, const uint8_t* b, size_t n) {
 }
 
 int main() {
-  using namespace crosswire;
+  using namespace offband;
 
   // -------------------------------------------------------------
   // Case 1: golden vector for all-zero pubkey.

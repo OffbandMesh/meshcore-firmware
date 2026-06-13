@@ -28,12 +28,12 @@ EXPECTED = [
 ]
 
 # Every Plan-1 env MUST set both flags (Plan 1 = companion-only,
-# so CROSSWIRE_OBSERVER_BLE_COMPANION is always on). When a repeater
-# variant lands later, only CROSSWIRE_OBSERVER will be required and
+# so OFFBAND_OBSERVER_BLE_COMPANION is always on). When a repeater
+# variant lands later, only OFFBAND_OBSERVER will be required and
 # this assertion splits.
 REQUIRED_FLAGS_ALL = [
-    "-D CROSSWIRE_OBSERVER",
-    "-D CROSSWIRE_OBSERVER_BLE_COMPANION",
+    "-D OFFBAND_OBSERVER",
+    "-D OFFBAND_OBSERVER_BLE_COMPANION",
 ]
 REQUIRED_SRC_FILTER = "+<helpers/wifi_observer/*.cpp>"
 

@@ -55,7 +55,7 @@ from pathlib import Path
 # returns false -> result is CliResult::Unknown.
 STUB_DEFS_CPP = r"""
 #include <cstddef>
-namespace crosswire {
+namespace offband {
 class MqttBrokerPool {};
 bool dispatchObserverCli(const char* cmd, char* /*reply*/,
                          std::size_t /*reply_size*/,
@@ -69,7 +69,7 @@ MqttBrokerPool& wifiObserverPool() {
     static MqttBrokerPool inst;
     return inst;
 }
-}  // namespace crosswire
+}  // namespace offband
 """
 
 # Driver: 16 allowlist-gate cases + 2 end-to-end execute cases.
@@ -113,20 +113,20 @@ static const GateCase kGateCases[] = {
 //     returns true -> CliResult::Ok (baseline; passes pre + post fix).
 struct ExecCase {
     const char* line;
-    crosswire::CliResult expect;
+    offband::CliResult expect;
 };
 
 static const ExecCase kExecCases[] = {
-    {"  set mqtt.iata CMH", crosswire::CliResult::Ok},  // I1 regression
-    {"get mqtt.iata",       crosswire::CliResult::Ok},  // baseline
-    {"  Wifi status",       crosswire::CliResult::Ok},  // #45: trim+lowercase+allow (screenshot)
+    {"  set mqtt.iata CMH", offband::CliResult::Ok},  // I1 regression
+    {"get mqtt.iata",       offband::CliResult::Ok},  // baseline
+    {"  Wifi status",       offband::CliResult::Ok},  // #45: trim+lowercase+allow (screenshot)
 };
 
-static const char* resultName(crosswire::CliResult r) {
+static const char* resultName(offband::CliResult r) {
     switch (r) {
-        case crosswire::CliResult::Ok:      return "Ok";
-        case crosswire::CliResult::Denied:  return "Denied";
-        case crosswire::CliResult::Unknown: return "Unknown";
+        case offband::CliResult::Ok:      return "Ok";
+        case offband::CliResult::Denied:  return "Denied";
+        case offband::CliResult::Unknown: return "Unknown";
     }
     return "?";
 }
@@ -137,7 +137,7 @@ int main() {
 
     int n_gate = (int)(sizeof(kGateCases)/sizeof(kGateCases[0]));
     for (int i = 0; i < n_gate; ++i) {
-        bool got = crosswire::cliPassthroughIsAllowed(kGateCases[i].line);
+        bool got = offband::cliPassthroughIsAllowed(kGateCases[i].line);
         const char* tag = (got == kGateCases[i].expect_allowed) ? "PASS" : "FAIL";
         if (got != kGateCases[i].expect_allowed) ++fails;
         ++total;
@@ -150,7 +150,7 @@ int main() {
     int n_exec = (int)(sizeof(kExecCases)/sizeof(kExecCases[0]));
     for (int i = 0; i < n_exec; ++i) {
         char buf[128] = {0};
-        crosswire::CliResult got = crosswire::cliPassthroughExecute(
+        offband::CliResult got = offband::cliPassthroughExecute(
             kExecCases[i].line, buf, sizeof(buf));
         const char* tag = (got == kExecCases[i].expect) ? "PASS" : "FAIL";
         if (got != kExecCases[i].expect) ++fails;
