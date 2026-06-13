@@ -36,9 +36,12 @@
 //
 // Static cost: MqttBrokerPool holds brokers_[CROSSWIRE_MAX_BROKERS], and
 // BrokerConfig is ~1.2 KB/slot (jwt_token[512] dominates), so 10 slots is
-// ~12 KB static -- fine even on HV3. This is the CONFIGURABLE ceiling, NOT a
-// concurrency target: simultaneously *enabling* many wss/TLS brokers is
-// heap-bound by mbedTLS (~3-5 on HV3), independent of this number.
+// ~12 KB static. MEASURED fine even on no-PSRAM HV3: the Heltec_v3 observer
+// build uses 27.4% RAM (89.7 KB / 327 KB internal SRAM) with this at 10 --
+// ~238 KB free, the +4.7 KB of the 6->10 bump is ~1.4% of SRAM. This is the
+// CONFIGURABLE ceiling, NOT a concurrency target: simultaneously *enabling*
+// many wss/TLS brokers is heap-bound by mbedTLS (~3-5 on HV3), independent of
+// this number.
 //
 // Caveat (#95/#98): `mqtt status` assembles every configured slot into one
 // kSystemChannelReplyBufLen (768 B) buffer before splitting to _sys frames.
