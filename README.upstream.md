@@ -1,6 +1,6 @@
-# Crosswire — Strycher's MeshCore fork
+# Offband — Strycher's MeshCore fork
 
-Crosswire is a community fork of [MeshCore](https://github.com/meshcore-dev/MeshCore)
+Offband is a community fork of [MeshCore](https://github.com/meshcore-dev/MeshCore)
 that carries feature branches not (yet) in upstream:
 
 - **SafeBoot** — pre-init power guard for solar/battery-powered LoRa nodes

@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a defect in Crosswire firmware (any role)
+about: Report a defect in Offband firmware (any role)
 title: "bug: "
 labels: ["type:bug", "board:backlog"]
 ---
@@ -11,7 +11,7 @@ A clear description of the misbehavior.
 ## Affected role / variant
 - Role: companion / observer / repeater / other
 - Board: Heltec V3 / Heltec V4 / XIAO ESP32-S3 / RAK / other
-- Crosswire version (from the OLED splash or serial banner, e.g. `crosswire-v0.12.0-N-gXXXXXXX`):
+- Offband version (from the OLED splash or serial banner, e.g. `offband-v0.12.0-N-gXXXXXXX`):
 
 ## Steps to reproduce
 1.

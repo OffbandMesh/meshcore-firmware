@@ -1,6 +1,6 @@
 # Observer GPS, Location, and Time Configuration
 
-This doc is for operators deploying a Crosswire observer node — the WiFi+MQTT gateway that listens on
+This doc is for operators deploying a Offband observer node — the WiFi+MQTT gateway that listens on
 LoRa and forwards traffic to a broker. It covers what position and time the observer can report, how to
 configure it, and which hardware it applies to.
 
@@ -8,7 +8,7 @@ configure it, and which hardware it applies to.
 
 ## What an observer can report
 
-A Crosswire observer reports position in two places simultaneously, using the same data and the same
+A Offband observer reports position in two places simultaneously, using the same data and the same
 policy:
 
 - **LoRa advert** — broadcast to the mesh on the advertise interval.

@@ -14,7 +14,7 @@ need to be updated, in order.
 | `main` | `Strycher/MeshCore` (fork) | Tracks upstream `meshcore-dev/MeshCore:main` exactly. No local modifications. |
 | `feature/safeboot` | `Strycher/MeshCore` (fork) | Long-lived feature branch carrying the SafeBoot port. Always rebased onto (or merged with) the latest upstream release. **Never squash, never delete.** This is the branch the upstream PR is filed from. |
 | `safeboot-vX.Y.Z` | `Strycher/MeshCore` tags | Release tags applied to `feature/safeboot` at each upstream-aligned build distributed to the community. |
-| `crosswire` | `meshcore-firmware/` working clone (origin = `meshcore-dev/MeshCore`) | Our fleet-deployment branch (renamed from `deploy/issues-84-86-87-combined` 2026-05-23 per LoRa#212). Contains custom Crosswire features. SafeBoot is **merged or cherry-picked INTO** this branch — it does NOT live on this branch as a separate concern. Per LoRa#210, this branch is itself interim until the fork's `main` becomes the Crosswire main. |
+| `crosswire` | `meshcore-firmware/` working clone (origin = `meshcore-dev/MeshCore`) | Our fleet-deployment branch (renamed from `deploy/issues-84-86-87-combined` 2026-05-23 per LoRa#212). Contains custom Offband features. SafeBoot is **merged or cherry-picked INTO** this branch — it does NOT live on this branch as a separate concern. Per LoRa#210, this branch is itself interim until the fork's `main` becomes the Offband main. |
 
 ## Remotes
 

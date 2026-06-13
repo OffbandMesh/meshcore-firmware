@@ -1,6 +1,6 @@
 # Observer `_sys` CLI command reference
 
-The Crosswire observer is configured over the **`_sys` system channel** in the
+The Offband observer is configured over the **`_sys` system channel** in the
 MeshCore companion app (BLE) — type these as channel messages. The observer
 build has **no USB-serial text console**; the `_sys` channel is the management
 surface.
