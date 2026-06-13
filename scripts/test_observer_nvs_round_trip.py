@@ -144,44 +144,78 @@ int main() {
     // populateDefaultBrokers — Plan 2 v2 Task 3 Step 5
     // -----------------------------------------------------------------------
     // Slot 2 was just written above with a custom URL ("mqtt.example.org").
-    // Slots 0 + 1 are still virgin. populateDefaultBrokers should:
-    //   - fill slot 0 with EastMesh wss URL
-    //   - fill slot 1 with LetsMesh-EU wss URL
+    // Slots 0 + 1 + 3 are still virgin. populateDefaultBrokers should (#95):
+    //   - fill slot 0 with CoreScope (tcp/anon, the only default-ENABLED slot)
+    //   - fill slot 1 with LetsMesh-US (wss/jwt, disabled, BARE audience)
+    //   - fill slot 3 with MeshMapper (wss/jwt, disabled, isrg-x2 CA)
     //   - LEAVE slot 2 alone (already has user-set URL)
 
     populateDefaultBrokers();
 
-    BrokerConfig slot0, slot1, slot2;
+    BrokerConfig slot0, slot1, slot2, slot3;
     if (!readBrokerConfig(0, slot0)) { puts("FAIL read slot 0"); return 1; }
     if (!readBrokerConfig(1, slot1)) { puts("FAIL read slot 1"); return 1; }
     if (!readBrokerConfig(2, slot2)) { puts("FAIL read slot 2"); return 1; }
+    if (!readBrokerConfig(3, slot3)) { puts("FAIL read slot 3"); return 1; }
 
-    if (strcmp(slot0.url, "wss://mqtt2.eastmesh.au:443/mqtt") != 0) {
+    // Slot 0 = CoreScope: plaintext + anonymous, the ONLY default-enabled slot.
+    if (strcmp(slot0.url, "mqtt://mqtt.w8oof.net:1883") != 0) {
         printf("FAIL slot 0 url after populate: '%s'\n", slot0.url);
         return 1;
     }
-    if (strcmp(slot0.jwt_audience, "https://mqtt2.eastmesh.au") != 0) {
-        printf("FAIL slot 0 jwt_audience: '%s'\n", slot0.jwt_audience);
-        return 1;
-    }
-    if (slot0.transport != BrokerTransport::Wss) {
+    if (slot0.transport != BrokerTransport::Tcp) {
         printf("FAIL slot 0 transport: %d\n", (int)slot0.transport);
         return 1;
     }
-    if (slot0.auth_type != BrokerAuthType::Jwt) {
+    if (slot0.auth_type != BrokerAuthType::None) {
         printf("FAIL slot 0 auth_type: %d\n", (int)slot0.auth_type);
         return 1;
     }
-    if (slot0.enabled) {
-        // Defaults must ship DISABLED so user explicitly opts in after
-        // configuring owner identity for the JWT claim.
-        printf("FAIL slot 0 should default to disabled\n");
+    if (!slot0.enabled) {
+        printf("FAIL slot 0 (CoreScope) should default to ENABLED\n");
         return 1;
     }
-    if (strcmp(slot1.url, "wss://mqtt-eu-v1.letsmesh.net:443/mqtt") != 0) {
+
+    // Slot 1 = LetsMesh-US (wss/jwt). Ships disabled; audience is the BARE
+    // host (#95 -- LetsMesh rejects the scheme-qualified "https://" form).
+    if (strcmp(slot1.url, "wss://mqtt-us-v1.letsmesh.net:443/mqtt") != 0) {
         printf("FAIL slot 1 url after populate: '%s'\n", slot1.url);
         return 1;
     }
+    if (strcmp(slot1.jwt_audience, "mqtt-us-v1.letsmesh.net") != 0) {
+        printf("FAIL slot 1 jwt_audience (want bare host): '%s'\n", slot1.jwt_audience);
+        return 1;
+    }
+    if (slot1.transport != BrokerTransport::Wss || slot1.auth_type != BrokerAuthType::Jwt) {
+        printf("FAIL slot 1 transport/auth: %d/%d\n", (int)slot1.transport, (int)slot1.auth_type);
+        return 1;
+    }
+    if (slot1.enabled) {
+        printf("FAIL slot 1 (wss/jwt) should default to disabled\n");
+        return 1;
+    }
+    // #95: JWT identity claims are NOT seeded -- username auto-derives at
+    // connect, and jwt_owner/jwt_email are the operator's claims.
+    if (slot1.jwt_owner[0] != '\0' || slot1.jwt_email[0] != '\0' || slot1.username[0] != '\0') {
+        printf("FAIL slot 1 identity claims should be empty: own='%s' eml='%s' usr='%s'\n",
+               slot1.jwt_owner, slot1.jwt_email, slot1.username);
+        return 1;
+    }
+
+    // Slot 3 = MeshMapper (#95 new slot): wss/jwt, isrg-x2 CA, bare audience.
+    if (strcmp(slot3.url, "wss://mqtt.meshmapper.net:443/mqtt") != 0) {
+        printf("FAIL slot 3 url after populate: '%s'\n", slot3.url);
+        return 1;
+    }
+    if (strcmp(slot3.jwt_audience, "mqtt.meshmapper.net") != 0) {
+        printf("FAIL slot 3 jwt_audience (want bare host): '%s'\n", slot3.jwt_audience);
+        return 1;
+    }
+    if (strcmp(slot3.ca_cert_name, "isrg-x2") != 0) {
+        printf("FAIL slot 3 ca_cert_name: '%s'\n", slot3.ca_cert_name);
+        return 1;
+    }
+
     // Idempotency / no-overwrite: slot 2 STILL has the user-set URL.
     if (strcmp(slot2.url, "mqtt.example.org") != 0) {
         printf("FAIL slot 2 was overwritten by populateDefaultBrokers: '%s'\n", slot2.url);

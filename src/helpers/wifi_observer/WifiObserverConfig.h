@@ -28,12 +28,28 @@
 // ---------------------------------------------------------------------------
 // Broker pool sizing
 // ---------------------------------------------------------------------------
-// Hard ceiling on configurable brokers. Plan 1 uses the EastMesh-vendored
-// static 3-entry registry with letsmesh-us as the single default-enabled
-// broker; Plan 2 introduces the configurable NVS-backed list up to this
-// ceiling.
+// Hard ceiling on configurable broker slots. Plan 2 introduced the
+// configurable NVS-backed list; #95 raised the ceiling from 6 to 10 so the
+// pre-seeded public brokers (CoreScope + LetsMesh US/EU + Eastme.sh +
+// MeshMapper + Eastmesh.au = 6 slots, slots 0-5) leave four free slots (6-9)
+// for operator-custom brokers.
+//
+// Static cost: MqttBrokerPool holds brokers_[CROSSWIRE_MAX_BROKERS], and
+// BrokerConfig is ~1.2 KB/slot (jwt_token[512] dominates), so 10 slots is
+// ~12 KB static. MEASURED fine even on no-PSRAM HV3: the Heltec_v3 observer
+// build uses 27.4% RAM (89.7 KB / 327 KB internal SRAM) with this at 10 --
+// ~238 KB free, the +4.7 KB of the 6->10 bump is ~1.4% of SRAM. This is the
+// CONFIGURABLE ceiling, NOT a concurrency target: simultaneously *enabling*
+// many wss/TLS brokers is heap-bound by mbedTLS (~3-5 on HV3), independent of
+// this number.
+//
+// Caveat (#95/#98): `mqtt status` assembles every configured slot into one
+// kSystemChannelReplyBufLen (768 B) buffer before splitting to _sys frames.
+// The 6-broker default set already sits near that ceiling, so configuring the
+// custom slots 6-9 can truncate the tail of `mqtt status` on the _sys surface
+// until that buffer is paged/enlarged (tracked in #98).
 #ifndef CROSSWIRE_MAX_BROKERS
-  #define CROSSWIRE_MAX_BROKERS 6
+  #define CROSSWIRE_MAX_BROKERS 10
 #endif
 
 // ---------------------------------------------------------------------------

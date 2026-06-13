@@ -82,7 +82,7 @@ private:
     const mesh::LocalIdentity* identity_ = nullptr;
 #endif
     char     audience_[96] = {0};
-    char     owner_[65]    = {0};
+    char     owner_[65]    = {0};  // JWT "owner"; #95: defaults to device pubkey at apply() if unset
     char     email_[96]    = {0};
     uint32_t refresh_sec_  = 3600;
     uint32_t last_mint_ms_ = 0;
