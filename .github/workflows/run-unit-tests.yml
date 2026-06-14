@@ -19,6 +19,17 @@ jobs:
       - name: Setup Build Environment
         uses: ./.github/actions/setup-build-environment
 
+      # This repo's platformio.ini requires PIO_SECRETS_FILE (LoRa#209): the
+      # [platformio] extra_configs pulls in a secrets file, and device envs
+      # interpolate ${node_secrets.*} etc. Even `pio test -e native` loads the
+      # full config, so without this stub it errors "No section: 'node_secrets'".
+      # Real secrets never live in CI; this dummy stub only satisfies config
+      # interpolation (the native test builds Utils.cpp + googletest only).
+      - name: Generate dummy secrets stub (test-only; never flashed)
+        run: |
+          printf '[node_secrets]\nadmin_password = ci-dummy\n[wifi_secrets]\nssid = ci-dummy\npassword = ci-dummy\n[mqtt_secrets]\nhost = mqtt.example.com\nport = 1883\nuser = ci-dummy\npassword = ci-dummy\n[ota_secrets]\ntrigger_secret = ci-dummy\n[cmdrelay]\nurl = http://cmdrelay.example.com/cmd\n' > "$RUNNER_TEMP/ci-secrets.ini"
+          echo "PIO_SECRETS_FILE=$RUNNER_TEMP/ci-secrets.ini" >> "$GITHUB_ENV"
+
       - name: Run Unit Tests
         run: pio test -e native -vv
 
