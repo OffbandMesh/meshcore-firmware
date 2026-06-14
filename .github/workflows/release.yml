@@ -109,6 +109,8 @@ jobs:
           if [ ! -s body.md ]; then
             echo "(No CHANGELOG entry for ${ver}.)" > body.md
           fi
+          # Append the static "which file do I download?" flashing guide to every release
+          cat .github/release-footer.md >> body.md 2>/dev/null || true
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2

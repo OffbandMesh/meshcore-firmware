@@ -95,7 +95,8 @@ heltec_v4_repeater
 #heltec_v4_repeater_telemetry   # GATED: uncomment after #20 (runtime-config secrets)
 heltec_v4_room_server
 
-# Heltec V4 TFT (ESP32-S3)
+# Heltec V4 TFT (ESP32-S3) -- includes observer
+heltec_v4_tft_companion_observer_wifi
 heltec_v4_tft_companion_radio_ble
 heltec_v4_tft_companion_radio_usb
 heltec_v4_tft_repeater
