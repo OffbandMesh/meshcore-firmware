@@ -16,6 +16,13 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-06-14
+
+First release under **OffbandMesh/meshcore-firmware**. Bundles the 0.16.0 observer
+work below (which landed on `firmware-base` but was never separately tagged) with
+the Crosswire→Offband rebrand and the OffbandMesh org cutover. *(Version pending
+owner confirmation; the tag is hardware-gated per VERSIONING.md.)*
+
 ### Changed
 - **Rebranded the fork from Crosswire to Offband** (GitHub org `OffbandMesh`):
   the C++ namespace, build macros, embedded identity blob, version prefix
@@ -23,8 +30,17 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
   strings (serial banner, `version` command, OLED splash, Home Assistant
   manufacturer), and the WiFi setup-AP SSID (`Offband-Observer-`). Historical
   `crosswire-v*` release tags are preserved; the `_sys` PSK domain separator
-  and the MeshCore interop topic namespace are intentionally unchanged.
-  Repo / board / working-dir moves to follow. (#100)
+  and the MeshCore interop topic namespace are intentionally unchanged. (#100)
+- **Repo / board / working-dir cutover to OffbandMesh** — repo
+  `OffbandMesh/meshcore-firmware`, OffbandMesh org Projects board, and the
+  preflight / CLAUDE.md / label-sync workflow re-pointed; removed the stale
+  upstream `CNAME`. (#107, #111)
+
+### Docs
+- Finished the rebrand reference cleanup across docs + code comments. (#113, #114)
+- Release-readiness pass: README getting-started + multi-role positioning, the
+  docs index surfaces the observer guides, and observer `_sys` CLI reference
+  corrections. (#117)
 
 ## [0.16.0] - 2026-06-12
 
