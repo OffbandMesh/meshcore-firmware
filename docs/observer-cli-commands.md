@@ -5,7 +5,7 @@ MeshCore companion app (BLE) — type these as channel messages. The observer
 build has **no USB-serial text console**; the `_sys` channel is the management
 surface.
 
-## Grammar (Strycher/Crosswire#45)
+## Grammar (#45)
 
 Two shapes, consistently:
 

@@ -1,9 +1,9 @@
-<!-- DRAFT for owner review. Task Strycher/Crosswire#32, Epic #31, Feature #30. Author: CyanGate (claude-code). First pass: research + draft. Not a committed design-of-record until human sign-off (Epic #31 acceptance gate). -->
+<!-- DRAFT for owner review. Task #32, Epic #31, Feature #30. Author: CyanGate (claude-code). First pass: research + draft. Not a committed design-of-record until human sign-off (Epic #31 acceptance gate). -->
 
 # Position-to-Map Telemetry Pipeline -- Draft Architecture
 
 **Status:** DRAFT, first pass. Not yet design-of-record.
-**Feature:** Strycher/Crosswire#30 -- **Epic:** #31 -- **Task:** #32
+**Feature:** #30 -- **Epic:** #31 -- **Task:** #32
 **Scope:** Evaluate architecture and means. Hardware selection (antennas, enclosures, exact boards) is explicitly out of scope.
 
 ---

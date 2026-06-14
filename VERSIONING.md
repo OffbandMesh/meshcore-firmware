@@ -45,7 +45,7 @@ Between version tags, commits accumulate as `+N` dev builds (e.g.
 `offband-v0.16.0-4-gABCDEF` = 4 commits past the tag); each epic landing cuts a
 new tag. **Every landing updates `CHANGELOG.md`.**
 
-Tags are pushed to the **`origin` remote** (`Strycher/Crosswire`; moves to the
+Tags are pushed to the **`origin` remote** (`OffbandMesh/meshcore-firmware`; moves to the
 Offband org repo after the rename) and are accessible to all working trees of the
 fork.
 

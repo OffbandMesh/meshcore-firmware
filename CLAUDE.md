@@ -48,7 +48,7 @@ Recorded per REPOCONFIG (board field IDs captured in project CLAUDE.md). Consume
 - Status field `PVTSSF_lADOEXsS3c4BaleWzhVcBL8`: backlog `91d35710`, todo `7bf7b9ef`, ready `ec816a33`, in-progress `ee71a6e3`, testing `3dc70fe4`, deferred `fc4959bc`, done `4a67db65`
 - Priority field `PVTSSF_lADOEXsS3c4BaleWzhVcBMs`: P0 `43b5c396`, P1 `40c7b471`, P2 `3ed2b368`, P3 `2406bdd1`
 
-**Required secret:** the sync workflow needs repo secret `PROJECT_PAT` (PAT with `project` + `repo` scope) — the default `GITHUB_TOKEN` cannot mutate an org-owned Projects v2 board. Set it on `OffbandMesh/meshcore-firmware`; the existing `GITHUB_PERSONAL_ACCESS_TOKEN` (classic; `project`+`repo`) already covers it. **Not yet set** as of 2026-06-13 — workflow inert until then.
+**Required secret:** the sync workflow needs repo secret `PROJECT_PAT` — a **classic** PAT with `project` + `repo` scope (the default `GITHUB_TOKEN` cannot mutate an org-owned Projects v2 board). ⚠ **Must be classic, not fine-grained:** OffbandMesh rejects fine-grained PATs with >366-day lifetime for org-Projects access, so `GITHUB_PERSONAL_ACCESS_TOKEN` (fine-grained) does **not** work (DifferentWire/standards#148). **Set + verified** 2026-06-14 (board sync confirmed live).
 
 ## Migration status (IMPORTANT for agents)
 
