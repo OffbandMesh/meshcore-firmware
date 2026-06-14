@@ -19,7 +19,7 @@
 set -euo pipefail
 
 # ─── Project-specific overrides (edit these) ──────────────────────────────
-PROJECT_DIR="/c/Dev/Crosswire"
+PROJECT_DIR="/c/Dev/meshcore-firmware"
 # ──────────────────────────────────────────────────────────────────────────
 
 CITADEL_HEALTH="https://getunfocused.app/citadel/health"

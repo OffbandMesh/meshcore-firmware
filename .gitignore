@@ -58,3 +58,6 @@ hardware-devices.yaml
 # per-host flash audit log + full-flash backups (device MACs/DeviceIDs) -- never commit
 flash-history.jsonl
 flash-backups/
+
+# local scratch working dir -- untracked for now (#107)
+weather/

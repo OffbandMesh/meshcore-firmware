@@ -5,8 +5,8 @@ name: Sync Labels to Project Board
 # This Action translates those labels into board field updates.
 #
 # Requires repo secret PROJECT_PAT: a PAT with `project` + `repo` scope that can
-# write to the user-level Crosswire Project Board (#14). The default GITHUB_TOKEN
-# is repo-scoped and CANNOT mutate a user-owned Projects v2 board.
+# write to the OffbandMesh org-level Project Board (#1). The default GITHUB_TOKEN
+# is repo-scoped and CANNOT mutate an org-owned Projects v2 board.
 on:
   issues:
     types: [labeled, closed]
@@ -40,26 +40,26 @@ jobs:
         with:
           github-token: ${{ secrets.PROJECT_PAT }}
           script: |
-            // ── Project field IDs (Crosswire Project Board, project #14) ──
-            const PROJECT_ID = 'PVT_kwHODGcOBc4BZuj8';
+            // ── Project field IDs (OffbandMesh org board, project #1) ──
+            const PROJECT_ID = 'PVT_kwDOEXsS3c4BaleW';
 
-            const STATUS_FIELD_ID = 'PVTSSF_lAHODGcOBc4BZuj8zhUrOWo';
+            const STATUS_FIELD_ID = 'PVTSSF_lADOEXsS3c4BaleWzhVcBL8';
             const STATUS_OPTIONS = {
-              'board:backlog':     '21424ffd',  // Backlog
-              'board:todo':        'e440428b',  // Todo
-              'board:ready':       '1bbb2e8b',  // Ready
-              'board:in-progress': '7f81218e',  // In Progress
-              'board:testing':     '8275aca6',  // Testing
-              'board:deferred':    'c6ce415d',  // Deferred
-              'board:done':        'da0f8be7',  // Done
+              'board:backlog':     '91d35710',  // Backlog
+              'board:todo':        '7bf7b9ef',  // Todo
+              'board:ready':       'ec816a33',  // Ready
+              'board:in-progress': 'ee71a6e3',  // In Progress
+              'board:testing':     '3dc70fe4',  // Testing
+              'board:deferred':    'fc4959bc',  // Deferred
+              'board:done':        '4a67db65',  // Done
             };
 
-            const PRIORITY_FIELD_ID = 'PVTSSF_lAHODGcOBc4BZuj8zhUrPDQ';
+            const PRIORITY_FIELD_ID = 'PVTSSF_lADOEXsS3c4BaleWzhVcBMs';
             const PRIORITY_OPTIONS = {
-              'priority:P0': '4c4b0f45',
-              'priority:P1': '48f7b50e',
-              'priority:P2': '1a66b940',
-              'priority:P3': 'a5ffd218',
+              'priority:P0': '43b5c396',
+              'priority:P1': '40c7b471',
+              'priority:P2': '3ed2b368',
+              'priority:P3': '2406bdd1',
             };
 
             // ── Determine what triggered us ─────────────────────────
