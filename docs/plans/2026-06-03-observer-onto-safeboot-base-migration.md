@@ -6,7 +6,7 @@
 
 **Why this direction:** both branches are MeshCore **v1.15.0** (verified, identical `FIRMWARE_VERSION`). `crosswire` is a *shallow* clone (history truncated at the graft); `feature/safeboot` has full history + the rebrand + SafeBoot + the variant matrix. The observer feature set is smaller and largely additive, so moving it onto the richer base is less work and lands on the better base. No meaningful history loss (cherry-pick preserves content/message/author; only SHAs change; the GitHub PR/issue trail is independent; full upstream history is *gained*).
 
-**Architectural decision this forces (OWNER SIGN-OFF REQUIRED — see S6):** SafeBoot edits MeshCore core (`Mesh.cpp`, `NRF52Board.cpp`) + variant inis, so **Crosswire is a true MeshCore fork, not a "compose MeshCore as a dependency" consumer.** This *supersedes* the compose-not-inherit conclusion of the 2026-06-01 architecture review for the firmware-as-a-whole. The observer's decoupling (Session isolation, command bus, transport router) becomes an **internal refactor within the fork**, not a repo-boundary mechanism. The new `Strycher/Crosswire` repo therefore eventually holds the **full fork tree** (this unified base), not a thin consumer.
+**Architectural decision this forces (OWNER SIGN-OFF REQUIRED — see S6):** SafeBoot edits MeshCore core (`Mesh.cpp`, `NRF52Board.cpp`) + variant inis, so **Crosswire is a true MeshCore fork, not a "compose MeshCore as a dependency" consumer.** This *supersedes* the compose-not-inherit conclusion of the 2026-06-01 architecture review for the firmware-as-a-whole. The observer's decoupling (Session isolation, command bus, transport router) becomes an **internal refactor within the fork**, not a repo-boundary mechanism. The new `OffbandMesh/meshcore-firmware` repo therefore eventually holds the **full fork tree** (this unified base), not a thin consumer.
 
 **Overlap analysis (verified):** `feature/safeboot` has NO `wifi_observer`, NO `wifi_telemetry`, and a Bluedroid BLE stack. So: `wifi_observer`/`wifi_telemetry` port purely additively (new files, zero conflict); the NimBLE migration (#288) replays onto the same Bluedroid starting point it originally migrated from; the only real conflict hotspot is `examples/companion_radio/main.cpp` (SafeBoot's `setup()` hook vs observer init wiring).
 
@@ -61,7 +61,7 @@
 
 ## Phase 5 — Land as the canonical Crosswire firmware (Tier 2 — explicit approval) [GATE]
 
-- [ ] **5.1** Decide the canonical branch + how the unified tree becomes `Strycher/Crosswire`'s content (push as the repo's firmware = the "code migration" endpoint finally executed, now as a fork tree). See S6.
+- [ ] **5.1** Decide the canonical branch + how the unified tree becomes `OffbandMesh/meshcore-firmware`'s content (push as the repo's firmware = the "code migration" endpoint finally executed, now as a fork tree). See S6.
 - [ ] **5.2** Port the LoRa flash-discipline (`hardware-devices.yaml`, `pio-flash`, `block-raw-flash`/`block-raw-curl-ota`/`require-agent-mail-check` hooks) into Crosswire BEFORE any flash happens from it.
 - [ ] **5.3** On-hardware smoke test (ST-P V4 observer + an hv3 repeater) before declaring the base canonical. NO PR/merge without the owner's hands-on test.
 
@@ -69,7 +69,7 @@
 
 1. **Fork vs compose (load-bearing):** confirm Crosswire is a full MeshCore fork (SafeBoot requires it), superseding the compose-not-inherit firmware framing. The observer decoupling becomes internal.
 2. **Granular cherry-pick (recommended) vs squash-port** the observer delta.
-3. **When the unified base populates `Strycher/Crosswire`** (now, vs after build+hardware verify).
+3. **When the unified base populates `OffbandMesh/meshcore-firmware`** (now, vs after build+hardware verify).
 4. **#325/#327 disposition** — fold into the port, or keep as follow-on PRs against the new base.
 
 ## Rollback (whole migration)

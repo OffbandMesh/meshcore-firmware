@@ -17,11 +17,11 @@
 
 | Channel | Value |
 |---|---|
-| Firmware repo | `C:\Dev\LoRa\Crosswire` -- GitHub `Strycher/Crosswire`, default branch **`firmware-base`** |
+| Firmware repo | `C:\Dev\meshcore-firmware` -- GitHub `OffbandMesh/meshcore-firmware`, default branch **`firmware-base`** |
 | Citadel | `DW_PROJECT=Crosswire` (prefix every `dw` and `git commit` from a worktree). **Never** `LoRa`. |
 | Agent Mail | project_key **`app-c-dev-lora-crosswire`** (path slug). NOT `app-c-dev-lora`, NOT `app-crosswire`. |
 | Other agents | **DustyFox** (owns the deferred MeshCore 1.16.0 base-update), HazyForest (meshcore-open client fork -- separate). I was **RedCreek**. |
-| Upstream remotes on the repo | `upstream` = meshcore-dev/MeshCore, `iotthinks` -- both fetch-only (`no-push`). `origin` = Strycher/Crosswire (push). |
+| Upstream remotes on the repo | `upstream` = meshcore-dev/MeshCore, `iotthinks` -- both fetch-only (`no-push`). `origin` = OffbandMesh/meshcore-firmware (push). |
 
 `Strycher/LoRa` is the **separate personal origin** repo -- the Crosswire fork is no longer part of it. Bash sandbox blocks network; use `dangerouslyDisableSandbox: true` for git fetch/push/pull and any broker/Pi5 network call.
 
@@ -123,7 +123,7 @@ The owner explicitly flagged multiple SAFELANE failures this session. They were 
 
 1. `/refresh-context` (date, preflight, standards, Citadel, the 5 canonical docs) -- and actually read all 5.
 2. Register in Agent Mail `app-c-dev-lora-crosswire`, `fetch_inbox`, and reply to DustyFox if there's a pending thread.
-3. Confirm the `crosswire-v0.14.0` / `v0.15.0` GitHub Releases published (`gh release list -R Strycher/Crosswire`).
+3. Confirm the `crosswire-v0.14.0` / `v0.15.0` GitHub Releases published (`gh release list -R OffbandMesh/meshcore-firmware`).
 4. Pick from section 5 -- the natural next is the **#66/#67/#70 cosmetic-display fix** (one small PR, same `ObserverCli` status path) and/or pinging DustyFox to start the 1.16.0 merge.
 5. If returning to broker work: re-read section 4 and use the empirical-probe method, not guesses.
 
