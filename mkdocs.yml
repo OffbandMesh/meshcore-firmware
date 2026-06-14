@@ -1,10 +1,10 @@
-site_name: MeshCore Docs
-site_url: https://meshcore-dev.github.io/meshcore/
-site_description: Documentation for the open source MeshCore firmware
+site_name: Offband Docs
+site_url: https://github.com/OffbandMesh/meshcore-firmware
+site_description: Documentation for Offband, a cross-role MeshCore firmware fork
 
-repo_name: meshcore-dev/meshcore
-repo_url: https://github.com/meshcore-dev/meshcore/
-edit_uri: edit/main/docs/
+repo_name: OffbandMesh/meshcore-firmware
+repo_url: https://github.com/OffbandMesh/meshcore-firmware/
+edit_uri: edit/firmware-base/docs/
 
 theme:
   name: material
@@ -17,3 +17,13 @@ theme:
 
 extra_css:
   - _stylesheets/extra.css
+
+# Internal session artifacts — kept in-repo for history, excluded from the built
+# docs site so they never ship as public pages.
+exclude_docs: |
+  handoffs/
+  assessments/
+  plans/
+  superpowers/
+  llm-consultations/
+  llm-consult-prompts/
