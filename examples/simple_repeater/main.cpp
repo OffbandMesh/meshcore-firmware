@@ -5,7 +5,7 @@
 #include "MyMesh.h"
 
 #ifdef PIN_STATUS_LED
-  // Repeater heartbeat status LED (Strycher/Crosswire#9). Active-high default;
+  // Repeater heartbeat status LED (#9). Active-high default;
   // variants override LED_STATE_ON for active-low boards.
   #ifndef LED_STATE_ON
     #define LED_STATE_ON HIGH
@@ -959,7 +959,7 @@ void setup() {
 
 void loop() {
 #ifdef PIN_STATUS_LED
-  // Heartbeat: brief blip = alive (Strycher/Crosswire#9). No unread-message
+  // Heartbeat: brief blip = alive (#9). No unread-message
   // logic (repeaters carry none). Cadence follows the loop rate; under nRF52
   // powersave it blips on each wake.
   {

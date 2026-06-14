@@ -70,7 +70,7 @@ public:
     void shutdown();
 
     // Create the per-broker client mutex. Call ONCE from the pool on
-    // loopTask, before the lifecycle worker task starts (Strycher/Crosswire#53),
+    // loopTask, before the lifecycle worker task starts (#53),
     // so worker create/destroy and loopTask publish/connect serialize on the
     // same handle. Idempotent; no-op on host builds.
     void initLock();
@@ -112,7 +112,7 @@ private:
     esp_mqtt_client_handle_t client_ = nullptr;
     // Serializes ALL client_ ops (publish/start/stop/destroy) so the lifecycle
     // worker's blocking stop/destroy never races a loopTask publish/connect on
-    // the same handle (Strycher/Crosswire#53). Recursive: begin() -> shutdown().
+    // the same handle (#53). Recursive: begin() -> shutdown().
     SemaphoreHandle_t        client_lock_ = nullptr;
     // LoRa#327: tracks whether esp_mqtt_client_start() has been called since the
     // last stop/destroy, so tryConnect() can pair a stop() before each re-start.

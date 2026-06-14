@@ -94,7 +94,7 @@ public:
     // NON-BLOCKING: marks the slot "reconciling" + posts it to the lifecycle
     // worker task, which performs the (possibly multi-second) esp_mqtt client
     // create/destroy OFF loopTask so the BLE command channel never stalls
-    // (Strycher/Crosswire#53). Returns false if the pool/worker isn't up or
+    // (#53). Returns false if the pool/worker isn't up or
     // the request couldn't be queued; true if the reload was queued.
     bool reloadSlot(uint8_t slot);
 

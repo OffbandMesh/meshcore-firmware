@@ -383,7 +383,7 @@ void MyMesh::onContactOverwrite(const uint8_t* pub_key) {
     _store->deleteBlobByKey(pub_key, PUB_KEY_SIZE); // delete from storage
   // _serial is NULL during boot-time loadContacts (transport not set up yet);
   // guard it so the overwrite-oldest path during a populated-store load -- e.g.
-  // after MAX_CONTACTS is reduced (Strycher/Crosswire#42) -- does not NULL-deref.
+  // after MAX_CONTACTS is reduced (#42) -- does not NULL-deref.
   if (_serial && _serial->isConnected()) {
     out_frame[0] = PUSH_CODE_CONTACT_DELETED;
     memcpy(&out_frame[1], pub_key, PUB_KEY_SIZE);

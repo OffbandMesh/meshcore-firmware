@@ -106,7 +106,7 @@ bool cliPassthroughIsAllowed(const char* line) {
     // (Strycher/LoRa#313 phone auto-capitalize fix). "mqtt " covers the
     // status/enable/disable subcommands documented in ObserverCli.h; "wifi "
     // covers the aligned "wifi status/enable/disable" grammar
-    // (Strycher/Crosswire#45) -- without it, "wifi status" was denied here
+    // (#45) -- without it, "wifi status" was denied here
     // before ever reaching dispatchObserverCli.
     size_t skip = 0;
     if      (strncmp(p, "get ", 4) == 0)  skip = 4;

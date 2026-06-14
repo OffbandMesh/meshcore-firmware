@@ -471,7 +471,7 @@ static bool handleSetWebAllowInitial(char* reply, size_t reply_size,
 // Top-level dispatch
 // ---------------------------------------------------------------------------
 
-// "wifi enable" / "wifi disable" -- Strycher/Crosswire#45. Persists an NVS
+// "wifi enable" / "wifi disable" -- #45. Persists an NVS
 // policy flag in namespace "wifi" (key "enabled", default true) that
 // WifiBootstrap::begin() honors at boot. Reboot-to-apply by design: we do
 // NOT tear down a live STA here, because the observer's MQTT uplink and this
@@ -492,7 +492,7 @@ static bool handleSetWifiEnabled(char* reply, size_t reply_size, bool enabled) {
     return true;
 }
 
-// "get mqtt.broker.<N>.<key>" -- Strycher/Crosswire#45: symmetric read for the
+// "get mqtt.broker.<N>.<key>" -- #45: symmetric read for the
 // existing "set mqtt.broker.<N>.<key>". Key vocabulary mirrors
 // handleSetBrokerField. Secret fields (password) are write-only and refused
 // here, per the wifi.pwd policy + the CLAUDE.md "never echo a secret" rule.
@@ -529,7 +529,7 @@ static bool handleGetBrokerField(char* reply, size_t reply_size,
     return true;
 }
 
-// "mqtt view <N>" -- Strycher/Crosswire#98: dump ALL stored config for one
+// "mqtt view <N>" -- #98: dump ALL stored config for one
 // slot in a single reply (secrets redacted), so an operator can verify a slot
 // without querying each field via `get mqtt.broker.<N>.<key>`. The rendering +
 // redaction live in ConfigSchema::formatBrokerConfig (host-tested,
@@ -545,7 +545,7 @@ static bool handleViewBroker(char* reply, size_t reply_size, int slot) {
     return true;
 }
 
-// "mqtt clear <N>" -- Strycher/Crosswire#98: wipe one slot's stored config back
+// "mqtt clear <N>" -- #98: wipe one slot's stored config back
 // to empty (url + every field blank, disabled), tearing down any live client.
 // It clears the FIELDS, not the device. RECOVERY: a default slot (0-5) is
 // re-seeded to its default on the NEXT reboot (populateDefaultBrokers fills
@@ -620,7 +620,7 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
         return true;
     }
 
-    // "wifi ..." commands -- Strycher/Crosswire#45: namespace-subcommand
+    // "wifi ..." commands -- #45: namespace-subcommand
     // grammar aligned with "mqtt status/enable/disable". `status` moves from
     // the verb-first "get wifi.status" to "wifi status"; the dotted form is
     // kept as a backward-compat alias in the `get` branch below.

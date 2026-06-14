@@ -5,7 +5,7 @@
 # the same pure parse in Python and testing against known-good fixtures.
 #
 # The C++ implementation is a direct translation of this algorithm; this test
-# is the executable specification (Strycher/Crosswire#33). Portable: no g++.
+# is the executable specification (#33). Portable: no g++.
 #
 # Run with:  python scripts/test_offband_version_splash.py
 
