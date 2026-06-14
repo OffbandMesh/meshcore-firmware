@@ -19,8 +19,9 @@ The verb + field are case-insensitive (phone auto-capitalize is tolerated, so
 **write-only** — never echoed back.
 
 Commands reach the dispatcher through a `_sys` allowlist that permits the
-`get`, `set`, `mqtt`, and `wifi` verbs (and rejects shell metacharacters and
-device-state verbs like `reboot`/`format`/`erase`/`factory`/`ota.`).
+`get`, `set`, `mqtt`, and `wifi` verbs and rejects shell metacharacters (`$(`,
+backtick, `!`) plus device/filesystem verbs
+(`reboot`/`format`/`erase`/`factory`/`ota.`/`fs.`/`flash.`/`rm`/`cat`/`exit`/`quit`).
 
 ## WiFi
 
@@ -52,7 +53,18 @@ device-state verbs like `reboot`/`format`/`erase`/`factory`/`ota.`).
 Broker fields (`<key>`): `url`, `port`, `transport` (tcp\|tls\|wss),
 `auth_type` (none\|basic\|jwt), `username`, `password` (write-only),
 `topic_prefix`, `iata_override`, `ca_cert`, `jwt_audience`, `jwt_refresh`,
-`jwt_owner`, `jwt_email`, `enabled`.
+`jwt_owner`, `jwt_email`.
+
+`enabled` is **read-only** (via `get`) — there is no `set …enabled`; toggle a
+slot with `mqtt enable <N>` / `mqtt disable <N>`.
+
+**Field constraints:** `port` `1..65535` (per-transport defaults
+`1883`/`8883`/`9001` for tcp/tls/wss); `jwt_owner` = exactly **64 hex chars**;
+`jwt_refresh` `60..86400` s; `status_interval` `10..3600` s (**default 30**).
+
+**Recovery:** `set web.allow_initial <on|off>` is a recovery override for the web
+UI's initial-password gate (writes NVS `web/allow_initial`); leave `off` in
+normal operation.
 
 Setting a field on a **live** (enabled) broker slot auto-disables that slot;
 re-enable explicitly with `mqtt enable <N>` once the config is complete.
@@ -104,7 +116,7 @@ mqtt status
   internally, so the input case doesn't matter.
 - **The exact `username` form is broker-dependent.** A **bare pubkey** works on
   eastme.sh; some brokers expect a `v1_<pubkey>` prefix. If a wss slot won't
-  authenticate, try the other form. (Defaulting this per broker is Crosswire#95.)
+  authenticate, try the other form. (Defaulting this per broker is #95.)
 
 ### Known broker values
 | Broker | url | ca_cert | jwt_audience |
@@ -113,11 +125,15 @@ mqtt status
 | LetsMesh-US | `wss://mqtt-us-v1.letsmesh.net:443/mqtt` | `gts-r4` | `mqtt-us-v1.letsmesh.net` (bare) |
 | eastme.sh | `wss://mqtt.eastme.sh:443/mqtt` | `letsencrypt` | `mqtt.eastme.sh` |
 
+The firmware also seeds **MeshMapper** (slot 3), **LetsMesh-EU** (slot 4), and
+**Eastmesh.au** (slot 5) as defaults — run `mqtt view 3` / `4` / `5` for their
+exact `url` / `ca_cert` / `jwt_audience`.
+
 ## Gotchas
 
 - **A `set` on a *disabled* slot may not apply immediately, and `mqtt status`
   shows the broker's *cached* config, not NVS** — so a slot can look
-  mis-configured right after a `set` (Crosswire#67). Do your `set`s, then
+  mis-configured right after a `set` (#67). Do your `set`s, then
   `mqtt enable <N>` (which reloads), or reboot. If a field looks wrong, re-apply
   it while the slot is enabled.
 - **wss/TLS brokers need a valid wall clock** (cert validity + JWT `exp`). Until
