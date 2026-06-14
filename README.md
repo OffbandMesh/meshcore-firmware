@@ -19,7 +19,17 @@ The firmware lives here: **`firmware-base`** is the canonical Offband tree (the 
 
 ## Getting started
 
-**Pre-built firmware** — grab a `.bin` from the [Releases page](../../releases) and flash it (web flasher, `esptool`, or `pio run -e <env> -t upload`). Each release's notes carry per-board flashing details.
+**Pre-built firmware** — grab the file for your board from the [Releases page](../../releases) and flash it. **Which file depends on whether it's a first install or an update:**
+
+| File | What it is | When |
+|---|---|---|
+| `<env>-...-merged.bin` (ESP32) | full image (bootloader + partitions + app), flashed at `0x0` after erase | **first install** — web flasher "Full Firmware"; self-contained |
+| `<env>-....bin` (ESP32) | app only, flashed at the app offset | **update** — OTA / "Update Only"; keeps identity + config |
+| `<env>-....uf2` (nRF52) | complete self-contained image | first install **and** update — double-tap reset, drag-drop |
+
+> On ESP32 the app-only `.bin` will **not boot** if written at `0x0` — use `-merged.bin` for a fresh install. A full erase wipes the device identity + config (first-install / recovery only). nRF52 `.uf2` has no merged/app split.
+
+Flash from a browser ([MeshCore web flasher](https://meshcore.co.uk/flasher.html) → custom firmware), or `pio run -e <env> -t upload`. Each release's notes repeat this guidance.
 
 **Build from source** — install [PlatformIO](https://platformio.org/), then build the env that matches your board + role:
 
