@@ -78,13 +78,13 @@ FIRMWARE_DIR = Path(os.environ.get(
 # ESP32 OTA partition offsets. Universal across this repo's ESP32 partition
 # tables (default*.csv / min_spiffs.csv / max_app_*.csv place the low region
 # identically; only the high-region app/spiffs sizes vary). Verified against
-# the partition table embedded in CI -merged.bin images (Strycher/Crosswire#29):
+# the partition table embedded in CI -merged.bin images (#29):
 # nvs@0x9000, otadata@0xe000, app0(ota_0)@0x10000.
 ESP32_APP0_OFFSET = 0x10000      # ota_0 (app) partition start
 ESP32_OTADATA_OFFSET = 0xe000    # boot selector
 ESP32_OTADATA_SIZE = 0x2000
 
-# Bootloader-discovery (Strycher/Crosswire#34): native-USB boards change USB
+# Bootloader-discovery (#34): native-USB boards change USB
 # identity + COM number entering bootloader (ESP32-S3 303A:0002->303A:1001;
 # nRF52/Adafruit 239A:8029->239A:00xx). After triggering bootloader entry on the
 # verified running port, the wrapper re-enumerates and discovers the new port by
@@ -379,7 +379,7 @@ def cmd_list(args, registry):
 
 
 # ---------------------------------------------------------------------------
-# Artifact-flash (Strycher/Crosswire#29): flash a downloaded CI release
+# Artifact-flash (#29): flash a downloaded CI release
 # artifact through the SAME resolve_device identity gate as an env flash.
 # ESP32 default = NVS-preserving app-slot update (write app0 + reset otadata);
 # --erase = full factory write of the -merged.bin at 0x0. nRF52 = serial DFU
@@ -534,7 +534,7 @@ def env_with_auth() -> dict:
 
 
 # esptool / adafruit-nrfutil output markers for output-parsed verification
-# (Strycher/Crosswire#34). Markers are matched case-insensitively.
+# (#34). Markers are matched case-insensitively.
 _ESPTOOL_WRITE_OK = ["hash of data verified"]
 _ESPTOOL_ERASE_OK = ["erased successfully", "erased in"]
 _ESPTOOL_FAIL = ["a fatal error", "serial exception", "failed", "traceback (most recent call"]
@@ -547,7 +547,7 @@ def _run_flasher(cmd: list, env_d: dict, success_markers: list,
     """Run a flasher subprocess, capture + print its output, and decide success
     by PARSING that output - never by exit code alone.
 
-    Rationale (Strycher/Crosswire#34): adafruit-nrfutil exits 0 even on a fatal
+    Rationale (#34): adafruit-nrfutil exits 0 even on a fatal
     "Failed to upgrade target", which reported false success (the OTA-incident
     class of bug). A flash is "ok" only when exit code 0 AND a positive success
     marker is present AND no failure marker is present. Conservative by design:
@@ -644,7 +644,7 @@ def _discover_bootloader_port(before: list, vendor: str, running_pid: str,
 def _enter_bootloader_and_discover(running_port: dict, platform: str) -> dict:
     """Trigger bootloader entry on the verified running port, then discover the
     device on its new (bootloader) COM. Unified for both chip families - they
-    all change identity + COM entering bootloader (Strycher/Crosswire#34)."""
+    all change identity + COM entering bootloader (#34)."""
     vendor = NRF52_VENDOR if platform == "nrf52" else ESP32S3_VENDOR
     running_pid = running_port["vid_pid"].split(":")[1]
     out(f"Triggering bootloader entry on {running_port['com']} "
@@ -700,7 +700,7 @@ def _flash_esp32_merged_full(artifact: Path, bl_com: str, env_d: dict) -> bool:
 def _flash_nrf52_dfu(artifact: Path, bl_com: str, env_d: dict) -> bool:
     """nRF52 serial DFU of the .zip on the DISCOVERED DFU port (no --touch - the
     device is already in the bootloader). Success is decided by PARSING output:
-    adafruit-nrfutil exits 0 even when it fails (Strycher/Crosswire#34). A normal
+    adafruit-nrfutil exits 0 even when it fails (#34). A normal
     app DFU preserves the internal config filesystem."""
     out(f"[1/1] adafruit-nrfutil dfu serial {artifact.name} -> {bl_com}")
     _, ok = _run_flasher(

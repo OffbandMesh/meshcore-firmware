@@ -76,7 +76,7 @@ public:
     // The commits-since suffix is identified by git's "-g<sha>" marker, NOT the
     // first dash. Splitting on the first dash (prior behavior) mis-read a
     // pre-release tag's "-rcN" as the commits field -> it dropped "-rcN" and
-    // showed a spurious "+0" (Strycher/Crosswire#33).
+    // showed a spurious "+0" (#33).
     const char *cw = OFFBAND_VERSION;
     static const char *cw_prefix = "offband-";
     if (strncmp(cw, cw_prefix, 8) == 0) cw += 8;
@@ -500,7 +500,7 @@ public:
 #if defined(ESP32) || defined(ESP_PLATFORM)
     // Heap readout was added for the ESP32 V3/V4 heap crisis; ESP.* is
     // ESP32-only, so guard it -- nRF52 companions otherwise fail to compile
-    // ('ESP' not declared). Strycher/Crosswire#8.
+    // ('ESP' not declared). #8.
     char heap_tmp[24];
     snprintf(heap_tmp, sizeof(heap_tmp), "Heap:%u", (unsigned)ESP.getFreeHeap());
     display.setTextSize(1);

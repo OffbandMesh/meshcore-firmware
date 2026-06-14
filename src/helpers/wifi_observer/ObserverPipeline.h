@@ -1,6 +1,6 @@
 // src/helpers/wifi_observer/ObserverPipeline.h
 //
-// Plan 2 v2 Task 9 (ring removed in Strycher/Crosswire#42): LoRa RX hooks
+// Plan 2 v2 Task 9 (ring removed in #42): LoRa RX hooks
 // -> broker-pool publish. Hooks MyMesh::logRxRaw (every raw RX, rssi+snr)
 // and MyMesh::logRx (parsed), fanning each out to the pool via /raw + /packets.
 //

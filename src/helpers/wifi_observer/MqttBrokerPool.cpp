@@ -60,7 +60,7 @@ void MqttBrokerPool::begin(const mesh::LocalIdentity& identity,
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     // Start the lifecycle worker. It owns ALL blocking esp_mqtt ops --
     // create/destroy AND the connect/retry loop -- so loopTask never stalls
-    // on MQTT for any reason (Strycher/Crosswire#53). Created once; lives for
+    // on MQTT for any reason (#53). Created once; lives for
     // the device's life (pool.begin() is one-shot, guarded upstream).
     worker_run_  = true;
     reconcile_q_ = xQueueCreate(OFFBAND_MAX_BROKERS * 2, sizeof(uint8_t));

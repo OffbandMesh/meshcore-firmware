@@ -37,7 +37,7 @@ REQUIRED_FLAGS_ALL = [
 ]
 REQUIRED_SRC_FILTER = "+<helpers/wifi_observer/*.cpp>"
 
-# Phase-1 strip (Strycher/Crosswire#42): observer envs override the inherited
+# Phase-1 strip (#42): observer envs override the inherited
 # companion defaults down to observer minima to free static .bss. The strings
 # below must match the platformio.ini byte-for-byte -- MAX_GROUP_CHANNELS uses
 # the no-space second-D form; MAX_CONTACTS / OFFLINE_QUEUE_SIZE use the spaced

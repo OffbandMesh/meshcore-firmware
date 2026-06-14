@@ -18,7 +18,7 @@ namespace offband {
 namespace {
 // RAII guard for the per-broker recursive client mutex. Take on
 // construction, give on destruction -- covers all early-return paths
-// (Strycher/Crosswire#53).
+// (#53).
 struct ClientLockGuard {
     SemaphoreHandle_t m_;
     explicit ClientLockGuard(SemaphoreHandle_t m) : m_(m) {
