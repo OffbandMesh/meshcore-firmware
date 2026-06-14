@@ -17,6 +17,21 @@ Cross-cutting work used by multiple roles: a NimBLE migration off Bluedroid, a C
 
 The firmware lives here: **`firmware-base`** is the canonical Offband tree (the old `Strycher/MeshCore` fork is archived). Design-of-record for the observer architecture is in [`docs/architecture/`](docs/architecture/). Operator setup for the observer is in [`docs/observer-cli-commands.md`](docs/observer-cli-commands.md) (the `_sys` CLI) and [`docs/observer-gps-location-config.md`](docs/observer-gps-location-config.md) (GPS / location).
 
+## Getting started
+
+**Pre-built firmware** — grab a `.bin` from the [Releases page](../../releases) and flash it (web flasher, `esptool`, or `pio run -e <env> -t upload`). Each release's notes carry per-board flashing details.
+
+**Build from source** — install [PlatformIO](https://platformio.org/), then build the env that matches your board + role:
+
+```bash
+pio run -e heltec_v4_companion_observer_wifi     # observer — Heltec V4
+pio run -e Heltec_v3_companion_observer_wifi     # observer — Heltec V3
+pio run -e Xiao_S3_WIO_companion_observer_wifi   # observer — XIAO S3 WIO
+pio run -e heltec_v4_repeater_telemetry          # repeater telemetry — Heltec V4
+```
+
+The full env list lives in [`platformio.ini`](platformio.ini). Build artifacts land in `.pio/build/<env>/`; flash with `pio run -e <env> -t upload`.
+
 ## Filing requests
 
 Requests and bug reports are welcome now -- use the issue templates (Bug report / Feature request). When reporting a bug, include the role, board, and the Offband version from the OLED splash or serial banner, and **never paste WiFi/MQTT credentials**.
