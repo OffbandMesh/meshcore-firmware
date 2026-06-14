@@ -69,6 +69,10 @@ Intentionally-kept tags/branches that are **NOT on the build line** and must **N
 
 Decision record: **OffbandMesh/meshcore-firmware#5** (closed, preserved-by-design). Do not casually merge any of these into `firmware-base`.
 
+## Hardware facts — read before any hardware work
+
+Device inventory, RF chain (FEM / TX power), per-device MACs/roles, slot/pin maps, and flash paths live in **`HARDWARE.local.md`** (gitignored, per-host; symlink to the canonical `C:\Dev\LoRa\HARDWARE.md`). **Read it before asking about or acting on hardware**, and record newly-stated hardware facts there so the user never has to restate them. It holds LAN IPs / MACs / SSID / BLE PINs / GPS coordinates — **never commit it or paste its contents** into issues/PRs/chat.
+
 ## Security
 
 - MIT fork: preserve upstream copyright in `LICENSE.txt`.

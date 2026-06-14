@@ -55,6 +55,10 @@ Thumbs.db
 # per-host device registry (LAN IPs/MACs) -- never commit; use hardware-devices.example.yaml
 hardware-devices.yaml
 
+# per-host hardware inventory / RF chain / device facts (LAN IPs, MACs, SSID, BLE PINs, GPS coords)
+# -- never commit. Symlink/mirror of canonical C:\Dev\LoRa\HARDWARE.md; read before any hardware work.
+HARDWARE.local.md
+
 # per-host flash audit log + full-flash backups (device MACs/DeviceIDs) -- never commit
 flash-history.jsonl
 flash-backups/
