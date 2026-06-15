@@ -367,7 +367,7 @@ static bool handleSetWifiField(char* reply, size_t reply_size,
     if (eq(field, "pwd")) {
         // Never echo the PSK in any code path.
         snprintf(reply, reply_size,
-                 "wifi.pwd set (length=%u). Reboot or run "
+                 "wifi.pwd set (%u chars entered). Reboot or run "
                  "'wifi status' after STA retry.\n",
                  (unsigned)strlen(value));
     } else {
