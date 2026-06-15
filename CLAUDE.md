@@ -79,6 +79,10 @@ Device inventory, RF chain (FEM / TX power), per-device MACs/roles, slot/pin map
 - No secrets in the repo, ever. WiFi PSK / MQTT credentials / OTA tokens live only in gitignored per-host files.
 - Never echo a configured PSK into logs, commit messages, issues, or chat. Log only derived properties (length, checksum) when diagnostics need it.
 
+## Release discipline
+
+- **Release approval gate** — never push a release tag (`-rc` or stable) without first posting a concise **release preview** (version, `-rc`/stable, the CHANGELOG entry, any user-facing string change) and getting an explicit human "ship it." Validation/feedback ("it works" / "happy with it") is **not** release authorization. Scale the preview to the change — keep it light, not ceremony. Full rationale + format in [`VERSIONING.md`](VERSIONING.md) ("Release approval gate").
+
 ## Follow-ups (bootstrap gaps to close)
 
 - `/work` slash command + `session-state.py` compaction-recovery hook: **now published canonically** (standards @27b3ec7 — `/work` #112, `session-state.py` #107). `/work` auto-syncs into `.claude/commands/` via preflight; `session-state.py` is a hook copy-in (not auto-synced). Port deferred by owner — do when picked up.

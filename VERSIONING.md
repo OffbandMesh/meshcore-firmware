@@ -88,6 +88,21 @@ flashing to test." `-rc` is the single pre-release tier for now: testers arrive
 after the internal minimum bar, so they're already past "alpha". Add `-beta` only
 if a rougher tier below `-rc` is ever needed.
 
+## Release approval gate
+
+Before pushing **any release tag** (`-rc` or stable), post a concise **release preview** to the maintainer and wait for an explicit "ship it":
+
+- the **version** + whether it's **`-rc` or stable**
+- the **CHANGELOG entry** being released
+- any **user-facing string change** in the release (exact before → after)
+
+Scale the preview to the change — a line or two for a patch, a short list for a feature; don't make it a wall. Two rules behind it:
+
+- **Validation is not authorization.** A maintainer saying a build "works" / "is happy with it" means the *hardware gate is met* — it is not "publish the release." The tag is pushed only on an explicit go.
+- **No unreviewed copy ships.** Anything users read (firmware reply strings, release notes, the CHANGELOG entry) goes in front of the maintainer *before* the tag, not after.
+
+(Adopted 2026-06-14 after a stable release was cut on an inferred go and a user-facing wording change shipped to production unreviewed.)
+
 ## Upstream baseline tracking
 
 The upstream MeshCore version that a given Offband build rides on is
