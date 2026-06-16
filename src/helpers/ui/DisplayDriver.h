@@ -16,6 +16,9 @@ public:
   virtual bool isOn() = 0;
   virtual void turnOn() = 0;
   virtual void turnOff() = 0;
+  // #148: runtime rotation in DEGREES (0/180 supported; other values ignored).
+  // Default no-op so non-rotating drivers (e-ink, etc.) simply ignore it.
+  virtual void setRotation(uint8_t deg) {}
   virtual void clear() = 0;
   virtual void startFrame(Color bkg = DARK) = 0;
   virtual void setTextSize(int sz) = 0;

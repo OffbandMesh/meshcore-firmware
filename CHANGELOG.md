@@ -21,6 +21,10 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
   observer's screen lit instead of blanking after 15 s; `display normal` restores the
   timeout. Persists across reboots and applies immediately. Available on the Heltec V3,
   V4 OLED, and V4 TFT observer builds.
+- **Display rotation (0/180)** (#148) — `display rotate 0` / `display rotate 180` /
+  `display flip` rotate the screen 180° (upside-down mounting) over the `_sys` channel.
+  Persists across reboots; applies immediately. Heltec V3, V4 OLED, and V4 TFT observer
+  builds.
 
 ## [0.18.1] - 2026-06-14
 

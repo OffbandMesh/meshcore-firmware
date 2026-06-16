@@ -104,6 +104,9 @@ static const GateCase kGateCases[] = {
     {"display always on",            true},   // #141: display always-on toggle
     {"display normal",               true},   // #141: restore default timeout
     {"display always off",           true},   // #141: accepted as an alias for "display normal"
+    {"display rotate 0",             true},   // #148: rotate command
+    {"display rotate 180",           true},   // #148
+    {"display flip",                 true},   // #148: flip toggle
 };
 
 // End-to-end cases: exercise cliPassthroughExecute, which must trim
@@ -295,7 +298,7 @@ def main() -> int:
         out = (r.stdout or "").rstrip()
         # Echo full per-case output for visibility.
         print(out)
-        if r.returncode == 0 and "OK: 25 cases pass." in out:   # #141: +3 display gate cases
+        if r.returncode == 0 and "OK: 28 cases pass." in out:   # #141/#148: +6 display gate cases
             return 0
         print(f"FAIL (rc={r.returncode})")
         if r.stderr:

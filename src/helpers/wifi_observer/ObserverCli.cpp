@@ -584,6 +584,41 @@ static bool handleDisplayAlwaysOn(char* reply, size_t reply_size, bool on) {
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// #148: display rotation (0/180). Persists to offband_ui; applies live via a
+// raw-fn-pointer applier the app registers at boot (parallel to the always-on
+// applier above).
+// ---------------------------------------------------------------------------
+static void (*s_display_rotation_applier)(uint8_t) = nullptr;
+
+void setDisplayRotationApplier(void (*fn)(uint8_t)) {
+    s_display_rotation_applier = fn;
+}
+
+// In-session cache of the current rotation so `display flip` toggles reliably
+// from RAM instead of a write-then-read NVS round-trip (a fresh read-only
+// handle may not observe a just-committed write). Lazily seeded from NVS;
+// updated on every rotate/flip. NVS stays the persistence layer (#148).
+static int s_rotation_cache = -1;   // -1 = not yet loaded
+
+static bool handleDisplayRotate(char* reply, size_t reply_size, uint8_t deg) {
+    setDisplayRotation(deg);                                                  // persist (offband_ui NVS)
+    s_rotation_cache = deg;                                                   // keep the in-session cache current
+    if (s_display_rotation_applier) s_display_rotation_applier(deg);          // apply to the live display
+    snprintf(reply, reply_size,
+             deg == 180 ? "display: rotation 180 (flipped)\n"
+                        : "display: rotation 0 (default)\n");
+    return true;
+}
+
+static bool handleDisplayFlip(char* reply, size_t reply_size) {
+    // Toggle from the in-session cache (seeded from NVS on first use), so flip
+    // always inverts 0<->180 without depending on a read-after-write.
+    if (s_rotation_cache < 0) s_rotation_cache = getDisplayRotation();
+    uint8_t other = (s_rotation_cache == 180) ? 0 : 180;
+    return handleDisplayRotate(reply, reply_size, other);
+}
+
 bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
                          MqttBrokerPool& pool) {
     if (cmd == nullptr || reply == nullptr || reply_size == 0) return false;
@@ -650,8 +685,17 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
         // mode, so we redirect it to normal rather than reject it (#141).
         if (eq(disp_rest, "normal") ||
             eq(disp_rest, "always off")) return handleDisplayAlwaysOn(reply, reply_size, false);
+        // #148: display rotation (0/180) + flip toggle.
+        if (eq(disp_rest, "flip")) return handleDisplayFlip(reply, reply_size);
+        const char* rot_rest = skipPrefix(disp_rest, "rotate");
+        if (rot_rest != nullptr) {
+            if (eq(rot_rest, "0"))   return handleDisplayRotate(reply, reply_size, 0);
+            if (eq(rot_rest, "180")) return handleDisplayRotate(reply, reply_size, 180);
+            snprintf(reply, reply_size, "ERROR: display rotate supports 0 or 180\n");
+            return true;
+        }
         snprintf(reply, reply_size,
-                 "ERROR: usage: display always on | display normal\n");
+                 "ERROR: usage: display always on | display normal | display rotate <0|180> | display flip\n");
         return true;
     }
 

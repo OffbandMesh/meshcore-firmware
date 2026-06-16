@@ -700,6 +700,12 @@ void UITask::setAlwaysOn(bool on) {
   }
 }
 
+// #148: request a rotation; the render loop applies it at the frame boundary.
+void UITask::requestRotation(uint8_t deg) {
+  _rotation = (int)deg;
+  _rotation_dirty = true;
+}
+
 void UITask::showAlert(const char* text, int duration_millis) {
   strcpy(_alert, text);
   _alert_expiry = millis() + duration_millis;
@@ -921,6 +927,15 @@ void UITask::loop() {
   if (curr) curr->poll();
 
   if (_display != NULL && _display->isOn()) {
+    // #148: (re)apply rotation at the frame boundary -- on a pending change and
+    // again after a wake (some drivers reset orientation in turnOn()'s re-init).
+    if (!_was_on) { _was_on = true; _rotation_dirty = true; }
+    if (_rotation_dirty) {
+      _display->setRotation((uint8_t)_rotation);
+      _rotation_dirty = false;
+      _display->clear();
+      _next_refresh = 0;            // force an immediate full repaint
+    }
     if (millis() >= _next_refresh && curr) {
       _display->startFrame();
       int delay_millis = curr->render(*_display);
@@ -944,6 +959,8 @@ void UITask::loop() {
       _display->turnOff();
     }
 #endif
+  } else if (_display != NULL) {
+    _was_on = false;   // #148: display off -> re-apply rotation on the next wake
   }
 
 #ifdef PIN_VIBRATION

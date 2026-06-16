@@ -49,6 +49,13 @@ void SSD1306Display::turnOff() {
   }
 }
 
+// #148: 0 deg -> Adafruit-GFX rotation index 0, 180 deg -> index 2 (both
+// landscape). Only 0/180 are supported; other values are ignored.
+void SSD1306Display::setRotation(uint8_t deg) {
+  if (deg == 0)        display.setRotation(0);
+  else if (deg == 180) display.setRotation(2);
+}
+
 void SSD1306Display::clear() {
   display.clearDisplay();
   display.display();

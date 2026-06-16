@@ -42,6 +42,7 @@ constexpr uint16_t kMaxStatusIntervalSec     = 3600;
 // Offband UI keys (in "offband_ui" namespace)
 // ---------------------------------------------------------------------------
 constexpr const char* kKeyDisplayAlwaysOn = "always_on";  // bool; default false (#141)
+constexpr const char* kKeyDisplayRotation = "rotation";   // uint8 0/180; default 0 (#148)
 
 // ---------------------------------------------------------------------------
 // Per-broker keys (in per-broker "mqtt_bN" namespace)
@@ -85,6 +86,10 @@ void     writeStatusIntervalSec(uint16_t seconds);
 // screen. Stored in the fork-branded "offband_ui" NVS namespace.
 bool getDisplayAlwaysOn();
 void setDisplayAlwaysOn(bool on);
+
+// #148: display rotation in degrees (0 or 180). Stored in "offband_ui".
+uint8_t getDisplayRotation();
+void    setDisplayRotation(uint8_t deg);
 
 // Broker-slot accessors. Slot range [0, OFFBAND_MAX_BROKERS).
 // Returns sensible defaults on read-miss (e.g., empty url, enabled=false,

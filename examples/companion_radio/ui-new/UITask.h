@@ -39,6 +39,9 @@ class UITask : public AbstractUITask {
   unsigned long ui_started_at, next_batt_chck;
   int next_backlight_btn_check = 0;
   bool _always_on = false;   // #141: when true, never auto-blank the display
+  int  _rotation = 0;            // #148: desired display rotation in degrees (0/180)
+  bool _rotation_dirty = true;   // #148: rotation needs (re)applying on the next render
+  bool _was_on = false;          // #148: display on/off edge, to re-apply rotation after a wake
 #ifdef PIN_STATUS_LED
   int led_state = 0;
   int next_led_change = 0;
@@ -93,6 +96,9 @@ public:
 
   // #141: display always-on toggle (set via `display always on/off` over the _sys CLI).
   void setAlwaysOn(bool on);
+
+  // #148: request a display rotation (deg 0/180); applied at the next render cycle.
+  void requestRotation(uint8_t deg);
 
   // from AbstractUITask
   void msgRead(int msgcount) override;
