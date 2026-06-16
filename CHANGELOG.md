@@ -16,6 +16,8 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-06-15
+
 ### Added
 - **Display always-on toggle** (#141) — `display always on` keeps a USB/mains-powered
   observer's screen lit instead of blanking after 15 s; `display normal` restores the
