@@ -16,6 +16,12 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+### Added
+- **Display always-on toggle** (#141) — `display always on` keeps a USB/mains-powered
+  observer's screen lit instead of blanking after 15 s; `display normal` restores the
+  timeout. Persists across reboots and applies immediately. Available on the Heltec V3,
+  V4 OLED, and V4 TFT observer builds.
+
 ## [0.18.1] - 2026-06-14
 
 ### Fixed

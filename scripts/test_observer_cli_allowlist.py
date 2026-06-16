@@ -101,6 +101,9 @@ static const GateCase kGateCases[] = {
     {"wifi status",                  true},   // #45: was "denied: not in allowlist"
     {"wifi enable",                  true},   // #45
     {"wifi disable",                 true},   // #45
+    {"display always on",            true},   // #141: display always-on toggle
+    {"display normal",               true},   // #141: restore default timeout
+    {"display always off",           true},   // #141: accepted as an alias for "display normal"
 };
 
 // End-to-end cases: exercise cliPassthroughExecute, which must trim
@@ -292,7 +295,7 @@ def main() -> int:
         out = (r.stdout or "").rstrip()
         # Echo full per-case output for visibility.
         print(out)
-        if r.returncode == 0 and "OK: 22 cases pass." in out:
+        if r.returncode == 0 and "OK: 25 cases pass." in out:   # #141: +3 display gate cases
             return 0
         print(f"FAIL (rc={r.returncode})")
         if r.stderr:

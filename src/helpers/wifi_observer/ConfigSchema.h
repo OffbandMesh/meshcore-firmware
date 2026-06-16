@@ -21,6 +21,7 @@ namespace offband {
 constexpr const char* kNvsWifi      = "wifi";      // Plan 1
 constexpr const char* kNvsMqtt      = "mqtt";      // global mqtt keys (iata, status_interval)
 constexpr const char* kNvsObserver  = "observer";  // ring buffer size etc.
+constexpr const char* kNvsOffbandUi = "offband_ui"; // #141: fork UI prefs (display.always_on). Fork-branded so a future upstream NVS namespace can never clash.
 
 // Per-broker namespace is generated at runtime: "mqtt_b0".."mqtt_b5".
 // 15-char ceiling tolerates "mqtt_b<digit>" comfortably.
@@ -36,6 +37,11 @@ constexpr const char* kKeyMqttStatusInterval = "status_int";  // <15 chars
 constexpr uint16_t kDefaultStatusIntervalSec = 30;
 constexpr uint16_t kMinStatusIntervalSec     = 10;
 constexpr uint16_t kMaxStatusIntervalSec     = 3600;
+
+// ---------------------------------------------------------------------------
+// Offband UI keys (in "offband_ui" namespace)
+// ---------------------------------------------------------------------------
+constexpr const char* kKeyDisplayAlwaysOn = "always_on";  // bool; default false (#141)
 
 // ---------------------------------------------------------------------------
 // Per-broker keys (in per-broker "mqtt_bN" namespace)
@@ -74,6 +80,11 @@ void writeGlobalIata(const char* iata);
 
 uint16_t readStatusIntervalSec();
 void     writeStatusIntervalSec(uint16_t seconds);
+
+// #141: display always-on toggle. When true, UITask never auto-blanks the
+// screen. Stored in the fork-branded "offband_ui" NVS namespace.
+bool getDisplayAlwaysOn();
+void setDisplayAlwaysOn(bool on);
 
 // Broker-slot accessors. Slot range [0, OFFBAND_MAX_BROKERS).
 // Returns sensible defaults on read-miss (e.g., empty url, enabled=false,

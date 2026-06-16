@@ -65,6 +65,22 @@ void writeStatusIntervalSec(uint16_t seconds) {
     p.end();
 }
 
+// #141: display always-on toggle, in the fork-branded "offband_ui" namespace.
+bool getDisplayAlwaysOn() {
+    Preferences p;
+    p.begin(kNvsOffbandUi, /*readOnly=*/true);
+    bool v = p.getBool(kKeyDisplayAlwaysOn, false);
+    p.end();
+    return v;
+}
+
+void setDisplayAlwaysOn(bool on) {
+    Preferences p;
+    p.begin(kNvsOffbandUi, /*readOnly=*/false);
+    p.putBool(kKeyDisplayAlwaysOn, on);
+    p.end();
+}
+
 bool readBrokerConfig(uint8_t slot, BrokerConfig& out) {
     if (slot >= OFFBAND_MAX_BROKERS) return false;
     char ns[16];

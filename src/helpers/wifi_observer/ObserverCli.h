@@ -36,11 +36,18 @@ namespace offband {
 //   set mqtt.broker.<N>.iata_override <code>
 //   set mqtt.broker.<N>.topic_prefix <s>
 //   set mqtt.broker.<N>.ca_cert <name>           -- letsencrypt, eastmesh, ""
+//   display always on | display normal           -- #141: keep the screen lit / restore the 15 s blank
+//                                                    ("display always off" is accepted as an alias for "display normal")
 //
 // All "set" commands write to NVS via ConfigSchema and call
 // pool.reloadSlot(N) if a per-slot field changed. Slot range [0,
 // OFFBAND_MAX_BROKERS).
 bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
                          MqttBrokerPool& pool);
+
+// #141: register a callback the app provides so a `display always on/off`
+// command applies to the live UITask immediately (no reboot). Raw function
+// pointer (not std::function) to avoid heap on tight-RAM boards.
+void setDisplayAlwaysOnApplier(void (*fn)(bool));
 
 }  // namespace offband

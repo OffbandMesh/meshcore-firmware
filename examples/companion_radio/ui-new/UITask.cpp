@@ -688,6 +688,18 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   setCurrScreen(splash);
 }
 
+// #141: display always-on toggle. Persisted in NVS (offband_ui); applied here
+// live by the observer CLI (and at boot) via the applier registered in main.cpp.
+void UITask::setAlwaysOn(bool on) {
+  _always_on = on;
+  if (_display == NULL) return;
+  if (on) {
+    if (!_display->isOn()) _display->turnOn();   // light it now; the loop's auto-off is gated on _always_on
+  } else {
+    _auto_off = millis() + AUTO_OFF_MILLIS;      // resume the normal timeout from now (no abrupt blank)
+  }
+}
+
 void UITask::showAlert(const char* text, int duration_millis) {
   strcpy(_alert, text);
   _alert_expiry = millis() + duration_millis;
@@ -928,7 +940,7 @@ void UITask::loop() {
       _display->endFrame();
     }
 #if AUTO_OFF_MILLIS > 0
-    if (millis() > _auto_off) {
+    if (!_always_on && millis() > _auto_off) {   // #141: always-on skips the auto-blank
       _display->turnOff();
     }
 #endif

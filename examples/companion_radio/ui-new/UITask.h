@@ -38,6 +38,7 @@ class UITask : public AbstractUITask {
   int _msgcount;
   unsigned long ui_started_at, next_batt_chck;
   int next_backlight_btn_check = 0;
+  bool _always_on = false;   // #141: when true, never auto-blank the display
 #ifdef PIN_STATUS_LED
   int led_state = 0;
   int next_led_change = 0;
@@ -90,6 +91,8 @@ public:
   bool getGPSState();
   void toggleGPS();
 
+  // #141: display always-on toggle (set via `display always on/off` over the _sys CLI).
+  void setAlwaysOn(bool on);
 
   // from AbstractUITask
   void msgRead(int msgcount) override;

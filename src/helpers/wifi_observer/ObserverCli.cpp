@@ -563,6 +563,27 @@ static bool handleClearBroker(char* reply, size_t reply_size,
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// #141: display always-on toggle (`display always on` / `display always off`).
+// Persists to the fork-branded "offband_ui" NVS namespace, then applies the
+// change to the live display via an applier the app registers at boot (a raw
+// function pointer -- not std::function -- to avoid heap on tight-RAM boards).
+// ---------------------------------------------------------------------------
+static void (*s_display_always_on_applier)(bool) = nullptr;
+
+void setDisplayAlwaysOnApplier(void (*fn)(bool)) {
+    s_display_always_on_applier = fn;
+}
+
+static bool handleDisplayAlwaysOn(char* reply, size_t reply_size, bool on) {
+    setDisplayAlwaysOn(on);                                            // persist (offband_ui NVS)
+    if (s_display_always_on_applier) s_display_always_on_applier(on);  // apply to the live display
+    snprintf(reply, reply_size,
+             on ? "display: always on (screen stays lit)\n"
+                : "display: normal (blanks after 15 s)\n");
+    return true;
+}
+
 bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
                          MqttBrokerPool& pool) {
     if (cmd == nullptr || reply == nullptr || reply_size == 0) return false;
@@ -617,6 +638,20 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
         snprintf(reply, reply_size,
                  "ERROR: unknown mqtt subcommand "
                  "(status | view <N> | enable <N> | disable <N> | clear <N>)\n");
+        return true;
+    }
+
+    // "display ..." commands -- #141: display always-on toggle.
+    const char* disp_rest = skipPrefix(cmd, "display");
+    if (disp_rest != nullptr) {
+        if (eq(disp_rest, "always on")) return handleDisplayAlwaysOn(reply, reply_size, true);
+        // "normal" restores the default 15 s timeout. "always off" is accepted
+        // as an alias for it: it reads literally, but there is no force-dark
+        // mode, so we redirect it to normal rather than reject it (#141).
+        if (eq(disp_rest, "normal") ||
+            eq(disp_rest, "always off")) return handleDisplayAlwaysOn(reply, reply_size, false);
+        snprintf(reply, reply_size,
+                 "ERROR: usage: display always on | display normal\n");
         return true;
     }
 
