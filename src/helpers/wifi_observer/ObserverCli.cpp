@@ -613,7 +613,9 @@ static bool handleDisplayRotate(char* reply, size_t reply_size, uint8_t deg) {
     // #148: gate to drivers with a verified runtime-rotation override (SSD1306
     // OLED). Others report unsupported rather than silently no-op'ing; the TFT
     // (ST7789) override is not yet hardware-verified and is tracked separately.
-    if (s_display_rotation_supported && !s_display_rotation_supported()) {
+    // Deny-by-default: if the capability query was never registered, treat the
+    // display as unsupported (don't fall through to a silent no-op) -- per Gemini review.
+    if (!s_display_rotation_supported || !s_display_rotation_supported()) {
         snprintf(reply, reply_size, "display: rotation not supported on this display\n");
         return true;
     }
