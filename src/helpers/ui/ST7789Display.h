@@ -24,6 +24,7 @@ public:
   bool isOn() override { return _isOn; }
   void turnOn() override;
   void turnOff() override;
+  void setRotation(uint8_t deg) override;
   void clear() override;
   void startFrame(Color bkg = DARK) override;
   void setTextSize(int sz) override;

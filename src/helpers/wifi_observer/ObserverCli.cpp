@@ -563,6 +563,79 @@ static bool handleClearBroker(char* reply, size_t reply_size,
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// #141: display always-on toggle (`display always on` / `display always off`).
+// Persists to the fork-branded "offband_ui" NVS namespace, then applies the
+// change to the live display via an applier the app registers at boot (a raw
+// function pointer -- not std::function -- to avoid heap on tight-RAM boards).
+// ---------------------------------------------------------------------------
+static void (*s_display_always_on_applier)(bool) = nullptr;
+
+void setDisplayAlwaysOnApplier(void (*fn)(bool)) {
+    s_display_always_on_applier = fn;
+}
+
+static bool handleDisplayAlwaysOn(char* reply, size_t reply_size, bool on) {
+    setDisplayAlwaysOn(on);                                            // persist (offband_ui NVS)
+    if (s_display_always_on_applier) s_display_always_on_applier(on);  // apply to the live display
+    snprintf(reply, reply_size,
+             on ? "display: always on (screen stays lit)\n"
+                : "display: normal (blanks after 15 s)\n");
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// #148: display rotation (0/180). Persists to offband_ui; applies live via a
+// raw-fn-pointer applier the app registers at boot (parallel to the always-on
+// applier above).
+// ---------------------------------------------------------------------------
+static void (*s_display_rotation_applier)(uint8_t) = nullptr;
+
+void setDisplayRotationApplier(void (*fn)(uint8_t)) {
+    s_display_rotation_applier = fn;
+}
+
+// #148: capability query (parallel to the applier) so we can refuse rotation on
+// displays whose driver has no verified runtime-rotation override.
+static bool (*s_display_rotation_supported)() = nullptr;
+
+void setDisplayRotationSupportedQuery(bool (*fn)()) {
+    s_display_rotation_supported = fn;
+}
+
+// In-session cache of the current rotation so `display flip` toggles reliably
+// from RAM instead of a write-then-read NVS round-trip (a fresh read-only
+// handle may not observe a just-committed write). Lazily seeded from NVS;
+// updated on every rotate/flip. NVS stays the persistence layer (#148).
+static int s_rotation_cache = -1;   // -1 = not yet loaded
+
+static bool handleDisplayRotate(char* reply, size_t reply_size, uint8_t deg) {
+    // #148: gate to drivers with a verified runtime-rotation override (SSD1306
+    // OLED). Others report unsupported rather than silently no-op'ing; the TFT
+    // (ST7789) override is not yet hardware-verified and is tracked separately.
+    // Deny-by-default: if the capability query was never registered, treat the
+    // display as unsupported (don't fall through to a silent no-op) -- per Gemini review.
+    if (!s_display_rotation_supported || !s_display_rotation_supported()) {
+        snprintf(reply, reply_size, "display: rotation not supported on this display\n");
+        return true;
+    }
+    setDisplayRotation(deg);                                                  // persist (offband_ui NVS)
+    s_rotation_cache = deg;                                                   // keep the in-session cache current
+    if (s_display_rotation_applier) s_display_rotation_applier(deg);          // apply to the live display
+    snprintf(reply, reply_size,
+             deg == 180 ? "display: rotation 180 (flipped)\n"
+                        : "display: rotation 0 (default)\n");
+    return true;
+}
+
+static bool handleDisplayFlip(char* reply, size_t reply_size) {
+    // Toggle from the in-session cache (seeded from NVS on first use), so flip
+    // always inverts 0<->180 without depending on a read-after-write.
+    if (s_rotation_cache < 0) s_rotation_cache = getDisplayRotation();
+    uint8_t other = (s_rotation_cache == 180) ? 0 : 180;
+    return handleDisplayRotate(reply, reply_size, other);
+}
+
 bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
                          MqttBrokerPool& pool) {
     if (cmd == nullptr || reply == nullptr || reply_size == 0) return false;
@@ -617,6 +690,29 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
         snprintf(reply, reply_size,
                  "ERROR: unknown mqtt subcommand "
                  "(status | view <N> | enable <N> | disable <N> | clear <N>)\n");
+        return true;
+    }
+
+    // "display ..." commands -- #141: display always-on toggle.
+    const char* disp_rest = skipPrefix(cmd, "display");
+    if (disp_rest != nullptr) {
+        if (eq(disp_rest, "always on")) return handleDisplayAlwaysOn(reply, reply_size, true);
+        // "normal" restores the default 15 s timeout. "always off" is accepted
+        // as an alias for it: it reads literally, but there is no force-dark
+        // mode, so we redirect it to normal rather than reject it (#141).
+        if (eq(disp_rest, "normal") ||
+            eq(disp_rest, "always off")) return handleDisplayAlwaysOn(reply, reply_size, false);
+        // #148: display rotation (0/180) + flip toggle.
+        if (eq(disp_rest, "flip")) return handleDisplayFlip(reply, reply_size);
+        const char* rot_rest = skipPrefix(disp_rest, "rotate");
+        if (rot_rest != nullptr) {
+            if (eq(rot_rest, "0"))   return handleDisplayRotate(reply, reply_size, 0);
+            if (eq(rot_rest, "180")) return handleDisplayRotate(reply, reply_size, 180);
+            snprintf(reply, reply_size, "ERROR: display rotate supports 0 or 180\n");
+            return true;
+        }
+        snprintf(reply, reply_size,
+                 "ERROR: usage: display always on | display normal | display rotate <0|180> | display flip\n");
         return true;
     }
 

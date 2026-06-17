@@ -36,11 +36,27 @@ namespace offband {
 //   set mqtt.broker.<N>.iata_override <code>
 //   set mqtt.broker.<N>.topic_prefix <s>
 //   set mqtt.broker.<N>.ca_cert <name>           -- letsencrypt, eastmesh, ""
+//   display always on | display normal           -- #141: keep the screen lit / restore the 15 s blank
+//                                                    ("display always off" is accepted as an alias for "display normal")
+//   display rotate <0|180> | display flip         -- #148: rotate the display 0/180 ("flip" toggles)
 //
 // All "set" commands write to NVS via ConfigSchema and call
 // pool.reloadSlot(N) if a per-slot field changed. Slot range [0,
 // OFFBAND_MAX_BROKERS).
 bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
                          MqttBrokerPool& pool);
+
+// #141: register a callback the app provides so a `display always on/off`
+// command applies to the live UITask immediately (no reboot). Raw function
+// pointer (not std::function) to avoid heap on tight-RAM boards.
+void setDisplayAlwaysOnApplier(void (*fn)(bool));
+
+// #148: register the applier for `display rotate`/`display flip` (degrees 0/180).
+void setDisplayRotationApplier(void (*fn)(uint8_t));
+
+// #148: register a query so `display rotate`/`flip` can report "not supported on
+// this display" (instead of a silent no-op) when the live driver has no verified
+// runtime-rotation override (TFT variants, e-ink).
+void setDisplayRotationSupportedQuery(bool (*fn)());
 
 }  // namespace offband

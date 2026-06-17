@@ -61,6 +61,14 @@ void ST7789Display::turnOn() {
   }
 }
 
+// #148: 0 deg = the begin() default (landscapeScreen, RGB|MV|MX); 180 deg =
+// flipScreenVertically (RGB|MV|MY) -- a true 180 flip of both axes. Only 0/180
+// supported. NOTE: 180 on the TFT is UNVERIFIED pending real-TFT hardware test.
+void ST7789Display::setRotation(uint8_t deg) {
+  if (deg == 0)        display.landscapeScreen();
+  else if (deg == 180) display.flipScreenVertically();
+}
+
 void ST7789Display::turnOff() {
   digitalWrite(PIN_TFT_VDD_CTL, HIGH);
 #ifdef PIN_TFT_LEDA_CTL_ACTIVE

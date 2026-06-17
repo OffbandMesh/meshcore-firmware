@@ -6,6 +6,8 @@
 #ifdef OFFBAND_OBSERVER
   #include "helpers/wifi_observer/WifiObserver.h"
   #include "helpers/wifi_observer/CrashLog.h"
+  #include "helpers/wifi_observer/ConfigSchema.h"   // #141: getDisplayAlwaysOn()
+  #include "helpers/wifi_observer/ObserverCli.h"     // #141: setDisplayAlwaysOnApplier()
   // CW_PHASE: tracing macro for setup() crash localization. With
   // CrashLog v2's ESP_LOG hook + shutdown handler, the last phase
   // line surviving in the ring buffer pinpoints where setup() died.
@@ -101,6 +103,17 @@ static uint32_t _atoi(const char* sp) {
 #ifdef DISPLAY_CLASS
   #include "UITask.h"
   UITask ui_task(&board, &serial_interface);
+#endif
+
+#if defined(OFFBAND_OBSERVER) && defined(DISPLAY_CLASS)
+// #141: applier the observer CLI invokes so `display always on/off` reaches the
+// live UITask immediately. Registered in setup() after ui_task.begin().
+static void applyDisplayAlwaysOn(bool on) { ui_task.setAlwaysOn(on); }
+// #148: applier for `display rotate`/`display flip`.
+static void applyDisplayRotation(uint8_t deg) { ui_task.requestRotation(deg); }
+// #148: capability query so the observer CLI refuses rotation on displays
+// without a verified runtime-rotation override.
+static bool displayRotationSupported() { return ui_task.displaySupportsRotation(); }
 #endif
 
 StdRNG fast_rng;
@@ -314,6 +327,16 @@ void setup() {
 #ifdef DISPLAY_CLASS
   ui_task.begin(disp, &sensors, the_mesh.getNodePrefs());  // still want to pass this in as dependency, as prefs might be moved
   CW_PHASE("post:ui_task.begin");
+#if defined(OFFBAND_OBSERVER)
+  // #141/#148: register the live-apply hooks + apply persisted display prefs.
+  offband::setDisplayAlwaysOnApplier(&applyDisplayAlwaysOn);
+  ui_task.setAlwaysOn(offband::getDisplayAlwaysOn());
+  offband::setDisplayRotationApplier(&applyDisplayRotation);
+  offband::setDisplayRotationSupportedQuery(&displayRotationSupported);
+  // Only restore a persisted rotation on displays that actually support it (#148).
+  if (ui_task.displaySupportsRotation()) ui_task.requestRotation(offband::getDisplayRotation());
+  CW_PHASE("post:display.prefs");
+#endif
 #endif
   board.onBootComplete();
   CW_PHASE("setup:DONE");

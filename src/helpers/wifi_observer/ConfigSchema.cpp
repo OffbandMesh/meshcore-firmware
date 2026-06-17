@@ -65,6 +65,39 @@ void writeStatusIntervalSec(uint16_t seconds) {
     p.end();
 }
 
+// #141: display always-on toggle, in the fork-branded "offband_ui" namespace.
+bool getDisplayAlwaysOn() {
+    Preferences p;
+    p.begin(kNvsOffbandUi, /*readOnly=*/true);
+    bool v = p.getBool(kKeyDisplayAlwaysOn, false);
+    p.end();
+    return v;
+}
+
+void setDisplayAlwaysOn(bool on) {
+    Preferences p;
+    p.begin(kNvsOffbandUi, /*readOnly=*/false);
+    p.putBool(kKeyDisplayAlwaysOn, on);
+    p.end();
+}
+
+// #148: display rotation (0/180) in the "offband_ui" namespace. Clamped to the
+// supported set on both read and write.
+uint8_t getDisplayRotation() {
+    Preferences p;
+    p.begin(kNvsOffbandUi, /*readOnly=*/true);
+    uint8_t v = p.getUChar(kKeyDisplayRotation, 0);
+    p.end();
+    return (v == 180) ? 180 : 0;
+}
+
+void setDisplayRotation(uint8_t deg) {
+    Preferences p;
+    p.begin(kNvsOffbandUi, /*readOnly=*/false);
+    p.putUChar(kKeyDisplayRotation, (deg == 180) ? 180 : 0);
+    p.end();
+}
+
 bool readBrokerConfig(uint8_t slot, BrokerConfig& out) {
     if (slot >= OFFBAND_MAX_BROKERS) return false;
     char ns[16];
