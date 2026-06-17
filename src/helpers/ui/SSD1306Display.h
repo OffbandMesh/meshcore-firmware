@@ -35,6 +35,7 @@ public:
   void turnOn() override;
   void turnOff() override;
   void setRotation(uint8_t deg) override;
+  bool supportsRotation() const override { return true; }   // #148: verified OLED rotation (0/180)
   void clear() override;
   void startFrame(Color bkg = DARK) override;
   void setTextSize(int sz) override;

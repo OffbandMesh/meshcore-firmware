@@ -111,6 +111,9 @@ static uint32_t _atoi(const char* sp) {
 static void applyDisplayAlwaysOn(bool on) { ui_task.setAlwaysOn(on); }
 // #148: applier for `display rotate`/`display flip`.
 static void applyDisplayRotation(uint8_t deg) { ui_task.requestRotation(deg); }
+// #148: capability query so the observer CLI refuses rotation on displays
+// without a verified runtime-rotation override.
+static bool displayRotationSupported() { return ui_task.displaySupportsRotation(); }
 #endif
 
 StdRNG fast_rng;
@@ -311,7 +314,9 @@ void setup() {
   offband::setDisplayAlwaysOnApplier(&applyDisplayAlwaysOn);
   ui_task.setAlwaysOn(offband::getDisplayAlwaysOn());
   offband::setDisplayRotationApplier(&applyDisplayRotation);
-  ui_task.requestRotation(offband::getDisplayRotation());
+  offband::setDisplayRotationSupportedQuery(&displayRotationSupported);
+  // Only restore a persisted rotation on displays that actually support it (#148).
+  if (ui_task.displaySupportsRotation()) ui_task.requestRotation(offband::getDisplayRotation());
   CW_PHASE("post:display.prefs");
 #endif
 #endif

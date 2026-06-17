@@ -706,6 +706,11 @@ void UITask::requestRotation(uint8_t deg) {
   _rotation_dirty = true;
 }
 
+// #148: report whether the live display driver implements runtime rotation.
+bool UITask::displaySupportsRotation() const {
+  return _display && _display->supportsRotation();
+}
+
 void UITask::showAlert(const char* text, int duration_millis) {
   strcpy(_alert, text);
   _alert_expiry = millis() + duration_millis;

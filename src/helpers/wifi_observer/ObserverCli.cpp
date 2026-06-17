@@ -595,6 +595,14 @@ void setDisplayRotationApplier(void (*fn)(uint8_t)) {
     s_display_rotation_applier = fn;
 }
 
+// #148: capability query (parallel to the applier) so we can refuse rotation on
+// displays whose driver has no verified runtime-rotation override.
+static bool (*s_display_rotation_supported)() = nullptr;
+
+void setDisplayRotationSupportedQuery(bool (*fn)()) {
+    s_display_rotation_supported = fn;
+}
+
 // In-session cache of the current rotation so `display flip` toggles reliably
 // from RAM instead of a write-then-read NVS round-trip (a fresh read-only
 // handle may not observe a just-committed write). Lazily seeded from NVS;
@@ -602,6 +610,13 @@ void setDisplayRotationApplier(void (*fn)(uint8_t)) {
 static int s_rotation_cache = -1;   // -1 = not yet loaded
 
 static bool handleDisplayRotate(char* reply, size_t reply_size, uint8_t deg) {
+    // #148: gate to drivers with a verified runtime-rotation override (SSD1306
+    // OLED). Others report unsupported rather than silently no-op'ing; the TFT
+    // (ST7789) override is not yet hardware-verified and is tracked separately.
+    if (s_display_rotation_supported && !s_display_rotation_supported()) {
+        snprintf(reply, reply_size, "display: rotation not supported on this display\n");
+        return true;
+    }
     setDisplayRotation(deg);                                                  // persist (offband_ui NVS)
     s_rotation_cache = deg;                                                   // keep the in-session cache current
     if (s_display_rotation_applier) s_display_rotation_applier(deg);          // apply to the live display

@@ -54,4 +54,9 @@ void setDisplayAlwaysOnApplier(void (*fn)(bool));
 // #148: register the applier for `display rotate`/`display flip` (degrees 0/180).
 void setDisplayRotationApplier(void (*fn)(uint8_t));
 
+// #148: register a query so `display rotate`/`flip` can report "not supported on
+// this display" (instead of a silent no-op) when the live driver has no verified
+// runtime-rotation override (TFT variants, e-ink).
+void setDisplayRotationSupportedQuery(bool (*fn)());
+
 }  // namespace offband

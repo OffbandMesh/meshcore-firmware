@@ -100,6 +100,9 @@ public:
   // #148: request a display rotation (deg 0/180); applied at the next render cycle.
   void requestRotation(uint8_t deg);
 
+  // #148: does the live display driver implement a verified runtime rotation?
+  bool displaySupportsRotation() const;
+
   // from AbstractUITask
   void msgRead(int msgcount) override;
   void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) override;
