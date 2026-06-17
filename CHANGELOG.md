@@ -16,6 +16,38 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-06-14
+
+### Fixed
+- **WiFi password confirmation wording** — `set wifi.pwd` now replies
+  `wifi.pwd set (N chars entered)` instead of `wifi.pwd set (length=N)`, which was
+  being misread as a 17-character maximum. The reply reports the length of what was
+  *entered* (never the secret PSK); it is not a cap. WiFi passwords accept the full
+  WPA2 range (8–63 chars).
+
+## [0.18.0] - 2026-06-14
+
+### Added
+- **Heltec V4 TFT observer build** (`heltec_v4_tft_companion_observer_wifi`) — the
+  observer role on the TFT (ST7789) display variant, switched to the NimBLE stack
+  the observer requires. Added to the CI build matrix and the release env set so it
+  **always builds and ships**.
+
+### Changed
+- **Firmware download clarity** — a "Which file?" table in the README and a static
+  footer appended to every GitHub Release, explaining `-merged.bin` (first install)
+  vs `.bin` (update) vs `.uf2` (nRF52).
+
+### Fixed
+- **`pio-flash` device matching** — `find_in_registry` prefers an exact
+  DeviceID-instance match over a class-only label, so a registered chip is no longer
+  shadowed by a same-class device with null discriminators (fixes nRF52/ESP32
+  mislabels where two boards share a VID:PID).
+
+### Internal
+- Wire a gitignored `HARDWARE.local.md` (symlink to the LoRa hardware inventory) plus
+  a CLAUDE.md "read before any hardware work" pointer.
+
 ## [0.17.0] - 2026-06-14
 
 First release under **OffbandMesh/meshcore-firmware**. Bundles the 0.16.0 observer

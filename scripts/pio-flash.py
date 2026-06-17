@@ -203,6 +203,15 @@ def enumerate_ports() -> list[dict]:
 def find_in_registry(
     registry: dict, vid_pid: str, instance_hash: str
 ) -> tuple[Optional[str], Optional[str], Optional[dict]]:
+    # Two-tier match: an exact DeviceID-instance match ALWAYS wins over a weaker
+    # VID:PID-class-only match, regardless of registry order. Without this, a
+    # device with null/empty discriminators (class-only) that happens to be
+    # listed earlier shadows a later device that has the exact instance hash
+    # recorded -- which is how a board sitting on another device's old USB port
+    # gets mislabeled (e.g. a XIAO on a Meshtastic node's former port). The
+    # class-only candidate is kept only as a fallback when nothing matches by
+    # instance.
+    class_only_fallback: tuple[Optional[str], Optional[str], Optional[dict]] = (None, None, None)
     for kind_key, kind_label in [("devices", "device"), ("foreign_devices", "foreign")]:
         for name, entry in (registry.get(kind_key) or {}).items():
             entry_vid_pids = entry.get("vid_pid") or []
@@ -215,17 +224,18 @@ def find_in_registry(
                 d.get("bootloader_deviceid_instance"),
             ]
             known_hashes = [h for h in known_hashes if h]
-            if not known_hashes:
-                # Registry has this device class but no per-instance hash yet.
-                # Match by VID:PID alone is weaker but acceptable for first
-                # registration of a known-class device.
-                return (kind_label, name, entry)
-            if instance_hash in known_hashes:
-                return (kind_label, name, entry)
-            # VID:PID matched but instance hash didn't - keep searching, another
-            # entry might match. (Possible if user has two devices of the same
-            # class on the bus, e.g., two Heltec V4s.)
-    return (None, None, None)
+            if known_hashes:
+                if instance_hash in known_hashes:
+                    # Exact instance match -- strongest signal, return immediately.
+                    return (kind_label, name, entry)
+                # Has hashes but none match this port -- definitely not this device.
+                continue
+            # No per-instance hash recorded: a class-only candidate. Remember the
+            # first one as a fallback, but keep looking for an exact instance match
+            # before settling for it.
+            if class_only_fallback == (None, None, None):
+                class_only_fallback = (kind_label, name, entry)
+    return class_only_fallback
 
 
 # ---------------------------------------------------------------------------

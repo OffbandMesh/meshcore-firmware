@@ -26,6 +26,7 @@ jobs:
           - Heltec_v3_companion_observer_wifi
           - Xiao_S3_WIO_companion_observer_wifi
           - heltec_v4_companion_observer_wifi
+          - heltec_v4_tft_companion_observer_wifi
           - heltec_v4_repeater_telemetry
           - heltec_v4_companion_radio_ble
           - RAK_4631_repeater

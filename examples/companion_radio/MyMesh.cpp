@@ -2399,7 +2399,7 @@ void MyMesh::checkSerialInterface() {
 // what they type, EXCEPT once the accumulated line is recognized as
 // "set wifi.pwd " -- from that point the remaining chars (the PSK)
 // are NOT echoed, so the secret never lands in the serial log. The
-// reply path already redacts the PSK ("wifi.pwd set (length=N)").
+// reply path already redacts the PSK ("wifi.pwd set (N chars entered)").
 //
 // Strycher/LoRa#325 (Gemini review finding): the prefix match below
 // MUST mirror both input tolerances that cliPassthroughExecute applies
