@@ -16,6 +16,34 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-17
+
+First production-stable Offband release — companion, observer, and repeater roles
+all working and hardware-verified. Built on the **MeshCore 1.16.0** base.
+
+### Base
+- **MeshCore 1.16.0 base-update** (#126) — the fork is rebased onto upstream MeshCore
+  1.16.0, smoke-verified across all three active roles (Companion, Observer, Repeater)
+  on Heltec V3/V4 + RAK3401.
+
+### Added
+- **RAK3401 (WisMesh 1W) GPS** (#104) — the RAK12500 (u-blox ZOE-M8Q) I²C GPS now works
+  in Slot D. Companion and repeater acquire a position fix. (Position only; the I²C
+  path does not sync the clock.)
+- **Display always-on toggle** (#141) — `display always on` keeps a USB/mains-powered
+  observer's screen lit; `display normal` restores the 15 s timeout. Persists across
+  reboots, applies immediately. Heltec V3, V4 OLED, V4 TFT observers.
+- **Display rotation (0/180)** (#148) — `display rotate 0/180` / `display flip` over the
+  `_sys` channel; persists, applies immediately. **Verified on the OLED observers
+  (Heltec V3, V4 OLED).** Displays without a verified rotation driver (the V4 TFT)
+  report `rotation not supported on this display` rather than silently no-op'ing; TFT
+  rotation is tracked separately.
+
+### Known issues
+- **Heltec V4 observer GPS position unverified** (#149) — an attached UART GPS doesn't
+  yet surface a position on the V4 observer (reads 0,0). Observer time (NTP/SNTP) and all
+  other function are unaffected; GPS only adds the device's own map-position dot.
+
 ## [0.18.1] - 2026-06-14
 
 ### Fixed

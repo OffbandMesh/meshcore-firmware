@@ -6,6 +6,8 @@
 #ifdef OFFBAND_OBSERVER
   #include "helpers/wifi_observer/WifiObserver.h"
   #include "helpers/wifi_observer/CrashLog.h"
+  #include "helpers/wifi_observer/ConfigSchema.h"   // #141: getDisplayAlwaysOn()
+  #include "helpers/wifi_observer/ObserverCli.h"     // #141: setDisplayAlwaysOnApplier()
   // CW_PHASE: tracing macro for setup() crash localization. With
   // CrashLog v2's ESP_LOG hook + shutdown handler, the last phase
   // line surviving in the ring buffer pinpoints where setup() died.
@@ -103,6 +105,17 @@ static uint32_t _atoi(const char* sp) {
   UITask ui_task(&board, &serial_interface);
 #endif
 
+#if defined(OFFBAND_OBSERVER) && defined(DISPLAY_CLASS)
+// #141: applier the observer CLI invokes so `display always on/off` reaches the
+// live UITask immediately. Registered in setup() after ui_task.begin().
+static void applyDisplayAlwaysOn(bool on) { ui_task.setAlwaysOn(on); }
+// #148: applier for `display rotate`/`display flip`.
+static void applyDisplayRotation(uint8_t deg) { ui_task.requestRotation(deg); }
+// #148: capability query so the observer CLI refuses rotation on displays
+// without a verified runtime-rotation override.
+static bool displayRotationSupported() { return ui_task.displaySupportsRotation(); }
+#endif
+
 StdRNG fast_rng;
 SimpleMeshTables tables;
 MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
@@ -116,6 +129,12 @@ MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
 void halt() {
   while (1) ;
 }
+
+/* WIFI RECONNECT TRACKERS */
+#if defined(ESP32) && defined(WIFI_SSID)
+  bool wifi_needs_reconnect = false;
+  unsigned long last_wifi_reconnect_attempt = 0;
+#endif
 
 void setup() {
   Serial.begin(115200);
@@ -165,7 +184,7 @@ void setup() {
   if (!radio_init()) { halt(); }
   CW_PHASE("post:radio_init");
 
-  fast_rng.begin(radio_get_rng_seed());
+  fast_rng.begin(radio_driver.getRngSeed());
   CW_PHASE("post:fast_rng.begin");
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -240,6 +259,18 @@ void setup() {
 
 #ifdef WIFI_SSID
   board.setInhibitSleep(true);   // prevent sleep when WiFi is active
+  WiFi.setAutoReconnect(true);
+
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info){
+      if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+          WIFI_DEBUG_PRINTLN("WiFi disconnected. Flagging for reconnect...");
+          wifi_needs_reconnect = true;
+      } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+          WIFI_DEBUG_PRINTLN("WiFi connected successfully!");
+          wifi_needs_reconnect = false;
+      }
+  });
+
   WiFi.begin(WIFI_SSID, WIFI_PWD);
   serial_interface.begin(TCP_PORT);
   CW_PHASE("ESP32:post WIFI_SSID serial_interface.begin");
@@ -296,7 +327,18 @@ void setup() {
 #ifdef DISPLAY_CLASS
   ui_task.begin(disp, &sensors, the_mesh.getNodePrefs());  // still want to pass this in as dependency, as prefs might be moved
   CW_PHASE("post:ui_task.begin");
+#if defined(OFFBAND_OBSERVER)
+  // #141/#148: register the live-apply hooks + apply persisted display prefs.
+  offband::setDisplayAlwaysOnApplier(&applyDisplayAlwaysOn);
+  ui_task.setAlwaysOn(offband::getDisplayAlwaysOn());
+  offband::setDisplayRotationApplier(&applyDisplayRotation);
+  offband::setDisplayRotationSupportedQuery(&displayRotationSupported);
+  // Only restore a persisted rotation on displays that actually support it (#148).
+  if (ui_task.displaySupportsRotation()) ui_task.requestRotation(offband::getDisplayRotation());
+  CW_PHASE("post:display.prefs");
 #endif
+#endif
+  board.onBootComplete();
   CW_PHASE("setup:DONE");
 }
 
@@ -414,4 +456,20 @@ void loop() {
   offband::heartbeatTick(millis());
 #endif
   rtc_clock.tick();
+
+  if (!the_mesh.hasPendingWork()) {
+#if defined(NRF52_PLATFORM)
+    board.sleep(0); // nrf ignores seconds param, sleeps whenever possible
+#endif
+  }
+
+#if defined(ESP32) && defined(WIFI_SSID)
+  // Safely attempt to reconnect every 10 seconds if flagged
+  if (wifi_needs_reconnect && (millis() - last_wifi_reconnect_attempt > 10000)) {
+    WIFI_DEBUG_PRINTLN("Attempting manual WiFi reconnect...");
+    WiFi.disconnect();
+    WiFi.reconnect();
+    last_wifi_reconnect_attempt = millis();
+  }
+#endif
 }

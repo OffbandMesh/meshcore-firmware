@@ -14,8 +14,16 @@ public:
   int height() const { return _h; }
 
   virtual bool isOn() = 0;
+  virtual bool isEink() { return false; } // default to non-eink, override in eink drivers
   virtual void turnOn() = 0;
   virtual void turnOff() = 0;
+  // #148: runtime rotation in DEGREES (0/180 supported; other values ignored).
+  // Default no-op so non-rotating drivers (e-ink, etc.) simply ignore it.
+  virtual void setRotation(uint8_t deg) {}
+  // #148: does this driver implement a *verified* runtime setRotation? Default
+  // false, so the observer CLI reports "not supported on this display" instead
+  // of silently no-op'ing. Only drivers with a verified override return true.
+  virtual bool supportsRotation() const { return false; }
   virtual void clear() = 0;
   virtual void startFrame(Color bkg = DARK) = 0;
   virtual void setTextSize(int sz) = 0;

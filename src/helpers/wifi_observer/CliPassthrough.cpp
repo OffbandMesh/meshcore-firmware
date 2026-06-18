@@ -107,12 +107,14 @@ bool cliPassthroughIsAllowed(const char* line) {
     // status/enable/disable subcommands documented in ObserverCli.h; "wifi "
     // covers the aligned "wifi status/enable/disable" grammar
     // (#45) -- without it, "wifi status" was denied here
-    // before ever reaching dispatchObserverCli.
+    // before ever reaching dispatchObserverCli. "display " (#141) likewise
+    // admits the "display always on/off" toggle, dispatched in ObserverCli.
     size_t skip = 0;
     if      (strncmp(p, "get ", 4) == 0)  skip = 4;
     else if (strncmp(p, "set ", 4) == 0)  skip = 4;
     else if (strncmp(p, "mqtt ", 5) == 0) skip = 5;
     else if (strncmp(p, "wifi ", 5) == 0) skip = 5;
+    else if (strncmp(p, "display ", 8) == 0) skip = 8;  // #141: "display always on/off" toggle
     else return false;
     // Deny scan against the tail (after the verb + its trailing space).
     const char* tail = p + skip;

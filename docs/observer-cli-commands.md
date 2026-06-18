@@ -19,8 +19,8 @@ The verb + field are case-insensitive (phone auto-capitalize is tolerated, so
 **write-only** — never echoed back.
 
 Commands reach the dispatcher through a `_sys` allowlist that permits the
-`get`, `set`, `mqtt`, and `wifi` verbs and rejects shell metacharacters (`$(`,
-backtick, `!`) plus device/filesystem verbs
+`get`, `set`, `mqtt`, `wifi`, and `display` verbs and rejects shell
+metacharacters (`$(`, backtick, `!`) plus device/filesystem verbs
 (`reboot`/`format`/`erase`/`factory`/`ota.`/`fs.`/`flash.`/`rm`/`cat`/`exit`/`quit`).
 
 ## WiFi
@@ -36,6 +36,22 @@ backtick, `!`) plus device/filesystem verbs
 > `get wifi.status` still works as a backward-compat alias for `wifi status`.
 > `wifi disable` is deliberately reboot-to-apply: it does **not** drop a live
 > STA, because the `_sys` channel and the MQTT uplink ride that link.
+
+## Display
+
+Device-local display controls (no network needed). Persisted in NVS (the
+fork-branded `offband_ui` namespace) and applied **live** — no reboot. On builds
+with a display (Heltec V3 / V4 OLED, V4 TFT).
+
+| Command | Effect |
+|---|---|
+| `display always on` | keep the screen lit — don't auto-blank after 15 s |
+| `display normal` | restore the default 15 s auto-blank (`display always off` is an accepted alias) |
+| `display rotate 0` / `display rotate 180` | screen orientation — `180` for upside-down mounting |
+| `display flip` | toggle rotation 0 ↔ 180 (the reply reports the resulting state) |
+
+> Rotation is **0/180 only** (landscape flip); 90/270 portrait is not supported.
+> Both settings default off / 0 and survive a reboot.
 
 ## MQTT broker pool
 
