@@ -63,5 +63,8 @@ HARDWARE.local.md
 flash-history.jsonl
 flash-backups/
 
+# per-host device private-key backups (exported via scripts/backup-device-key.py) -- never commit
+device_backups/
+
 # local scratch working dir -- untracked for now (#107)
 weather/
