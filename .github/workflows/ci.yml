@@ -31,7 +31,7 @@ jobs:
           - heltec_v4_companion_radio_ble
           - RAK_4631_repeater
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5
         with:

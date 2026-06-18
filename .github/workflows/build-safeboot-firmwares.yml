@@ -98,7 +98,7 @@ jobs:
     steps:
 
       - name: Clone Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Build Environment
         uses: ./.github/actions/setup-build-environment

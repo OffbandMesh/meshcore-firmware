@@ -27,7 +27,7 @@ jobs:
     outputs:
       envs: ${{ steps.read.outputs.envs }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - id: read
         name: Read curated env list
         run: |
@@ -45,7 +45,7 @@ jobs:
       matrix:
         env: ${{ fromJSON(needs.list.outputs.envs) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: ./.github/actions/setup-build-environment
 
@@ -84,7 +84,7 @@ jobs:
     if: ${{ always() && github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
