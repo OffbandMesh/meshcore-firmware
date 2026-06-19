@@ -40,11 +40,20 @@ EXPECTED_KEY_HEX = 128
 KEY_LINE_RE = re.compile(rb">\s*([0-9A-Fa-f]{64,})\s*[\r\n]")
 
 
-def outdir_is_gitignored():
-    """True if device_backups/ is gitignored, False if not, None if git is unavailable."""
+def output_is_gitignored(out_path):
+    """True if the key file would be gitignored, False if not, None if git is unavailable.
+
+    Checks the *file* path, not the bare dir: a `device_backups/` (trailing-slash)
+    pattern matches files inside the dir, but `git check-ignore device_backups`
+    (no slash, dir absent) returns "not ignored" -- a false negative.
+    """
+    try:
+        target = out_path.relative_to(REPO)
+    except ValueError:
+        target = out_path
     try:
         r = subprocess.run(
-            ["git", "-C", str(REPO), "check-ignore", "-q", "device_backups"],
+            ["git", "-C", str(REPO), "check-ignore", "-q", str(target)],
             capture_output=True,
         )
         return r.returncode == 0  # 0 = ignored, 1 = not ignored
@@ -73,8 +82,10 @@ def main():
     ap.add_argument("--force", action="store_true", help="overwrite an existing backup file")
     args = ap.parse_args()
 
-    # Verify the output dir is gitignored BEFORE we ever write a key there.
-    ignored = outdir_is_gitignored()
+    out = OUTDIR / f"{args.name}-prv.key.txt"
+
+    # Verify the key file would be gitignored BEFORE we ever read/write a key.
+    ignored = output_is_gitignored(out)
     if ignored is False:
         print("ERROR: device_backups/ is NOT gitignored -- refusing to write a private key.")
         print("  Add 'device_backups/' to .gitignore first, then re-run.")
@@ -84,7 +95,6 @@ def main():
         print("      Ensure 'device_backups/' is in .gitignore before committing anything.")
 
     OUTDIR.mkdir(exist_ok=True)
-    out = OUTDIR / f"{args.name}-prv.key.txt"
     if out.exists() and not args.force:
         print(f"ERROR: backup already exists: device_backups/{out.name}")
         print("  Re-run with --force to overwrite.")
