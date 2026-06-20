@@ -25,6 +25,7 @@ protected:
 
   #if ENV_INCLUDE_GPS
   LocationProvider* _location;
+  unsigned long _last_gps_clock_sync = 0;   // #152: millis() of last GPS clock-sync (0 = never)
   void start_gps();
   void stop_gps();
   void initBasicGPS();
@@ -43,6 +44,7 @@ public:
   #endif
   #if ENV_INCLUDE_GPS
   bool gpsHasFix() { return gps_active && _location != nullptr && _location->isValid(); }
+  uint32_t getGpsClockSyncTime() const override { return _last_gps_clock_sync; }   // #152
   #endif
   bool begin() override;
   bool querySensors(uint8_t requester_permissions, CayenneLPP& telemetry) override;

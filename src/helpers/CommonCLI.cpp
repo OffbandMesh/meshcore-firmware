@@ -519,10 +519,23 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
         int sats = l->satellitesCount();
         bool active = !strcmp(_sensors->getSettingByKey("gps"), "1");
         if (enabled) {
-          sprintf(reply, "on, %s, %s, %d sats",
+          // #152: GPS time + clock-sync state (visible on any GPS path), appended to
+          // the status line and formatted like `clock` so both compare at a glance.
+          long gps_epoch = l->getTimestamp();
+          bool synced = _sensors->getGpsClockSyncTime() != 0;
+          char gbuf[48];
+          if (gps_epoch >= (long)GPS_CLOCK_SANE_MIN) {
+            DateTime gdt = DateTime((uint32_t)gps_epoch);
+            snprintf(gbuf, sizeof(gbuf), "gps %02d:%02d - %d/%d/%d UTC, %s",
+              gdt.hour(), gdt.minute(), gdt.day(), gdt.month(), gdt.year(),
+              synced ? "synced" : "unsynced");
+          } else {
+            snprintf(gbuf, sizeof(gbuf), "gps --, %s", synced ? "synced" : "unsynced");
+          }
+          snprintf(reply, 160, "on, %s, %s, %d sats, %s",
             active?"active":"deactivated",
             fix?"fix":"no fix",
-            sats);
+            sats, gbuf);
         } else {
           strcpy(reply, "off");
         }

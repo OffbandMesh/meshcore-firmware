@@ -122,10 +122,12 @@ public :
     long satellitesCount() override { return nmea.getNumSatellites(); }
     bool isValid() override { return nmea.isValid(); }
 
-    long getTimestamp() override { 
+    long getTimestamp() override {
         DateTime dt(nmea.getYear(), nmea.getMonth(),nmea.getDay(),nmea.getHour(),nmea.getMinute(),nmea.getSecond());
         return dt.unixtime();
-    } 
+    }
+
+    mesh::RTCClock* getClock() override { return _clock; }  // #152: expose clock for provider hand-off
 
     void sendSentence(const char *sentence) override {
         nmea.sendSentence(*_gps_serial, sentence);

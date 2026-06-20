@@ -181,7 +181,10 @@ class RAK12500LocationProvider : public LocationProvider {
   int _sats = 0;
   long _epoch = 0;
   bool _fix = false;
+  mesh::RTCClock* _clock = nullptr;                          // #152: inherited from the UART provider; the manager syncs the clock from getTimestamp()
 public:
+  void setClock(mesh::RTCClock* clock) { _clock = clock; }   // #152
+  mesh::RTCClock* getClock() override { return _clock; }     // #152: idempotent re-init hand-off
   long getLatitude() override { return _lat; }
   long getLongitude() override { return _lng; }
   long getAltitude() override { return _alt; }
@@ -202,7 +205,7 @@ public:
     } else {
       _fix = false;
     }
-    _epoch = ublox_GNSS.getUnixEpoch(2);
+    _epoch = ublox_GNSS.getUnixEpoch(2);   // #152: GPS time; the manager syncs the clock from getTimestamp()
   }
   bool isEnabled() override { return true; }
 };
@@ -832,6 +835,9 @@ bool EnvironmentSensorManager::gpsIsAwake(uint8_t ioPin){
     gps_active = true;
     gps_detected = true;
 
+    // #152: hand the I2C GPS provider the same RTC clock the UART provider holds,
+    // so it can sync the device clock from GPS time.
+    RAK12500_provider.setClock(_location != nullptr ? _location->getClock() : nullptr);
     _location = &RAK12500_provider;
     return true;
   } else if (Serial1.available()) {
@@ -892,6 +898,21 @@ void EnvironmentSensorManager::loop() {
   static long next_gps_update = 0;
   if (gps_active) {
     _location->loop();
+    // #152: provider-agnostic GPS clock-sync. Any active provider reporting a
+    // plausible GPS epoch (>= GPS_CLOCK_SANE_MIN, i.e. after 2025) sets the device
+    // clock -- on the first valid reading, then every GPS_CLOCK_SYNC_INTERVAL. No
+    // position-fix or chip-specific-flag gate, so time syncs before a fix and the
+    // logic holds across GPS modules / slots / architectures. (UART providers also
+    // self-sync; this writes the same value, harmless.)
+    mesh::RTCClock* gps_clk = _location->getClock();
+    long gps_epoch = _location->getTimestamp();
+    if (gps_clk != nullptr && gps_epoch >= (long)GPS_CLOCK_SANE_MIN) {
+      if (_last_gps_clock_sync == 0 ||
+          (millis() - _last_gps_clock_sync) > GPS_CLOCK_SYNC_INTERVAL) {
+        gps_clk->setCurrentTime((uint32_t)gps_epoch);
+        _last_gps_clock_sync = millis();
+      }
+    }
   }
   if (millis() > next_gps_update) {
 
