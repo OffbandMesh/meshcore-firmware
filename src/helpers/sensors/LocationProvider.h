@@ -16,6 +16,9 @@ public:
     virtual long satellitesCount() = 0;
     virtual bool isValid() = 0;
     virtual long getTimestamp() = 0;
+    // #152: the RTC clock this provider keeps in sync (nullptr if none). Lets a
+    // manager hand the same clock to a different active provider (UART -> I2C GPS).
+    virtual mesh::RTCClock* getClock() { return nullptr; }
     virtual void sendSentence(const char * sentence);
     virtual void reset() = 0;
     virtual void begin() = 0;
