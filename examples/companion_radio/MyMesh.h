@@ -64,7 +64,7 @@
 #endif
 
 #ifndef BLE_NAME_PREFIX
-#define BLE_NAME_PREFIX "MeshCore-"
+#define BLE_NAME_PREFIX "Offband-MC-"   // #154: clean-flash BLE name (was "MeshCore-")
 #endif
 
 #include <helpers/BaseChatMesh.h>
