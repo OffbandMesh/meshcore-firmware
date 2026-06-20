@@ -1141,6 +1141,41 @@ void MyMesh::startInterface(BaseSerialInterface &serial) {
 #endif
 }
 
+// #154: companion-API firmware-version string. The standard MeshCore app shows
+// this field, so surface Offband over the base: "<offband>-<meshcore>" (e.g.
+// "1.0.0-1.16.0"). <offband> is the offband-v* tag core; <meshcore> the upstream
+// FIRMWARE_VERSION core (a leading 'v' and any -rc/-dev suffix trimmed). Fits the
+// 20-char device-info field. Falls back to bare FIRMWARE_VERSION when no Offband
+// tag is available (an untagged build, or a non-Offband upstream build).
+static const char* offbandClientVersion() {
+  static char buf[20];
+  // MeshCore base core: strip a leading 'v', then take up to the first '-'.
+  const char* mc = FIRMWARE_VERSION;
+  if (*mc == 'v' || *mc == 'V') mc++;
+  char mc_core[12];
+  size_t m = 0;
+  while (mc[m] && mc[m] != '-' && m < sizeof(mc_core) - 1) { mc_core[m] = mc[m]; m++; }
+  mc_core[m] = '\0';
+#ifdef OFFBAND_VERSION
+  // Offband core: chars after "offband-v" up to the first '-' (drops the
+  // git-describe -N-g<sha>/-dirty suffix and any -rc tag suffix).
+  const char* ob = strstr(OFFBAND_VERSION, "offband-v");
+  if (ob != nullptr) {
+    ob += 9;  // strlen("offband-v")
+    char ob_core[12];
+    size_t n = 0;
+    while (ob[n] && ob[n] != '-' && n < sizeof(ob_core) - 1) { ob_core[n] = ob[n]; n++; }
+    ob_core[n] = '\0';
+    if (n > 0) {
+      snprintf(buf, sizeof(buf), "%s-%s", ob_core, mc_core);
+      return buf;
+    }
+  }
+#endif
+  StrHelper::strzcpy(buf, FIRMWARE_VERSION, sizeof(buf));
+  return buf;
+}
+
 void MyMesh::handleCmdFrame(size_t len) {
   if (cmd_frame[0] == CMD_DEVICE_QUERY && len >= 2) { // sent when app establishes connection
     app_target_ver = cmd_frame[1];                    // which version of protocol does app understand
@@ -1157,7 +1192,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     i += 12;
     StrHelper::strzcpy((char *)&out_frame[i], board.getManufacturerName(), 40);
     i += 40;
-    StrHelper::strzcpy((char *)&out_frame[i], FIRMWARE_VERSION, 20);
+    StrHelper::strzcpy((char *)&out_frame[i], offbandClientVersion(), 20);  // #154
     i += 20;
     out_frame[i++] = _prefs.client_repeat;   // v9+
     out_frame[i++] = _prefs.path_hash_mode;  // v10+
