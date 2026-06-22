@@ -108,6 +108,12 @@ constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: config backend (w
 //     auth_type(none|basic|jwt), username, password(WO), topic_prefix,
 //     iata_override, jwt_audience, jwt_refresh, jwt_owner, jwt_email, ca_cert }
 //   (jwt_token is NOT a config key -- it is live-minted at connect, never set/read.)
+//   ACTIONS (F6 #166, OCFG_SET only -- routed to activation/wipe handlers, not stored
+//   as plain fields):
+//     mqtt.broker.<N>.enabled <0|1> -- activate/deactivate the slot (write LAST; see
+//       the recovery handshake below). Read back via OCFG_BROKERS + OCFG_GET.
+//     mqtt.broker.<N>.clear <any>   -- wipe the slot (clearBrokerConfig). Value is
+//       ignored; write-only (no GET).
 // The secret `password` is WRITE-ONLY: never returned by GET/BROKERS; rendered as
 // "(set)" / "(unset)" only (existing ConfigSchema redaction).
 
@@ -144,7 +150,7 @@ constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: config backend (w
 //   * Each field SET returns OCFG_R_ACK / OCFG_R_ERR for THAT field, so the client
 //     knows exactly which field failed.
 //   * On any ERR/timeout the client re-reads true state (OCFG_BROKERS), shows a
-//     "partial save" error, and offers retry or discard via the existing
-//     `mqtt clear <N>` (clearBrokerConfig) definitive wipe.
+//     "partial save" error, and offers retry or discard via the
+//     `mqtt.broker.<N>.clear` action (F6 #166 -> clearBrokerConfig) definitive wipe.
 
 }  // namespace offband

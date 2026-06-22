@@ -912,8 +912,24 @@ bool configSet(const char* key, const char* value, char* reply, size_t reply_siz
 
     {
         int slot; const char* field;
-        if (parseBrokerKey(key, slot, field))
+        if (parseBrokerKey(key, slot, field)) {
+            // F6 (#166): `enabled` and `clear` are ACTIONS, not persisted fields.
+            // handleSetBrokerField has no enabled-set and force-disables the slot
+            // on any field write (#53), so route these to their own handlers --
+            // this is what lets the client write `enabled` LAST as the activation
+            // guard and wipe a slot via `clear`. Everything else is a real field.
+            if (eq(field, "enabled")) {
+                bool on;
+                if (!parseConfigBool(value, on)) {
+                    snprintf(reply, reply_size, "ERROR: mqtt.broker.%d.enabled expects 0|1\n", slot);
+                    return true;
+                }
+                return handleEnableSet(reply, reply_size, pool, slot, on);
+            }
+            if (eq(field, "clear"))
+                return handleClearBroker(reply, reply_size, pool, slot);
             return handleSetBrokerField(reply, reply_size, pool, slot, field, value);
+        }
         if (strncmp(key, "mqtt.broker.", 12) == 0) {
             snprintf(reply, reply_size, "ERROR: bad broker key '%s' (mqtt.broker.<0..%d>.<field>)\n",
                      key, OFFBAND_MAX_BROKERS - 1);
