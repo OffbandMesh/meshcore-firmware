@@ -46,6 +46,17 @@ namespace offband {
 bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
                          MqttBrokerPool& pool);
 
+// Epic F (#165): typed config dispatch -- the wire path's set/get backend.
+// configSet/configGet route a config key straight to the same handlers the
+// _sys CLI uses (above), WITHOUT re-parsing a CLI string. Consumed by the
+// companion-API config command (CMD_OFFBAND_CONFIG / OffbandConfigProtocol.h).
+// `reply` is NUL-terminated human text; returns true if the key was handled
+// (reply populated, incl. an ERROR string), false if the key is unknown.
+// Secrets stay write-only on get (wifi.pwd / broker password|jwt_token).
+bool configSet(const char* key, const char* value, char* reply, size_t reply_size,
+               MqttBrokerPool& pool);
+bool configGet(const char* key, char* reply, size_t reply_size);
+
 // #141: register a callback the app provides so a `display always on/off`
 // command applies to the live UITask immediately (no reboot). Raw function
 // pointer (not std::function) to avoid heap on tight-RAM boards.

@@ -844,4 +844,133 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
     return false;
 }
 
+// ===========================================================================
+// Typed config dispatch (Epic F / #165) -- the wire path's set/get backend.
+// ===========================================================================
+// The Offband config command (CMD_OFFBAND_CONFIG; OffbandConfigProtocol.h)
+// calls configSet/configGet instead of re-parsing a CLI string. Each key routes
+// straight to the SAME static handler dispatchObserverCli uses, so the
+// ConfigSchema/NVS logic, validation, and secret redaction stay single-source
+// at the handler layer -- the CLI grammar never enters the wire path.
+// dispatchObserverCli (the _sys string front-end) is intentionally unchanged.
+//   reply : NUL-terminated human text (the same the CLI returns).
+//   return: true if the key was handled (incl. an ERROR reply); false if the
+//           key is unknown to the observer config surface.
+
+// "1"/"true"/"on" -> true; "0"/"false"/"off" -> false; else leave out, return false.
+static bool parseConfigBool(const char* v, bool& out) {
+    if (v == nullptr) return false;
+    while (*v == ' ') ++v;
+    if (eq(v, "1") || eq(v, "true")  || eq(v, "on"))  { out = true;  return true; }
+    if (eq(v, "0") || eq(v, "false") || eq(v, "off")) { out = false; return true; }
+    return false;
+}
+
+// Parse "mqtt.broker.<slot>.<field>" -> slot index + field pointer. Returns
+// true iff the key is a well-formed broker key (slot in range, '.' before a
+// non-empty field); out_field then points just past the '.'. Shared by
+// configSet/configGet so the slot/field walk lives in one place.
+static bool parseBrokerKey(const char* key, int& out_slot, const char*& out_field) {
+    if (strncmp(key, "mqtt.broker.", 12) != 0) return false;
+    const char* p = key + 12;
+    int slot = parseSlot(p);
+    if (slot < 0) return false;
+    while (*p >= '0' && *p <= '9') ++p;   // past slot digit(s)
+    if (*p != '.' || *(p + 1) == '\0') return false;
+    out_slot = slot;
+    out_field = p + 1;
+    return true;
+}
+
+bool configSet(const char* key, const char* value, char* reply, size_t reply_size,
+               MqttBrokerPool& pool) {
+    if (key == nullptr || value == nullptr || reply == nullptr || reply_size == 0) return false;
+    reply[0] = '\0';
+
+    if (eq(key, "mqtt.iata"))            return handleSetIata(reply, reply_size, value);
+    if (eq(key, "mqtt.status_interval")) return handleSetStatusInterval(reply, reply_size, value);
+
+    if (eq(key, "display.always_on")) {
+        bool on;
+        if (!parseConfigBool(value, on)) { snprintf(reply, reply_size, "ERROR: display.always_on expects 0|1\n"); return true; }
+        return handleDisplayAlwaysOn(reply, reply_size, on);
+    }
+    if (eq(key, "display.rotation")) {
+        if (eq(value, "0"))   return handleDisplayRotate(reply, reply_size, 0);
+        if (eq(value, "180")) return handleDisplayRotate(reply, reply_size, 180);
+        snprintf(reply, reply_size, "ERROR: display.rotation expects 0|180\n");
+        return true;
+    }
+
+    if (eq(key, "wifi.enabled")) {
+        bool on;
+        if (!parseConfigBool(value, on)) { snprintf(reply, reply_size, "ERROR: wifi.enabled expects 0|1\n"); return true; }
+        return handleSetWifiEnabled(reply, reply_size, on);
+    }
+    if (strncmp(key, "wifi.", 5) == 0)            // wifi.ssid / wifi.pwd
+        return handleSetWifiField(reply, reply_size, key + 5, value);
+
+    {
+        int slot; const char* field;
+        if (parseBrokerKey(key, slot, field))
+            return handleSetBrokerField(reply, reply_size, pool, slot, field, value);
+        if (strncmp(key, "mqtt.broker.", 12) == 0) {
+            snprintf(reply, reply_size, "ERROR: bad broker key '%s' (mqtt.broker.<0..%d>.<field>)\n",
+                     key, OFFBAND_MAX_BROKERS - 1);
+            return true;
+        }
+    }
+
+    return false;  // unknown key -- not part of the observer config surface
+}
+
+bool configGet(const char* key, char* reply, size_t reply_size) {
+    if (key == nullptr || reply == nullptr || reply_size == 0) return false;
+    reply[0] = '\0';
+
+    if (eq(key, "wifi.enabled")) {
+#ifdef ARDUINO
+        Preferences p; bool en = true;
+        if (p.begin("wifi", /*readOnly=*/true)) { en = p.getBool("enabled", true); p.end(); }
+        snprintf(reply, reply_size, "wifi.enabled = %d\n", en ? 1 : 0);
+#else
+        snprintf(reply, reply_size, "wifi.enabled = (host build)\n");
+#endif
+        return true;
+    }
+    if (strncmp(key, "wifi.", 5) == 0)             // wifi.ssid (wifi.pwd -> write-only error)
+        return handleGetWifi(reply, reply_size, key + 5);
+
+    if (eq(key, "mqtt.iata")) {
+        char iata[8] = {0};
+        readGlobalIata(iata, sizeof(iata));
+        snprintf(reply, reply_size, "mqtt.iata = %s\n", iata[0] ? iata : "(unset)");
+        return true;
+    }
+    if (eq(key, "mqtt.status_interval")) {
+        snprintf(reply, reply_size, "mqtt.status_interval = %u\n", (unsigned)readStatusIntervalSec());
+        return true;
+    }
+    if (eq(key, "display.always_on")) {
+        snprintf(reply, reply_size, "display.always_on = %d\n", getDisplayAlwaysOn() ? 1 : 0);
+        return true;
+    }
+    if (eq(key, "display.rotation")) {
+        snprintf(reply, reply_size, "display.rotation = %u\n", (unsigned)getDisplayRotation());
+        return true;
+    }
+
+    {
+        int slot; const char* field;
+        if (parseBrokerKey(key, slot, field))
+            return handleGetBrokerField(reply, reply_size, slot, field);
+        if (strncmp(key, "mqtt.broker.", 12) == 0) {
+            snprintf(reply, reply_size, "ERROR: bad broker key '%s'\n", key);
+            return true;
+        }
+    }
+
+    return false;  // unknown key
+}
+
 }  // namespace offband
