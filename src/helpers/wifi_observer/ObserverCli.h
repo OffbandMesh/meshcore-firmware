@@ -57,6 +57,15 @@ bool configSet(const char* key, const char* value, char* reply, size_t reply_siz
                MqttBrokerPool& pool);
 bool configGet(const char* key, char* reply, size_t reply_size);
 
+// Epic F (#162): broker-pool enumeration for the OCFG_BROKERS paginated read.
+// configBrokerSlotCount() = max slots to iterate; configBrokerSlotPopulated() =
+// is slot N set (non-empty url); configRenderBrokerSlot() renders a populated
+// slot's non-secret fields as wire "key=value\n" lines (string enums; password
+// redacted; jwt_token omitted), returning bytes written (0 if empty).
+int    configBrokerSlotCount();
+bool   configBrokerSlotPopulated(uint8_t slot);
+size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size);
+
 // #141: register a callback the app provides so a `display always on/off`
 // command applies to the live UITask immediately (no reboot). Raw function
 // pointer (not std::function) to avoid heap on tight-RAM boards.

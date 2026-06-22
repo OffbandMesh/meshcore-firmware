@@ -1262,7 +1262,37 @@ void MyMesh::handleOffbandConfigCmd(size_t len) {
   }
 
   if (op == offband::OCFG_BROKERS) {
-    writeOffbandConfigScalar(offband::OCFG_R_ERR, "brokers: not yet implemented (F3 #162)");
+    // Paginated broker-pool dump: START(count) -> BROKER_KV x N (one field/frame) -> END.
+    int maxSlots = offband::configBrokerSlotCount();
+    uint8_t count = 0;
+    for (int s = 0; s < maxSlots; ++s)
+      if (offband::configBrokerSlotPopulated((uint8_t)s)) count++;
+    uint8_t hdr[3] = { offband::RESP_CODE_OFFBAND_CONFIG, offband::OCFG_R_BROKERS_START, count };
+    _serial->writeFrame(hdr, 3);
+    char buf[1024];                                       // one slot's "key=value\n" lines
+    for (int s = 0; s < maxSlots; ++s) {
+      if (offband::configRenderBrokerSlot((uint8_t)s, buf, sizeof(buf)) == 0) continue;
+      char* line = buf;
+      while (*line) {
+        char* nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+        if (*line) {                                      // one BROKER_KV frame per non-empty line
+          out_frame[0] = offband::RESP_CODE_OFFBAND_CONFIG;
+          out_frame[1] = offband::OCFG_R_BROKER_KV;
+          out_frame[2] = (uint8_t)s;
+          size_t klen = strlen(line);
+          const size_t cap = MAX_FRAME_SIZE - 4;          // [0],[1],[2]=slot + trailing NUL
+          if (klen > cap) klen = cap;
+          memcpy(&out_frame[3], line, klen);
+          out_frame[3 + klen] = 0;
+          _serial->writeFrame(out_frame, 3 + klen + 1);
+        }
+        if (!nl) break;
+        line = nl + 1;
+      }
+    }
+    hdr[1] = offband::OCFG_R_BROKERS_END;
+    _serial->writeFrame(hdr, 2);
     return;
   }
 

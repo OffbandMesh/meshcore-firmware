@@ -76,6 +76,9 @@ enum OffbandConfigResp : uint8_t {
 // ---------------------------------------------------------------------------
 // Broker enum values (shared so neither side hard-codes magic numbers)
 // ---------------------------------------------------------------------------
+// NVS-internal ordinals (the stored enum). On the WIRE, transport/auth_type are
+// transmitted as the STRING NAME the firmware CLI parses + returns -- "tcp"/"tls"/
+// "wss" and "none"/"basic"/"jwt" -- NOT these numbers.
 enum MqttTransport : uint8_t { MQTT_TCP = 0, MQTT_TLS = 1, MQTT_WSS = 2 };
 enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUTH_JWT = 2 };
 
@@ -101,20 +104,20 @@ constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: config backend (w
 //   mqtt.iata   mqtt.status_interval
 //   display.always_on   display.rotation (0|180)
 // Broker pool (OCFG_SET per-field; read via OCFG_BROKERS):
-//   mqtt.broker.<0-9>.{ enabled, url, port, transport(MqttTransport),
-//     auth_type(MqttAuthType), username, password(WO), topic_prefix,
-//     iata_override, jwt_aud, jwt_refresh, jwt_owner, jwt_email, ca_cert,
-//     jwt_token(WO) }
-// Secrets (password, jwt_token) are WRITE-ONLY: never returned by GET/BROKERS;
-// rendered as "(set)" / "(unset)" only (existing ConfigSchema redaction).
+//   mqtt.broker.<0-9>.{ enabled, url, port, transport(tcp|tls|wss),
+//     auth_type(none|basic|jwt), username, password(WO), topic_prefix,
+//     iata_override, jwt_audience, jwt_refresh, jwt_owner, jwt_email, ca_cert }
+//   (jwt_token is NOT a config key -- it is live-minted at connect, never set/read.)
+// The secret `password` is WRITE-ONLY: never returned by GET/BROKERS; rendered as
+// "(set)" / "(unset)" only (existing ConfigSchema redaction).
 
 // ---------------------------------------------------------------------------
 // WIRE ENCODING RULES (resolve every parsing ambiguity -- both sides MUST follow)
 // ---------------------------------------------------------------------------
-// 1. ALL values are ASCII TEXT. Numerics (port, transport, auth_type,
-//    jwt_refresh, enabled, status_interval, rotation) are sent and returned as
-//    DECIMAL ASCII strings ("8883", not a binary u16). There is no binary
-//    integer anywhere in this protocol -- it tunnels the text CLI.
+// 1. ALL values are ASCII TEXT. Numerics (port, jwt_refresh, enabled,
+//    status_interval, rotation) are sent and returned as DECIMAL ASCII strings
+//    ("8883", not a binary u16). transport/auth_type are the STRING enum NAMES
+//    (tcp|tls|wss ; none|basic|jwt), matching the firmware CLI. No binary anywhere.
 // 2. OCFG_SET payload = "<key> <value>" split on the FIRST space ONLY. <value>
 //    is the verbatim remainder and MAY contain spaces (e.g. wifi.ssid "My Net");
 //    it is NOT quoted and MUST NOT be re-tokenized past the first space.

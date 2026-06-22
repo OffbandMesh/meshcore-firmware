@@ -973,4 +973,53 @@ bool configGet(const char* key, char* reply, size_t reply_size) {
     return false;  // unknown key
 }
 
+// ---------------------------------------------------------------------------
+// Broker-pool enumeration (Epic F / F3, #162) -- backs the OCFG_BROKERS read.
+// ---------------------------------------------------------------------------
+int configBrokerSlotCount() { return OFFBAND_MAX_BROKERS; }
+
+bool configBrokerSlotPopulated(uint8_t slot) {
+    BrokerConfig cfg;
+    return readBrokerConfig(slot, cfg) && cfg.url[0] != '\0';
+}
+
+// Render a populated slot's non-secret config as wire "key=value\n" lines (the
+// OCFG_BROKER_KV payload bodies). transport/auth_type as the string enum names
+// (matching the SET grammar); password redacted to "(set)"/"(unset)"; jwt_token
+// omitted (not a config key). Returns bytes written (0 if the slot is empty).
+// Caller passes a buffer large enough for a full slot (~700 B) and splits the
+// result on '\n', emitting one BROKER_KV frame per line.
+size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size) {
+    if (out == nullptr || out_size == 0) return 0;
+    out[0] = '\0';
+    BrokerConfig cfg;
+    if (!readBrokerConfig(slot, cfg) || cfg.url[0] == '\0') return 0;
+    size_t n = 0;
+    // Clamp the accumulation: snprintf returns the WOULD-BE length, so on
+    // truncation w_ can exceed the remaining space -- never let n pass out_size
+    // (else the next call's `out_size - n` underflows, size_t -> UB).
+#define BKV(...) do { \
+    if (n < out_size) { \
+        int w_ = snprintf(out + n, out_size - n, __VA_ARGS__); \
+        if (w_ > 0) n += ((size_t)w_ < out_size - n) ? (size_t)w_ : (out_size - n - 1); \
+    } \
+} while (0)
+    BKV("enabled=%d\n",       cfg.enabled ? 1 : 0);
+    BKV("url=%s\n",           cfg.url);
+    BKV("port=%u\n",          (unsigned)cfg.port);
+    BKV("transport=%s\n",     transportStr(cfg.transport));
+    BKV("auth_type=%s\n",     authStr(cfg.auth_type));
+    BKV("username=%s\n",      cfg.username);
+    BKV("password=%s\n",      cfg.password[0] ? "(set)" : "(unset)");
+    BKV("topic_prefix=%s\n",  cfg.topic_prefix);
+    BKV("iata_override=%s\n", cfg.iata_override);
+    BKV("jwt_audience=%s\n",  cfg.jwt_audience);
+    BKV("jwt_refresh=%u\n",   (unsigned)cfg.jwt_refresh_sec);
+    BKV("jwt_owner=%s\n",     cfg.jwt_owner);
+    BKV("jwt_email=%s\n",     cfg.jwt_email);
+    BKV("ca_cert=%s\n",       cfg.ca_cert_name);
+#undef BKV
+    return n;   // clamped written length (== strlen(out))
+}
+
 }  // namespace offband
