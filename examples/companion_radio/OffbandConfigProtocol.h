@@ -25,6 +25,22 @@
 #pragma once
 #include <stdint.h>
 
+// ===========================================================================
+// HARDENING GUARD (F7 #168) -- the config command must NOT ship on the
+// UNAUTHENTICATED TCP companion.
+// ===========================================================================
+// main.cpp selects SerialWifiInterface (a WiFiServer on TCP port 5000 with NO
+// connection auth) whenever WIFI_SSID is defined -- in preference to PIN-paired
+// BLE. CMD_OFFBAND_CONFIG can rewrite WiFi/MQTT-broker credentials and repoint
+// the MQTT uplink, so exposing it on that socket = an unauthenticated control
+// channel reachable by any host on the device's LAN. Observer builds use runtime
+// WiFi (WifiBootstrap) + BLE companion and deliberately omit WIFI_SSID; this
+// guard makes that invariant load-bearing instead of a convention. Authenticating
+// the TCP companion is the real fix -- tracked in #167 (P1).
+#if defined(OFFBAND_OBSERVER) && defined(WIFI_SSID)
+#error "Offband observer config command would be exposed on the unauthenticated TCP companion (WIFI_SSID selects SerialWifiInterface :5000, no auth). Build the observer with BLE_PIN_CODE + runtime WiFi (WifiBootstrap), not WIFI_SSID. See #167 / #168."
+#endif
+
 namespace offband {
 
 // ---------------------------------------------------------------------------
