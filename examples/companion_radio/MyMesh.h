@@ -118,6 +118,11 @@ public:
   // OFFBAND_OBSERVER. Wire contract: OffbandConfigProtocol.h.
   void handleOffbandConfigCmd(size_t len);
   void writeOffbandConfigScalar(uint8_t sub, const char* text);
+  // F8 (#169): multi-frame config responses (OCFG_BROKERS / OCFG_VIEW) STREAM one
+  // frame per idle main-loop pass via offbandStreamDrain() -- mirroring
+  // ContactsIterator -- instead of flooding the 4-deep BLE send queue synchronously,
+  // which dropped frames including the *_END terminator (F5 device test, mc #79).
+  void offbandStreamDrain();
 #endif
 
 #ifdef OFFBAND_OBSERVER_BLE_COMPANION
@@ -265,6 +270,14 @@ private:
   char _obs_cli_buf[128];
   uint8_t _obs_cli_len;
   bool _obs_cli_redact;   // true once "set wifi.pwd " seen -> stop echoing the PSK
+  // F8 (#169): streaming state for multi-frame config responses (OCFG_BROKERS /
+  // OCFG_VIEW). offbandStreamDrain() emits ONE frame per idle main-loop pass
+  // (mirroring ContactsIterator) so it never floods the 4-deep BLE send queue.
+  enum : uint8_t { OB_STREAM_NONE = 0, OB_STREAM_BROKERS, OB_STREAM_VIEW };
+  uint8_t _ob_stream;     // OB_STREAM_* ; constructor-init to NONE
+  int     _ob_slot;       // BROKERS: slot whose rendered lines are in _ob_buf
+  size_t  _ob_off;        // next line (BROKERS) / chunk (VIEW) offset into _ob_buf
+  char    _ob_buf[1024];  // current slot's "key=value\n" lines, or the VIEW text
 #endif
   uint8_t app_target_ver;
   uint8_t *sign_data;
