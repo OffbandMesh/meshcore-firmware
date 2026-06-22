@@ -84,11 +84,14 @@ enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUT
 // ---------------------------------------------------------------------------
 // F4 appends ONE `offband_caps` byte to the device-info reply, after the existing
 // path_hash_mode byte (additive -- pre-v14 clients read a shorter frame and ignore
-// it). Version code alone cannot distinguish a build with wifi_observer compiled
-// OUT from one with it IN, so the client gates the wifi/mqtt config category on
-// WIFI_OBSERVER below; display.* keys gate on FIRMWARE_VER_CODE >= 14 alone
-// (display applies to companion + observer builds -- no observer required).
-constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: wifi_observer compiled in
+// it). The ENTIRE config command is observer-only: its backend (ConfigSchema +
+// dispatchObserverCli) compiles only under OFFBAND_OBSERVER, so on a non-observer
+// node type there is no config at all -- display config included (the #141/#148
+// display prefs are persisted via ConfigSchema, itself observer-only). Version code
+// alone cannot tell an observer-out build from an observer-in one, so the client
+// gates the WHOLE command -- every key, display included -- on WIFI_OBSERVER_SUPPORT
+// (in addition to FIRMWARE_VER_CODE >= 14). There is NO display-without-observer path.
+constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: config backend (wifi_observer) compiled in
 
 // ---------------------------------------------------------------------------
 // Key schema -- the firmware<->client contract surface
