@@ -112,6 +112,12 @@ public:
   // the mesh object.
   uint16_t getErrFlags()         const { return _err_flags; }
   int      getOutboundQueueLen() const { return _mgr->getOutboundTotal(); }
+
+  // Epic F (#161): Offband config command handler (CMD_OFFBAND_CONFIG). Observer-
+  // only -- the backend (configSet/configGet, ConfigSchema) compiles only under
+  // OFFBAND_OBSERVER. Wire contract: OffbandConfigProtocol.h.
+  void handleOffbandConfigCmd(size_t len);
+  void writeOffbandConfigScalar(uint8_t sub, const char* text);
 #endif
 
 #ifdef OFFBAND_OBSERVER_BLE_COMPANION

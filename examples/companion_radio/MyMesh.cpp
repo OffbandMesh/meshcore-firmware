@@ -20,6 +20,13 @@
 // broad OFFBAND_OBSERVER flag (not the BLE-companion flag) so it is
 // present on every observer build, including future BLE-disabled ones.
 #include "helpers/wifi_observer/CliPassthrough.h"
+// Epic F: the config command codes (#160 contract) + its typed dispatch backend (#165).
+#include "OffbandConfigProtocol.h"
+#include "helpers/wifi_observer/ObserverCli.h"   // configSet/configGet + dispatchObserverCli
+// wifiObserverPool() lives in WifiObserver.h (heavy transitive includes); forward-
+// declare it here as CliPassthrough.cpp does. configSet takes a pool ref (only the
+// broker branch -- F3 -- consumes it, but the signature requires it for flat keys too).
+namespace offband { MqttBrokerPool& wifiObserverPool(); }
 #endif
 
 #define CMD_APP_START                 1
@@ -1176,7 +1183,101 @@ static const char* offbandClientVersion() {
   return buf;
 }
 
+#ifdef OFFBAND_OBSERVER
+// Emit one Offband-config scalar reply frame: [0]=RESP code, [1]=sub-type,
+// [2..]=NUL-terminated text (truncated to the frame).
+void MyMesh::writeOffbandConfigScalar(uint8_t sub, const char* text) {
+  out_frame[0] = offband::RESP_CODE_OFFBAND_CONFIG;
+  out_frame[1] = sub;
+  size_t n = strlen(text);
+  const size_t cap = MAX_FRAME_SIZE - 3;   // [0],[1] header + trailing NUL
+  if (n > cap) n = cap;
+  memcpy(&out_frame[2], text, n);
+  out_frame[2 + n] = 0;
+  _serial->writeFrame(out_frame, 2 + n + 1);
+}
+
+// Offband config command (Epic F / F2, #161). Parse the wire frame and dispatch
+// to the typed configSet/configGet (#165) -- NOT the CLI string parser, so the
+// CLI grammar never enters the wire path. VIEW (a human text dump) routes to a
+// whitelisted read-only dispatchObserverCli selector, chunked. The paginated
+// broker GET (OCFG_BROKERS) lands in F3 (#162). Observer-only. Contract:
+// OffbandConfigProtocol.h.
+void MyMesh::handleOffbandConfigCmd(size_t len) {
+  if (len < 2) { writeOffbandConfigScalar(offband::OCFG_R_ERR, "missing sub-type"); return; }
+  uint8_t op = cmd_frame[1];
+  cmd_frame[len] = 0;                                // NUL-terminate the payload
+  char* payload = (char*)&cmd_frame[2];
+  char reply[512];
+
+  if (op == offband::OCFG_SET) {
+    char* sp = strchr(payload, ' ');                 // split on FIRST space; value = remainder
+    if (sp == nullptr) { writeOffbandConfigScalar(offband::OCFG_R_ERR, "set: expected '<key> <value>'"); return; }
+    *sp = '\0';
+    if (!offband::configSet(payload, sp + 1, reply, sizeof(reply), offband::wifiObserverPool())) {
+      writeOffbandConfigScalar(offband::OCFG_R_ERR, "unknown config key"); return;
+    }
+    bool err = (strncmp(reply, "ERROR", sizeof("ERROR") - 1) == 0);
+    writeOffbandConfigScalar(err ? offband::OCFG_R_ERR : offband::OCFG_R_ACK, reply);
+    return;
+  }
+
+  if (op == offband::OCFG_GET) {
+    if (!offband::configGet(payload, reply, sizeof(reply))) {
+      writeOffbandConfigScalar(offband::OCFG_R_ERR, "unknown config key"); return;
+    }
+    bool err = (strncmp(reply, "ERROR", sizeof("ERROR") - 1) == 0);
+    writeOffbandConfigScalar(err ? offband::OCFG_R_ERR : offband::OCFG_R_VALUE, reply);
+    return;
+  }
+
+  if (op == offband::OCFG_VIEW) {
+    // Read-only dumps only -- never a mutating selector through VIEW.
+    bool ok = (strcmp(payload, "mqtt status") == 0) ||
+              (strncmp(payload, "mqtt view ", 10) == 0) ||
+              (strcmp(payload, "wifi status") == 0);
+    if (!ok) { writeOffbandConfigScalar(offband::OCFG_R_ERR, "view: allowed: mqtt status | mqtt view <N> | wifi status"); return; }
+    if (!offband::dispatchObserverCli(payload, reply, sizeof(reply), offband::wifiObserverPool())) {
+      writeOffbandConfigScalar(offband::OCFG_R_ERR, "view: unrecognized selector"); return;
+    }
+    uint8_t hdr[2] = { offband::RESP_CODE_OFFBAND_CONFIG, offband::OCFG_R_VIEW_START };
+    _serial->writeFrame(hdr, 2);
+    const char* p = reply;
+    size_t remaining = strlen(reply);
+    if (remaining > 0) {                              // empty dump -> just START + END
+      const size_t cap = MAX_FRAME_SIZE - 3;
+      do {
+        size_t take = remaining < cap ? remaining : cap;
+        out_frame[0] = offband::RESP_CODE_OFFBAND_CONFIG;
+        out_frame[1] = offband::OCFG_R_VIEW_CHUNK;
+        memcpy(&out_frame[2], p, take);
+        out_frame[2 + take] = 0;
+        _serial->writeFrame(out_frame, 2 + take + 1);
+        p += take; remaining -= take;
+      } while (remaining > 0);
+    }
+    hdr[1] = offband::OCFG_R_VIEW_END;
+    _serial->writeFrame(hdr, 2);
+    return;
+  }
+
+  if (op == offband::OCFG_BROKERS) {
+    writeOffbandConfigScalar(offband::OCFG_R_ERR, "brokers: not yet implemented (F3 #162)");
+    return;
+  }
+
+  writeOffbandConfigScalar(offband::OCFG_R_ERR, "bad config sub-type");
+}
+#endif  // OFFBAND_OBSERVER
+
 void MyMesh::handleCmdFrame(size_t len) {
+#ifdef OFFBAND_OBSERVER
+  // Epic F (#161): the Offband config command routes to its own observer-only handler.
+  if (cmd_frame[0] == offband::CMD_OFFBAND_CONFIG) {
+    handleOffbandConfigCmd(len);
+    return;
+  }
+#endif
   if (cmd_frame[0] == CMD_DEVICE_QUERY && len >= 2) { // sent when app establishes connection
     app_target_ver = cmd_frame[1];                    // which version of protocol does app understand
 
