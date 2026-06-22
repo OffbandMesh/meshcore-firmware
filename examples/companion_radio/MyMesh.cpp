@@ -1327,6 +1327,16 @@ void MyMesh::handleCmdFrame(size_t len) {
     i += 20;
     out_frame[i++] = _prefs.client_repeat;   // v9+
     out_frame[i++] = _prefs.path_hash_mode;  // v10+
+    // F4 (#163): Offband capability byte. bit0 = WIFI_OBSERVER_SUPPORT -- the
+    // config command's backend (wifi_observer) is compiled in. Additive: pre-v14
+    // clients read a shorter frame and never see it; v14+ clients gate the Observer
+    // config category on this bit (version code alone can't tell observer-in from
+    // observer-out builds). 0 on non-observer node types -> no config at all.
+    uint8_t offband_caps = 0;
+#ifdef OFFBAND_OBSERVER
+    offband_caps |= offband::OFFBAND_CAP_WIFI_OBSERVER;
+#endif
+    out_frame[i++] = offband_caps;           // v14+
     _serial->writeFrame(out_frame, i);
   } else if (cmd_frame[0] == CMD_APP_START &&
              len >= 8) { // sent when app establishes connection, respond with node ID
