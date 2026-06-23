@@ -167,7 +167,10 @@ static bool handleSetIata(char* reply, size_t reply_size, const char* value) {
         snprintf(reply, reply_size, "ERROR: usage: set mqtt.iata <code>\n");
         return true;
     }
-    writeGlobalIata(value);
+    if (!writeGlobalIata(value)) {   // #181: surface NVS failure -- never ACK an unverified write
+        snprintf(reply, reply_size, "ERROR: failed to save mqtt.iata (NVS write failed)\n");
+        return true;
+    }
     snprintf(reply, reply_size, "mqtt.iata = %s\n", value);
     return true;
 }
@@ -183,7 +186,10 @@ static bool handleSetStatusInterval(char* reply, size_t reply_size, const char* 
         snprintf(reply, reply_size, "ERROR: status_interval %ld out of range [10, 3600]\n", v);
         return true;
     }
-    writeStatusIntervalSec((uint16_t)v);
+    if (!writeStatusIntervalSec((uint16_t)v)) {   // #181: surface NVS failure
+        snprintf(reply, reply_size, "ERROR: failed to save mqtt.status_interval (NVS write failed)\n");
+        return true;
+    }
     snprintf(reply, reply_size, "mqtt.status_interval = %ld\n", v);
     return true;
 }
@@ -577,7 +583,13 @@ void setDisplayAlwaysOnApplier(void (*fn)(bool)) {
 }
 
 static bool handleDisplayAlwaysOn(char* reply, size_t reply_size, bool on) {
-    setDisplayAlwaysOn(on);                                            // persist (offband_ui NVS)
+    // #181: if persistence fails, surface it and do NOT apply to the live display
+    // -- applying a setting that won't survive a reboot would mislead the user
+    // about what's actually stored (SAFELANE 6: state must match the ACK).
+    if (!setDisplayAlwaysOn(on)) {                                     // persist (offband_ui NVS)
+        snprintf(reply, reply_size, "ERROR: failed to save display setting (NVS write failed)\n");
+        return true;
+    }
     if (s_display_always_on_applier) s_display_always_on_applier(on);  // apply to the live display
     snprintf(reply, reply_size,
              on ? "display: always on (screen stays lit)\n"
@@ -620,7 +632,12 @@ static bool handleDisplayRotate(char* reply, size_t reply_size, uint8_t deg) {
         snprintf(reply, reply_size, "display: rotation not supported on this display\n");
         return true;
     }
-    setDisplayRotation(deg);                                                  // persist (offband_ui NVS)
+    // #181: persist first; on NVS failure surface it and leave the cache + live
+    // display untouched, so RAM state, NVS, and the ACK all stay consistent.
+    if (!setDisplayRotation(deg)) {                                           // persist (offband_ui NVS)
+        snprintf(reply, reply_size, "ERROR: failed to save display rotation (NVS write failed)\n");
+        return true;
+    }
     s_rotation_cache = deg;                                                   // keep the in-session cache current
     if (s_display_rotation_applier) s_display_rotation_applier(deg);          // apply to the live display
     snprintf(reply, reply_size,

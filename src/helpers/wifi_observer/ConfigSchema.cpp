@@ -28,6 +28,24 @@ void mqttBrokerNamespace(uint8_t broker_index, char* out, size_t out_len) {
 
 #ifdef ARDUINO
 
+// #181: surface a config-write failure (SAFELANE 6 -- never silent) AND measure
+// the cause (free-entry count answers "is NVS full?" with evidence, not a guess).
+// Shared by every NVS writer below. Real-device only; the host round-trip test
+// gets the no-op stub (it defines ARDUINO but not ESP_PLATFORM).
+#if defined(ESP_PLATFORM)
+static void logCfgWriteFailure(const char* where, const char* ns) {
+    nvs_stats_t st;
+    if (nvs_get_stats(NULL, &st) == ESP_OK) {
+        crashLogf("[cfg] %s WRITE FAILED ns=%s nvs[used=%u free=%u total=%u]", where, ns,
+                  (unsigned)st.used_entries, (unsigned)st.free_entries, (unsigned)st.total_entries);
+    } else {
+        crashLogf("[cfg] %s WRITE FAILED ns=%s (nvs_get_stats unavailable)", where, ns);
+    }
+}
+#else
+static void logCfgWriteFailure(const char*, const char*) {}
+#endif
+
 bool readGlobalIata(char* out, size_t out_len) {
     Preferences p;
     p.begin(kNvsMqtt, /*readOnly=*/true);
@@ -42,11 +60,22 @@ bool readGlobalIata(char* out, size_t out_len) {
     return true;
 }
 
-void writeGlobalIata(const char* iata) {
+bool writeGlobalIata(const char* iata) {
     Preferences p;
-    p.begin(kNvsMqtt, /*readOnly=*/false);
-    p.putString(kKeyMqttIata, iata);
+    if (!p.begin(kNvsMqtt, /*readOnly=*/false)) {   // #181: never silent -- report begin failure
+        logCfgWriteFailure("writeGlobalIata.begin", kNvsMqtt);
+        return false;
+    }
+    size_t wrote = p.putString(kKeyMqttIata, iata);
     p.end();
+    // putString returns chars written (0 on NVS failure). An empty value also
+    // returns 0 but is a legitimate clear, so only treat 0 as failure when there
+    // was actually content to store.
+    if (wrote == 0 && iata != nullptr && iata[0] != '\0') {
+        logCfgWriteFailure("writeGlobalIata.putString", kNvsMqtt);
+        return false;
+    }
+    return true;
 }
 
 uint16_t readStatusIntervalSec() {
@@ -60,13 +89,21 @@ uint16_t readStatusIntervalSec() {
     return v;
 }
 
-void writeStatusIntervalSec(uint16_t seconds) {
+bool writeStatusIntervalSec(uint16_t seconds) {
     if (seconds < kMinStatusIntervalSec) seconds = kMinStatusIntervalSec;
     if (seconds > kMaxStatusIntervalSec) seconds = kMaxStatusIntervalSec;
     Preferences p;
-    p.begin(kNvsMqtt, /*readOnly=*/false);
-    p.putUShort(kKeyMqttStatusInterval, seconds);
+    if (!p.begin(kNvsMqtt, /*readOnly=*/false)) {
+        logCfgWriteFailure("writeStatusIntervalSec.begin", kNvsMqtt);
+        return false;
+    }
+    size_t wrote = p.putUShort(kKeyMqttStatusInterval, seconds);
     p.end();
+    if (wrote != sizeof(uint16_t)) {    // putUShort returns 2 on success, 0 on failure
+        logCfgWriteFailure("writeStatusIntervalSec.putUShort", kNvsMqtt);
+        return false;
+    }
+    return true;
 }
 
 // #141: display always-on toggle, in the fork-branded "offband_ui" namespace.
@@ -78,11 +115,19 @@ bool getDisplayAlwaysOn() {
     return v;
 }
 
-void setDisplayAlwaysOn(bool on) {
+bool setDisplayAlwaysOn(bool on) {
     Preferences p;
-    p.begin(kNvsOffbandUi, /*readOnly=*/false);
-    p.putBool(kKeyDisplayAlwaysOn, on);
+    if (!p.begin(kNvsOffbandUi, /*readOnly=*/false)) {
+        logCfgWriteFailure("setDisplayAlwaysOn.begin", kNvsOffbandUi);
+        return false;
+    }
+    size_t wrote = p.putBool(kKeyDisplayAlwaysOn, on);
     p.end();
+    if (wrote != sizeof(uint8_t)) {     // putBool stores 1 byte; 0 on failure
+        logCfgWriteFailure("setDisplayAlwaysOn.putBool", kNvsOffbandUi);
+        return false;
+    }
+    return true;
 }
 
 // #148: display rotation (0/180) in the "offband_ui" namespace. Clamped to the
@@ -95,11 +140,19 @@ uint8_t getDisplayRotation() {
     return (v == 180) ? 180 : 0;
 }
 
-void setDisplayRotation(uint8_t deg) {
+bool setDisplayRotation(uint8_t deg) {
     Preferences p;
-    p.begin(kNvsOffbandUi, /*readOnly=*/false);
-    p.putUChar(kKeyDisplayRotation, (deg == 180) ? 180 : 0);
+    if (!p.begin(kNvsOffbandUi, /*readOnly=*/false)) {
+        logCfgWriteFailure("setDisplayRotation.begin", kNvsOffbandUi);
+        return false;
+    }
+    size_t wrote = p.putUChar(kKeyDisplayRotation, (deg == 180) ? 180 : 0);
     p.end();
+    if (wrote != sizeof(uint8_t)) {     // putUChar stores 1 byte; 0 on failure
+        logCfgWriteFailure("setDisplayRotation.putUChar", kNvsOffbandUi);
+        return false;
+    }
+    return true;
 }
 
 // #181: broker config persists as ONE versioned blob (kKeyBrokerBlob), not 15
@@ -112,23 +165,6 @@ void setDisplayRotation(uint8_t deg) {
 static constexpr uint16_t    kBrokerBlobVersion = 1;
 static constexpr const char* kKeyBrokerBlob     = "cfg_blob";
 struct BrokerBlob { uint16_t version; BrokerConfig cfg; };
-
-// #181: surface a config-write failure (SAFELANE 6 -- never silent) AND measure
-// the cause (free-entry count answers "is NVS full?" with evidence, not a guess).
-// Real-device only; the host round-trip test gets the no-op stub.
-#if defined(ESP_PLATFORM)
-static void logCfgWriteFailure(const char* where, const char* ns) {
-    nvs_stats_t st;
-    if (nvs_get_stats(NULL, &st) == ESP_OK) {
-        crashLogf("[cfg] %s WRITE FAILED ns=%s nvs[used=%u free=%u total=%u]", where, ns,
-                  (unsigned)st.used_entries, (unsigned)st.free_entries, (unsigned)st.total_entries);
-    } else {
-        crashLogf("[cfg] %s WRITE FAILED ns=%s (nvs_get_stats unavailable)", where, ns);
-    }
-}
-#else
-static void logCfgWriteFailure(const char*, const char*) {}
-#endif
 
 bool readBrokerConfig(uint8_t slot, BrokerConfig& out) {
     if (slot >= OFFBAND_MAX_BROKERS) return false;
@@ -298,11 +334,12 @@ constexpr uint8_t kNumDefaultBrokers =
 }  // namespace
 
 void populateDefaultBrokers() {
+    bool all_ok = true;
     // Seed the owner's IATA (HAO) if unset -- SWOH default to simplify setup
     // for most operators; non-SWOH operators override via the global mqtt iata.
     char iata[8] = {0};
     if (!readGlobalIata(iata, sizeof(iata)) || iata[0] == '\0') {
-        writeGlobalIata("HAO");
+        all_ok &= writeGlobalIata("HAO");
     }
 
     for (uint8_t slot = 0;
@@ -329,7 +366,14 @@ void populateDefaultBrokers() {
         // is auto-built at connect, and jwt_owner/jwt_email are the operator's
         // identity claims, set via `set mqtt.broker.<N>.jwt_owner|jwt_email`
         // (#63). NOT device-derivable here -- see header comment (#95).
-        writeBrokerConfig(slot, def);
+        all_ok &= writeBrokerConfig(slot, def);
+    }
+    // #181: each failed write already self-logged its NVS cause + free-entry
+    // stats; surface a single boot-time summary so an incomplete default-seed
+    // is never silent (SAFELANE 6). Boot-time best-effort: a failed seed retries
+    // on the next boot (populateDefaultBrokers is idempotent / skip-if-present).
+    if (!all_ok) {
+        logCfgWriteFailure("populateDefaultBrokers", "(default-seed: 1+ write failed)");
     }
 }
 

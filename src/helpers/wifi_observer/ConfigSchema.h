@@ -77,19 +77,22 @@ constexpr const char* kDefaultTopicPrefix = "meshcore";
 // ---------------------------------------------------------------------------
 // Returns false if NVS error / missing. Defaults applied at call site.
 bool readGlobalIata(char* out, size_t out_len);
-void writeGlobalIata(const char* iata);
+// #181: writers return false on NVS failure (begin/put), and self-log the cause
+// (+ free-entry stats) before returning -- never silent (SAFELANE 6). Callers
+// must surface the failure rather than ACK success on an unverified write.
+bool writeGlobalIata(const char* iata);
 
 uint16_t readStatusIntervalSec();
-void     writeStatusIntervalSec(uint16_t seconds);
+bool     writeStatusIntervalSec(uint16_t seconds);
 
 // #141: display always-on toggle. When true, UITask never auto-blanks the
 // screen. Stored in the fork-branded "offband_ui" NVS namespace.
 bool getDisplayAlwaysOn();
-void setDisplayAlwaysOn(bool on);
+bool setDisplayAlwaysOn(bool on);   // #181: false on NVS failure (logged)
 
 // #148: display rotation in degrees (0 or 180). Stored in "offband_ui".
 uint8_t getDisplayRotation();
-void    setDisplayRotation(uint8_t deg);
+bool    setDisplayRotation(uint8_t deg);   // #181: false on NVS failure (logged)
 
 // Broker-slot accessors. Slot range [0, OFFBAND_MAX_BROKERS).
 // Returns sensible defaults on read-miss (e.g., empty url, enabled=false,
