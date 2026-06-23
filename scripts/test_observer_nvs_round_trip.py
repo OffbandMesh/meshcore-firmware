@@ -55,6 +55,7 @@ class Preferences {
     bool begin(const char* ns, bool /*ro*/) { ns_ = ns; return true; }
     void end() {}
     bool clear() { kvs_[ns_].clear(); return true; }
+    bool remove(const char* k) { return kvs_[ns_].erase(k) > 0; }  // #182: erase key (no-blank writes)
     bool   putBool   (const char* k, bool v)        { kvs_[ns_][k] = v ? "1":"0"; return true; }
     bool   getBool   (const char* k, bool def)      { auto& m = kvs_[ns_]; auto it=m.find(k); return it==m.end()?def:(it->second=="1"); }
     size_t putString (const char* k, const char* v) { kvs_[ns_][k] = v; return strlen(v); }
@@ -240,6 +241,26 @@ int main() {
                slot0_again.url, slot0.url);
         return 1;
     }
+
+    // #182: migration smoke -- migrateBrokerStorage() preserves config, stamps the
+    // schema flag, and is idempotent (a second call is a no-op).
+    BrokerConfig pre2; readBrokerConfig(2, pre2);
+    migrateBrokerStorage();
+    BrokerConfig post2;
+    if (!readBrokerConfig(2, post2)) { puts("FAIL re-read slot 2 post-migration"); return 1; }
+    if (strcmp(post2.url, pre2.url) != 0 || strcmp(post2.jwt_audience, pre2.jwt_audience) != 0) {
+        printf("FAIL migration altered slot 2: url '%s' aud '%s'\n", post2.url, post2.jwt_audience);
+        return 1;
+    }
+    {
+        Preferences obs; obs.begin(kNvsObserver, true);
+        uint8_t ver = obs.getUChar(kKeyCfgSchema, 0);
+        obs.end();
+        if (ver != kCfgSchemaVersion) { printf("FAIL schema flag not stamped: %u\n", ver); return 1; }
+    }
+    migrateBrokerStorage();  // idempotent: flag set -> no-op
+    BrokerConfig post2b; readBrokerConfig(2, post2b);
+    if (strcmp(post2b.url, pre2.url) != 0) { puts("FAIL migration not idempotent"); return 1; }
 
     puts("OK");
     return 0;

@@ -47,6 +47,11 @@ void MqttBrokerPool::begin(const mesh::LocalIdentity& identity,
 
     // Seed defaults (idempotent -- no-op if slots already populated).
     populateDefaultBrokers();
+    // #182: one-time reclaim of an upgraded observer's NVS to the per-key/no-blank
+    // format, BEFORE any slot is read or a worker runs -- so the space is freed at
+    // boot and the user never sees the interactive first-write error. Gated to run
+    // once; idempotent on already-migrated/fresh devices.
+    migrateBrokerStorage();
 
     // Read global iata + status interval from NVS.
     if (!readGlobalIata(global_iata_, sizeof(global_iata_))) {

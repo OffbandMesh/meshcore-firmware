@@ -63,6 +63,12 @@ constexpr const char* kKeyBrokerCaCertName   = "ca_cert";      // Plan 2 v2: ref
 constexpr const char* kKeyBrokerTopicPrefix  = "topic_prefix";
 constexpr const char* kKeyBrokerIataOverride = "iata_override";
 
+// #182: per-key / no-blank broker-storage schema version, stored in the "observer"
+// namespace. migrateBrokerStorage() runs the one-time reclaim when the stored
+// version is older than this, then stamps it so the migration runs exactly once.
+constexpr const char* kKeyCfgSchema    = "cfg_schema";
+constexpr uint8_t     kCfgSchemaVersion = 1;
+
 enum class BrokerTransport : uint8_t { Tcp = 0, Tls = 1, Wss = 2 };
 enum class BrokerAuthType  : uint8_t { None = 0, Basic = 1, Jwt = 2 };
 
@@ -134,6 +140,12 @@ bool clearBrokerConfig(uint8_t slot);
 // pending operator opt-in + JWT identity claims; slots 6-9 are left empty for
 // operator-custom brokers.
 void populateDefaultBrokers();
+
+// #182: one-time boot migration of an upgraded observer to the per-key / no-blank
+// storage format. Reclaims NVS space behind the scenes so the user never sees the
+// interactive "first write errors, then works". Gated + idempotent; call once at
+// observer startup, AFTER populateDefaultBrokers(). See ConfigSchema.cpp.
+void migrateBrokerStorage();
 
 // #98: render a broker slot's stored config to a human-readable, multi-line
 // text block (one "  key = value" per line) for `mqtt view <N>`. SECRETS ARE

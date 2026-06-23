@@ -46,37 +46,23 @@ static void logCfgWriteFailure(const char* where, const char* ns) {
 static void logCfgWriteFailure(const char*, const char*) {}
 #endif
 
-// #181: the config READERS default to a SAFE value on a miss (empty iata, 30s
-// interval, display off/0deg, empty-url broker) and the Arduino read-only API
-// can't distinguish "key absent" -- the legitimate first-boot state -- from a
-// deeper error, so silence-with-safe-default IS the correct, documented contract
-// for a read-miss (NOT a SAFELANE 6 violation). The one read-side anomaly worth
-// surfacing is "data present but unusable": a broker blob of the right SIZE that
-// reads back short = NVS corruption, distinct from a clean miss. logCfgReadFailure
-// records that. Real-device only; host gets the no-op stub.
+// #181/#182: the config READERS default to a SAFE value on a miss (empty iata,
+// 30s interval, display off/0deg, empty-url broker), and the Arduino read-only
+// API can't distinguish "key absent" -- the legitimate first-boot/unset state --
+// from a deeper error, so silence-with-safe-default IS the correct, documented
+// contract for a read-miss (NOT a SAFELANE 6 violation). This is exactly why
+// writeBrokerConfig can safely REMOVE an empty field's key (#182): an absent key
+// just reads back as the default.
 //
 // The same logic deliberately covers a read-only begin() returning false: on a
-// readonly handle that is the EXPECTED "namespace not yet created" first-boot miss
-// (nvs_open -> ESP_ERR_NVS_NOT_FOUND), which the Arduino wrapper collapses into the
-// same `false` as a genuine NVS error. Logging it would flag every fresh /
-// unconfigured namespace as an error and flood a first-boot log (violating §1). A
-// SYSTEMIC NVS failure still surfaces -- the WRITE path and the boot counter DO log
-// their begin() failures (a read-WRITE begin failure is genuinely anomalous;
+// readonly handle that is the EXPECTED "namespace not yet created" miss (nvs_open
+// -> ESP_ERR_NVS_NOT_FOUND), which the Arduino wrapper collapses into the same
+// `false` as a genuine NVS error. Logging it would flag every fresh / unconfigured
+// namespace as an error and flood a first-boot log (violating §1). A SYSTEMIC NVS
+// failure still surfaces -- the WRITE path and the boot counter DO log their
+// begin() failures (a read-WRITE begin failure is genuinely anomalous;
 // NVS_READWRITE creates the namespace). So the readers intentionally do not log
 // begin()==false; the safe get-defaults flow through unchanged.
-#if defined(ESP_PLATFORM)
-static void logCfgReadFailure(const char* where, const char* ns) {
-    nvs_stats_t st;
-    if (nvs_get_stats(NULL, &st) == ESP_OK) {
-        crashLogf("[cfg] %s READ FAILED ns=%s nvs[used=%u free=%u total=%u]", where, ns,
-                  (unsigned)st.used_entries, (unsigned)st.free_entries, (unsigned)st.total_entries);
-    } else {
-        crashLogf("[cfg] %s READ FAILED ns=%s (nvs_get_stats unavailable)", where, ns);
-    }
-}
-#else
-static void logCfgReadFailure(const char*, const char*) {}
-#endif
 
 bool readGlobalIata(char* out, size_t out_len) {
     Preferences p;
@@ -187,16 +173,13 @@ bool setDisplayRotation(uint8_t deg) {
     return true;
 }
 
-// #181: broker config persists as ONE versioned blob (kKeyBrokerBlob), not 15
-// separate keys. A write is all-or-nothing at the app level, so no partial/corrupt
-// slot is possible, and NVS leaves the prior blob intact if a write fails (the blob
-// is committed via its index). Bump kBrokerBlobVersion whenever BrokerConfig's
-// layout changes so a stale-size blob is treated as absent -> the legacy per-key
-// read below supplies the value (non-destructive migration: legacy keys are never
-// deleted, so they remain a fallback even after a slot has migrated).
-static constexpr uint16_t    kBrokerBlobVersion = 1;
-static constexpr const char* kKeyBrokerBlob     = "cfg_blob";
-struct BrokerBlob { uint16_t version; BrokerConfig cfg; };
+// #182: broker config is stored as individual per-key NVS entries. The #181
+// single-blob attempt was reverted: a ~1.1KB blob needs one large contiguous
+// allocation that a near-full partition cannot place -- measured on HV4 as
+// nvs_set_blob NOT_ENOUGH_SPACE at used=504 free=126 total=630 (the #179 root) --
+// whereas small per-key writes slot into fragmented free space. The old migration
+// blob key is removed on the next write (writeBrokerConfig) to reclaim its entries.
+static constexpr const char* kKeyBrokerBlob = "cfg_blob";
 
 bool readBrokerConfig(uint8_t slot, BrokerConfig& out) {
     if (slot >= OFFBAND_MAX_BROKERS) return false;
@@ -204,24 +187,10 @@ bool readBrokerConfig(uint8_t slot, BrokerConfig& out) {
     mqttBrokerNamespace(slot, ns, sizeof(ns));
     Preferences p;
     p.begin(ns, /*readOnly=*/true);
-    // #181: prefer the versioned blob. A size or version mismatch -> treat as
-    // absent and fall through to the legacy per-key read (pre-#181 devices).
-    if (p.getBytesLength(kKeyBrokerBlob) == sizeof(BrokerBlob)) {
-        BrokerBlob blob;
-        size_t got = p.getBytes(kKeyBrokerBlob, &blob, sizeof(blob));
-        if (got == sizeof(blob) && blob.version == kBrokerBlobVersion) {
-            out = blob.cfg;
-            p.end();
-            return true;
-        }
-        // A right-sized blob that reads back SHORT = NVS corruption, not a clean
-        // miss: surface it (SAFELANE 6), then fall through to the legacy keys.
-        // A version mismatch is the expected non-destructive migration path
-        // (downgrade / future bump) -> fall through silently.
-        if (got != sizeof(blob)) {
-            logCfgReadFailure("readBrokerConfig.blob", ns);
-        }
-    }
+    // #182: per-key read. A missing key returns its default (empty / sentinel),
+    // which is correct because writeBrokerConfig REMOVES empty fields rather than
+    // storing blanks. Any #181 migration blob is ignored here and is cleaned up on
+    // the next write.
     out.enabled   = p.getBool(kKeyBrokerEnabled, false);
     String url    = p.getString(kKeyBrokerUrl, "");
     strncpy(out.url, url.c_str(), sizeof(out.url));
@@ -265,24 +234,113 @@ bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg) {
     char ns[16];
     mqttBrokerNamespace(slot, ns, sizeof(ns));
     Preferences p;
-    if (!p.begin(ns, /*readOnly=*/false)) {     // #181: never silent -- report a begin failure
+    if (!p.begin(ns, /*readOnly=*/false)) {     // never silent -- report a begin failure
         logCfgWriteFailure("writeBrokerConfig.begin", ns);
         return false;
     }
-    // #181: ONE versioned blob, all-or-nothing. putBytes returns the byte count
-    // written (0 / short on failure, e.g. NVS exhausted). On failure: log the
-    // cause (free-entry stats) and return false, so the caller's ACK reflects
-    // reality instead of claiming success on a write that never landed.
-    BrokerBlob blob{};                        // #181: zero padding -> deterministic NVS bytes
-    blob.version = kBrokerBlobVersion;
-    blob.cfg     = cfg;
-    size_t wrote = p.putBytes(kKeyBrokerBlob, &blob, sizeof(blob));
+    // #182: per-key writes (reverted from the #181 blob -- a ~1.1KB blob needs one
+    // large contiguous allocation a near-full partition can't place; small per-key
+    // writes slot into fragmented free space). The string fields live in a table so
+    // they can be processed in two phases (removes, then puts). topic_prefix, the
+    // numerics, and enabled are handled separately below.
+    const struct { const char* key; const char* val; } kStrFields[] = {
+        {kKeyBrokerUrl,          cfg.url},
+        {kKeyBrokerUsername,     cfg.username},
+        {kKeyBrokerPassword,     cfg.password},
+        {kKeyBrokerJwtToken,     cfg.jwt_token},
+        {kKeyBrokerIataOverride, cfg.iata_override},
+        {kKeyBrokerJwtAudience,  cfg.jwt_audience},
+        {kKeyBrokerCaCertName,   cfg.ca_cert_name},
+        {kKeyBrokerJwtOwner,     cfg.jwt_owner},
+        {kKeyBrokerJwtEmail,     cfg.jwt_email},
+    };
+
+    // Phase 1 -- REMOVES first: drop the migration blob + every empty field so their
+    // NVS entries become reclaimable BEFORE the value puts. On a near-full partition
+    // this lets the puts complete in one shot (GC reclaims the freed entries) instead
+    // of erroring on the first attempt -- and stores no blanks either (#182). The
+    // removes always land here even if a later put can't, so the space reclaim is
+    // what the one-time boot migration (migrateBrokerStorage) relies on.
+    p.remove(kKeyBrokerBlob);
+    for (const auto& f : kStrFields) {
+        if (f.val[0] == '\0') p.remove(f.key);
+    }
+
+    // Phase 2 -- value puts, each CHECKED (the #181 SAFELANE-6 honesty is kept).
+    // Only non-empty strings; topic_prefix is ALWAYS stored because its read-default
+    // is "meshcore", not "" -- removing it would lose an explicit value to the default.
+    bool ok = true;
+    for (const auto& f : kStrFields) {
+        if (f.val[0] != '\0') ok &= (p.putString(f.key, f.val) == strlen(f.val));
+    }
+    ok &= (p.putString(kKeyBrokerTopicPrefix, cfg.topic_prefix) == strlen(cfg.topic_prefix));
+    ok &= (p.putUShort(kKeyBrokerPort,      cfg.port)               == sizeof(uint16_t));
+    ok &= (p.putUChar (kKeyBrokerTransport, (uint8_t)cfg.transport) == sizeof(uint8_t));
+    ok &= (p.putUChar (kKeyBrokerAuthType,  (uint8_t)cfg.auth_type) == sizeof(uint8_t));
+    ok &= (p.putULong (kKeyBrokerJwtRefresh, cfg.jwt_refresh_sec)   == sizeof(uint32_t));
+
+    // Phase 3 -- enabled LAST, and only if every value put succeeded. enabled is the
+    // gate that decides whether the broker goes live; writing it last means a failed
+    // write leaves the enable/disable state UNCHANGED, so the slot's live state stays
+    // consistent with the returned ERROR (a failed write never silently flips it).
+    if (ok) ok &= (p.putBool(kKeyBrokerEnabled, cfg.enabled) == sizeof(uint8_t));
     p.end();
-    if (wrote != sizeof(blob)) {
-        logCfgWriteFailure("writeBrokerConfig.putBytes", ns);
+
+    if (!ok) {     // a put failed -- surface the cause (free-entry stats) + don't ACK success
+        logCfgWriteFailure("writeBrokerConfig.put", ns);
         return false;
     }
     return true;
+}
+
+// #182: one-time boot migration so an UPGRADED observer reclaims NVS space behind
+// the scenes -- the user never sees the interactive "first write errors, then
+// works", because the reclaim already happened here at boot. Gated by a schema
+// version flag so it runs exactly once; idempotent (re-running on a clean slot is
+// cheap). For each configured slot it rewrites the config into the per-key /
+// no-blank format; writeBrokerConfig's REMOVES phase frees that slot's blanks even
+// if its puts can't all complete on a near-full partition, so the reclaim always
+// lands. A retry completes the rewrite once the first pass has freed enough.
+// Old values are preserved on a failed put, so a partial migration never loses
+// config. Call once at observer startup, after populateDefaultBrokers().
+void migrateBrokerStorage() {
+    Preferences obs;
+    if (obs.begin(kNvsObserver, /*readOnly=*/true)) {
+        uint8_t ver = obs.getUChar(kKeyCfgSchema, 0);
+        obs.end();
+        if (ver >= kCfgSchemaVersion) return;   // already migrated
+    }
+
+    uint8_t migrated = 0, failed = 0;
+    for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
+        BrokerConfig cfg;
+        if (!readBrokerConfig(slot, cfg)) continue;
+        if (cfg.url[0] == '\0') continue;        // unconfigured slot -- nothing to migrate
+        // Retry once: the first write frees the slot's blanks, so a retry fits if the
+        // first couldn't fully complete (writeBrokerConfig self-logs any failure).
+        if (writeBrokerConfig(slot, cfg) || writeBrokerConfig(slot, cfg)) migrated++;
+        else failed++;
+    }
+
+    // Stamp the schema version so this runs exactly once. Even if a slot's rewrite
+    // didn't fully complete, its blanks were reclaimed (removes land first) and its
+    // old values are preserved, so a later interactive write finishes the job in one
+    // shot -- the user never hits the first-write error.
+    Preferences w;
+    if (w.begin(kNvsObserver, /*readOnly=*/false)) {
+        w.putUChar(kKeyCfgSchema, kCfgSchemaVersion);
+        w.end();
+    }
+
+    // #182: the migration is invisible to the user by design, so record that it ran
+    // (+ outcome) to the persistent crash-log -- observable for validation + field
+    // diagnosis, never user-facing. Real-device only (host has no crashLogf here).
+#if defined(ESP_PLATFORM)
+    crashLogf("[cfg] migrateBrokerStorage: schema->%u migrated=%u failed=%u",
+              (unsigned)kCfgSchemaVersion, (unsigned)migrated, (unsigned)failed);
+#else
+    (void)migrated; (void)failed;
+#endif
 }
 
 // #98: clear a broker slot by WIPING its NVS namespace (every key removed), so
