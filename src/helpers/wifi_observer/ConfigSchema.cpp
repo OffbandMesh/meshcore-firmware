@@ -46,6 +46,38 @@ static void logCfgWriteFailure(const char* where, const char* ns) {
 static void logCfgWriteFailure(const char*, const char*) {}
 #endif
 
+// #181: the config READERS default to a SAFE value on a miss (empty iata, 30s
+// interval, display off/0deg, empty-url broker) and the Arduino read-only API
+// can't distinguish "key absent" -- the legitimate first-boot state -- from a
+// deeper error, so silence-with-safe-default IS the correct, documented contract
+// for a read-miss (NOT a SAFELANE 6 violation). The one read-side anomaly worth
+// surfacing is "data present but unusable": a broker blob of the right SIZE that
+// reads back short = NVS corruption, distinct from a clean miss. logCfgReadFailure
+// records that. Real-device only; host gets the no-op stub.
+//
+// The same logic deliberately covers a read-only begin() returning false: on a
+// readonly handle that is the EXPECTED "namespace not yet created" first-boot miss
+// (nvs_open -> ESP_ERR_NVS_NOT_FOUND), which the Arduino wrapper collapses into the
+// same `false` as a genuine NVS error. Logging it would flag every fresh /
+// unconfigured namespace as an error and flood a first-boot log (violating §1). A
+// SYSTEMIC NVS failure still surfaces -- the WRITE path and the boot counter DO log
+// their begin() failures (a read-WRITE begin failure is genuinely anomalous;
+// NVS_READWRITE creates the namespace). So the readers intentionally do not log
+// begin()==false; the safe get-defaults flow through unchanged.
+#if defined(ESP_PLATFORM)
+static void logCfgReadFailure(const char* where, const char* ns) {
+    nvs_stats_t st;
+    if (nvs_get_stats(NULL, &st) == ESP_OK) {
+        crashLogf("[cfg] %s READ FAILED ns=%s nvs[used=%u free=%u total=%u]", where, ns,
+                  (unsigned)st.used_entries, (unsigned)st.free_entries, (unsigned)st.total_entries);
+    } else {
+        crashLogf("[cfg] %s READ FAILED ns=%s (nvs_get_stats unavailable)", where, ns);
+    }
+}
+#else
+static void logCfgReadFailure(const char*, const char*) {}
+#endif
+
 bool readGlobalIata(char* out, size_t out_len) {
     Preferences p;
     p.begin(kNvsMqtt, /*readOnly=*/true);
@@ -176,11 +208,18 @@ bool readBrokerConfig(uint8_t slot, BrokerConfig& out) {
     // absent and fall through to the legacy per-key read (pre-#181 devices).
     if (p.getBytesLength(kKeyBrokerBlob) == sizeof(BrokerBlob)) {
         BrokerBlob blob;
-        if (p.getBytes(kKeyBrokerBlob, &blob, sizeof(blob)) == sizeof(blob)
-            && blob.version == kBrokerBlobVersion) {
+        size_t got = p.getBytes(kKeyBrokerBlob, &blob, sizeof(blob));
+        if (got == sizeof(blob) && blob.version == kBrokerBlobVersion) {
             out = blob.cfg;
             p.end();
             return true;
+        }
+        // A right-sized blob that reads back SHORT = NVS corruption, not a clean
+        // miss: surface it (SAFELANE 6), then fall through to the legacy keys.
+        // A version mismatch is the expected non-destructive migration path
+        // (downgrade / future bump) -> fall through silently.
+        if (got != sizeof(blob)) {
+            logCfgReadFailure("readBrokerConfig.blob", ns);
         }
     }
     out.enabled   = p.getBool(kKeyBrokerEnabled, false);
