@@ -4,6 +4,10 @@
 #ifdef ARDUINO
   #include <Arduino.h>
   #include <Preferences.h>
+  #if defined(ESP_PLATFORM)
+    #include <nvs.h>        // #181: nvs_get_stats() -- write-failure diagnostic (real device only)
+    #include "CrashLog.h"   // #181: crashLogf() -- persistent + Serial failure log
+  #endif
 #else
   // Host build: provide a thin Preferences shim so the file compiles
   // for host-runnable tests. The shim is in scripts/test_*.py harness.
@@ -98,12 +102,51 @@ void setDisplayRotation(uint8_t deg) {
     p.end();
 }
 
+// #181: broker config persists as ONE versioned blob (kKeyBrokerBlob), not 15
+// separate keys. A write is all-or-nothing at the app level, so no partial/corrupt
+// slot is possible, and NVS leaves the prior blob intact if a write fails (the blob
+// is committed via its index). Bump kBrokerBlobVersion whenever BrokerConfig's
+// layout changes so a stale-size blob is treated as absent -> the legacy per-key
+// read below supplies the value (non-destructive migration: legacy keys are never
+// deleted, so they remain a fallback even after a slot has migrated).
+static constexpr uint16_t    kBrokerBlobVersion = 1;
+static constexpr const char* kKeyBrokerBlob     = "cfg_blob";
+struct BrokerBlob { uint16_t version; BrokerConfig cfg; };
+
+// #181: surface a config-write failure (SAFELANE 6 -- never silent) AND measure
+// the cause (free-entry count answers "is NVS full?" with evidence, not a guess).
+// Real-device only; the host round-trip test gets the no-op stub.
+#if defined(ESP_PLATFORM)
+static void logCfgWriteFailure(const char* where, const char* ns) {
+    nvs_stats_t st;
+    if (nvs_get_stats(NULL, &st) == ESP_OK) {
+        crashLogf("[cfg] %s WRITE FAILED ns=%s nvs[used=%u free=%u total=%u]", where, ns,
+                  (unsigned)st.used_entries, (unsigned)st.free_entries, (unsigned)st.total_entries);
+    } else {
+        crashLogf("[cfg] %s WRITE FAILED ns=%s (nvs_get_stats unavailable)", where, ns);
+    }
+}
+#else
+static void logCfgWriteFailure(const char*, const char*) {}
+#endif
+
 bool readBrokerConfig(uint8_t slot, BrokerConfig& out) {
     if (slot >= OFFBAND_MAX_BROKERS) return false;
     char ns[16];
     mqttBrokerNamespace(slot, ns, sizeof(ns));
     Preferences p;
     p.begin(ns, /*readOnly=*/true);
+    // #181: prefer the versioned blob. A size or version mismatch -> treat as
+    // absent and fall through to the legacy per-key read (pre-#181 devices).
+    if (p.getBytesLength(kKeyBrokerBlob) == sizeof(BrokerBlob)) {
+        BrokerBlob blob;
+        if (p.getBytes(kKeyBrokerBlob, &blob, sizeof(blob)) == sizeof(blob)
+            && blob.version == kBrokerBlobVersion) {
+            out = blob.cfg;
+            p.end();
+            return true;
+        }
+    }
     out.enabled   = p.getBool(kKeyBrokerEnabled, false);
     String url    = p.getString(kKeyBrokerUrl, "");
     strncpy(out.url, url.c_str(), sizeof(out.url));
@@ -147,25 +190,23 @@ bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg) {
     char ns[16];
     mqttBrokerNamespace(slot, ns, sizeof(ns));
     Preferences p;
-    p.begin(ns, /*readOnly=*/false);
-    p.putBool   (kKeyBrokerEnabled,      cfg.enabled);
-    p.putString (kKeyBrokerUrl,          cfg.url);
-    p.putUShort (kKeyBrokerPort,         cfg.port);
-    p.putUChar  (kKeyBrokerTransport,    (uint8_t)cfg.transport);
-    p.putUChar  (kKeyBrokerAuthType,     (uint8_t)cfg.auth_type);
-    p.putString (kKeyBrokerUsername,     cfg.username);
-    p.putString (kKeyBrokerPassword,     cfg.password);
-    p.putString (kKeyBrokerJwtToken,     cfg.jwt_token);
-    p.putString (kKeyBrokerTopicPrefix,  cfg.topic_prefix);
-    p.putString (kKeyBrokerIataOverride, cfg.iata_override);
-    // Plan 2 v2 additions
-    p.putString (kKeyBrokerJwtAudience,  cfg.jwt_audience);
-    p.putULong  (kKeyBrokerJwtRefresh,   cfg.jwt_refresh_sec);
-    p.putString (kKeyBrokerCaCertName,   cfg.ca_cert_name);
-    // #63 additions: JWT identity claims
-    p.putString (kKeyBrokerJwtOwner,     cfg.jwt_owner);
-    p.putString (kKeyBrokerJwtEmail,     cfg.jwt_email);
+    if (!p.begin(ns, /*readOnly=*/false)) {     // #181: never silent -- report a begin failure
+        logCfgWriteFailure("writeBrokerConfig.begin", ns);
+        return false;
+    }
+    // #181: ONE versioned blob, all-or-nothing. putBytes returns the byte count
+    // written (0 / short on failure, e.g. NVS exhausted). On failure: log the
+    // cause (free-entry stats) and return false, so the caller's ACK reflects
+    // reality instead of claiming success on a write that never landed.
+    BrokerBlob blob{};                        // #181: zero padding -> deterministic NVS bytes
+    blob.version = kBrokerBlobVersion;
+    blob.cfg     = cfg;
+    size_t wrote = p.putBytes(kKeyBrokerBlob, &blob, sizeof(blob));
     p.end();
+    if (wrote != sizeof(blob)) {
+        logCfgWriteFailure("writeBrokerConfig.putBytes", ns);
+        return false;
+    }
     return true;
 }
 
