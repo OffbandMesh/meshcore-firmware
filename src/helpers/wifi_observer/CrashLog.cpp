@@ -174,8 +174,11 @@ void crashLogBegin() {
 }
 
 void crashLogf(const char* fmt, ...) {
-    if (!s_begin_called) return;  // pre-init writes go nowhere
-
+    // #181: NEVER drop a line on the floor pre-begin. The crash logger silently
+    // losing a line is the one failure that erases the very evidence the log
+    // exists to capture (SAFELANE 6/1). Before crashLogBegin(), still emit to the
+    // live path (Serial/stdout); only the RTC ring -- which begin() initializes --
+    // is skipped until ready (mirrors crashlog_vprintf's pre-begin handling).
     char line[kCrashLogLineMax + 1];
     int  prefix_len = 0;
 
@@ -207,13 +210,16 @@ void crashLogf(const char* fmt, ...) {
     }
 
 #ifdef ARDUINO
-    // Write to serial (live monitoring path).
+    // Live monitoring path -- ALWAYS, even before begin() (the ring isn't ready
+    // yet, but the line must not vanish).
     Serial.write((const uint8_t*)line, total);
 
-    // Write to ring buffer (crash-survival path).
-    portENTER_CRITICAL(&s_log_mux);
-    writeToRing(line, total);
-    portEXIT_CRITICAL(&s_log_mux);
+    // Crash-survival ring -- only once begin() has initialized the header.
+    if (s_begin_called) {
+        portENTER_CRITICAL(&s_log_mux);
+        writeToRing(line, total);
+        portEXIT_CRITICAL(&s_log_mux);
+    }
 #else
     // Host build: just write to stdout.
     fputs(line, stdout);
@@ -393,8 +399,13 @@ void heartbeatBegin() {
     if (ok) {
         s_nvs_boot_count       = s_boot_prefs.getUInt("count", 0) + 1;
         s_prev_boot_uptime_s   = s_boot_prefs.getUInt("last_up_s", 0);
-        s_boot_prefs.putUInt("count", s_nvs_boot_count);
-        s_boot_prefs.putUInt("last_up_s", 0);  // reset; will be updated periodically
+        // #181: the boot counter IS crash-cycle evidence -- a silent put failure
+        // would freeze the count and mask a reboot loop (SAFELANE 6). Surface it.
+        if (s_boot_prefs.putUInt("count", s_nvs_boot_count) == 0) {
+            crashLogf("[boot] WARN: NVS cw_boot 'count' write FAILED (count=%u not persisted)",
+                      (unsigned)s_nvs_boot_count);
+        }
+        s_boot_prefs.putUInt("last_up_s", 0);  // reset; maybeSaveUptime overwrites within 5s
         s_boot_prefs.end();
     } else {
         crashLogf("[boot] WARN: NVS cw_boot namespace open failed; falling back to RTC counter");
@@ -429,11 +440,29 @@ static void maybeSaveUptime(uint32_t now_ms) {
     // Save every 5 seconds (matches stats cadence; balances flash wear)
     if (now_ms - s_last_uptime_save_ms < 5000) return;
     s_last_uptime_save_ms = now_ms;
+    // #181: feeds "prev boot lasted Ns" -- the crash-cycle-PERIOD evidence. Runs
+    // every 5s, so a silent failure would erase that evidence indefinitely. Log a
+    // failure ONCE and re-arm on the next success, rather than flooding the 4KB
+    // ring with a repeating warning (SAFELANE 6).
+    static bool s_uptime_save_warned = false;
     ::Preferences p;
-    if (p.begin("cw_boot", /*readOnly=*/false)) {
-        p.putUInt("last_up_s", now_ms / 1000);
-        p.end();
+    if (!p.begin("cw_boot", /*readOnly=*/false)) {
+        if (!s_uptime_save_warned) {
+            crashLogf("[boot] WARN: uptime save -- NVS cw_boot open FAILED (suppressing repeats)");
+            s_uptime_save_warned = true;
+        }
+        return;
     }
+    size_t wrote = p.putUInt("last_up_s", now_ms / 1000);
+    p.end();
+    if (wrote == 0) {
+        if (!s_uptime_save_warned) {
+            crashLogf("[boot] WARN: uptime save -- NVS 'last_up_s' write FAILED (suppressing repeats)");
+            s_uptime_save_warned = true;
+        }
+        return;
+    }
+    s_uptime_save_warned = false;  // re-arm: a recovered write re-logs the next failure
 }
 
 void subloopMark(uint8_t which) {
