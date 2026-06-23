@@ -1376,8 +1376,31 @@ void MyMesh::handleCmdFrame(size_t len) {
     cmd_frame[len] = 0; // make app_name null terminated
     MESH_DEBUG_PRINTLN("App %s connected", app_name);
 
+    // #178: a reconnect (the client's connect-thrash) can land here mid-stream.
+    // Emit the in-flight stream's terminator BEFORE clearing it, so the client's
+    // contact / settings read completes instead of hanging forever on an END that
+    // never comes. Guarded -> a normal first connect (no stream in flight) is a
+    // no-op. Best-effort: if the BLE send queue is full the terminator may drop
+    // (no worse than today). Terminator byte sequences mirror the stream's own EOF
+    // paths (END_OF_CONTACTS line ~2593, VIEW_END/BROKERS_END in offbandStreamDrain).
+    if (_iter_started) {
+      uint8_t end[5];
+      end[0] = RESP_CODE_END_OF_CONTACTS;
+      memcpy(&end[1], &_most_recent_lastmod, 4);
+      _serial->writeFrame(end, 5);
+      MESH_DEBUG_PRINTLN("APP_START mid-stream: sent END_OF_CONTACTS terminator (#178)");
+    }
     _iter_started = false; // stop any left-over ContactsIterator
 #ifdef OFFBAND_OBSERVER
+    if (_ob_stream == OB_STREAM_VIEW) {
+      uint8_t h[2] = { offband::RESP_CODE_OFFBAND_CONFIG, offband::OCFG_R_VIEW_END };
+      _serial->writeFrame(h, 2);
+      MESH_DEBUG_PRINTLN("APP_START mid-stream: sent VIEW_END terminator (#178)");
+    } else if (_ob_stream == OB_STREAM_BROKERS) {
+      uint8_t h[2] = { offband::RESP_CODE_OFFBAND_CONFIG, offband::OCFG_R_BROKERS_END };
+      _serial->writeFrame(h, 2);
+      MESH_DEBUG_PRINTLN("APP_START mid-stream: sent BROKERS_END terminator (#178)");
+    }
     _ob_stream = OB_STREAM_NONE; // F8 (#169): drop any in-flight config-response stream
 #endif
     int i = 0;

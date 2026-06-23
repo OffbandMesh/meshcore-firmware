@@ -25,7 +25,10 @@ class SerialBLEInterface : public BaseSerialInterface, NimBLEServerCallbacks, Ni
     uint8_t buf[MAX_FRAME_SIZE];
   };
 
-  #define FRAME_QUEUE_SIZE  4
+  // #178: was 4. Absorb the connect-time command/response burst so the client's
+  // uncapped-retry (connect-thrash) never gets a dropped frame and re-storms.
+  // Sizes BOTH recv + send queues; nrf52 already uses 12. ~a few KB static .bss.
+  #define FRAME_QUEUE_SIZE  12
   int recv_queue_len;
   Frame recv_queue[FRAME_QUEUE_SIZE];
   int send_queue_len;
