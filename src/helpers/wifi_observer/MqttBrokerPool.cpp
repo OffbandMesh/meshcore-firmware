@@ -341,6 +341,14 @@ void MqttBrokerPool::reconcileSlot(uint8_t slot) {
     brokers_[slot].begin(slot, cfg, *identity_);
 }
 
+namespace {
+// #171: a broker holds a ~60KB mbedTLS context only for TLS/wss transports.
+inline bool isTlsTransport(const BrokerConfig& c) {
+    return c.transport == BrokerTransport::Tls ||
+           c.transport == BrokerTransport::Wss;
+}
+}  // namespace
+
 void MqttBrokerPool::workerLoop() {
     for (;;) {
         // Block for a reconcile request, but wake every 500ms to drive the
@@ -361,16 +369,37 @@ void MqttBrokerPool::workerLoop() {
         // the same slot serializes safely (and loopTask only publishes to Up
         // slots, never one the worker is connect-blocking on).
         uint32_t now = millis();
+        // #171: count TLS contexts already live (Up/Connecting). Each holds a
+        // ~60KB mbedTLS context; HV3's heap fits ~2 before a 3rd handshake OOM-
+        // reboots. We refuse to START a TLS bring-up past OFFBAND_MAX_LIVE_TLS
+        // (the broker self-defers to HeldNoHeap). Plaintext brokers are exempt.
+        uint8_t tls_live = 0;
+        for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
+            const MqttBroker& b = brokers_[s];
+            if (!b.isConfigured() || !isTlsTransport(b.config())) continue;
+            BrokerState st = b.runtime().state;
+            if (st == BrokerState::Up || st == BrokerState::Connecting) tls_live++;
+        }
         for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
             if (reconciling_[s]) continue;
             MqttBroker& b = brokers_[s];
             if (!b.isConfigured()) continue;
             b.loop(now);
-            if (b.runtime().state == BrokerState::Down ||
-                b.runtime().state == BrokerState::Backoff ||
-                b.runtime().state == BrokerState::HeldNoClock) {  // #87: re-check the clock gate each tick so held wss slots release the moment the clock is sane
+            BrokerState st = b.runtime().state;
+            // Re-drive idle/held slots. HeldNoClock releases when the clock is
+            // sane (#87); HeldNoHeap releases when a TLS slot frees (#171).
+            if (st == BrokerState::Down || st == BrokerState::Backoff ||
+                st == BrokerState::HeldNoClock || st == BrokerState::HeldNoHeap) {
                 uint32_t biased = now + static_cast<uint32_t>(s) * 1000U;
-                (void)b.tryConnect(biased);
+                // TLS budget: non-TLS always OK; TLS only if a live slot is free.
+                bool budget_ok = !isTlsTransport(b.config()) ||
+                                 (tls_live < OFFBAND_MAX_LIVE_TLS);
+                (void)b.tryConnect(biased, budget_ok);
+                // Consume a budget slot if this TLS broker just began bringing up.
+                if (isTlsTransport(b.config()) &&
+                    b.runtime().state == BrokerState::Connecting) {
+                    tls_live++;
+                }
             }
         }
     }

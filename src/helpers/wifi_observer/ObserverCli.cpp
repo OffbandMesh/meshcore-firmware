@@ -88,6 +88,7 @@ static const char* stateStr(BrokerState s) {
         case BrokerState::Up:          return "up";
         case BrokerState::Backoff:     return "backoff";
         case BrokerState::HeldNoClock: return "held(no-clock)";
+        case BrokerState::HeldNoHeap:  return "held(no-heap)";
         default:                       return "?";
     }
 }
