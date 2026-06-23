@@ -4,6 +4,7 @@
 
 #include "MqttBrokerPool.h"
 #include "MqttPayload.h"
+#include "CrashLog.h"   // #181: crashLogf() -- worker has no user ACK channel
 #include <cstring>
 #include <cstdio>
 
@@ -338,7 +339,18 @@ void MqttBrokerPool::reconcileSlot(uint8_t slot) {
         brokers_[slot].shutdown();   // no/empty config -> ensure no client
         return;
     }
-    brokers_[slot].begin(slot, cfg, *identity_);
+    // #181: the worker runs off any user channel, so a reconcile that fails to
+    // bring up a configured + ENABLED slot must surface in the persistent crash
+    // log (SAFELANE 6) -- otherwise the slot silently stays Down with only
+    // rt_.state as evidence. begin() returns false on bad auth / client-init OOM;
+    // a DISABLED slot returns true with no client (expected, not a failure).
+    // URL is omitted from the log -- a broker URL may carry inline credentials.
+    if (!brokers_[slot].begin(slot, cfg, *identity_) && cfg.enabled) {
+        crashLogf("[pool] reconcileSlot %u begin FAILED state=%d err_class=%d",
+                  (unsigned)slot,
+                  (int)brokers_[slot].runtime().state,
+                  (int)brokers_[slot].runtime().last_error_class);
+    }
 }
 
 namespace {

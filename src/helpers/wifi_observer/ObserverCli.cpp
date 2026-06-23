@@ -155,7 +155,15 @@ static bool handleEnableSet(char* reply, size_t reply_size, MqttBrokerPool& pool
         snprintf(reply, reply_size, "ERROR: cannot write slot %d\n", slot);
         return true;
     }
-    pool.reloadSlot((uint8_t)slot);
+    if (!pool.reloadSlot((uint8_t)slot)) {
+        // #181: NVS is updated, but the live client wasn't reconciled now (worker
+        // queue full / not ready). Surface it instead of ACKing a clean toggle --
+        // the change still takes effect at the next reboot (SAFELANE 6).
+        snprintf(reply, reply_size,
+                 "mqtt slot %d: %s saved, but live reload failed -- effective after reboot\n",
+                 slot, enable ? "enabled" : "disabled");
+        return true;
+    }
     snprintf(reply, reply_size, "mqtt slot %d: %s\n",
              slot, enable ? "enabled" : "disabled");
     return true;
@@ -314,7 +322,15 @@ static bool handleSetBrokerField(char* reply, size_t reply_size,
     // owned (the reconciling_[] guard serializes it against loopTask), so this is
     // race-safe; for a disabled slot the worker just re-reads NVS into cfg_ with
     // no client touch.
-    pool.reloadSlot((uint8_t)slot);
+    if (!pool.reloadSlot((uint8_t)slot)) {
+        // #181: saved to NVS, but the cached cfg_ wasn't refreshed (worker queue
+        // full / not ready) -- `mqtt status` shows stale until reboot. Surface it
+        // rather than ACK a clean set (SAFELANE 6).
+        snprintf(reply, reply_size,
+                 "mqtt.broker.%d.%s saved, but live reload failed -- effective after reboot\n",
+                 slot, key);
+        return true;
+    }
 
     if (was_enabled) {
         snprintf(reply, reply_size,
