@@ -128,7 +128,7 @@ private:
 
     // Cached strings for ctx fills (caller owns lifetime).
     const char* device_id_        = "";
-    const char* node_name_        = "";
+    char        node_name_[64]    = "";  // OWNED (built in begin()): "<name> radar-emoji" Offband tell
     const char* client_version_   = "";
     const char* firmware_version_ = "";
     const char* model_            = "";

@@ -25,7 +25,21 @@ void MqttBrokerPool::begin(const mesh::LocalIdentity& identity,
                            const char* model) {
     identity_         = &identity;
     device_id_        = device_id        != nullptr ? device_id        : "";
-    node_name_        = node_name        != nullptr ? node_name        : "";
+    // Append the Offband tell (radar emoji U+1F4E1 = UTF-8 F0 9F 93 A1) to the
+    // observer's display name in every MQTT payload's `origin`, so feeds/maps show
+    // "<name> [radar]" for Offband observers. Falls back to device_id when there is
+    // no node_name, so it is never a bare emoji. node_name_ is the only OWNED cached
+    // string (the rest borrow the caller's lifetime). The TOPIC uses device_id, not
+    // this, so the emoji never reaches a topic.
+    {
+        const char* nm_base = (node_name != nullptr && node_name[0] != '\0') ? node_name
+                            : (device_id != nullptr ? device_id : "");
+        // Bound the base name with %.*s so the trailing " " + 4-byte emoji + NUL
+        // (6 bytes) always fit whole -- the emoji is never split mid-UTF-8 even on a
+        // pathologically long name (>58 chars). escapeJsonString passes the bytes >=0x20.
+        snprintf(node_name_, sizeof(node_name_), "%.*s \xF0\x9F\x93\xA1",
+                 (int)(sizeof(node_name_) - 6), nm_base);
+    }
     client_version_   = client_version   != nullptr ? client_version   : "";
     firmware_version_ = firmware_version != nullptr ? firmware_version : "";
     model_            = model            != nullptr ? model            : "";
