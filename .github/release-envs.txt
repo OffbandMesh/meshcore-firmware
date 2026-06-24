@@ -44,6 +44,12 @@ Xiao_C3_room_server
 Xiao_C6_companion_radio_ble_
 Xiao_C6_repeater_
 
+# MeshSmith Photon-1W (XIAO ESP32-C6 + Ebyte E22-900M30S 1W radio) -- #193
+meshsmith_photon_esp32c6_e22p_30dbm_companion_radio_ble
+meshsmith_photon_esp32c6_e22p_30dbm_companion_radio_usb
+meshsmith_photon_esp32c6_e22p_30dbm_repeater
+meshsmith_photon_esp32c6_e22p_30dbm_room_server
+
 # Seeed XIAO nRF52
 Xiao_nrf52_companion_radio_ble
 Xiao_nrf52_companion_radio_usb

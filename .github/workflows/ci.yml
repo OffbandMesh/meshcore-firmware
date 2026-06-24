@@ -31,6 +31,7 @@ jobs:
           - heltec_v4_companion_radio_ble
           - RAK_4631_repeater
           - Heltec_t114_companion_radio_ble   # nRF52 companion coverage (BLE; complements RAK_4631 repeater)
+          - meshsmith_photon_esp32c6_e22p_30dbm_companion_radio_ble   # MeshSmith Photon-1W (ESP32-C6 + E22 1W) coverage -- #193
     steps:
       - uses: actions/checkout@v5
 
