@@ -14,9 +14,7 @@ prior to 0.13.0 predate it; see `git tag -l 'crosswire-v*'` and the tag
 annotations for that history (highlights: v0.12.0 NimBLE migration, v0.11.x
 Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
-## [Unreleased]
-
-_Staged for `offband-v1.1.0` — rolls into a dated section at the release tag._
+## [1.1.0] - 2026-06-24
 
 The headline is **Epic F: the companion-API config command** — a WiFi observer can now be
 configured entirely from the app (WiFi, the full MQTT broker pool, display) over BLE —

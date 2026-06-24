@@ -99,8 +99,9 @@ jobs:
 
       - name: Extract CHANGELOG section for release body
         run: |
-          ver="${GITHUB_REF_NAME#offband-}"; ver="${ver#crosswire-}"   # e.g. v0.16.0
-          num="${ver#v}"                         # e.g. 0.14.0
+          ver="${GITHUB_REF_NAME#offband-}"; ver="${ver#crosswire-}"   # e.g. v1.1.0-rc1
+          num="${ver#v}"                         # e.g. 1.1.0-rc1
+          num="${num%-rc*}"                      # rc shares the base version's CHANGELOG section: 1.1.0-rc1 -> 1.1.0
           awk -v v="$num" '
             $0 ~ "^## \\[" v "\\]" { grab=1; next }
             grab && /^## \[/ { grab=0 }
