@@ -30,6 +30,7 @@ jobs:
           - heltec_v4_repeater_telemetry
           - heltec_v4_companion_radio_ble
           - RAK_4631_repeater
+          - Heltec_t114_companion_radio_ble   # nRF52 companion coverage (BLE; complements RAK_4631 repeater)
     steps:
       - uses: actions/checkout@v5
 
