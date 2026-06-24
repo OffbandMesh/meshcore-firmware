@@ -544,6 +544,11 @@ static bool handleSetWifiEnabled(char* reply, size_t reply_size, bool enabled) {
 // existing "set mqtt.broker.<N>.<key>". Key vocabulary mirrors
 // handleSetBrokerField. Secret fields (password) are write-only and refused
 // here, per the wifi.pwd policy + the CLAUDE.md "never echo a secret" rule.
+// #172/#173: reach the observer pool for live runtime + the device owner hex, so the
+// runtime/resolved fields below are individually GETtable (not just in the dump) --
+// the client editor's single-slot Refresh uses per-field get, not the pool dump.
+MqttBrokerPool& wifiObserverPool();
+
 static bool handleGetBrokerField(char* reply, size_t reply_size,
                                  int slot, const char* key) {
     if (slot < 0 || key == nullptr) {
@@ -573,6 +578,32 @@ static bool handleGetBrokerField(char* reply, size_t reply_size,
     else if (eq(key, "jwt_refresh"))   snprintf(reply, reply_size, "mqtt.broker.%d.jwt_refresh = %u\n", slot, (unsigned)cfg.jwt_refresh_sec);
     else if (eq(key, "jwt_owner"))     snprintf(reply, reply_size, "mqtt.broker.%d.jwt_owner = %s\n", slot, cfg.jwt_owner);
     else if (eq(key, "jwt_email"))     snprintf(reply, reply_size, "mqtt.broker.%d.jwt_email = %s\n", slot, cfg.jwt_email);
+    // #172/#173: runtime + resolved-default fields, individually GETtable so the
+    // client's single-slot Refresh (per-field get) matches the OCFG_BROKERS dump.
+    // Wire tokens identical to the dump (brokerStateWire/brokerErrorWire). A valid
+    // slot is guaranteed here (readBrokerConfig above rejects out-of-range).
+    else if (eq(key, "state"))         snprintf(reply, reply_size, "mqtt.broker.%d.state = %s\n",      slot, brokerStateWire(wifiObserverPool().broker((uint8_t)slot).runtime().state));
+    else if (eq(key, "last_error"))    snprintf(reply, reply_size, "mqtt.broker.%d.last_error = %s\n", slot, brokerErrorWire(wifiObserverPool().broker((uint8_t)slot).runtime().last_error_class));
+    else if (eq(key, "jwt_owner_resolved")) {
+        // The owner used at connect: the explicit jwt_owner if set, else the device pubkey (#95).
+        if (cfg.jwt_owner[0] != '\0') {
+            snprintf(reply, reply_size, "mqtt.broker.%d.jwt_owner_resolved = %s\n", slot, cfg.jwt_owner);
+        } else {
+            char hex[72] = {0};
+            wifiObserverPool().deviceOwnerHex(hex, sizeof(hex));
+            snprintf(reply, reply_size, "mqtt.broker.%d.jwt_owner_resolved = %s\n", slot, hex);
+        }
+    }
+    else if (eq(key, "iata_resolved")) {
+        // The IATA used at connect: the explicit iata_override if set, else the global IATA.
+        if (cfg.iata_override[0] != '\0') {
+            snprintf(reply, reply_size, "mqtt.broker.%d.iata_resolved = %s\n", slot, cfg.iata_override);
+        } else {
+            char giata[8] = {0};
+            readGlobalIata(giata, sizeof(giata));
+            snprintf(reply, reply_size, "mqtt.broker.%d.iata_resolved = %s\n", slot, giata);
+        }
+    }
     else snprintf(reply, reply_size, "ERROR: unknown broker field '%s'\n", key);
     return true;
 }
