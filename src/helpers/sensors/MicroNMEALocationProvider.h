@@ -44,7 +44,9 @@ class MicroNMEALocationProvider : public LocationProvider {
     char _nmeaBuffer[100];
     MicroNMEA nmea;
     mesh::RTCClock* _clock;
-    Stream* _gps_serial;
+protected :
+    Stream* _gps_serial;   // Offband (#193): protected so GPS subclasses (e.g. ATGM336H) can reach it
+private :
     RefCountedDigitalPin* _peripher_power;
     int8_t _claims = 0;
     int _pin_reset;
