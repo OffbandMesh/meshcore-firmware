@@ -73,6 +73,7 @@ jobs:
           - Heltec_v2_companion_radio_usb
           - Xiao_C6_companion_radio_ble_
           - meshsmith_photon_esp32c6_e22p_30dbm_companion_radio_ble   # MeshSmith Photon-1W (ESP32-C6 + E22 1W) coverage -- #193
+          - meshsmith_photon_esp32c6_e22p_30dbm_repeater   # Photon-1W repeater (its primary "ridge repeater" role) -- #193
     steps:
       - uses: actions/checkout@v5
 
