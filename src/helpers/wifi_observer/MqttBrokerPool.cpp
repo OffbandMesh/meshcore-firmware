@@ -452,4 +452,19 @@ uint8_t MqttBrokerPool::upCount() const {
     return n;
 }
 
+// #173: UPPERCASE hex of the device's own pubkey -- the connect-time default for a
+// broker's jwt_owner (#95). Renders "" when the identity is unset or on host builds
+// (no identity_), so the caller simply omits jwt_owner_resolved in that case.
+void MqttBrokerPool::deviceOwnerHex(char* out, size_t out_len) const {
+    if (out == nullptr || out_len == 0) return;
+    out[0] = '\0';
+#if defined(ARDUINO)
+    if (identity_ == nullptr || out_len < 2 * PUB_KEY_SIZE + 1) return;
+    for (size_t i = 0; i < PUB_KEY_SIZE; ++i) {
+        snprintf(&out[i * 2], 3, "%02X", identity_->pub_key[i]);
+    }
+    out[2 * PUB_KEY_SIZE] = '\0';
+#endif
+}
+
 }  // namespace offband

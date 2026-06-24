@@ -1308,7 +1308,14 @@ void MyMesh::offbandStreamDrain() {
         return;
       }
       _ob_slot = s;
-      offband::configRenderBrokerSlot((uint8_t)s, _ob_buf, sizeof(_ob_buf));
+      // #172/#173: pass the live runtime state + the device's default jwt_owner
+      // (pubkey hex) so the dump also carries state/last_error + resolved-default
+      // hints (additive -- old clients ignore the extra lines).
+      const offband::BrokerRuntimeState& _rt =
+          offband::wifiObserverPool().broker((uint8_t)s).runtime();
+      char _owner_hex[2 * PUB_KEY_SIZE + 1];
+      offband::wifiObserverPool().deviceOwnerHex(_owner_hex, sizeof(_owner_hex));
+      offband::configRenderBrokerSlot((uint8_t)s, _ob_buf, sizeof(_ob_buf), &_rt, _owner_hex);
       _ob_off = 0;
     }
     // Emit ONE "key=value" line as a BROKER_KV frame for the current slot.

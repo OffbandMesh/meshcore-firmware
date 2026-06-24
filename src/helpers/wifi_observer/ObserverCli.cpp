@@ -93,6 +93,31 @@ static const char* stateStr(BrokerState s) {
     }
 }
 
+// #172: WIRE-safe state/error tokens for the OCFG_BROKERS dump (no parens/spaces,
+// distinct from stateStr's human "held(no-clock)"). These MUST match the client
+// contract (see #172 / OffbandConfigProtocol.h).
+static const char* brokerStateWire(BrokerState s) {
+    switch (s) {
+        case BrokerState::Down:        return "down";
+        case BrokerState::Connecting:  return "connecting";
+        case BrokerState::Up:          return "up";
+        case BrokerState::Backoff:     return "backoff";
+        case BrokerState::HeldNoClock: return "held_no_clock";
+        case BrokerState::HeldNoHeap:  return "held_no_heap";
+        default:                       return "down";
+    }
+}
+static const char* brokerErrorWire(BrokerErrorClass e) {
+    switch (e) {
+        case BrokerErrorClass::None:  return "none";
+        case BrokerErrorClass::Tcp:   return "tcp";
+        case BrokerErrorClass::Auth:  return "auth";
+        case BrokerErrorClass::Tls:   return "tls";
+        case BrokerErrorClass::Other: return "other";
+        default:                      return "other";
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Subcommand handlers
 // ---------------------------------------------------------------------------
@@ -1039,7 +1064,9 @@ bool configBrokerSlotPopulated(uint8_t slot) {
 // omitted (not a config key). Returns bytes written (0 if the slot is empty).
 // Caller passes a buffer large enough for a full slot (~700 B) and splits the
 // result on '\n', emitting one BROKER_KV frame per line.
-size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size) {
+size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size,
+                              const BrokerRuntimeState* rt,
+                              const char* owner_default_hex) {
     if (out == nullptr || out_size == 0) return 0;
     out[0] = '\0';
     BrokerConfig cfg;
@@ -1068,6 +1095,26 @@ size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size) {
     BKV("jwt_owner=%s\n",     cfg.jwt_owner);
     BKV("jwt_email=%s\n",     cfg.jwt_email);
     BKV("ca_cert=%s\n",       cfg.ca_cert_name);
+    // #172: live runtime state + last-error (additive; passed from the pool). Lets
+    // the app show the REAL connect result, not just the config `enabled` flag.
+    // Old clients ignore unknown keys.
+    if (rt != nullptr) {
+        BKV("state=%s\n",      brokerStateWire(rt->state));
+        BKV("last_error=%s\n", brokerErrorWire(rt->last_error_class));
+    }
+    // #173: resolved-default placeholders (additive). Emitted ONLY when the raw
+    // field is blank, carrying the value the firmware actually uses at connect, so
+    // the client shows it as a hint WITHOUT writing it back as an explicit override
+    // -- the raw key above stays blank and remains the source of truth for writes.
+    if (cfg.jwt_owner[0] == '\0' && owner_default_hex != nullptr && owner_default_hex[0] != '\0') {
+        BKV("jwt_owner_resolved=%s\n", owner_default_hex);
+    }
+    if (cfg.iata_override[0] == '\0') {
+        char giata[8] = {0};
+        if (readGlobalIata(giata, sizeof(giata)) && giata[0] != '\0') {
+            BKV("iata_resolved=%s\n", giata);
+        }
+    }
 #undef BKV
     return n;   // clamped written length (== strlen(out))
 }
