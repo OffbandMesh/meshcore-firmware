@@ -62,6 +62,10 @@ on the **MeshCore 1.16.0** base.
   queue (4 → 12) + stream terminators on reconnect, so a mid-stream reconnect can't leave
   the app's contact / settings sync hung. Affects companion **and** observer. (The root —
   the client's uncapped reconnect retry — is paced client-side in meshcore-client.)
+- **Crash log reliable for the whole boot** (#183) — the 1 Hz heartbeat was flooding the
+  4 KB RTC crash-ring (wrapped in ~50 s) and evicting real crash diagnostics; the heartbeat
+  now writes the ring every 30 s / on a sharp heap drop, so a post-reboot dump keeps the
+  evidence that explains a crash past boot+50 s.
 
 ### CI / build
 - **Heltec T114** (nRF52) companion added to the CI matrix (#185) — first nRF52-companion

@@ -491,7 +491,18 @@ void heartbeatTick(uint32_t now_ms) {
     s_loop_iter_delta  = 0;
     portEXIT_CRITICAL(&s_hb_mux);
 
-    crashLogf("[hb] up=%us iter=+%u boot=%u phases=[W:%c M:%c S:%c U:%c] free_heap=%u",
+    uint32_t heap = ESP.getFreeHeap();
+
+    // #183: build the heartbeat line ONCE (same [millis] prefix crashLogf would add)
+    // and emit it to Serial every second for live monitoring -- but write it to the
+    // RTC crash ring only PERIODICALLY or on a real anomaly. A 1 Hz ring write floods
+    // the 4 KB ring (~50 s to wrap) and evicts the crash diagnostics the ring exists
+    // to preserve across a reboot. At one ring beat per 30 s the ring holds ~25 min of
+    // uptime markers AND keeps real events readable for the whole boot.
+    char line[180];
+    int n = snprintf(line, sizeof(line),
+              "[%lu] [hb] up=%us iter=+%u boot=%u phases=[W:%c M:%c S:%c U:%c] free_heap=%u\n",
+              (unsigned long)millis(),
               (unsigned)(now_ms / 1000),
               (unsigned)delta_iter,
               (unsigned)bootCounterValue(),
@@ -499,7 +510,28 @@ void heartbeatTick(uint32_t now_ms) {
               (flags & SUBLOOP_MESH)    ? 'Y' : 'N',
               (flags & SUBLOOP_SENSORS) ? 'Y' : 'N',
               (flags & SUBLOOP_UI)      ? 'Y' : 'N',
-              (unsigned)ESP.getFreeHeap());
+              (unsigned)heap);
+    if (n > 0) {
+        size_t total = ((size_t)n < sizeof(line)) ? (size_t)n : sizeof(line) - 1;
+        Serial.write((const uint8_t*)line, total);   // live monitoring, every second
+
+        // Ring-write only when the beat carries new signal: every 30 s, or the moment
+        // free heap drops sharply (>8 KB since the last beat) -- a memory-pressure
+        // anomaly worth preserving. (A hung subloop is still covered: the next periodic
+        // beat shows the N flags, and the shutdown handler dumps the ring on the
+        // watchdog reset.)
+        static uint32_t s_last_hb_ring_ms = 0;
+        static uint32_t s_last_hb_heap    = 0;
+        bool heap_drop = (s_last_hb_heap != 0) && (heap + 8192u < s_last_hb_heap);
+        bool periodic  = (s_last_hb_ring_ms == 0) || (now_ms - s_last_hb_ring_ms >= 30000u);
+        if (periodic || heap_drop) {
+            portENTER_CRITICAL(&s_log_mux);
+            writeToRing(line, total);
+            portEXIT_CRITICAL(&s_log_mux);
+            s_last_hb_ring_ms = now_ms;
+        }
+        s_last_hb_heap = heap;
+    }
 
     // Persist current uptime to NVS so next boot can report "previous
     // boot lasted Ns" -- definitive evidence of cycle period.
