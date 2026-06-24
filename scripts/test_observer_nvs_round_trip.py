@@ -55,6 +55,7 @@ class Preferences {
     bool begin(const char* ns, bool /*ro*/) { ns_ = ns; return true; }
     void end() {}
     bool clear() { kvs_[ns_].clear(); return true; }
+    bool remove(const char* k) { return kvs_[ns_].erase(k) > 0; }  // #182: erase key (no-blank writes)
     bool   putBool   (const char* k, bool v)        { kvs_[ns_][k] = v ? "1":"0"; return true; }
     bool   getBool   (const char* k, bool def)      { auto& m = kvs_[ns_]; auto it=m.find(k); return it==m.end()?def:(it->second=="1"); }
     size_t putString (const char* k, const char* v) { kvs_[ns_][k] = v; return strlen(v); }
@@ -65,6 +66,10 @@ class Preferences {
     uint8_t getUChar (const char* k, uint8_t def)   { auto& m = kvs_[ns_]; auto it=m.find(k); return it==m.end()?def:(uint8_t)std::stoi(it->second); }
     size_t putULong  (const char* k, uint32_t v)    { kvs_[ns_][k] = std::to_string(v); return 4; }
     uint32_t getULong(const char* k, uint32_t def)  { auto& m = kvs_[ns_]; auto it=m.find(k); return it==m.end()?def:(uint32_t)std::stoul(it->second); }
+    // #181: blob accessors for the single versioned broker-config blob.
+    size_t putBytes  (const char* k, const void* v, size_t len) { kvs_[ns_][k] = std::string((const char*)v, len); return len; }
+    size_t getBytes  (const char* k, void* out, size_t len)     { auto& m = kvs_[ns_]; auto it=m.find(k); if (it==m.end()) return 0; size_t n = it->second.size() < len ? it->second.size() : len; memcpy(out, it->second.data(), n); return n; }
+    size_t getBytesLength(const char* k)                        { auto& m = kvs_[ns_]; auto it=m.find(k); return it==m.end() ? 0 : it->second.size(); }
  private:
     static inline std::map<std::string, std::map<std::string,std::string>> kvs_;
     std::string ns_;
@@ -160,7 +165,7 @@ int main() {
     if (!readBrokerConfig(3, slot3)) { puts("FAIL read slot 3"); return 1; }
 
     // Slot 0 = CoreScope: plaintext + anonymous, the ONLY default-enabled slot.
-    if (strcmp(slot0.url, "mqtt://mqtt.w8oof.net:1883") != 0) {
+    if (strcmp(slot0.url, "mqtt://mqtt1.okimesh.org:1883") != 0) {  // #170: was mqtt.w8oof.net
         printf("FAIL slot 0 url after populate: '%s'\n", slot0.url);
         return 1;
     }
@@ -236,6 +241,26 @@ int main() {
                slot0_again.url, slot0.url);
         return 1;
     }
+
+    // #182: migration smoke -- migrateBrokerStorage() preserves config, stamps the
+    // schema flag, and is idempotent (a second call is a no-op).
+    BrokerConfig pre2; readBrokerConfig(2, pre2);
+    migrateBrokerStorage();
+    BrokerConfig post2;
+    if (!readBrokerConfig(2, post2)) { puts("FAIL re-read slot 2 post-migration"); return 1; }
+    if (strcmp(post2.url, pre2.url) != 0 || strcmp(post2.jwt_audience, pre2.jwt_audience) != 0) {
+        printf("FAIL migration altered slot 2: url '%s' aud '%s'\n", post2.url, post2.jwt_audience);
+        return 1;
+    }
+    {
+        Preferences obs; obs.begin(kNvsObserver, true);
+        uint8_t ver = obs.getUChar(kKeyCfgSchema, 0);
+        obs.end();
+        if (ver != kCfgSchemaVersion) { printf("FAIL schema flag not stamped: %u\n", ver); return 1; }
+    }
+    migrateBrokerStorage();  // idempotent: flag set -> no-op
+    BrokerConfig post2b; readBrokerConfig(2, post2b);
+    if (strcmp(post2b.url, pre2.url) != 0) { puts("FAIL migration not idempotent"); return 1; }
 
     puts("OK");
     return 0;

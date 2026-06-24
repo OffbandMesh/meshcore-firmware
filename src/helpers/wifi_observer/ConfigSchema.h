@@ -63,6 +63,12 @@ constexpr const char* kKeyBrokerCaCertName   = "ca_cert";      // Plan 2 v2: ref
 constexpr const char* kKeyBrokerTopicPrefix  = "topic_prefix";
 constexpr const char* kKeyBrokerIataOverride = "iata_override";
 
+// #182: per-key / no-blank broker-storage schema version, stored in the "observer"
+// namespace. migrateBrokerStorage() runs the one-time reclaim when the stored
+// version is older than this, then stamps it so the migration runs exactly once.
+constexpr const char* kKeyCfgSchema    = "cfg_schema";
+constexpr uint8_t     kCfgSchemaVersion = 1;
+
 enum class BrokerTransport : uint8_t { Tcp = 0, Tls = 1, Wss = 2 };
 enum class BrokerAuthType  : uint8_t { None = 0, Basic = 1, Jwt = 2 };
 
@@ -77,19 +83,22 @@ constexpr const char* kDefaultTopicPrefix = "meshcore";
 // ---------------------------------------------------------------------------
 // Returns false if NVS error / missing. Defaults applied at call site.
 bool readGlobalIata(char* out, size_t out_len);
-void writeGlobalIata(const char* iata);
+// #181: writers return false on NVS failure (begin/put), and self-log the cause
+// (+ free-entry stats) before returning -- never silent (SAFELANE 6). Callers
+// must surface the failure rather than ACK success on an unverified write.
+bool writeGlobalIata(const char* iata);
 
 uint16_t readStatusIntervalSec();
-void     writeStatusIntervalSec(uint16_t seconds);
+bool     writeStatusIntervalSec(uint16_t seconds);
 
 // #141: display always-on toggle. When true, UITask never auto-blanks the
 // screen. Stored in the fork-branded "offband_ui" NVS namespace.
 bool getDisplayAlwaysOn();
-void setDisplayAlwaysOn(bool on);
+bool setDisplayAlwaysOn(bool on);   // #181: false on NVS failure (logged)
 
 // #148: display rotation in degrees (0 or 180). Stored in "offband_ui".
 uint8_t getDisplayRotation();
-void    setDisplayRotation(uint8_t deg);
+bool    setDisplayRotation(uint8_t deg);   // #181: false on NVS failure (logged)
 
 // Broker-slot accessors. Slot range [0, OFFBAND_MAX_BROKERS).
 // Returns sensible defaults on read-miss (e.g., empty url, enabled=false,
@@ -131,6 +140,12 @@ bool clearBrokerConfig(uint8_t slot);
 // pending operator opt-in + JWT identity claims; slots 6-9 are left empty for
 // operator-custom brokers.
 void populateDefaultBrokers();
+
+// #182: one-time boot migration of an upgraded observer to the per-key / no-blank
+// storage format. Reclaims NVS space behind the scenes so the user never sees the
+// interactive "first write errors, then works". Gated + idempotent; call once at
+// observer startup, AFTER populateDefaultBrokers(). See ConfigSchema.cpp.
+void migrateBrokerStorage();
 
 // #98: render a broker slot's stored config to a human-readable, multi-line
 // text block (one "  key = value" per line) for `mqtt view <N>`. SECRETS ARE

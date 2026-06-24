@@ -52,6 +52,35 @@
   #define OFFBAND_MAX_BROKERS 10
 #endif
 
+// #171 -- TLS broker concurrency cap (TEMPORARY; superseded by the round-robin
+// scheduler #175). Each live wss/TLS broker holds a ~60KB mbedTLS context.
+// MEASURED on HV3 (~124KB free with WiFi up): ONE wss broker settles at ~63KB
+// free (heap_min ~52KB) -- safe; TWO wss brokers collapse free heap to ~1.5KB
+// (heap_min 456 bytes) -- the #171 OOM knife-edge. So HV3 safely holds exactly
+// ONE concurrent TLS context. The pool refuses to START a TLS handshake past
+// this many live contexts; the broker self-defers to BrokerState::HeldNoHeap
+// (no retry burned, released once the live slot frees). Plaintext (tcp) brokers
+// hold no mbedTLS context -- exempt. (=1 also removes the start-race where two
+// brokers begin handshakes in one pass before either's async ~60KB lands.) The
+// scheduler #175 cycles feeds through this 1-wide budget on PSRAM-less boards;
+// PSRAM boards override higher.
+#ifndef OFFBAND_MAX_LIVE_TLS
+  #define OFFBAND_MAX_LIVE_TLS 1
+#endif
+
+// Free-heap floor (bytes): the actual safety guarantee. Bringing up a wss broker
+// transiently peaks at ~72KB consumed (MEASURED on HV3: free 124KB -> heap_min
+// ~52KB during the handshake, settling to ~63KB). We refuse to START a TLS
+// handshake unless free heap exceeds this floor, so the transient always fits --
+// the floor MUST exceed the ~72KB transient or the check is worse than useless
+// (at 50KB free it would pass, then OOM mid-handshake; Gemini #171 BLOCKER).
+// 80KB = ~72KB measured transient + margin. With OFFBAND_MAX_LIVE_TLS=1 this is
+// a backstop (the count cap already prevents a 2nd context); it also guards the
+// 1st bring-up under any pre-existing low-heap condition. ESP.getFreeHeap() units.
+#ifndef OFFBAND_TLS_HEAP_FLOOR_BYTES
+  #define OFFBAND_TLS_HEAP_FLOOR_BYTES (80u * 1024u)
+#endif
+
 // ---------------------------------------------------------------------------
 // AP-mode SSID prefix
 // ---------------------------------------------------------------------------

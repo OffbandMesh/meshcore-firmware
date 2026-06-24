@@ -3,6 +3,7 @@
 // Plan 2 v2 Task 7. esp_mqtt_client wrapper with pluggable auth.
 
 #include "MqttBroker.h"
+#include "WifiObserverConfig.h"  // #171: OFFBAND_TLS_HEAP_FLOOR_BYTES
 #include <cstring>
 #include <cstdio>
 #include <ctime>          // #69: std::time() for the wall-clock sanity gate
@@ -46,6 +47,18 @@ uint32_t brokerBackoffMs(uint32_t retry_count) {
 // connect only burns backoff cycles. Threshold = 2025-01-01 UTC.
 static bool wallClockSane() {
     return std::time(nullptr) > 1735689600;
+}
+
+// #171: the TLS heap budget is "ok" when free heap is above the floor -- a
+// catastrophe backstop to the pool's count cap (OFFBAND_MAX_LIVE_TLS) so a
+// wss/TLS handshake (transiently ~60KB) can't be started into an OOM. Host
+// builds have no esp heap, so they always pass.
+static bool tlsHeapBudgetOk() {
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    return ESP.getFreeHeap() >= OFFBAND_TLS_HEAP_FLOOR_BYTES;
+#else
+    return true;
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -198,7 +211,7 @@ bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg) {
 // tryConnect: state machine entry point. Initiates a connection attempt
 // if the broker is eligible (enabled + Down + backoff window expired).
 // ---------------------------------------------------------------------------
-bool MqttBroker::tryConnect(uint32_t now_ms) {
+bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     ClientLockGuard _g(client_lock_);
 #endif
@@ -228,6 +241,20 @@ bool MqttBroker::tryConnect(uint32_t now_ms) {
         // tryConnect for HeldNoClock slots, so this releases on the first tick
         // after wallClockSane() becomes true (NTP sync or GPS lock).
         rt_.state = BrokerState::HeldNoClock;
+        return false;
+    }
+
+    // #171: each wss/TLS broker holds a ~60KB mbedTLS context, and a bring-up's
+    // handshake transient can drive HV3's heap to an OOM reboot. Defer -- without
+    // burning a backoff cycle -- when the pool's TLS budget is full
+    // (tls_budget_ok=false: already OFFBAND_MAX_LIVE_TLS live) or free heap is
+    // below the floor. The pool re-drives HeldNoHeap slots each tick, so this
+    // releases the moment a TLS slot frees or heap recovers (mirrors the
+    // HeldNoClock hold above). tcp brokers hold no mbedTLS context -- exempt.
+    if ((cfg_.transport == BrokerTransport::Tls ||
+         cfg_.transport == BrokerTransport::Wss) &&
+        (!tls_budget_ok || !tlsHeapBudgetOk())) {
+        rt_.state = BrokerState::HeldNoHeap;
         return false;
     }
 

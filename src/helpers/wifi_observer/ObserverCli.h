@@ -46,6 +46,35 @@ namespace offband {
 bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
                          MqttBrokerPool& pool);
 
+// Epic F (#165): typed config dispatch -- the wire path's set/get backend.
+// configSet/configGet route a config key straight to the same handlers the
+// _sys CLI uses (above), WITHOUT re-parsing a CLI string. Consumed by the
+// companion-API config command (CMD_OFFBAND_CONFIG / OffbandConfigProtocol.h).
+// `reply` is NUL-terminated human text; returns true if the key was handled
+// (reply populated, incl. an ERROR string), false if the key is unknown.
+// Secrets stay write-only on get (wifi.pwd / broker password|jwt_token).
+bool configSet(const char* key, const char* value, char* reply, size_t reply_size,
+               MqttBrokerPool& pool);
+bool configGet(const char* key, char* reply, size_t reply_size);
+
+// Epic F (#162): broker-pool enumeration for the OCFG_BROKERS paginated read.
+// configBrokerSlotCount() = max slots to iterate; configBrokerSlotPopulated() =
+// is slot N set (non-empty url); configRenderBrokerSlot() renders a populated
+// slot's non-secret fields as wire "key=value\n" lines (string enums; password
+// redacted; jwt_token omitted), returning bytes written (0 if empty).
+//
+// #172/#173 (additive, backward-compatible): when `rt` is provided, also emits
+// `state=`/`last_error=` (the live connection state, not just config `enabled`);
+// when `owner_default_hex` is provided, emits `jwt_owner_resolved=`/`iata_resolved=`
+// for blank jwt_owner/iata_override -- the value used at connect, shown by the
+// client as a hint and NOT written back as an override. Both nullable (omit -> no
+// extra lines). The raw keys are unchanged, so old clients are unaffected.
+int    configBrokerSlotCount();
+bool   configBrokerSlotPopulated(uint8_t slot);
+size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size,
+                              const BrokerRuntimeState* rt = nullptr,
+                              const char* owner_default_hex = nullptr);
+
 // #141: register a callback the app provides so a `display always on/off`
 // command applies to the live UITask immediately (no reboot). Raw function
 // pointer (not std::function) to avoid heap on tight-RAM boards.

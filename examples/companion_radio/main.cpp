@@ -50,6 +50,12 @@ static uint32_t _atoi(const char* sp) {
 
 #ifdef ESP32
   #ifdef WIFI_SSID
+    // SECURITY (Offband #167/#168): SerialWifiInterface is a TCP server on
+    // TCP_PORT (5000) with NO connection auth -- any host on the LAN that reaches
+    // it becomes the companion peer (full companion-API control). Do NOT pair
+    // WIFI_SSID with OFFBAND_OBSERVER: the config command would land on this
+    // unauthenticated socket (a compile-time #error in OffbandConfigProtocol.h
+    // enforces that). Authenticating this transport is tracked in #167 (P1).
     #include <helpers/esp32/SerialWifiInterface.h>
     SerialWifiInterface serial_interface;
     #ifndef TCP_PORT

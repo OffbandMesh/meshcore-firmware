@@ -88,7 +88,33 @@ static const char* stateStr(BrokerState s) {
         case BrokerState::Up:          return "up";
         case BrokerState::Backoff:     return "backoff";
         case BrokerState::HeldNoClock: return "held(no-clock)";
+        case BrokerState::HeldNoHeap:  return "held(no-heap)";
         default:                       return "?";
+    }
+}
+
+// #172: WIRE-safe state/error tokens for the OCFG_BROKERS dump (no parens/spaces,
+// distinct from stateStr's human "held(no-clock)"). These MUST match the client
+// contract (see #172 / OffbandConfigProtocol.h).
+static const char* brokerStateWire(BrokerState s) {
+    switch (s) {
+        case BrokerState::Down:        return "down";
+        case BrokerState::Connecting:  return "connecting";
+        case BrokerState::Up:          return "up";
+        case BrokerState::Backoff:     return "backoff";
+        case BrokerState::HeldNoClock: return "held_no_clock";
+        case BrokerState::HeldNoHeap:  return "held_no_heap";
+        default:                       return "down";
+    }
+}
+static const char* brokerErrorWire(BrokerErrorClass e) {
+    switch (e) {
+        case BrokerErrorClass::None:  return "none";
+        case BrokerErrorClass::Tcp:   return "tcp";
+        case BrokerErrorClass::Auth:  return "auth";
+        case BrokerErrorClass::Tls:   return "tls";
+        case BrokerErrorClass::Other: return "other";
+        default:                      return "other";
     }
 }
 
@@ -154,7 +180,15 @@ static bool handleEnableSet(char* reply, size_t reply_size, MqttBrokerPool& pool
         snprintf(reply, reply_size, "ERROR: cannot write slot %d\n", slot);
         return true;
     }
-    pool.reloadSlot((uint8_t)slot);
+    if (!pool.reloadSlot((uint8_t)slot)) {
+        // #181: NVS is updated, but the live client wasn't reconciled now (worker
+        // queue full / not ready). Surface it instead of ACKing a clean toggle --
+        // the change still takes effect at the next reboot (SAFELANE 6).
+        snprintf(reply, reply_size,
+                 "mqtt slot %d: %s saved, but live reload failed -- effective after reboot\n",
+                 slot, enable ? "enabled" : "disabled");
+        return true;
+    }
     snprintf(reply, reply_size, "mqtt slot %d: %s\n",
              slot, enable ? "enabled" : "disabled");
     return true;
@@ -166,7 +200,10 @@ static bool handleSetIata(char* reply, size_t reply_size, const char* value) {
         snprintf(reply, reply_size, "ERROR: usage: set mqtt.iata <code>\n");
         return true;
     }
-    writeGlobalIata(value);
+    if (!writeGlobalIata(value)) {   // #181: surface NVS failure -- never ACK an unverified write
+        snprintf(reply, reply_size, "ERROR: failed to save mqtt.iata (NVS write failed)\n");
+        return true;
+    }
     snprintf(reply, reply_size, "mqtt.iata = %s\n", value);
     return true;
 }
@@ -182,7 +219,10 @@ static bool handleSetStatusInterval(char* reply, size_t reply_size, const char* 
         snprintf(reply, reply_size, "ERROR: status_interval %ld out of range [10, 3600]\n", v);
         return true;
     }
-    writeStatusIntervalSec((uint16_t)v);
+    if (!writeStatusIntervalSec((uint16_t)v)) {   // #181: surface NVS failure
+        snprintf(reply, reply_size, "ERROR: failed to save mqtt.status_interval (NVS write failed)\n");
+        return true;
+    }
     snprintf(reply, reply_size, "mqtt.status_interval = %ld\n", v);
     return true;
 }
@@ -307,7 +347,15 @@ static bool handleSetBrokerField(char* reply, size_t reply_size,
     // owned (the reconciling_[] guard serializes it against loopTask), so this is
     // race-safe; for a disabled slot the worker just re-reads NVS into cfg_ with
     // no client touch.
-    pool.reloadSlot((uint8_t)slot);
+    if (!pool.reloadSlot((uint8_t)slot)) {
+        // #181: saved to NVS, but the cached cfg_ wasn't refreshed (worker queue
+        // full / not ready) -- `mqtt status` shows stale until reboot. Surface it
+        // rather than ACK a clean set (SAFELANE 6).
+        snprintf(reply, reply_size,
+                 "mqtt.broker.%d.%s saved, but live reload failed -- effective after reboot\n",
+                 slot, key);
+        return true;
+    }
 
     if (was_enabled) {
         snprintf(reply, reply_size,
@@ -496,6 +544,11 @@ static bool handleSetWifiEnabled(char* reply, size_t reply_size, bool enabled) {
 // existing "set mqtt.broker.<N>.<key>". Key vocabulary mirrors
 // handleSetBrokerField. Secret fields (password) are write-only and refused
 // here, per the wifi.pwd policy + the CLAUDE.md "never echo a secret" rule.
+// #172/#173: reach the observer pool for live runtime + the device owner hex, so the
+// runtime/resolved fields below are individually GETtable (not just in the dump) --
+// the client editor's single-slot Refresh uses per-field get, not the pool dump.
+MqttBrokerPool& wifiObserverPool();
+
 static bool handleGetBrokerField(char* reply, size_t reply_size,
                                  int slot, const char* key) {
     if (slot < 0 || key == nullptr) {
@@ -525,6 +578,32 @@ static bool handleGetBrokerField(char* reply, size_t reply_size,
     else if (eq(key, "jwt_refresh"))   snprintf(reply, reply_size, "mqtt.broker.%d.jwt_refresh = %u\n", slot, (unsigned)cfg.jwt_refresh_sec);
     else if (eq(key, "jwt_owner"))     snprintf(reply, reply_size, "mqtt.broker.%d.jwt_owner = %s\n", slot, cfg.jwt_owner);
     else if (eq(key, "jwt_email"))     snprintf(reply, reply_size, "mqtt.broker.%d.jwt_email = %s\n", slot, cfg.jwt_email);
+    // #172/#173: runtime + resolved-default fields, individually GETtable so the
+    // client's single-slot Refresh (per-field get) matches the OCFG_BROKERS dump.
+    // Wire tokens identical to the dump (brokerStateWire/brokerErrorWire). A valid
+    // slot is guaranteed here (readBrokerConfig above rejects out-of-range).
+    else if (eq(key, "state"))         snprintf(reply, reply_size, "mqtt.broker.%d.state = %s\n",      slot, brokerStateWire(wifiObserverPool().broker((uint8_t)slot).runtime().state));
+    else if (eq(key, "last_error"))    snprintf(reply, reply_size, "mqtt.broker.%d.last_error = %s\n", slot, brokerErrorWire(wifiObserverPool().broker((uint8_t)slot).runtime().last_error_class));
+    else if (eq(key, "jwt_owner_resolved")) {
+        // The owner used at connect: the explicit jwt_owner if set, else the device pubkey (#95).
+        if (cfg.jwt_owner[0] != '\0') {
+            snprintf(reply, reply_size, "mqtt.broker.%d.jwt_owner_resolved = %s\n", slot, cfg.jwt_owner);
+        } else {
+            char hex[72] = {0};
+            wifiObserverPool().deviceOwnerHex(hex, sizeof(hex));
+            snprintf(reply, reply_size, "mqtt.broker.%d.jwt_owner_resolved = %s\n", slot, hex);
+        }
+    }
+    else if (eq(key, "iata_resolved")) {
+        // The IATA used at connect: the explicit iata_override if set, else the global IATA.
+        if (cfg.iata_override[0] != '\0') {
+            snprintf(reply, reply_size, "mqtt.broker.%d.iata_resolved = %s\n", slot, cfg.iata_override);
+        } else {
+            char giata[8] = {0};
+            readGlobalIata(giata, sizeof(giata));
+            snprintf(reply, reply_size, "mqtt.broker.%d.iata_resolved = %s\n", slot, giata);
+        }
+    }
     else snprintf(reply, reply_size, "ERROR: unknown broker field '%s'\n", key);
     return true;
 }
@@ -576,7 +655,13 @@ void setDisplayAlwaysOnApplier(void (*fn)(bool)) {
 }
 
 static bool handleDisplayAlwaysOn(char* reply, size_t reply_size, bool on) {
-    setDisplayAlwaysOn(on);                                            // persist (offband_ui NVS)
+    // #181: if persistence fails, surface it and do NOT apply to the live display
+    // -- applying a setting that won't survive a reboot would mislead the user
+    // about what's actually stored (SAFELANE 6: state must match the ACK).
+    if (!setDisplayAlwaysOn(on)) {                                     // persist (offband_ui NVS)
+        snprintf(reply, reply_size, "ERROR: failed to save display setting (NVS write failed)\n");
+        return true;
+    }
     if (s_display_always_on_applier) s_display_always_on_applier(on);  // apply to the live display
     snprintf(reply, reply_size,
              on ? "display: always on (screen stays lit)\n"
@@ -619,7 +704,12 @@ static bool handleDisplayRotate(char* reply, size_t reply_size, uint8_t deg) {
         snprintf(reply, reply_size, "display: rotation not supported on this display\n");
         return true;
     }
-    setDisplayRotation(deg);                                                  // persist (offband_ui NVS)
+    // #181: persist first; on NVS failure surface it and leave the cache + live
+    // display untouched, so RAM state, NVS, and the ACK all stay consistent.
+    if (!setDisplayRotation(deg)) {                                           // persist (offband_ui NVS)
+        snprintf(reply, reply_size, "ERROR: failed to save display rotation (NVS write failed)\n");
+        return true;
+    }
     s_rotation_cache = deg;                                                   // keep the in-session cache current
     if (s_display_rotation_applier) s_display_rotation_applier(deg);          // apply to the live display
     snprintf(reply, reply_size,
@@ -842,6 +932,222 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
 
     // Not an observer command
     return false;
+}
+
+// ===========================================================================
+// Typed config dispatch (Epic F / #165) -- the wire path's set/get backend.
+// ===========================================================================
+// The Offband config command (CMD_OFFBAND_CONFIG; OffbandConfigProtocol.h)
+// calls configSet/configGet instead of re-parsing a CLI string. Each key routes
+// straight to the SAME static handler dispatchObserverCli uses, so the
+// ConfigSchema/NVS logic, validation, and secret redaction stay single-source
+// at the handler layer -- the CLI grammar never enters the wire path.
+// dispatchObserverCli (the _sys string front-end) is intentionally unchanged.
+//   reply : NUL-terminated human text (the same the CLI returns).
+//   return: true if the key was handled (incl. an ERROR reply); false if the
+//           key is unknown to the observer config surface.
+
+// "1"/"true"/"on" -> true; "0"/"false"/"off" -> false; else leave out, return false.
+static bool parseConfigBool(const char* v, bool& out) {
+    if (v == nullptr) return false;
+    while (*v == ' ') ++v;
+    if (eq(v, "1") || eq(v, "true")  || eq(v, "on"))  { out = true;  return true; }
+    if (eq(v, "0") || eq(v, "false") || eq(v, "off")) { out = false; return true; }
+    return false;
+}
+
+// Parse "mqtt.broker.<slot>.<field>" -> slot index + field pointer. Returns
+// true iff the key is a well-formed broker key (slot in range, '.' before a
+// non-empty field); out_field then points just past the '.'. Shared by
+// configSet/configGet so the slot/field walk lives in one place.
+static bool parseBrokerKey(const char* key, int& out_slot, const char*& out_field) {
+    if (strncmp(key, "mqtt.broker.", 12) != 0) return false;
+    const char* p = key + 12;
+    int slot = parseSlot(p);
+    if (slot < 0) return false;
+    while (*p >= '0' && *p <= '9') ++p;   // past slot digit(s)
+    if (*p != '.' || *(p + 1) == '\0') return false;
+    out_slot = slot;
+    out_field = p + 1;
+    return true;
+}
+
+bool configSet(const char* key, const char* value, char* reply, size_t reply_size,
+               MqttBrokerPool& pool) {
+    if (key == nullptr || value == nullptr || reply == nullptr || reply_size == 0) return false;
+    reply[0] = '\0';
+
+    if (eq(key, "mqtt.iata"))            return handleSetIata(reply, reply_size, value);
+    if (eq(key, "mqtt.status_interval")) return handleSetStatusInterval(reply, reply_size, value);
+
+    if (eq(key, "display.always_on")) {
+        bool on;
+        if (!parseConfigBool(value, on)) { snprintf(reply, reply_size, "ERROR: display.always_on expects 0|1\n"); return true; }
+        return handleDisplayAlwaysOn(reply, reply_size, on);
+    }
+    if (eq(key, "display.rotation")) {
+        if (eq(value, "0"))   return handleDisplayRotate(reply, reply_size, 0);
+        if (eq(value, "180")) return handleDisplayRotate(reply, reply_size, 180);
+        snprintf(reply, reply_size, "ERROR: display.rotation expects 0|180\n");
+        return true;
+    }
+
+    if (eq(key, "wifi.enabled")) {
+        bool on;
+        if (!parseConfigBool(value, on)) { snprintf(reply, reply_size, "ERROR: wifi.enabled expects 0|1\n"); return true; }
+        return handleSetWifiEnabled(reply, reply_size, on);
+    }
+    if (strncmp(key, "wifi.", 5) == 0)            // wifi.ssid / wifi.pwd
+        return handleSetWifiField(reply, reply_size, key + 5, value);
+
+    {
+        int slot; const char* field;
+        if (parseBrokerKey(key, slot, field)) {
+            // F6 (#166): `enabled` and `clear` are ACTIONS, not persisted fields.
+            // handleSetBrokerField has no enabled-set and force-disables the slot
+            // on any field write (#53), so route these to their own handlers --
+            // this is what lets the client write `enabled` LAST as the activation
+            // guard and wipe a slot via `clear`. Everything else is a real field.
+            if (eq(field, "enabled")) {
+                bool on;
+                if (!parseConfigBool(value, on)) {
+                    snprintf(reply, reply_size, "ERROR: mqtt.broker.%d.enabled expects 0|1\n", slot);
+                    return true;
+                }
+                return handleEnableSet(reply, reply_size, pool, slot, on);
+            }
+            if (eq(field, "clear"))
+                return handleClearBroker(reply, reply_size, pool, slot);
+            return handleSetBrokerField(reply, reply_size, pool, slot, field, value);
+        }
+        if (strncmp(key, "mqtt.broker.", 12) == 0) {
+            snprintf(reply, reply_size, "ERROR: bad broker key '%s' (mqtt.broker.<0..%d>.<field>)\n",
+                     key, OFFBAND_MAX_BROKERS - 1);
+            return true;
+        }
+    }
+
+    return false;  // unknown key -- not part of the observer config surface
+}
+
+bool configGet(const char* key, char* reply, size_t reply_size) {
+    if (key == nullptr || reply == nullptr || reply_size == 0) return false;
+    reply[0] = '\0';
+
+    if (eq(key, "wifi.enabled")) {
+#ifdef ARDUINO
+        Preferences p; bool en = true;
+        if (p.begin("wifi", /*readOnly=*/true)) { en = p.getBool("enabled", true); p.end(); }
+        snprintf(reply, reply_size, "wifi.enabled = %d\n", en ? 1 : 0);
+#else
+        snprintf(reply, reply_size, "wifi.enabled = (host build)\n");
+#endif
+        return true;
+    }
+    if (strncmp(key, "wifi.", 5) == 0)             // wifi.ssid (wifi.pwd -> write-only error)
+        return handleGetWifi(reply, reply_size, key + 5);
+
+    if (eq(key, "mqtt.iata")) {
+        char iata[8] = {0};
+        readGlobalIata(iata, sizeof(iata));
+        snprintf(reply, reply_size, "mqtt.iata = %s\n", iata[0] ? iata : "(unset)");
+        return true;
+    }
+    if (eq(key, "mqtt.status_interval")) {
+        snprintf(reply, reply_size, "mqtt.status_interval = %u\n", (unsigned)readStatusIntervalSec());
+        return true;
+    }
+    if (eq(key, "display.always_on")) {
+        snprintf(reply, reply_size, "display.always_on = %d\n", getDisplayAlwaysOn() ? 1 : 0);
+        return true;
+    }
+    if (eq(key, "display.rotation")) {
+        snprintf(reply, reply_size, "display.rotation = %u\n", (unsigned)getDisplayRotation());
+        return true;
+    }
+
+    {
+        int slot; const char* field;
+        if (parseBrokerKey(key, slot, field))
+            return handleGetBrokerField(reply, reply_size, slot, field);
+        if (strncmp(key, "mqtt.broker.", 12) == 0) {
+            snprintf(reply, reply_size, "ERROR: bad broker key '%s'\n", key);
+            return true;
+        }
+    }
+
+    return false;  // unknown key
+}
+
+// ---------------------------------------------------------------------------
+// Broker-pool enumeration (Epic F / F3, #162) -- backs the OCFG_BROKERS read.
+// ---------------------------------------------------------------------------
+int configBrokerSlotCount() { return OFFBAND_MAX_BROKERS; }
+
+bool configBrokerSlotPopulated(uint8_t slot) {
+    BrokerConfig cfg;
+    return readBrokerConfig(slot, cfg) && cfg.url[0] != '\0';
+}
+
+// Render a populated slot's non-secret config as wire "key=value\n" lines (the
+// OCFG_BROKER_KV payload bodies). transport/auth_type as the string enum names
+// (matching the SET grammar); password redacted to "(set)"/"(unset)"; jwt_token
+// omitted (not a config key). Returns bytes written (0 if the slot is empty).
+// Caller passes a buffer large enough for a full slot (~700 B) and splits the
+// result on '\n', emitting one BROKER_KV frame per line.
+size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size,
+                              const BrokerRuntimeState* rt,
+                              const char* owner_default_hex) {
+    if (out == nullptr || out_size == 0) return 0;
+    out[0] = '\0';
+    BrokerConfig cfg;
+    if (!readBrokerConfig(slot, cfg) || cfg.url[0] == '\0') return 0;
+    size_t n = 0;
+    // Clamp the accumulation: snprintf returns the WOULD-BE length, so on
+    // truncation w_ can exceed the remaining space -- never let n pass out_size
+    // (else the next call's `out_size - n` underflows, size_t -> UB).
+#define BKV(...) do { \
+    if (n < out_size) { \
+        int w_ = snprintf(out + n, out_size - n, __VA_ARGS__); \
+        if (w_ > 0) n += ((size_t)w_ < out_size - n) ? (size_t)w_ : (out_size - n - 1); \
+    } \
+} while (0)
+    BKV("enabled=%d\n",       cfg.enabled ? 1 : 0);
+    BKV("url=%s\n",           cfg.url);
+    BKV("port=%u\n",          (unsigned)cfg.port);
+    BKV("transport=%s\n",     transportStr(cfg.transport));
+    BKV("auth_type=%s\n",     authStr(cfg.auth_type));
+    BKV("username=%s\n",      cfg.username);
+    BKV("password=%s\n",      cfg.password[0] ? "(set)" : "(unset)");
+    BKV("topic_prefix=%s\n",  cfg.topic_prefix);
+    BKV("iata_override=%s\n", cfg.iata_override);
+    BKV("jwt_audience=%s\n",  cfg.jwt_audience);
+    BKV("jwt_refresh=%u\n",   (unsigned)cfg.jwt_refresh_sec);
+    BKV("jwt_owner=%s\n",     cfg.jwt_owner);
+    BKV("jwt_email=%s\n",     cfg.jwt_email);
+    BKV("ca_cert=%s\n",       cfg.ca_cert_name);
+    // #172: live runtime state + last-error (additive; passed from the pool). Lets
+    // the app show the REAL connect result, not just the config `enabled` flag.
+    // Old clients ignore unknown keys.
+    if (rt != nullptr) {
+        BKV("state=%s\n",      brokerStateWire(rt->state));
+        BKV("last_error=%s\n", brokerErrorWire(rt->last_error_class));
+    }
+    // #173: resolved-default placeholders (additive). Emitted ONLY when the raw
+    // field is blank, carrying the value the firmware actually uses at connect, so
+    // the client shows it as a hint WITHOUT writing it back as an explicit override
+    // -- the raw key above stays blank and remains the source of truth for writes.
+    if (cfg.jwt_owner[0] == '\0' && owner_default_hex != nullptr && owner_default_hex[0] != '\0') {
+        BKV("jwt_owner_resolved=%s\n", owner_default_hex);
+    }
+    if (cfg.iata_override[0] == '\0') {
+        char giata[8] = {0};
+        if (readGlobalIata(giata, sizeof(giata)) && giata[0] != '\0') {
+            BKV("iata_resolved=%s\n", giata);
+        }
+    }
+#undef BKV
+    return n;   // clamped written length (== strlen(out))
 }
 
 }  // namespace offband

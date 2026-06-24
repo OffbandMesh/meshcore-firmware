@@ -20,6 +20,13 @@
 // broad OFFBAND_OBSERVER flag (not the BLE-companion flag) so it is
 // present on every observer build, including future BLE-disabled ones.
 #include "helpers/wifi_observer/CliPassthrough.h"
+// Epic F: the config command codes (#160 contract) + its typed dispatch backend (#165).
+#include "OffbandConfigProtocol.h"
+#include "helpers/wifi_observer/ObserverCli.h"   // configSet/configGet + dispatchObserverCli
+// wifiObserverPool() lives in WifiObserver.h (heavy transitive includes); forward-
+// declare it here as CliPassthrough.cpp does. configSet takes a pool ref (only the
+// broker branch -- F3 -- consumes it, but the signature requires it for flat keys too).
+namespace offband { MqttBrokerPool& wifiObserverPool(); }
 #endif
 
 #define CMD_APP_START                 1
@@ -970,6 +977,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _obs_cli_len = 0;
   _obs_cli_redact = false;
   _obs_cli_buf[0] = 0;
+  _ob_stream = OB_STREAM_NONE;   // F8 (#169): no config-response stream in flight
 #endif
   offline_queue_len = 0;
   app_target_ver = 0;
@@ -1176,7 +1184,168 @@ static const char* offbandClientVersion() {
   return buf;
 }
 
+#ifdef OFFBAND_OBSERVER
+// Emit one Offband-config scalar reply frame: [0]=RESP code, [1]=sub-type,
+// [2..]=NUL-terminated text (truncated to the frame).
+void MyMesh::writeOffbandConfigScalar(uint8_t sub, const char* text) {
+  out_frame[0] = offband::RESP_CODE_OFFBAND_CONFIG;
+  out_frame[1] = sub;
+  size_t n = strlen(text);
+  const size_t cap = MAX_FRAME_SIZE - 3;   // [0],[1] header + trailing NUL
+  if (n > cap) n = cap;
+  memcpy(&out_frame[2], text, n);
+  out_frame[2 + n] = 0;
+  _serial->writeFrame(out_frame, 2 + n + 1);
+}
+
+// Offband config command (Epic F / F2, #161). Parse the wire frame and dispatch
+// to the typed configSet/configGet (#165) -- NOT the CLI string parser, so the
+// CLI grammar never enters the wire path. VIEW (a human text dump) routes to a
+// whitelisted read-only dispatchObserverCli selector, chunked. The paginated
+// broker GET (OCFG_BROKERS) lands in F3 (#162). Observer-only. Contract:
+// OffbandConfigProtocol.h.
+void MyMesh::handleOffbandConfigCmd(size_t len) {
+  if (len < 2) { writeOffbandConfigScalar(offband::OCFG_R_ERR, "missing sub-type"); return; }
+  uint8_t op = cmd_frame[1];
+  cmd_frame[len] = 0;                                // NUL-terminate the payload
+  char* payload = (char*)&cmd_frame[2];
+  char reply[512];
+
+  if (op == offband::OCFG_SET) {
+    char* sp = strchr(payload, ' ');                 // split on FIRST space; value = remainder
+    if (sp == nullptr) { writeOffbandConfigScalar(offband::OCFG_R_ERR, "set: expected '<key> <value>'"); return; }
+    *sp = '\0';
+    if (!offband::configSet(payload, sp + 1, reply, sizeof(reply), offband::wifiObserverPool())) {
+      writeOffbandConfigScalar(offband::OCFG_R_ERR, "unknown config key"); return;
+    }
+    bool err = (strncmp(reply, "ERROR", sizeof("ERROR") - 1) == 0);
+    writeOffbandConfigScalar(err ? offband::OCFG_R_ERR : offband::OCFG_R_ACK, reply);
+    return;
+  }
+
+  if (op == offband::OCFG_GET) {
+    if (!offband::configGet(payload, reply, sizeof(reply))) {
+      writeOffbandConfigScalar(offband::OCFG_R_ERR, "unknown config key"); return;
+    }
+    bool err = (strncmp(reply, "ERROR", sizeof("ERROR") - 1) == 0);
+    writeOffbandConfigScalar(err ? offband::OCFG_R_ERR : offband::OCFG_R_VALUE, reply);
+    return;
+  }
+
+  if (op == offband::OCFG_VIEW) {
+    // Read-only dumps only -- never a mutating selector through VIEW.
+    bool ok = (strcmp(payload, "mqtt status") == 0) ||
+              (strncmp(payload, "mqtt view ", 10) == 0) ||
+              (strcmp(payload, "wifi status") == 0);
+    if (!ok) { writeOffbandConfigScalar(offband::OCFG_R_ERR, "view: allowed: mqtt status | mqtt view <N> | wifi status"); return; }
+    // Render into the streaming buffer, send START, then STREAM the chunks one
+    // frame per main-loop pass (offbandStreamDrain) -- a synchronous flood would
+    // overrun the 4-deep BLE queue and drop the tail incl. END (F8 #169).
+    if (!offband::dispatchObserverCli(payload, _ob_buf, sizeof(_ob_buf), offband::wifiObserverPool())) {
+      writeOffbandConfigScalar(offband::OCFG_R_ERR, "view: unrecognized selector"); return;
+    }
+    uint8_t hdr[2] = { offband::RESP_CODE_OFFBAND_CONFIG, offband::OCFG_R_VIEW_START };
+    _serial->writeFrame(hdr, 2);
+    _ob_off = 0;
+    _ob_stream = OB_STREAM_VIEW;
+    return;
+  }
+
+  if (op == offband::OCFG_BROKERS) {
+    // Paginated broker-pool dump: START(count) -> BROKER_KV x N -> END, STREAMED one
+    // frame per main-loop pass (offbandStreamDrain). ~30 frames written synchronously
+    // would overrun the 4-deep BLE queue and drop the tail incl. END (F8 #169).
+    int maxSlots = offband::configBrokerSlotCount();
+    uint8_t count = 0;
+    for (int s = 0; s < maxSlots; ++s)
+      if (offband::configBrokerSlotPopulated((uint8_t)s)) count++;
+    uint8_t hdr[3] = { offband::RESP_CODE_OFFBAND_CONFIG, offband::OCFG_R_BROKERS_START, count };
+    _serial->writeFrame(hdr, 3);
+    _ob_slot   = -1;          // drain advances to the first populated slot
+    _ob_buf[0] = '\0';        // empty -> drain renders the next slot before emitting
+    _ob_off    = 0;
+    _ob_stream = OB_STREAM_BROKERS;
+    return;
+  }
+
+  writeOffbandConfigScalar(offband::OCFG_R_ERR, "bad config sub-type");
+}
+
+// F8 (#169): emit ONE frame of an in-flight multi-frame config response. Called
+// from checkSerialInterface once per idle main-loop pass while !isWriteBusy(), so
+// the BLE send queue (FRAME_QUEUE_SIZE=4, drops-when-full) drains between frames
+// instead of being flooded. Mirrors the ContactsIterator streaming pattern.
+void MyMesh::offbandStreamDrain() {
+  if (_ob_stream == OB_STREAM_VIEW) {
+    if (_ob_buf[_ob_off] == '\0') {                  // text exhausted -> END, done
+      uint8_t hdr[2] = { offband::RESP_CODE_OFFBAND_CONFIG, offband::OCFG_R_VIEW_END };
+      _serial->writeFrame(hdr, 2);
+      _ob_stream = OB_STREAM_NONE;
+      return;
+    }
+    const size_t cap = MAX_FRAME_SIZE - 3;
+    size_t remaining = strlen(&_ob_buf[_ob_off]);
+    size_t take = remaining < cap ? remaining : cap;
+    out_frame[0] = offband::RESP_CODE_OFFBAND_CONFIG;
+    out_frame[1] = offband::OCFG_R_VIEW_CHUNK;
+    memcpy(&out_frame[2], &_ob_buf[_ob_off], take);
+    out_frame[2 + take] = 0;
+    _serial->writeFrame(out_frame, 2 + take + 1);
+    _ob_off += take;
+    return;
+  }
+
+  if (_ob_stream == OB_STREAM_BROKERS) {
+    // Advance to the next populated slot whenever the current buffer is exhausted.
+    while (_ob_buf[_ob_off] == '\0') {
+      int maxSlots = offband::configBrokerSlotCount();
+      int s = _ob_slot + 1;
+      while (s < maxSlots && !offband::configBrokerSlotPopulated((uint8_t)s)) s++;
+      if (s >= maxSlots) {                           // all populated slots streamed -> END
+        uint8_t hdr[2] = { offband::RESP_CODE_OFFBAND_CONFIG, offband::OCFG_R_BROKERS_END };
+        _serial->writeFrame(hdr, 2);
+        _ob_stream = OB_STREAM_NONE;
+        return;
+      }
+      _ob_slot = s;
+      // #172/#173: pass the live runtime state + the device's default jwt_owner
+      // (pubkey hex) so the dump also carries state/last_error + resolved-default
+      // hints (additive -- old clients ignore the extra lines).
+      const offband::BrokerRuntimeState& _rt =
+          offband::wifiObserverPool().broker((uint8_t)s).runtime();
+      char _owner_hex[2 * PUB_KEY_SIZE + 1];
+      offband::wifiObserverPool().deviceOwnerHex(_owner_hex, sizeof(_owner_hex));
+      offband::configRenderBrokerSlot((uint8_t)s, _ob_buf, sizeof(_ob_buf), &_rt, _owner_hex);
+      _ob_off = 0;
+    }
+    // Emit ONE "key=value" line as a BROKER_KV frame for the current slot.
+    char* line = &_ob_buf[_ob_off];
+    char* nl = strchr(line, '\n');
+    size_t linelen = nl ? (size_t)(nl - line) : strlen(line);
+    const size_t cap = MAX_FRAME_SIZE - 4;           // [0],[1],[2]=slot + trailing NUL
+    if (linelen > cap) linelen = cap;
+    if (linelen > 0) {
+      out_frame[0] = offband::RESP_CODE_OFFBAND_CONFIG;
+      out_frame[1] = offband::OCFG_R_BROKER_KV;
+      out_frame[2] = (uint8_t)_ob_slot;
+      memcpy(&out_frame[3], line, linelen);
+      out_frame[3 + linelen] = 0;
+      _serial->writeFrame(out_frame, 3 + linelen + 1);
+    }
+    _ob_off += nl ? (size_t)(nl - line) + 1 : strlen(line);
+    return;
+  }
+}
+#endif  // OFFBAND_OBSERVER
+
 void MyMesh::handleCmdFrame(size_t len) {
+#ifdef OFFBAND_OBSERVER
+  // Epic F (#161): the Offband config command routes to its own observer-only handler.
+  if (cmd_frame[0] == offband::CMD_OFFBAND_CONFIG) {
+    handleOffbandConfigCmd(len);
+    return;
+  }
+#endif
   if (cmd_frame[0] == CMD_DEVICE_QUERY && len >= 2) { // sent when app establishes connection
     app_target_ver = cmd_frame[1];                    // which version of protocol does app understand
 
@@ -1196,6 +1365,16 @@ void MyMesh::handleCmdFrame(size_t len) {
     i += 20;
     out_frame[i++] = _prefs.client_repeat;   // v9+
     out_frame[i++] = _prefs.path_hash_mode;  // v10+
+    // F4 (#163): Offband capability byte. bit0 = WIFI_OBSERVER_SUPPORT -- the
+    // config command's backend (wifi_observer) is compiled in. Additive: pre-v14
+    // clients read a shorter frame and never see it; v14+ clients gate the Observer
+    // config category on this bit (version code alone can't tell observer-in from
+    // observer-out builds). 0 on non-observer node types -> no config at all.
+    uint8_t offband_caps = 0;
+#ifdef OFFBAND_OBSERVER
+    offband_caps |= offband::OFFBAND_CAP_WIFI_OBSERVER;
+#endif
+    out_frame[i++] = offband_caps;           // v14+
     _serial->writeFrame(out_frame, i);
   } else if (cmd_frame[0] == CMD_APP_START &&
              len >= 8) { // sent when app establishes connection, respond with node ID
@@ -1204,7 +1383,33 @@ void MyMesh::handleCmdFrame(size_t len) {
     cmd_frame[len] = 0; // make app_name null terminated
     MESH_DEBUG_PRINTLN("App %s connected", app_name);
 
+    // #178: a reconnect (the client's connect-thrash) can land here mid-stream.
+    // Emit the in-flight stream's terminator BEFORE clearing it, so the client's
+    // contact / settings read completes instead of hanging forever on an END that
+    // never comes. Guarded -> a normal first connect (no stream in flight) is a
+    // no-op. Best-effort: if the BLE send queue is full the terminator may drop
+    // (no worse than today). Terminator byte sequences mirror the stream's own EOF
+    // paths (END_OF_CONTACTS line ~2593, VIEW_END/BROKERS_END in offbandStreamDrain).
+    if (_iter_started) {
+      uint8_t end[5];
+      end[0] = RESP_CODE_END_OF_CONTACTS;
+      memcpy(&end[1], &_most_recent_lastmod, 4);
+      _serial->writeFrame(end, 5);
+      MESH_DEBUG_PRINTLN("APP_START mid-stream: sent END_OF_CONTACTS terminator (#178)");
+    }
     _iter_started = false; // stop any left-over ContactsIterator
+#ifdef OFFBAND_OBSERVER
+    if (_ob_stream == OB_STREAM_VIEW) {
+      uint8_t h[2] = { offband::RESP_CODE_OFFBAND_CONFIG, offband::OCFG_R_VIEW_END };
+      _serial->writeFrame(h, 2);
+      MESH_DEBUG_PRINTLN("APP_START mid-stream: sent VIEW_END terminator (#178)");
+    } else if (_ob_stream == OB_STREAM_BROKERS) {
+      uint8_t h[2] = { offband::RESP_CODE_OFFBAND_CONFIG, offband::OCFG_R_BROKERS_END };
+      _serial->writeFrame(h, 2);
+      MESH_DEBUG_PRINTLN("APP_START mid-stream: sent BROKERS_END terminator (#178)");
+    }
+    _ob_stream = OB_STREAM_NONE; // F8 (#169): drop any in-flight config-response stream
+#endif
     int i = 0;
     out_frame[i++] = RESP_CODE_SELF_INFO;
     out_frame[i++] = ADV_TYPE_CHAT; // what this node Advert identifies as (maybe node's pronouns too?? :-)
@@ -2390,6 +2595,11 @@ void MyMesh::checkSerialInterface() {
   size_t len = _serial->checkRecvFrame(cmd_frame);
   if (len > 0) {
     handleCmdFrame(len);
+#ifdef OFFBAND_OBSERVER
+  } else if (_ob_stream != OB_STREAM_NONE   // F8 (#169): drain an in-flight config
+             && !_serial->isWriteBusy()) {  // response, one frame per idle pass
+    offbandStreamDrain();
+#endif
   } else if (_iter_started              // check if our ContactsIterator is 'running'
              && !_serial->isWriteBusy() // don't spam the Serial Interface too quickly!
   ) {

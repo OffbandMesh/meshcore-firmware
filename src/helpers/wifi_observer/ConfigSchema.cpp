@@ -4,6 +4,10 @@
 #ifdef ARDUINO
   #include <Arduino.h>
   #include <Preferences.h>
+  #if defined(ESP_PLATFORM)
+    #include <nvs.h>        // #181: nvs_get_stats() -- write-failure diagnostic (real device only)
+    #include "CrashLog.h"   // #181: crashLogf() -- persistent + Serial failure log
+  #endif
 #else
   // Host build: provide a thin Preferences shim so the file compiles
   // for host-runnable tests. The shim is in scripts/test_*.py harness.
@@ -24,6 +28,42 @@ void mqttBrokerNamespace(uint8_t broker_index, char* out, size_t out_len) {
 
 #ifdef ARDUINO
 
+// #181: surface a config-write failure (SAFELANE 6 -- never silent) AND measure
+// the cause (free-entry count answers "is NVS full?" with evidence, not a guess).
+// Shared by every NVS writer below. Real-device only; the host round-trip test
+// gets the no-op stub (it defines ARDUINO but not ESP_PLATFORM).
+#if defined(ESP_PLATFORM)
+static void logCfgWriteFailure(const char* where, const char* ns) {
+    nvs_stats_t st;
+    if (nvs_get_stats(NULL, &st) == ESP_OK) {
+        crashLogf("[cfg] %s WRITE FAILED ns=%s nvs[used=%u free=%u total=%u]", where, ns,
+                  (unsigned)st.used_entries, (unsigned)st.free_entries, (unsigned)st.total_entries);
+    } else {
+        crashLogf("[cfg] %s WRITE FAILED ns=%s (nvs_get_stats unavailable)", where, ns);
+    }
+}
+#else
+static void logCfgWriteFailure(const char*, const char*) {}
+#endif
+
+// #181/#182: the config READERS default to a SAFE value on a miss (empty iata,
+// 30s interval, display off/0deg, empty-url broker), and the Arduino read-only
+// API can't distinguish "key absent" -- the legitimate first-boot/unset state --
+// from a deeper error, so silence-with-safe-default IS the correct, documented
+// contract for a read-miss (NOT a SAFELANE 6 violation). This is exactly why
+// writeBrokerConfig can safely REMOVE an empty field's key (#182): an absent key
+// just reads back as the default.
+//
+// The same logic deliberately covers a read-only begin() returning false: on a
+// readonly handle that is the EXPECTED "namespace not yet created" miss (nvs_open
+// -> ESP_ERR_NVS_NOT_FOUND), which the Arduino wrapper collapses into the same
+// `false` as a genuine NVS error. Logging it would flag every fresh / unconfigured
+// namespace as an error and flood a first-boot log (violating §1). A SYSTEMIC NVS
+// failure still surfaces -- the WRITE path and the boot counter DO log their
+// begin() failures (a read-WRITE begin failure is genuinely anomalous;
+// NVS_READWRITE creates the namespace). So the readers intentionally do not log
+// begin()==false; the safe get-defaults flow through unchanged.
+
 bool readGlobalIata(char* out, size_t out_len) {
     Preferences p;
     p.begin(kNvsMqtt, /*readOnly=*/true);
@@ -38,11 +78,22 @@ bool readGlobalIata(char* out, size_t out_len) {
     return true;
 }
 
-void writeGlobalIata(const char* iata) {
+bool writeGlobalIata(const char* iata) {
     Preferences p;
-    p.begin(kNvsMqtt, /*readOnly=*/false);
-    p.putString(kKeyMqttIata, iata);
+    if (!p.begin(kNvsMqtt, /*readOnly=*/false)) {   // #181: never silent -- report begin failure
+        logCfgWriteFailure("writeGlobalIata.begin", kNvsMqtt);
+        return false;
+    }
+    size_t wrote = p.putString(kKeyMqttIata, iata);
     p.end();
+    // putString returns chars written (0 on NVS failure). An empty value also
+    // returns 0 but is a legitimate clear, so only treat 0 as failure when there
+    // was actually content to store.
+    if (wrote == 0 && iata != nullptr && iata[0] != '\0') {
+        logCfgWriteFailure("writeGlobalIata.putString", kNvsMqtt);
+        return false;
+    }
+    return true;
 }
 
 uint16_t readStatusIntervalSec() {
@@ -56,13 +107,21 @@ uint16_t readStatusIntervalSec() {
     return v;
 }
 
-void writeStatusIntervalSec(uint16_t seconds) {
+bool writeStatusIntervalSec(uint16_t seconds) {
     if (seconds < kMinStatusIntervalSec) seconds = kMinStatusIntervalSec;
     if (seconds > kMaxStatusIntervalSec) seconds = kMaxStatusIntervalSec;
     Preferences p;
-    p.begin(kNvsMqtt, /*readOnly=*/false);
-    p.putUShort(kKeyMqttStatusInterval, seconds);
+    if (!p.begin(kNvsMqtt, /*readOnly=*/false)) {
+        logCfgWriteFailure("writeStatusIntervalSec.begin", kNvsMqtt);
+        return false;
+    }
+    size_t wrote = p.putUShort(kKeyMqttStatusInterval, seconds);
     p.end();
+    if (wrote != sizeof(uint16_t)) {    // putUShort returns 2 on success, 0 on failure
+        logCfgWriteFailure("writeStatusIntervalSec.putUShort", kNvsMqtt);
+        return false;
+    }
+    return true;
 }
 
 // #141: display always-on toggle, in the fork-branded "offband_ui" namespace.
@@ -74,11 +133,19 @@ bool getDisplayAlwaysOn() {
     return v;
 }
 
-void setDisplayAlwaysOn(bool on) {
+bool setDisplayAlwaysOn(bool on) {
     Preferences p;
-    p.begin(kNvsOffbandUi, /*readOnly=*/false);
-    p.putBool(kKeyDisplayAlwaysOn, on);
+    if (!p.begin(kNvsOffbandUi, /*readOnly=*/false)) {
+        logCfgWriteFailure("setDisplayAlwaysOn.begin", kNvsOffbandUi);
+        return false;
+    }
+    size_t wrote = p.putBool(kKeyDisplayAlwaysOn, on);
     p.end();
+    if (wrote != sizeof(uint8_t)) {     // putBool stores 1 byte; 0 on failure
+        logCfgWriteFailure("setDisplayAlwaysOn.putBool", kNvsOffbandUi);
+        return false;
+    }
+    return true;
 }
 
 // #148: display rotation (0/180) in the "offband_ui" namespace. Clamped to the
@@ -91,12 +158,28 @@ uint8_t getDisplayRotation() {
     return (v == 180) ? 180 : 0;
 }
 
-void setDisplayRotation(uint8_t deg) {
+bool setDisplayRotation(uint8_t deg) {
     Preferences p;
-    p.begin(kNvsOffbandUi, /*readOnly=*/false);
-    p.putUChar(kKeyDisplayRotation, (deg == 180) ? 180 : 0);
+    if (!p.begin(kNvsOffbandUi, /*readOnly=*/false)) {
+        logCfgWriteFailure("setDisplayRotation.begin", kNvsOffbandUi);
+        return false;
+    }
+    size_t wrote = p.putUChar(kKeyDisplayRotation, (deg == 180) ? 180 : 0);
     p.end();
+    if (wrote != sizeof(uint8_t)) {     // putUChar stores 1 byte; 0 on failure
+        logCfgWriteFailure("setDisplayRotation.putUChar", kNvsOffbandUi);
+        return false;
+    }
+    return true;
 }
+
+// #182: broker config is stored as individual per-key NVS entries. The #181
+// single-blob attempt was reverted: a ~1.1KB blob needs one large contiguous
+// allocation that a near-full partition cannot place -- measured on HV4 as
+// nvs_set_blob NOT_ENOUGH_SPACE at used=504 free=126 total=630 (the #179 root) --
+// whereas small per-key writes slot into fragmented free space. The old migration
+// blob key is removed on the next write (writeBrokerConfig) to reclaim its entries.
+static constexpr const char* kKeyBrokerBlob = "cfg_blob";
 
 bool readBrokerConfig(uint8_t slot, BrokerConfig& out) {
     if (slot >= OFFBAND_MAX_BROKERS) return false;
@@ -104,6 +187,10 @@ bool readBrokerConfig(uint8_t slot, BrokerConfig& out) {
     mqttBrokerNamespace(slot, ns, sizeof(ns));
     Preferences p;
     p.begin(ns, /*readOnly=*/true);
+    // #182: per-key read. A missing key returns its default (empty / sentinel),
+    // which is correct because writeBrokerConfig REMOVES empty fields rather than
+    // storing blanks. Any #181 migration blob is ignored here and is cleaned up on
+    // the next write.
     out.enabled   = p.getBool(kKeyBrokerEnabled, false);
     String url    = p.getString(kKeyBrokerUrl, "");
     strncpy(out.url, url.c_str(), sizeof(out.url));
@@ -147,26 +234,113 @@ bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg) {
     char ns[16];
     mqttBrokerNamespace(slot, ns, sizeof(ns));
     Preferences p;
-    p.begin(ns, /*readOnly=*/false);
-    p.putBool   (kKeyBrokerEnabled,      cfg.enabled);
-    p.putString (kKeyBrokerUrl,          cfg.url);
-    p.putUShort (kKeyBrokerPort,         cfg.port);
-    p.putUChar  (kKeyBrokerTransport,    (uint8_t)cfg.transport);
-    p.putUChar  (kKeyBrokerAuthType,     (uint8_t)cfg.auth_type);
-    p.putString (kKeyBrokerUsername,     cfg.username);
-    p.putString (kKeyBrokerPassword,     cfg.password);
-    p.putString (kKeyBrokerJwtToken,     cfg.jwt_token);
-    p.putString (kKeyBrokerTopicPrefix,  cfg.topic_prefix);
-    p.putString (kKeyBrokerIataOverride, cfg.iata_override);
-    // Plan 2 v2 additions
-    p.putString (kKeyBrokerJwtAudience,  cfg.jwt_audience);
-    p.putULong  (kKeyBrokerJwtRefresh,   cfg.jwt_refresh_sec);
-    p.putString (kKeyBrokerCaCertName,   cfg.ca_cert_name);
-    // #63 additions: JWT identity claims
-    p.putString (kKeyBrokerJwtOwner,     cfg.jwt_owner);
-    p.putString (kKeyBrokerJwtEmail,     cfg.jwt_email);
+    if (!p.begin(ns, /*readOnly=*/false)) {     // never silent -- report a begin failure
+        logCfgWriteFailure("writeBrokerConfig.begin", ns);
+        return false;
+    }
+    // #182: per-key writes (reverted from the #181 blob -- a ~1.1KB blob needs one
+    // large contiguous allocation a near-full partition can't place; small per-key
+    // writes slot into fragmented free space). The string fields live in a table so
+    // they can be processed in two phases (removes, then puts). topic_prefix, the
+    // numerics, and enabled are handled separately below.
+    const struct { const char* key; const char* val; } kStrFields[] = {
+        {kKeyBrokerUrl,          cfg.url},
+        {kKeyBrokerUsername,     cfg.username},
+        {kKeyBrokerPassword,     cfg.password},
+        {kKeyBrokerJwtToken,     cfg.jwt_token},
+        {kKeyBrokerIataOverride, cfg.iata_override},
+        {kKeyBrokerJwtAudience,  cfg.jwt_audience},
+        {kKeyBrokerCaCertName,   cfg.ca_cert_name},
+        {kKeyBrokerJwtOwner,     cfg.jwt_owner},
+        {kKeyBrokerJwtEmail,     cfg.jwt_email},
+    };
+
+    // Phase 1 -- REMOVES first: drop the migration blob + every empty field so their
+    // NVS entries become reclaimable BEFORE the value puts. On a near-full partition
+    // this lets the puts complete in one shot (GC reclaims the freed entries) instead
+    // of erroring on the first attempt -- and stores no blanks either (#182). The
+    // removes always land here even if a later put can't, so the space reclaim is
+    // what the one-time boot migration (migrateBrokerStorage) relies on.
+    p.remove(kKeyBrokerBlob);
+    for (const auto& f : kStrFields) {
+        if (f.val[0] == '\0') p.remove(f.key);
+    }
+
+    // Phase 2 -- value puts, each CHECKED (the #181 SAFELANE-6 honesty is kept).
+    // Only non-empty strings; topic_prefix is ALWAYS stored because its read-default
+    // is "meshcore", not "" -- removing it would lose an explicit value to the default.
+    bool ok = true;
+    for (const auto& f : kStrFields) {
+        if (f.val[0] != '\0') ok &= (p.putString(f.key, f.val) == strlen(f.val));
+    }
+    ok &= (p.putString(kKeyBrokerTopicPrefix, cfg.topic_prefix) == strlen(cfg.topic_prefix));
+    ok &= (p.putUShort(kKeyBrokerPort,      cfg.port)               == sizeof(uint16_t));
+    ok &= (p.putUChar (kKeyBrokerTransport, (uint8_t)cfg.transport) == sizeof(uint8_t));
+    ok &= (p.putUChar (kKeyBrokerAuthType,  (uint8_t)cfg.auth_type) == sizeof(uint8_t));
+    ok &= (p.putULong (kKeyBrokerJwtRefresh, cfg.jwt_refresh_sec)   == sizeof(uint32_t));
+
+    // Phase 3 -- enabled LAST, and only if every value put succeeded. enabled is the
+    // gate that decides whether the broker goes live; writing it last means a failed
+    // write leaves the enable/disable state UNCHANGED, so the slot's live state stays
+    // consistent with the returned ERROR (a failed write never silently flips it).
+    if (ok) ok &= (p.putBool(kKeyBrokerEnabled, cfg.enabled) == sizeof(uint8_t));
     p.end();
+
+    if (!ok) {     // a put failed -- surface the cause (free-entry stats) + don't ACK success
+        logCfgWriteFailure("writeBrokerConfig.put", ns);
+        return false;
+    }
     return true;
+}
+
+// #182: one-time boot migration so an UPGRADED observer reclaims NVS space behind
+// the scenes -- the user never sees the interactive "first write errors, then
+// works", because the reclaim already happened here at boot. Gated by a schema
+// version flag so it runs exactly once; idempotent (re-running on a clean slot is
+// cheap). For each configured slot it rewrites the config into the per-key /
+// no-blank format; writeBrokerConfig's REMOVES phase frees that slot's blanks even
+// if its puts can't all complete on a near-full partition, so the reclaim always
+// lands. A retry completes the rewrite once the first pass has freed enough.
+// Old values are preserved on a failed put, so a partial migration never loses
+// config. Call once at observer startup, after populateDefaultBrokers().
+void migrateBrokerStorage() {
+    Preferences obs;
+    if (obs.begin(kNvsObserver, /*readOnly=*/true)) {
+        uint8_t ver = obs.getUChar(kKeyCfgSchema, 0);
+        obs.end();
+        if (ver >= kCfgSchemaVersion) return;   // already migrated
+    }
+
+    uint8_t migrated = 0, failed = 0;
+    for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
+        BrokerConfig cfg;
+        if (!readBrokerConfig(slot, cfg)) continue;
+        if (cfg.url[0] == '\0') continue;        // unconfigured slot -- nothing to migrate
+        // Retry once: the first write frees the slot's blanks, so a retry fits if the
+        // first couldn't fully complete (writeBrokerConfig self-logs any failure).
+        if (writeBrokerConfig(slot, cfg) || writeBrokerConfig(slot, cfg)) migrated++;
+        else failed++;
+    }
+
+    // Stamp the schema version so this runs exactly once. Even if a slot's rewrite
+    // didn't fully complete, its blanks were reclaimed (removes land first) and its
+    // old values are preserved, so a later interactive write finishes the job in one
+    // shot -- the user never hits the first-write error.
+    Preferences w;
+    if (w.begin(kNvsObserver, /*readOnly=*/false)) {
+        w.putUChar(kKeyCfgSchema, kCfgSchemaVersion);
+        w.end();
+    }
+
+    // #182: the migration is invisible to the user by design, so record that it ran
+    // (+ outcome) to the persistent crash-log -- observable for validation + field
+    // diagnosis, never user-facing. Real-device only (host has no crashLogf here).
+#if defined(ESP_PLATFORM)
+    crashLogf("[cfg] migrateBrokerStorage: schema->%u migrated=%u failed=%u",
+              (unsigned)kCfgSchemaVersion, (unsigned)migrated, (unsigned)failed);
+#else
+    (void)migrated; (void)failed;
+#endif
 }
 
 // #98: clear a broker slot by WIPING its NVS namespace (every key removed), so
@@ -196,7 +370,7 @@ bool clearBrokerConfig(uint8_t slot) {
 // changing this layout does NOT re-shuffle slots on a device already seeded
 // under an older layout; it takes effect only on a fresh NVS.)
 //
-//   slot 0  CoreScope Dayton   mqtt://mqtt.w8oof.net:1883       tcp / anon   ENABLED
+//   slot 0  CoreScope Dayton   mqtt://mqtt1.okimesh.org:1883    tcp / anon   ENABLED
 //   slot 1  LetsMesh-US        wss://mqtt-us-v1.letsmesh.net    wss / jwt    disabled
 //   slot 2  Eastme.sh          wss://mqtt.eastme.sh             wss / jwt    disabled
 //   slot 3  MeshMapper         wss://mqtt.meshmapper.net        wss / jwt    disabled
@@ -245,7 +419,7 @@ struct DefaultBrokerSpec {
 // Slots 0-5. Slots 6-9 (MQTT Custom) are intentionally absent so they stay empty.
 // jwt_audience is the BARE host (#95); ca_cert names resolve in MqttBroker.cpp.
 constexpr DefaultBrokerSpec kDefaultBrokerSpecs[] = {
-    {true,  "mqtt://mqtt.w8oof.net:1883",             BrokerTransport::Tcp, 1883, BrokerAuthType::None, "",                        ""},
+    {true,  "mqtt://mqtt1.okimesh.org:1883",          BrokerTransport::Tcp, 1883, BrokerAuthType::None, "",                        ""},
     {false, "wss://mqtt-us-v1.letsmesh.net:443/mqtt", BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt-us-v1.letsmesh.net", "gts-r4"},
     {false, "wss://mqtt.eastme.sh:443/mqtt",          BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt.eastme.sh",          "letsencrypt"},
     {false, "wss://mqtt.meshmapper.net:443/mqtt",     BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt.meshmapper.net",     "isrg-x2"},
@@ -257,11 +431,12 @@ constexpr uint8_t kNumDefaultBrokers =
 }  // namespace
 
 void populateDefaultBrokers() {
+    bool all_ok = true;
     // Seed the owner's IATA (HAO) if unset -- SWOH default to simplify setup
     // for most operators; non-SWOH operators override via the global mqtt iata.
     char iata[8] = {0};
     if (!readGlobalIata(iata, sizeof(iata)) || iata[0] == '\0') {
-        writeGlobalIata("HAO");
+        all_ok &= writeGlobalIata("HAO");
     }
 
     for (uint8_t slot = 0;
@@ -288,7 +463,14 @@ void populateDefaultBrokers() {
         // is auto-built at connect, and jwt_owner/jwt_email are the operator's
         // identity claims, set via `set mqtt.broker.<N>.jwt_owner|jwt_email`
         // (#63). NOT device-derivable here -- see header comment (#95).
-        writeBrokerConfig(slot, def);
+        all_ok &= writeBrokerConfig(slot, def);
+    }
+    // #181: each failed write already self-logged its NVS cause + free-entry
+    // stats; surface a single boot-time summary so an incomplete default-seed
+    // is never silent (SAFELANE 6). Boot-time best-effort: a failed seed retries
+    // on the next boot (populateDefaultBrokers is idempotent / skip-if-present).
+    if (!all_ok) {
+        logCfgWriteFailure("populateDefaultBrokers", "(default-seed: 1+ write failed)");
     }
 }
 

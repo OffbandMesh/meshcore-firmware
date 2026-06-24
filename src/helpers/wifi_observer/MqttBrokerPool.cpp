@@ -4,6 +4,7 @@
 
 #include "MqttBrokerPool.h"
 #include "MqttPayload.h"
+#include "CrashLog.h"   // #181: crashLogf() -- worker has no user ACK channel
 #include <cstring>
 #include <cstdio>
 
@@ -25,13 +26,32 @@ void MqttBrokerPool::begin(const mesh::LocalIdentity& identity,
                            const char* model) {
     identity_         = &identity;
     device_id_        = device_id        != nullptr ? device_id        : "";
-    node_name_        = node_name        != nullptr ? node_name        : "";
+    // Append the Offband tell (radar emoji U+1F4E1 = UTF-8 F0 9F 93 A1) to the
+    // observer's display name in every MQTT payload's `origin`, so feeds/maps show
+    // "<name> [radar]" for Offband observers. Falls back to device_id when there is
+    // no node_name, so it is never a bare emoji. node_name_ is the only OWNED cached
+    // string (the rest borrow the caller's lifetime). The TOPIC uses device_id, not
+    // this, so the emoji never reaches a topic.
+    {
+        const char* nm_base = (node_name != nullptr && node_name[0] != '\0') ? node_name
+                            : (device_id != nullptr ? device_id : "");
+        // Bound the base name with %.*s so the trailing " " + 4-byte emoji + NUL
+        // (6 bytes) always fit whole -- the emoji is never split mid-UTF-8 even on a
+        // pathologically long name (>58 chars). escapeJsonString passes the bytes >=0x20.
+        snprintf(node_name_, sizeof(node_name_), "%.*s \xF0\x9F\x93\xA1",
+                 (int)(sizeof(node_name_) - 6), nm_base);
+    }
     client_version_   = client_version   != nullptr ? client_version   : "";
     firmware_version_ = firmware_version != nullptr ? firmware_version : "";
     model_            = model            != nullptr ? model            : "";
 
     // Seed defaults (idempotent -- no-op if slots already populated).
     populateDefaultBrokers();
+    // #182: one-time reclaim of an upgraded observer's NVS to the per-key/no-blank
+    // format, BEFORE any slot is read or a worker runs -- so the space is freed at
+    // boot and the user never sees the interactive first-write error. Gated to run
+    // once; idempotent on already-migrated/fresh devices.
+    migrateBrokerStorage();
 
     // Read global iata + status interval from NVS.
     if (!readGlobalIata(global_iata_, sizeof(global_iata_))) {
@@ -324,8 +344,27 @@ void MqttBrokerPool::reconcileSlot(uint8_t slot) {
         brokers_[slot].shutdown();   // no/empty config -> ensure no client
         return;
     }
-    brokers_[slot].begin(slot, cfg, *identity_);
+    // #181: the worker runs off any user channel, so a reconcile that fails to
+    // bring up a configured + ENABLED slot must surface in the persistent crash
+    // log (SAFELANE 6) -- otherwise the slot silently stays Down with only
+    // rt_.state as evidence. begin() returns false on bad auth / client-init OOM;
+    // a DISABLED slot returns true with no client (expected, not a failure).
+    // URL is omitted from the log -- a broker URL may carry inline credentials.
+    if (!brokers_[slot].begin(slot, cfg, *identity_) && cfg.enabled) {
+        crashLogf("[pool] reconcileSlot %u begin FAILED state=%d err_class=%d",
+                  (unsigned)slot,
+                  (int)brokers_[slot].runtime().state,
+                  (int)brokers_[slot].runtime().last_error_class);
+    }
 }
+
+namespace {
+// #171: a broker holds a ~60KB mbedTLS context only for TLS/wss transports.
+inline bool isTlsTransport(const BrokerConfig& c) {
+    return c.transport == BrokerTransport::Tls ||
+           c.transport == BrokerTransport::Wss;
+}
+}  // namespace
 
 void MqttBrokerPool::workerLoop() {
     for (;;) {
@@ -347,16 +386,37 @@ void MqttBrokerPool::workerLoop() {
         // the same slot serializes safely (and loopTask only publishes to Up
         // slots, never one the worker is connect-blocking on).
         uint32_t now = millis();
+        // #171: count TLS contexts already live (Up/Connecting). Each holds a
+        // ~60KB mbedTLS context; HV3's heap fits ~2 before a 3rd handshake OOM-
+        // reboots. We refuse to START a TLS bring-up past OFFBAND_MAX_LIVE_TLS
+        // (the broker self-defers to HeldNoHeap). Plaintext brokers are exempt.
+        uint8_t tls_live = 0;
+        for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
+            const MqttBroker& b = brokers_[s];
+            if (!b.isConfigured() || !isTlsTransport(b.config())) continue;
+            BrokerState st = b.runtime().state;
+            if (st == BrokerState::Up || st == BrokerState::Connecting) tls_live++;
+        }
         for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
             if (reconciling_[s]) continue;
             MqttBroker& b = brokers_[s];
             if (!b.isConfigured()) continue;
             b.loop(now);
-            if (b.runtime().state == BrokerState::Down ||
-                b.runtime().state == BrokerState::Backoff ||
-                b.runtime().state == BrokerState::HeldNoClock) {  // #87: re-check the clock gate each tick so held wss slots release the moment the clock is sane
+            BrokerState st = b.runtime().state;
+            // Re-drive idle/held slots. HeldNoClock releases when the clock is
+            // sane (#87); HeldNoHeap releases when a TLS slot frees (#171).
+            if (st == BrokerState::Down || st == BrokerState::Backoff ||
+                st == BrokerState::HeldNoClock || st == BrokerState::HeldNoHeap) {
                 uint32_t biased = now + static_cast<uint32_t>(s) * 1000U;
-                (void)b.tryConnect(biased);
+                // TLS budget: non-TLS always OK; TLS only if a live slot is free.
+                bool budget_ok = !isTlsTransport(b.config()) ||
+                                 (tls_live < OFFBAND_MAX_LIVE_TLS);
+                (void)b.tryConnect(biased, budget_ok);
+                // Consume a budget slot if this TLS broker just began bringing up.
+                if (isTlsTransport(b.config()) &&
+                    b.runtime().state == BrokerState::Connecting) {
+                    tls_live++;
+                }
             }
         }
     }
@@ -390,6 +450,21 @@ uint8_t MqttBrokerPool::upCount() const {
         if (brokers_[i].runtime().state == BrokerState::Up) n++;
     }
     return n;
+}
+
+// #173: UPPERCASE hex of the device's own pubkey -- the connect-time default for a
+// broker's jwt_owner (#95). Renders "" when the identity is unset or on host builds
+// (no identity_), so the caller simply omits jwt_owner_resolved in that case.
+void MqttBrokerPool::deviceOwnerHex(char* out, size_t out_len) const {
+    if (out == nullptr || out_len == 0) return;
+    out[0] = '\0';
+#if defined(ARDUINO)
+    if (identity_ == nullptr || out_len < 2 * PUB_KEY_SIZE + 1) return;
+    for (size_t i = 0; i < PUB_KEY_SIZE; ++i) {
+        snprintf(&out[i * 2], 3, "%02X", identity_->pub_key[i]);
+    }
+    out[2 * PUB_KEY_SIZE] = '\0';
+#endif
 }
 
 }  // namespace offband

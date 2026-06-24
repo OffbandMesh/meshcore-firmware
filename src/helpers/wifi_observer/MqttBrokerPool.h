@@ -103,6 +103,10 @@ public:
     uint8_t enabledCount()    const;
     uint8_t upCount()         const;
     const MqttBroker& broker(uint8_t slot) const { return brokers_[slot]; }
+    // #173: the device's own pubkey as UPPERCASE hex (the connect-time default for a
+    // broker's jwt_owner when none is set, #95) -- so the OCFG_BROKERS dump can show
+    // the resolved owner as a placeholder. Writes "" if identity unset / host build.
+    void deviceOwnerHex(char* out, size_t out_len) const;
 
 private:
 #ifdef ARDUINO
@@ -128,7 +132,7 @@ private:
 
     // Cached strings for ctx fills (caller owns lifetime).
     const char* device_id_        = "";
-    const char* node_name_        = "";
+    char        node_name_[64]    = "";  // OWNED (built in begin()): "<name> radar-emoji" Offband tell
     const char* client_version_   = "";
     const char* firmware_version_ = "";
     const char* model_            = "";

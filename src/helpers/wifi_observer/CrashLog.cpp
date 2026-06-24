@@ -174,8 +174,11 @@ void crashLogBegin() {
 }
 
 void crashLogf(const char* fmt, ...) {
-    if (!s_begin_called) return;  // pre-init writes go nowhere
-
+    // #181: NEVER drop a line on the floor pre-begin. The crash logger silently
+    // losing a line is the one failure that erases the very evidence the log
+    // exists to capture (SAFELANE 6/1). Before crashLogBegin(), still emit to the
+    // live path (Serial/stdout); only the RTC ring -- which begin() initializes --
+    // is skipped until ready (mirrors crashlog_vprintf's pre-begin handling).
     char line[kCrashLogLineMax + 1];
     int  prefix_len = 0;
 
@@ -207,13 +210,16 @@ void crashLogf(const char* fmt, ...) {
     }
 
 #ifdef ARDUINO
-    // Write to serial (live monitoring path).
+    // Live monitoring path -- ALWAYS, even before begin() (the ring isn't ready
+    // yet, but the line must not vanish).
     Serial.write((const uint8_t*)line, total);
 
-    // Write to ring buffer (crash-survival path).
-    portENTER_CRITICAL(&s_log_mux);
-    writeToRing(line, total);
-    portEXIT_CRITICAL(&s_log_mux);
+    // Crash-survival ring -- only once begin() has initialized the header.
+    if (s_begin_called) {
+        portENTER_CRITICAL(&s_log_mux);
+        writeToRing(line, total);
+        portEXIT_CRITICAL(&s_log_mux);
+    }
 #else
     // Host build: just write to stdout.
     fputs(line, stdout);
@@ -393,8 +399,13 @@ void heartbeatBegin() {
     if (ok) {
         s_nvs_boot_count       = s_boot_prefs.getUInt("count", 0) + 1;
         s_prev_boot_uptime_s   = s_boot_prefs.getUInt("last_up_s", 0);
-        s_boot_prefs.putUInt("count", s_nvs_boot_count);
-        s_boot_prefs.putUInt("last_up_s", 0);  // reset; will be updated periodically
+        // #181: the boot counter IS crash-cycle evidence -- a silent put failure
+        // would freeze the count and mask a reboot loop (SAFELANE 6). Surface it.
+        if (s_boot_prefs.putUInt("count", s_nvs_boot_count) == 0) {
+            crashLogf("[boot] WARN: NVS cw_boot 'count' write FAILED (count=%u not persisted)",
+                      (unsigned)s_nvs_boot_count);
+        }
+        s_boot_prefs.putUInt("last_up_s", 0);  // reset; maybeSaveUptime overwrites within 5s
         s_boot_prefs.end();
     } else {
         crashLogf("[boot] WARN: NVS cw_boot namespace open failed; falling back to RTC counter");
@@ -429,11 +440,29 @@ static void maybeSaveUptime(uint32_t now_ms) {
     // Save every 5 seconds (matches stats cadence; balances flash wear)
     if (now_ms - s_last_uptime_save_ms < 5000) return;
     s_last_uptime_save_ms = now_ms;
+    // #181: feeds "prev boot lasted Ns" -- the crash-cycle-PERIOD evidence. Runs
+    // every 5s, so a silent failure would erase that evidence indefinitely. Log a
+    // failure ONCE and re-arm on the next success, rather than flooding the 4KB
+    // ring with a repeating warning (SAFELANE 6).
+    static bool s_uptime_save_warned = false;
     ::Preferences p;
-    if (p.begin("cw_boot", /*readOnly=*/false)) {
-        p.putUInt("last_up_s", now_ms / 1000);
-        p.end();
+    if (!p.begin("cw_boot", /*readOnly=*/false)) {
+        if (!s_uptime_save_warned) {
+            crashLogf("[boot] WARN: uptime save -- NVS cw_boot open FAILED (suppressing repeats)");
+            s_uptime_save_warned = true;
+        }
+        return;
     }
+    size_t wrote = p.putUInt("last_up_s", now_ms / 1000);
+    p.end();
+    if (wrote == 0) {
+        if (!s_uptime_save_warned) {
+            crashLogf("[boot] WARN: uptime save -- NVS 'last_up_s' write FAILED (suppressing repeats)");
+            s_uptime_save_warned = true;
+        }
+        return;
+    }
+    s_uptime_save_warned = false;  // re-arm: a recovered write re-logs the next failure
 }
 
 void subloopMark(uint8_t which) {
@@ -462,7 +491,18 @@ void heartbeatTick(uint32_t now_ms) {
     s_loop_iter_delta  = 0;
     portEXIT_CRITICAL(&s_hb_mux);
 
-    crashLogf("[hb] up=%us iter=+%u boot=%u phases=[W:%c M:%c S:%c U:%c] free_heap=%u",
+    uint32_t heap = ESP.getFreeHeap();
+
+    // #183: build the heartbeat line ONCE (same [millis] prefix crashLogf would add)
+    // and emit it to Serial every second for live monitoring -- but write it to the
+    // RTC crash ring only PERIODICALLY or on a real anomaly. A 1 Hz ring write floods
+    // the 4 KB ring (~50 s to wrap) and evicts the crash diagnostics the ring exists
+    // to preserve across a reboot. At one ring beat per 30 s the ring holds ~25 min of
+    // uptime markers AND keeps real events readable for the whole boot.
+    char line[180];
+    int n = snprintf(line, sizeof(line),
+              "[%lu] [hb] up=%us iter=+%u boot=%u phases=[W:%c M:%c S:%c U:%c] free_heap=%u\n",
+              (unsigned long)millis(),
               (unsigned)(now_ms / 1000),
               (unsigned)delta_iter,
               (unsigned)bootCounterValue(),
@@ -470,7 +510,28 @@ void heartbeatTick(uint32_t now_ms) {
               (flags & SUBLOOP_MESH)    ? 'Y' : 'N',
               (flags & SUBLOOP_SENSORS) ? 'Y' : 'N',
               (flags & SUBLOOP_UI)      ? 'Y' : 'N',
-              (unsigned)ESP.getFreeHeap());
+              (unsigned)heap);
+    if (n > 0) {
+        size_t total = ((size_t)n < sizeof(line)) ? (size_t)n : sizeof(line) - 1;
+        Serial.write((const uint8_t*)line, total);   // live monitoring, every second
+
+        // Ring-write only when the beat carries new signal: every 30 s, or the moment
+        // free heap drops sharply (>8 KB since the last beat) -- a memory-pressure
+        // anomaly worth preserving. (A hung subloop is still covered: the next periodic
+        // beat shows the N flags, and the shutdown handler dumps the ring on the
+        // watchdog reset.)
+        static uint32_t s_last_hb_ring_ms = 0;
+        static uint32_t s_last_hb_heap    = 0;
+        bool heap_drop = (s_last_hb_heap != 0) && (heap + 8192u < s_last_hb_heap);
+        bool periodic  = (s_last_hb_ring_ms == 0) || (now_ms - s_last_hb_ring_ms >= 30000u);
+        if (periodic || heap_drop) {
+            portENTER_CRITICAL(&s_log_mux);
+            writeToRing(line, total);
+            portEXIT_CRITICAL(&s_log_mux);
+            s_last_hb_ring_ms = now_ms;
+        }
+        s_last_hb_heap = heap;
+    }
 
     // Persist current uptime to NVS so next boot can report "previous
     // boot lasted Ns" -- definitive evidence of cycle period.

@@ -28,6 +28,11 @@ enum class BrokerState : uint8_t {
     HeldNoClock = 4,  // #87: wss/TLS deferred pending a sane wall clock (NTP/GPS).
                       // NOT a failure -- no retry burned; released automatically on
                       // the next drive tick once wallClockSane() becomes true.
+    HeldNoHeap  = 5,  // #171: wss/TLS bring-up deferred -- the pool's TLS budget is
+                      // full (>= OFFBAND_MAX_LIVE_TLS live) or free heap is below
+                      // the floor. NOT a failure -- no retry burned; released on a
+                      // later drive tick once a TLS slot frees or heap recovers
+                      // (mirrors HeldNoClock).
 };
 
 enum class BrokerErrorClass : uint8_t {
@@ -78,7 +83,11 @@ public:
     // Initiate connection if not already up/connecting. Honors backoff.
     // Returns true if a connect attempt is in progress after this call,
     // false if disabled or backoff window unexpired.
-    bool tryConnect(uint32_t now_ms);
+    // tls_budget_ok: pool-supplied, REQUIRED (no default -- so no caller can
+    // silently bypass the concurrency guard #171). false means OFFBAND_MAX_LIVE_TLS
+    // TLS contexts are already live, so a wss/TLS bring-up self-defers to
+    // HeldNoHeap. Pass true for tcp brokers (the guard ignores them).
+    bool tryConnect(uint32_t now_ms, bool tls_budget_ok);
 
     // Drive auth refresh + any housekeeping. Called every pool tick.
     void loop(uint32_t now_ms);
