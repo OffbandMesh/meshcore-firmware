@@ -146,6 +146,12 @@ public:
     return "Generic ESP32";
   }
 
+  // Offband (#193): wireless-antenna-switch capability. Default = no switch;
+  // boards with an antenna-select RF switch (e.g. MeshSmith Photon) override these.
+  virtual bool hasWirelessAntennaSwitch() const { return false; }
+  virtual bool getWirelessAntennaExternal(bool& external) const { return false; }
+  virtual bool setWirelessAntennaExternal(bool external) { return false; }
+
   void reboot() override {
     esp_restart();
   }
