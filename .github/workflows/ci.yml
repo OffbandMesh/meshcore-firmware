@@ -34,12 +34,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
       - name: Cache PlatformIO toolchains/packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'variants/**/*.ini') }}
@@ -61,7 +61,7 @@ jobs:
       # secrets stub above -- these are dev/test builds, NOT releases. Configure
       # WiFi/MQTT at runtime, or rebuild with real secrets.
       - name: Upload firmware artifact (dev channel)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: offband-dev-${{ matrix.env }}
           path: |
