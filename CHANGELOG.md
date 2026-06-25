@@ -14,6 +14,28 @@ prior to 0.13.0 predate it; see `git tag -l 'crosswire-v*'` and the tag
 annotations for that history (highlights: v0.12.0 NimBLE migration, v0.11.x
 Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
+## [1.2.0] - 2026-06-25
+
+Adds **MeshSmith Photon‑1W support** (both MCU flavors) plus a NimBLE build fix, on the
+**MeshCore 1.16.0** base. Shipping in `-beta` until the Photon‑1W is bench‑verified on hardware.
+
+### Added
+- **MeshSmith Photon‑1W support — ESP32‑C6 + nRF52 (#193, #194)** — vendors MeshSmith's MIT Photon
+  variants (`meshsmith_photon_esp32c6`, `meshsmith_photon_nrf52`; Seeed XIAO ESP32‑C6 / XIAO nRF52840 +
+  Ebyte E22‑900M30S 1 W radio) and wires all roles into CI + the release pipeline. ESP32‑C6 needed
+  minimal MeshCore‑consistent base edits (antenna‑switch virtuals, protected `_gps_serial`, NimBLE dep);
+  nRF52 needed none. **Not yet bench‑verified** — vendored drivers kept for round‑1; review findings
+  tracked as bench checkpoints on #193/#194.
+
+### Fixed
+- **`Xiao_S3_WIO_companion_radio_usb` build (#89)** — exclude `SerialBLEInterface.cpp` from the USB
+  companion env (it has no BLE), resolving the `NimBLEDevice.h` regression from the #288 NimBLE migration.
+
+### Changed
+- **CLAUDE.md: no‑upstream‑merge policy (#197)** — Offband does not merge from upstream MeshCore; the
+  `upstream` remote stays fetch‑only for reference. Keep MeshCore nomenclature/coding‑standard consistency
+  for clean rebasing.
+
 ## [1.1.0] - 2026-06-24
 
 The headline is **Epic F: the companion-API config command** — a WiFi observer can now be
