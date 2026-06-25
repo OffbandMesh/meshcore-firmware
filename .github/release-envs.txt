@@ -50,6 +50,12 @@ meshsmith_photon_esp32c6_e22p_30dbm_companion_radio_usb
 meshsmith_photon_esp32c6_e22p_30dbm_repeater
 meshsmith_photon_esp32c6_e22p_30dbm_room_server
 
+# MeshSmith Photon-1W (XIAO nRF52840 + Ebyte E22-900M30S 1W radio) -- #194
+meshsmith_photon_nrf52_e22p_30dbm_companion_radio_ble
+meshsmith_photon_nrf52_e22p_30dbm_companion_radio_usb
+meshsmith_photon_nrf52_e22p_30dbm_repeater
+meshsmith_photon_nrf52_e22p_30dbm_room_server
+
 # Seeed XIAO nRF52
 Xiao_nrf52_companion_radio_ble
 Xiao_nrf52_companion_radio_usb
