@@ -101,7 +101,7 @@ jobs:
         run: |
           ver="${GITHUB_REF_NAME#offband-}"; ver="${ver#crosswire-}"   # e.g. v1.1.0-rc1
           num="${ver#v}"                         # e.g. 1.1.0-rc1
-          num="${num%-rc*}"                      # rc shares the base version's CHANGELOG section: 1.1.0-rc1 -> 1.1.0
+          num="${num%-rc*}"; num="${num%-beta*}" # rc/beta share the base version's CHANGELOG section: 1.2.0-beta1 -> 1.2.0
           awk -v v="$num" '
             $0 ~ "^## \\[" v "\\]" { grab=1; next }
             grab && /^## \[/ { grab=0 }
@@ -118,8 +118,8 @@ jobs:
         with:
           name: Offband ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
-          prerelease: ${{ contains(github.ref_name, '-rc') }}
-          make_latest: ${{ !contains(github.ref_name, '-rc') }}
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
+          make_latest: ${{ !contains(github.ref_name, '-rc') && !contains(github.ref_name, '-beta') }}
           body_path: body.md
           generate_release_notes: true
           files: out/*
