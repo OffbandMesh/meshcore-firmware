@@ -14,9 +14,28 @@ prior to 0.13.0 predate it; see `git tag -l 'crosswire-v*'` and the tag
 annotations for that history (highlights: v0.12.0 NimBLE migration, v0.11.x
 Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
-## [Unreleased]
+## [1.2.0] - Unreleased
+
+Adds **MeshSmith Photon‑1W support** (both MCU flavors) on the **MeshCore 1.16.0** base,
+plus the ESP32‑C6 I2C‑scan boot‑hang fix found bench‑validating it, a NimBLE build fix,
+and flashing‑docs corrections.
+
+### Added
+- **MeshSmith Photon‑1W support — ESP32‑C6 + nRF52 (#193, #194)** — vendors MeshSmith's MIT Photon
+  variants (`meshsmith_photon_esp32c6`, `meshsmith_photon_nrf52`; Seeed XIAO ESP32‑C6 / XIAO nRF52840 +
+  Ebyte E22‑900M30S 1 W radio) and wires all roles into CI + the release pipeline. ESP32‑C6 needed
+  minimal MeshCore‑consistent base edits (antenna‑switch virtuals, protected `_gps_serial`, NimBLE dep);
+  nRF52 needed none. The **ESP32‑C6 companion + repeater are bench‑verified** on hardware; the
+  **nRF52 variant is not yet bench‑verified** — review findings tracked as bench checkpoints on #193/#194.
 
 ### Fixed
+- **Photon‑1W ESP32‑C6 hung at boot, dead on the mesh (#294).** The C6 variant declares its I2C bus,
+  but `EnvironmentSensorManager::begin()` ran the blind I2C scan regardless; on the C6 the scan wedges
+  the I2C peripheral (hangs at addr `0x0d`) and never returns, so `setup()` never reached `loop()`.
+  The scan is now skipped on boards that set `ENV_SKIP_I2C_SENSOR_SCAN` (guard vendored verbatim from
+  MeshSmith's fork); every other board is unchanged.
+- **`Xiao_S3_WIO_companion_radio_usb` build (#89)** — exclude `SerialBLEInterface.cpp` from the USB
+  companion env (it has no BLE), resolving the `NimBLEDevice.h` regression from the #288 NimBLE migration.
 - **Flashing docs pointed at the wrong page and omitted a release file** (#326). The
   README's web-flasher link went to `meshcore.co.uk/flasher.html` — a wrapper page that
   forwards to a configurator, not the flasher. It now points at
@@ -29,6 +48,11 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
   erasing. Corrected, and both surfaces gained a short "how do I flash it" section covering
   the nRF52 UF2 drag-drop path, the ESP32 web-flasher path, and building from source.
   Documentation only — no firmware change.
+
+### Changed
+- **CLAUDE.md: no‑upstream‑merge policy (#197)** — Offband does not merge from upstream MeshCore; the
+  `upstream` remote stays fetch‑only for reference. Keep MeshCore nomenclature/coding‑standard consistency
+  for clean rebasing.
 
 ## [1.1.2] - 2026-07-02
 
