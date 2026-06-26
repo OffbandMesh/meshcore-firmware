@@ -160,7 +160,10 @@ static Adafruit_VL53L0X VL53L0X;
 static RAK12035_SoilMoisture RAK12035;
 #endif
 
-#if ENV_INCLUDE_GPS && defined(RAK_BOARD) && !defined(RAK_WISMESH_TAG)
+// RAK3401 companion opts out of GPS via -D RAK3401_NO_GPS: on this board the GPS probe
+// (gpsIsAwake) toggles WB_IO2 = PIN_3V3_EN = the radio power-enable, and a failed probe
+// leaves it floating -> SX1262 TCXO can't start (-707). Repeater (has GPS) keeps the path.
+#if ENV_INCLUDE_GPS && defined(RAK_BOARD) && !defined(RAK_WISMESH_TAG) && !defined(RAK3401_NO_GPS)
 #define RAK_WISBLOCK_GPS
 #endif
 

@@ -31,6 +31,13 @@ jobs:
           - heltec_v4_companion_radio_ble
           - RAK_4631_repeater
           - Heltec_t114_companion_radio_ble   # nRF52 companion coverage (BLE; complements RAK_4631 repeater)
+          # RAK3401 (WisMesh 1W) -- a widely-used device; its RAK_BOARD GPS path is
+          # rak3401-specific and was previously built nowhere in CI (#211 shipped a
+          # companion that couldn't TX). Cover both fix-touched companion envs (the
+          # RAK3401_NO_GPS no-GPS path) + the repeater (live-GPS branch of the gate).
+          - RAK_3401_companion_radio_ble
+          - RAK_3401_companion_radio_usb
+          - RAK_3401_repeater
     steps:
       - uses: actions/checkout@v5
 

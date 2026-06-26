@@ -14,6 +14,17 @@ prior to 0.13.0 predate it; see `git tag -l 'crosswire-v*'` and the tag
 annotations for that history (highlights: v0.12.0 NimBLE migration, v0.11.x
 Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
+## [1.1.1] - 2026-06-26
+
+Urgent patch: the **RAK3401 1W companion** radio was dead on v1.1.0. Still on the
+**MeshCore 1.16.0** base.
+
+### Fixed
+- **RAK3401 1W companion radio dead on Offband (no TX/RX).** Offband's GPS support
+  (#104) probed a pin that doubles as the radio's power-enable on the RAK3401; with no
+  GPS attached it left the radio unpowered, so it couldn't transmit or receive. GPS is
+  now disabled on the RAK3401 companion build until the probe is fixed. (#211)
+
 ## [1.1.0] - 2026-06-24
 
 The headline is **Epic F: the companion-API config command** — a WiFi observer can now be
