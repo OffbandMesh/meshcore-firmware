@@ -144,6 +144,15 @@ void halt() {
 
 void setup() {
   Serial.begin(115200);
+  // #149: never let serial logging block the main loop. On the S3's USB-Serial-JTAG
+  // (HWCDC) a write stalls when the port is plugged in but not being drained fast
+  // enough; under BLE_DEBUG_LOGGING's per-frame flood (e.g. an app reconnect + full
+  // sync) that stall starves BLE servicing until the send/recv queues overflow and
+  // BLE jams. Timeout 0 = drop log bytes instead of blocking; output still flows
+  // normally whenever a serial monitor is attached and draining the port.
+#if defined(ESP32)
+  Serial.setTxTimeoutMs(0);
+#endif
 
   // SafeBoot: pre-init power guard. See src/SafeBoot.h.
   SafeBoot::checkAndMaybeSleep();

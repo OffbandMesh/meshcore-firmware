@@ -29,6 +29,9 @@ public:
   virtual bool setSettingValue(const char* name, const char* value) { return false; }
   virtual LocationProvider* getLocationProvider() { return NULL; }
   virtual uint32_t getGpsClockSyncTime() const { return 0; }   // #152: millis() of last GPS clock-sync (0 = never)
+  // Offband (#149): format live GPS state as ASCII into out[0..cap). Default empty
+  // for managers without GPS; EnvironmentSensorManager overrides it.
+  virtual size_t getGpsStatusText(char* out, size_t cap) { if (cap > 0) out[0] = '\0'; return 0; }
 
   // Helper functions to manage setting by keys (useful in many places ...)
   const char* getSettingByKey(const char* key) {
