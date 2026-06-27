@@ -1181,7 +1181,22 @@ static const char* offbandClientVersion() {
     while (ob[n] && ob[n] != '-' && n < sizeof(ob_core) - 1) { ob_core[n] = ob[n]; n++; }
     ob_core[n] = '\0';
     if (n > 0) {
-      snprintf(buf, sizeof(buf), "%s-%s", ob_core, mc_core);
+      char vers[20];
+      snprintf(vers, sizeof(vers), "%s-%s", ob_core, mc_core);
+#ifdef OFFBAND_BUILD_TAG
+      // #222: a settable build tag lets flag-only variants (same git commit,
+      // different compile flags) self-identify in the 20-char app device-info
+      // field. Reserve room so the TAG (the variant discriminator) always
+      // survives; the version cores truncate first if the field is tight.
+      if (OFFBAND_BUILD_TAG[0] != '\0') {
+        int tagroom = (int)strlen(OFFBAND_BUILD_TAG) + 1;   // "-<tag>"
+        int vmax = (int)sizeof(buf) - 1 - tagroom;
+        if (vmax < 0) vmax = 0;
+        snprintf(buf, sizeof(buf), "%.*s-%s", vmax, vers, OFFBAND_BUILD_TAG);
+        return buf;
+      }
+#endif
+      StrHelper::strzcpy(buf, vers, sizeof(buf));
       return buf;
     }
   }

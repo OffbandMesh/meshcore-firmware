@@ -58,7 +58,7 @@ class SplashScreen : public UIScreen {
   // Per VERSIONING.md Pattern B the splash exposes BOTH the upstream
   // MeshCore version AND the Offband fork version so a glance at
   // the device unambiguously identifies what firmware is running.
-  char _offband_short[24];
+  char _offband_short[40];   // #222: holds the compact version + an optional build tag
 #endif
 
 public:
@@ -120,6 +120,15 @@ public:
       snprintf(_offband_short, sizeof(_offband_short), "%.*s%s",
                taglen, cw, cw_dirty ? "*" : "");
     }
+#ifdef OFFBAND_BUILD_TAG
+    // #222: append a settable build tag so flag-only variants (same commit,
+    // different compile flags) are distinguishable at a glance on the splash.
+    // Skip a defined-but-empty tag so we don't leave a dangling trailing space.
+    if (OFFBAND_BUILD_TAG[0] != '\0') {
+      size_t _l = strlen(_offband_short);
+      snprintf(_offband_short + _l, sizeof(_offband_short) - _l, " %s", OFFBAND_BUILD_TAG);
+    }
+#endif
 #endif
 
     dismiss_after = millis() + BOOT_SCREEN_MILLIS;
