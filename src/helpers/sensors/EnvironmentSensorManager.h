@@ -22,6 +22,19 @@ protected:
   bool     gps_detected = false;
   bool     gps_active = false;
   uint32_t gps_update_interval_sec = 1;
+  uint32_t _gps_baud = 0;   // #149: locked GPS UART baud (0 = not yet locked)
+  #if ENV_INCLUDE_GPS && defined(ESP32)
+  // #149: non-blocking auto-baud state machine (Meshtastic-style). One tiny step per
+  // loop() while gps_active && !_gps_baud_locked -- never blocks setup(); falls back
+  // to the first candidate and locks if nothing answers (no spin/wedge).
+  bool     _gps_baud_locked = false;
+  uint8_t  _baud_idx = 0;            // candidate index during probe
+  uint32_t _baud_window_ms = 0;      // millis() the current candidate window opened (0 = open fresh)
+  uint8_t  _nmea_st = 0, _nmea_sum = 0, _nmea_ck = 0;   // incremental "$..*HH" checksum scanner
+  int      _nmea_blen = 0;
+  void     autoBaudStep();
+  bool     nmeaScanByte(char c);
+  #endif
 
   #if ENV_INCLUDE_GPS
   LocationProvider* _location;
@@ -45,6 +58,7 @@ public:
   #if ENV_INCLUDE_GPS
   bool gpsHasFix() { return gps_active && _location != nullptr && _location->isValid(); }
   uint32_t getGpsClockSyncTime() const override { return _last_gps_clock_sync; }   // #152
+  size_t getGpsStatusText(char* out, size_t cap) override;   // #149
   #endif
   bool begin() override;
   bool querySensors(uint8_t requester_permissions, CayenneLPP& telemetry) override;

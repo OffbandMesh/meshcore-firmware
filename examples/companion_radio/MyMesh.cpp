@@ -89,6 +89,12 @@ namespace offband { MqttBrokerPool& wifiObserverPool(); }
 #define CMD_GET_DEFAULT_FLOOD_SCOPE   64
 #define CMD_SEND_RAW_PACKET           65
 
+// Offband fork-only frame codes -- 0xC0+ extension space (see OffbandConfigProtocol.h),
+// far above upstream's command max (65) so upstream growth never collides. The whole
+// pair is companion-available (no observer gate) and is never submitted upstream.
+#define CMD_OFFBAND_GPS               0xC1  // request: GPS status query
+#define RESP_CODE_OFFBAND_GPS         0xC1  // reply: ASCII "enabled=.. detected=.. fix=.. lat=.. ..."
+
 // Stats sub-types for CMD_GET_STATS
 #define STATS_TYPE_CORE               0
 #define STATS_TYPE_RADIO              1
@@ -1346,6 +1352,19 @@ void MyMesh::handleCmdFrame(size_t len) {
     return;
   }
 #endif
+  // Offband fork-only GPS status query (companion-available, never upstream). The
+  // stock protocol can't poll GPS on demand -- position only ships in SELF_INFO at
+  // connect. This returns the live state as ASCII for the client to render. #149.
+  if (cmd_frame[0] == CMD_OFFBAND_GPS) {
+    out_frame[0] = RESP_CODE_OFFBAND_GPS;
+    char* txt = (char*)&out_frame[1];
+    const size_t cap = (size_t)MAX_FRAME_SIZE - 2;   // [0] header + trailing NUL
+    int n = snprintf(txt, cap, "enabled=%d ", (int)_prefs.gps_enabled);
+    if (n < 0 || (size_t)n >= cap) n = 0;
+    sensors.getGpsStatusText(txt + n, cap - (size_t)n);
+    _serial->writeFrame(out_frame, 1 + strlen(txt) + 1);  // +1: NUL-terminated (Offband convention)
+    return;
+  }
   if (cmd_frame[0] == CMD_DEVICE_QUERY && len >= 2) { // sent when app establishes connection
     app_target_ver = cmd_frame[1];                    // which version of protocol does app understand
 

@@ -691,7 +691,9 @@ bool EnvironmentSensorManager::querySensors(uint8_t requester_permissions, Cayen
 int EnvironmentSensorManager::getNumSettings() const {
   int settings = 0;
   #if ENV_INCLUDE_GPS
-    if (gps_detected) settings++;  // only show GPS setting if GPS is detected
+    settings++;  // #149: board has a GPS interface -> always expose the toggle. Runtime
+                 // presence is reported via gps_detected / the 0xC1 query, NOT this gate
+                 // (gating on a one-shot detect created the chicken-egg that blocked enable).
   #endif
   return settings;
 }
@@ -699,7 +701,7 @@ int EnvironmentSensorManager::getNumSettings() const {
 const char* EnvironmentSensorManager::getSettingName(int i) const {
   int settings = 0;
   #if ENV_INCLUDE_GPS
-    if (gps_detected && i == settings++) {
+    if (i == settings++) {
       return "gps";
     }
   #endif
@@ -709,7 +711,7 @@ const char* EnvironmentSensorManager::getSettingName(int i) const {
 const char* EnvironmentSensorManager::getSettingValue(int i) const {
   int settings = 0;
   #if ENV_INCLUDE_GPS
-    if (gps_detected && i == settings++) {
+    if (i == settings++) {
       return gps_active ? "1" : "0";
     }
   #endif
@@ -718,7 +720,7 @@ const char* EnvironmentSensorManager::getSettingValue(int i) const {
 
 bool EnvironmentSensorManager::setSettingValue(const char* name, const char* value) {
   #if ENV_INCLUDE_GPS
-  if (gps_detected && strcmp(name, "gps") == 0) {
+  if (strcmp(name, "gps") == 0) {
     if (strcmp(value, "0") == 0) {
       stop_gps();
     } else {
@@ -736,14 +738,110 @@ bool EnvironmentSensorManager::setSettingValue(const char* name, const char* val
 }
 
 #if ENV_INCLUDE_GPS
+// Offband (#149): single ASCII formatter for the live GPS state, shared by the
+// serial status line and the companion CMD_OFFBAND_GPS query. lat/lon/alt use the
+// same integer units as the SELF_INFO wire format (1e-6 deg, cm) so no float
+// printf is needed -- newlib-nano on nRF52 omits %f, which would print garbage.
+size_t EnvironmentSensorManager::getGpsStatusText(char* out, size_t cap) {
+  bool valid = (_location != nullptr) && gps_active && _location->isValid();
+  long sats  = (_location != nullptr && gps_active) ? _location->satellitesCount() : 0;
+  long epoch = (_location != nullptr) ? _location->getTimestamp() : 0;
+  long lat_ud = (long)(node_lat * 1000000.0);    // 1e-6 deg (matches SELF_INFO)
+  long lon_ud = (long)(node_lon * 1000000.0);
+  long alt_cm = (long)(node_altitude * 100.0);   // cm
+  int n = snprintf(out, cap,
+    "detected=%d active=%d fix=%d baud=%lu lat=%ld lon=%ld alt_cm=%ld sats=%ld time=%ld",
+    gps_detected ? 1 : 0, gps_active ? 1 : 0, valid ? 1 : 0,
+    (unsigned long)_gps_baud, lat_ud, lon_ud, alt_cm, sats, epoch);
+  return (n < 0) ? 0 : (size_t)n;
+}
+
+#if defined(ESP32)
+// #149: hex-nibble value, -1 if not a hex digit (for the NMEA checksum check).
+static int gps_hexval(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  return -1;
+}
+#endif  // ESP32 (gps_hexval)
+
+#if defined(ESP32)
+// #149: incremental NMEA checksum scanner -- fed one byte at a time across loop()
+// steps (state in members), returns true on a checksum-valid "$..*HH" sentence
+// (>=5 body chars). How auto-baud tells a correct rate from framing garbage.
+bool EnvironmentSensorManager::nmeaScanByte(char c) {
+  switch (_nmea_st) {            // 0=SEEK '$', 1=BODY, 2=CK1, 3=CK2
+    case 0: if (c == '$') { _nmea_sum = 0; _nmea_blen = 0; _nmea_st = 1; } break;
+    case 1:
+      if (c == '*') _nmea_st = 2;
+      else if (c == '$') { _nmea_sum = 0; _nmea_blen = 0; }
+      else if (c == '\r' || c == '\n') _nmea_st = 0;
+      else { _nmea_sum ^= (uint8_t)c; _nmea_blen++; }
+      break;
+    case 2: { int h = gps_hexval(c); if (h < 0) _nmea_st = 0; else { _nmea_ck = (uint8_t)(h << 4); _nmea_st = 3; } } break;
+    case 3: { int h = gps_hexval(c);
+              bool ok = (h >= 0 && _nmea_blen >= 5 && (uint8_t)(_nmea_ck | h) == _nmea_sum);
+              _nmea_st = 0; return ok; }
+    default: _nmea_st = 0; break;
+  }
+  return false;
+}
+
+// #149: ONE non-blocking step of the auto-baud state machine (Meshtastic-style).
+// Called from loop() while gps_active && !_gps_baud_locked. Reads only already-buffered
+// bytes (no blocking wait), scans for a valid sentence, advances to the next candidate
+// when a candidate's ~1.5s window elapses, and falls back to the first candidate +
+// locks (stops probing -- no spin/wedge) if none answer.
+void EnvironmentSensorManager::autoBaudStep() {
+  static const uint32_t cand[] = {
+    #ifdef GPS_BAUD_RATE
+    GPS_BAUD_RATE,
+    #endif
+    115200, 9600
+  };
+  const uint8_t NCAND = sizeof(cand) / sizeof(cand[0]);
+
+  if (_baud_window_ms == 0) {                     // open a fresh candidate window
+    Serial1.updateBaudRate(cand[_baud_idx]);
+    while (Serial1.available()) Serial1.read();   // drop stale bytes from the old rate (bounded by RX buffer)
+    _nmea_st = 0; _nmea_blen = 0;                 // reset the scanner
+    _baud_window_ms = millis();
+    return;                                       // let bytes arrive before the next step reads
+  }
+
+  while (Serial1.available()) {                   // scan only what's buffered -- returns instantly
+    if (nmeaScanByte((char)Serial1.read())) {     // this rate yields real sentences -> lock
+      _gps_baud = cand[_baud_idx];
+      _gps_baud_locked = true;
+      gps_detected = true;
+      _baud_window_ms = 0;
+      return;
+    }
+  }
+
+  if (millis() - _baud_window_ms >= 1500) {       // candidate timed out -> next, or fall back
+    _baud_window_ms = 0;
+    if (++_baud_idx >= NCAND) {
+      _baud_idx = 0;
+      _gps_baud = cand[0];
+      Serial1.updateBaudRate(_gps_baud);
+      _gps_baud_locked = true;                    // lock to default; no GPS present (gps_detected stays false)
+    }
+  }
+}
+#endif  // ESP32
+
 void EnvironmentSensorManager::initBasicGPS() {
 
   Serial1.setPins(PIN_GPS_TX, PIN_GPS_RX);
 
   #ifdef GPS_BAUD_RATE
   Serial1.begin(GPS_BAUD_RATE);
+  _gps_baud = GPS_BAUD_RATE;
   #else
   Serial1.begin(9600);
+  _gps_baud = 9600;
   #endif
 
   // Try to detect if GPS is physically connected to determine if we should expose the setting
@@ -757,24 +855,38 @@ void EnvironmentSensorManager::initBasicGPS() {
   // Give GPS a moment to power up and send data
   delay(1000);
 
-  // We'll consider GPS detected if we see any data on Serial1
-#ifdef ENV_SKIP_GPS_DETECT
+  // #149: GPS presence + baud are resolved at RUNTIME by the non-blocking auto-baud
+  // state machine in loop() (ESP32) -- no blocking probe here. The "gps" toggle is
+  // exposed regardless of detection (board has a GPS interface), so the client can
+  // always enable it; gps_detected then reflects whether a candidate yielded valid
+  // NMEA, reported via the 0xC1 query.
+#if defined(ESP32)
+  gps_detected = false;
+  _gps_baud_locked = false;
+  _baud_idx = 0;
+  _baud_window_ms = 0;
+#elif defined(ENV_SKIP_GPS_DETECT)
   gps_detected = true;
 #else
-  gps_detected = (Serial1.available() > 0);
+  // Non-ESP32 (e.g. Adafruit nRF52): no updateBaudRate(), so no auto-baud -- keep the
+  // bounded byte-presence detect at the build-configured rate.
+  gps_detected = false;
+  uint32_t _detect_t0 = millis();
+  while (millis() - _detect_t0 < 1500) {
+    if (Serial1.available() > 0) { gps_detected = true; break; }
+    delay(10);
+  }
 #endif
 
-  if (gps_detected) {
-    MESH_DEBUG_PRINTLN("GPS detected");
-    #ifdef PERSISTANT_GPS
-      gps_active = true;
-      return;
-    #endif
-  } else {
-    MESH_DEBUG_PRINTLN("No GPS detected");
-  }
+#ifdef PERSISTANT_GPS
+  // #149: always-on GPS. On ESP32 detection is async (auto-baud runs in loop), so
+  // gps_detected is false here -- don't gate on it; stay active and let the state
+  // machine lock the rate. (Was gated on gps_detected, which broke this on ESP32.)
+  gps_active = true;
+  return;
+#endif
   _location->stop();
-  gps_active = false; //Set GPS visibility off until setting is changed
+  gps_active = false;   // off until the client enables it (auto-baud then runs in loop)
 }
 
 // gps code for rak might be moved to MicroNMEALoactionProvider
@@ -864,6 +976,12 @@ bool EnvironmentSensorManager::gpsIsAwake(uint8_t ioPin){
 
 void EnvironmentSensorManager::start_gps() {
   gps_active = true;
+  #if defined(ESP32)
+  // #149: re-run auto-baud each time GPS is enabled (handles a module swap w/o reboot).
+  _gps_baud_locked = false;
+  _baud_idx = 0;
+  _baud_window_ms = 0;
+  #endif
   #ifdef RAK_WISBLOCK_GPS
     pinMode(gpsResetPin, OUTPUT);
     digitalWrite(gpsResetPin, HIGH);
@@ -900,6 +1018,12 @@ void EnvironmentSensorManager::loop() {
   #if ENV_INCLUDE_GPS
   static long next_gps_update = 0;
   if (gps_active) {
+    #if defined(ESP32)
+    if (!_gps_baud_locked) {
+      autoBaudStep();   // #149: non-blocking baud detection owns the UART until locked
+    } else
+    #endif
+    {
     _location->loop();
     // #152: provider-agnostic GPS clock-sync. Any active provider reporting a
     // plausible GPS epoch (>= GPS_CLOCK_SANE_MIN, i.e. after 2025) sets the device
@@ -916,10 +1040,15 @@ void EnvironmentSensorManager::loop() {
         _last_gps_clock_sync = millis();
       }
     }
+    }
   }
   if (millis() > next_gps_update) {
 
-    if(gps_active){
+    if (gps_active
+        #if defined(ESP32)
+        && _gps_baud_locked
+        #endif
+       ) {
     #ifdef RAK_WISBLOCK_GPS
     if ((i2cGPSFlag || serialGPSFlag) && _location->isValid()) {
       node_lat = ((double)_location->getLatitude())/1000000.;
@@ -939,6 +1068,16 @@ void EnvironmentSensorManager::loop() {
     #endif
     }
     next_gps_update = millis() + (gps_update_interval_sec * 1000);
+  }
+
+  // Offband (#149): periodic GPS-state line so the chain (enabled->detected->fix->
+  // coords) is visible live on the serial console without a client. Self-throttled.
+  static uint32_t _gps_log_ms = 0;
+  if (millis() - _gps_log_ms >= 5000) {
+    _gps_log_ms = millis();
+    char _gps_b[160];
+    getGpsStatusText(_gps_b, sizeof(_gps_b));
+    Serial.print("[GPS] "); Serial.println(_gps_b);
   }
   #endif
   #if ENV_INCLUDE_BME680_BSEC
