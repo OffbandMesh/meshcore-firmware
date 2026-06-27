@@ -154,6 +154,16 @@ void setup() {
   Serial.setTxTimeoutMs(0);
 #endif
 
+  // #149: stamp the running build on the serial console at boot. Every test build
+  // looks identical otherwise, so there's no way to confirm what's actually flashed.
+#ifdef OFFBAND_VERSION
+  Serial.print("\n=== Offband build: "); Serial.print(OFFBAND_VERSION);
+  #ifdef OFFBAND_GIT_SHA
+  Serial.print(" sha "); Serial.print(OFFBAND_GIT_SHA);
+  #endif
+  Serial.println(" ===");
+#endif
+
   // SafeBoot: pre-init power guard. See src/SafeBoot.h.
   SafeBoot::checkAndMaybeSleep();
 #ifdef OFFBAND_OBSERVER
