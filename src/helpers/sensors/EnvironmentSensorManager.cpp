@@ -826,6 +826,7 @@ void EnvironmentSensorManager::autoBaudStep() {
       _baud_idx = 0;
       _gps_baud = cand[0];
       Serial1.updateBaudRate(_gps_baud);
+      while (Serial1.available()) Serial1.read();  // #231: flush stale bytes from the probe rate (Gemini review)
       _gps_baud_locked = true;                    // lock to default; no GPS present (gps_detected stays false)
     }
   }
