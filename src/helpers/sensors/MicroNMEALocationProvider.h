@@ -33,6 +33,13 @@
     #endif
 #endif
 
+#ifndef GPS_LOOP_MAX_BYTES
+    // #216: max NMEA bytes ingested per loop() (see loop()). Headroom over the
+    // 115200 steady-state per-loop arrival while bounding the worst case so the
+    // GPS read can never monopolize the loop / starve BLE. Tunable per board.
+    #define GPS_LOOP_MAX_BYTES 96
+#endif
+
 class MicroNMEALocationProvider : public LocationProvider {
     char _nmeaBuffer[100];
     MicroNMEA nmea;
@@ -123,6 +130,12 @@ public :
     bool isValid() override { return nmea.isValid(); }
 
     long getTimestamp() override {
+        // #216: the calendar date (y/mo/d) only arrives once RMC carries it; until
+        // then MicroNMEA's date fields are 0 and DateTime(0,0,0,...) wraps to a
+        // garbage NEGATIVE epoch (date2days(0,0,0) underflows). Report 0 = "no GPS
+        // time yet" so callers (serial [GPS] line, 0xC1 query, client) can tell
+        // "acquiring" from a real fix instead of seeing wrapped garbage.
+        if (nmea.getYear() == 0) return 0;
         DateTime dt(nmea.getYear(), nmea.getMonth(),nmea.getDay(),nmea.getHour(),nmea.getMinute(),nmea.getSecond());
         return dt.unixtime();
     }
@@ -135,7 +148,16 @@ public :
 
     void loop() override {
 
-        while (_gps_serial->available()) {
+        // #216: BOUND the per-loop GPS ingestion. The upstream unbounded
+        // `while (available())` drain monopolizes the main loop at high baud --
+        // an M100 @115200 (multi-constellation, 10Hz) delivers ~11.5 KB/s, and
+        // draining it every loop starves BLE servicing (recv_queue overflow ->
+        // slog/wedge; observed on the companion, never on a 9600 L76K). Cap the
+        // bytes processed per loop so the loop ALWAYS yields to BLE; the UART
+        // buffer holds the rest, and any lost backlog is fine -- we only need a
+        // periodic fix, not every sentence.
+        int _gps_budget = GPS_LOOP_MAX_BYTES;
+        while (_gps_budget-- > 0 && _gps_serial->available()) {
             char c = _gps_serial->read();
             #ifdef GPS_NMEA_DEBUG
             Serial.print(c);
@@ -153,14 +175,38 @@ public :
             }
             if (_time_sync_needed && time_valid > 2) {
                 if (_clock != NULL) {
-                    _clock->setCurrentTime(getTimestamp());
-                    _time_sync_needed = false;
-                    _last_time_sync = millis();
+                    // #216: time_valid tracks the POSITION fix, which can lead the
+                    // date. Only sync the RTC once getTimestamp() returns a real
+                    // (date-backed) epoch -- otherwise we'd set the clock to 1970.
+                    long ts = getTimestamp();
+                    if (ts > 0) {
+                        _clock->setCurrentTime(ts);
+                        _time_sync_needed = false;
+                        _last_time_sync = millis();
+                    }
                 }
             }
             if (isValid()) {
                 time_valid ++;
             }
         }
+
+#ifdef GPS_PARSE_DEBUG
+        // #216 diagnostic: show exactly what MicroNMEA PARSED (vs the raw stream),
+        // once/sec, to localize the bad-time bug -- does the parser capture the RMC
+        // date or not? Low-volume so it doesn't drop under setTxTimeoutMs(0).
+        static long _gpsparse_t = 0;
+        if (millis() - _gpsparse_t >= 1000) {
+            _gpsparse_t = millis();
+            Serial.print("[GPSPARSE] valid="); Serial.print(nmea.isValid() ? 1 : 0);
+            Serial.print(" y="); Serial.print(nmea.getYear());
+            Serial.print(" mo="); Serial.print(nmea.getMonth());
+            Serial.print(" d="); Serial.print(nmea.getDay());
+            Serial.print(" h="); Serial.print(nmea.getHour());
+            Serial.print(" mi="); Serial.print(nmea.getMinute());
+            Serial.print(" s="); Serial.print(nmea.getSecond());
+            Serial.print(" ts="); Serial.println((long)getTimestamp());
+        }
+#endif
     }
 };
