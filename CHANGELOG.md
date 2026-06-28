@@ -14,10 +14,10 @@ prior to 0.13.0 predate it; see `git tag -l 'crosswire-v*'` and the tag
 annotations for that history (highlights: v0.12.0 NimBLE migration, v0.11.x
 Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
-## [1.2.0] - 2026-06-28
+## [1.1.2] - 2026-06-28
 
-Companion **GPS auto-baud + on-demand GPS status**, plus the wedge/time fixes found
-validating it on real hardware. Still on the **MeshCore 1.16.0** base.
+Companion **GPS auto-baud + on-demand GPS status**, plus the wedge/time fixes
+found while validating it on real hardware. Still on the **MeshCore 1.16.0** base.
 
 ### Added
 - **GPS auto-baud detection** — the companion now detects the GPS modem's baud rate at
@@ -27,16 +27,21 @@ validating it on real hardware. Still on the **MeshCore 1.16.0** base.
 - **On-demand GPS status to the app (`0xC1`)** — the client can query live GPS state
   (enabled / detected / fix / baud / lat / lon / alt / sats / time) instead of only seeing
   position at connect. (#216)
-- **Build identity on-device** — an optional build tag shows on the app device-info field
-  and the OLED splash, so a specific build is identifiable without a serial console. (#222)
+- **On-device build identity** — an optional build tag shows on the app device-info
+  field and the OLED splash, so a specific build is identifiable without a serial
+  console. (#222)
 
 ### Fixed
 - **GPS at high baud could wedge BLE.** An unbounded GPS read loop let a fast modem
   (e.g. 115200, multi-constellation) monopolize the main loop and starve BLE — the app
   would slog or stall. GPS ingestion is now bounded per loop. (#231)
-- **GPS time showed garbage before the date was acquired.** A valid position fix can
-  arrive before the calendar date; the device now reports `time=0` ("acquiring") until a
-  real date is parsed, instead of a wrapped-garbage timestamp. (#232)
+- **GPS time showed garbage before the date was acquired.** A position fix can arrive
+  before the calendar date; the device now reports `time=0` ("acquiring") until a real
+  date is parsed, instead of a wrapped-garbage timestamp. (#232)
+
+### Internal
+- Build/governance tooling + GPS design & diagnostic records — no firmware-behavior
+  change. (#214, #217–#219)
 
 ## [1.1.1] - 2026-06-26
 
