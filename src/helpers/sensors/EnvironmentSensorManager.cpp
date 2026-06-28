@@ -791,8 +791,9 @@ bool EnvironmentSensorManager::nmeaScanByte(char c) {
 // #149: ONE non-blocking step of the auto-baud state machine (Meshtastic-style).
 // Called from loop() while gps_active && !_gps_baud_locked. Reads only already-buffered
 // bytes (no blocking wait), scans for a valid sentence, advances to the next candidate
-// when a candidate's ~1.5s window elapses, and falls back to the first candidate +
-// locks (stops probing -- no spin/wedge) if none answer.
+// when a candidate's ~1.5s window elapses, and LOCKS (detected=true) the instant a
+// candidate yields a valid sentence. #233: if none answer in a pass it wraps and keeps
+// re-probing (a modem may be slow to start) -- non-blocking, never spins/wedges.
 void EnvironmentSensorManager::autoBaudStep() {
   static const uint32_t cand[] = {
     #ifdef GPS_BAUD_RATE
@@ -820,14 +821,17 @@ void EnvironmentSensorManager::autoBaudStep() {
     }
   }
 
-  if (millis() - _baud_window_ms >= 1500) {       // candidate timed out -> next, or fall back
+  if (millis() - _baud_window_ms >= 1500) {       // candidate timed out -> next candidate
     _baud_window_ms = 0;
     if (++_baud_idx >= NCAND) {
+      // #233: wrap and KEEP probing -- never give up / lock a fallback. A modem can be
+      // slow to start at boot (cold start), so exhausting one pass does NOT mean "no GPS".
+      // We re-probe the candidates indefinitely; the next pass locks (detected=true) the
+      // instant a candidate yields a valid sentence. The wrap leaves _baud_window_ms==0,
+      // so the next step re-opens cand[0]'s window (updateBaudRate + RX flush) cleanly.
+      // Harmless if truly no GPS is present: non-blocking, just cycles the baud on an idle
+      // UART and stays detected=false (was: lock cand[0] with detected=false and stop).
       _baud_idx = 0;
-      _gps_baud = cand[0];
-      Serial1.updateBaudRate(_gps_baud);
-      while (Serial1.available()) Serial1.read();  // #231: flush stale bytes from the probe rate (Gemini review)
-      _gps_baud_locked = true;                    // lock to default; no GPS present (gps_detected stays false)
     }
   }
 }
