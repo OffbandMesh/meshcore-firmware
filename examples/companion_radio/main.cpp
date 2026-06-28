@@ -150,7 +150,12 @@ void setup() {
   // sync) that stall starves BLE servicing until the send/recv queues overflow and
   // BLE jams. Timeout 0 = drop log bytes instead of blocking; output still flows
   // normally whenever a serial monitor is attached and draining the port.
-#if defined(ESP32)
+  // #216/CI: setTxTimeoutMs is a USB-CDC (HWCDC) method, present only when Serial is
+  // the native USB CDC (ARDUINO_USB_CDC_ON_BOOT=1, e.g. Heltec V4). On boards where
+  // Serial is a UART HardwareSerial (e.g. Heltec V3 = esp32-s3-devkitc-1) it doesn't
+  // exist -- and isn't needed there (no HWCDC head-of-line blocking). Guarding on plain
+  // ESP32 broke the V3 observer build.
+#if defined(ESP32) && defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
   Serial.setTxTimeoutMs(0);
 #endif
 
