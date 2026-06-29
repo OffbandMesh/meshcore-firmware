@@ -30,6 +30,7 @@
 #include <helpers/ArduinoHelpers.h>
 #include <helpers/BaseSerialInterface.h>
 #include <helpers/IdentityStore.h>
+#include <helpers/BlockStore.h>   // #241: portable pubkey block list (receive-side)
 #include <helpers/SimpleMeshTables.h>
 #include <helpers/StaticPoolPacketManager.h>
 #include <target.h>
@@ -246,7 +247,12 @@ private:
   void saveChannels() { _store->saveChannels(this); }
   void saveContacts();
 
+  // #241: block-list persistence (flat /blocks file: [count][key0..keyN-1]).
+  void loadBlocks();
+  void saveBlocks();
+
   DataStore* _store;
+  BlockStore _blocks;   // #241: blocked pubkeys (in-memory; persisted via load/saveBlocks)
   NodePrefs _prefs;
   uint32_t pending_login;
   uint32_t pending_status;

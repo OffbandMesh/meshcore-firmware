@@ -499,6 +499,13 @@ ContactInfo*  MyMesh::processAck(const uint8_t *data) {
 
 void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packet *pkt,
                           uint32_t sender_timestamp, const uint8_t *extra, int extra_len, const char *text) {
+  // #241: receive-side user block -- the ONLY enforcement point. Drop a DM from a
+  // blocked pubkey before it reaches the app queue/notification. This is the
+  // app-push layer (after routing decisions); forwarding, relaying, adverts, and
+  // channels are all untouched (contract §11). We only suppress local delivery to
+  // the phone, so interoperability with stock MeshCore is unchanged.
+  if (_blocks.contains(from.id.pub_key)) return;
+
   int i = 0;
   if (app_target_ver >= 3) {
     out_frame[i++] = RESP_CODE_CONTACT_MSG_RECV_V3;
@@ -1091,6 +1098,7 @@ void MyMesh::begin(bool has_display) {
 
   resetContacts();
   _store->loadContacts(this);
+  loadBlocks();   // #241: restore the persisted block list at boot
   bootstrapRTCfromContacts();
   addChannel("Public", PUBLIC_GROUP_PSK); // pre-configure Andy's public channel
   _store->loadChannels(this);
@@ -2452,6 +2460,32 @@ static bool save_filter(const ContactInfo& c) {
 
 void MyMesh::saveContacts() {
   _store->saveContacts(this, save_filter);
+}
+
+// #241: block-list persistence. Flat file "/blocks": [count:1][key:32]*count.
+// Streamed (no large stack buffer) via the DataStore FS abstraction so the
+// per-platform open flags (nRF52/RP2040/ESP32) are handled in one place and
+// not duplicated here (mirrors saveContacts/savePrefs).
+void MyMesh::saveBlocks() {
+  auto f = _store->openWriteFile("/blocks");
+  if (!f) return;
+  uint8_t n = _blocks.count();
+  f.write(&n, 1);
+  for (uint8_t i = 0; i < n; i++) f.write(_blocks.keyAt(i), BLOCK_KEY_SIZE);
+  f.close();
+}
+
+void MyMesh::loadBlocks() {
+  auto f = _store->openRead("/blocks");
+  if (!f) return;
+  uint8_t n = 0;
+  if (f.read(&n, 1) == 1) {
+    uint8_t key[BLOCK_KEY_SIZE];
+    for (uint8_t i = 0; i < n && i < MAX_BLOCKED_KEYS; i++) {
+      if (f.read(key, BLOCK_KEY_SIZE) == (int)BLOCK_KEY_SIZE) _blocks.add(key);
+    }
+  }
+  f.close();
 }
 
 void MyMesh::enterCLIRescue() {
