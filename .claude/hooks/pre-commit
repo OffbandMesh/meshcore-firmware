@@ -65,6 +65,52 @@ if [ -n "$REPO_ROOT_FOR_AGENT_CHECK" ] && [ -f "$REPO_ROOT_FOR_AGENT_CHECK/.agen
   fi
 fi
 
+# ─── 0.6. Safe Lane: primary-clone (main working tree) block (agent only) ───
+# Per SAFELANE §5, agent edits/commits must happen in a git *worktree*, not the
+# primary clone. The §0.5 branch check above misses one path: `git checkout -b`
+# *inside* the primary clone leaves the main working tree on a feature branch —
+# the branch check then passes while main's working tree is still polluted.
+# This check closes that loophole: it refuses commits made in the MAIN working
+# tree regardless of branch.
+#
+# Detection: a linked worktree's git dir always lives under `.git/worktrees/`;
+# the main working tree's never does. (A `--git-dir == --git-common-dir` compare
+# is NOT subdir-safe — see block-primary-clone-edit.py.)
+#
+# Gated on .agent-identity (agent commits only) — humans may commit in the
+# primary clone. See DifferentWire/standards#181.
+if [ -n "$REPO_ROOT_FOR_AGENT_CHECK" ] && [ -f "$REPO_ROOT_FOR_AGENT_CHECK/.agent-identity" ]; then
+  if [ "${DW_ALLOW_PRIMARY_CLONE:-0}" = "1" ]; then
+    echo "⚠ PRIMARY-CLONE COMMIT BYPASSED — DW_ALLOW_PRIMARY_CLONE=1" >&2
+    echo "  This bypass is logged. Use only for emergencies." >&2
+  else
+    # Detection: a linked worktree's git dir differs from its *common* git dir
+    # (the git dir is <common>/worktrees/<name>); the main working tree's git
+    # dir IS the common dir. Comparing the two (absolute) is precise and can't
+    # be fooled by a repo cloned under a path that merely contains the string
+    # ".git/worktrees/" — a substring match on the git dir alone can (see
+    # block-primary-clone-edit.py and standards#181 review). Submodules are
+    # exempt (their own working tree is the only place to edit them). Fails
+    # CLOSED (block) on uncertainty — this hook only ever runs inside a repo.
+    SUPERPROJECT=$(git rev-parse --show-superproject-working-tree 2>/dev/null)
+    GIT_DIR_ABS=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null | tr 'A-Z' 'a-z')
+    COMMON_DIR_ABS=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null | tr 'A-Z' 'a-z')
+    if [ -n "$SUPERPROJECT" ]; then
+      : # inside a submodule — its own working tree is the only place to edit; exempt
+    elif [ -n "$GIT_DIR_ABS" ] && [ "$GIT_DIR_ABS" != "$COMMON_DIR_ABS" ]; then
+      : # linked worktree (git dir != common dir) — allowed
+    else
+      # main working tree (git dir == common dir), or detection failed -> block
+      echo "✗ Safe Lane: agent commit in the PRIMARY CLONE (main working tree) is blocked." >&2
+      echo "  Repo: ${REPO_ROOT_FOR_AGENT_CHECK}" >&2
+      echo "  Its working tree mirrors 'main' and must stay clean. Work in a worktree:" >&2
+      echo "    git worktree add /c/Dev/<project>-<topic>/ -b <type>/<issue>-<topic> main" >&2
+      echo "  Emergency bypass: DW_ALLOW_PRIMARY_CLONE=1 git commit ... (logged)" >&2
+      exit 1
+    fi
+  fi
+fi
+
 CITADEL_API="https://getunfocused.app/citadel"
 
 # Detect project name from DW_PROJECT env var or directory name
@@ -89,71 +135,69 @@ except Exception:
     print('true')
 " 2>/dev/null)
 
-# ─── 2. Check for in_progress tasks (with optional issue-link check) ────
+# ─── 2. Resolve THE active task for this work, deterministically ───────
+# Pick the task tied to THIS unit of work (DW_TASK > branch issue > the lone
+# in_progress task) instead of whichever in_progress task Citadel returns
+# first — that coarse check misreports with two tasks open and is exploitable.
+# Fail closed when ambiguous. Strycher/LoRa#241, DifferentWire/standards#172.
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+BRANCH_ISSUE=$(printf '%s' "$BRANCH" | grep -oE '^[A-Za-z]+/[0-9]+[-_]' | grep -oE '[0-9]+' | head -1)
 RESPONSE=$(curl -s --max-time 5 "${CITADEL_API}/projects/${PROJECT}/tasks?status=in_progress" 2>/dev/null)
-
 if [ -z "$RESPONSE" ]; then
   echo "✗ Citadel unreachable — cannot verify task claim." >&2
-  echo "  Fix Citadel connectivity or set DW_SKIP_CITADEL_CHECK=1 for emergency." >&2
+  echo "  Fix Citadel connectivity and retry." >&2
   exit 1
 fi
 
-HAS_CLAIMED=$(echo "$RESPONSE" | REQUIRE_ISSUE_LINK="$REQUIRE_ISSUE_LINK" python3 -c "
-import json, os, sys
-require = os.environ.get('REQUIRE_ISSUE_LINK', 'true') == 'true'
-try:
-    tasks = json.load(sys.stdin)
-    claimed = [t for t in tasks if t.get('status') == 'in_progress']
-    if not claimed:
-        print('NO_TASK')
-    elif not require:
-        # Relaxed: any claimed task is sufficient. Report issue link if
-        # present for informational purposes, but don't require it.
-        t = claimed[0]
-        iss = t.get('external_issue_number')
-        if iss:
-            print(f'OK:{t[\"short_id\"]}:#{iss}')
-        else:
-            print(f'OK_RELAXED:{t[\"short_id\"]}')
-    else:
-        # Strict (default): at least one claimed task must have an issue link
-        linked = [t for t in claimed if t.get('external_issue_number')]
-        if linked:
-            print(f'OK:{linked[0][\"short_id\"]}:#{linked[0][\"external_issue_number\"]}')
-        else:
-            print(f'NO_ISSUE:{claimed[0][\"short_id\"]}')
-except Exception:
-    print('ERROR')
-" 2>/dev/null)
-
-case "$HAS_CLAIMED" in
-  OK:*)
-    TASK_ID=$(echo "$HAS_CLAIMED" | cut -d: -f2)
-    ISSUE=$(echo "$HAS_CLAIMED" | cut -d: -f3)
-    echo "✓ Citadel: active task ${TASK_ID} (${ISSUE})" >&2
-    ;;
-  OK_RELAXED:*)
-    TASK_ID=$(echo "$HAS_CLAIMED" | cut -d: -f2)
-    echo "✓ Citadel: active task ${TASK_ID} (project '${PROJECT}' has issue-link requirement relaxed)" >&2
+HOOK_DIR=$(dirname "$0")
+RESOLVER="$HOOK_DIR/resolve-active-task.py"
+if [ ! -f "$RESOLVER" ]; then
+  echo "⚠ Safe Lane: resolve-active-task.py not installed next to pre-commit — active-task gate SKIPPED (non-bricking)." >&2
+  echo "  Copy the canonical hooks from standards; it ships with pre-commit. standards#172." >&2
+  RESULT="SKIP"
+else
+  RESULT=$(printf '%s' "$RESPONSE" | python3 "$RESOLVER" --branch-issue "$BRANCH_ISSUE" --dw-task "${DW_TASK:-}" --require-issue-link "$REQUIRE_ISSUE_LINK" 2>/dev/null)
+fi
+read -r CODE A B <<< "$RESULT"
+case "$CODE" in
+  SKIP) : ;;  # helper not installed (warned above) — do not block
+  OK)
+    echo "✓ Citadel: active task $A ($B)" >&2
     ;;
   NO_TASK)
-    echo "✗ No claimed task in Citadel for project '${PROJECT}'." >&2
-    echo "  Run: dw --project ${PROJECT} claim <task-id>" >&2
-    echo "  You must claim a task before committing code." >&2
+    echo "✗ Safe Lane: no in_progress task in Citadel for project '${PROJECT}'." >&2
+    echo "  Claim the task for the work being committed: dw -p ${PROJECT} claim <ShortId>" >&2
     exit 1
     ;;
-  NO_ISSUE:*)
-    TASK_ID=$(echo "$HAS_CLAIMED" | cut -d: -f2)
-    echo "✗ Task ${TASK_ID} has no GitHub issue link." >&2
-    echo "  Every task must be linked to a GitHub issue before work begins." >&2
-    echo "  (Project '${PROJECT}' requires issue linkage — if this project doesn't" >&2
-    echo "   need it, have an admin run:" >&2
-    echo "     dw project-update ${PROJECT} --require-issue-link false)" >&2
+  AMBIGUOUS)
+    echo "✗ Safe Lane: $A tasks are in_progress and none matches this work." >&2
+    echo "  The hook cannot tell which task this commit is for. Make it deterministic:" >&2
+    echo "    - work on a feat/<issue#>-... branch (the hook reads the issue from it), or" >&2
+    echo "    - export DW_TASK=<ShortId> in this worktree." >&2
+    exit 1
+    ;;
+  BRANCH_NO_MATCH)
+    echo "✗ Safe Lane: this branch implies issue #$A, but no in_progress task is linked to it." >&2
+    echo "  Claim the task for #$A (dw -p ${PROJECT} claim <ShortId>), or set DW_TASK to the right task." >&2
+    exit 1
+    ;;
+  DW_TASK_BAD)
+    echo "✗ Safe Lane: DW_TASK=$A is not an in_progress task in project '${PROJECT}'." >&2
+    echo "  Claim it first (dw -p ${PROJECT} claim $A) or unset DW_TASK." >&2
+    exit 1
+    ;;
+  NO_ISSUE)
+    echo "✗ Safe Lane: task $A has no linked GitHub issue (project '${PROJECT}' requires one)." >&2
+    echo "  Link it: dw -p ${PROJECT} update $A -i <issue#>  (or relax: dw project-update ${PROJECT} --require-issue-link false)." >&2
+    exit 1
+    ;;
+  AMBIGUOUS_ISSUE)
+    echo "✗ Safe Lane: two in_progress tasks are linked to issue #$A — cannot tell which." >&2
+    echo "  Disambiguate: export DW_TASK=<ShortId> in this worktree." >&2
     exit 1
     ;;
   *)
-    echo "✗ Could not verify Citadel task status." >&2
-    echo "  Set DW_SKIP_CITADEL_CHECK=1 for emergency bypass." >&2
+    echo "✗ Safe Lane: could not resolve the active task (Citadel parse error / BAD_INPUT)." >&2
     exit 1
     ;;
 esac

@@ -1,4 +1,7 @@
 {
+  "env": {
+    "DW_PROJECT": "Crosswire"
+  },
   "hooks": {
     "SessionStart": [
       {
