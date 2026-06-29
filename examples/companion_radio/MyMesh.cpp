@@ -3,6 +3,12 @@
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
 
+// Offband fork-only companion-API frame codes (config 0xC0 / GPS 0xC1 / block 0xC2)
+// + shared enums. Self-contained (only <stdint.h>); included unconditionally so the
+// block cap bit and 0xC2 codes resolve on EVERY companion build, not just observer
+// ones. The config *backend* (ConfigSchema/ObserverCli) stays observer-gated below. #241.
+#include "OffbandConfigProtocol.h"
+
 #ifdef OFFBAND_OBSERVER_BLE_COMPANION
 // Plan 3 Task 10 (Strycher/LoRa#272): reserved-slot CLI intercepts +
 // system-channel status posting. Build-flag-gated so the upstream
@@ -20,8 +26,8 @@
 // broad OFFBAND_OBSERVER flag (not the BLE-companion flag) so it is
 // present on every observer build, including future BLE-disabled ones.
 #include "helpers/wifi_observer/CliPassthrough.h"
-// Epic F: the config command codes (#160 contract) + its typed dispatch backend (#165).
-#include "OffbandConfigProtocol.h"
+// Epic F: the config command codes (#160 contract) live in OffbandConfigProtocol.h,
+// now included unconditionally above (#241). Its typed dispatch backend (#165):
 #include "helpers/wifi_observer/ObserverCli.h"   // configSet/configGet + dispatchObserverCli
 // wifiObserverPool() lives in WifiObserver.h (heavy transitive includes); forward-
 // declare it here as CliPassthrough.cpp does. configSet takes a pool ref (only the
@@ -493,6 +499,13 @@ ContactInfo*  MyMesh::processAck(const uint8_t *data) {
 
 void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packet *pkt,
                           uint32_t sender_timestamp, const uint8_t *extra, int extra_len, const char *text) {
+  // #241: receive-side user block -- the ONLY enforcement point. Drop a DM from a
+  // blocked pubkey before it reaches the app queue/notification. This is the
+  // app-push layer (after routing decisions); forwarding, relaying, adverts, and
+  // channels are all untouched (contract §11). We only suppress local delivery to
+  // the phone, so interoperability with stock MeshCore is unchanged.
+  if (_blocks.contains(from.id.pub_key)) return;
+
   int i = 0;
   if (app_target_ver >= 3) {
     out_frame[i++] = RESP_CODE_CONTACT_MSG_RECV_V3;
@@ -985,6 +998,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _obs_cli_buf[0] = 0;
   _ob_stream = OB_STREAM_NONE;   // F8 (#169): no config-response stream in flight
 #endif
+  _blk_listing = false;   // #241: no block-LIST stream in flight
   offline_queue_len = 0;
   app_target_ver = 0;
   clearPendingReqs();
@@ -1085,6 +1099,7 @@ void MyMesh::begin(bool has_display) {
 
   resetContacts();
   _store->loadContacts(this);
+  loadBlocks();   // #241: restore the persisted block list at boot
   bootstrapRTCfromContacts();
   addChannel("Public", PUBLIC_GROUP_PSK); // pre-configure Andy's public channel
   _store->loadChannels(this);
@@ -1380,6 +1395,38 @@ void MyMesh::handleCmdFrame(size_t len) {
     _serial->writeFrame(out_frame, 1 + strlen(txt) + 1);  // +1: NUL-terminated (Offband convention)
     return;
   }
+  // #241: block-list sync (companion-API only; NEVER on the mesh). 0xC2.
+  // Receive-side store maintenance: ADD/REMOVE/CLEAR are single-frame acks;
+  // LIST streams (START -> one key/frame -> END) via blockListDrain so it never
+  // bursts the send queue (drops-when-full, #169). Forwarding/relay untouched (§11).
+  if (cmd_frame[0] == offband::CMD_OFFBAND_BLOCK && len >= 2) {
+    uint8_t sub = cmd_frame[1];
+    if (sub == offband::OFFBAND_BLOCK_ADD && len >= 2 + PUB_KEY_SIZE) {
+      bool ok = _blocks.add(&cmd_frame[2]);
+      if (ok) saveBlocks();
+      out_frame[0] = offband::RESP_CODE_OFFBAND_BLOCK; out_frame[1] = sub; out_frame[2] = ok ? 1 : 0;
+      _serial->writeFrame(out_frame, 3);
+    } else if (sub == offband::OFFBAND_BLOCK_REMOVE && len >= 2 + PUB_KEY_SIZE) {
+      bool ok = _blocks.remove(&cmd_frame[2]);
+      if (ok) saveBlocks();
+      out_frame[0] = offband::RESP_CODE_OFFBAND_BLOCK; out_frame[1] = sub; out_frame[2] = ok ? 1 : 0;
+      _serial->writeFrame(out_frame, 3);
+    } else if (sub == offband::OFFBAND_BLOCK_CLEAR) {
+      _blocks.clear(); saveBlocks();
+      out_frame[0] = offband::RESP_CODE_OFFBAND_BLOCK; out_frame[1] = sub; out_frame[2] = 1;
+      _serial->writeFrame(out_frame, 3);
+    } else if (sub == offband::OFFBAND_BLOCK_LIST) {
+      // START frame [.., 0xFF, count]; keys then stream one-per-idle-pass; then END.
+      out_frame[0] = offband::RESP_CODE_OFFBAND_BLOCK; out_frame[1] = sub;
+      out_frame[2] = 0xFF; out_frame[3] = _blocks.count();
+      _serial->writeFrame(out_frame, 4);
+      _blk_list_i = 0;
+      _blk_listing = true;
+    } else {
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    }
+    return;
+  }
   if (cmd_frame[0] == CMD_DEVICE_QUERY && len >= 2) { // sent when app establishes connection
     app_target_ver = cmd_frame[1];                    // which version of protocol does app understand
 
@@ -1408,6 +1455,7 @@ void MyMesh::handleCmdFrame(size_t len) {
 #ifdef OFFBAND_OBSERVER
     offband_caps |= offband::OFFBAND_CAP_WIFI_OBSERVER;
 #endif
+    offband_caps |= offband::OFFBAND_CAP_BLOCK;  // #241: block list always present on the companion
     out_frame[i++] = offband_caps;           // v14+
     _serial->writeFrame(out_frame, i);
   } else if (cmd_frame[0] == CMD_APP_START &&
@@ -1432,6 +1480,12 @@ void MyMesh::handleCmdFrame(size_t len) {
       MESH_DEBUG_PRINTLN("APP_START mid-stream: sent END_OF_CONTACTS terminator (#178)");
     }
     _iter_started = false; // stop any left-over ContactsIterator
+    if (_blk_listing) {    // #241: terminate an in-flight block-LIST for the (re)connecting client (#178 pattern)
+      uint8_t h[3] = { offband::RESP_CODE_OFFBAND_BLOCK, offband::OFFBAND_BLOCK_LIST, 0xFE };
+      _serial->writeFrame(h, 3);
+      _blk_listing = false;
+      MESH_DEBUG_PRINTLN("APP_START mid-stream: sent block-LIST END terminator (#241)");
+    }
 #ifdef OFFBAND_OBSERVER
     if (_ob_stream == OB_STREAM_VIEW) {
       uint8_t h[2] = { offband::RESP_CODE_OFFBAND_CONFIG, offband::OCFG_R_VIEW_END };
@@ -2447,6 +2501,55 @@ void MyMesh::saveContacts() {
   _store->saveContacts(this, save_filter);
 }
 
+// #241: block-list persistence. Flat file "/blocks": [count:1][key:32]*count.
+// Streamed (no large stack buffer) via the DataStore FS abstraction so the
+// per-platform open flags (nRF52/RP2040/ESP32) are handled in one place and
+// not duplicated here (mirrors saveContacts/savePrefs).
+void MyMesh::saveBlocks() {
+  auto f = _store->openWriteFile("/blocks");
+  if (!f) return;
+  uint8_t n = _blocks.count();
+  f.write(&n, 1);
+  for (uint8_t i = 0; i < n; i++) f.write(_blocks.keyAt(i), BLOCK_KEY_SIZE);
+  f.close();
+}
+
+void MyMesh::loadBlocks() {
+  auto f = _store->openRead("/blocks");
+  if (!f) return;
+  uint8_t n = 0;
+  if (f.read(&n, 1) == 1) {
+    uint8_t key[BLOCK_KEY_SIZE];
+    for (uint8_t i = 0; i < n && i < MAX_BLOCKED_KEYS; i++) {
+      if (f.read(key, BLOCK_KEY_SIZE) == (int)BLOCK_KEY_SIZE) _blocks.add(key);
+    }
+  }
+  f.close();
+}
+
+// #241: emit ONE frame of an in-flight 0xC2 LIST, called once per idle main-loop
+// pass while !isWriteBusy() (like the contacts iterator / config stream) so the
+// send queue drains between frames instead of overflowing + dropping the tail.
+// Uses the live count()/keyAt() each pass; a concurrent REMOVE mid-stream can only
+// shift indices (eventually-consistent snapshot, never a read past the array since
+// the index is re-checked against count() here) -- the app re-syncs if it matters.
+void MyMesh::blockListDrain() {
+  if (_blk_list_i >= _blocks.count()) {              // all keys emitted -> END
+    out_frame[0] = offband::RESP_CODE_OFFBAND_BLOCK;
+    out_frame[1] = offband::OFFBAND_BLOCK_LIST;
+    out_frame[2] = 0xFE;                             // END
+    _serial->writeFrame(out_frame, 3);
+    _blk_listing = false;
+    return;
+  }
+  out_frame[0] = offband::RESP_CODE_OFFBAND_BLOCK;
+  out_frame[1] = offband::OFFBAND_BLOCK_LIST;
+  out_frame[2] = _blk_list_i;                        // 0..MAX_BLOCKED_KEYS-1 (never 0xFE/0xFF)
+  memcpy(&out_frame[3], _blocks.keyAt(_blk_list_i), PUB_KEY_SIZE);
+  _serial->writeFrame(out_frame, 3 + PUB_KEY_SIZE);
+  _blk_list_i++;
+}
+
 void MyMesh::enterCLIRescue() {
   _cli_rescue = true;
   cli_command[0] = 0;
@@ -2634,6 +2737,9 @@ void MyMesh::checkSerialInterface() {
              && !_serial->isWriteBusy()) {  // response, one frame per idle pass
     offbandStreamDrain();
 #endif
+  } else if (_blk_listing                 // #241: drain an in-flight 0xC2 block-LIST,
+             && !_serial->isWriteBusy()) {  // one key frame per idle pass (queue-safe)
+    blockListDrain();
   } else if (_iter_started              // check if our ContactsIterator is 'running'
              && !_serial->isWriteBusy() // don't spam the Serial Interface too quickly!
   ) {

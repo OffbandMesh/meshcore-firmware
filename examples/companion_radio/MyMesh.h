@@ -5,7 +5,7 @@
 #include "AbstractUITask.h"
 
 /*------------ Frame Protocol --------------*/
-#define FIRMWARE_VER_CODE 14   // #163 (Epic F): + Offband caps byte / config command
+#define FIRMWARE_VER_CODE 15   // #241: + block-list cap bit (0x02) / 0xC2 block sync command
 
 #ifndef FIRMWARE_BUILD_DATE
 #define FIRMWARE_BUILD_DATE "6 Jun 2026"
@@ -30,6 +30,7 @@
 #include <helpers/ArduinoHelpers.h>
 #include <helpers/BaseSerialInterface.h>
 #include <helpers/IdentityStore.h>
+#include <helpers/BlockStore.h>   // #241: portable pubkey block list (receive-side)
 #include <helpers/SimpleMeshTables.h>
 #include <helpers/StaticPoolPacketManager.h>
 #include <target.h>
@@ -246,7 +247,13 @@ private:
   void saveChannels() { _store->saveChannels(this); }
   void saveContacts();
 
+  // #241: block-list persistence (flat /blocks file: [count][key0..keyN-1]).
+  void loadBlocks();
+  void saveBlocks();
+  void blockListDrain();   // emit one key frame of an in-flight 0xC2 LIST
+
   DataStore* _store;
+  BlockStore _blocks;   // #241: blocked pubkeys (in-memory; persisted via load/saveBlocks)
   NodePrefs _prefs;
   uint32_t pending_login;
   uint32_t pending_status;
@@ -279,6 +286,12 @@ private:
   size_t  _ob_off;        // next line (BROKERS) / chunk (VIEW) offset into _ob_buf
   char    _ob_buf[1024];  // current slot's "key=value\n" lines, or the VIEW text
 #endif
+  // #241: in-flight block-LIST streaming (ALWAYS compiled, unlike the observer
+  // config stream above). blockListDrain() emits one key frame per idle main-loop
+  // pass so the LIST never bursts the companion send queue (which drops when full,
+  // #169). Framing: START=[..,0xFF,count] -> [..,idx,key]* -> END=[..,0xFE].
+  bool    _blk_listing;
+  uint8_t _blk_list_i;
   uint8_t app_target_ver;
   uint8_t *sign_data;
   uint32_t sign_data_len;

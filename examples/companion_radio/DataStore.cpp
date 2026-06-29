@@ -155,6 +155,14 @@ File DataStore::openRead(FILESYSTEM* fs, const char* filename) {
 #endif
 }
 
+// #241: truncating write-open on the primary FS, via the file-local openWrite()
+// helper so the per-platform flags live in exactly one place. Named openWriteFile
+// (not openWrite) so it does not hide the file-local static openWrite() that the
+// existing savePrefs/saveContacts/saveChannels methods call.
+File DataStore::openWriteFile(const char* filename) {
+  return openWrite(_fs, filename);
+}
+
 bool DataStore::removeFile(const char* filename) {
   return _fs->remove(filename);
 }
