@@ -1480,6 +1480,12 @@ void MyMesh::handleCmdFrame(size_t len) {
       MESH_DEBUG_PRINTLN("APP_START mid-stream: sent END_OF_CONTACTS terminator (#178)");
     }
     _iter_started = false; // stop any left-over ContactsIterator
+    if (_blk_listing) {    // #241: terminate an in-flight block-LIST for the (re)connecting client (#178 pattern)
+      uint8_t h[3] = { offband::RESP_CODE_OFFBAND_BLOCK, offband::OFFBAND_BLOCK_LIST, 0xFE };
+      _serial->writeFrame(h, 3);
+      _blk_listing = false;
+      MESH_DEBUG_PRINTLN("APP_START mid-stream: sent block-LIST END terminator (#241)");
+    }
 #ifdef OFFBAND_OBSERVER
     if (_ob_stream == OB_STREAM_VIEW) {
       uint8_t h[2] = { offband::RESP_CODE_OFFBAND_CONFIG, offband::OCFG_R_VIEW_END };
