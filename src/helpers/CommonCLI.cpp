@@ -1037,7 +1037,7 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
 #endif
   } else if (memcmp(config, "radio", 5) == 0) {
     char freq[16], bw[16];
-    strcpy(freq, StrHelper::ftoa(_prefs->freq));
+    strcpy(freq, StrHelper::ftoa3(_prefs->freq));
     strcpy(bw, StrHelper::ftoa3(_prefs->bw));
     sprintf(reply, "> %s,%s,%d,%d", freq, bw, (uint32_t)_prefs->sf, (uint32_t)_prefs->cr);
   } else if (memcmp(config, "rxdelay", 7) == 0) {
@@ -1077,7 +1077,7 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
   } else if (memcmp(config, "tx", 2) == 0 && (config[2] == 0 || config[2] == ' ')) {
     sprintf(reply, "> %d", (int32_t) _prefs->tx_power_dbm);
   } else if (memcmp(config, "freq", 4) == 0) {
-    sprintf(reply, "> %s", StrHelper::ftoa(_prefs->freq));
+    sprintf(reply, "> %s", StrHelper::ftoa3(_prefs->freq));
   } else if (memcmp(config, "public.key", 10) == 0) {
     strcpy(reply, "> ");
     mesh::Utils::toHex(&reply[2], _callbacks->getSelfId().pub_key, PUB_KEY_SIZE);
