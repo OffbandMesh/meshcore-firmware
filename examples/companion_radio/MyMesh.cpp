@@ -998,6 +998,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _obs_cli_buf[0] = 0;
   _ob_stream = OB_STREAM_NONE;   // F8 (#169): no config-response stream in flight
 #endif
+  _blk_listing = false;   // #241: no block-LIST stream in flight
   offline_queue_len = 0;
   app_target_ver = 0;
   clearPendingReqs();
@@ -1392,6 +1393,38 @@ void MyMesh::handleCmdFrame(size_t len) {
     if (n < 0 || (size_t)n >= cap) n = 0;
     sensors.getGpsStatusText(txt + n, cap - (size_t)n);
     _serial->writeFrame(out_frame, 1 + strlen(txt) + 1);  // +1: NUL-terminated (Offband convention)
+    return;
+  }
+  // #241: block-list sync (companion-API only; NEVER on the mesh). 0xC2.
+  // Receive-side store maintenance: ADD/REMOVE/CLEAR are single-frame acks;
+  // LIST streams (START -> one key/frame -> END) via blockListDrain so it never
+  // bursts the send queue (drops-when-full, #169). Forwarding/relay untouched (§11).
+  if (cmd_frame[0] == offband::CMD_OFFBAND_BLOCK && len >= 2) {
+    uint8_t sub = cmd_frame[1];
+    if (sub == offband::OFFBAND_BLOCK_ADD && len >= 2 + PUB_KEY_SIZE) {
+      bool ok = _blocks.add(&cmd_frame[2]);
+      if (ok) saveBlocks();
+      out_frame[0] = offband::RESP_CODE_OFFBAND_BLOCK; out_frame[1] = sub; out_frame[2] = ok ? 1 : 0;
+      _serial->writeFrame(out_frame, 3);
+    } else if (sub == offband::OFFBAND_BLOCK_REMOVE && len >= 2 + PUB_KEY_SIZE) {
+      bool ok = _blocks.remove(&cmd_frame[2]);
+      if (ok) saveBlocks();
+      out_frame[0] = offband::RESP_CODE_OFFBAND_BLOCK; out_frame[1] = sub; out_frame[2] = ok ? 1 : 0;
+      _serial->writeFrame(out_frame, 3);
+    } else if (sub == offband::OFFBAND_BLOCK_CLEAR) {
+      _blocks.clear(); saveBlocks();
+      out_frame[0] = offband::RESP_CODE_OFFBAND_BLOCK; out_frame[1] = sub; out_frame[2] = 1;
+      _serial->writeFrame(out_frame, 3);
+    } else if (sub == offband::OFFBAND_BLOCK_LIST) {
+      // START frame [.., 0xFF, count]; keys then stream one-per-idle-pass; then END.
+      out_frame[0] = offband::RESP_CODE_OFFBAND_BLOCK; out_frame[1] = sub;
+      out_frame[2] = 0xFF; out_frame[3] = _blocks.count();
+      _serial->writeFrame(out_frame, 4);
+      _blk_list_i = 0;
+      _blk_listing = true;
+    } else {
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    }
     return;
   }
   if (cmd_frame[0] == CMD_DEVICE_QUERY && len >= 2) { // sent when app establishes connection
@@ -2488,6 +2521,29 @@ void MyMesh::loadBlocks() {
   f.close();
 }
 
+// #241: emit ONE frame of an in-flight 0xC2 LIST, called once per idle main-loop
+// pass while !isWriteBusy() (like the contacts iterator / config stream) so the
+// send queue drains between frames instead of overflowing + dropping the tail.
+// Uses the live count()/keyAt() each pass; a concurrent REMOVE mid-stream can only
+// shift indices (eventually-consistent snapshot, never a read past the array since
+// the index is re-checked against count() here) -- the app re-syncs if it matters.
+void MyMesh::blockListDrain() {
+  if (_blk_list_i >= _blocks.count()) {              // all keys emitted -> END
+    out_frame[0] = offband::RESP_CODE_OFFBAND_BLOCK;
+    out_frame[1] = offband::OFFBAND_BLOCK_LIST;
+    out_frame[2] = 0xFE;                             // END
+    _serial->writeFrame(out_frame, 3);
+    _blk_listing = false;
+    return;
+  }
+  out_frame[0] = offband::RESP_CODE_OFFBAND_BLOCK;
+  out_frame[1] = offband::OFFBAND_BLOCK_LIST;
+  out_frame[2] = _blk_list_i;                        // 0..MAX_BLOCKED_KEYS-1 (never 0xFE/0xFF)
+  memcpy(&out_frame[3], _blocks.keyAt(_blk_list_i), PUB_KEY_SIZE);
+  _serial->writeFrame(out_frame, 3 + PUB_KEY_SIZE);
+  _blk_list_i++;
+}
+
 void MyMesh::enterCLIRescue() {
   _cli_rescue = true;
   cli_command[0] = 0;
@@ -2675,6 +2731,9 @@ void MyMesh::checkSerialInterface() {
              && !_serial->isWriteBusy()) {  // response, one frame per idle pass
     offbandStreamDrain();
 #endif
+  } else if (_blk_listing                 // #241: drain an in-flight 0xC2 block-LIST,
+             && !_serial->isWriteBusy()) {  // one key frame per idle pass (queue-safe)
+    blockListDrain();
   } else if (_iter_started              // check if our ContactsIterator is 'running'
              && !_serial->isWriteBusy() // don't spam the Serial Interface too quickly!
   ) {

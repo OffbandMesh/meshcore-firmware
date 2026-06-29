@@ -250,6 +250,7 @@ private:
   // #241: block-list persistence (flat /blocks file: [count][key0..keyN-1]).
   void loadBlocks();
   void saveBlocks();
+  void blockListDrain();   // emit one key frame of an in-flight 0xC2 LIST
 
   DataStore* _store;
   BlockStore _blocks;   // #241: blocked pubkeys (in-memory; persisted via load/saveBlocks)
@@ -285,6 +286,12 @@ private:
   size_t  _ob_off;        // next line (BROKERS) / chunk (VIEW) offset into _ob_buf
   char    _ob_buf[1024];  // current slot's "key=value\n" lines, or the VIEW text
 #endif
+  // #241: in-flight block-LIST streaming (ALWAYS compiled, unlike the observer
+  // config stream above). blockListDrain() emits one key frame per idle main-loop
+  // pass so the LIST never bursts the companion send queue (which drops when full,
+  // #169). Framing: START=[..,0xFF,count] -> [..,idx,key]* -> END=[..,0xFE].
+  bool    _blk_listing;
+  uint8_t _blk_list_i;
   uint8_t app_target_ver;
   uint8_t *sign_data;
   uint32_t sign_data_len;
