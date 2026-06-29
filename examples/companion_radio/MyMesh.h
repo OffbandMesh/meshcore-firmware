@@ -5,7 +5,7 @@
 #include "AbstractUITask.h"
 
 /*------------ Frame Protocol --------------*/
-#define FIRMWARE_VER_CODE 14   // #163 (Epic F): + Offband caps byte / config command
+#define FIRMWARE_VER_CODE 15   // #241: + block-list cap bit (0x02) / 0xC2 block sync command
 
 #ifndef FIRMWARE_BUILD_DATE
 #define FIRMWARE_BUILD_DATE "6 Jun 2026"

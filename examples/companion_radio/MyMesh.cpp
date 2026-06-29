@@ -3,6 +3,12 @@
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
 
+// Offband fork-only companion-API frame codes (config 0xC0 / GPS 0xC1 / block 0xC2)
+// + shared enums. Self-contained (only <stdint.h>); included unconditionally so the
+// block cap bit and 0xC2 codes resolve on EVERY companion build, not just observer
+// ones. The config *backend* (ConfigSchema/ObserverCli) stays observer-gated below. #241.
+#include "OffbandConfigProtocol.h"
+
 #ifdef OFFBAND_OBSERVER_BLE_COMPANION
 // Plan 3 Task 10 (Strycher/LoRa#272): reserved-slot CLI intercepts +
 // system-channel status posting. Build-flag-gated so the upstream
@@ -20,8 +26,8 @@
 // broad OFFBAND_OBSERVER flag (not the BLE-companion flag) so it is
 // present on every observer build, including future BLE-disabled ones.
 #include "helpers/wifi_observer/CliPassthrough.h"
-// Epic F: the config command codes (#160 contract) + its typed dispatch backend (#165).
-#include "OffbandConfigProtocol.h"
+// Epic F: the config command codes (#160 contract) live in OffbandConfigProtocol.h,
+// now included unconditionally above (#241). Its typed dispatch backend (#165):
 #include "helpers/wifi_observer/ObserverCli.h"   // configSet/configGet + dispatchObserverCli
 // wifiObserverPool() lives in WifiObserver.h (heavy transitive includes); forward-
 // declare it here as CliPassthrough.cpp does. configSet takes a pool ref (only the
@@ -1408,6 +1414,7 @@ void MyMesh::handleCmdFrame(size_t len) {
 #ifdef OFFBAND_OBSERVER
     offband_caps |= offband::OFFBAND_CAP_WIFI_OBSERVER;
 #endif
+    offband_caps |= offband::OFFBAND_CAP_BLOCK;  // #241: block list always present on the companion
     out_frame[i++] = offband_caps;           // v14+
     _serial->writeFrame(out_frame, i);
   } else if (cmd_frame[0] == CMD_APP_START &&

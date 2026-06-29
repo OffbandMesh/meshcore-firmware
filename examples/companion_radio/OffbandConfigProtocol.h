@@ -111,6 +111,17 @@ enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUT
 // gates the WHOLE command -- every key, display included -- on WIFI_OBSERVER_SUPPORT
 // (in addition to FIRMWARE_VER_CODE >= 14). There is NO display-without-observer path.
 constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: config backend (wifi_observer) compiled in
+constexpr uint8_t OFFBAND_CAP_BLOCK         = 0x02;  // bit 1: user-block list (BlockStore) compiled in (#241)
+
+// Block-list sync (fork command 0xC2; companion-API only, NEVER on the mesh -- the
+// block list is receive-side only and changes no forwarding/relay/advert path,
+// contract §11). Request sub-code in cmd_frame[1]; replies echo it in out_frame[1].
+constexpr uint8_t CMD_OFFBAND_BLOCK       = 0xC2;  // request:  cmd_frame[0]
+constexpr uint8_t RESP_CODE_OFFBAND_BLOCK = 0xC2;  // response: out_frame[0]
+constexpr uint8_t OFFBAND_BLOCK_ADD    = 0x01;
+constexpr uint8_t OFFBAND_BLOCK_REMOVE = 0x02;
+constexpr uint8_t OFFBAND_BLOCK_LIST   = 0x03;
+constexpr uint8_t OFFBAND_BLOCK_CLEAR  = 0x04;
 
 // ---------------------------------------------------------------------------
 // Key schema -- the firmware<->client contract surface
