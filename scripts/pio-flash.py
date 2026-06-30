@@ -204,14 +204,17 @@ def find_in_registry(
     registry: dict, vid_pid: str, instance_hash: str
 ) -> tuple[Optional[str], Optional[str], Optional[dict]]:
     # Two-tier match: an exact DeviceID-instance match ALWAYS wins over a weaker
-    # VID:PID-class-only match, regardless of registry order. Without this, a
-    # device with null/empty discriminators (class-only) that happens to be
-    # listed earlier shadows a later device that has the exact instance hash
-    # recorded -- which is how a board sitting on another device's old USB port
-    # gets mislabeled (e.g. a XIAO on a Meshtastic node's former port). The
-    # class-only candidate is kept only as a fallback when nothing matches by
-    # instance.
-    class_only_fallback: tuple[Optional[str], Optional[str], Optional[dict]] = (None, None, None)
+    # VID:PID-class-only match. A class-only candidate (no instance hash recorded,
+    # e.g. discriminators.windows == null) is settled for ONLY when it is the
+    # *sole* device claiming this VID:PID class. When several registered devices
+    # share the VID:PID (e.g. multiple ESP32-S3 303A:0002 boards) and none match
+    # by instance hash, a class-only guess would mislabel the port -- this is the
+    # recurring "COM<n> shows as LIBT" bug, where LIBT carried a null Windows
+    # discriminator and wildcard-grabbed any unmatched 303A:0002 port (the
+    # companion sitting on a different bench port than its recorded hash). In that
+    # ambiguous case we return UNMATCHED so the caller surfaces an honest
+    # "unidentified" port instead of a confidently-wrong device name.
+    class_only_candidates: list[tuple[Optional[str], Optional[str], Optional[dict]]] = []
     for kind_key, kind_label in [("devices", "device"), ("foreign_devices", "foreign")]:
         for name, entry in (registry.get(kind_key) or {}).items():
             entry_vid_pids = entry.get("vid_pid") or []
@@ -230,12 +233,14 @@ def find_in_registry(
                     return (kind_label, name, entry)
                 # Has hashes but none match this port -- definitely not this device.
                 continue
-            # No per-instance hash recorded: a class-only candidate. Remember the
-            # first one as a fallback, but keep looking for an exact instance match
-            # before settling for it.
-            if class_only_fallback == (None, None, None):
-                class_only_fallback = (kind_label, name, entry)
-    return class_only_fallback
+            # No per-instance hash recorded: a class-only candidate.
+            class_only_candidates.append((kind_label, name, entry))
+    # Settle for a class-only candidate only when it UNIQUELY claims this VID:PID;
+    # an ambiguous class-only guess is reported as unidentified (None), never as a
+    # specific device.
+    if len(class_only_candidates) == 1:
+        return class_only_candidates[0]
+    return (None, None, None)
 
 
 # ---------------------------------------------------------------------------
@@ -744,7 +749,17 @@ def _confirm_artifact(args, token: dict, port: dict) -> int:
 
     # Trigger bootloader entry on the verified running port, then discover the
     # device on its new bootloader COM (it changes identity + port).
-    bl = _enter_bootloader_and_discover(port, platform)
+    # Exception: boards whose ROM bootloader keeps the same USB identity (e.g.
+    # the Heltec V4 TFT stays PID 1001 on the same port) have no transition to
+    # discover. With --in-bootloader, flash directly on the already-verified
+    # resolved port -- exactly as cmd_factory_reset does -- letting esptool's own
+    # reset enter download mode. The port was identity-checked in cmd_confirm.
+    if getattr(args, "in_bootloader", False):
+        out(f"--in-bootloader: flashing on resolved port {port['com']} "
+            f"({port['vid_pid']}) directly; no reset/rediscover dance.")
+        bl = port
+    else:
+        bl = _enter_bootloader_and_discover(port, platform)
 
     env_d = env_with_auth()
     if method == "esptool_app_slot":
@@ -1178,8 +1193,13 @@ def cmd_backup(args, registry):
         "python", "-m", "esptool",
         "--port", port["com"],
         "--baud", str(baud),
-        "read_flash", str(args.offset), str(flash_size), str(output),
     ]
+    if getattr(args, "no_stub", False):
+        # ROM loader reads block-by-block (request->receive->request) instead of
+        # streaming continuously, so it can't overflow the ESP32-S3 USB-Serial/JTAG
+        # FIFO -- robust against 'serial stream stopped' on long reads. Slower.
+        cmd.append("--no-stub")
+    cmd += ["read_flash", str(args.offset), str(flash_size), str(output)]
     rc = subprocess.call(cmd, env=env_dict)
 
     if rc == 0 and output.exists():
@@ -1539,6 +1559,12 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("confirm", help="execute the staged Tier A flash")
     s.add_argument("device", help="must match the device in the token")
     s.add_argument("--token", required=True, help="path to token file from preview")
+    s.add_argument("--in-bootloader", action="store_true",
+                   help="device's ROM bootloader keeps the same USB identity "
+                        "(e.g. Heltec V4 TFT bootloader stays PID 1001 on the same "
+                        "port). Skip the reset-and-rediscover dance; flash directly "
+                        "on the resolved (identity-verified) port -- esptool handles "
+                        "the reset. Mirrors cmd_factory_reset.")
 
     s = sub.add_parser("monitor", help="open serial monitor (Tier B; no reset on properly-configured envs -- see --env)")
     s.add_argument("device")
@@ -1572,7 +1598,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="region size in bytes (default 0x1000000 = 16 MB full ESP32-S3 flash; use 0x6000 for default NVS partition)")
     s.add_argument("--baud", type=int, default=460800,
                    help="post-stub baud rate (default 460800; drop to 115200/230400 if "
-                        "high baud produces 'serial stream stopped' on long reads)")
+                        "high baud produces 'serial stream stopped' on long reads -- "
+                        "but note USB-Serial/JTAG ignores baud, where --no-stub is the fix)")
+    s.add_argument("--no-stub", action="store_true",
+                   help="use the ROM loader instead of the stub -- robust against "
+                        "'serial stream stopped' on USB-Serial/JTAG sustained reads (slower)")
 
     s = sub.add_parser("erase-region", help="erase specific flash region (Tier A, resets chip)")
     s.add_argument("device")
