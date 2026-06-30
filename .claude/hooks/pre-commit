@@ -65,6 +65,52 @@ if [ -n "$REPO_ROOT_FOR_AGENT_CHECK" ] && [ -f "$REPO_ROOT_FOR_AGENT_CHECK/.agen
   fi
 fi
 
+# ─── 0.6. Safe Lane: primary-clone (main working tree) block (agent only) ───
+# Per SAFELANE §5, agent edits/commits must happen in a git *worktree*, not the
+# primary clone. The §0.5 branch check above misses one path: `git checkout -b`
+# *inside* the primary clone leaves the main working tree on a feature branch —
+# the branch check then passes while main's working tree is still polluted.
+# This check closes that loophole: it refuses commits made in the MAIN working
+# tree regardless of branch.
+#
+# Detection: a linked worktree's git dir always lives under `.git/worktrees/`;
+# the main working tree's never does. (A `--git-dir == --git-common-dir` compare
+# is NOT subdir-safe — see block-primary-clone-edit.py.)
+#
+# Gated on .agent-identity (agent commits only) — humans may commit in the
+# primary clone. See DifferentWire/standards#181.
+if [ -n "$REPO_ROOT_FOR_AGENT_CHECK" ] && [ -f "$REPO_ROOT_FOR_AGENT_CHECK/.agent-identity" ]; then
+  if [ "${DW_ALLOW_PRIMARY_CLONE:-0}" = "1" ]; then
+    echo "⚠ PRIMARY-CLONE COMMIT BYPASSED — DW_ALLOW_PRIMARY_CLONE=1" >&2
+    echo "  This bypass is logged. Use only for emergencies." >&2
+  else
+    # Detection: a linked worktree's git dir differs from its *common* git dir
+    # (the git dir is <common>/worktrees/<name>); the main working tree's git
+    # dir IS the common dir. Comparing the two (absolute) is precise and can't
+    # be fooled by a repo cloned under a path that merely contains the string
+    # ".git/worktrees/" — a substring match on the git dir alone can (see
+    # block-primary-clone-edit.py and standards#181 review). Submodules are
+    # exempt (their own working tree is the only place to edit them). Fails
+    # CLOSED (block) on uncertainty — this hook only ever runs inside a repo.
+    SUPERPROJECT=$(git rev-parse --show-superproject-working-tree 2>/dev/null)
+    GIT_DIR_ABS=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null | tr 'A-Z' 'a-z')
+    COMMON_DIR_ABS=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null | tr 'A-Z' 'a-z')
+    if [ -n "$SUPERPROJECT" ]; then
+      : # inside a submodule — its own working tree is the only place to edit; exempt
+    elif [ -n "$GIT_DIR_ABS" ] && [ "$GIT_DIR_ABS" != "$COMMON_DIR_ABS" ]; then
+      : # linked worktree (git dir != common dir) — allowed
+    else
+      # main working tree (git dir == common dir), or detection failed -> block
+      echo "✗ Safe Lane: agent commit in the PRIMARY CLONE (main working tree) is blocked." >&2
+      echo "  Repo: ${REPO_ROOT_FOR_AGENT_CHECK}" >&2
+      echo "  Its working tree mirrors 'main' and must stay clean. Work in a worktree:" >&2
+      echo "    git worktree add /c/Dev/<project>-<topic>/ -b <type>/<issue>-<topic> main" >&2
+      echo "  Emergency bypass: DW_ALLOW_PRIMARY_CLONE=1 git commit ... (logged)" >&2
+      exit 1
+    fi
+  fi
+fi
+
 CITADEL_API="https://getunfocused.app/citadel"
 
 # Detect project name from DW_PROJECT env var or directory name
