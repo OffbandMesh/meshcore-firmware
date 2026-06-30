@@ -32,6 +32,7 @@ class NRF52Board : public mesh::MainBoard {
 protected:
   uint8_t startup_reason;
   char *ota_name;
+  bool _wdt_started = false;          // #257: hardware watchdog has been started
 
 #ifdef NRF52_POWER_MANAGEMENT
   uint32_t reset_reason;              // RESETREAS register value
@@ -54,6 +55,12 @@ public:
   virtual bool startOTAUpdate(const char *id, char reply[]) override;
   virtual void sleep(uint32_t secs) override;
   bool isExternalPowered() override;
+
+  // #257: hardware watchdog (independent of NRF52_POWER_MANAGEMENT).
+  // startWatchdog() once at boot; feedWatchdog() from the MAIN LOOP only, so a
+  // hung loop trips it -> auto-reboot + RESETREAS=DOG ("Watchdog") at next boot.
+  void startWatchdog(uint32_t timeout_secs);
+  void feedWatchdog();
 
 #ifdef NRF52_POWER_MANAGEMENT
   uint16_t getBootVoltage() override { return boot_voltage_mv; }

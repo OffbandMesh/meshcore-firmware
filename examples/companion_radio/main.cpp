@@ -179,6 +179,19 @@ void setup() {
   board.begin();
   CW_PHASE("post:board.begin");
 
+#if defined(NRF52_PLATFORM) && defined(NRF52_POWER_MANAGEMENT)
+  // #257: surface the last reset cause on the boot banner (unconditional, NOT
+  // MESH_DEBUG-gated) so a Watchdog / CPU-Lockup recovery is visible the moment
+  // the unit is pulled to USB. RESETREAS was captured pre-SystemInit in initPowerMgr().
+  {
+    char rr[64];
+    snprintf(rr, sizeof(rr), "[boot] last reset: %s (RESETREAS=0x%lX)",
+             board.getResetReasonString(board.getResetReason()),
+             (unsigned long)board.getResetReason());
+    Serial.println(rr);
+  }
+#endif
+
 #ifdef DISPLAY_CLASS
   DisplayDriver* disp = NULL;
   bool display_begin_ok = display.begin();
@@ -369,10 +382,23 @@ void setup() {
 #endif
 #endif
   board.onBootComplete();
+
+#if defined(NRF52_PLATFORM)
+  // #257: start the hardware watchdog AFTER all boot init (incl. flash/contacts
+  // load), so a slow boot can't false-trip it. From here, any main-loop hang
+  // auto-reboots within the timeout (RESETREAS=DOG, "Watchdog") instead of
+  // wedging until a physical power-cycle. Fed at loop top + sleep entry.
+  // Fleet-wide for nRF52 companions; no-op on platforms without nrf_wdt.h.
+  board.startWatchdog(30);
+#endif
+
   CW_PHASE("setup:DONE");
 }
 
 void loop() {
+#if defined(NRF52_PLATFORM)
+  board.feedWatchdog();  // #257: feed from the MAIN LOOP only -> a hung loop trips the WDT
+#endif
 #ifdef OFFBAND_OBSERVER
   // CrashLog v6: per-sub-loop visit marking + heartbeat. Each sub-loop
   // sets its bit on entry; heartbeat reads + resets every ~1s. Lets us
