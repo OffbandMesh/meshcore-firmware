@@ -3,6 +3,9 @@
 
 #include <bluefruit.h>
 #include <nrf_soc.h>
+#if __has_include(<nrf_wdt.h>)
+#include <nrf_wdt.h>     // #257: hardware watchdog HAL (same dep SafeBoot.cpp uses)
+#endif
 
 static BLEDfu bledfu;
 
@@ -20,6 +23,32 @@ static void disconnect_callback(uint16_t conn_handle, uint8_t reason) {
 
 void NRF52Board::begin() {
   startup_reason = BD_STARTUP_NORMAL;
+}
+
+// --- Hardware watchdog (#257) ----------------------------------------------
+// Direct-register WDT (matches this file's NRF_*-> style). Once started the WDT
+// cannot be stopped or reconfigured; CONFIG.SLEEP=Run keeps it counting while
+// the CPU sleeps in sleep()/__WFE. Fed ONLY from the main loop (+ at sleep
+// entry) so a hung loop trips it -> NVIC reset with RESETREAS=DOG ("Watchdog"),
+// surfaced on the next boot banner. See OffbandMesh/meshcore-firmware#257.
+void NRF52Board::startWatchdog(uint32_t timeout_secs) {
+#if __has_include(<nrf_wdt.h>)
+  if (nrf_wdt_started(NRF_WDT)) { _wdt_started = true; return; }  // already running -> just feed it
+  if (timeout_secs == 0) timeout_secs = 30;
+  // SLEEP=Run: keep counting during __WFE sleep. HALT=Pause (default 0): don't
+  // fire while a debugger has the core halted.
+  NRF_WDT->CONFIG = (WDT_CONFIG_SLEEP_Run << WDT_CONFIG_SLEEP_Pos);
+  NRF_WDT->CRV    = (timeout_secs * 32768UL) - 1UL;   // timeout = (CRV + 1) / 32768 s
+  NRF_WDT->RREN   = WDT_RREN_RR0_Msk;                 // enable reload register 0
+  NRF_WDT->TASKS_START = 1;                           // start (irreversible)
+  _wdt_started = true;
+#endif
+}
+
+void NRF52Board::feedWatchdog() {
+#if __has_include(<nrf_wdt.h>)
+  if (_wdt_started) nrf_wdt_reload_request_set(NRF_WDT, NRF_WDT_RR0);
+#endif
 }
 
 #ifdef NRF52_POWER_MANAGEMENT
@@ -257,6 +286,8 @@ bool NRF52Board::isExternalPowered() {
 }
 
 void NRF52Board::sleep(uint32_t secs) {
+  feedWatchdog();  // #257: refresh at sleep entry; only a truly stuck (no-wake) sleep can then trip the WDT
+
   // Clear FPU interrupt flags to avoid insomnia
   // see errata 87 for details https://docs.nordicsemi.com/bundle/errata_nRF52840_Rev3/page/ERR/nRF52840/Rev3/latest/anomaly_840_87.html
   #if (__FPU_USED == 1)
