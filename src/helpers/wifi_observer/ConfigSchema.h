@@ -135,10 +135,11 @@ bool clearBrokerConfig(uint8_t slot);
 
 // Phase 2 (#48; layout revised in #95): seed the public-broker registry into
 // empty slots only (cfg.url[0] == '\0'); never overwrites user-set values;
-// idempotent. Slot 0 = CoreScope (tcp/anon) ships ENABLED; slots 1-5 (wss/jwt:
-// LetsMesh-US, Eastme.sh, MeshMapper, LetsMesh-EU, Eastmesh.au) ship disabled
-// pending operator opt-in + JWT identity claims; slots 6-9 are left empty for
-// operator-custom brokers.
+// idempotent. As of #262 ALL seeded slots ship DISABLED (slot 0 = CoreScope
+// tcp/anon; slots 1-5 wss/jwt: LetsMesh-US, Eastme.sh, MeshMapper, LetsMesh-EU,
+// Eastmesh.au) -- a fresh flash must not auto-publish to any upstream broker;
+// the operator opts in per slot (+ JWT identity claims for the wss brokers).
+// Slots 6-9 are left empty for operator-custom brokers.
 void populateDefaultBrokers();
 
 // #182: one-time boot migration of an upgraded observer to the per-key / no-blank

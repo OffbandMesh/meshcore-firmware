@@ -370,7 +370,7 @@ bool clearBrokerConfig(uint8_t slot) {
 // changing this layout does NOT re-shuffle slots on a device already seeded
 // under an older layout; it takes effect only on a fresh NVS.)
 //
-//   slot 0  CoreScope Dayton   mqtt://mqtt1.okimesh.org:1883    tcp / anon   ENABLED
+//   slot 0  CoreScope Dayton   mqtt://mqtt1.okimesh.org:1883    tcp / anon   disabled  (#262)
 //   slot 1  LetsMesh-US        wss://mqtt-us-v1.letsmesh.net    wss / jwt    disabled
 //   slot 2  Eastme.sh          wss://mqtt.eastme.sh             wss / jwt    disabled
 //   slot 3  MeshMapper         wss://mqtt.meshmapper.net        wss / jwt    disabled
@@ -378,8 +378,11 @@ bool clearBrokerConfig(uint8_t slot) {
 //   slot 5  Eastmesh.au        wss://mqtt2.eastmesh.au          wss / jwt    disabled
 //   slots 6-9  (MQTT Custom)   left empty for the operator to fill
 //
-// CoreScope is plaintext + anonymous, so it is the only slot enabled by
-// default: no TLS cert, no JWT identity (validated live on HV3 -- #42/#48).
+// As of #262 NO slot is enabled by default -- a fresh flash must not
+// auto-publish to any upstream broker. CoreScope (slot 0, plaintext + anon,
+// no TLS cert / no JWT; validated live on HV3 -- #42/#48) was formerly the
+// sole default-enabled slot, which made out-of-region fresh flashes feed
+// OKIMesh CoreScope tagged as Dayton/HAO.
 // The wss brokers stay disabled until the operator opts in; their ca_cert
 // names ("gts-r4", "letsencrypt", "isrg-x2") all resolve in MqttBroker.cpp's
 // lookupCaCertPem(), and while disabled they never connect anyway.
@@ -419,7 +422,7 @@ struct DefaultBrokerSpec {
 // Slots 0-5. Slots 6-9 (MQTT Custom) are intentionally absent so they stay empty.
 // jwt_audience is the BARE host (#95); ca_cert names resolve in MqttBroker.cpp.
 constexpr DefaultBrokerSpec kDefaultBrokerSpecs[] = {
-    {true,  "mqtt://mqtt1.okimesh.org:1883",          BrokerTransport::Tcp, 1883, BrokerAuthType::None, "",                        ""},
+    {false, "mqtt://mqtt1.okimesh.org:1883",          BrokerTransport::Tcp, 1883, BrokerAuthType::None, "",                        ""},
     {false, "wss://mqtt-us-v1.letsmesh.net:443/mqtt", BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt-us-v1.letsmesh.net", "gts-r4"},
     {false, "wss://mqtt.eastme.sh:443/mqtt",          BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt.eastme.sh",          "letsencrypt"},
     {false, "wss://mqtt.meshmapper.net:443/mqtt",     BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt.meshmapper.net",     "isrg-x2"},
@@ -432,11 +435,13 @@ constexpr uint8_t kNumDefaultBrokers =
 
 void populateDefaultBrokers() {
     bool all_ok = true;
-    // Seed the owner's IATA (HAO) if unset -- SWOH default to simplify setup
-    // for most operators; non-SWOH operators override via the global mqtt iata.
+    // Seed a NON-geographic placeholder IATA ("XYZ") if unset -- #262. A fresh
+    // flash must not masquerade as a real region; HAO (Dayton/SWOH) was the old
+    // default and mislabeled out-of-region devices. The operator sets their real
+    // region via the global `mqtt iata`.
     char iata[8] = {0};
     if (!readGlobalIata(iata, sizeof(iata)) || iata[0] == '\0') {
-        all_ok &= writeGlobalIata("HAO");
+        all_ok &= writeGlobalIata("XYZ");
     }
 
     for (uint8_t slot = 0;
