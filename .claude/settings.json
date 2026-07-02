@@ -11,6 +11,11 @@
             "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/preflight.sh\"",
             "timeout": 30000
+          },
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-identity.py\" register",
+            "timeout": 10000
           }
         ]
       }
