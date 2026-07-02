@@ -14,7 +14,10 @@ Subcommands:
     write                       Snapshot live state into .claude/agent-session.json.
     clear                       Remove the state file.
     note <text>                 Append a freeform timestamped note.
-    identity <name>             Set agent_mail_identity.
+    identity <name>             Set agent_mail_identity. LEGACY — the
+                                authoritative identity now comes from
+                                session-identity.py (keyed to the session UUID);
+                                kept only for backward-compat during transition.
     approval <action...>        Record a Tier 2 approval ("merge PR #N", etc.).
 
 State file schema v1 (.claude/agent-session.json):
@@ -22,7 +25,9 @@ State file schema v1 (.claude/agent-session.json):
       "version": 1,
       "project": "<name>",
       "last_updated": "ISO8601 UTC",
-      "agent_mail_identity": "<window identity>",
+      "agent_mail_identity": "<window identity>",   # LEGACY — superseded by
+                                                     # session-identity.py; read
+                                                     # prefers that, this is fallback.
       "active_worktree": {"path": "...", "branch": "..."},
       "claimed_tasks": [{"task_id": "...", "external_issue_number": N,
                          "claimed_at": "..."}],
@@ -199,6 +204,28 @@ def query_worktree(root: Path) -> dict:
     }
 
 
+def session_identity_name() -> str:
+    """Authoritative per-session identity from the sibling session-identity.py
+    hook (keyed to the session UUID; standards#190/#192/#197). SUPERSEDES the
+    legacy `agent_mail_identity` singleton — that field lived in the shared
+    agent-session.json, so every concurrent session read the same name (the
+    "10 concurrent RedCreeks" collision). Best-effort: returns "" if the sibling
+    hook is absent (repo not yet fanned out) or errors, so cmd_read falls back
+    to the stored field during the transition.
+    """
+    script = Path(__file__).resolve().parent / "session-identity.py"
+    if not script.exists():
+        return ""
+    for py in ("python3", "python"):
+        out = run_capture([py, str(script), "whoami"], timeout=5)
+        if out is None:
+            continue  # nonzero exit (no UUID / corrupt record) or py absent
+        line = out.strip().splitlines()[-1].strip() if out.strip() else ""
+        if line and not line.startswith(("NO_SESSION", "BLOCKED", "usage")):
+            return line
+    return ""
+
+
 # ─── subcommands ─────────────────────────────────────────────────────────
 
 def cmd_read(args: list[str]) -> int:
@@ -213,9 +240,11 @@ def cmd_read(args: list[str]) -> int:
         return 0
 
     print(f"Last snapshot: {data.get('last_updated', 'unknown')}")
-    identity = data.get("agent_mail_identity") or ""
+    # Authoritative per-session identity (session-identity.py, keyed to UUID);
+    # fall back to the legacy singleton only where that hook isn't deployed yet.
+    identity = session_identity_name() or (data.get("agent_mail_identity") or "")
     if identity:
-        print(f"Agent Mail identity: {identity}")
+        print(f"Session identity: {identity}")
     wt = data.get("active_worktree") or {}
     if wt.get("path"):
         print(f"Active worktree: {wt.get('branch', '?')}  ({wt['path']})")
