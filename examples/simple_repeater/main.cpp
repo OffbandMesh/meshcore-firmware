@@ -949,12 +949,24 @@ void setup() {
 #endif
 
   board.onBootComplete();
+
+#if defined(NRF52_PLATFORM)
+  // #266: start the hardware watchdog after boot/init so a hung loop auto-reboots
+  // (RESETREAS=DOG, "Watchdog") instead of wedging an unattended repeater. The
+  // NRF52_PLATFORM guard excludes the ESP32 WiFi/MQTT-bridge repeaters, whose
+  // network calls can legitimately block >30 s. Fed from loop() only.
+  board.startWatchdog(30);
+#endif
+
 #ifdef ENABLE_WIFI_TELEMETRY
   wifi_telemetry_setup();
 #endif
 }
 
 void loop() {
+#if defined(NRF52_PLATFORM)
+  board.feedWatchdog();  // #266: feed from the MAIN LOOP only -> a hung loop trips the WDT
+#endif
 #ifdef PIN_STATUS_LED
   // Heartbeat: brief blip = alive (#9). No unread-message
   // logic (repeaters carry none). Cadence follows the loop rate; under nRF52
