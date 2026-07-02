@@ -68,3 +68,6 @@ device_backups/
 
 # local scratch working dir -- untracked for now (#107)
 weather/
+
+# Per-session identity registry — local runtime state (standards#190/#195/#197)
+.claude/sessions/
