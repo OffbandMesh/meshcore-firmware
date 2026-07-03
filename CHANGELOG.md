@@ -14,10 +14,12 @@ prior to 0.13.0 predate it; see `git tag -l 'crosswire-v*'` and the tag
 annotations for that history (highlights: v0.12.0 NimBLE migration, v0.11.x
 Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
-## [1.1.2] - 2026-06-28
+## [1.1.2] - 2026-07-02
 
 Companion **GPS auto-baud + on-demand GPS status**, plus the wedge/time fixes
-found while validating it on real hardware. Still on the **MeshCore 1.16.0** base.
+found while validating it on real hardware, and a **safer first-flash default** — a
+fresh Observer no longer auto-publishes to a preset MQTT broker. Still on the
+**MeshCore 1.16.0** base.
 
 ### Added
 - **GPS auto-baud detection** — the companion now detects the GPS modem's baud rate at
@@ -30,6 +32,17 @@ found while validating it on real hardware. Still on the **MeshCore 1.16.0** bas
 - **On-device build identity** — an optional build tag shows on the app device-info
   field and the OLED splash, so a specific build is identifiable without a serial
   console. (#222)
+
+### Changed
+- **Fresh flashes no longer auto-publish to OKIMesh CoreScope.** A newly-flashed
+  Observer previously seeded the CoreScope (Dayton) broker **enabled**, so a device
+  flashed anywhere in the world immediately fed MQTT to OKIMesh CoreScope tagged as a
+  Dayton node. On a fresh flash every broker now ships **disabled** — the operator
+  opts in per slot. (#262)
+- **Default region is now `XYZ`** (a non-geographic placeholder) instead of `HAO`
+  (Dayton), so an out-of-region device stops mislabeling itself until the operator sets
+  its region via `mqtt iata`. Fresh / NVS-erased devices only; existing devices keep
+  their stored config. (#262)
 
 ### Fixed
 - **GPS at high baud could wedge BLE.** An unbounded GPS read loop let a fast modem
