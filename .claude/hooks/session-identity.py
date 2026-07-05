@@ -55,7 +55,7 @@ import sys
 import time
 from pathlib import Path
 
-_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
 _MAX_IDENTITY_LEN = 64
 
 ADJ = ["Amber", "Azure", "Basalt", "Cobalt", "Crimson", "Dusk", "Ember", "Flint",
@@ -68,7 +68,7 @@ NOUN = ["Basin", "Bluff", "Canyon", "Cedar", "Creek", "Delta", "Dune", "Falls",
         "Thicket", "Thorn", "Vale", "Warren", "Wharf", "Wren", "Yarrow", "Zephyr"]
 
 
-class CorruptRecord(Exception):
+class CorruptRecordError(Exception):
     """The session's record file exists but could not be read/parsed."""
 
 
@@ -149,7 +149,7 @@ def record_path(uuid: str) -> Path:
 def read_record(uuid: str):
     """Return the record dict, or None if ABSENT.
 
-    Raises CorruptRecord if the file EXISTS but cannot be read/parsed — the
+    Raises CorruptRecordError if the file EXISTS but cannot be read/parsed — the
     caller must NOT treat that as "absent" (that would re-derive over a real
     identity). Distinguishing absent from corrupt is the core safety property.
     """
@@ -159,9 +159,9 @@ def read_record(uuid: str):
     try:
         data = json.loads(f.read_text(encoding="utf-8"))
     except Exception as e:  # unreadable / invalid JSON / permission / truncated
-        raise CorruptRecord(f"{f}: {e}") from e
+        raise CorruptRecordError(f"{f}: {e}") from e
     if not isinstance(data, dict):
-        raise CorruptRecord(f"{f}: not a JSON object")
+        raise CorruptRecordError(f"{f}: not a JSON object")
     return data
 
 
@@ -175,10 +175,10 @@ def _require_uuid():
 
 
 def _read_or_die(uuid: str):
-    """read_record but turn CorruptRecord into a loud exit(2) — never override."""
+    """read_record but turn CorruptRecordError into a loud exit(2) — never override."""
     try:
         return read_record(uuid)
-    except CorruptRecord as e:
+    except CorruptRecordError as e:
         print(
             f"BLOCKED: session identity record is unreadable — refusing to "
             f"re-derive over it.\n  {e}\n  Fix or remove the file by hand once "
@@ -322,7 +322,7 @@ def cmd_migrate(scratch_root=None) -> int:
             continue
         try:
             existing = read_record(uuid)
-        except CorruptRecord:
+        except CorruptRecordError:
             print(f"  ! {uuid}: canonical record corrupt — skipping (fix by hand)", file=sys.stderr)
             skipped += 1
             continue
@@ -354,8 +354,9 @@ def cmd_list() -> int:
                 continue
     for r in rows:
         if isinstance(r, dict):
-            print("  %-20s %-14s %s" % (
-                r.get("identity", "?"), r.get("entrypoint", "?"), r.get("uuid", "?")))
+            ident = r.get("identity", "?")
+            entry = r.get("entrypoint", "?")
+            print(f"  {ident!s:<20} {entry!s:<14} {r.get('uuid', '?')!s}")
     print(f"  ({len(rows)} session(s))")
     return 0
 

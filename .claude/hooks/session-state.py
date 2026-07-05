@@ -54,7 +54,10 @@ SCHEMA_VERSION = 1
 
 
 def iso_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # timezone.utc (NOT the 3.11+ `datetime.UTC` alias) keeps this hook importable
+    # on Python < 3.11 — an ImportError here fires at module load, before main()'s
+    # best-effort guard can catch it, breaking bootstrap (Gemini review, standards#212).
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: UP017
 
 
 def project_root() -> Path:
