@@ -85,15 +85,22 @@ def session_uuid():
 
 
 def derive(uuid: str) -> str:
-    """UUID -> stable, unique, human-readable identity.
+    """UUID -> stable, AM-VALID adjective+noun placeholder — a LOCAL FALLBACK,
+    not a coordination identity.
 
-    Adjective+noun and the 32-bit suffix come from independent bytes of
-    sha256(uuid), so the suffix does not correlate with the name (a raw
-    UUID-prefix would, reintroducing collisions — standards#190 review).
+    Agent Mail is the authority for a session's identity: register with the name
+    OMITTED so AM assigns a valid, per-project-unique adjective+noun name, then
+    record THAT via `register --identity <AM-name>`. So derive() emits an
+    AM-valid *plain* adjective+noun with NO suffix — AM's register_agent rejects
+    suffixed names (e.g. `GlacierYarrow-63890f45`), which split-brained sessions
+    between their derived name and AM's assigned one (the recurring identity
+    fight, standards#204 / 2026-07-05). Uniqueness is AM's per-project dedup, not
+    a hash suffix; derive() is only a deterministic placeholder for the
+    AM-unreachable case (where you STOP and tell the user anyway). See CLAUDE-BASE
+    "Agent Mail identity" + memory reference_agent_mail_identity_authority.
     """
     h = hashlib.sha256(uuid.encode("utf-8")).digest()
-    name = ADJ[h[0] % len(ADJ)] + NOUN[h[1] % len(NOUN)]
-    return f"{name}-{h[4:8].hex()}"
+    return ADJ[h[0] % len(ADJ)] + NOUN[h[1] % len(NOUN)]
 
 
 def project_dir() -> Path:
