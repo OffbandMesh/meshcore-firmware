@@ -87,7 +87,7 @@ private:
     uint32_t refresh_sec_  = 3600;
     uint32_t last_mint_ms_ = 0;
     char     token_[768]   = {0};
-    // #68: MQTT CONNECT username = "v1_" + UPPERCASE hex(pubkey). eastme.sh /
+    // #68: MQTT CONNECT username = "v1_" + UPPERCASE hex(pubkey). CoreComms.net /
     // LetsMesh gate auth on this; a null username is rejected (CONNACK rc=5)
     // even with a valid token (proven live). Built once on first apply().
     char     username_[72] = {0};

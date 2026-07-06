@@ -372,7 +372,7 @@ bool clearBrokerConfig(uint8_t slot) {
 //
 //   slot 0  CoreScope Dayton   mqtt://mqtt1.okimesh.org:1883    tcp / anon   disabled  (#262)
 //   slot 1  LetsMesh-US        wss://mqtt-us-v1.letsmesh.net    wss / jwt    disabled
-//   slot 2  Eastme.sh          wss://mqtt.eastme.sh             wss / jwt    disabled
+//   slot 2  CoreComms.net      wss://mqtt.corecomms.net         wss / jwt    disabled
 //   slot 3  MeshMapper         wss://mqtt.meshmapper.net        wss / jwt    disabled
 //   slot 4  LetsMesh-EU        wss://mqtt-eu-v1.letsmesh.net    wss / jwt    disabled
 //   slot 5  Eastmesh.au        wss://mqtt2.eastmesh.au          wss / jwt    disabled
@@ -403,7 +403,7 @@ bool clearBrokerConfig(uint8_t slot) {
 //
 // Audiences are the BARE host (e.g. "mqtt-us-v1.letsmesh.net"), NOT the
 // scheme-qualified "https://..." form: LetsMesh validates the "aud" claim
-// strictly and rejects the scheme form; Eastme.sh is lenient (#95, verified
+// strictly and rejects the scheme form; CoreComms.net is lenient (#95, verified
 // live 2026-06-11).
 //
 // Invoke once at WifiObserver::begin() before MqttBrokerPool::begin().
@@ -424,7 +424,7 @@ struct DefaultBrokerSpec {
 constexpr DefaultBrokerSpec kDefaultBrokerSpecs[] = {
     {false, "mqtt://mqtt1.okimesh.org:1883",          BrokerTransport::Tcp, 1883, BrokerAuthType::None, "",                        ""},
     {false, "wss://mqtt-us-v1.letsmesh.net:443/mqtt", BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt-us-v1.letsmesh.net", "gts-r4"},
-    {false, "wss://mqtt.eastme.sh:443/mqtt",          BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt.eastme.sh",          "letsencrypt"},
+    {false, "wss://mqtt.corecomms.net:443/mqtt",          BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt.corecomms.net",  "gts-r4"},
     {false, "wss://mqtt.meshmapper.net:443/mqtt",     BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt.meshmapper.net",     "isrg-x2"},
     {false, "wss://mqtt-eu-v1.letsmesh.net:443/mqtt", BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt-eu-v1.letsmesh.net", "gts-r4"},
     {false, "wss://mqtt2.eastmesh.au:443/mqtt",       BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt2.eastmesh.au",       "letsencrypt"},

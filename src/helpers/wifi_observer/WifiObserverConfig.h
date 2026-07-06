@@ -30,7 +30,7 @@
 // ---------------------------------------------------------------------------
 // Hard ceiling on configurable broker slots. Plan 2 introduced the
 // configurable NVS-backed list; #95 raised the ceiling from 6 to 10 so the
-// pre-seeded public brokers (CoreScope + LetsMesh US/EU + Eastme.sh +
+// pre-seeded public brokers (CoreScope + LetsMesh US/EU + CoreComms.net +
 // MeshMapper + Eastmesh.au = 6 slots, slots 0-5) leave four free slots (6-9)
 // for operator-custom brokers.
 //

@@ -6,7 +6,7 @@ A [MeshCore](https://github.com/meshcore-dev/MeshCore) fork for **cross-role fir
 
 | Role | Status | What Offband adds |
 |------|--------|---------------------|
-| **Companion / Observer** | Active | WiFi + MQTT publishing of LoRa-mesh observations to public brokers (CoreScope, eastme.sh, LetsMesh), NimBLE BLE stack, multi-broker pool with TLS + JWT auth, a GPS&nbsp;>&nbsp;NTP phone-free wall clock for unattended JWT auth, position in the MQTT `/status`, and full **in-app configuration over BLE** — WiFi, the MQTT broker pool, and display, via the companion-API config command — alongside the `_sys`-channel CLI |
+| **Companion / Observer** | Active | WiFi + MQTT publishing of LoRa-mesh observations to public brokers (CoreScope, CoreComms.net, LetsMesh), NimBLE BLE stack, multi-broker pool with TLS + JWT auth, a GPS&nbsp;>&nbsp;NTP phone-free wall clock for unattended JWT auth, position in the MQTT `/status`, and full **in-app configuration over BLE** — WiFi, the MQTT broker pool, and display, via the companion-API config command — alongside the `_sys`-channel CLI |
 | **Repeater** | Active | MQTT telemetry bridging (to Mosquitto and other brokers), burst-WiFi telemetry, heap and power tuning |
 | **Room server** | Not yet | -- |
 | **Bridge** | Not yet | -- |

@@ -131,7 +131,7 @@ mqtt status
   (the password — you do **not** set it) and normalizes `jwt_owner` case
   internally, so the input case doesn't matter.
 - **The exact `username` form is broker-dependent.** A **bare pubkey** works on
-  eastme.sh; some brokers expect a `v1_<pubkey>` prefix. If a wss slot won't
+  CoreComms.net; some brokers expect a `v1_<pubkey>` prefix. If a wss slot won't
   authenticate, try the other form. (Defaulting this per broker is #95.)
 
 ### Known broker values
@@ -139,7 +139,7 @@ mqtt status
 |---|---|---|---|
 | CoreScope | `mqtt://mqtt.w8oof.net:1883` | — (tcp / anon) | — |
 | LetsMesh-US | `wss://mqtt-us-v1.letsmesh.net:443/mqtt` | `gts-r4` | `mqtt-us-v1.letsmesh.net` (bare) |
-| eastme.sh | `wss://mqtt.eastme.sh:443/mqtt` | `letsencrypt` | `mqtt.eastme.sh` |
+| CoreComms.net | `wss://mqtt.CoreComms.net:443/mqtt` | `gts-r4` | `mqtt.CoreComms.net` |
 
 The firmware also seeds **MeshMapper** (slot 3), **LetsMesh-EU** (slot 4), and
 **Eastmesh.au** (slot 5) as defaults — run `mqtt view 3` / `4` / `5` for their
