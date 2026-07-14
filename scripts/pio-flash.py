@@ -1325,8 +1325,12 @@ def cmd_erase_region(args, registry):
 # back to a strict 6-byte MAC whose negative lookahead refuses to capture the
 # head of an 8-byte EUI-64.
 _MAC6 = r"([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})"
-_BASE_MAC_RE = re.compile(r"BASE\s+MAC:\s*" + _MAC6, re.IGNORECASE)
-_PLAIN_MAC_RE = re.compile(r"MAC:\s*" + _MAC6 + r"(?![0-9a-fA-F:])", re.IGNORECASE)
+# Anchored to line start (re.MULTILINE) so noisy log text like
+# "Note: check BASE MAC: .. on sticker" can never be mistaken for the field.
+_BASE_MAC_RE = re.compile(r"^BASE\s+MAC:\s*" + _MAC6, re.IGNORECASE | re.MULTILINE)
+_PLAIN_MAC_RE = re.compile(
+    r"^MAC:\s*" + _MAC6 + r"(?![0-9a-fA-F:])", re.IGNORECASE | re.MULTILINE
+)
 
 
 def parse_base_mac(stdout):
