@@ -1316,6 +1316,29 @@ def cmd_erase_region(args, registry):
     return rc
 
 
+# --- MAC parsing (#290) ------------------------------------------------------
+# On IEEE 802.15.4 chips (ESP32-C6 / ESP32-H2) `esptool read_mac` prints an
+# 8-byte EUI-64 as the FIRST "MAC:" line (e.g. 02:71:bc:ff:fe:12:34:56); its
+# first 6 bytes carry the ff:fe EUI-64 fill and are NOT the device base MAC.
+# The real 6-byte address is on the "BASE MAC:" line. S3/C3 print only a plain
+# 6-byte "MAC:" line (some builds also add "BASE MAC:"). Prefer BASE MAC; fall
+# back to a strict 6-byte MAC whose negative lookahead refuses to capture the
+# head of an 8-byte EUI-64.
+_MAC6 = r"([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})"
+_BASE_MAC_RE = re.compile(r"BASE\s+MAC:\s*" + _MAC6, re.IGNORECASE)
+_PLAIN_MAC_RE = re.compile(r"MAC:\s*" + _MAC6 + r"(?![0-9a-fA-F:])", re.IGNORECASE)
+
+
+def parse_base_mac(stdout):
+    """Extract the device base MAC (lowercased) from `esptool read_mac` output.
+
+    Returns the 6-byte MAC as "aa:bb:cc:dd:ee:ff", or None if none is found.
+    See #290 for the C6/H2 EUI-64 mis-parse this replaces.
+    """
+    m = _BASE_MAC_RE.search(stdout) or _PLAIN_MAC_RE.search(stdout)
+    return m.group(1).lower() if m else None
+
+
 def cmd_bootstrap(args, registry):
     """
     Register a new device. User-initiated only. Performs ONE authorized
@@ -1368,13 +1391,12 @@ def cmd_bootstrap(args, registry):
             f"stderr: {result.stderr.strip()}"
         )
 
-    # Parse MAC from esptool output. Format example:
-    #   MAC: <device-mac>
-    m = re.search(r"MAC:\s*([0-9a-fA-F:]{17})", result.stdout)
-    if not m:
+    # Parse MAC from esptool output. Prefer the BASE MAC line so 802.15.4 chips
+    # (C6/H2) don't record the EUI-64 head instead of the base MAC (#290).
+    mac = parse_base_mac(result.stdout)
+    if mac is None:
         out(result.stdout)
         refuse("could not parse MAC from esptool output (see stdout above)")
-    mac = m.group(1).lower()
     out(f"MAC read from device: {mac}")
 
     # Cross-check: does this MAC already belong to a different registered name?
