@@ -63,11 +63,19 @@ UPPER = "MAC:  AA:BB:CC:DD:EE:FF\n"
 
 NO_MAC = "esptool v5.2.0\nConnected to ESP32-S3\nStub flasher running.\n"
 
+# Noisy mid-line "BASE MAC:" must NOT be mistaken for the real field; only the
+# line-anchored MAC line counts (guards the #292 anchoring hardening).
+NOISY = (
+    "Note: check BASE MAC: aa:bb:cc:dd:ee:ff on the sticker\n"
+    "MAC:  02:dd:ee:11:22:33\n"
+)
+
 CASES = [
     ("C6 EUI-64 -> BASE MAC", C6, "02:71:bc:12:34:56"),
     ("S3 plain MAC", S3_PLAIN, "02:cc:a8:12:34:56"),
     ("S3 with BASE MAC", S3_WITH_BASE, "02:cc:a8:12:34:56"),
     ("uppercase normalized", UPPER, "aa:bb:cc:dd:ee:ff"),
+    ("noisy mid-line BASE MAC ignored", NOISY, "02:dd:ee:11:22:33"),
     ("no MAC -> None", NO_MAC, None),
 ]
 
