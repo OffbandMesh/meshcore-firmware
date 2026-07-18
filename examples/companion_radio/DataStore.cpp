@@ -241,6 +241,11 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
     file.read((uint8_t *)&_prefs.rx_boosted_gain, sizeof(_prefs.rx_boosted_gain));         // 89
     file.read((uint8_t *)_prefs.default_scope_name, sizeof(_prefs.default_scope_name));    // 90
     file.read((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));     // 121
+    // #298: APPEND-ONLY, must stay last. Prefs files written before this field ended at
+    // 137, so on those this read short-reads to EOF and leaves the caller-set default
+    // (LNA ON) intact. A uint8 append is all-or-nothing, so there is no partial-read
+    // hazard. Never insert a new field mid-sequence.
+    file.read((uint8_t *)&_prefs.radio_fem_rxgain, sizeof(_prefs.radio_fem_rxgain));      // 137
 
     file.close();
   }
@@ -281,6 +286,8 @@ void DataStore::savePrefs(const NodePrefs& _prefs, double node_lat, double node_
     file.write((uint8_t *)&_prefs.rx_boosted_gain, sizeof(_prefs.rx_boosted_gain));         // 89
     file.write((uint8_t *)_prefs.default_scope_name, sizeof(_prefs.default_scope_name));    // 90
     file.write((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));     // 121
+    // #298: APPEND-ONLY, must stay last -- see the matching note in loadPrefsInt().
+    file.write((uint8_t *)&_prefs.radio_fem_rxgain, sizeof(_prefs.radio_fem_rxgain));      // 137
 
     file.close();
   }
