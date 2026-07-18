@@ -995,64 +995,75 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
   }
 }
 
+// #299: exact-token match for CLI 'get' keys. The bare memcmp prefix compares that
+// gated this chain let any garbage suffix through -- 'get radio foobar' matched the
+// "radio" prefix and silently returned the radio settings instead of the standard
+// unknown-command error (it also let a longer key be shadowed by a shorter sibling).
+// Require the key to be followed by end-of-string or a space. strncmp (not memcmp)
+// so a config shorter than the key cannot read past its NUL terminator.
+static bool isKey(const char* config, const char* key) {
+  size_t n = strlen(key);
+  return strncmp(config, key, n) == 0 && (config[n] == 0 || config[n] == ' ');
+}
+
 void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* reply) {
   const char* config = &command[4];
-  if (memcmp(config, "dutycycle", 9) == 0) {
+  if (isKey(config, "dutycycle")) {
     float dc = 100.0f / (_prefs->airtime_factor + 1.0f);
     int dc_int = (int)dc;
     int dc_frac = (int)((dc - dc_int) * 10.0f + 0.5f);
     sprintf(reply, "> %d.%d%%", dc_int, dc_frac);
-  } else if (memcmp(config, "af", 2) == 0) {
+  } else if (isKey(config, "af")) {
     sprintf(reply, "> %s", StrHelper::ftoa(_prefs->airtime_factor));
-  } else if (memcmp(config, "int.thresh", 10) == 0) {
+  } else if (isKey(config, "int.thresh")) {
     sprintf(reply, "> %d", (uint32_t) _prefs->interference_threshold);
-  } else if (memcmp(config, "agc.reset.interval", 18) == 0) {
+  } else if (isKey(config, "agc.reset.interval")) {
     sprintf(reply, "> %d", ((uint32_t) _prefs->agc_reset_interval) * 4);
-  } else if (memcmp(config, "multi.acks", 10) == 0) {
+  } else if (isKey(config, "multi.acks")) {
     sprintf(reply, "> %d", (uint32_t) _prefs->multi_acks);
-  } else if (memcmp(config, "allow.read.only", 15) == 0) {
+  } else if (isKey(config, "allow.read.only")) {
     sprintf(reply, "> %s", _prefs->allow_read_only ? "on" : "off");
-  } else if (memcmp(config, "flood.advert.interval", 21) == 0) {
+  } else if (isKey(config, "flood.advert.interval")) {
     sprintf(reply, "> %d", ((uint32_t) _prefs->flood_advert_interval));
-  } else if (memcmp(config, "advert.interval", 15) == 0) {
+  } else if (isKey(config, "advert.interval")) {
     sprintf(reply, "> %d", ((uint32_t) _prefs->advert_interval) * 2);
-  } else if (memcmp(config, "guest.password", 14) == 0) {
+  } else if (isKey(config, "guest.password")) {
     sprintf(reply, "> %s", _prefs->guest_password);
-  } else if (sender_timestamp == 0 && memcmp(config, "prv.key", 7) == 0) {  // from serial command line only
+  } else if (sender_timestamp == 0 && isKey(config, "prv.key")) {  // from serial command line only
     uint8_t prv_key[PRV_KEY_SIZE];
     int len = _callbacks->getSelfId().writeTo(prv_key, PRV_KEY_SIZE);
     mesh::Utils::toHex(tmp, prv_key, len);
     sprintf(reply, "> %s", tmp);
-  } else if (memcmp(config, "name", 4) == 0) {
+  } else if (isKey(config, "name")) {
     sprintf(reply, "> %s", _prefs->node_name);
-  } else if (memcmp(config, "repeat", 6) == 0) {
+  } else if (isKey(config, "repeat")) {
     sprintf(reply, "> %s", _prefs->disable_fwd ? "off" : "on");
-  } else if (memcmp(config, "lat", 3) == 0) {
+  } else if (isKey(config, "lat")) {
     sprintf(reply, "> %s", StrHelper::ftoa(_prefs->node_lat));
-  } else if (memcmp(config, "lon", 3) == 0) {
+  } else if (isKey(config, "lon")) {
     sprintf(reply, "> %s", StrHelper::ftoa(_prefs->node_lon));
 #if defined(USE_SX1262) || defined(USE_SX1268) || defined(USE_LR1110)
-  } else if (memcmp(config, "radio.rxgain", 12) == 0) {
+  } else if (isKey(config, "radio.rxgain")) {
     sprintf(reply, "> %s", _prefs->rx_boosted_gain ? "on" : "off");
 #endif
-  } else if (memcmp(config, "radio", 5) == 0) {
+  } else if (isKey(config, "radio")) {
     char freq[16], bw[16];
     strcpy(freq, StrHelper::ftoa3(_prefs->freq));
     strcpy(bw, StrHelper::ftoa3(_prefs->bw));
     sprintf(reply, "> %s,%s,%d,%d", freq, bw, (uint32_t)_prefs->sf, (uint32_t)_prefs->cr);
-  } else if (memcmp(config, "rxdelay", 7) == 0) {
+  } else if (isKey(config, "rxdelay")) {
     sprintf(reply, "> %s", StrHelper::ftoa(_prefs->rx_delay_base));
-  } else if (memcmp(config, "txdelay", 7) == 0) {
+  } else if (isKey(config, "txdelay")) {
     sprintf(reply, "> %s", StrHelper::ftoa(_prefs->tx_delay_factor));
-  } else if (memcmp(config, "flood.max.advert", 16) == 0) {
+  } else if (isKey(config, "flood.max.advert")) {
     sprintf(reply, "> %d", (uint32_t)_prefs->flood_max_advert);
-  } else if (memcmp(config, "flood.max.unscoped", 18) == 0) {
+  } else if (isKey(config, "flood.max.unscoped")) {
     sprintf(reply, "> %d", (uint32_t)_prefs->flood_max_unscoped);
-  } else if (memcmp(config, "flood.max", 9) == 0) {
+  } else if (isKey(config, "flood.max")) {
     sprintf(reply, "> %d", (uint32_t)_prefs->flood_max);
-  } else if (memcmp(config, "direct.txdelay", 14) == 0) {
+  } else if (isKey(config, "direct.txdelay")) {
     sprintf(reply, "> %s", StrHelper::ftoa(_prefs->direct_tx_delay_factor));
-  } else if (memcmp(config, "owner.info", 10) == 0) {
+  } else if (isKey(config, "owner.info")) {
     auto start = reply;
     *reply++ = '>';
     *reply++ = ' ';
@@ -1062,9 +1073,9 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
       sp++;
     }
     *reply = 0;  // set null terminator
-  } else if (memcmp(config, "path.hash.mode", 14) == 0) {
+  } else if (isKey(config, "path.hash.mode")) {
     sprintf(reply, "> %d", (uint32_t)_prefs->path_hash_mode);
-  } else if (memcmp(config, "loop.detect", 11) == 0) {
+  } else if (isKey(config, "loop.detect")) {
     if (_prefs->loop_detect == LOOP_DETECT_OFF) {
       strcpy(reply, "> off");
     } else if (_prefs->loop_detect == LOOP_DETECT_MINIMAL) {
@@ -1074,16 +1085,16 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     } else {
       strcpy(reply, "> strict");
     }
-  } else if (memcmp(config, "tx", 2) == 0 && (config[2] == 0 || config[2] == ' ')) {
+  } else if (isKey(config, "tx")) {
     sprintf(reply, "> %d", (int32_t) _prefs->tx_power_dbm);
-  } else if (memcmp(config, "freq", 4) == 0) {
+  } else if (isKey(config, "freq")) {
     sprintf(reply, "> %s", StrHelper::ftoa3(_prefs->freq));
-  } else if (memcmp(config, "public.key", 10) == 0) {
+  } else if (isKey(config, "public.key")) {
     strcpy(reply, "> ");
     mesh::Utils::toHex(&reply[2], _callbacks->getSelfId().pub_key, PUB_KEY_SIZE);
-  } else if (memcmp(config, "role", 4) == 0) {
+  } else if (isKey(config, "role")) {
     sprintf(reply, "> %s", _callbacks->getRole());
-  } else if (memcmp(config, "bridge.type", 11) == 0) {
+  } else if (isKey(config, "bridge.type")) {
     sprintf(reply, "> %s",
 #ifdef WITH_RS232_BRIDGE
             "rs232"
@@ -1094,24 +1105,24 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
 #endif
     );
 #ifdef WITH_BRIDGE
-  } else if (memcmp(config, "bridge.enabled", 14) == 0) {
+  } else if (isKey(config, "bridge.enabled")) {
     sprintf(reply, "> %s", _prefs->bridge_enabled ? "on" : "off");
-  } else if (memcmp(config, "bridge.delay", 12) == 0) {
+  } else if (isKey(config, "bridge.delay")) {
     sprintf(reply, "> %d", (uint32_t)_prefs->bridge_delay);
-  } else if (memcmp(config, "bridge.source", 13) == 0) {
+  } else if (isKey(config, "bridge.source")) {
     sprintf(reply, "> %s", _prefs->bridge_pkt_src ? "logRx" : "logTx");
 #endif
 #ifdef WITH_RS232_BRIDGE
-  } else if (memcmp(config, "bridge.baud", 11) == 0) {
+  } else if (isKey(config, "bridge.baud")) {
     sprintf(reply, "> %d", (uint32_t)_prefs->bridge_baud);
 #endif
 #ifdef WITH_ESPNOW_BRIDGE
-  } else if (memcmp(config, "bridge.channel", 14) == 0) {
+  } else if (isKey(config, "bridge.channel")) {
     sprintf(reply, "> %d", (uint32_t)_prefs->bridge_channel);
-  } else if (memcmp(config, "bridge.secret", 13) == 0) {
+  } else if (isKey(config, "bridge.secret")) {
     sprintf(reply, "> %s", _prefs->bridge_secret);
 #endif
-  } else if (memcmp(config, "bootloader.ver", 14) == 0) {
+  } else if (isKey(config, "bootloader.ver")) {
   #ifdef NRF52_PLATFORM
       char ver[32];
       if (_board->getBootloaderVersion(ver, sizeof(ver))) {
@@ -1122,7 +1133,7 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
   #else
       strcpy(reply, "ERROR: unsupported");
   #endif
-  } else if (memcmp(config, "adc.multiplier", 14) == 0) {
+  } else if (isKey(config, "adc.multiplier")) {
     float adc_mult = _board->getAdcMultiplier();
     if (adc_mult == 0.0f) {
       strcpy(reply, "Error: unsupported by this board");
@@ -1130,19 +1141,19 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
       sprintf(reply, "> %.3f", adc_mult);
     }
   // Power management commands
-  } else if (memcmp(config, "pwrmgt.support", 14) == 0) {
+  } else if (isKey(config, "pwrmgt.support")) {
 #ifdef NRF52_POWER_MANAGEMENT
     strcpy(reply, "> supported");
 #else
     strcpy(reply, "> unsupported");
 #endif
-  } else if (memcmp(config, "pwrmgt.source", 13) == 0) {
+  } else if (isKey(config, "pwrmgt.source")) {
 #ifdef NRF52_POWER_MANAGEMENT
     strcpy(reply, _board->isExternalPowered() ? "> external" : "> battery");
 #else
     strcpy(reply, "ERROR: Power management not supported");
 #endif
-  } else if (memcmp(config, "pwrmgt.bootreason", 17) == 0) {
+  } else if (isKey(config, "pwrmgt.bootreason")) {
 #ifdef NRF52_POWER_MANAGEMENT
     sprintf(reply, "> Reset: %s; Shutdown: %s",
       _board->getResetReasonString(_board->getResetReason()),
@@ -1150,7 +1161,7 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
 #else
     strcpy(reply, "ERROR: Power management not supported");
 #endif
-  } else if (memcmp(config, "pwrmgt.bootmv", 13) == 0) {
+  } else if (isKey(config, "pwrmgt.bootmv")) {
 #ifdef NRF52_POWER_MANAGEMENT
     sprintf(reply, "> %u mV", _board->getBootVoltage());
 #else
