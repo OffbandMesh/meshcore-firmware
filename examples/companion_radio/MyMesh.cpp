@@ -1028,6 +1028,11 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _prefs.rx_boosted_gain = 1; // enabled by default
 #endif
 #endif
+
+  // #298: external FEM LNA enabled by default, matching the repeater default. Set here
+  // (before loadPrefs) so a prefs file written before the field existed short-reads to
+  // EOF and leaves this default in place. No-op on boards without a controllable FEM.
+  _prefs.radio_fem_rxgain = 1;
 }
 
 void MyMesh::begin(bool has_display) {
@@ -1119,6 +1124,25 @@ void MyMesh::begin(bool has_display) {
   radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
   MESH_DEBUG_PRINTLN("RX Boosted Gain Mode: %s",
                      radio_driver.getRxBoostedGainMode() ? "Enabled" : "Disabled");
+
+  // #298: the companion role never applied the external FEM LNA setting -- only
+  // simple_repeater did (MyMesh.cpp:973-974) -- so Heltec V4 companions fell
+  // through to the class default (lna_enabled=false, LNA bypassed) and ran with
+  // degraded RX sensitivity. That is exactly the 1.16-base behavior reported
+  // upstream (meshcore-dev/MeshCore#2732). Enable the LNA at boot to match the
+  // repeater default.
+  //
+  // No-op on boards without a controllable FEM: base MainBoard::canControlLoRaFemLna()
+  // returns false, and today only HeltecV4Board overrides it -- where the answer is
+  // itself runtime-gated by the auto-detected FEM type (KCT8103L vs GC1109), so it
+  // is a per-unit capability, not a per-model one.
+  //
+  // Driven by the persisted radio_fem_rxgain pref (default ON). The user-facing toggle
+  // arrives with the #298 wire contract (capability bit + setter + device-info value),
+  // which needs a matching client change; until that ships the pref stays at its default.
+  if (board.canControlLoRaFemLna()) {
+    board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain != 0);
+  }
 }
 
 const char *MyMesh::getNodeName() {

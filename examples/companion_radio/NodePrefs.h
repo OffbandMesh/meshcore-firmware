@@ -29,6 +29,13 @@ struct NodePrefs {  // persisted to file
   uint32_t gps_interval;     // GPS read interval in seconds
   uint8_t autoadd_config;    // bitmask for auto-add contacts config
   uint8_t rx_boosted_gain; // SX126x RX boosted gain mode (0=power saving, 1=boosted)
+  // #298: external FEM LNA enable (1 = LNA on, 0 = bypass). Default 1 (ON), matching
+  // the repeater. Only meaningful where MainBoard::canControlLoRaFemLna() is true.
+  // NOTE: serialized LAST in DataStore (offset 137), NOT next to rx_boosted_gain --
+  // the prefs file is a flat offset-tracked stream with no version/length/CRC, so new
+  // fields must be appended at the end or they shift every field after them and
+  // corrupt saved config on already-deployed devices.
+  uint8_t radio_fem_rxgain;
   uint8_t client_repeat;
   uint8_t path_hash_mode;    // which path mode to use when sending
   uint8_t autoadd_max_hops;  // 0 = no limit, 1 = direct (0 hops), N = up to N-1 hops (max 64)
