@@ -82,3 +82,21 @@ void HeltecTrackerV2Board::begin() {
   const char* HeltecTrackerV2Board::getManufacturerName() const {
     return "Heltec Tracker V2";
   }
+
+  // #298: runtime control of the external FEM LNA (mirrors HeltecV4Board). TX/RX mode
+  // switching happens automatically on each transmit via onBeforeTransmit/
+  // onAfterTransmit; changing the enable flag here only takes effect on the next
+  // RX-mode entry, so re-enter RX mode to apply it immediately.
+  bool HeltecTrackerV2Board::setLoRaFemLnaEnabled(bool enable) {
+    loRaFEMControl.setLNAEnable(enable);
+    loRaFEMControl.setRxModeEnable();
+    return loRaFEMControl.isLnaCanControl();
+  }
+
+  bool HeltecTrackerV2Board::canControlLoRaFemLna() const {
+    return loRaFEMControl.isLnaCanControl();
+  }
+
+  bool HeltecTrackerV2Board::isLoRaFemLnaEnabled() const {
+    return loRaFEMControl.isLnaEnabled();
+  }

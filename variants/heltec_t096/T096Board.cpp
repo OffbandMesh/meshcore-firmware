@@ -124,3 +124,21 @@ void T096Board::powerOff() {
 const char* T096Board::getManufacturerName() const {
   return "Heltec T096";
 }
+
+// #298: runtime control of the external FEM LNA (mirrors HeltecV4Board). TX/RX mode
+// switching happens automatically on each transmit via onBeforeTransmit/
+// onAfterTransmit; changing the enable flag here only takes effect on the next
+// RX-mode entry, so re-enter RX mode to apply it immediately.
+bool T096Board::setLoRaFemLnaEnabled(bool enable) {
+  loRaFEMControl.setLNAEnable(enable);
+  loRaFEMControl.setRxModeEnable();
+  return loRaFEMControl.isLnaCanControl();
+}
+
+bool T096Board::canControlLoRaFemLna() const {
+  return loRaFEMControl.isLnaCanControl();
+}
+
+bool T096Board::isLoRaFemLnaEnabled() const {
+  return loRaFEMControl.isLnaEnabled();
+}
