@@ -2,7 +2,7 @@
 
 **Status:** **AS-BUILT** — firmware half shipped (#246 / PR #247, `FIRMWARE_VER_CODE 15`) and verified end-to-end (#242). Wire codes below are final.
 **Date:** 2026-06-28 · **As-built revision:** 2026-07-14 (#313)
-**Parties:** Offband firmware (`OffbandMesh/meshcore-firmware`) ↔ Offband client app (`OffbandMesh/meshcore-client` / DustyBasin).
+**Parties:** Offband firmware (`OffbandMesh/meshcore-firmware`) ↔ Offband client app (`OffbandMesh/meshcore-client`).
 **Tracking:** Feature [#241](https://github.com/OffbandMesh/meshcore-firmware/issues/241) · Epic [#242](https://github.com/OffbandMesh/meshcore-firmware/issues/242) · this doc [#244](https://github.com/OffbandMesh/meshcore-firmware/issues/244) · as-built reconciliation [#313](https://github.com/OffbandMesh/meshcore-firmware/issues/313).
 **Scope of this doc:** the firmware ↔ app interface and the division of responsibility. Wire-level codes are **as-built** (verified on hardware); everything else is the agreed design.
 
