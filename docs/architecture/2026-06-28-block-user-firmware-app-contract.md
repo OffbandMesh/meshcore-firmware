@@ -48,16 +48,27 @@ Consequence: the firmware can do a real **pubkey** block for **DM + adverts**, b
 
 ---
 
-## 4. Sync commands — **PROPOSED**
+## 4. Sync commands — **AS-BUILT** (`FIRMWARE_VER_CODE` 15, cap bit `0x02`; PR #247)
 
-New fork command **`0xC2 = CMD_OFFBAND_BLOCK`** (0xC0 = config, 0xC1 = GPS already used), sub-typed, following the existing 0xC0 broker-pool dump convention. Request `[0xC2][sub][…]`, reply `[0xC2][sub][…]`:
+New fork command **`0xC2 = CMD_OFFBAND_BLOCK`** (0xC0 = config, 0xC1 = GPS already used), sub-typed, following the existing 0xC0 broker-pool dump convention. **Companion-API only** — these frames never traverse LoRa (§11). Request byte `[0]` = `0xC2`, byte `[1]` = sub-code; replies echo `[0xC2][sub]…`.
 
-| Sub | Name | Frame | Reply |
+| Sub | Name | Request | Reply |
 |---|---|---|---|
-| `0x01` | BLOCK_ADD | `[0xC2][0x01][pubkey:32]` | ack / err |
-| `0x02` | BLOCK_REMOVE | `[0xC2][0x02][pubkey:32]` | ack / err |
-| `0x03` | BLOCK_LIST | `[0xC2][0x03]` | dump `START → {pubkey:32}×N → END` |
-| `0x04` | BLOCK_CLEAR | `[0xC2][0x04]` | ack (optional) |
+| `0x01` | BLOCK_ADD | `[0xC2][0x01][pubkey:32]` | `[0xC2][0x01][ok]` — `ok` = 1 (present after call: added or already there) / 0 (store full). `ERR_ILLEGAL_ARG` if frame < 34 B. |
+| `0x02` | BLOCK_REMOVE | `[0xC2][0x02][pubkey:32]` | `[0xC2][0x02][ok]` — `ok` = 1 (removed) / 0 (not present). `ERR_ILLEGAL_ARG` if frame < 34 B. |
+| `0x03` | BLOCK_LIST | `[0xC2][0x03]` | **streamed dump** — see below. |
+| `0x04` | BLOCK_CLEAR | `[0xC2][0x04]` | `[0xC2][0x04][0x01]` |
+| other | — | — | `ERR_ILLEGAL_ARG` |
+
+**`BLOCK_LIST` is a *streamed* dump — one frame per idle main-loop pass**, not a single burst (mirrors the config/broker dump; the companion send queue drops when full, so the whole list is never bursted — #169). The client MUST read frames until it sees END:
+
+- **START:** `[0xC2][0x03][0xFF][count]` (4 B) — `count` = number of key frames to expect.
+- **Per key** (×`count`): `[0xC2][0x03][index][pubkey:32]` (35 B) — `index` is `0…count-1`.
+- **END:** `[0xC2][0x03][0xFE]` (3 B).
+
+Byte `[2]` disambiguates the frame: `0xFF` = START, `0xFE` = END, otherwise a key `index`. There is no collision because `MAX_BLOCKED_KEYS = 32`, so `index` is always `≤ 31` (never `0xFE`/`0xFF`). If the client (re)sends `CMD_APP_START` mid-dump, the firmware emits an early END terminator and drops the stream (#178 pattern), so a reconnecting client is never left hanging.
+
+**Capacity:** `MAX_BLOCKED_KEYS = 32` (32 × 32 B = 1 KB). ADD returns `ok = 0` (**not** an error) when the store is full.
 
 The app **pulls `BLOCK_LIST` on connect** to load the node's portable list, and pushes `ADD`/`REMOVE` as the user blocks/unblocks.
 
@@ -112,9 +123,9 @@ When a blocked person renames, their next advert updates **their contact's name 
 
 ## 10. Open questions (design step)
 
-- Firmware block-store capacity vs NVS budget.
+- ~~Firmware block-store capacity vs NVS budget.~~ **RESOLVED** — `MAX_BLOCKED_KEYS = 32`, persisted to a flat `/blocks` file (not NVS); see §4.
 - Auto-add policy for a blocked **non-contact** pubkey (recommend: don't clutter contacts; the app's own name↔key index covers resolution).
-- Final `0xC2` sub-type codes + dump framing.
+- ~~Final `0xC2` sub-type codes + dump framing.~~ **RESOLVED** — implemented as-built in §4 (PR #247).
 - Confirm advert-notification suppression stays purely app-side (recommended).
 
 ---
