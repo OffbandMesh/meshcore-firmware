@@ -1,10 +1,10 @@
 # Block / Ignore Users — Firmware ↔ App Architectural Contract (Offband)
 
-**Status:** Draft contract — shared for firmware + app alignment. Not yet implemented.
-**Date:** 2026-06-28
-**Parties:** Offband firmware (`OffbandMesh/meshcore-firmware`) ↔ Offband client app (`meshcore-open` / DarkBasin).
-**Tracking:** Feature [#241](https://github.com/OffbandMesh/meshcore-firmware/issues/241) · Epic [#242](https://github.com/OffbandMesh/meshcore-firmware/issues/242) · this doc [#244](https://github.com/OffbandMesh/meshcore-firmware/issues/244).
-**Scope of this doc:** the firmware ↔ app interface and the division of responsibility. Wire-level codes marked **PROPOSED** finalize at firmware implementation; everything else is the agreed design.
+**Status:** **AS-BUILT** — firmware half shipped (#246 / PR #247, `FIRMWARE_VER_CODE 15`) and verified end-to-end (#242). Wire codes below are final.
+**Date:** 2026-06-28 · **As-built revision:** 2026-07-14 (#313)
+**Parties:** Offband firmware (`OffbandMesh/meshcore-firmware`) ↔ Offband client app (`OffbandMesh/meshcore-client` / DustyBasin).
+**Tracking:** Feature [#241](https://github.com/OffbandMesh/meshcore-firmware/issues/241) · Epic [#242](https://github.com/OffbandMesh/meshcore-firmware/issues/242) · this doc [#244](https://github.com/OffbandMesh/meshcore-firmware/issues/244) · as-built reconciliation [#313](https://github.com/OffbandMesh/meshcore-firmware/issues/313).
+**Scope of this doc:** the firmware ↔ app interface and the division of responsibility. Wire-level codes are **as-built** (verified on hardware); everything else is the agreed design.
 
 ---
 
@@ -42,24 +42,43 @@ Consequence: the firmware can do a real **pubkey** block for **DM + adverts**, b
 
 ## 3. Firmware block store
 
-- A list of blocked **public keys** (full 32-byte identity / `pub_key`). Persisted in NVS; survives reboot **and client switches**.
+- A list of blocked **public keys** (full 32-byte identity / `pub_key`). Persisted to a flat **`/blocks` file** — `[count:1][key:32]*count` (`MyMesh.cpp:2504-2513`), **not NVS**. Survives reboot **and client switches** (verified on hardware: 32/32 keys survive a power-cycle).
 - **Independent of the contacts list** — a pubkey can be blocked without being a contact (important when contacts is full, or you don't want to store the spammer).
-- Capacity: **PROPOSED** 32–64 entries; confirm against the NVS budget at design.
+- Capacity: **32 entries** — `MAX_BLOCKED_KEYS` (`BlockStore.h:20`), 32 × 32 B = 1 KB.
 
 ---
 
-## 4. Sync commands — **PROPOSED**
+## 4. Sync commands — **AS-BUILT**
 
-New fork command **`0xC2 = CMD_OFFBAND_BLOCK`** (0xC0 = config, 0xC1 = GPS already used), sub-typed, following the existing 0xC0 broker-pool dump convention. Request `[0xC2][sub][…]`, reply `[0xC2][sub][…]`:
+`[verified: OffbandConfigProtocol.h:119-124 · MyMesh.cpp:1402-1428, 2536-2551 · on-device round-trip 14/14, #242]`
 
-| Sub | Name | Frame | Reply |
+Fork command **`0xC2 = CMD_OFFBAND_BLOCK`** (0xC0 = config, 0xC1 = GPS already used), sub-typed. **Companion-API only** — these frames never traverse LoRa (§11). Request byte `[0]` = `0xC2`, byte `[1]` = sub-code; replies echo `[0xC2][sub]…` (`RESP_CODE_OFFBAND_BLOCK` = 0xC2).
+
+| Sub | Name | Request | Reply |
 |---|---|---|---|
-| `0x01` | BLOCK_ADD | `[0xC2][0x01][pubkey:32]` | ack / err |
-| `0x02` | BLOCK_REMOVE | `[0xC2][0x02][pubkey:32]` | ack / err |
-| `0x03` | BLOCK_LIST | `[0xC2][0x03]` | dump `START → {pubkey:32}×N → END` |
-| `0x04` | BLOCK_CLEAR | `[0xC2][0x04]` | ack (optional) |
+| `0x01` | BLOCK_ADD | `[0xC2][0x01][pubkey:32]` (34 B) | `[0xC2][0x01][ok]` — `ok`=1 present after call (added **or already there**), `ok`=0 store full |
+| `0x02` | BLOCK_REMOVE | `[0xC2][0x02][pubkey:32]` (34 B) | `[0xC2][0x02][ok]` — `ok`=1 removed, `ok`=0 not present |
+| `0x03` | BLOCK_LIST | `[0xC2][0x03]` | **streamed dump** — see below |
+| `0x04` | BLOCK_CLEAR | `[0xC2][0x04]` | `[0xC2][0x04][0x01]` |
+| other / short | — | — | generic error `[0x01][0x06]` (`RESP_CODE_ERR`, `ERR_CODE_ILLEGAL_ARG`); ADD/REMOVE under 34 B also errors |
 
-The app **pulls `BLOCK_LIST` on connect** to load the node's portable list, and pushes `ADD`/`REMOVE` as the user blocks/unblocks.
+⚠ The error frame is **not** 0xC2-prefixed — a client must recognise the generic 2-byte error frame, not wait for a `0xC2` echo.
+
+**`BLOCK_LIST` is a streamed dump, not a single reply.** Frames arrive **one per firmware idle main-loop pass** (the companion send queue drops when full, so the list is paced — #169). The client MUST read until END:
+
+```
+START      [0xC2][0x03][0xFF][count]        4 B    count = key frames to expect (advisory)
+key × N    [0xC2][0x03][index][pubkey:32]  35 B    index = 0…count-1
+END        [0xC2][0x03][0xFE]               3 B
+```
+
+- Byte `[2]` is the demux tag: `0xFF` = START, `0xFE` = END, anything else = a key `index`. No collision — `index ≤ 31` (capacity 32), never `0xFE`/`0xFF`.
+- **END, not `count`, is authoritative.** If the client (re)sends `CMD_APP_START` mid-dump the firmware emits an **early END** and drops the stream (`MyMesh.cpp:1483-1488`), so a reconnecting client never hangs. Detect truncation by comparing key-frames-received against START's `count`, and re-request once the link settles.
+- **Never derive removals from a LIST** (partial or full). Removal is explicit-unblock only, so a partial pull can never cause a false unblock — worst case is missing node keys, filled by a re-request.
+
+**No unsolicited pushes.** Strictly app-pull + app-initiated ADD/REMOVE/CLEAR/LIST. The only firmware-initiated 0xC2 frame is the APP_START early-END terminator (reconnect-triggered, not a state change). There is also **no notification when a DM is dropped** — the drop is silent at receive, so the app never sees blocked DMs and cannot count or badge them.
+
+The app **pulls `BLOCK_LIST` on connect** to load the node's portable list, and pushes `ADD`/`REMOVE` as the user blocks/unblocks. If the app's local list exceeds 32, overflow ADDs return `ok=0` (not an error) and those keys simply aren't node-portable — the app-local list stays authoritative.
 
 ---
 
@@ -112,10 +131,10 @@ When a blocked person renames, their next advert updates **their contact's name 
 
 ## 10. Open questions (design step)
 
-- Firmware block-store capacity vs NVS budget.
-- Auto-add policy for a blocked **non-contact** pubkey (recommend: don't clutter contacts; the app's own name↔key index covers resolution).
-- Final `0xC2` sub-type codes + dump framing.
-- Confirm advert-notification suppression stays purely app-side (recommended).
+- ~~Firmware block-store capacity vs NVS budget.~~ **RESOLVED** — `MAX_BLOCKED_KEYS = 32`, persisted to a flat `/blocks` file (not NVS); see §3.
+- ~~Final `0xC2` sub-type codes + dump framing.~~ **RESOLVED** — as-built in §4 (sub-codes `0x01`–`0x04`; LIST = streamed START/key/END with `0xFF`/index/`0xFE` demux), verified on hardware.
+- Auto-add policy for a blocked **non-contact** pubkey (recommend: don't clutter contacts; the app's own name↔key index covers resolution). *(still open)*
+- Confirm advert-notification suppression stays purely app-side (recommended). *(still open)*
 
 ---
 
