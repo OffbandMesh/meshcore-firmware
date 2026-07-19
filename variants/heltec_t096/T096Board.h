@@ -25,4 +25,11 @@ public:
   uint16_t getBattMilliVolts() override;
   const char* getManufacturerName() const override ;
   void powerOff() override;
+
+  // #298: external FEM LNA runtime control. Capability-gated -- the base MainBoard
+  // reports "not supported", and this board overrides it because its KCT8103L FEM
+  // exposes an independent LNA path (same as heltec_v4).
+  bool setLoRaFemLnaEnabled(bool enable) override;
+  bool canControlLoRaFemLna() const override;
+  bool isLoRaFemLnaEnabled() const override;
 };
