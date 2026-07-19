@@ -112,6 +112,7 @@ enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUT
 // (in addition to FIRMWARE_VER_CODE >= 14). There is NO display-without-observer path.
 constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: config backend (wifi_observer) compiled in
 constexpr uint8_t OFFBAND_CAP_BLOCK         = 0x02;  // bit 1: user-block list (BlockStore) compiled in (#241)
+constexpr uint8_t OFFBAND_CAP_FEM_LNA       = 0x04;  // bit 2: FEM LNA runtime control available (#298)
 
 // Block-list sync (fork command 0xC2; companion-API only, NEVER on the mesh -- the
 // block list is receive-side only and changes no forwarding/relay/advert path,
@@ -122,6 +123,29 @@ constexpr uint8_t OFFBAND_BLOCK_ADD    = 0x01;
 constexpr uint8_t OFFBAND_BLOCK_REMOVE = 0x02;
 constexpr uint8_t OFFBAND_BLOCK_LIST   = 0x03;
 constexpr uint8_t OFFBAND_BLOCK_CLEAR  = 0x04;
+
+// External FEM LNA control (fork command 0xC3; companion-API only, NEVER on the
+// mesh -- it changes only this node's own receive front-end, touching no
+// forwarding/relay/advert path). Sub-typed like 0xC2; replies echo the sub-code.
+//
+// The client emits 0xC3 ONLY when OFFBAND_CAP_FEM_LNA is set in the device-info
+// caps byte, so stock/unsupported radios never see this command. The capability is
+// PER-UNIT, not per-model: on Heltec V4 it derives from the auto-detected FEM chip
+// (KCT8103L vs GC1109), so two V4s can legitimately disagree -- never gate on model
+// or version code. Boards whose FEM cannot bypass the LNA independently keep the
+// bit clear (e.g. rak3401's SKY66122, where one line gates the LNA and the PA path
+// together, so a toggle would kill TX).
+//
+// Malformed requests reply with the generic [RESP_CODE_ERR][ERR_CODE_ILLEGAL_ARG]
+// 2-byte error, so the client needs no command-specific error handling.
+//   SET: [0xC3][0x01][value]  ->  [0xC3][0x01][value]    value: 0 = bypass, 1 = on
+//   GET: [0xC3][0x02]         ->  [0xC3][0x02][value]
+// The current value is ALSO appended to the device-info reply (v16+) so the client
+// renders the toggle on connect with no extra round trip; GET is the fallback.
+constexpr uint8_t CMD_OFFBAND_FEM_LNA       = 0xC3;  // request:  cmd_frame[0]
+constexpr uint8_t RESP_CODE_OFFBAND_FEM_LNA = 0xC3;  // response: out_frame[0]
+constexpr uint8_t OFFBAND_FEM_LNA_SET = 0x01;
+constexpr uint8_t OFFBAND_FEM_LNA_GET = 0x02;
 
 // ---------------------------------------------------------------------------
 // Key schema -- the firmware<->client contract surface

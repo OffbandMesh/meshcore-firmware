@@ -1451,6 +1451,39 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
     return;
   }
+  // #298: external FEM LNA control (companion-API only; NEVER on the mesh -- it changes
+  // only this node's own receive front-end, touching no forwarding/relay/advert path).
+  // The client emits this only when OFFBAND_CAP_FEM_LNA is set, so the not-capable
+  // branch is purely defensive against a mis-gated or stale client.
+  if (cmd_frame[0] == offband::CMD_OFFBAND_FEM_LNA && len >= 2) {
+    uint8_t sub = cmd_frame[1];
+    if (!board.canControlLoRaFemLna()) {
+      writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
+    } else if (sub == offband::OFFBAND_FEM_LNA_SET && len >= 3) {
+      // Persist ONLY on an actual change: a client slider bound to onChange can emit
+      // a burst of SETs, and an unconditional savePrefs() would put that burst
+      // straight onto flash. The hardware apply stays unconditional so a pref that
+      // already matches still re-asserts the FEM state (cheap, and self-healing).
+      uint8_t new_val = cmd_frame[2] ? 1 : 0;           // normalise: any non-zero = on
+      if (_prefs.radio_fem_rxgain != new_val) {
+        _prefs.radio_fem_rxgain = new_val;
+        savePrefs();                                    // survives reboot, like the CLI path
+      }
+      board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain != 0);
+      // Reply the POST-APPLY hardware state rather than echoing the request, so a set
+      // the FEM refuses shows the client the truth instead of a silent lie.
+      out_frame[0] = offband::RESP_CODE_OFFBAND_FEM_LNA; out_frame[1] = sub;
+      out_frame[2] = board.isLoRaFemLnaEnabled() ? 1 : 0;
+      _serial->writeFrame(out_frame, 3);
+    } else if (sub == offband::OFFBAND_FEM_LNA_GET) {
+      out_frame[0] = offband::RESP_CODE_OFFBAND_FEM_LNA; out_frame[1] = sub;
+      out_frame[2] = board.isLoRaFemLnaEnabled() ? 1 : 0;
+      _serial->writeFrame(out_frame, 3);
+    } else {
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    }
+    return;
+  }
   if (cmd_frame[0] == CMD_DEVICE_QUERY && len >= 2) { // sent when app establishes connection
     app_target_ver = cmd_frame[1];                    // which version of protocol does app understand
 
@@ -1480,7 +1513,16 @@ void MyMesh::handleCmdFrame(size_t len) {
     offband_caps |= offband::OFFBAND_CAP_WIFI_OBSERVER;
 #endif
     offband_caps |= offband::OFFBAND_CAP_BLOCK;  // #241: block list always present on the companion
+    // #298: FEM LNA control is PER-UNIT, not per-model -- on Heltec V4 it depends on
+    // which FEM chip the runtime probe found, so two V4s can legitimately differ.
+    // Deriving the bit from the board keeps the client off model/version guessing.
+    if (board.canControlLoRaFemLna()) offband_caps |= offband::OFFBAND_CAP_FEM_LNA;
     out_frame[i++] = offband_caps;           // v14+
+    // #298: current FEM LNA state (v16+), so the client renders the toggle on connect
+    // without a 0xC3 GET round trip. Appended UNCONDITIONALLY -- the frame layout must
+    // stay fixed for a given version code; the cap bit above, not this byte's presence,
+    // is what tells the client whether to show the control. Reads 0 when not capable.
+    out_frame[i++] = board.isLoRaFemLnaEnabled() ? 1 : 0;   // v16+
     _serial->writeFrame(out_frame, i);
   } else if (cmd_frame[0] == CMD_APP_START &&
              len >= 8) { // sent when app establishes connection, respond with node ID
