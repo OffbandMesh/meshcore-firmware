@@ -134,16 +134,29 @@ mqtt status
   eastme.sh; some brokers expect a `v1_<pubkey>` prefix. If a wss slot won't
   authenticate, try the other form. (Defaulting this per broker is #95.)
 
-### Known broker values
+### Seeded broker slots (#317)
+
+| Slot | Broker | url | ca_cert | jwt_audience |
+|---|---|---|---|---|
+| 0 | OKIMesh mqtt1 | `mqtt://mqtt1.okimesh.org:1883` | — (tcp / anon) | — |
+| 1 | OKIMesh mqtt2 | `mqtt://mqtt2.okimesh.org:1883` | — (tcp / anon) | — |
+| 2 | MeshMapper | `wss://mqtt.meshmapper.net:443/mqtt` | `isrg-x2` | `mqtt.meshmapper.net` |
+| 3 | eastme.sh | `wss://mqtt.eastme.sh:443/mqtt` | `letsencrypt` | `mqtt.eastme.sh` |
+| 4 | Eastmesh.au | `wss://mqtt2.eastmesh.au:443/mqtt` | `letsencrypt` | `mqtt2.eastmesh.au` |
+| 5–9 | *(empty)* | — | — | — |
+
+**Every seeded slot ships disabled** (#262) — `mqtt enable <N>` to opt in.
+
+**LetsMesh is no longer seeded** (#317). To add it by hand in a free slot:
+
 | Broker | url | ca_cert | jwt_audience |
 |---|---|---|---|
-| CoreScope | `mqtt://mqtt.w8oof.net:1883` | — (tcp / anon) | — |
 | LetsMesh-US | `wss://mqtt-us-v1.letsmesh.net:443/mqtt` | `gts-r4` | `mqtt-us-v1.letsmesh.net` (bare) |
-| eastme.sh | `wss://mqtt.eastme.sh:443/mqtt` | `letsencrypt` | `mqtt.eastme.sh` |
+| LetsMesh-EU | `wss://mqtt-eu-v1.letsmesh.net:443/mqtt` | `gts-r4` | `mqtt-eu-v1.letsmesh.net` (bare) |
 
-The firmware also seeds **MeshMapper** (slot 3), **LetsMesh-EU** (slot 4), and
-**Eastmesh.au** (slot 5) as defaults — run `mqtt view 3` / `4` / `5` for their
-exact `url` / `ca_cert` / `jwt_audience`.
+> **Devices flashed before #317 keep their old layout.** Seeding is
+> skip-if-present, so a reorder never reshuffles a device that was already
+> seeded — run `mqtt view <N>` to see what a given slot actually holds.
 
 ## Gotchas
 

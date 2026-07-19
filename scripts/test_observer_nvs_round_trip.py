@@ -150,11 +150,12 @@ int main() {
     // populateDefaultBrokers — Plan 2 v2 Task 3 Step 5
     // -----------------------------------------------------------------------
     // Slot 2 was just written above with a custom URL ("mqtt.example.org").
-    // Slots 0 + 1 + 3 are still virgin. populateDefaultBrokers should (#95):
-    //   - fill slot 0 with CoreScope (tcp/anon, the only default-ENABLED slot)
-    //   - fill slot 1 with LetsMesh-US (wss/jwt, disabled, BARE audience)
-    //   - fill slot 3 with MeshMapper (wss/jwt, disabled, isrg-x2 CA)
-    //   - LEAVE slot 2 alone (already has user-set URL)
+    // Slots 0 + 1 + 3 are still virgin. populateDefaultBrokers should (#317):
+    //   - fill slot 0 with OKIMesh mqtt1 (tcp/anon, disabled since #262)
+    //   - fill slot 1 with OKIMesh mqtt2 (tcp/anon, disabled)
+    //   - fill slot 3 with Eastme.sh (wss/jwt, disabled, letsencrypt CA)
+    //   - LEAVE slot 2 alone (already has user-set URL -- would otherwise be
+    //     MeshMapper under the #317 layout)
 
     populateDefaultBrokers();
 
@@ -164,7 +165,8 @@ int main() {
     if (!readBrokerConfig(2, slot2)) { puts("FAIL read slot 2"); return 1; }
     if (!readBrokerConfig(3, slot3)) { puts("FAIL read slot 3"); return 1; }
 
-    // Slot 0 = CoreScope: plaintext + anonymous, the ONLY default-enabled slot.
+    // Slot 0 = OKIMesh mqtt1: plaintext + anonymous. Ships DISABLED (#262 --
+    // a fresh flash must not auto-publish anywhere).
     if (strcmp(slot0.url, "mqtt://mqtt1.okimesh.org:1883") != 0) {  // #170: was mqtt.w8oof.net
         printf("FAIL slot 0 url after populate: '%s'\n", slot0.url);
         return 1;
@@ -177,48 +179,58 @@ int main() {
         printf("FAIL slot 0 auth_type: %d\n", (int)slot0.auth_type);
         return 1;
     }
-    if (!slot0.enabled) {
-        printf("FAIL slot 0 (CoreScope) should default to ENABLED\n");
+    if (slot0.enabled) {
+        printf("FAIL slot 0 (OKIMesh mqtt1) should default to DISABLED (#262)\n");
         return 1;
     }
 
-    // Slot 1 = LetsMesh-US (wss/jwt). Ships disabled; audience is the BARE
-    // host (#95 -- LetsMesh rejects the scheme-qualified "https://" form).
-    if (strcmp(slot1.url, "wss://mqtt-us-v1.letsmesh.net:443/mqtt") != 0) {
+    // Slot 1 = OKIMesh mqtt2 (#317): same plaintext/anon config as mqtt1,
+    // also disabled. Replaced LetsMesh-US, which is no longer seeded.
+    if (strcmp(slot1.url, "mqtt://mqtt2.okimesh.org:1883") != 0) {
         printf("FAIL slot 1 url after populate: '%s'\n", slot1.url);
         return 1;
     }
-    if (strcmp(slot1.jwt_audience, "mqtt-us-v1.letsmesh.net") != 0) {
-        printf("FAIL slot 1 jwt_audience (want bare host): '%s'\n", slot1.jwt_audience);
+    if (slot1.transport != BrokerTransport::Tcp) {
+        printf("FAIL slot 1 transport: %d\n", (int)slot1.transport);
         return 1;
     }
-    if (slot1.transport != BrokerTransport::Wss || slot1.auth_type != BrokerAuthType::Jwt) {
-        printf("FAIL slot 1 transport/auth: %d/%d\n", (int)slot1.transport, (int)slot1.auth_type);
+    if (slot1.auth_type != BrokerAuthType::None) {
+        printf("FAIL slot 1 auth_type: %d\n", (int)slot1.auth_type);
         return 1;
     }
     if (slot1.enabled) {
-        printf("FAIL slot 1 (wss/jwt) should default to disabled\n");
+        printf("FAIL slot 1 (OKIMesh mqtt2) should default to disabled\n");
+        return 1;
+    }
+
+    // Slot 3 = Eastme.sh (#317, moved from slot 2): wss/jwt, letsencrypt CA,
+    // BARE audience (#95 -- the scheme-qualified "https://" form is rejected
+    // by strict validators like LetsMesh).
+    if (strcmp(slot3.url, "wss://mqtt.eastme.sh:443/mqtt") != 0) {
+        printf("FAIL slot 3 url after populate: '%s'\n", slot3.url);
+        return 1;
+    }
+    if (strcmp(slot3.jwt_audience, "mqtt.eastme.sh") != 0) {
+        printf("FAIL slot 3 jwt_audience (want bare host): '%s'\n", slot3.jwt_audience);
+        return 1;
+    }
+    if (strcmp(slot3.ca_cert_name, "letsencrypt") != 0) {
+        printf("FAIL slot 3 ca_cert_name: '%s'\n", slot3.ca_cert_name);
+        return 1;
+    }
+    if (slot3.transport != BrokerTransport::Wss || slot3.auth_type != BrokerAuthType::Jwt) {
+        printf("FAIL slot 3 transport/auth: %d/%d\n", (int)slot3.transport, (int)slot3.auth_type);
+        return 1;
+    }
+    if (slot3.enabled) {
+        printf("FAIL slot 3 (wss/jwt) should default to disabled\n");
         return 1;
     }
     // #95: JWT identity claims are NOT seeded -- username auto-derives at
     // connect, and jwt_owner/jwt_email are the operator's claims.
-    if (slot1.jwt_owner[0] != '\0' || slot1.jwt_email[0] != '\0' || slot1.username[0] != '\0') {
-        printf("FAIL slot 1 identity claims should be empty: own='%s' eml='%s' usr='%s'\n",
-               slot1.jwt_owner, slot1.jwt_email, slot1.username);
-        return 1;
-    }
-
-    // Slot 3 = MeshMapper (#95 new slot): wss/jwt, isrg-x2 CA, bare audience.
-    if (strcmp(slot3.url, "wss://mqtt.meshmapper.net:443/mqtt") != 0) {
-        printf("FAIL slot 3 url after populate: '%s'\n", slot3.url);
-        return 1;
-    }
-    if (strcmp(slot3.jwt_audience, "mqtt.meshmapper.net") != 0) {
-        printf("FAIL slot 3 jwt_audience (want bare host): '%s'\n", slot3.jwt_audience);
-        return 1;
-    }
-    if (strcmp(slot3.ca_cert_name, "isrg-x2") != 0) {
-        printf("FAIL slot 3 ca_cert_name: '%s'\n", slot3.ca_cert_name);
+    if (slot3.jwt_owner[0] != '\0' || slot3.jwt_email[0] != '\0' || slot3.username[0] != '\0') {
+        printf("FAIL slot 3 identity claims should be empty: own='%s' eml='%s' usr='%s'\n",
+               slot3.jwt_owner, slot3.jwt_email, slot3.username);
         return 1;
     }
 
