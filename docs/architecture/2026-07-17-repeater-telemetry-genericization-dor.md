@@ -49,17 +49,25 @@ De-hardcode + document + GUI-enable the existing native-ESP32 repeater telemetry
 
 This preserves the owner's D1 intent (TLS/wss/JWT possible on a repeater, driven by the combined repeater+observer role on powered/PoE builds) while removing the regression risk to working observers.
 
-### 4a. TLS on solar — **default OFF** (review BLOCKER 1)
+### 4a. TLS cost is a function of **reconnect frequency**, not power source
 
-v1 said "accept the per-wake TLS handshake cost." **That was wrong for solar.** Estimated cost: 288 wakes/day × ~1.5 s handshake @ ~150 mA ≈ **~18 mAh/day for handshakes alone**, against a documented **~17 mAh/day** incremental burst budget — i.e. TLS alone could consume the entire power budget, leaving nothing for LoRa/mesh.
+The review framed this as "TLS on solar is non-viable." **That framing is wrong and has been corrected (owner challenge, 2026-07-18).** TLS is encryption, not a power feature. It costs energy only *indirectly*:
 
-`[hypothesis: 1.5 s / 150 mA are estimates and the 17 mAh figure is the incremental burst cost — Epic 0 must measure both empirically before this is treated as settled.]`
+- **Handshake round-trips** keep the WiFi radio awake waiting on the server (~100–150 mA — the dominant term on the board).
+- **Crypto CPU work** for the key exchange (~hundreds of ms at full clock).
+
+**The variable that matters is how often you reconnect — not whether you're on battery.**
+- **`always` mode:** handshake once, connection persists for days → cost amortizes to ~zero. Power source irrelevant.
+- **`burst` mode:** WiFi drops between wakes, so **every wake pays a full handshake**. At a 5-minute interval that's ~288/day; at a 6-hour interval it's 4/day and TLS is a non-issue.
+
+Solar is merely *correlated* (it's why you'd choose burst), not causal. So cost scales with **`wifi.burst_interval`**, and the estimate that motivated the original BLOCKER is only meaningful at short intervals.
+
+**Mitigation already planned:** #175 (round-robin TLS broker scheduler) includes **TLS session resumption** — a reconnect reuses a cached session and skips the full handshake, substantially reducing per-wake cost. Cross-link when it lands.
 
 **Binding position:**
-- **Solar / burst nodes default to plain TCP** (user/pass).
-- **TLS/wss is opt-in**, with a clear power warning in the GUI when selected on a burst-mode node.
-- **Powered / `always` mode nodes use TLS freely** — no burst penalty; this is the combined repeater+observer case that motivated D1.
-- The default must not be changed without the Epic-0 power measurement.
+- **`burst` mode defaults to plain TCP** — a safe *default* for operators who haven't considered it. It is **not** a restriction.
+- **TLS is freely selectable in either mode.** No warning gate, no blocking, no measurement precondition. The operator knows their panel, battery, latitude, interval, and season; we do not. Guardrails here would contradict the point of the feature.
+- **Instead of warning, we observe** — the device reports its own radio-active time (§4d) so the operator can judge empirically.
 
 ### 4b. Mode selection — `wifi.mode` (owner-approved)
 
@@ -78,6 +86,21 @@ Chosen as an extensible **mode** (not a boolean) so it renders as a GUI dropdown
 ### 4c. Combined repeater+observer role
 
 The shared `ConfigSchema` + pool naturally allows one node to be both roles. **#295's obligation is only that the architecture must not preclude it**; the explicit combined build profile is deferred to backlog epic **#297**.
+
+### 4d. Radio-active-time telemetry — observability instead of guardrails (owner-proposed)
+
+Rather than warn operators about a cost we cannot compute for their hardware, **the node reports what the burst cycle actually cost it**, in situ:
+
+```
+wifi_active_last_s   ← radio-active seconds, most recent burst session
+wifi_active_avg4_s   ← rolling mean over the last 4 sessions
+```
+
+Two fields added to `TelemetryData`, published over MQTT and surfaced as **Home Assistant entities** via the existing HA discovery path. Implementation is a `millis()` delta around the burst session's existing `begin()`/`end()` boundaries plus a 4-element ring — small.
+
+**Why this matters more than a warning:** it makes the TLS-cost question **self-answering for anyone**. Enable TLS, watch `wifi_active_avg4_s` move, decide. No bench estimate, no power analyzer, no assumptions about panel/battery/latitude. The owner can already infer this from power draw; **a third-party operator cannot** — and making this deployable by third parties is the entire point of the Feature.
+
+Owned as a task under the publish epic (#301), which owns the session boundaries.
 
 ## 5. Decision 2 — config backend sharing  ✅ (a) shared backend, app-coordinated
 
@@ -120,7 +143,9 @@ Extend the #143 contract with repeater keys (`wifi.mode`, WiFi creds, broker slo
 
 ## 10. Child-epic decomposition
 
-**Epic 0 — Feasibility spike (BLOCKS EVERYTHING; review MAJOR 4).** The design is assumption-based until this lands. Delivers: (a) **heap ceiling** on `heltec_v4_repeater_telemetry` with LoRa active → real max concurrent TLS/brokers; (b) **measured power profile** of a burst wake with and without TLS → validates or kills §4a; (c) **burst-lifecycle PoC** on `esp_mqtt_client`; (d) **config subset** — the strict subset of `ConfigSchema` `BurstMqttPublisher` honours, with the GUI hiding/disabling settings inapplicable to `wifi.mode = burst` (two publishers sharing one schema otherwise risks divergent behaviour); (e) **mode-switch state machine** — switching logic plus **precedence rules** against existing temporary overrides (`wifi on N` / OTA keepalive), so they cannot conflict; (f) **flash budget** — quantified cost of shipping both publisher implementations, confirmed to fit every env in the release matrix. Output gates go/no-go on the architecture.
+**Epic 0 — Feasibility spike (BLOCKS EVERYTHING; review MAJOR 4).** Delivers: (a) **heap ceiling** on `heltec_v4_repeater_telemetry` with LoRa active → real max concurrent brokers and TLS contexts (a hard RAM limit, and the number #302 consumes); (b) **burst-lifecycle PoC** on `esp_mqtt_client`; (c) **config subset** — the strict subset of `ConfigSchema` `BurstMqttPublisher` honours, with the GUI hiding/disabling settings inapplicable to `wifi.mode = burst` (two publishers sharing one schema otherwise risks divergent behaviour); (d) **mode-switch state machine** — switching logic plus **precedence rules** against existing temporary overrides (`wifi on N` / OTA keepalive), so they cannot conflict; (e) **flash budget** — quantified cost of shipping both publisher implementations, confirmed to fit every env in the release matrix.
+
+**Explicitly NOT in Epic 0:** a bench power profile / power-analyzer measurement. Dropped (owner, 2026-07-18) — TLS is freely selectable, the default is safe, and §4d's radio-active-time telemetry answers the cost question empirically on the operator's own hardware. No gear required.
 
 1. **Config backend shared surface** (D2) — extract dispatch; **+ observer zero-regression gate** before anything proceeds.
 2. **Repeater publish convergence** (D1 v2) — build `BurstMqttPublisher`; add `wifi.mode`; un-bake WiFi/MQTT to runtime.
@@ -135,7 +160,7 @@ Extend the #143 contract with repeater keys (`wifi.mode`, WiFi creds, broker slo
 
 ## 11. Decisions log
 - **D1** ✅ **v2:** separate `BurstMqttPublisher` (not a dual-lifecycle retrofit); pool untouched; both share `ConfigSchema` (owner, 2026-07-18, post-review).
-- **D1a** ✅ TLS **default off** on solar/burst; opt-in with warning; powered/`always` uses TLS freely; gated on Epic-0 measurement (2026-07-18).
+- **D1a** ✅ **REVISED (owner challenge, 2026-07-18):** TLS cost tracks **reconnect frequency**, not power source. `burst` **defaults** to plain TCP (safe default only) but TLS is **freely selectable in either mode** — no warning gate, no blocking, no measurement precondition. Bench power measurement **dropped**; replaced by §4d radio-active-time telemetry so operators judge empirically. Session resumption (#175) is the real mitigation.
 - **D1b** ✅ `wifi.mode = burst | always` (extensible mode, not boolean) selects behaviour **and** code path (owner, 2026-07-18).
 - **D2** ✅ shared config backend, app-coordinated, **+ mandatory observer no-regression gate** (owner 2026-07-17; gate added 2026-07-18).
 - **D3** ✅ both intakes + OTA-pull-from-GitHub, now with five mandatory security controls (owner 2026-07-17; controls added 2026-07-18).
