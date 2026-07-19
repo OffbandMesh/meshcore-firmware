@@ -120,7 +120,7 @@ Extend the #143 contract with repeater keys (`wifi.mode`, WiFi creds, broker slo
 
 ## 10. Child-epic decomposition
 
-**Epic 0 — Feasibility spike (BLOCKS EVERYTHING; review MAJOR 4).** The design is assumption-based until this lands. Delivers: (a) **heap ceiling** on `heltec_v4_repeater_telemetry` with LoRa active → real max concurrent TLS/brokers; (b) **measured power profile** of a burst wake with and without TLS → validates or kills §4a; (c) **burst-lifecycle PoC** on `esp_mqtt_client` + mode-switch cost. Output gates go/no-go on the architecture.
+**Epic 0 — Feasibility spike (BLOCKS EVERYTHING; review MAJOR 4).** The design is assumption-based until this lands. Delivers: (a) **heap ceiling** on `heltec_v4_repeater_telemetry` with LoRa active → real max concurrent TLS/brokers; (b) **measured power profile** of a burst wake with and without TLS → validates or kills §4a; (c) **burst-lifecycle PoC** on `esp_mqtt_client`; (d) **config subset** — the strict subset of `ConfigSchema` `BurstMqttPublisher` honours, with the GUI hiding/disabling settings inapplicable to `wifi.mode = burst` (two publishers sharing one schema otherwise risks divergent behaviour); (e) **mode-switch state machine** — switching logic plus **precedence rules** against existing temporary overrides (`wifi on N` / OTA keepalive), so they cannot conflict; (f) **flash budget** — quantified cost of shipping both publisher implementations, confirmed to fit every env in the release matrix. Output gates go/no-go on the architecture.
 
 1. **Config backend shared surface** (D2) — extract dispatch; **+ observer zero-regression gate** before anything proceeds.
 2. **Repeater publish convergence** (D1 v2) — build `BurstMqttPublisher`; add `wifi.mode`; un-bake WiFi/MQTT to runtime.
