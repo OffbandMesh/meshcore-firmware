@@ -14,6 +14,23 @@ prior to 0.13.0 predate it; see `git tag -l 'crosswire-v*'` and the tag
 annotations for that history (highlights: v0.12.0 NimBLE migration, v0.11.x
 Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
+## [Unreleased]
+
+### Changed
+- **Default broker slots reseated** — the OKI Mesh's own two brokers now hold slots 0
+  and 1: slot 0 `mqtt1.okimesh.org` (relabelled from "CoreScope Dayton", same host) and
+  slot 1 `mqtt2.okimesh.org` (new, same plaintext/anonymous/1883 config). MeshMapper and
+  eastme.sh swap to slots 2 and 3, Eastmesh.au moves 5 → 4, and slot 5 frees up for
+  operator use. **LetsMesh-US and LetsMesh-EU are no longer seeded** — both remain fully
+  supported and can be added by hand in any free slot (`gts-r4` still resolves). Every
+  seeded slot still ships disabled per #262. Because seeding is skip-if-present, this
+  only affects fresh-NVS devices; existing devices keep their current layout. (#317)
+
+### Fixed
+- **NVS round-trip test asserted a stale default** — the test still required slot 0 to
+  seed as *enabled*, which #262 changed to disabled on 2026-07-02 without updating the
+  assertion. Corrected alongside the #317 layout change. (#317)
+
 ## [1.2.0] - 2026-07-21
 
 Adds **MeshSmith Photon‑1W support** (both MCU flavors) on the **MeshCore 1.16.0** base, and **receive-sensitivity recovery on Heltec V4** (external FEM LNA control, which stock MeshCore leaves bypassed),
