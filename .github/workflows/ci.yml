@@ -17,6 +17,32 @@ on:
   workflow_dispatch:
 
 jobs:
+  # #199: build-config invariant check. Seconds, and it covers EVERY env rather
+  # than the curated build matrix below -- which is the point. The NimBLE defect
+  # recurred four times board-by-board because the affected envs were neither in
+  # CI nor able to fail a release (release.yml is fail-fast: false, so a broken
+  # env just silently produced no binary). A per-env build matrix would never
+  # have caught it without building all 114; this asserts the rule instead.
+  config-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Generate dummy secrets stub (config interpolation only)
+        run: |
+          printf '[node_secrets]\nadmin_password = ci-dummy\n[wifi_secrets]\nssid = ci-dummy\npassword = ci-dummy\n[mqtt_secrets]\nhost = mqtt.example.com\nport = 1883\nuser = ci-dummy\npassword = ci-dummy\n[ota_secrets]\ntrigger_secret = ci-dummy\n[cmdrelay]\nurl = http://cmdrelay.example.com/cmd\n' > "$RUNNER_TEMP/ci-secrets.ini"
+          echo "PIO_SECRETS_FILE=$RUNNER_TEMP/ci-secrets.ini" >> "$GITHUB_ENV"
+
+      - name: Every ESP32 env compiling SerialBLEInterface.cpp declares NimBLE
+        run: python scripts/check_esp32_ble_deps.py
+
   build:
     runs-on: ubuntu-latest
     strategy:
@@ -38,6 +64,14 @@ jobs:
           - RAK_3401_companion_radio_ble
           - RAK_3401_companion_radio_usb
           - RAK_3401_repeater
+          # #199: one env per remedy class, both previously unbuildable and both
+          # in the SHIPPED release matrix -- releases were publishing without
+          # their binaries. The usb env is the non-BLE case (drops
+          # SerialBLEInterface.cpp); Xiao_C6 is the BLE case (declares the dep)
+          # and also covers the C6 platform package, which resolves NimBLE
+          # separately from the esp32/esp32s3 line.
+          - Heltec_v2_companion_radio_usb
+          - Xiao_C6_companion_radio_ble_
     steps:
       - uses: actions/checkout@v5
 
