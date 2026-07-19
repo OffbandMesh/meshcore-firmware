@@ -800,13 +800,19 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
 #endif
   } else if (memcmp(config, "radio ", 6) == 0) {
     strcpy(tmp, &config[6]);
-    const char *parts[4];
-    int num = mesh::Utils::parseTextParts(tmp, parts, 4);
+    // #299: parse one MORE part than we consume. parseTextParts silently discards
+    // anything past max_num, so 'set radio 910.525,62.5,7,5,foobar' used to apply
+    // the first four and drop the junk without a word -- the same misleading
+    // silent-accept as the 'get' side. Asking for 5 lets us see the extra and reject.
+    const char *parts[5];
+    int num = mesh::Utils::parseTextParts(tmp, parts, 5);
     float freq  = num > 0 ? strtof(parts[0], nullptr) : 0.0f;
     float bw    = num > 1 ? strtof(parts[1], nullptr) : 0.0f;
     uint8_t sf  = num > 2 ? atoi(parts[2]) : 0;
     uint8_t cr  = num > 3 ? atoi(parts[3]) : 0;
-    if (freq >= 150.0f && freq <= 2500.0f && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8 && bw >= 7.0f && bw <= 500.0f) {
+    if (num > 4) {
+      strcpy(reply, "Error, too many params (expected freq,bw,sf,cr)");
+    } else if (freq >= 150.0f && freq <= 2500.0f && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8 && bw >= 7.0f && bw <= 500.0f) {
       _prefs->sf = sf;
       _prefs->cr = cr;
       _prefs->freq = freq;
@@ -999,11 +1005,22 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
 // gated this chain let any garbage suffix through -- 'get radio foobar' matched the
 // "radio" prefix and silently returned the radio settings instead of the standard
 // unknown-command error (it also let a longer key be shadowed by a shorter sibling).
-// Require the key to be followed by end-of-string or a space. strncmp (not memcmp)
-// so a config shorter than the key cannot read past its NUL terminator.
+//
+// The key must consume the WHOLE remaining token, not merely be followed by a space:
+// EVERY 'get' key in this chain is valueless (each one just prints a pref), so a
+// trailing term is always a user error -- typically a command copied from another
+// fork or version, which is exactly the upstream repro (a user typed the
+// non-existent 'get radio.fem.rxgain', got the radio settings back, and concluded
+// the knob was broken). Accepting "key + space + anything" would leave that repro
+// unfixed. Trailing whitespace alone is tolerated.
+//
+// strncmp (not memcmp) so a config shorter than the key cannot read past its NUL.
 static bool isKey(const char* config, const char* key) {
   size_t n = strlen(key);
-  return strncmp(config, key, n) == 0 && (config[n] == 0 || config[n] == ' ');
+  if (strncmp(config, key, n) != 0) return false;
+  const char* p = &config[n];
+  while (*p == ' ') p++;
+  return *p == 0;
 }
 
 void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* reply) {
