@@ -145,20 +145,35 @@ Get-PnpDevice -Class Ports -PresentOnly | Where-Object { $_.Status -eq 'OK' } | 
     if ($did -match 'VID_([0-9A-Fa-f]{4}).*PID_([0-9A-Fa-f]{4})') {
         $vid = $matches[1].ToUpper(); $prodid = $matches[2].ToUpper()
     }
-    # Capture just the two-segment device-hash portion (e.g., "8&1A77809D") and
-    # discard the trailing port-address segments (e.g., "&0&0000"), which vary
-    # with physical USB topology. Standards-canonical hash format per
-    # proposal-flash-discipline.md.
+    # LEGACY, PORT-PATH ONLY (#323). "8&1A77809D" identifies the USB SOCKET, not the
+    # board: move a device to another port and this changes; plug another device into
+    # that port and it inherits this value. Retained only as a weak fallback for
+    # registry entries that predate usb_serial. NEVER treat it as identity.
     $inst = ''
     if ($did -match '\\([0-9A-Fa-f]+&[0-9A-Fa-f]+)(?:&[0-9A-Fa-f]+)*$') {
         $inst = $matches[1]
     }
+    # IDENTITY (#323): the device-unique USB serial. A COM port is an interface
+    # (…&MI_00\<port-path>); its PARENT is the USB device, whose instance id ends in
+    # the serial: USB\VID_303A&PID_0002\441BF662448C. Port paths always contain '&',
+    # serials do not -- that is how we tell them apart when a device is not composite
+    # and the parent lookup returns another port-path.
+    $serial = ''
+    try {
+        $parent = (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_Parent' -ErrorAction Stop).Data
+        if ($parent -is [array]) { $parent = $parent[0] }
+        if ("$parent" -match '\\([^\\]+)$') {
+            $tail = $matches[1]
+            if ($tail -notmatch '&') { $serial = $tail.ToUpper() }
+        }
+    } catch { }
     # Emit one JSON line per port. ConvertTo-Json with -Compress is single-line.
     @{
         com = $com
         vid_pid = ($vid + ':' + $prodid)
         deviceid_full = $did
         instance_hash = $inst
+        usb_serial = $serial
         description = $name
     } | ConvertTo-Json -Compress
 }
@@ -200,8 +215,40 @@ def enumerate_ports() -> list[dict]:
 # registered device (or foreign device). Returns (kind, name, entry) where
 # kind is "device" / "foreign" / None.
 # ---------------------------------------------------------------------------
+def norm_serial(value: Any) -> str:
+    """Normalise a USB serial for comparison (#323).
+
+    The SAME board reports its serial differently depending on which USB endpoint
+    it enumerates on -- observed on one ESP32-S3: 'E8:F6:0A:CA:4E:54' via one
+    interface and 'E8F60ACA4E54' via the other. Comparing raw strings would fail
+    precisely when the device changes mode (runtime vs bootloader), which is the
+    moment identification matters most. Compare on alphanumerics only, uppercased.
+    """
+    return re.sub(r"[^0-9A-Za-z]", "", str(value or "")).upper()
+
+
+def entry_usb_serials(entry: dict) -> list[str]:
+    """Device-unique USB serial(s) recorded for a registry entry (#323).
+
+    Accepted at either `usb_serial:` (top level) or
+    `discriminators.windows.usb_serial`; a single value or a list. Returned
+    normalised via norm_serial().
+    """
+    d = (entry.get("discriminators") or {}).get("windows") or {}
+    vals = [entry.get("usb_serial"), d.get("usb_serial")]
+    out = []
+    for v in vals:
+        if not v:
+            continue
+        if isinstance(v, (list, tuple)):
+            out.extend(norm_serial(x) for x in v if x)
+        else:
+            out.append(norm_serial(v))
+    return [s for s in out if s]
+
+
 def find_in_registry(
-    registry: dict, vid_pid: str, instance_hash: str
+    registry: dict, vid_pid: str, instance_hash: str, usb_serial: str = ""
 ) -> tuple[Optional[str], Optional[str], Optional[dict]]:
     # Two-tier match: an exact DeviceID-instance match ALWAYS wins over a weaker
     # VID:PID-class-only match. A class-only candidate (no instance hash recorded,
@@ -214,32 +261,47 @@ def find_in_registry(
     # companion sitting on a different bench port than its recorded hash). In that
     # ambiguous case we return UNMATCHED so the caller surfaces an honest
     # "unidentified" port instead of a confidently-wrong device name.
-    class_only_candidates: list[tuple[Optional[str], Optional[str], Optional[dict]]] = []
+    serial_up = norm_serial(usb_serial)
+    legacy_candidates: list[tuple[Optional[str], Optional[str], Optional[dict]]] = []
+
     for kind_key, kind_label in [("devices", "device"), ("foreign_devices", "foreign")]:
         for name, entry in (registry.get(kind_key) or {}).items():
             entry_vid_pids = entry.get("vid_pid") or []
             if vid_pid not in entry_vid_pids:
                 continue
-            # VID:PID class match. Now check DeviceID instance hash if known.
+
+            # TIER 1 -- USB serial. Device-unique and port-independent: this IS identity.
+            serials = entry_usb_serials(entry)
+            if serials:
+                if serial_up and serial_up in serials:
+                    return (kind_label, name, entry)
+                # This entry has a serial and it is NOT this port's device. Excluding
+                # it here is what stops a registered board from impersonating another
+                # board that happens to sit in a port it once used.
+                continue
+
+            # TIER 2 -- legacy port-path hash, for entries predating usb_serial.
             d = (entry.get("discriminators") or {}).get("windows") or {}
             known_hashes = [
                 d.get("runtime_deviceid_instance"),
                 d.get("bootloader_deviceid_instance"),
             ]
             known_hashes = [h for h in known_hashes if h]
-            if known_hashes:
-                if instance_hash in known_hashes:
-                    # Exact instance match -- strongest signal, return immediately.
-                    return (kind_label, name, entry)
-                # Has hashes but none match this port -- definitely not this device.
-                continue
-            # No per-instance hash recorded: a class-only candidate.
-            class_only_candidates.append((kind_label, name, entry))
-    # Settle for a class-only candidate only when it UNIQUELY claims this VID:PID;
-    # an ambiguous class-only guess is reported as unidentified (None), never as a
-    # specific device.
-    if len(class_only_candidates) == 1:
-        return class_only_candidates[0]
+            if known_hashes and instance_hash in known_hashes:
+                legacy_candidates.append((kind_label, name, entry))
+
+            # TIER 3 -- neither serial nor hash (e.g. discriminators.windows == null).
+            # DELIBERATELY NOT A CANDIDATE (#323). Such an entry matches its whole
+            # VID:PID class, so it silently swallows any unrecognised board of that
+            # chip family. That is how a node physically mounted in the garage ceiling
+            # was reported as sitting on the bench. Unidentified is the honest answer;
+            # a confidently-wrong device name gets firmware written to the wrong board.
+
+    # A legacy hash match is accepted only when it is unambiguous. Note this is
+    # weaker than a serial match and follows the socket, not the board -- callers
+    # warn the operator to record usb_serial.
+    if len(legacy_candidates) == 1:
+        return legacy_candidates[0]
     return (None, None, None)
 
 
@@ -266,34 +328,66 @@ def resolve_device(name: str, registry: dict) -> tuple[dict, dict]:
 
     ports = enumerate_ports()
 
-    # First, see if any present port matches THIS device's registered hashes.
+    # #323: identify by USB serial (device-unique, port-independent) when the entry
+    # records one; fall back to the legacy port-path hash only for entries that
+    # predate it; refuse outright when neither exists.
+    serials = entry_usb_serials(entry)
     matches = []
-    for p in ports:
-        if p["vid_pid"] not in entry_vid_pids:
-            continue
+
+    if serials:
+        # Deliberately NOT filtered by vid_pid: the serial already identifies the
+        # board, and a device in bootloader mode legitimately presents a different
+        # PID than in runtime. Filtering on VID:PID here is what made a board
+        # "disappear" when it enumerated on its other USB endpoint.
+        matches = [p for p in ports if norm_serial(p.get("usb_serial")) in serials]
+        if not matches:
+            present_summary = ", ".join(
+                f"{p['com']}={p['vid_pid']} serial={p.get('usb_serial') or '(none)'}"
+                for p in ports
+            ) or "(no ports)"
+            refuse(
+                f"no present port carries device '{name}' USB serial "
+                f"{sorted(serials)} -- it is not attached to this host. "
+                f"Present: {present_summary}"
+            )
+    else:
         d = (entry.get("discriminators") or {}).get("windows") or {}
         known_hashes = [
             d.get("runtime_deviceid_instance"),
             d.get("bootloader_deviceid_instance"),
         ]
         known_hashes = [h for h in known_hashes if h]
-        if known_hashes and p["instance_hash"] in known_hashes:
-            matches.append(p)
-        elif not known_hashes:
-            # Class match only - registry has no hash yet. Accept but warn.
-            matches.append(p)
-
-    if not matches:
-        # No port matches this device. Surface what IS present so the user can
-        # see whether they expected this device to be connected.
-        present_summary = ", ".join(
-            f"{p['com']}={p['vid_pid']}({p['description']})" for p in ports
-        ) or "(no ports)"
-        refuse(
-            f"no present port matches device '{name}' "
-            f"(expected VID:PID in {sorted(entry_vid_pids)}, "
-            f"known DeviceID hashes from registry). "
-            f"Present: {present_summary}"
+        if not known_hashes:
+            # Previously this accepted ANY port of the right VID:PID class -- the
+            # defect behind #323. A chip-family match is not an identity.
+            refuse(
+                f"device '{name}' records neither usb_serial nor a DeviceID hash, so it "
+                "cannot be identified -- only its VID:PID class, which every board of "
+                "that chip family shares. Refusing rather than guessing (#323). "
+                "Run 'pio-flash list' to read this board's usb_serial, then record it "
+                "on the entry as 'usb_serial: <VALUE>'."
+            )
+        matches = [
+            p for p in ports
+            if p["vid_pid"] in entry_vid_pids and p["instance_hash"] in known_hashes
+        ]
+        if not matches:
+            present_summary = ", ".join(
+                f"{p['com']}={p['vid_pid']} serial={p.get('usb_serial') or '(none)'}"
+                for p in ports
+            ) or "(no ports)"
+            refuse(
+                f"no present port matches device '{name}' by legacy DeviceID port-path "
+                f"hash {sorted(known_hashes)}. NOTE: that hash identifies the USB SOCKET, "
+                "not the board, so it stops matching whenever the device is moved to a "
+                "different port. Record 'usb_serial:' on this entry to make it "
+                f"port-independent (#323). Present: {present_summary}"
+            )
+        err(
+            f"WARNING: '{name}' was matched by legacy DeviceID port-path hash, which "
+            "identifies the USB socket rather than the board. Record "
+            f"'usb_serial: {matches[0].get('usb_serial') or '<unavailable>'}' on this "
+            "entry so identification survives a port change (#323)."
         )
 
     if len(matches) > 1:
@@ -308,7 +402,9 @@ def resolve_device(name: str, registry: dict) -> tuple[dict, dict]:
     # to know about it (it's a candidate for bootstrap or foreign registration).
     unregistered = []
     for p in ports:
-        kind, _, _ = find_in_registry(registry, p["vid_pid"], p["instance_hash"])
+        kind, _, _ = find_in_registry(
+            registry, p["vid_pid"], p["instance_hash"], p.get("usb_serial", "")
+        )
         if kind is None:
             unregistered.append(p)
     if unregistered:
@@ -377,17 +473,25 @@ def cmd_list(args, registry):
     """Tier 0: enumerate present ports vs registry. No device touch."""
     ports = enumerate_ports()
     out(f"Present ports ({len(ports)}):")
-    out(f"{'COM':<8} {'VID:PID':<12} {'instance':<14} {'match':<22} description")
-    out("-" * 100)
+    # usb_serial is the identity column (#323); instance is the legacy port-path and
+    # is shown only so an operator can see what the old matcher was keying on.
+    out(f"{'COM':<8} {'VID:PID':<12} {'usb_serial':<16} {'port-path':<12} {'match':<22} description")
+    out("-" * 110)
     for p in ports:
-        kind, name, _ = find_in_registry(registry, p["vid_pid"], p["instance_hash"])
+        kind, name, _ = find_in_registry(
+            registry, p["vid_pid"], p["instance_hash"], p.get("usb_serial", "")
+        )
         if kind == "device":
             tag = f"device:{name}"
         elif kind == "foreign":
             tag = f"FOREIGN:{name}"
         else:
             tag = "unregistered"
-        out(f"{p['com']:<8} {p['vid_pid']:<12} {p['instance_hash']:<14} {tag:<22} {p['description']}")
+        ser = p.get("usb_serial") or "(none)"
+        out(
+            f"{p['com']:<8} {p['vid_pid']:<12} {ser:<16} {p['instance_hash']:<12} "
+            f"{tag:<22} {p['description']}"
+        )
     if not ports:
         out("(no present serial ports)")
     return 0
