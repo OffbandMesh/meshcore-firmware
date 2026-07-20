@@ -16,13 +16,25 @@ void LoRaFEMControl::init(void)
         delay(1);  // FEM startup time after cold power-on
     }
 
-    // Auto-detect FEM type via shared GPIO2 default pull level.
-    // GC1109 CSD: internal pull-down → reads LOW
-    // KCT8103L CSD: internal pull-up → reads HIGH
+    // Auto-detect FEM type from the CSD level on the shared GPIO.
+    //
+    // #318: this is a BOARD STRAP, not a chip-internal pull. The previous comment
+    // here claimed "internal pull-down / internal pull-up"; that is wrong -- the
+    // GC1109 datasheet documents no internal pulls on CSD/CPS/CTX. From the Heltec
+    // schematics:
+    //   V4.2 / GC1109  : R4  10k from PA_CSD to RF_GND  (pull-down) -> reads LOW
+    //   V4.3 / KCT8103L: R33 10k from PA_CSD to Vfem    (pull-up)   -> reads HIGH
+    //
+    // R33 pulls to Vfem -- downstream of the FEM LDO enabled a few lines above --
+    // NOT to 3V3. That is why a settle window can exist at all here. Measured on a
+    // GC1109 unit: LOW at 1 ms and still LOW after 50 ms, so the strap is
+    // unambiguous there. Build with -D FEM_DEBUG_PROBE to re-measure on a board
+    // whose FEM is unknown or suspect.
     rtc_gpio_hold_dis((gpio_num_t)P_LORA_KCT8103L_PA_CSD);
     pinMode(P_LORA_KCT8103L_PA_CSD, INPUT);
     delay(1);
-    if(digitalRead(P_LORA_KCT8103L_PA_CSD)==HIGH) {
+    csd_early = digitalRead(P_LORA_KCT8103L_PA_CSD);   // the level the decision uses
+    if(csd_early==HIGH) {
         // FEM is KCT8103L (V4.3)
         fem_type= KCT8103L_PA;
         pinMode(P_LORA_KCT8103L_PA_CSD, OUTPUT);
@@ -32,6 +44,15 @@ void LoRaFEMControl::init(void)
         digitalWrite(P_LORA_KCT8103L_PA_CTX, lna_enabled ? LOW : HIGH);
         setLnaCanControl(true);
     } else {
+#ifdef FEM_DEBUG_PROBE
+        // #318 (diagnostic only, does NOT affect the decision above): re-read the
+        // same pin after a longer settle while it is still INPUT. A V4.3 whose R33
+        // pull-up to Vfem had not yet asserted would read LOW here at 1 ms and HIGH
+        // at 50 ms -- i.e. a genuine misdetection. Falsifiable: late==LOW means
+        // settle time is NOT the explanation and the part really is a GC1109.
+        delay(50);
+        csd_late = digitalRead(P_LORA_KCT8103L_PA_CSD);
+#endif
         // FEM is GC1109 (V4.2)
         fem_type= GC1109_PA;
         pinMode(P_LORA_GC1109_PA_EN, OUTPUT);
@@ -39,6 +60,42 @@ void LoRaFEMControl::init(void)
         pinMode(P_LORA_GC1109_PA_TX_EN, OUTPUT);
         digitalWrite(P_LORA_GC1109_PA_TX_EN, LOW);
     }
+
+#ifdef FEM_DEBUG_PROBE
+    // #318: emit the evidence the FEM decision was made on. OFF by default -- this
+    // is bench diagnostics, not production logging.
+    //
+    // Repeated because on ESP32-S3 native USB the port drops and re-enumerates
+    // across a reset, so a host reader CANNOT hold the port through boot; it can
+    // only re-attach afterwards, by which time a single print is long gone. Each
+    // repeat costs 1 s of boot delay, and at ~1 Hz this WILL drown CLI replies on
+    // the same serial endpoint -- which is exactly why it is opt-in. Bounded so it
+    // can never become the outage it is meant to diagnose (SAFELANE §11 r10).
+    //
+    //   -D FEM_DEBUG_PROBE                      -> 60 lines / ~60 s boot delay
+    //   -D FEM_DEBUG_PROBE -D FEM_DEBUG_PROBE_REPEAT=1  -> single line, no delay
+    #ifndef FEM_DEBUG_PROBE_REPEAT
+    #define FEM_DEBUG_PROBE_REPEAT 60
+    #endif
+    for (int i = 0; i < FEM_DEBUG_PROBE_REPEAT; i++) {
+        // Only transmit when a host is actually attached: on native USB CDC with no
+        // host, the TX buffer fills and Serial.flush() blocks, which can trip the
+        // watchdog. The delay stays OUTSIDE this guard on purpose -- the whole point
+        // of repeating is that the host attaches LATE (after the post-reset USB
+        // re-enumeration), so the window must stay open even while nothing is
+        // listening. Gating the delay too would burn all iterations instantly and
+        // print nothing to the reader that shows up at t+10 s.
+        if (Serial) {
+            Serial.printf("[FEM] csd_early=%u csd_late=%u fem_type=%s lna_can_control=%u reset=%d\n",
+                          (unsigned)csd_early, (unsigned)csd_late,
+                          fem_type==KCT8103L_PA ? "KCT8103L(V4.3)" :
+                          fem_type==GC1109_PA   ? "GC1109(V4.2)"   : "OTHER/UNDETECTED",
+                          (unsigned)lna_can_control, (int)reason);
+            Serial.flush();
+        }
+        if (i + 1 < FEM_DEBUG_PROBE_REPEAT) delay(1000);
+    }
+#endif
 }
 
 void LoRaFEMControl::setSleepModeEnable(void)
