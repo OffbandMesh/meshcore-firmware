@@ -23,13 +23,20 @@ The firmware lives here: **`firmware-base`** is the canonical Offband tree (the 
 
 | File | What it is | When |
 |---|---|---|
-| `<env>-...-merged.bin` (ESP32) | full image (bootloader + partitions + app), flashed at `0x0` after erase | **first install** — web flasher "Full Firmware"; self-contained |
-| `<env>-....bin` (ESP32) | app only, flashed at the app offset | **update** — OTA / "Update Only"; keeps identity + config |
+| `<env>-...-merged.bin` (ESP32) | full image (bootloader + partitions + app), flashed at `0x0` after erase | **first install** — self-contained, boots a blank chip |
+| `<env>-....bin` (ESP32) | app only, flashed at the app offset (`0x10000`) | **update** — keeps identity + config |
 | `<env>-....uf2` (nRF52) | complete self-contained image | first install **and** update — double-tap reset, drag-drop |
+| `<env>-....zip` (nRF52) | Adafruit DFU package — the same image as the `.uf2`, DFU-wrapped | serial DFU tooling (`adafruit-nrfutil`). Most people want the `.uf2` instead |
 
-> On ESP32 the app-only `.bin` will **not boot** if written at `0x0` — use `-merged.bin` for a fresh install. A full erase wipes the device identity + config (first-install / recovery only). nRF52 `.uf2` has no merged/app split.
+> On ESP32 the app-only `.bin` will **not boot** if written at `0x0` — use `-merged.bin` for a fresh install. A full erase wipes the device identity + config (first-install / recovery only). nRF52 has no merged/app split; the `.uf2` and `.zip` carry the same image in different wrappers.
 
-Flash from a browser ([MeshCore web flasher](https://meshcore.co.uk/flasher.html) → custom firmware), or `pio run -e <env> -t upload`. Each release's notes repeat this guidance.
+**Flashing — no toolchain required:**
+
+- **nRF52 (RAK, T-Echo, XIAO nRF52)** — double-tap reset; the board mounts as a USB drive; drag the `.uf2` onto it. Nothing to install. This is the simplest path.
+- **ESP32** — the [MeshCore web flasher](https://flasher.meshcore.io/) → **Custom Firmware**, which takes a file straight off your disk. Needs a Chromium-based browser (Web Serial). It detects the `-merged.bin` suffix and warns before erasing — expected on a first install.
+- **From source** — `pio run -e <env> -t upload`.
+
+Each release's notes repeat this guidance.
 
 **Build from source** — install [PlatformIO](https://platformio.org/), then build the env that matches your board + role:
 
