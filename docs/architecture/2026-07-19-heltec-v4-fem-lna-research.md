@@ -42,9 +42,13 @@ Five things matter:
    **CPS** instead. This explains the firmware's asymmetric handling, which had looked like an
    inconsistency.
 
-**Load-bearing gap:** no KCT8103L datasheet could be obtained anywhere. The polarity of the
-user-facing `fem on/off` control is therefore **unverified**, and several conclusions below are
-explicitly conditional on it. One bench test closes it (§8).
+**Documentation gap (no longer load-bearing):** no KCT8103L datasheet could be obtained anywhere,
+so the *electrical* polarity of `fem on/off` is not documented. It has, however, been **validated
+functionally on real V4.3 hardware** in firmware and client (§8a), so the feature is trustworthy in
+behavior even though the vendor numbers remain unpublished.
+
+**Both FEM paths are hardware-confirmed** — GC1109 on ST-P by silkscreen + CLI, KCT8103L on a
+separate V4.3 board by owner bench validation. See §8a.
 
 ### Review history
 
@@ -259,6 +263,42 @@ evidence would catch it. **This is the highest-value bench test available** (§8
 
 ## 6. Board identification
 
+### 6.0 In practice — read the silkscreen
+
+**`[verified: photograph of ST-P, 2026-07-19]` The board prints its revision on the back
+silkscreen: `HTIT-WB32LAF V4.2`.** Flip the board over. That is the whole method — no power, no
+tooling, no magnification.
+
+An earlier revision of this document asserted that no source confirmed a printed revision string.
+That was wrong, and wrong in a specific way worth naming: "I did not find it" was written up as
+"it does not exist." Same overreach as the R1 draft. **The most reliable identifier was printed on
+the hardware the entire time.**
+
+Ranked, cheapest first:
+
+| # | Method | Observable | GC1109 board | KCT8103L board |
+|---|---|---|---|---|
+| 1 | **Back silkscreen** | printed revision | `HTIT-WB32LAF V4.2` | `V4.3` / `V4.3.1` |
+| 2 | **CLI** | `fem` | `controllable: no` | `controllable: yes` |
+| 3 | Board name string | reported device name | `Heltec V4 OLED` / `V4 TFT` | `Heltec V4.3 OLED` / `V4.3 TFT` |
+| 4 | Component-level tells | see §6.2 | 17 dB Pi attenuator populated | empty `U10`/`U11` SAW pads |
+
+**Purchase date is NOT a usable proxy.** `[verified: owner purchase records + silkscreen]` Boards
+bought 2026-04-14 and 2026-04-24 are **V4.2** — Heltec was still shipping V4.2 stock roughly seven
+weeks after V4.3.1 was announced (2026-02-25). An earlier revision of this document offered
+purchase date as a free no-hardware check; it would have returned the wrong answer.
+
+`[verified: src/helpers/CommonCLI.cpp:580-584, variants/heltec_v4/HeltecV4Board.cpp:81-83]`
+Both derive from `LoRaFEMControl::fem_type`, which is set by the R4/R33 strap read at boot (R7).
+Since that strap is a deliberate hardware difference, this is a **reliable** discriminator — the
+firmware is reading real board state, not guessing.
+
+Caveat carried from R1: the `V4.3` in the name string is our label, not one Heltec publishes. Read
+it as "the KCT8103L board," which in Heltec's own numbering is **V4.3.1**.
+
+**If a board cannot be powered or flashed**, fall back to §6.2.
+
+
 ### 6.1 By firmware probing — mechanism is misstated
 
 Current probe (`LoRaFEMControl.cpp:19-41`): release RTC hold on GPIO2, set INPUT, delay 1 ms, read.
@@ -266,12 +306,42 @@ HIGH → KCT8103L; LOW → GC1109. The comment attributes this to:
 
 > `GC1109 CSD: internal pull-down → reads LOW` / `KCT8103L CSD: internal pull-up → reads HIGH`
 
-**Finding R7 — the stated mechanism is not supported.** `[verified: GC1109 datasheet §6-7]` The
-GC1109 datasheet's pin description and recommended operating conditions document **no internal
-pull-up or pull-down on CSD, CPS, or CTX.** Meanwhile `[verified: both schematics]` the FEM control
-nets sit alongside external resistors (10 kΩ parts `R40`/`R42`/`R33`/`R39` on the V4.3 sheet;
-`R44 10K` on the V4.2 sheet) — i.e. any defined idle level is most likely a **board-level** pull,
-not a chip-internal one.
+**Finding R7 — the stated mechanism is wrong; the real one is better. RESOLVED.**
+
+`[verified: GC1109 datasheet §6-7]` The GC1109 datasheet's pin description and recommended operating
+conditions document **no internal pull-up or pull-down on CSD, CPS, or CTX.** So the code comment's
+stated cause cannot be right.
+
+`[verified: rendered schematic excerpts — see images below]` The real mechanism is a **deliberate
+board-level revision strap**, and the two boards pull the same net in **opposite** directions:
+
+| Board | FEM | Resistor on `PA_CSD` | Tied to | GPIO2 reads |
+|---|---|---|---|---|
+| V4.2-era | GC1109 (U10) | **R4, 10 kΩ** | **RF_GND** (pull-**down**) | **LOW** |
+| V4.3.1 | KCT8103L (U8) | **R33, 10 kΩ** | **Vfem** (pull-**up**) | **HIGH** |
+
+That is exactly the polarity the firmware's probe assumes, so `LoRaFEMControl::init()` detects
+correctly — but for a **more robust** reason than it claims. A designed-in external strap is a
+deliberate hardware signal, not an incidental chip characteristic; it is a sound thing to key on.
+
+Also visible and worth recording:
+- V4.2 additionally pulls `PA_CPS` down via **R44 10 kΩ** to RF_GND.
+- V4.3 pulls `PA_CTX` down via **R40 10 kΩ** to GND — i.e. the LNA-control line idles in whichever
+  state CTX-low selects, which is the other half of the R6 polarity question.
+- V4.2 carries a **17 dB Pi attenuator** on the RX path (`R33`/`R35`/`R36`, annotated
+  「Π形衰减 17dB」). The V4.3 sheet has no equivalent — instead it has the unpopulated `U10`/`U11`
+  SAW-filter footprints with `R32 0R` bypassing them. This is a substantive RX-chain difference
+  beyond the FEM swap and is **not** currently reflected anywhere in firmware or `HARDWARE.md`.
+
+**Correction required in code:** the comment at `variants/heltec_v4/LoRaFEMControl.cpp:19-21`
+attributing detection to "internal pull-down"/"internal pull-up" should name R4/R33 instead.
+
+![GC1109 FEM section, V4.2 schematic](2026-07-19-heltec-v4-fem-gc1109-schematic.png)
+*V4.2 / GC1109 (U10). Note `R4 10K` from `PA_CSD` to RF_GND, and the 17 dB Pi attenuator at left.*
+
+![KCT8103L FEM section, V4.3 schematic](2026-07-19-heltec-v4-fem-kct8103l-schematic.png)
+*V4.3 / KCT8103L (U8). Note `R33 10K` from `PA_CSD` to Vfem, `R40 10K` from `PA_CTX` to GND, and
+the unpopulated `U10` SAW-filter footprint with `R37`/`R38` NC.*
 
 The probe's *outcome* may still be reliable — a board-level pull is arguably a more dependable
 discriminator than a chip-internal one. But the documented rationale is wrong, and anyone reasoning
@@ -282,10 +352,8 @@ rail, on which net) is **not** established. The positioned-text method that sett
 resolve it: resistor designators and value glyphs (`R40 10K`, `R42`, `R33`, `R39`) extract without
 the connectivity that gives them meaning.
 
-**This is a required action, not an optional one.** Ground truth for a detection mechanism is not
-complete while the mechanism is unknown — the probe is currently trusted on outcome alone. Closing
-it needs eyes on the two schematic sheets (a human, or a host where PDF rendering works). Until
-then the auto-detect should be treated as empirically-working-for-unknown-reasons.
+*(Resolved — see the table and images above. The gap was closed by rendering the schematic regions
+with PyMuPDF, which does not depend on the broken canvas binding.)*
 
 ### 6.2 By visual inspection — one solid discriminator, one weak
 
@@ -305,7 +373,7 @@ then the auto-detect should be treated as empirically-working-for-unknown-reason
 | 1 | V4.2 carries GC1109; V4.3 carries KCT8103L | **Confirmed as to parts** `[verified: both schematics]`; **revision labels are not Heltec's** (R1) |
 | 2 | FEM auto-detected via GPIO2 default pull level | **Behavior confirmed in code; stated mechanism refuted** (R7) |
 | 3 | LNA controllable only on KCT8103L | **Confirmed** — and the reason is that GC1109 has no LNA bypass at all (R4), not that it is deficient |
-| 4 | KCT8103L: CTX LOW = LNA on, HIGH = bypass | **Unverified — no datasheet obtainable** (R6). Load-bearing for the user-facing control |
+| 4 | KCT8103L: CTX LOW = LNA on, HIGH = bypass | **Functionally validated on V4.3 hardware** (§8a) — detection + control confirmed working in firmware and client. Electrical polarity still undocumented (no datasheet), but no longer load-bearing; RF characterisation is optional |
 | 5 | GC1109 CPS: 1 = full PA, 0 = bypass; don't-care in RX | **Confirmed** `[verified: GC1109 Table 4]` (R5) |
 | 6 | `HARDWARE.md`: high-power V4.3 = +28 ±1 dBm at antenna | **Consistent with Heltec** `[verified: update log]` — "maximum output remains 28 dBm (not 30 dBm)", despite the GC1109's own 30 dBm saturated rating |
 | 7 | `HARDWARE.md`: KCT8103L's advantage is RX noise figure, not TX gain | **Unsourced.** Plausible and directionally consistent with Heltec's "software control of RX LNA" framing, but no datasheet backs it |
@@ -344,6 +412,85 @@ correct. Do not repeat this framing to users until the §8 bench test has run.
 > floor, **the polarity is inverted** and the control is backwards.
 
 That test needs no new tooling and no probe — the CLI and `noise_floor` reporting already exist.
+
+---
+
+## 8a. Hardware validation — both FEM types confirmed
+
+`[verified: bench, 2026-07-19]`
+
+### GC1109 path — a V4.2 board on COM10
+
+Two independent methods agree:
+
+| Method | Result |
+|---|---|
+| Back silkscreen (firmware- and tooling-independent) | `HTIT-WB32LAF V4.2` |
+| Serial CLI | `fem_type=GC1109(V4.2) lna_can_control=0` |
+
+The auto-detect reads real board state on a GC1109 board. **R7's strap explanation is confirmed in
+behavior as well as in schematic.**
+
+⚠ **Device-identity caveat — see #323.** `pio-flash` matches devices by **USB port-path**, not by
+device identity, so it misidentifies boards after any port or device swap. The board was unplugged
+(for the silkscreen photograph) and re-attached between enumeration and query. **The registry label
+"ST-P" is therefore not trustworthy here.**
+
+What survives that caveat, and what does not:
+
+- **Survives:** a **V4.2 / GC1109 board** was on COM10 and reported `GC1109(V4.2)`,
+  `lna_can_control=0`. The fleet is mixed and the only other known V4 OLED (Firestar) is KCT8103L,
+  which would have reported the *other* FEM. So the queried board genuinely is a GC1109/V4.2 unit,
+  and the detect genuinely worked on it. **The FEM conclusion is unaffected.**
+- **Does not survive:** the assertion that this specific unit is the one the registry calls **ST-P**.
+  That rests on `pio-flash`'s port-path match, which #323 documents as unsound.
+
+Per-unit attribution should be re-established once #323 is fixed (key nRF52/ESP32 devices on chip
+serial rather than port-path). Until then, treat this as "a V4.2 board," not "ST-P."
+
+*What this did NOT prove:* on a GC1109 board, `R4` pulls `PA_CSD` to ground, so the pin reads LOW
+whether the Vfem timing is correct or not. A correct read and a timing-failed read are
+indistinguishable here — this test could not exercise that failure mode.
+
+### KCT8103L path — owner-validated on a separate V4.3 board
+
+`[verified: owner bench validation, 2026-07-19]` A **V4.3 board** was located and tested. Detection
+resolved to the KCT8103L path and the LNA control **worked as anticipated, validated in both the
+firmware and the client.**
+
+**This closes the concern raised in R5/R7 about Vfem settling.** The KCT8103L branch depends on
+`R33` pulling `PA_CSD` up to `Vfem` *after* the firmware enables the FEM LDO, with only ~2 ms of
+settling. Had that window been too short, the board would have silently misdetected as GC1109 and
+the control would have been absent. It was not — the board detected correctly and the control
+functioned. The timing is adequate on real hardware.
+
+**Scope note, stated precisely:** this validates *functional* behavior end-to-end — detection,
+firmware control path, and client surface. It is **not** an RF measurement. The noise-floor
+direction test in §8 would independently confirm that CTX-low engages the LNA rather than bypassing
+it (R6). Given that the control now behaves as expected across firmware and client on real
+hardware, that measurement drops from load-bearing to **optional characterisation** — worth doing if
+anyone wants the actual dB figures, not required to trust the feature.
+
+### Net effect on the fleet — **the fleet is MIXED**
+
+`[verified: per-unit inventory in HARDWARE.local.md, established by a concurrent session 2026-07-19]`
+
+| Unit | FEM | LNA control |
+|---|---|---|
+| **Firestar** | KCT8103L (V4.3) | **yes** |
+| **ST-P** | GC1109 (V4.2) | no |
+
+**Two V4 OLEDs from the same order, the same day, resolve to different FEMs.** Heltec was evidently
+shipping mixed stock in April 2026.
+
+**Correction to an earlier claim in this document.** A prior revision generalised ST-P's V4.2
+silkscreen to "the V4 OLED fleet is V4.2 / GC1109." That was wrong — one unit's silkscreen is
+evidence about **that unit**, not about a fleet. It is the same one-sample-to-population overreach
+this document already had to correct twice (R1's changelog argument, and the "no printed revision
+string" claim). **Never infer a unit's FEM from the model name, the purchase order, or another
+unit — check the individual board.**
+
+This also makes the `fem` control and #298 **live on real owned hardware**, not theoretical.
 
 ---
 
