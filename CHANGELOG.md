@@ -14,6 +14,22 @@ prior to 0.13.0 predate it; see `git tag -l 'crosswire-v*'` and the tag
 annotations for that history (highlights: v0.12.0 NimBLE migration, v0.11.x
 Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
+## [Unreleased]
+
+### Fixed
+- **Flashing docs pointed at the wrong page and omitted a release file** (#326). The
+  README's web-flasher link went to `meshcore.co.uk/flasher.html` — a wrapper page that
+  forwards to a configurator, not the flasher. It now points at
+  [`flasher.meshcore.io`](https://flasher.meshcore.io/). The per-release download table
+  (README + `.github/release-footer.md`) also never listed the nRF52 `*.zip` DFU package —
+  40 of the 130 assets in a release — so it now has a row, pointing at serial DFU tooling
+  while steering most users to the simpler `*.uf2`. Both tables described the merged image as a web-flasher **"Full Firmware"**
+  option; that is the device-catalog flow, and an Offband user takes the **Custom Firmware**
+  flow instead, where the flasher auto-detects the `-merged.bin` suffix and prompts before
+  erasing. Corrected, and both surfaces gained a short "how do I flash it" section covering
+  the nRF52 UF2 drag-drop path, the ESP32 web-flasher path, and building from source.
+  Documentation only — no firmware change.
+
 ## [1.1.2] - 2026-07-02
 
 Companion **GPS auto-baud + on-demand GPS status**, plus the wedge/time fixes
