@@ -32,10 +32,14 @@ bool ESP32Board::startOTAUpdate(const char* id, char reply[]) {
   g_ota_is_sta_mode = false;
   MESH_DEBUG_PRINTLN("startOTAUpdate: %s", reply);
 
+  // #327: snprintf, not sprintf. `id` is node_name[32] (31 chars max) and the model
+  // string grew when getManufacturerName() started reporting the FEM part, so the
+  // worst case now lands exactly on the 60-byte capacity with zero margin. Bounded so
+  // a future longer model string truncates instead of corrupting memory.
   static char id_buf[60];
-  sprintf(id_buf, "%s (%s)", id, getManufacturerName());
+  snprintf(id_buf, sizeof(id_buf), "%s (%s)", id, getManufacturerName());
   static char home_buf[90];
-  sprintf(home_buf, "<H2>Hi! I am a MeshCore Repeater. ID: %s</H2>", id);
+  snprintf(home_buf, sizeof(home_buf), "<H2>Hi! I am a MeshCore Repeater. ID: %s</H2>", id);
 
   // Free any prior server before allocating a new one.
   if (g_ota_server) { delete g_ota_server; g_ota_server = nullptr; }

@@ -57,6 +57,29 @@ void LoRaFEMControl::init(void)
         fem_type= GC1109_PA;
         pinMode(P_LORA_GC1109_PA_EN, OUTPUT);
         digitalWrite(P_LORA_GC1109_PA_EN, HIGH);
+        // #327: P_LORA_GC1109_PA_TX_EN is GPIO46 = an ESP32-S3 STRAPPING pin.
+        // Driving it as an output here is datasheet-compliant -- audited against the
+        // ESP32-S3 Series Datasheet v2.2 §3 Boot Configurations:
+        //   - Table 3-1: GPIO46 default is a weak pull-DOWN, bit value 0.
+        //   - "All strapping pins have latches. At Chip Reset, the latches sample the
+        //      bit values ... and store them until the chip is powered down ... and the
+        //      pins are freed up to be used as regular IO pins after reset."
+        //   - Table 3-3: GPIO0=1 selects SPI boot for ANY GPIO46 value. Only
+        //     GPIO0=0 + GPIO46=0 selects download boot.
+        // The one theoretical hazard is a Chip Reset latching GPIO0=0 (BOOT held) while
+        // GPIO46 is driven HIGH mid-TX -- a combination Table 3-3 does not define.
+        // That cannot happen: across any Chip Reset (WDT, brownout, esp_restart, deep
+        // sleep wake) the GPIO peripheral is reset and its output driver disabled
+        // BEFORE the strapping latches sample, so the pin reverts to high-Z and the
+        // datasheet weak pull-down makes it read 0. What WOULD break that is
+        // rtc_gpio_hold_en() on this pin, which holds a driven level through reset --
+        // it is deliberately not applied here (unlike PA_POWER and the KCT8103L lines).
+        // NOTE the gpio_pulldown_en() call on this pin in setRxModeEnableWhenMCUSleep()
+        // is a DEEP-SLEEP measure and plays no part in the reset argument above.
+        // Upstream meshcore-dev/MeshCore#1249 proposed releasing this pin to INPUT
+        // after each TX; it was closed and superseded by #1600. Not adopted here: it
+        // adds TX-path state changes to guard a hazard the reset behaviour already
+        // rules out.
         pinMode(P_LORA_GC1109_PA_TX_EN, OUTPUT);
         digitalWrite(P_LORA_GC1109_PA_TX_EN, LOW);
     }
