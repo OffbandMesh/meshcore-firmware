@@ -16,7 +16,7 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [1.2.0] - Unreleased
 
-Adds **MeshSmith Photon‑1W support** (both MCU flavors) on the **MeshCore 1.16.0** base,
+Adds **MeshSmith Photon‑1W support** (both MCU flavors) on the **MeshCore 1.16.0** base, and **receive-sensitivity recovery on Heltec V4** (external FEM LNA control, which stock MeshCore leaves bypassed),
 plus the ESP32‑C6 I2C‑scan boot‑hang fix found bench‑validating it, a NimBLE build fix,
 and flashing‑docs corrections.
 
@@ -27,6 +27,16 @@ and flashing‑docs corrections.
   minimal MeshCore‑consistent base edits (antenna‑switch virtuals, protected `_gps_serial`, NimBLE dep);
   nRF52 needed none. The **ESP32‑C6 companion + repeater are bench‑verified** on hardware; the
   **nRF52 variant is not yet bench‑verified** — review findings tracked as bench checkpoints on #193/#194.
+- **External FEM LNA control on Heltec V4 companions (#298).** MeshCore leaves the Heltec V4
+  front-end module's LNA bypassed at boot, so V4 companions ran with degraded receive
+  sensitivity. Offband now enables it at companion boot from a persisted `radio_fem_rxgain`
+  preference (default on), on the boards whose FEM exposes an independent LNA line
+  (`heltec_v4`, `heltec_tracker_v2`, `heltec_t096`). A new companion-API command (`0xC3`,
+  SET/GET) plus a capability bit lets the client show a user toggle, gated on the
+  runtime-detected FEM chip. `FIRMWARE_VER_CODE` 15 -> 16. Verified end-to-end on a
+  KCT8103L (V4.3) board.
+- **Model string names the detected FEM part (#327)** — reads `Heltec V4 OLED (KCT8103L)`
+  or `(GC1109)`, so a V4.3 (independent LNA control) is distinguishable from a V4.2 in the app.
 
 ### Fixed
 - **Photon‑1W ESP32‑C6 hung at boot, dead on the mesh (#294).** The C6 variant declares its I2C bus,
@@ -34,6 +44,25 @@ and flashing‑docs corrections.
   the I2C peripheral (hangs at addr `0x0d`) and never returns, so `setup()` never reached `loop()`.
   The scan is now skipped on boards that set `ENV_SKIP_I2C_SENSOR_SCAN` (guard vendored verbatim from
   MeshSmith's fork); every other board is unchanged.
+- **CLI accepted garbage after a valid key (#299).** `get radio foobar` returned the radio
+  settings, and `set radio 910.525,62.5,7,5,junk` silently applied the first four values and
+  dropped the rest. Keys now require a whole-token match; extra `set radio` parameters are rejected.
+- **64 ESP32 BLE companion environments could not build (#199, #90).** The NimBLE dependency was
+  declared per-variant with no shared source, and the greedy source filter pulled the BLE
+  interface into non-BLE (`usb`/`wifi`) builds too. Factored into a shared config; restores
+  boards silently absent from prior releases, including `Heltec_v2_companion_radio_usb` and
+  `Xiao_C3_companion_radio_usb`. A CI invariant now guards every ESP32 env. (The #89 fix below
+  is the first, single-env instance of this class.)
+- **FEM auto-detect source comment corrected (#318, #321).** The Heltec V4 FEM type is set by a
+  board strap, not chip-internal pulls as the code claimed; documented against schematics + the
+  GC1109 datasheet. A boot detection probe is available behind `-D FEM_DEBUG_PROBE` (off by default).
+- **`pio-flash` identified devices by USB port-path, not identity (#336, #323).** Boards were
+  misidentified after any USB port or device swap, and a no-discriminator registry entry
+  wildcard-matched its whole chip family. Now keys on the device-unique USB serial and refuses
+  ambiguous matches; hardware-verified across colliding same-VID:PID boards. Bench tooling, not
+  shipped firmware.
+- **`pio-flash` bootstrap parses the ESP32-C6/H2 base MAC and anchors its MAC regexes (#290, #292).**
+  Bench tooling.
 - **`Xiao_S3_WIO_companion_radio_usb` build (#89)** — exclude `SerialBLEInterface.cpp` from the USB
   companion env (it has no BLE), resolving the `NimBLEDevice.h` regression from the #288 NimBLE migration.
 - **Flashing docs pointed at the wrong page and omitted a release file** (#326). The
@@ -53,6 +82,12 @@ and flashing‑docs corrections.
 - **CLAUDE.md: no‑upstream‑merge policy (#197)** — Offband does not merge from upstream MeshCore; the
   `upstream` remote stays fetch‑only for reference. Keep MeshCore nomenclature/coding‑standard consistency
   for clean rebasing.
+
+### Documentation
+- Heltec V4 FEM/LNA ground-truth from schematics, the GC1109 datasheet, and on-device
+  measurement, including V4.2-vs-V4.3 RX-path differences (#320, #321).
+- Repeater WiFi-telemetry genericization design-of-record (#296, design only).
+- Block-user companion-API contract reconciled to as-built (#313, #315).
 
 ## [1.1.2] - 2026-07-02
 
