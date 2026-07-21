@@ -14,7 +14,7 @@ prior to 0.13.0 predate it; see `git tag -l 'crosswire-v*'` and the tag
 annotations for that history (highlights: v0.12.0 NimBLE migration, v0.11.x
 Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
-## [1.2.0] - Unreleased
+## [1.2.0] - 2026-07-21
 
 Adds **MeshSmith Photon‑1W support** (both MCU flavors) on the **MeshCore 1.16.0** base, and **receive-sensitivity recovery on Heltec V4** (external FEM LNA control, which stock MeshCore leaves bypassed),
 plus the ESP32‑C6 I2C‑scan boot‑hang fix found bench‑validating it, a NimBLE build fix,
