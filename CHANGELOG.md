@@ -23,7 +23,7 @@ and flashing‑docs corrections.
 ### Added
 - **MeshSmith Photon‑1W support — ESP32‑C6 + nRF52 (#193, #194)** — vendors MeshSmith's MIT Photon
   variants (`meshsmith_photon_esp32c6`, `meshsmith_photon_nrf52`; Seeed XIAO ESP32‑C6 / XIAO nRF52840 +
-  Ebyte E22‑900M30S 1 W radio) and wires all roles into CI + the release pipeline. ESP32‑C6 needed
+  Ebyte E22‑900M30S 1W radio) and wires all roles into CI + the release pipeline. ESP32‑C6 needed
   minimal MeshCore‑consistent base edits (antenna‑switch virtuals, protected `_gps_serial`, NimBLE dep);
   nRF52 needed none. The **ESP32‑C6 companion + repeater are bench‑verified** on hardware; the
   **nRF52 variant is not yet bench‑verified** — review findings tracked as bench checkpoints on #193/#194.
