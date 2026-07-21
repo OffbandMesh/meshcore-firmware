@@ -8,6 +8,10 @@
 #define TELEM_WIRE &Wire  // Use default I2C bus for Environment Sensors
 #endif
 
+#ifndef ENV_SKIP_I2C_SENSOR_SCAN
+#define ENV_SKIP_I2C_SENSOR_SCAN 0
+#endif
+
 // ============================================================
 // Sensor library includes and static driver instances
 // ============================================================
@@ -637,6 +641,16 @@ bool EnvironmentSensorManager::begin() {
     #endif
   MESH_DEBUG_PRINTLN("Second I2C initialized on pins SDA: %d SCL: %d", ENV_PIN_SDA, ENV_PIN_SCL);
   #endif
+
+#if ENV_SKIP_I2C_SENSOR_SCAN
+  // #294: boards that declare their I2C bus must not be blind-scanned. On the
+  // MeshSmith Photon-1W ESP32-C6 the scan wedges the C6 I2C peripheral (hangs at
+  // addr 0x0d) and never returns, so setup() never reaches loop() and the node is
+  // dead on the mesh. Guard + the ENV_SKIP_I2C_SENSOR_SCAN flag are vendored from
+  // MeshSmith's fork (their variant defines the flag; our tree was missing the guard).
+  MESH_DEBUG_PRINTLN("I2C sensor scan disabled for this board");
+  return true;
+#endif
 
   // Scan the I2C bus before touching any sensor library.
   bool detected[128] = {};
