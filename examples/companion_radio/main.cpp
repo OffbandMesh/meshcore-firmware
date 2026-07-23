@@ -390,6 +390,10 @@ void setup() {
   // wedging until a physical power-cycle. Fed at loop top + sleep entry.
   // Fleet-wide for nRF52 companions; no-op on platforms without nrf_wdt.h.
   board.startWatchdog(30);
+  // #275 (P0): start the true, ungated green-LED heartbeat + its ~10 Hz loop-wake
+  // timer. The heartbeat is loop-driven (heartbeatTick below), NOT gated by UI /
+  // display / connection / traffic / the power-save nap -- it is the liveness signal.
+  board.startHeartbeat();
 #endif
 
   CW_PHASE("setup:DONE");
@@ -398,6 +402,7 @@ void setup() {
 void loop() {
 #if defined(NRF52_PLATFORM)
   board.feedWatchdog();  // #257: feed from the MAIN LOOP only -> a hung loop trips the WDT
+  board.heartbeatTick(); // #275: loop-driven green-LED heartbeat (freezes if the loop hangs)
 #endif
 #ifdef OFFBAND_OBSERVER
   // CrashLog v6: per-sub-loop visit marking + heartbeat. Each sub-loop

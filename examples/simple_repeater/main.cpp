@@ -956,6 +956,10 @@ void setup() {
   // NRF52_PLATFORM guard excludes the ESP32 WiFi/MQTT-bridge repeaters, whose
   // network calls can legitimately block >30 s. Fed from loop() only.
   board.startWatchdog(30);
+  // #275 (P0): true, ungated green-LED heartbeat + ~10 Hz loop-wake timer. Replaces
+  // the nap-suppressed in-loop blip below on nRF52 -- the wake makes the heartbeat
+  // (and the loop-fed watchdog) fire even when the repeater is in RF silence.
+  board.startHeartbeat();
 #endif
 
 #ifdef ENABLE_WIFI_TELEMETRY
@@ -966,11 +970,14 @@ void setup() {
 void loop() {
 #if defined(NRF52_PLATFORM)
   board.feedWatchdog();  // #266: feed from the MAIN LOOP only -> a hung loop trips the WDT
+  board.heartbeatTick(); // #275: loop-driven, ungated green-LED heartbeat (freezes on hang)
 #endif
-#ifdef PIN_STATUS_LED
+// #275 (P0): the old in-loop blip below is nap-suppressed on nRF52 (only blips on a
+// wake, so an idle repeater looks dead). On nRF52 the board heartbeat above owns the
+// LED; keep this path only for ESP32 repeaters (no sd_app_evt_wait nap).
+#if defined(PIN_STATUS_LED) && !defined(NRF52_PLATFORM)
   // Heartbeat: brief blip = alive (#9). No unread-message
-  // logic (repeaters carry none). Cadence follows the loop rate; under nRF52
-  // powersave it blips on each wake.
+  // logic (repeaters carry none). Cadence follows the loop rate.
   {
     static unsigned long s_led_next = 0;
     static bool s_led_on = false;

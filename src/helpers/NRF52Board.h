@@ -34,6 +34,12 @@ protected:
   char *ota_name;
   bool _wdt_started = false;          // #257: hardware watchdog has been started
 
+  // #275: nap-independent green-LED heartbeat state (loop-driven; see startHeartbeat).
+  bool _hb_started = false;
+  bool _hb_on = false;
+  uint32_t _hb_next_ms = 0;
+  SoftwareTimer _hb_wake_timer;       // repeating ~10 Hz loop-wake (RTC1) so the blink isn't nap-gated
+
 #ifdef NRF52_POWER_MANAGEMENT
   uint32_t reset_reason;              // RESETREAS register value
   uint8_t shutdown_reason;            // GPREGRET value (why we entered last SYSTEMOFF)
@@ -61,6 +67,13 @@ public:
   // hung loop trips it -> auto-reboot + RESETREAS=DOG ("Watchdog") at next boot.
   void startWatchdog(uint32_t timeout_secs);
   void feedWatchdog();
+
+  // #275 (P0): true, ungated green-LED heartbeat. startHeartbeat() once at boot;
+  // heartbeatTick() from the MAIN LOOP only. The LED toggle is loop-driven (so a hung
+  // loop freezes it -> the WDT trips), and a repeating SoftwareTimer wakes the loop
+  // ~10 Hz so the blink is NOT gated by the power-save nap, UI, display, or traffic.
+  void startHeartbeat();
+  void heartbeatTick();
 
 #ifdef NRF52_POWER_MANAGEMENT
   uint16_t getBootVoltage() override { return boot_voltage_mv; }

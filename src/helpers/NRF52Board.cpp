@@ -51,6 +51,55 @@ void NRF52Board::feedWatchdog() {
 #endif
 }
 
+// --- True, ungated green-LED heartbeat (#275, P0) --------------------------
+// The green LED MUST blink as long as the main loop runs -- not gated by UI,
+// display, connection, traffic, or the power-save nap. Two parts:
+//   (1) heartbeatTick() toggles the LED from the MAIN LOOP (loop-driven, so a
+//       hung loop freezes the LED and the WDT trips -- the blink IS liveness);
+//   (2) a repeating SoftwareTimer whose RTC1 interrupt pulls the loop out of
+//       sd_app_evt_wait() so the loop cycles ~10 Hz even when fully idle.
+// The same wake also guarantees the loop-fed watchdog (#257) is serviced on an
+// idle node, so the nap can't starve the feed into a false-positive reset.
+// Rationale + why NOT raw NRF_RTC/NRF_TIMER (SoftDevice owns TIMER0, FreeRTOS
+// owns RTC1): docs/superpowers/plans/2026-07-03-275-nrf52-heartbeat-fix.md +
+// docs/llm-consultations/2026-07-03-275-nrf52-wake-heartbeat-gemini-gemini-2.5-pro.log
+static void loop_wake_cb(TimerHandle_t) {
+  // Empty on purpose: the WAKE is the point. The loop (not this callback)
+  // toggles the LED + feeds the WDT, so a genuine loop hang still shows.
+}
+
+void NRF52Board::startHeartbeat() {
+  if (_hb_started) return;
+#ifdef PIN_STATUS_LED
+  pinMode(PIN_STATUS_LED, OUTPUT);
+  digitalWrite(PIN_STATUS_LED, !LED_STATE_ON);   // start off
+  _hb_on = false;
+  _hb_next_ms = millis();
+#endif
+  // 100 ms repeating RTC1 wake -> loop runs ~10 Hz even when idle. Chosen so the
+  // LED-on window can be short (~one wake period) for a low-duty blip -- the car
+  // companion is a SOLAR node (see HARDWARE.md), so power efficiency is required.
+  // Member (not file-static) so it's owned by the board instance (Gemini #275 CRITICAL).
+  _hb_wake_timer.begin(100, loop_wake_cb);
+  _hb_wake_timer.start();
+  _hb_started = true;
+}
+
+void NRF52Board::heartbeatTick() {
+#ifdef PIN_STATUS_LED
+  if (!_hb_started) return;
+  uint32_t now = millis();
+  if ((int32_t)(now - _hb_next_ms) >= 0) {
+    _hb_on = !_hb_on;
+    digitalWrite(PIN_STATUS_LED, _hb_on ? LED_STATE_ON : !LED_STATE_ON);
+    // #275 Option A: ~1 Hz low-duty blip. on ~100 ms (rounds up to the next 100 ms
+    // wake) / off ~900 ms => ~10% duty (~0.2-0.5 mA) instead of ~50%. Both values sit
+    // just under a 100 ms wake boundary so the edge lands on the following wake.
+    _hb_next_ms = now + (_hb_on ? 90 : 890);
+  }
+#endif
+}
+
 #ifdef NRF52_POWER_MANAGEMENT
 #include "nrf.h"
 
