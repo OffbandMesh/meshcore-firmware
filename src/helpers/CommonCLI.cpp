@@ -303,6 +303,50 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       _board->powerOff();  // doesn't return
     } else if (memcmp(command, "reboot", 6) == 0) {
       _board->reboot();  // doesn't return
+#ifdef OFFBAND_WDT_HANGTEST
+    } else if (memcmp(command, "hangtest", 8) == 0) {
+      // DEBUG-ONLY -- gated by -D OFFBAND_WDT_HANGTEST=1, so it is NEVER present
+      // in a shipping image (verify with: strings firmware.bin | grep hangtest).
+      //
+      // Deliberately wedges the MAIN LOOP to produce the falsifiable bench test
+      // both #257 and #275 require, in one shot:
+      //   - #257: the hardware watchdog is fed ONLY from the main loop, so
+      //     spinning here starves the feed -> NVIC reset with RESETREAS=DOG,
+      //     surfaced as "Watchdog" on the next boot banner, within the
+      //     startWatchdog() timeout (~30 s on rak3401).
+      //   - #275: the green-LED heartbeat is loop-driven, so it MUST freeze
+      //     here. A heartbeat that kept blinking through this would prove the
+      //     blink is NOT a true liveness signal.
+      //
+      // The nop prevents the compiler from eliding a side-effect-free infinite
+      // loop (C++ forward-progress rules). Does not return -- by design.
+      Serial.println("hangtest: wedging main loop on purpose -- expect LED freeze then Watchdog reset (~30s)");
+      Serial.flush();
+      for (;;) { __asm__ __volatile__("nop"); }
+    } else if (memcmp(command, "resetreason", 11) == 0) {
+      // DEBUG-ONLY -- same gate. Reports the reset/shutdown reason captured at
+      // boot by the early constructor (NRF52Board nrf52_early_reset_capture).
+      //
+      // Why this is needed at all: on these boards the reason is otherwise
+      // UNREADABLE after the fact -- there is no SWD/J-Link probe on this bench
+      // (so no RTT), and the boot banner prints before a USB-CDC host can
+      // attach, so it goes to the void. Without this you cannot prove WHY a
+      // field node rebooted.
+      //
+      // The captured values live in RAM for the lifetime of THIS boot, so
+      // querying after a watchdog reset reports that reset -- which is exactly
+      // how #257's "RESETREAS = Watchdog" acceptance gets evidenced.
+      //
+      // Superseded by #351 (persistent + permissioned + queryable over the
+      // mesh). The MainBoard virtuals used here already exist fleet-wide and
+      // return "Not available" on boards that don't implement them, so this is
+      // portable, not nRF52-only.
+      uint32_t rr = _board->getResetReason();
+      uint8_t  sr = _board->getShutdownReason();
+      sprintf(reply, "Last reset: %s (0x%lX) | Shutdown: %s (0x%02X)",
+              _board->getResetReasonString(rr), (unsigned long)rr,
+              _board->getShutdownReasonString(sr), (unsigned)sr);
+#endif
     } else if (memcmp(command, "version", 7) == 0 && (command[7] == 0 || command[7] == ' ')) {
       // Offband identity (FF3 / #180). Reports both upstream MeshCore version
       // (via callback into example's MyMesh which #defines FIRMWARE_VERSION) and
