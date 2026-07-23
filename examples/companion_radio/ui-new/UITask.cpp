@@ -802,7 +802,11 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
 }
 
 void UITask::userLedHandler() {
-#ifdef PIN_STATUS_LED
+// #275 (P0): on nRF52 the green LED is the ungated heartbeat, driven from the main
+// loop by NRF52Board::heartbeatTick(). UITask must NOT also write PIN_STATUS_LED or
+// it would contend with (and, when the UI/loop stalls, silently kill) the heartbeat.
+// ESP32 keeps its UI-driven status LED unchanged.
+#if defined(PIN_STATUS_LED) && !defined(NRF52_PLATFORM)
   int cur_time = millis();
   if (cur_time > next_led_change) {
     if (led_state == 0) {
