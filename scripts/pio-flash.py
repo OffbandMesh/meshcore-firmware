@@ -1478,7 +1478,8 @@ def cmd_bootstrap(args, registry):
     out("============================================================")
     out(f"Port VID:PID  : {target['vid_pid']}")
     out(f"Port DeviceID : {target['deviceid_full']}")
-    out(f"Hash          : {target['instance_hash']}")
+    out(f"usb_serial    : {target.get('usb_serial') or '(UNAVAILABLE)'}   <- identity (#354)")
+    out(f"Hash          : {target['instance_hash']}   (port-path, legacy)")
     out(f"Description   : {target['description']}")
     out("")
     out("Reading MAC via esptool (this is the ONE authorized device touch)...")
@@ -1519,10 +1520,22 @@ def cmd_bootstrap(args, registry):
                 )
 
     # Build new entry. v1: assumes ESP32-S3 dual-mode; user can edit later.
+    #
+    # #354: record usb_serial as the PRIMARY identity. It is device-unique and
+    # port-independent, so the entry survives being moved between USB ports/hubs.
+    # Writing only the port-path hash (as bootstrap did before #354) minted a
+    # Tier 2 "legacy" entry on every registration -- exactly the class #323 set
+    # out to eliminate -- so a freshly bootstrapped board still followed the
+    # socket rather than the board. The value is already in hand from
+    # enumerate_ports(); there is no reason to make the operator retype it.
+    usb_serial = (target.get("usb_serial") or "").strip()
     new_entry = {
         "mac": mac,
         "role": f"new device registered via bootstrap on {time.strftime('%Y-%m-%d')}",
         "vid_pid": [target["vid_pid"]],
+        # Legacy port-path hash retained as a secondary discriminator only. It is
+        # harmless once usb_serial is present (find_in_registry prefers Tier 1),
+        # and still gives a match for hosts/boards that expose no serial.
         "discriminators": {
             "windows": {
                 "runtime_deviceid_instance": target["instance_hash"],
@@ -1536,6 +1549,25 @@ def cmd_bootstrap(args, registry):
             "Other discriminators (bootloader mode) TBD on next observation."
         ),
     }
+
+    # #354: usb_serial is the identity column -- write it when the device exposes
+    # one. Placed top-level; entry_usb_serials() accepts it there or under
+    # discriminators.windows.
+    if usb_serial:
+        new_entry["usb_serial"] = usb_serial
+        out(f"Recorded usb_serial: {usb_serial} (port-independent identity)")
+    else:
+        # No silent legacy write. An entry with only a port-path hash follows the
+        # USB socket, not the board -- it will mis-resolve after any port swap.
+        out("")
+        out("!! WARNING: this device exposed NO usb_serial.")
+        out("!!   The entry records only the port-path hash, which identifies the")
+        out("!!   USB SOCKET and NOT the board. It will mis-resolve if the device")
+        out("!!   is moved to a different port (#323/#354).")
+        out("!!   Re-run 'pio-flash list' once the serial enumerates and record it")
+        out("!!   on this entry as 'usb_serial: <VALUE>' before trusting it.")
+        out("")
+
     registry["devices"][name] = new_entry
 
     # Atomic write: dump to temp file, then rename.
