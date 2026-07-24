@@ -4,7 +4,7 @@
 
 #include "MqttBrokerPool.h"
 #include "MqttPayload.h"
-#include "CrashLog.h"   // #181: crashLogf() -- worker has no user ACK channel
+#include <helpers/diagnostics/CrashLog.h>   // #181: crashLogf() -- worker has no user ACK channel
 #include <cstring>
 #include <cstdio>
 

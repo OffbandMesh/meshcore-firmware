@@ -5,7 +5,7 @@
 
 #ifdef OFFBAND_OBSERVER
   #include "helpers/wifi_observer/WifiObserver.h"
-  #include "helpers/wifi_observer/CrashLog.h"
+  #include "helpers/diagnostics/CrashLog.h"
   #include "helpers/wifi_observer/ConfigSchema.h"   // #141: getDisplayAlwaysOn()
   #include "helpers/wifi_observer/ObserverCli.h"     // #141: setDisplayAlwaysOnApplier()
   // CW_PHASE: tracing macro for setup() crash localization. With

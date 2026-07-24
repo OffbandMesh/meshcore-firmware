@@ -6,7 +6,7 @@
   #include <Preferences.h>
   #if defined(ESP_PLATFORM)
     #include <nvs.h>        // #181: nvs_get_stats() -- write-failure diagnostic (real device only)
-    #include "CrashLog.h"   // #181: crashLogf() -- persistent + Serial failure log
+    #include <helpers/diagnostics/CrashLog.h>   // #181: crashLogf() -- persistent + Serial failure log
   #endif
 #else
   // Host build: provide a thin Preferences shim so the file compiles
