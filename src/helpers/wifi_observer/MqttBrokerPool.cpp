@@ -140,27 +140,47 @@ void MqttBrokerPool::setStatusSnapshot(const MqttStatusSnapshot& snap) {
 // ---------------------------------------------------------------------------
 uint8_t MqttBrokerPool::publishPacket(const uint8_t* payload, size_t payload_len) {
     if (payload == nullptr || payload_len == 0) return 0;
-    uint8_t accepted = 0;
+    // #175: append ONCE. Brokers pull from their own cursor in drainBroker(),
+    // so a broker that is down (rotated out, backoff, HeldNoHeap) resumes where
+    // it left off instead of losing the traffic.
+    if (ring_.append(payload, payload_len) == 0) return 0;  // oversize/rejected
+    uint8_t drained = 0;
     for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
-        if (reconciling_[slot]) continue;  // #53: skip slots mid-reconcile
-        MqttBroker& b = brokers_[slot];
-        if (!b.isConfigured() || b.runtime().state != BrokerState::Up) continue;
-
-        MqttPayloadCtx ctx;
-        b.fillPayloadCtx(ctx, global_iata_, device_id_, node_name_,
-                         client_version_, firmware_version_, model_);
-        if (ctx.iata == nullptr || ctx.iata[0] == '\0') {
-            // Per HARD RULE: silent skip on missing IATA (no garbage topics).
-            continue;
-        }
-        char topic[160];
-        formatTopic(topic, sizeof(topic), "packets", ctx);
-        if (topic[0] == '\0') continue;
-        if (b.publish(topic, payload, payload_len, /*retain=*/false)) {
-            accepted++;
-        }
+        drained += drainBroker(slot) ? 1 : 0;
     }
-    return accepted;
+    return drained;
+}
+
+// #175: publish this broker's unread backlog. Bounded per call so one lagging
+// broker cannot monopolise a loop pass. Only commits the cursor on a SUCCESSFUL
+// publish, so a refused enqueue is retried next pass rather than dropped.
+uint8_t MqttBrokerPool::drainBroker(uint8_t slot) {
+    if (slot >= OFFBAND_MAX_BROKERS) return 0;
+    if (reconciling_[slot]) return 0;              // #53: mid-reconcile
+    MqttBroker& b = brokers_[slot];
+    if (!b.isConfigured() || b.runtime().state != BrokerState::Up) return 0;
+
+    MqttPayloadCtx ctx;
+    b.fillPayloadCtx(ctx, global_iata_, device_id_, node_name_,
+                     client_version_, firmware_version_, model_);
+    // Per HARD RULE: silent skip on missing IATA (no garbage topics).
+    if (ctx.iata == nullptr || ctx.iata[0] == '\0') return 0;
+    char topic[160];
+    formatTopic(topic, sizeof(topic), "packets", ctx);
+    if (topic[0] == '\0') return 0;
+
+    uint8_t sent = 0;
+    uint8_t buf[MQTT_RING_MSG_MAX];
+    size_t  len = 0;
+    uint32_t seq = 0;
+    // Bound the burst: at most MQTT_RING_SLOTS messages per pass.
+    for (uint8_t i = 0; i < MQTT_RING_SLOTS; ++i) {
+        if (!ring_.peek(slot, buf, sizeof(buf), len, seq)) break;
+        if (!b.publish(topic, buf, len, /*retain=*/false)) break;  // retry next pass
+        ring_.commit(slot);
+        sent++;
+    }
+    return sent;
 }
 
 // ---------------------------------------------------------------------------
@@ -402,6 +422,9 @@ void MqttBrokerPool::workerLoop() {
             MqttBroker& b = brokers_[s];
             if (!b.isConfigured()) continue;
             b.loop(now);
+            // #175: a broker that just came Up (or was rotated back in) drains
+            // its backlog here, not only when a new packet arrives.
+            if (b.runtime().state == BrokerState::Up) (void)drainBroker(s);
             BrokerState st = b.runtime().state;
             // Re-drive idle/held slots. HeldNoClock releases when the clock is
             // sane (#87); HeldNoHeap releases when a TLS slot frees (#171).

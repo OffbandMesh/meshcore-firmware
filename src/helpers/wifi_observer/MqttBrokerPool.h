@@ -7,6 +7,13 @@
 #pragma once
 #include "WifiObserverConfig.h"
 #include "MqttBroker.h"
+#include "MqttRingLog.h"
+
+// #175: every broker slot is a ring reader, so the ring must have at least as
+// many cursors as there are broker slots. Caught at compile time rather than
+// silently dropping reads for the tail slots if OFFBAND_MAX_BROKERS ever grows.
+static_assert(MQTT_RING_MAX_READERS >= OFFBAND_MAX_BROKERS,
+              "MQTT_RING_MAX_READERS must be >= OFFBAND_MAX_BROKERS (#175)");
 
 #ifdef ARDUINO
   #include <Identity.h>
@@ -113,6 +120,14 @@ private:
     const mesh::LocalIdentity* identity_ = nullptr;
 #endif
     MqttBroker brokers_[OFFBAND_MAX_BROKERS];
+
+    // #175: one retained copy of each published payload; each broker reads at
+    // its own cursor. Decouples "message published" from "broker currently live",
+    // which is what makes TLS rotation lossless within the ring depth.
+    MqttRingLog ring_;
+
+    // Drain one broker's backlog to its transport. Returns messages published.
+    uint8_t drainBroker(uint8_t slot);
 
     // Per-slot guard: true while the lifecycle worker is creating/destroying
     // that slot's client. loopTask publish/status paths SKIP reconciling slots
