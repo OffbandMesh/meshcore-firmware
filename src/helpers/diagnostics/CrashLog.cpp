@@ -9,7 +9,7 @@
 #include <cstdio>
 #include <cstring>
 
-#ifdef ARDUINO
+#if defined(OFFBAND_CRASHLOG_ESP32)
   #include <Arduino.h>
   #include <Wire.h>          // i2cScan() bus probing
   #include <Preferences.h>   // NVS-backed boot counter
@@ -19,15 +19,21 @@
   #include <freertos/FreeRTOS.h>
   #include <freertos/portmacro.h>  // portENTER_CRITICAL
   #include <freertos/task.h> // uxTaskGetStackHighWaterMark()
+#elif defined(OFFBAND_CRASHLOG_NRF52)
+  #include <Arduino.h>       // Serial, millis(); .noinit ring from #361
 #endif
 
 namespace offband {
+
+// Reset-reason provider hook (#376). Board registers its decoder; unset is safe.
+static ResetReasonHook s_reset_reason_hook = nullptr;
+void crashLogSetResetReasonHook(ResetReasonHook hook) { s_reset_reason_hook = hook; }
 
 // ---------------------------------------------------------------------------
 // Reset-reason mapping
 // ---------------------------------------------------------------------------
 const char* resetReasonString(int reason) {
-#ifdef ARDUINO
+#if defined(OFFBAND_CRASHLOG_ESP32)
     switch ((esp_reset_reason_t)reason) {
         case ESP_RST_UNKNOWN:    return "UNKNOWN";
         case ESP_RST_POWERON:    return "POWERON";
@@ -42,6 +48,11 @@ const char* resetReasonString(int reason) {
         case ESP_RST_SDIO:       return "SDIO";
         default:                 return "UNKNOWN";
     }
+#elif defined(OFFBAND_CRASHLOG_NRF52)
+    // No esp_reset_reason enum on nRF52. Delegate to the board's decoder if it
+    // registered one (#376 decision 2); otherwise say so honestly.
+    (void)reason;
+    return s_reset_reason_hook ? s_reset_reason_hook() : "n/a";
 #else
     (void)reason;
     return "HOST_BUILD";
@@ -56,8 +67,8 @@ const char* resetReasonString(int reason) {
 // Total: 4096 B in RTC slow memory.
 
 static constexpr uint32_t kCrashLogMagic    = 0xCAFEF00DU;
-static constexpr size_t   kCrashLogTotal    = 4096;
-static constexpr size_t   kCrashLogDataSize = kCrashLogTotal - 16;  // 4080 B
+static constexpr size_t   kCrashLogTotal    = OFFBAND_CRASHLOG_RING_BYTES;  // #376: overridable
+static constexpr size_t   kCrashLogDataSize = kCrashLogTotal - 16;  // header is 16 B
 static constexpr size_t   kCrashLogLineMax  = 240;                  // truncation cap
 
 struct CrashLogHeader {
@@ -67,19 +78,33 @@ struct CrashLogHeader {
     uint32_t reserved;     // pad to 16 B
 };
 
-#ifdef ARDUINO
-// RTC_NOINIT_ATTR puts this in RTC slow memory, NOT cleared by soft reset.
-// The compiler does NOT initialize NOINIT variables; whatever was there
-// before the reset is what we see. That's the whole point.
-RTC_NOINIT_ATTR static CrashLogHeader s_header;
-RTC_NOINIT_ATTR static char           s_data[kCrashLogDataSize];
+// Retained storage. OFFBAND_RETAINED = RTC_NOINIT_ATTR (ESP32) / .noinit (nRF52)
+// / nothing (host). Contents are NOT zeroed by C-runtime startup, so a previous
+// boot's log survives a soft/watchdog reset. The compiler does not initialize
+// these; whatever survived the reset is what we read -- that is the point.
+OFFBAND_RETAINED static CrashLogHeader s_header;
+OFFBAND_RETAINED static char           s_data[kCrashLogDataSize];
 
-// Critical section spinlock for thread-safe writes.
-static portMUX_TYPE s_log_mux = portMUX_INITIALIZER_UNLOCKED;
+// Thread-safe write guard. ESP32 uses a portMUX spinlock; nRF52 (FreeRTOS via
+// the Adafruit core) masks interrupts around the short critical region; host is
+// single-threaded and needs neither.
+#if defined(OFFBAND_CRASHLOG_ESP32)
+  static portMUX_TYPE s_log_mux = portMUX_INITIALIZER_UNLOCKED;
+  static portMUX_TYPE s_hb_mux  = portMUX_INITIALIZER_UNLOCKED;
+  #define OFFBAND_CL_ENTER(mux) portENTER_CRITICAL(mux)
+  #define OFFBAND_CL_EXIT(mux)  portEXIT_CRITICAL(mux)
+#elif defined(OFFBAND_CRASHLOG_NRF52)
+  // Dummy mux tokens so shared call sites compile unchanged; the guard is a
+  // brief interrupt mask (writes are a memcpy of <=241 bytes).
+  static int s_log_mux = 0;
+  static int s_hb_mux  = 0;
+  #define OFFBAND_CL_ENTER(mux) do { (void)(mux); noInterrupts(); } while (0)
+  #define OFFBAND_CL_EXIT(mux)  do { (void)(mux); interrupts();   } while (0)
 #else
-// Host build: just provide stubs so the unit harness compiles.
-static CrashLogHeader s_header;
-static char           s_data[kCrashLogDataSize];
+  static int s_log_mux = 0;
+  static int s_hb_mux  = 0;
+  #define OFFBAND_CL_ENTER(mux) do { (void)(mux); } while (0)
+  #define OFFBAND_CL_EXIT(mux)  do { (void)(mux); } while (0)
 #endif
 
 static bool s_begin_called = false;
@@ -114,11 +139,22 @@ static void writeToRing(const char* src, size_t n) {
 // Public API
 // ---------------------------------------------------------------------------
 
+// Platform reset-reason code. ESP32 has the esp_reset_reason() enum; nRF52's
+// reason is carried by the board hook (its raw code is provider-defined, so 0
+// here and the string comes from resetReasonString via the hook).
+static int currentResetReasonCode() {
+#if defined(OFFBAND_CRASHLOG_ESP32)
+    return (int)esp_reset_reason();
+#else
+    return 0;
+#endif
+}
+
 void crashLogBegin() {
     if (s_begin_called) return;
     s_begin_called = true;
 
-#ifdef ARDUINO
+#ifndef OFFBAND_CRASHLOG_HOST
     // Was the previous boot's buffer valid?
     bool valid = (s_header.magic == kCrashLogMagic) &&
                  (s_header.write_index < kCrashLogDataSize);
@@ -126,10 +162,10 @@ void crashLogBegin() {
         // Dump previous-boot contents to serial.
         Serial.println();
         Serial.println("=========================================================");
-        Serial.println("=== CRASH LOG FROM PREVIOUS BOOT (RTC_NOINIT survived) ===");
+        Serial.println("=== CRASH LOG FROM PREVIOUS BOOT (retained RAM survived) =");
         Serial.printf("=== reset_reason=%d (%s), buffer wrapped=%u ===\n",
-                      (int)esp_reset_reason(),
-                      resetReasonString(esp_reset_reason()),
+                      currentResetReasonCode(),
+                      resetReasonString(currentResetReasonCode()),
                       (unsigned)s_header.wrapped);
         Serial.println("=========================================================");
 
@@ -156,19 +192,20 @@ void crashLogBegin() {
     // intentionally NOT cleared -- the wrap logic + start-from-write_index
     // handles "empty" correctly because write_index = 0 + wrapped = 0
     // means "print bytes [0..0)" = print nothing.
-    portENTER_CRITICAL(&s_log_mux);
+    OFFBAND_CL_ENTER(&s_log_mux);
     s_header.magic       = kCrashLogMagic;
     s_header.write_index = 0;
     s_header.wrapped     = 0;
     s_header.reserved    = 0;
-    portEXIT_CRITICAL(&s_log_mux);
+    OFFBAND_CL_EXIT(&s_log_mux);
 
     // v2: install hooks immediately so ESP-IDF logs from THIS boot onward
     // are captured, and any reset path triggers a last-gasp dump.
+    // (No-ops on nRF52: no ESP-IDF log stream, no shutdown-handler registry.)
     crashLogInstallEspLogHook();
     crashLogInstallShutdownHandler();
 
-    // v6: initialize boot counter + heartbeat state.
+    // v6: initialize boot counter + heartbeat state. (nRF52: minimal, see below.)
     heartbeatBegin();
 #endif
 }
@@ -182,7 +219,7 @@ void crashLogf(const char* fmt, ...) {
     char line[kCrashLogLineMax + 1];
     int  prefix_len = 0;
 
-#ifdef ARDUINO
+#ifndef OFFBAND_CRASHLOG_HOST
     // Auto-prepend "[<millis>] " for ordering context.
     prefix_len = snprintf(line, sizeof(line), "[%lu] ",
                           (unsigned long)millis());
@@ -209,16 +246,16 @@ void crashLogf(const char* fmt, ...) {
         line[total]   = '\0';
     }
 
-#ifdef ARDUINO
+#ifndef OFFBAND_CRASHLOG_HOST
     // Live monitoring path -- ALWAYS, even before begin() (the ring isn't ready
     // yet, but the line must not vanish).
     Serial.write((const uint8_t*)line, total);
 
     // Crash-survival ring -- only once begin() has initialized the header.
     if (s_begin_called) {
-        portENTER_CRITICAL(&s_log_mux);
+        OFFBAND_CL_ENTER(&s_log_mux);
         writeToRing(line, total);
-        portEXIT_CRITICAL(&s_log_mux);
+        OFFBAND_CL_EXIT(&s_log_mux);
     }
 #else
     // Host build: just write to stdout.
@@ -228,7 +265,7 @@ void crashLogf(const char* fmt, ...) {
 }
 
 void crashLogDump() {
-#ifdef ARDUINO
+#ifndef OFFBAND_CRASHLOG_HOST
     Serial.println("--- crashLogDump (current buffer) ---");
     size_t start = s_header.wrapped ? s_header.write_index : 0;
     size_t count = s_header.wrapped ? kCrashLogDataSize : s_header.write_index;
@@ -242,18 +279,25 @@ void crashLogDump() {
 }
 
 void crashLogClear() {
-    portENTER_CRITICAL(&s_log_mux);
+    OFFBAND_CL_ENTER(&s_log_mux);
     s_header.magic       = kCrashLogMagic;
     s_header.write_index = 0;
     s_header.wrapped     = 0;
-    portEXIT_CRITICAL(&s_log_mux);
+    OFFBAND_CL_EXIT(&s_log_mux);
 }
 
 // ---------------------------------------------------------------------------
 // CrashLog v2: ESP-IDF log capture + shutdown handler + heap stats
 // ---------------------------------------------------------------------------
+// ESP32-ONLY. These lean on ESP-IDF facilities with no nRF52 equivalent:
+// esp_log_set_vprintf (BT/Bluedroid log capture), esp_register_shutdown_handler,
+// NVS Preferences, ESP.getFreeHeap, uxTaskGetStackHighWaterMark. On nRF52 the
+// retained ring + crashLogf above are the breadcrumb substrate; the richer
+// sub-loop/heartbeat instrumentation is a later #350 increment. nRF52 + host
+// therefore share the stub set at the `#else` below.
+// ---------------------------------------------------------------------------
 
-#ifdef ARDUINO
+#if defined(OFFBAND_CRASHLOG_ESP32)
 
 // Recursion guard: if ESP_LOG is called from inside our handler (e.g., a
 // driver logs while we're writing to its serial), we'd loop forever.
@@ -363,10 +407,9 @@ struct BootCounterState {
 RTC_NOINIT_ATTR static BootCounterState s_boot_state;
 
 // Sub-loop visit tracking. Each sub-loop sets its bit on entry;
-// heartbeat reads + zeroes. portMUX serialization for thread safety.
+// heartbeat reads + zeroes. s_hb_mux (defined once, up top) serializes.
 static volatile uint8_t s_subloop_flags = 0;
 static volatile uint32_t s_loop_iter_delta = 0;
-static portMUX_TYPE s_hb_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // Heartbeat timing
 static uint32_t s_last_hb_ms = 0;
@@ -581,7 +624,9 @@ void crashLogHeapStats(const char* tag) {
               phase);
 }
 
-#else  // !ARDUINO host build
+#else  // nRF52 + host: ESP-IDF extras are stubbed (see block header). The
+       // retained ring + crashLogf (above) are the working breadcrumb substrate
+       // on nRF52; sub-loop/heartbeat instrumentation is a later #350 increment.
 
 void crashLogInstallEspLogHook() {}
 void crashLogInstallShutdownHandler() {}

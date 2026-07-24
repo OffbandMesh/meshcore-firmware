@@ -27,7 +27,58 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// ---------------------------------------------------------------------------
+// Platform selector (#350 / #376)
+// ---------------------------------------------------------------------------
+// CrashLog was written ESP32-only, gated behind `#ifdef ARDUINO`. But ARDUINO
+// is defined on nRF52 too, so that guard is wrong for a role-neutral logger.
+// Select an EXPLICIT platform instead. ESP32 keeps every prior code path
+// byte-for-byte; nRF52 gets the portable core; anything else is the host build.
+#if defined(ARDUINO_ARCH_ESP32) || defined(ESP_PLATFORM)
+  #define OFFBAND_CRASHLOG_ESP32 1
+#elif defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52_PLATFORM)
+  #define OFFBAND_CRASHLOG_NRF52 1
+#else
+  #define OFFBAND_CRASHLOG_HOST 1
+#endif
+
+// Retained-memory placement. The ring + boot counter live here so they survive
+// a reset without being re-initialized by C-runtime startup.
+//   ESP32 : RTC slow memory (RTC_NOINIT_ATTR) -- separate from main RAM,
+//           survives deep sleep as well as soft/watchdog reset.
+//   nRF52 : the .noinit section added in #361 -- main SRAM, survives soft and
+//           watchdog reset but NOT a power cut. (Accepted trade, #350.)
+//           NB (ld 2.29, #363): .noinit is GC'd unless REFERENCED. The ring IS
+//           referenced by live code, so it is retained; do not add unreferenced
+//           retained globals without a `used` anchor.
+//   host  : plain static (tests only; no retention semantics).
+#if defined(OFFBAND_CRASHLOG_ESP32)
+  #include <esp_attr.h>
+  #define OFFBAND_RETAINED RTC_NOINIT_ATTR
+#elif defined(OFFBAND_CRASHLOG_NRF52)
+  #define OFFBAND_RETAINED __attribute__((section(".noinit")))
+#else
+  #define OFFBAND_RETAINED
+#endif
+
+// Ring size in bytes (header + data). 4 KB default; a RAM-tight variant may
+// override with -D OFFBAND_CRASHLOG_RING_BYTES=<n>. On nRF52840 (the whole
+// fleet) 4 KB is ~1.7% of app RAM; ~2% of a repeater's free RAM.
+#ifndef OFFBAND_CRASHLOG_RING_BYTES
+  #define OFFBAND_CRASHLOG_RING_BYTES 4096
+#endif
+
 namespace offband {
+
+// Reset-reason provider hook (#376, design decision 2: "delegate to the board").
+// CrashLog is board-agnostic, so instead of threading a board handle through the
+// API (which would ripple into integration code other sessions are editing), the
+// board registers its decoder here. When set, CrashLog reports the reset reason
+// via this hook; when null, it falls back to a built-in decode (ESP32) or "n/a"
+// (nRF52). The hook returns a short human-readable string; the raw code is
+// provider-defined. Wiring is a one-liner the board/example adds; unset is safe.
+typedef const char* (*ResetReasonHook)();
+void crashLogSetResetReasonHook(ResetReasonHook hook);
 
 // ---------------------------------------------------------------------------
 // Reset-reason string mapping (Stage A)
