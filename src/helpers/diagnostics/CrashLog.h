@@ -24,9 +24,6 @@
 //   inspect/clear it on demand.
 
 #pragma once
-// NOTE (#350): CrashLog still depends on WifiObserverConfig.h. Breaking that
-// dependency is the next decoupling step -- this task is the move only.
-#include <helpers/wifi_observer/WifiObserverConfig.h>
 #include <stddef.h>
 #include <stdint.h>
 
