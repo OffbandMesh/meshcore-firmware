@@ -28,10 +28,13 @@
 #include "helpers/wifi_observer/CliPassthrough.h"
 // Epic F: the config command codes (#160 contract) live in OffbandConfigProtocol.h,
 // now included unconditionally above (#241). Its typed dispatch backend (#165):
-#include "helpers/wifi_observer/ObserverCli.h"   // configSet/configGet + dispatchObserverCli
+#include "helpers/wifi_observer/ObserverCli.h"   // dispatchObserverCli + broker enumeration
+#include "helpers/config/ConfigDispatch.h"       // #364: role-agnostic config set/get
 // wifiObserverPool() lives in WifiObserver.h (heavy transitive includes); forward-
-// declare it here as CliPassthrough.cpp does. configSet takes a pool ref (only the
-// broker branch -- F3 -- consumes it, but the signature requires it for flat keys too).
+// declare it here as CliPassthrough.cpp does. Still needed by the VIEW passthrough
+// and the F3 broker enumeration below; the config set/get path no longer takes a
+// pool ref (#364 -- the shared dispatcher must not know about MqttBrokerPool, so
+// the observer's provider fetches the pool itself).
 namespace offband { MqttBrokerPool& wifiObserverPool(); }
 #endif
 
@@ -1275,7 +1278,7 @@ void MyMesh::handleOffbandConfigCmd(size_t len) {
     char* sp = strchr(payload, ' ');                 // split on FIRST space; value = remainder
     if (sp == nullptr) { writeOffbandConfigScalar(offband::OCFG_R_ERR, "set: expected '<key> <value>'"); return; }
     *sp = '\0';
-    if (!offband::configSet(payload, sp + 1, reply, sizeof(reply), offband::wifiObserverPool())) {
+    if (!offband::config::dispatchSet(payload, sp + 1, reply, sizeof(reply))) {
       writeOffbandConfigScalar(offband::OCFG_R_ERR, "unknown config key"); return;
     }
     bool err = (strncmp(reply, "ERROR", sizeof("ERROR") - 1) == 0);
@@ -1284,7 +1287,7 @@ void MyMesh::handleOffbandConfigCmd(size_t len) {
   }
 
   if (op == offband::OCFG_GET) {
-    if (!offband::configGet(payload, reply, sizeof(reply))) {
+    if (!offband::config::dispatchGet(payload, reply, sizeof(reply))) {
       writeOffbandConfigScalar(offband::OCFG_R_ERR, "unknown config key"); return;
     }
     bool err = (strncmp(reply, "ERROR", sizeof("ERROR") - 1) == 0);

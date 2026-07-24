@@ -47,15 +47,19 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
                          MqttBrokerPool& pool);
 
 // Epic F (#165): typed config dispatch -- the wire path's set/get backend.
-// configSet/configGet route a config key straight to the same handlers the
-// _sys CLI uses (above), WITHOUT re-parsing a CLI string. Consumed by the
-// companion-API config command (CMD_OFFBAND_CONFIG / OffbandConfigProtocol.h).
-// `reply` is NUL-terminated human text; returns true if the key was handled
-// (reply populated, incl. an ERROR string), false if the key is unknown.
+// A config key routes straight to the same handlers the _sys CLI uses (above),
+// WITHOUT re-parsing a CLI string. Consumed by the companion-API config command
+// (CMD_OFFBAND_CONFIG / OffbandConfigProtocol.h).
+//
+// #364 (Epic #300 item 1): the former public configSet()/configGet() are now
+// file-static providers in ObserverCli.cpp, registered with the role-agnostic
+// dispatcher in helpers/config/ConfigDispatch.h. Call
+// offband::config::dispatchSet() / dispatchGet() instead -- same reply text,
+// same "false == unknown key" contract, same wire behaviour (#143/#160
+// unchanged), but the repeater can register its own keys alongside the
+// observer's. Registration is automatic when this translation unit is linked.
+//
 // Secrets stay write-only on get (wifi.pwd / broker password|jwt_token).
-bool configSet(const char* key, const char* value, char* reply, size_t reply_size,
-               MqttBrokerPool& pool);
-bool configGet(const char* key, char* reply, size_t reply_size);
 
 // Epic F (#162): broker-pool enumeration for the OCFG_BROKERS paginated read.
 // configBrokerSlotCount() = max slots to iterate; configBrokerSlotPopulated() =

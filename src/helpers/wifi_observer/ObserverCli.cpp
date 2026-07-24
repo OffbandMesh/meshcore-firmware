@@ -6,6 +6,9 @@
 #include "ConfigSchema.h"
 #include "WifiBootstrap.h"   // Plan 3 Task 10: get wifi.status walks
                              // WifiBootstrap::state()
+#include "../config/ConfigDispatch.h"   // #364: role-agnostic config dispatch --
+                                        // this file registers the observer's
+                                        // provider at the bottom.
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -947,35 +950,33 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
 //   return: true if the key was handled (incl. an ERROR reply); false if the
 //           key is unknown to the observer config surface.
 
-// "1"/"true"/"on" -> true; "0"/"false"/"off" -> false; else leave out, return false.
-static bool parseConfigBool(const char* v, bool& out) {
-    if (v == nullptr) return false;
-    while (*v == ' ') ++v;
-    if (eq(v, "1") || eq(v, "true")  || eq(v, "on"))  { out = true;  return true; }
-    if (eq(v, "0") || eq(v, "false") || eq(v, "off")) { out = false; return true; }
-    return false;
+// #364 (Epic #300 item 1): the parse LOGIC moved to the shared dispatcher
+// (helpers/config/ConfigDispatch.h) so every role parses config values
+// identically. These two thin adapters bind the observer's own constant
+// (OFFBAND_MAX_BROKERS) and keep the dispatch chain below byte-for-byte
+// unchanged -- behaviour is identical to the former local implementations.
+static inline bool parseConfigBool(const char* v, bool& out) {
+    return config::parseBool(v, out);
+}
+static inline bool parseBrokerKey(const char* key, int& out_slot, const char*& out_field) {
+    return config::parseIndexedKey(key, "mqtt.broker.", OFFBAND_MAX_BROKERS,
+                                   out_slot, out_field);
 }
 
-// Parse "mqtt.broker.<slot>.<field>" -> slot index + field pointer. Returns
-// true iff the key is a well-formed broker key (slot in range, '.' before a
-// non-empty field); out_field then points just past the '.'. Shared by
-// configSet/configGet so the slot/field walk lives in one place.
-static bool parseBrokerKey(const char* key, int& out_slot, const char*& out_field) {
-    if (strncmp(key, "mqtt.broker.", 12) != 0) return false;
-    const char* p = key + 12;
-    int slot = parseSlot(p);
-    if (slot < 0) return false;
-    while (*p >= '0' && *p <= '9') ++p;   // past slot digit(s)
-    if (*p != '.' || *(p + 1) == '\0') return false;
-    out_slot = slot;
-    out_field = p + 1;
-    return true;
-}
-
-bool configSet(const char* key, const char* value, char* reply, size_t reply_size,
-               MqttBrokerPool& pool) {
+// #364: the observer's config-SET provider, registered with the shared
+// dispatcher at the bottom of this file. Formerly the public
+// configSet(..., MqttBrokerPool&). The body is UNCHANGED; the only difference is
+// that the pool is taken from wifiObserverPool() instead of a parameter, because
+// the role-agnostic dispatcher must not know about MqttBrokerPool.
+//
+// Key ORDER below is load-bearing and must not be reordered: exact
+// `wifi.enabled` is tested before the generic `wifi.` prefix (else the on/off
+// switch is silently written as a wifi field named "enabled"), and the exact
+// `mqtt.*` keys before the `mqtt.broker.` family.
+static bool observerConfigSet(const char* key, const char* value, char* reply, size_t reply_size) {
     if (key == nullptr || value == nullptr || reply == nullptr || reply_size == 0) return false;
     reply[0] = '\0';
+    MqttBrokerPool& pool = wifiObserverPool();
 
     if (eq(key, "mqtt.iata"))            return handleSetIata(reply, reply_size, value);
     if (eq(key, "mqtt.status_interval")) return handleSetStatusInterval(reply, reply_size, value);
@@ -1030,7 +1031,10 @@ bool configSet(const char* key, const char* value, char* reply, size_t reply_siz
     return false;  // unknown key -- not part of the observer config surface
 }
 
-bool configGet(const char* key, char* reply, size_t reply_size) {
+// #364: the observer's config-GET provider (registered at the bottom of this
+// file). Formerly the public configGet(). Body unchanged. Secrets stay
+// write-only here (wifi.pwd / broker password|jwt_token).
+static bool observerConfigGet(const char* key, char* reply, size_t reply_size) {
     if (key == nullptr || reply == nullptr || reply_size == 0) return false;
     reply[0] = '\0';
 
@@ -1149,5 +1153,30 @@ size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size,
 #undef BKV
     return n;   // clamped written length (== strlen(out))
 }
+
+// ---------------------------------------------------------------------------
+// #364 (Epic #300 item 1): register the observer as a config provider.
+//
+// File-scope registrar -> runs during static initialisation. The dispatcher's
+// provider table is POD in .bss (zero-initialised before ANY dynamic
+// initialiser), so this is link-order safe, and there is nothing for a future
+// role to forget to call from main().
+//
+// This registration is the ONLY thing that couples the observer to the shared
+// dispatcher. The repeater (#301/#305) adds its own registrar for its own keys
+// without touching this file.
+// ---------------------------------------------------------------------------
+// __attribute__((used)): belt-and-braces against the compiler/linker dropping an
+// object whose only purpose is its constructor's side effect. NOT a fix for an
+// observed defect -- verified present on the linked ESP32-S3 image (#364 review,
+// BLOCKER-1): .init_array entry 6 == _GLOBAL__sub_I_...setDisplayAlwaysOnApplier,
+// whose whole body is one call to config::registerProvider. ESP-IDF's linker
+// script KEEPs .init_array, and this TU is always pulled in (dispatchObserverCli
+// / configBrokerSlotCount are referenced elsewhere), so it cannot be dropped as
+// an unextracted archive member either. Kept as free insurance against a future
+// toolchain/flag change, since the failure mode -- every config key answering
+// "unknown config key" on a deployed fleet -- is severe.
+static __attribute__((used)) config::ProviderRegistrar _observer_config_provider(
+    &observerConfigSet, &observerConfigGet, "observer");
 
 }  // namespace offband
