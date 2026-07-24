@@ -1,7 +1,7 @@
 #include "SSD1306Display.h"
 
 #ifdef OFFBAND_OBSERVER
-  #include <helpers/wifi_observer/CrashLog.h>
+  #include <helpers/diagnostics/CrashLog.h>
 #endif
 
 bool SSD1306Display::i2c_probe(TwoWire& wire, uint8_t addr) {

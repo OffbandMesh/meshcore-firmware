@@ -1,4 +1,4 @@
-// src/helpers/wifi_observer/CrashLog.cpp
+// src/helpers/diagnostics/CrashLog.cpp
 //
 // Implementation of the RTC_NOINIT-backed crash log ring buffer.
 // See CrashLog.h for the full rationale.

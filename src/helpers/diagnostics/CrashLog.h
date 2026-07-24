@@ -1,4 +1,4 @@
-// src/helpers/wifi_observer/CrashLog.h
+// src/helpers/diagnostics/CrashLog.h
 //
 // Panic-survival ring buffer using RTC_NOINIT memory on ESP32-S3.
 //
@@ -24,7 +24,9 @@
 //   inspect/clear it on demand.
 
 #pragma once
-#include "WifiObserverConfig.h"
+// NOTE (#350): CrashLog still depends on WifiObserverConfig.h. Breaking that
+// dependency is the next decoupling step -- this task is the move only.
+#include <helpers/wifi_observer/WifiObserverConfig.h>
 #include <stddef.h>
 #include <stdint.h>
 

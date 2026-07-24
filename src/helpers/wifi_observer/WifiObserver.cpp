@@ -7,7 +7,7 @@
 
 #include "WifiObserver.h"
 #include "WifiBootstrap.h"
-#include "CrashLog.h"
+#include <helpers/diagnostics/CrashLog.h>
 #include "ObserverPipeline.h"
 
 #ifdef ARDUINO

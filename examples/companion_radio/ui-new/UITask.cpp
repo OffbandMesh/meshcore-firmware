@@ -6,7 +6,7 @@
   #include <WiFi.h>
 #endif
 #ifdef OFFBAND_OBSERVER
-  #include <helpers/wifi_observer/CrashLog.h>
+  #include <helpers/diagnostics/CrashLog.h>
 #endif
 
 #ifndef AUTO_OFF_MILLIS
