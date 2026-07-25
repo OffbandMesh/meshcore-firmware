@@ -445,6 +445,7 @@ void loop() {
     // after a hang shows how long this boot ran. Also keeps the ring referenced.
     static uint32_t s_cl_last_ms = 0;
     uint32_t now_ms = millis();
+    offband::crashLogTick(now_ms);  // #378: deferred previous-boot re-dump for late serial connect
     if (s_cl_last_ms == 0 || now_ms - s_cl_last_ms >= 30000u) {
       s_cl_last_ms = now_ms;
       offband::crashLogf("[hb] up=%us", (unsigned)(now_ms / 1000));

@@ -127,6 +127,13 @@ void crashLogDump();
 // reads see nothing prior. CLI / settings command on demand.
 void crashLogClear();
 
+// Call once per loop iteration (pass millis()). Re-emits the previous-boot crash
+// dump ONE more time, ~5 s after boot, so a serial monitor connected AFTER the
+// reset -- the normal field case, you plug in to a node you found wedged or
+// rebooted -- still sees it. The boot-time print alone is lost to a host that
+// has not attached yet (#378). No-op after it has fired, and on a fresh boot.
+void crashLogTick(uint32_t now_ms);
+
 // ---------------------------------------------------------------------------
 // CrashLog v2 additions (SAFELANE "no silent failure" enforcement)
 // ---------------------------------------------------------------------------
