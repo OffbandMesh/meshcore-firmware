@@ -16,6 +16,14 @@
   #define CW_PHASE(name) ((void)0)
 #endif
 
+// #377 (Epic #350): boot-survival CrashLog on the nRF52 companion. The observer
+// path (ESP32) already wires CrashLog above; nRF52 companions are non-observer,
+// so include it here. Additive + nRF52-scoped -- does not touch the observer
+// blocks or the runtime-WiFi path.
+#if defined(NRF52_PLATFORM) && !defined(OFFBAND_OBSERVER)
+  #include "helpers/diagnostics/CrashLog.h"
+#endif
+
 // Believe it or not, this std C function is busted on some platforms!
 static uint32_t _atoi(const char* sp) {
   uint32_t n = 0;
@@ -190,6 +198,21 @@ void setup() {
              (unsigned long)board.getResetReason());
     Serial.println(rr);
   }
+#endif
+
+#if defined(NRF52_PLATFORM) && !defined(OFFBAND_OBSERVER)
+  // #377 (Epic #350): start the boot-survival breadcrumb on the nRF52 companion.
+  // Delegate the reset reason to the board (#376 decision 2) via a non-capturing
+  // lambda -- it references only the global `board`, so it converts to the
+  // ResetReasonHook function pointer. crashLogBegin() dumps a ring that survived
+  // the previous reset (retained .noinit, #361); the boot line records the reason
+  // AND keeps the ring referenced so ld-2.29 GC can't drop it (#363).
+  offband::crashLogSetResetReasonHook([]() -> const char* {
+    return board.getResetReasonString(board.getResetReason());
+  });
+  offband::crashLogBegin();
+  offband::crashLogf("[boot] nRF52 companion up; reset=%s",
+                     board.getResetReasonString(board.getResetReason()));
 #endif
 
 #ifdef DISPLAY_CLASS
@@ -415,6 +438,19 @@ void loop() {
 #if defined(NRF52_PLATFORM)
   board.feedWatchdog();  // #257: feed from the MAIN LOOP only -> a hung loop trips the WDT
   board.heartbeatTick(); // #275: loop-driven green-LED heartbeat (freezes if the loop hangs)
+  #if !defined(OFFBAND_OBSERVER)
+  {
+    // #377: periodic breadcrumb into the retained ring. Low cadence (30 s) so it
+    // does not evict real events from the 4 KB ring; records "up=Ns" so the boot
+    // after a hang shows how long this boot ran. Also keeps the ring referenced.
+    static uint32_t s_cl_last_ms = 0;
+    uint32_t now_ms = millis();
+    if (s_cl_last_ms == 0 || now_ms - s_cl_last_ms >= 30000u) {
+      s_cl_last_ms = now_ms;
+      offband::crashLogf("[hb] up=%us", (unsigned)(now_ms / 1000));
+    }
+  }
+  #endif
 #endif
 #ifdef OFFBAND_OBSERVER
   // CrashLog v6: per-sub-loop visit marking + heartbeat. Each sub-loop
