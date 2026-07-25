@@ -150,6 +150,35 @@ static int currentResetReasonCode() {
 #endif
 }
 
+// Snapshot of the PREVIOUS boot's ring, captured at crashLogBegin() before this
+// boot overwrites it. Held so the dump can be re-emitted a few seconds later,
+// once a serial monitor plugged in AFTER the reset has had time to attach --
+// the boot-time print alone is lost to a not-yet-connected host (#378). Plain
+// static (not retained): it only needs to live for this boot.
+#ifndef OFFBAND_CRASHLOG_HOST
+static char   s_prev_snapshot[kCrashLogDataSize];
+static size_t s_prev_len     = 0;
+static bool   s_prev_pending = false;   // a deferred re-dump is still owed
+
+static void emitPreviousBootDump(const char* why) {
+    if (s_prev_len == 0) { return; }
+    Serial.println();
+    Serial.println("=========================================================");
+    Serial.printf ("=== CRASH LOG FROM PREVIOUS BOOT (%s) ===\n", why);
+    Serial.printf ("=== reset_reason=%d (%s) ===\n",
+                   currentResetReasonCode(),
+                   resetReasonString(currentResetReasonCode()));
+    Serial.println("=========================================================");
+    for (size_t i = 0; i < s_prev_len; ++i) {
+        char c = s_prev_snapshot[i];
+        if (c != '\0') Serial.write(c);
+    }
+    Serial.println();
+    Serial.println("=== END CRASH LOG ======================================");
+    Serial.println();
+}
+#endif
+
 void crashLogBegin() {
     if (s_begin_called) return;
     s_begin_called = true;
@@ -159,32 +188,22 @@ void crashLogBegin() {
     bool valid = (s_header.magic == kCrashLogMagic) &&
                  (s_header.write_index < kCrashLogDataSize);
     if (valid) {
-        // Dump previous-boot contents to serial.
-        Serial.println();
-        Serial.println("=========================================================");
-        Serial.println("=== CRASH LOG FROM PREVIOUS BOOT (retained RAM survived) =");
-        Serial.printf("=== reset_reason=%d (%s), buffer wrapped=%u ===\n",
-                      currentResetReasonCode(),
-                      resetReasonString(currentResetReasonCode()),
-                      (unsigned)s_header.wrapped);
-        Serial.println("=========================================================");
-
-        // Print the buffer in order: if wrapped, start at write_index
-        // (= oldest byte); else start at 0.
+        // Snapshot the previous-boot ring IN ORDER (oldest first) before this
+        // boot overwrites it, so it can be re-emitted later for a late-connecting
+        // monitor (#378). If wrapped, order starts at write_index; else at 0.
         size_t start = s_header.wrapped ? s_header.write_index : 0;
         size_t count = s_header.wrapped ? kCrashLogDataSize : s_header.write_index;
+        if (count > kCrashLogDataSize) count = kCrashLogDataSize;
         for (size_t i = 0; i < count; ++i) {
-            char c = s_data[(start + i) % kCrashLogDataSize];
-            if (c == '\0') continue;  // skip embedded nulls
-            Serial.write(c);
+            s_prev_snapshot[i] = s_data[(start + i) % kCrashLogDataSize];
         }
-        Serial.println();
-        Serial.println("=========================================================");
-        Serial.println("=== END CRASH LOG (this boot's writes start here)     ===");
-        Serial.println("=========================================================");
-        Serial.println();
+        s_prev_len     = count;
+        s_prev_pending = true;                 // a deferred re-dump is owed
+        emitPreviousBootDump("retained RAM survived");   // immediate (attached monitors)
     } else {
-        // Fresh power-on (or deep-sleep wake, or corrupted RTC memory).
+        // Fresh power-on (or brown-out / corrupted retained memory).
+        s_prev_len     = 0;
+        s_prev_pending = false;
         Serial.println("[CrashLog] fresh boot; no previous-boot log to recover.");
     }
 
@@ -284,6 +303,21 @@ void crashLogClear() {
     s_header.write_index = 0;
     s_header.wrapped     = 0;
     OFFBAND_CL_EXIT(&s_log_mux);
+}
+
+// #378: call once per loop. Re-emits the previous-boot crash dump ONE more time,
+// ~5 s after boot, so a serial monitor connected AFTER the reset (the normal
+// field case -- you plug in to a node you found wedged/rebooted) still sees it.
+// The boot-time print alone is lost to a host that has not attached yet.
+void crashLogTick(uint32_t now_ms) {
+#ifndef OFFBAND_CRASHLOG_HOST
+    if (s_prev_pending && now_ms >= 5000u) {
+        s_prev_pending = false;
+        emitPreviousBootDump("deferred re-dump for late serial connect");
+    }
+#else
+    (void)now_ms;
+#endif
 }
 
 // ---------------------------------------------------------------------------
