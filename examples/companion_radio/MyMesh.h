@@ -251,7 +251,7 @@ private:
   void loadBlocks();
   void saveBlocks();
   void blockListDrain();   // emit one key frame of an in-flight 0xC2 LIST
-  void caplogDrain();      // #396: emit one chunk frame of an in-flight 0xC3 caplog download
+  void caplogDrain();      // #396: emit one chunk frame of an in-flight 0xC4 caplog download
 
   DataStore* _store;
   BlockStore _blocks;   // #241: blocked pubkeys (in-memory; persisted via load/saveBlocks)
