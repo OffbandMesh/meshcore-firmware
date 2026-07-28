@@ -312,10 +312,12 @@ a bug. Tracked on the client issue (#430).
 
 ## 9. Reconciliation & sequencing
 
-- **Blocked-by #350.** Implementation child issues stay `blocked-by #350` — they do not land
-  until the `epic/350-crashlog-decouple` store merges to `firmware-base` (currently unpushed;
-  CrashLog still shows the old `wifi_observer/` path on `firmware-base`). `[verified: find src
-  -iname '*crashlog*' → only wifi_observer/]` The *design* proceeds now; the *code* waits.
+- **NOT blocked-by #350** (corrected 2026-07-28). The capture ring is a **separate, non-retained
+  plain-RAM buffer**, so serial-capture does *not* depend on #350's cross-role store nor its
+  (currently-unsolved, #378) nRF52 retention. The only tie is a **soft/optional** `crashLogf`
+  cross-feed that degrades gracefully. Implementation can — and does (#393) — proceed
+  independently of #350; coordinate only on file overlap in core `src/` / `CommonCLI`. *(The
+  earlier "blocked-by #350" framing over-coupled the two and was removed.)*
 - **#255 / #257:** no retained-region collision (§4.2/Q6). Coordinate the optional
   `crashLogf` cross-feed with RubyDog before that child issue lands.
 - **#325:** the companion download transport aligns with the Serial+WiFi coexistence work; the
@@ -323,8 +325,8 @@ a bug. Tracked on the client issue (#430).
 
 ## 10. Proposed implementation breakdown (child issues — created AFTER sign-off)
 
-> Each `blocked-by #350`; each a single-PR task (CLAUDE-BASE sizing). Created + parent-linked
-> to #384 on 2026-07-28.
+> Each a single-PR task (CLAUDE-BASE sizing). Created + parent-linked to #384 on 2026-07-28.
+> **Not blocked-by #350** — soft coordination only (see §9). #394 was folded into #393.
 
 1. **[#393](https://github.com/OffbandMesh/meshcore-firmware/issues/393) — Core tee sink**
    `mesh_log_line()` in `src/`; route `MESH_DEBUG_PRINTLN` + raw packet prints + boot/error
@@ -383,4 +385,4 @@ retained RAM.
 
 - [x] Gemini adversarial review (standards#145) — [log](../llm-consultations/2026-07-28-384-serial-capture-design-review-gemini-gemini-2.5-pro.log); 13 findings, all dispositioned (§12).
 - [x] **Ben sign-off** — 2026-07-28: D1 `caplog`, D2 default `debug`, D3 defer (§5.4).
-- [ ] Implementation + integration-test child issues created, parent-linked to #384, `blocked-by #350`.
+- [x] Implementation + integration-test child issues created (#393–#398), parent-linked to #384. **Not** blocked-by #350 (§9). #393 in progress.
