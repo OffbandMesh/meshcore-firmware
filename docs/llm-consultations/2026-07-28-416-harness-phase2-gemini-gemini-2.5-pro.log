@@ -1,0 +1,37 @@
+This is a sound, high-quality diff that correctly implements the core requirements. The key fix in `read_frame` is a major improvement. The review identifies one medium-severity risk of test flakiness related to that fix and one minor missed validation.
+
+---
+
+### Adversarial Review
+
+**Overall Assessment:** Sound. The logic for the caplog round-trip is robust, and the key `read_frame` fix is correct for handling multi-frame reads. The code correctly anticipates and handles protocol edge cases like the `0xC4` vs `0x01` error reply.
+
+**Concrete Findings:**
+
+1.  **`read_frame` FIFO leaves stale data, risking test flakiness.**
+    *   **Line:** `companion_harness.py:161` (`for i, payload in enumerate(self._pending):`)
+    *   **Severity:** **Medium**
+    *   **Issue:** The `read_frame` logic correctly serves the *oldest matching frame*. However, if an *unexpected* frame (e.g., a noisy GPS debug message, or a reply to a command that timed out on the host side) is received, it will be added to `self._pending` and remain there indefinitely if no subsequent call specifically matches it. A later call to `read_frame(match_code=None)` — as used in `caplog_download`'s initial read and `fem_lna_get` — would then receive this stale, unexpected frame, likely causing an unrelated test step to fail. This introduces a risk of non-deterministic test failures.
+    *   **Recommendation:** For a test harness, consider adding a `self.flush_pending()` method to be called in test `setUp` or between distinct logical operations to ensure a clean state.
+
+2.  **`caplog_download` does not validate received length against `START` frame's total.**
+    *   **Line:** `companion_harness.py:230` (`return bytes(out), total`)
+    *   **Severity:** **Low**
+    *   **Issue:** The `caplog_download` function correctly parses the `total` expected bytes from the `START` frame but only returns it. The reassembly loop relies solely on the `END` frame. There is no final `assert len(out) == total` to confirm that the sum of the chunks matches the header's promise.
+    *   **Recommendation:** Add an assertion `if len(out) != total: raise RuntimeError(...)` after the loop for an extra layer of validation.
+
+---
+
+### Answers to Specific Questions
+
+1.  **`read_frame` FIFO:** The buffering is correct regarding drops/reordering/duplication (none). The risk, detailed above, is the indefinite persistence of un-matched frames leading to potential test cross-talk or leaks over a long-lived `CompanionSession`. For short, known sequences, it is not a problem.
+
+2.  **`caplog_download` reassembly:** Correct. `END` handling is right. `START` `total` is parsed but not validated against. Busy/error `[0x01]` detection is excellent; the dispatch on `byte[0]` before dispatching on `byte[1]` is robust and shows a deep understanding of the protocol. Timeout handling is correct.
+
+3.  **Control ops + `fem_lna_get`:** Correct. Frames sent are correct. Reply parsing for `_caplog_ack` and `caplog_status` is correct.
+
+4.  **Hardware flakiness:**
+    *   The primary risk is the stale `_pending` issue described in point #1 above, which could cause flakiness.
+    *   Mid-frame corruption from noise is not an issue for this layer; the underlying `FrameDecoder` (with COBS and checksums) is responsible for rejecting corrupt frames, so they would never be added to `_pending`.
+
+5.  **Anything missed:** No other significant issues. The implementation is solid.
