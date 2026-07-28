@@ -2,6 +2,7 @@
 
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
+#include <MeshLog.h>  // #396: serial-capture buffer access for the caplog download
 
 // Offband fork-only companion-API frame codes (config 0xC0 / GPS 0xC1 / block 0xC2)
 // + shared enums. Self-contained (only <stdint.h>); included unconditionally so the
@@ -103,6 +104,14 @@ namespace offband { MqttBrokerPool& wifiObserverPool(); }
 // pair is companion-available (no observer gate) and is never submitted upstream.
 #define CMD_OFFBAND_GPS               0xC1  // request: GPS status query
 #define RESP_CODE_OFFBAND_GPS         0xC1  // reply: ASCII "enabled=.. detected=.. fix=.. lat=.. ..."
+// #396: Offband fork-only serial-capture download (companion-only, never on the
+// mesh). Request 0xC3 -> reply START[total 4B LE] -> CHUNK* -> END, streamed one
+// frame per idle main-loop pass (F8 #169 queue-safe). Sub-code in reply byte[1].
+#define CMD_OFFBAND_CAPLOG            0xC3  // request: download the serial-capture buffer
+#define RESP_CODE_OFFBAND_CAPLOG      0xC3  // reply: [0xC3, sub, ...]
+#define CAPLOG_SUB_START              0x01  // [0xC3,0x01, total_len(4B LE)]
+#define CAPLOG_SUB_CHUNK              0x02  // [0xC3,0x02, <up to MAX_FRAME_SIZE-2 bytes>]
+#define CAPLOG_SUB_END                0x03  // [0xC3,0x03]
 
 // Stats sub-types for CMD_GET_STATS
 #define STATS_TYPE_CORE               0
@@ -1002,6 +1011,9 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _ob_stream = OB_STREAM_NONE;   // F8 (#169): no config-response stream in flight
 #endif
   _blk_listing = false;   // #241: no block-LIST stream in flight
+  _caplog_streaming = false;  // #396: no caplog download in flight
+  _caplog_off = 0;
+  _caplog_resume = false;
   offline_queue_len = 0;
   app_target_ver = 0;
   clearPendingReqs();
@@ -1422,6 +1434,36 @@ void MyMesh::handleCmdFrame(size_t len) {
     _serial->writeFrame(out_frame, 1 + strlen(txt) + 1);  // +1: NUL-terminated (Offband convention)
     return;
   }
+  // #396: serial-capture download (companion-only). Freeze the ring (auto-stop
+  // capture) so the offset stream is stable, send START with the total byte
+  // count, then stream CHUNK* -> END one frame per idle pass via caplogDrain().
+  if (cmd_frame[0] == CMD_OFFBAND_CAPLOG) {
+    // Reject if any streamed response is already in flight (self, block-list,
+    // contacts, or observer config) — interleaving frames would corrupt the
+    // client parser. Client sees RESP_CODE_ERR and can retry.
+    if (_caplog_streaming || _blk_listing || _iter_started
+#ifdef OFFBAND_OBSERVER
+        || _ob_stream != OB_STREAM_NONE
+#endif
+       ) {
+      out_frame[0] = RESP_CODE_ERR;
+      _serial->writeFrame(out_frame, 1);
+      return;
+    }
+    _caplog_resume = meshLogIsEnabled();            // restore this state at END
+    meshLogSetEnabled(false);                       // freeze for a clean download
+    uint32_t total = (uint32_t)meshLogBytesUsed();
+    out_frame[0] = RESP_CODE_OFFBAND_CAPLOG;
+    out_frame[1] = CAPLOG_SUB_START;
+    out_frame[2] = (uint8_t)(total & 0xFF);
+    out_frame[3] = (uint8_t)((total >> 8) & 0xFF);
+    out_frame[4] = (uint8_t)((total >> 16) & 0xFF);
+    out_frame[5] = (uint8_t)((total >> 24) & 0xFF);
+    _serial->writeFrame(out_frame, 6);
+    _caplog_off = 0;
+    _caplog_streaming = true;
+    return;
+  }
   // #241: block-list sync (companion-API only; NEVER on the mesh). 0xC2.
   // Receive-side store maintenance: ADD/REMOVE/CLEAR are single-frame acks;
   // LIST streams (START -> one key/frame -> END) via blockListDrain so it never
@@ -1554,6 +1596,13 @@ void MyMesh::handleCmdFrame(size_t len) {
       _serial->writeFrame(h, 3);
       _blk_listing = false;
       MESH_DEBUG_PRINTLN("APP_START mid-stream: sent block-LIST END terminator (#241)");
+    }
+    if (_caplog_streaming) {  // #396: terminate an in-flight caplog download for the (re)connecting client
+      uint8_t h[2] = { RESP_CODE_OFFBAND_CAPLOG, CAPLOG_SUB_END };
+      _serial->writeFrame(h, 2);
+      _caplog_streaming = false;
+      meshLogSetEnabled(_caplog_resume);   // resume capture if it was on
+      MESH_DEBUG_PRINTLN("APP_START mid-stream: sent caplog END terminator (#396)");
     }
 #ifdef OFFBAND_OBSERVER
     if (_ob_stream == OB_STREAM_VIEW) {
@@ -2619,6 +2668,27 @@ void MyMesh::blockListDrain() {
   _blk_list_i++;
 }
 
+// #396: emit ONE chunk frame of an in-flight caplog download. Called from
+// checkSerialInterface once per idle main-loop pass while !isWriteBusy(), so the
+// companion send queue (drops-when-full, #169) drains between frames instead of
+// being flooded. The ring is frozen (capture auto-stopped at START), so the
+// offset stream is stable. Snapshot returning 0 signals the buffer is exhausted.
+void MyMesh::caplogDrain() {
+  const size_t cap = (size_t)MAX_FRAME_SIZE - 2;   // [0]=code, [1]=sub-code
+  out_frame[0] = RESP_CODE_OFFBAND_CAPLOG;
+  size_t n = meshLogSnapshot(&out_frame[2], cap, _caplog_off);
+  if (n == 0) {                                    // buffer exhausted -> END
+    out_frame[1] = CAPLOG_SUB_END;
+    _serial->writeFrame(out_frame, 2);
+    _caplog_streaming = false;
+    meshLogSetEnabled(_caplog_resume);             // resume capture if it was on
+    return;
+  }
+  out_frame[1] = CAPLOG_SUB_CHUNK;
+  _serial->writeFrame(out_frame, 2 + n);
+  _caplog_off += n;
+}
+
 void MyMesh::enterCLIRescue() {
   _cli_rescue = true;
   cli_command[0] = 0;
@@ -2809,6 +2879,9 @@ void MyMesh::checkSerialInterface() {
   } else if (_blk_listing                 // #241: drain an in-flight 0xC2 block-LIST,
              && !_serial->isWriteBusy()) {  // one key frame per idle pass (queue-safe)
     blockListDrain();
+  } else if (_caplog_streaming            // #396: drain an in-flight 0xC3 caplog download,
+             && !_serial->isWriteBusy()) {  // one chunk frame per idle pass (queue-safe)
+    caplogDrain();
   } else if (_iter_started              // check if our ContactsIterator is 'running'
              && !_serial->isWriteBusy() // don't spam the Serial Interface too quickly!
   ) {

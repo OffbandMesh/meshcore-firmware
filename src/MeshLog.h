@@ -57,8 +57,10 @@ uint8_t meshLogGetLevel();
 void   meshLogClear();
 size_t meshLogBytesUsed();
 size_t meshLogCapacity();
-// Copy up to out_cap captured bytes, oldest-first, into out (for #396 download).
-size_t meshLogSnapshot(uint8_t* out, size_t out_cap);
+// Copy up to out_cap captured bytes, oldest-first, into out, starting `offset`
+// bytes in — lets the #396 download stream the buffer in chunks. Returns bytes
+// copied (0 when offset >= bytesUsed()).
+size_t meshLogSnapshot(uint8_t* out, size_t out_cap, size_t offset = 0);
 // Stream the captured buffer to Serial in chunks (local-console `caplog dump`).
 // Best-effort: stop capture first for a clean dump. Framed remote download is #396.
 void   meshLogDumpSerial();
