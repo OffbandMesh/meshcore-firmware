@@ -259,6 +259,10 @@ void setup() {
   serial_interface.begin(Serial);
 #endif
   the_mesh.startInterface(serial_interface);
+  // #411: mirror captured serial-log lines to the live console EXCEPT where the
+  // framed protocol runs on Serial itself (USB-serial companion) -- there it stays
+  // capture-only so nothing raw corrupts the protocol line.
+  meshLogSetMirror(!serial_interface.isConsoleSharedWithProtocol());
 #elif defined(RP2040_PLATFORM)
   LittleFS.begin();
   store.begin();
@@ -285,6 +289,10 @@ void setup() {
     serial_interface.begin(Serial);
   #endif
     the_mesh.startInterface(serial_interface);
+  // #411: mirror captured serial-log lines to the live console EXCEPT where the
+  // framed protocol runs on Serial itself (USB-serial companion) -- there it stays
+  // capture-only so nothing raw corrupts the protocol line.
+  meshLogSetMirror(!serial_interface.isConsoleSharedWithProtocol());
 #elif defined(ESP32)
   CW_PHASE("ESP32:before SPIFFS.begin");
   SPIFFS.begin(true);
@@ -331,6 +339,10 @@ void setup() {
   CW_PHASE("ESP32:post fallback serial_interface.begin");
 #endif
   the_mesh.startInterface(serial_interface);
+  // #411: mirror captured serial-log lines to the live console EXCEPT where the
+  // framed protocol runs on Serial itself (USB-serial companion) -- there it stays
+  // capture-only so nothing raw corrupts the protocol line.
+  meshLogSetMirror(!serial_interface.isConsoleSharedWithProtocol());
   CW_PHASE("ESP32:post the_mesh.startInterface");
 
 #ifdef OFFBAND_OBSERVER

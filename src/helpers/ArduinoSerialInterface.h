@@ -31,4 +31,11 @@ public:
   bool isWriteBusy() const override;
   size_t writeFrame(const uint8_t src[], size_t len) override;
   size_t checkRecvFrame(uint8_t dest[]) override;
+
+  // #411: shared with the console only when the framed protocol runs on `Serial`
+  // itself (USB-serial companion). A dedicated-UART bridge (begin(companion_serial))
+  // leaves the console Serial free.
+  bool isConsoleSharedWithProtocol() const override {
+    return _serial == static_cast<Stream*>(&Serial);
+  }
 };

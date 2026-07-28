@@ -18,4 +18,10 @@ public:
   virtual bool isWriteBusy() const = 0;
   virtual size_t writeFrame(const uint8_t src[], size_t len) = 0;
   virtual size_t checkRecvFrame(uint8_t dest[]) = 0;
+
+  // #411: does this transport carry its framed protocol on the same `Serial`
+  // that the debug console uses? If so, the serial-capture mirror must stay off
+  // to avoid corrupting the protocol line. Default false (most transports -- BLE,
+  // WiFi/TCP, a dedicated UART -- leave the console Serial free).
+  virtual bool isConsoleSharedWithProtocol() const { return false; }
 };

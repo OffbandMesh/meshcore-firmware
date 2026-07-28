@@ -24,24 +24,25 @@
 
 #include "MeshLog.h"
 
-// MESH_DEBUG_PRINTLN is tee'd into the serial-capture sink (#393). When capture
-// is disabled (the default) the g_meshLogEnabled guard short-circuits before
-// the arguments are evaluated, so a stock build pays only a single flag test
-// and behaves exactly as before. When MESH_DEBUG is compiled in, the live
-// Serial.printf is preserved unchanged. MESH_DEBUG_PRINT (partial fragments) is
-// left as-is — the line-oriented sink only captures complete PRINTLN lines.
-#if MESH_DEBUG && ARDUINO
+// MESH_DEBUG_PRINTLN is now fully RUNTIME (#411). It routes into the serial-capture
+// sink, which captures to the ring AND mirrors to the live serial console wherever
+// the console is not the framed protocol line -- all gated by the client-settable
+// caplog enable + level (`caplog start [level]`). The old compile-time MESH_DEBUG
+// serial print is RETIRED: turn debug on at runtime from the client, no rebuild.
+// The g_meshLogEnabled guard keeps a disabled node at a single flag test (the
+// arguments are not evaluated), so this is free when debug is off.
+#if ARDUINO
   #include <Arduino.h>
+#endif
+#define MESH_DEBUG_PRINTLN(F, ...) do { \
+    if (g_meshLogEnabled) mesh_log_line(MLOG_DEBUG, "DEBUG: " F "\n", ##__VA_ARGS__); \
+  } while (0)
+// MESH_DEBUG_PRINT (partial fragments) is niche and not line-oriented, so it stays
+// compile-gated on MESH_DEBUG -- dev builds only.
+#if MESH_DEBUG && ARDUINO
   #define MESH_DEBUG_PRINT(F, ...) Serial.printf("DEBUG: " F, ##__VA_ARGS__)
-  #define MESH_DEBUG_PRINTLN(F, ...) do { \
-      Serial.printf("DEBUG: " F "\n", ##__VA_ARGS__); \
-      if (g_meshLogEnabled) mesh_log_line(MLOG_DEBUG, "DEBUG: " F "\n", ##__VA_ARGS__); \
-    } while (0)
 #else
   #define MESH_DEBUG_PRINT(...) {}
-  #define MESH_DEBUG_PRINTLN(F, ...) do { \
-      if (g_meshLogEnabled) mesh_log_line(MLOG_DEBUG, "DEBUG: " F "\n", ##__VA_ARGS__); \
-    } while (0)
 #endif
 
 #if BRIDGE_DEBUG && ARDUINO

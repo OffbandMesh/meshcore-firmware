@@ -1,0 +1,29 @@
+This is a sound and well-reasoned change. The implementation correctly addresses the design intent.
+
+1.  **Mirror Reentrancy (`mesh_log_line`)**:
+    *   `src/MeshLog.cpp:134`
+    *   **Severity**: Low/Acceptable.
+    *   `Serial.write` is correctly placed outside the lock to avoid blocking within a critical section. Concurrent calls from two tasks can result in interleaved output on the mirrored serial console (e.g., `[TASK1_PART1][TASK2_PART1][TASK1_PART2]...`). This is a cosmetic issue for a human-readable debug mirror and is acceptable. The primary capture mechanism (the ring buffer) remains correctly ordered and uncorrupted due to the lock. The protocol line is explicitly protected from this by `g_meshLogMirror` being false. This is the correct trade-off.
+
+2.  **`isConsoleSharedWithProtocol` Correctness**:
+    *   `src/helpers/ArduinoSerialInterface.h:40`
+    *   **Severity**: Sound.
+    *   The `_serial == &Serial` pointer comparison is a robust and correct way to determine if the interface is using the global `Serial` object on standard Arduino-core platforms (nRF52, ESP32, etc.). The `BaseSerialInterface` default of `false` is safe, correctly enabling the mirror for non-serial transports (like BLE) or dedicated UART bridges where the console is free.
+
+3.  **Macro Change (`MESH_DEBUG_PRINTLN`)**:
+    *   `src/MeshCore.h:32`
+    *   **Severity**: Sound.
+    *   This is an improvement. It unifies all debug output through the runtime `g_meshLogEnabled` flag, fulfilling the intent.
+        *   **No regression**: It fixes a potential double-print bug in the old `MESH_DEBUG` build where output could come from both the direct `Serial.printf` and the mirror.
+        *   **Hot-path cost**: The `if (g_meshLogEnabled)` guard ensures arguments are not evaluated when logging is disabled, maintaining performance.
+        *   The retirement of the compile-time serial branch is the explicit goal.
+
+4.  **GPS Routing Format Safety**:
+    *   `src/helpers/sensors/EnvironmentSensorManager.cpp:1098`
+    *   `src/helpers/sensors/MicroNMEALocationProvider.h:207`
+    *   **Severity**: Sound.
+    *   The implementation is safe from format-string vulnerabilities. In both cases, the format string is a constant literal. The variable data (`_gps_b`, GPS fields) is passed as arguments to format specifiers (`%s`, `%d`, `%ld`), not used as the format string itself. The types and casts in the `[GPSPARSE]` line are correct.
+
+5.  **Anything Missed**:
+    *   **Severity**: Sound.
+    *   The `g_meshLogMirror` default of `true` is a sensible "debug is visible" default for non-companion roles (repeater, observer). The logic in `companion_radio/main.cpp` correctly overrides this for the one case where it would be harmful. The assumption that `Serial` exists and is the debug console is standard and safe within this project's context. The use of `volatile` for the global flags is correct.
