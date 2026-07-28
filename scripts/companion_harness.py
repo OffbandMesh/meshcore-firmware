@@ -18,6 +18,25 @@ import time
 # --- companion protocol constants (examples/companion_radio/MyMesh.cpp) ---
 CMD_APP_START = 1
 RESP_CODE_SELF_INFO = 5
+RESP_CODE_ERR = 1
+
+# serial-capture (#396/#417): CMD_OFFBAND_CAPLOG 0xC4, request sub-code in byte[1]
+CMD_OFFBAND_CAPLOG = 0xC4
+CAPLOG_REQ_DOWNLOAD = 0x01
+CAPLOG_REQ_ENABLE = 0x02
+CAPLOG_REQ_DISABLE = 0x03
+CAPLOG_REQ_ERASE = 0x04
+CAPLOG_REQ_STATUS = 0x05
+CAPLOG_SUB_START = 0x01   # reply byte[1] (download stream)
+CAPLOG_SUB_CHUNK = 0x02
+CAPLOG_SUB_END = 0x03
+CAPLOG_RESP_ACK = 0x10    # reply byte[1] (control)
+CAPLOG_RESP_STATUS = 0x11
+MLOG_BOOT, MLOG_ERROR, MLOG_DEBUG, MLOG_PACKET = 0, 1, 2, 3
+
+# FEM/LNA control (#298): CMD_OFFBAND_FEM_LNA 0xC3 — used as a collision guard.
+CMD_OFFBAND_FEM_LNA = 0xC3
+OFFBAND_FEM_LNA_GET = 0x02
 
 _FRAME_HDR_DEVICE = ord(">")   # device -> host
 _FRAME_HDR_HOST = b"<"         # host -> device
@@ -105,6 +124,22 @@ def _registry_clone_root():
     return os.path.dirname(here)  # fallback: this script's own clone
 
 
+def parse_caplog_status(body: bytes) -> dict:
+    """[0xC4, 0x11(STATUS), enabled, level, used(4B LE), cap(4B LE)]."""
+    if len(body) < 12 or body[0] != CMD_OFFBAND_CAPLOG or body[1] != CAPLOG_RESP_STATUS:
+        raise ValueError(f"not a caplog STATUS frame: {body[:2].hex()}")
+    used = int.from_bytes(body[4:8], "little")
+    cap = int.from_bytes(body[8:12], "little")
+    return {"enabled": body[2], "level": body[3], "used": used, "cap": cap}
+
+
+def parse_caplog_start(body: bytes) -> int:
+    """[0xC4, 0x01(START), total_len(4B LE)] -> total_len."""
+    if len(body) < 6 or body[0] != CMD_OFFBAND_CAPLOG or body[1] != CAPLOG_SUB_START:
+        raise ValueError(f"not a caplog START frame: {body[:2].hex()}")
+    return int.from_bytes(body[2:6], "little")
+
+
 def resolve_device_port(name: str):
     """Resolve a registered device name to its current COM port by MAC, via
     `pio-flash list` (which matches by usb_serial/MAC, not COM). None if absent."""
@@ -131,6 +166,7 @@ class CompanionSession:
         import serial  # pyserial; imported lazily so pure tests need no hardware deps
         self._ser = serial.Serial(port, baud, timeout=0.2)
         self._dec = FrameDecoder()
+        self._pending = []   # decoded-but-not-yet-returned frames (a read() can yield several)
         self._timeout = timeout
 
     def __enter__(self):
@@ -146,21 +182,37 @@ class CompanionSession:
         except Exception:
             pass
 
+    def flush_pending(self):
+        """Drop any buffered/unread frames + serial input. Call between distinct
+        logical operations so a stray or timed-out frame (or raw [GPS] noise on
+        the shared USB-CDC line, #411) can't cross-talk into the next step."""
+        self._pending.clear()
+        self._dec = FrameDecoder()
+        try:
+            self._ser.reset_input_buffer()
+        except Exception:
+            pass
+
     def send_frame(self, payload: bytes):
         self._ser.write(encode_frame(payload))
         self._ser.flush()
 
     def read_frame(self, match_code=None, timeout=None):
-        """Read framed payloads until one whose byte[0] == match_code (or any
-        frame if match_code is None). Returns the payload or None on timeout."""
+        """Return the oldest buffered frame whose byte[0] == match_code (or the
+        oldest frame if match_code is None), reading more serial as needed. A
+        single serial read() can decode SEVERAL frames (START+CHUNK+END arrive
+        together), so decoded frames are buffered in FIFO order and served one
+        per call -- never dropped. Returns None on timeout."""
         deadline = time.time() + (timeout if timeout is not None else self._timeout)
-        while time.time() < deadline:
+        while True:
+            for i, payload in enumerate(self._pending):
+                if match_code is None or (payload and payload[0] == match_code):
+                    return self._pending.pop(i)
+            if time.time() >= deadline:
+                return None
             chunk = self._ser.read(256)
             if chunk:
-                for payload in self._dec.feed(chunk):
-                    if match_code is None or (payload and payload[0] == match_code):
-                        return payload
-        return None
+                self._pending.extend(self._dec.feed(chunk))
 
     def app_start(self, app_name=b"harness") -> dict:
         self.send_frame(build_app_start(app_name))
@@ -168,6 +220,66 @@ class CompanionSession:
         if body is None:
             raise TimeoutError("no SELF_INFO reply to CMD_APP_START")
         return parse_self_info(body)
+
+    # --- serial-capture (#396/#417) ------------------------------------------
+    def _caplog_ack(self, req_op) -> bool:
+        """Send a control op and expect [0xC4, 0x10(ACK), req_op, ok]."""
+        body = self.read_frame(match_code=CMD_OFFBAND_CAPLOG)
+        return bool(body and len(body) >= 4 and body[1] == CAPLOG_RESP_ACK
+                    and body[2] == req_op and body[3] == 1)
+
+    def caplog_enable(self, level=MLOG_DEBUG) -> bool:
+        self.send_frame(bytes([CMD_OFFBAND_CAPLOG, CAPLOG_REQ_ENABLE, level]))
+        return self._caplog_ack(CAPLOG_REQ_ENABLE)
+
+    def caplog_disable(self) -> bool:
+        self.send_frame(bytes([CMD_OFFBAND_CAPLOG, CAPLOG_REQ_DISABLE]))
+        return self._caplog_ack(CAPLOG_REQ_DISABLE)
+
+    def caplog_erase(self) -> bool:
+        self.send_frame(bytes([CMD_OFFBAND_CAPLOG, CAPLOG_REQ_ERASE]))
+        return self._caplog_ack(CAPLOG_REQ_ERASE)
+
+    def caplog_status(self) -> dict:
+        self.send_frame(bytes([CMD_OFFBAND_CAPLOG, CAPLOG_REQ_STATUS]))
+        body = self.read_frame(match_code=CMD_OFFBAND_CAPLOG)
+        if body is None:
+            raise TimeoutError("no caplog STATUS reply")
+        return parse_caplog_status(body)
+
+    def caplog_download(self) -> bytes:
+        """Request a download, reassemble START -> CHUNK* -> END into the log bytes.
+
+        The busy rejection is a bare [RESP_CODE_ERR] frame (byte[0]=1, not 0xC4),
+        so read ANY frame first and dispatch on byte[0] -- do NOT match on 0xC4
+        (and never test byte[1]==1 for 'error', since START's sub-code is also 1)."""
+        self.send_frame(bytes([CMD_OFFBAND_CAPLOG, CAPLOG_REQ_DOWNLOAD]))
+        start = self.read_frame()
+        if start is None:
+            raise TimeoutError("no caplog download reply")
+        if start[0] == RESP_CODE_ERR:
+            raise RuntimeError("caplog download rejected (busy)")
+        if start[0] != CMD_OFFBAND_CAPLOG or start[1] != CAPLOG_SUB_START:
+            raise RuntimeError(f"unexpected download reply: {start[:2].hex()}")
+        total = parse_caplog_start(start)
+        out = bytearray()
+        while True:
+            frame = self.read_frame(match_code=CMD_OFFBAND_CAPLOG)
+            if frame is None:
+                raise TimeoutError("caplog download truncated (no END)")
+            if frame[1] == CAPLOG_SUB_CHUNK:
+                out += frame[2:]
+            elif frame[1] == CAPLOG_SUB_END:
+                break
+        if len(out) != total:
+            raise RuntimeError(f"caplog download size mismatch: got {len(out)}, START said {total}")
+        return bytes(out), total
+
+    def fem_lna_get(self):
+        """Send CMD_OFFBAND_FEM_LNA (0xC3) GET. Returns the reply body (byte[0]
+        must be 0xC3 — the #408 collision guard: 0xC3 must NOT hit caplog)."""
+        self.send_frame(bytes([CMD_OFFBAND_FEM_LNA, OFFBAND_FEM_LNA_GET]))
+        return self.read_frame()  # any frame; caller checks byte[0]
 
 
 if __name__ == "__main__":

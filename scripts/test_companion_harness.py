@@ -105,6 +105,61 @@ def test_hardware_app_start_handshake():
         print(f"  SELF_INFO ok: pubkey={info['pubkey'].hex()[:12]}… tx={info['tx_power']}")
 
 
+def test_parse_caplog_status():
+    body = bytes([ch.CMD_OFFBAND_CAPLOG, ch.CAPLOG_RESP_STATUS, 1, ch.MLOG_DEBUG]) \
+        + (1234).to_bytes(4, "little") + (16384).to_bytes(4, "little")
+    st = ch.parse_caplog_status(body)
+    assert st == {"enabled": 1, "level": ch.MLOG_DEBUG, "used": 1234, "cap": 16384}
+
+
+def test_parse_caplog_start():
+    body = bytes([ch.CMD_OFFBAND_CAPLOG, ch.CAPLOG_SUB_START]) + (999).to_bytes(4, "little")
+    assert ch.parse_caplog_start(body) == 999
+
+
+def test_hardware_caplog_roundtrip():
+    dev = ch.resolve_device_port("hv4-bench-1")
+    if dev is None:
+        print("SKIP: hv4-bench-1 not attached")
+        return
+    with ch.CompanionSession(dev) as s:
+        s.flush_pending()
+        s.app_start()
+        assert s.caplog_erase(), "erase ACK"
+        assert s.caplog_enable(ch.MLOG_DEBUG), "enable ACK"
+        # generate a known captured line: the CMD_APP_START handler logs
+        # "App <name> connected" via MESH_DEBUG_PRINTLN -> the sink (capture on).
+        s.app_start(app_name=b"CAPLOGPROBE")
+        st = s.caplog_status()
+        assert st["enabled"] == 1, f"status enabled: {st}"
+        assert st["used"] > 0, f"expected captured bytes: {st}"
+        s.flush_pending()
+        data, total = s.caplog_download()
+        assert len(data) > 0, "download non-empty"
+        assert b"CAPLOGPROBE" in data, f"probe line captured; got {data[:120]!r}"
+        assert s.caplog_disable(), "disable ACK"
+        print(f"  caplog roundtrip ok: used={st['used']}/{st['cap']} "
+              f"downloaded={len(data)}B total={total} contains-probe=yes")
+
+
+def test_hardware_fem_lna_still_answers_after_caplog():
+    # #408 collision guard: 0xC3 must route to FEM/LNA, never to caplog.
+    dev = ch.resolve_device_port("hv4-bench-1")
+    if dev is None:
+        print("SKIP: hv4-bench-1 not attached")
+        return
+    with ch.CompanionSession(dev) as s:
+        s.flush_pending()
+        s.app_start()
+        s.flush_pending()
+        reply = s.fem_lna_get()
+        # A companion with the FEM/LNA cap replies with a 0xC3 frame; the key
+        # guard is that it is NOT a caplog (0xC4) frame and not silence-from-hijack.
+        assert reply is not None, "0xC3 GET got no reply (hijacked or unsupported?)"
+        assert reply[0] == ch.CMD_OFFBAND_FEM_LNA, f"0xC3 reply expected; got {reply[:2].hex()}"
+        print(f"  FEM/LNA 0xC3 still answers: {reply[:4].hex()}")
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
@@ -115,6 +170,9 @@ def _run_all():
         except AssertionError as e:
             failed += 1
             print(f"FAIL {fn.__name__}: {e}")
+        except Exception as e:  # e.g. a hardware timeout: fail cleanly, don't crash the run
+            failed += 1
+            print(f"ERROR {fn.__name__}: {type(e).__name__}: {e}")
     print(f"\n{len(fns)-failed}/{len(fns)} passed")
     return failed
 
