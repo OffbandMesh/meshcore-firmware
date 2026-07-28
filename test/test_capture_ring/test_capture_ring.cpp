@@ -100,6 +100,36 @@ TEST(CaptureRing, SnapshotRespectsOutputCapacity) {
   EXPECT_EQ(0, memcmp(out, "abcd", 4));   // oldest-first
 }
 
+// Offset lets the download path read the buffer in chunks (#395 dump / #396).
+TEST(CaptureRing, SnapshotFromOffsetReadsChunk) {
+  uint8_t buf[64];
+  CaptureRing r(buf, sizeof(buf));
+  appendStr(r, "0123456789\n");     // 11 bytes
+  uint8_t out[4];
+  size_t n = r.snapshot(out, sizeof(out), 4);  // 4 bytes from offset 4
+  EXPECT_EQ(4u, n);
+  EXPECT_EQ(0, memcmp(out, "4567", 4));
+}
+
+TEST(CaptureRing, SnapshotOffsetAtOrBeyondEndReturnsZero) {
+  uint8_t buf[64];
+  CaptureRing r(buf, sizeof(buf));
+  appendStr(r, "abc\n");            // 4 bytes
+  uint8_t out[8];
+  EXPECT_EQ(0u, r.snapshot(out, sizeof(out), 4));   // offset == count
+  EXPECT_EQ(0u, r.snapshot(out, sizeof(out), 10));  // offset past end
+}
+
+TEST(CaptureRing, SnapshotOffsetClampsToRemaining) {
+  uint8_t buf[64];
+  CaptureRing r(buf, sizeof(buf));
+  appendStr(r, "hello\n");          // 6 bytes
+  uint8_t out[16];
+  size_t n = r.snapshot(out, sizeof(out), 3);  // only 3 bytes remain from offset 3
+  EXPECT_EQ(3u, n);
+  EXPECT_EQ(0, memcmp(out, "lo\n", 3));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

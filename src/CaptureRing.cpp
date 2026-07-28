@@ -53,10 +53,12 @@ size_t CaptureRing::bytesUsed() const { return _count; }
 
 size_t CaptureRing::capacity() const { return _cap; }
 
-size_t CaptureRing::snapshot(uint8_t* out, size_t out_cap) const {
-  size_t n = _count < out_cap ? _count : out_cap;
+size_t CaptureRing::snapshot(uint8_t* out, size_t out_cap, size_t offset) const {
+  if (offset >= _count) return 0;
+  size_t avail = _count - offset;
+  size_t n = avail < out_cap ? avail : out_cap;
   for (size_t i = 0; i < n; ++i) {
-    out[i] = _buf[ring_wrap(_tail + i, _cap)];
+    out[i] = _buf[ring_wrap(_tail + offset + i, _cap)];
   }
   return n;
 }

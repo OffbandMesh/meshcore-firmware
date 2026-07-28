@@ -31,8 +31,10 @@ public:
   // Total capacity in bytes.
   size_t capacity() const;
 
-  // Copy up to out_cap bytes, oldest-first, into out. Returns bytes copied.
-  size_t snapshot(uint8_t* out, size_t out_cap) const;
+  // Copy up to out_cap bytes into out, oldest-first, starting `offset` bytes
+  // from the oldest byte. Returns bytes copied (0 if offset >= bytesUsed()).
+  // The offset lets the download path stream the buffer in chunks.
+  size_t snapshot(uint8_t* out, size_t out_cap, size_t offset = 0) const;
 
   // Drop all contents.
   void clear();

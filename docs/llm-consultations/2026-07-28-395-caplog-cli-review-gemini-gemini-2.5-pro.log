@@ -1,0 +1,33 @@
+An adversarial review of the `caplog` CLI addition follows.
+
+### 1. High: CLI Prefix Matching Bug
+
+*   **`src/helpers/CommonCLI.cpp:760, 763, 768`**
+*   The `memcmp` checks for `caplog stop`, `caplog erase`, and the bare `caplog` command do not verify that the command ends after the verb (with a NUL or space). This causes incorrect command matching. For example:
+    *   `caplog stop-something` is treated as `caplog stop`.
+    *   `caplog startle` is not matched by `caplog start` (correct) but falls through and is incorrectly matched by the bare `caplog` check, treating it as a status request.
+*   **Fix:** Add a terminator check, as is done for other commands in the same file:
+    ```cpp
+    // Example for 'caplog stop'
+    } else if (memcmp(command, "caplog stop", 11) == 0 && (command[11] == 0 || command[11] == ' ')) {
+    ```
+
+### 2. Medium: `caplog start` Argument Parsing Unsafe
+
+*   **`src/helpers/CommonCLI.cpp:751-753`**
+*   The argument parsing for `caplog start <level>` is unsafe if the input buffer `command` is not NUL-terminated. The code checks `command[12] == ' '`, then passes `&command[13]` to `meshLogLevelFromName`, which calls `strcmp`. If the buffer contains `caplog start level` without a NUL terminator, `strcmp` will read out of bounds. While the surrounding infrastructure likely ensures NUL termination, this specific handler shouldn't rely on it.
+*   **Fix:** The command should be tokenized or a temporary, NUL-terminated buffer should be used for the argument.
+
+### 3. Low: `meshLogDumpSerial` Race Condition
+
+*   **`src/MeshLog.cpp:84`**
+*   The `meshLogDumpSerial` function reads the ring buffer in chunks, releasing the lock between each `Serial.write`. If new log entries are captured during the dump and cause old entries to be evicted, the `_tail` of the ring buffer will advance. The dumper's `offset` becomes stale relative to the new `_tail`, causing it to skip sections of the log.
+*   The comment acknowledges this is "best-effort," and the implementation avoids deadlock or infinite loops. However, the data skipping behavior might be unexpected. It is an acceptable trade-off for keeping lock contention low, but it's a notable one.
+
+### 4. Low: Un-gated Control Verbs Risk
+
+*   **`src/helpers/CommonCLI.cpp:749-771`**
+*   The `caplog start/stop/erase/status` verbs are not gated to the local console (`sender_timestamp == 0`). This allows any authenticated node on the mesh to enable, disable, or wipe the log buffer on another node. This presents a denial-of-service vector for debugging; a remote peer could repeatedly erase logs, preventing a local operator from capturing a bug.
+*   While a design choice to allow remote control (e.g., from a companion app), the security/nuisance trade-off warrants consideration. At a minimum, `caplog erase` should be considered for local-only execution.
+
+The logic in `CaptureRing::snapshot(offset)` appears correct and is well-tested. No other significant bugs were found.
