@@ -1,0 +1,34 @@
+Adversarial review complete. One moderate severity bug found; otherwise, the design is sound.
+
+### 1. Dispatch Correctness
+-   **`len==1` (bare `0xC4`)**: **Correct**. Line 1449's ternary `(len >= 2) ? ...` correctly assigns `CAPLOG_REQ_DOWNLOAD` to `req` when `len` is 1, maintaining backward compatibility.
+-   **Unknown sub-codes**: **Minor issue**. Any sub-code not matching `ENABLE` through `STATUS` will fall through to the download logic starting at L1480. This makes `DOWNLOAD` the default for any malformed request, which could be surprising. An explicit check for `req == CAPLOG_REQ_DOWNLOAD` and an error for other unknown codes would be more robust. This is not a bug but a point of design fragility.
+-   **Frame lengths**: **Correct**. All calls to `_serial->writeFrame()` use the correct length for the corresponding reply frame (`4` for ACKs, `12` for STATUS).
+
+### 2. Response Sub-code Space
+-   **Correct**. The download stream sub-codes (`0x01`-`0x03`) and control response sub-codes (`0x10`-`0x11`) occupy distinct, non-overlapping ranges. A client parser switching on `reply[1]` will not have any ambiguity.
+
+### 3. State/Interaction
+-   **Severity**: **Moderate**.
+-   **Bug**: The new control operations `ENABLE`, `DISABLE`, and `ERASE` can be invoked while a download stream is in progress (`_caplog_streaming == true`). The check that rejects new streams (L1480-1486) is positioned *after* the new control op handlers (L1452-1479).
+-   **Impact**: Calling `meshLogClear()` (for `ERASE` at L1466) while `caplogDrain()` is reading from the log buffer in the main loop could corrupt the stream, return partial data, or cause a crash (e.g., read-after-free). Similarly, `ENABLE`/`DISABLE` modify state the streaming process depends on.
+-   **Recommendation**: Reject state-changing control operations when a stream is active. The `STATUS` query is read-only and likely safe, but for consistency, all control ops except `DOWNLOAD` could be gated by the same check.
+
+    ```cpp
+    // In MyMesh::handleCmdFrame, inside `if (cmd_frame[0] == CMD_OFFBAND_CAPLOG)`
+    if (req != CAPLOG_REQ_DOWNLOAD && (_caplog_streaming || _blk_listing || ...)) {
+        // Send RESP_CODE_ERR, this is a busy/conflicting operation
+        return;
+    }
+    ```
+
+### 4. STATUS frame
+-   **Byte layout**: **Correct**. The frame structure `[code, sub, enabled, level, used(4), cap(4)]` matches the implementation at L1473-1477 and the final size of 12 bytes at L1478.
+-   **Endianness**: **Minor issue**. Lines 1476-1477 use `memcpy` to write the 32-bit `used` and `cap` values. This implicitly relies on the host MCU being Little-Endian to match the contract (`LE`). This is common for target hardware but is not portable. Explicitly serializing the bytes would be more robust.
+-   **Bounds**: **Correct**. A 12-byte reply is well within `out_frame`'s capacity.
+
+### 5. Anything Missed
+-   No security or DoS issues of note were found beyond what is typical for an unauthenticated serial protocol.
+-   The design could be slightly cleaner using a `switch` statement on `req`, which would make handling of the default/unknown case more explicit.
+
+The change is not sound as-is due to the state corruption issue (point 3).

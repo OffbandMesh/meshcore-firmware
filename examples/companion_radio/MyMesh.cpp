@@ -109,11 +109,22 @@ namespace offband { MqttBrokerPool& wifiObserverPool(); }
 // frame per idle main-loop pass (F8 #169 queue-safe). Sub-code in reply byte[1].
 // NOTE (#408): 0xC4, NOT 0xC3 -- 0xC3 is CMD_OFFBAND_FEM_LNA (OffbandConfigProtocol.h).
 // The 0xC-range allocation map lives in that header; keep new codes in sync there.
-#define CMD_OFFBAND_CAPLOG            0xC4  // request: download the serial-capture buffer
-#define RESP_CODE_OFFBAND_CAPLOG      0xC4  // reply: [0xC4, sub, ...]
-#define CAPLOG_SUB_START              0x01  // [0xC4,0x01, total_len(4B LE)]
-#define CAPLOG_SUB_CHUNK              0x02  // [0xC4,0x02, <up to MAX_FRAME_SIZE-2 bytes>]
-#define CAPLOG_SUB_END                0x03  // [0xC4,0x03]
+#define CMD_OFFBAND_CAPLOG            0xC4  // request: [0xC4, req_sub, args...]
+#define RESP_CODE_OFFBAND_CAPLOG      0xC4  // reply:   [0xC4, resp_sub, ...]
+// #417: request sub-code in cmd_frame[1] (absent/len==1 => DOWNLOAD, back-compat).
+// Control ops let a COMPANION enable/erase/inspect capture (it has no CLI; the
+// #395 CommonCLI verbs cover repeater/room-server only).
+#define CAPLOG_REQ_DOWNLOAD           0x01  // [0xC4] or [0xC4,0x01]      -> START/CHUNK*/END
+#define CAPLOG_REQ_ENABLE             0x02  // [0xC4,0x02,(level)]        -> ACK  (level: MLOG_*; default DEBUG)
+#define CAPLOG_REQ_DISABLE            0x03  // [0xC4,0x03]                -> ACK
+#define CAPLOG_REQ_ERASE              0x04  // [0xC4,0x04]                -> ACK
+#define CAPLOG_REQ_STATUS             0x05  // [0xC4,0x05]                -> STATUS
+// response sub-code in out_frame[1]:
+#define CAPLOG_SUB_START              0x01  // download: [0xC4,0x01, total_len(4B LE)]
+#define CAPLOG_SUB_CHUNK              0x02  // download: [0xC4,0x02, <up to MAX_FRAME_SIZE-2 bytes>]
+#define CAPLOG_SUB_END                0x03  // download: [0xC4,0x03]
+#define CAPLOG_RESP_ACK               0x10  // control:  [0xC4,0x10, req_op, ok(0|1)]
+#define CAPLOG_RESP_STATUS            0x11  // status:   [0xC4,0x11, enabled, level, used(4B LE), cap(4B LE)]
 
 // Stats sub-types for CMD_GET_STATS
 #define STATS_TYPE_CORE               0
@@ -1436,34 +1447,86 @@ void MyMesh::handleCmdFrame(size_t len) {
     _serial->writeFrame(out_frame, 1 + strlen(txt) + 1);  // +1: NUL-terminated (Offband convention)
     return;
   }
-  // #396: serial-capture download (companion-only). Freeze the ring (auto-stop
-  // capture) so the offset stream is stable, send START with the total byte
-  // count, then stream CHUNK* -> END one frame per idle pass via caplogDrain().
+  // #396/#417: serial-capture (companion-only). cmd_frame[1] selects the op:
+  // ENABLE/DISABLE/ERASE/STATUS are single-frame acks; DOWNLOAD (default) freezes
+  // the ring and streams START -> CHUNK* -> END one frame per idle pass.
   if (cmd_frame[0] == CMD_OFFBAND_CAPLOG) {
-    // Reject if any streamed response is already in flight (self, block-list,
-    // contacts, or observer config) — interleaving frames would corrupt the
-    // client parser. Client sees RESP_CODE_ERR and can retry.
-    if (_caplog_streaming || _blk_listing || _iter_started
+    uint8_t req = (len >= 2) ? cmd_frame[1] : CAPLOG_REQ_DOWNLOAD;
+
+    // STATUS is read-only and always allowed. Every other op either mutates the
+    // capture state or starts a stream, so reject it while any streamed response
+    // is in flight -- racing caplogDrain() (e.g. an ERASE mid-download) would
+    // corrupt the stream or the ring. Client sees RESP_CODE_ERR and can retry.
+    if (req != CAPLOG_REQ_STATUS &&
+        (_caplog_streaming || _blk_listing || _iter_started
 #ifdef OFFBAND_OBSERVER
-        || _ob_stream != OB_STREAM_NONE
+         || _ob_stream != OB_STREAM_NONE
 #endif
-       ) {
+        )) {
       out_frame[0] = RESP_CODE_ERR;
       _serial->writeFrame(out_frame, 1);
       return;
     }
-    _caplog_resume = meshLogIsEnabled();            // restore this state at END
-    meshLogSetEnabled(false);                       // freeze for a clean download
-    uint32_t total = (uint32_t)meshLogBytesUsed();
-    out_frame[0] = RESP_CODE_OFFBAND_CAPLOG;
-    out_frame[1] = CAPLOG_SUB_START;
-    out_frame[2] = (uint8_t)(total & 0xFF);
-    out_frame[3] = (uint8_t)((total >> 8) & 0xFF);
-    out_frame[4] = (uint8_t)((total >> 16) & 0xFF);
-    out_frame[5] = (uint8_t)((total >> 24) & 0xFF);
-    _serial->writeFrame(out_frame, 6);
-    _caplog_off = 0;
-    _caplog_streaming = true;
+
+    if (req == CAPLOG_REQ_STATUS) {
+      uint32_t used = (uint32_t)meshLogBytesUsed();
+      uint32_t cap = (uint32_t)meshLogCapacity();
+      out_frame[0] = RESP_CODE_OFFBAND_CAPLOG;
+      out_frame[1] = CAPLOG_RESP_STATUS;
+      out_frame[2] = meshLogIsEnabled() ? 1 : 0;
+      out_frame[3] = meshLogGetLevel();
+      out_frame[4] = (uint8_t)(used & 0xFF);         // little-endian, explicit
+      out_frame[5] = (uint8_t)((used >> 8) & 0xFF);
+      out_frame[6] = (uint8_t)((used >> 16) & 0xFF);
+      out_frame[7] = (uint8_t)((used >> 24) & 0xFF);
+      out_frame[8] = (uint8_t)(cap & 0xFF);
+      out_frame[9] = (uint8_t)((cap >> 8) & 0xFF);
+      out_frame[10] = (uint8_t)((cap >> 16) & 0xFF);
+      out_frame[11] = (uint8_t)((cap >> 24) & 0xFF);
+      _serial->writeFrame(out_frame, 12);
+      return;
+    }
+    if (req == CAPLOG_REQ_ENABLE) {
+      uint8_t level = (len >= 3) ? cmd_frame[2] : (uint8_t)MLOG_DEBUG;
+      meshLogSetLevel(level);
+      meshLogSetEnabled(true);
+      out_frame[0] = RESP_CODE_OFFBAND_CAPLOG; out_frame[1] = CAPLOG_RESP_ACK;
+      out_frame[2] = CAPLOG_REQ_ENABLE; out_frame[3] = 1;
+      _serial->writeFrame(out_frame, 4);
+      return;
+    }
+    if (req == CAPLOG_REQ_DISABLE) {
+      meshLogSetEnabled(false);
+      out_frame[0] = RESP_CODE_OFFBAND_CAPLOG; out_frame[1] = CAPLOG_RESP_ACK;
+      out_frame[2] = CAPLOG_REQ_DISABLE; out_frame[3] = 1;
+      _serial->writeFrame(out_frame, 4);
+      return;
+    }
+    if (req == CAPLOG_REQ_ERASE) {
+      meshLogClear();
+      out_frame[0] = RESP_CODE_OFFBAND_CAPLOG; out_frame[1] = CAPLOG_RESP_ACK;
+      out_frame[2] = CAPLOG_REQ_ERASE; out_frame[3] = 1;
+      _serial->writeFrame(out_frame, 4);
+      return;
+    }
+    if (req == CAPLOG_REQ_DOWNLOAD) {
+      _caplog_resume = meshLogIsEnabled();          // restore this state at END
+      meshLogSetEnabled(false);                     // freeze for a clean download
+      uint32_t total = (uint32_t)meshLogBytesUsed();
+      out_frame[0] = RESP_CODE_OFFBAND_CAPLOG;
+      out_frame[1] = CAPLOG_SUB_START;
+      out_frame[2] = (uint8_t)(total & 0xFF);
+      out_frame[3] = (uint8_t)((total >> 8) & 0xFF);
+      out_frame[4] = (uint8_t)((total >> 16) & 0xFF);
+      out_frame[5] = (uint8_t)((total >> 24) & 0xFF);
+      _serial->writeFrame(out_frame, 6);
+      _caplog_off = 0;
+      _caplog_streaming = true;
+      return;
+    }
+    // unknown sub-code -> explicit error (never silently fall through to download)
+    out_frame[0] = RESP_CODE_ERR;
+    _serial->writeFrame(out_frame, 1);
     return;
   }
   // #241: block-list sync (companion-API only; NEVER on the mesh). 0xC2.
