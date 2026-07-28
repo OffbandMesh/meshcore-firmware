@@ -18,10 +18,13 @@ plus conservative generic catch-alls for the unknown gessaman source.
 Redaction is IN-LINE (the secret value is replaced, the rest of the line is kept)
 so diagnostic context that shares a line with a secret is preserved.
 
-Known limitation: label-less interactive CLI replies — `get guest_password` /
-`get bridge_secret` print `> <value>` with no key — cannot be caught by
-line-checking. Testers are told below not to run password `get` commands during
-capture.
+Known limitation: label-less interactive CLI replies. The serial console prints
+`get wifi.ssid` / `get guest_password` / `get bridge_secret` replies as an
+indented "  > <value>" with no field name. The single-line form IS now caught
+(#382). A hypothetical value-on-the-NEXT-line reply ("> \n<value>") would not be —
+line-based redaction can't see across lines, and our firmware doesn't emit that
+form (CommonCLI `> %s` is single-line). Testers are told below not to run any
+secret-returning `get` command during capture.
 
 Context: OffbandMesh/meshcore-firmware#379 (OKI-Mesh/CoreScope#72) — capture the
 device side of an observer that stopped publishing to MQTT and did not reconnect.
@@ -68,11 +71,15 @@ _REDACTIONS = [
     (re.compile(r"(\b[\w.-]*(?:password|passwd|pwd|psk|secret|token|apikey|api_key|bearer|pass)\b\s*[:=]\s*)([^\r\n]+)",
                 re.IGNORECASE), r"\1<redacted:secret>"),
 
-    # Last-resort net for label-less interactive CLI replies. CommonCLI prints
-    # `get guest_password` / `get bridge_secret` as "> <value>" with no key, so
-    # nothing above can catch them. Normal runtime logs use "[Tag]" prefixes,
-    # not a leading "> ", so over-redaction risk is low. Anchored to line start.
-    (re.compile(r"(^>\s*)([^\r\n]+)"), r"\1<redacted:cli-reply>"),
+    # Last-resort net for label-less interactive CLI replies. The serial console
+    # prints `get wifi.ssid` / `get guest_password` / `get bridge_secret` replies
+    # as "> <value>" with NO field label (CommonCLI `> %s`), so nothing above can
+    # catch them -- the grounded `wifi.ssid =` rule only matches the _sys-channel
+    # format. #382: the live reply is INDENTED ("  > tsunami"), so the anchor must
+    # allow leading whitespace (`^\s*>`); the original `^>` missed it and leaked a
+    # real SSID on the bench. Normal runtime logs use "[Tag]" prefixes, not a
+    # leading ">", so over-redaction risk stays low.
+    (re.compile(r"(^\s*>\s*)([^\r\n]+)"), r"\1<redacted:cli-reply>"),
 ]
 
 
@@ -116,8 +123,9 @@ TESTER_INSTRUCTIONS = """\
  2. Let it run through the problem window (e.g. force the WiFi drop/return you
     are debugging). Capture keeps going until you press Ctrl-C (or --secs).
  3. WiFi SSID, tokens and known secrets are redacted automatically before the
-    file is written -- but DO NOT type `get guest_password` / `get bridge_secret`
-    in the device CLI while capturing (those replies can't be auto-redacted).
+    file is written -- but as a precaution DO NOT run any secret-returning `get`
+    command (e.g. `get guest_password`, `get bridge_secret`) in the device CLI
+    while capturing.
  4. When done, send us the file printed at the end.
 ============================================================================
 """
