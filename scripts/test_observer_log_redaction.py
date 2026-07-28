@@ -47,6 +47,11 @@ MUST_REDACT = [
     ("reconnect-token: aWReallyLongTokenValue", "aWReallyLongTokenValue"),
     # Label-less interactive CLI reply (Gemini Finding 5)
     ("> s3cr3t_bridge_v4lu3", "s3cr3t_bridge_v4lu3"),
+    # #382 regression: the live `get wifi.ssid` serial reply is INDENTED
+    # ("  > <SSID>"). The old `^>` anchor missed the leading whitespace and
+    # leaked a real SSID on the bench. Placeholder value, never a real SSID.
+    ("  > PlaceholderNet", "PlaceholderNet"),           # two-space indent
+    ("\t> AnotherSSID_value", "AnotherSSID_value"),     # tab indent
 ]
 
 # Diagnostic lines that must survive untouched — redaction must not gut the log.
@@ -64,6 +69,7 @@ MUST_PRESERVE = [
     # catch-all, which would have scrubbed this).
     "observer pubkey = B4680F16DBFC443EC2D00FB7AF2181EA96C2C4D4A65C2E93E054BB159D81F3BA",
     "[WifiObserver] STA connected, RSSI=-67 dBm",    # a normal [Tag] line, not a '>' reply
+    "  [hb] up=61s free_heap=67820",                 # #382: indented tag line must survive (no '>')
 ]
 
 
