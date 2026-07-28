@@ -22,13 +22,26 @@
 #define MAX_PATH_SIZE        64
 #define MAX_TRANS_UNIT      255
 
+#include "MeshLog.h"
+
+// MESH_DEBUG_PRINTLN is tee'd into the serial-capture sink (#393). When capture
+// is disabled (the default) the g_meshLogEnabled guard short-circuits before
+// the arguments are evaluated, so a stock build pays only a single flag test
+// and behaves exactly as before. When MESH_DEBUG is compiled in, the live
+// Serial.printf is preserved unchanged. MESH_DEBUG_PRINT (partial fragments) is
+// left as-is — the line-oriented sink only captures complete PRINTLN lines.
 #if MESH_DEBUG && ARDUINO
   #include <Arduino.h>
   #define MESH_DEBUG_PRINT(F, ...) Serial.printf("DEBUG: " F, ##__VA_ARGS__)
-  #define MESH_DEBUG_PRINTLN(F, ...) Serial.printf("DEBUG: " F "\n", ##__VA_ARGS__)
+  #define MESH_DEBUG_PRINTLN(F, ...) do { \
+      Serial.printf("DEBUG: " F "\n", ##__VA_ARGS__); \
+      if (g_meshLogEnabled) mesh_log_line(MLOG_DEBUG, "DEBUG: " F "\n", ##__VA_ARGS__); \
+    } while (0)
 #else
   #define MESH_DEBUG_PRINT(...) {}
-  #define MESH_DEBUG_PRINTLN(...) {}
+  #define MESH_DEBUG_PRINTLN(F, ...) do { \
+      if (g_meshLogEnabled) mesh_log_line(MLOG_DEBUG, "DEBUG: " F "\n", ##__VA_ARGS__); \
+    } while (0)
 #endif
 
 #if BRIDGE_DEBUG && ARDUINO
