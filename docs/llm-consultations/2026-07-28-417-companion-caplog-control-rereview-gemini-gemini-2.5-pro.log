@@ -1,0 +1,6 @@
+All issues are resolved and the new code is sound.
+
+1.  **Resolved.** The busy-check now correctly precedes all mutating ops (`ENABLE`/`DISABLE`/`ERASE`) and `DOWNLOAD`, while correctly permitting the read-only `STATUS` op.
+2.  **Resolved.** An explicit error `RESP_CODE_ERR` is now returned for any unknown sub-code.
+3.  **Resolved.** The `STATUS` response now uses explicit, portable byte-shifting to encode 32-bit values in little-endian format.
+4.  **No new issues.** The new `if/return` structure is sound, with no fall-through, missing returns, or length-mismatch bugs.
