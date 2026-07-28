@@ -1,0 +1,6 @@
+This is a clean, complete rename to 0xC4 with FEM_LNA's 0xC3 untouched.
+
+1.  **`0xC4` is free.** The new allocation map comment in `OffbandConfigProtocol.h` explicitly confirms `0xC4` was unused and claims it for `CAPLOG`.
+2.  **The change is complete.** All `CAPLOG`-related `0xC3` references in the diff—the command/response code defines, the sub-code comments, and the drainer function comments in both `.cpp` and `.h` files—have been correctly updated to `0xC4`. The `FEM_LNA` code is not modified and remains `0xC3` per the new allocation map.
+3.  **Sub-code scheme is correct.** The `START/CHUNK/END` sub-codes (`0x01/0x02/0x03`) are unaffected by the parent command code change. Their definitions are unchanged, and their explanatory comments were correctly updated to show `0xC4` as the parent.
+4.  **No other issues.** The fix is narrow and correct. The addition of the 0xC-range allocation map is a good defensive measure against future collisions.

@@ -48,6 +48,16 @@ namespace offband {
 // ---------------------------------------------------------------------------
 // Offband extension space starts at 0xC0 -- far above upstream's current max
 // (65); leaves 66..191 for upstream growth, 0xC0.. for Offband.
+//
+// 0xC-RANGE ALLOCATION MAP (frame byte[0]) -- keep this current when adding a
+// code. NOTE: some codes are #defined in MyMesh.cpp (GPS, CAPLOG), not here, so
+// grep the WHOLE 0xC range before claiming one (a partial grep missed FEM_LNA
+// and collided CAPLOG onto 0xC3 -- #408). Next free: 0xC5.
+//   0xC0 CMD_OFFBAND_CONFIG    (this file)
+//   0xC1 CMD_OFFBAND_GPS       (MyMesh.cpp)
+//   0xC2 CMD_OFFBAND_BLOCK     (this file)
+//   0xC3 CMD_OFFBAND_FEM_LNA   (this file)
+//   0xC4 CMD_OFFBAND_CAPLOG    (MyMesh.cpp, #396)
 constexpr uint8_t CMD_OFFBAND_CONFIG       = 0xC0;  // request:  cmd_frame[0]
 constexpr uint8_t RESP_CODE_OFFBAND_CONFIG = 0xC0;  // response: out_frame[0]
 

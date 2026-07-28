@@ -105,13 +105,15 @@ namespace offband { MqttBrokerPool& wifiObserverPool(); }
 #define CMD_OFFBAND_GPS               0xC1  // request: GPS status query
 #define RESP_CODE_OFFBAND_GPS         0xC1  // reply: ASCII "enabled=.. detected=.. fix=.. lat=.. ..."
 // #396: Offband fork-only serial-capture download (companion-only, never on the
-// mesh). Request 0xC3 -> reply START[total 4B LE] -> CHUNK* -> END, streamed one
+// mesh). Request 0xC4 -> reply START[total 4B LE] -> CHUNK* -> END, streamed one
 // frame per idle main-loop pass (F8 #169 queue-safe). Sub-code in reply byte[1].
-#define CMD_OFFBAND_CAPLOG            0xC3  // request: download the serial-capture buffer
-#define RESP_CODE_OFFBAND_CAPLOG      0xC3  // reply: [0xC3, sub, ...]
-#define CAPLOG_SUB_START              0x01  // [0xC3,0x01, total_len(4B LE)]
-#define CAPLOG_SUB_CHUNK              0x02  // [0xC3,0x02, <up to MAX_FRAME_SIZE-2 bytes>]
-#define CAPLOG_SUB_END                0x03  // [0xC3,0x03]
+// NOTE (#408): 0xC4, NOT 0xC3 -- 0xC3 is CMD_OFFBAND_FEM_LNA (OffbandConfigProtocol.h).
+// The 0xC-range allocation map lives in that header; keep new codes in sync there.
+#define CMD_OFFBAND_CAPLOG            0xC4  // request: download the serial-capture buffer
+#define RESP_CODE_OFFBAND_CAPLOG      0xC4  // reply: [0xC4, sub, ...]
+#define CAPLOG_SUB_START              0x01  // [0xC4,0x01, total_len(4B LE)]
+#define CAPLOG_SUB_CHUNK              0x02  // [0xC4,0x02, <up to MAX_FRAME_SIZE-2 bytes>]
+#define CAPLOG_SUB_END                0x03  // [0xC4,0x03]
 
 // Stats sub-types for CMD_GET_STATS
 #define STATS_TYPE_CORE               0
@@ -2879,7 +2881,7 @@ void MyMesh::checkSerialInterface() {
   } else if (_blk_listing                 // #241: drain an in-flight 0xC2 block-LIST,
              && !_serial->isWriteBusy()) {  // one key frame per idle pass (queue-safe)
     blockListDrain();
-  } else if (_caplog_streaming            // #396: drain an in-flight 0xC3 caplog download,
+  } else if (_caplog_streaming            // #396: drain an in-flight 0xC4 caplog download,
              && !_serial->isWriteBusy()) {  // one chunk frame per idle pass (queue-safe)
     caplogDrain();
   } else if (_iter_started              // check if our ContactsIterator is 'running'
