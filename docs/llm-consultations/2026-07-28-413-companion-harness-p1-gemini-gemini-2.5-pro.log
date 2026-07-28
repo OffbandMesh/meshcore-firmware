@@ -1,0 +1,66 @@
+This is a sound implementation for phase 1. The code is clean, well-tested, and the design choices are pragmatic for its intended purpose as a test harness.
+
+Here is a concrete breakdown based on your criteria:
+
+### 1. `FrameDecoder` Correctness
+The `FrameDecoder` logic is correct and robust against the common cases you listed.
+
+*   **Noise-skipping, split-feeds, multiple frames, zero-length:** All are handled correctly by the `while` loop in `FrameDecoder.feed` (lines 53-65). The tests verify this behavior thoroughly.
+
+*   **Failure Modes (infinite loop, dropping frames, unbounded buffer):**
+    *   **Infinite loop:** Unlikely. The loop either consumes data from `self._buf` or `break`s. Progress is always made.
+    *   **Dropping a valid frame:** This can only happen as a consequence of the documented desync limitation, not as a separate bug.
+    *   **Unbounded buffer growth:** This is a theoretical possibility.
+        *   **Line:** `companion_harness.py:61` (`if len(self._buf) < 3 + length:`)
+        *   **Severity:** Low
+        *   **Description:** If the decoder sees a `>` start byte followed by a valid-looking 2-byte length that is very large (e.g., 65535), but the device never sends the full payload (e.g., it crashes or sends other data), the `break` condition on line 62 will always be met. All subsequent data received from the device will be appended to `self._buf` without limit, potentially leading to memory exhaustion.
+        *   **Mitigation (optional for this phase):** A simple safeguard would be to cap the buffer size (e.g., `if len(self._buf) > SOME_REASONABLE_MAX: self._buf.clear(); raise ProtocolError(...)`). Given this is a controlled test harness against known firmware, the risk is minimal, but it is the "worse failure" you asked about.
+
+### 2. Framing Correctness
+The framing logic is correct.
+
+*   **Line:** `companion_harness.py:35` (`encode_frame`)
+*   **Severity:** None
+*   **Description:** The implementation `_FRAME_HDR_HOST + struct.pack("<H", len(payload)) + payload` perfectly matches the described wire format.
+
+*   **Payloads exceeding `MAX_FRAME_SIZE`:**
+    *   **Severity:** Note (not a bug)
+    *   **Description:** The harness correctly does not enforce a maximum payload size. It will happily encode a frame larger than the firmware's `MAX_FRAME_SIZE`. This is the correct behavior for a test harness, as it allows for testing the firmware's handling of oversized frames. Test authors should be aware of the device's limits.
+
+### 3. Serial/Session Handling
+Resource management and transport logic are solid.
+
+*   **Timeout Handling:**
+    *   **Line:** `companion_harness.py:171` (`read_frame`)
+    *   **Severity:** None
+    *   **Description:** The deadline-based timeout (`time.time() < deadline`) is robust and correctly implemented. The combination of a short, non-blocking `self._ser.read()` timeout (0.2s) and the longer application-level deadline is an efficient way to poll for data without busy-waiting.
+*   **Resource Cleanup:**
+    *   **Line:** `companion_harness.py:155` (`__exit__`)
+    *   **Severity:** None
+    *   **Description:** The `__enter__`/`__exit__` context manager correctly guarantees `self._ser.close()` is called, even on exceptions. The broad `except Exception:` on line 159 is acceptable here to prevent the harness from crashing during cleanup if the port has already been disconnected.
+*   **Lazy `pyserial` Import:**
+    *   **Line:** `companion_harness.py:146` (`import serial`)
+    *   **Severity:** None
+    *   **Description:** This is a good pattern. It allows the pure, TDD-driven parts of the code (`FrameDecoder`) to be tested without requiring `pyserial` to be installed, which is ideal for lightweight CI environments.
+
+### 4. `resolve_device_port` Robustness
+This is pragmatic but represents the most likely point of future flakiness.
+
+*   **Line:** `companion_harness.py:104-111` (_registry_clone_root)
+*   **Severity:** Minor Risk
+*   **Description:** The `git rev-parse` logic to find the primary worktree is a clever solution to the problem. The broad `except Exception` makes it resilient to environments without `git` or with unusual configurations. This is a reasonable approach.
+
+*   **Line:** `companion_harness.py:118` (`subprocess.run`)
+*   **Severity:** Minor Risk
+*   **Description:** Shelling out to an external script (`pio-flash.py`) and parsing its stdout is a common pattern in test automation but creates a firm dependency. If that script's output format changes, this function will break. The regex `r"\s*(COM\d+)\b"` is well-formed and specific enough to be reasonably stable. This is an acceptable trade-off for getting a working system quickly.
+
+### 5. Foundation for Regression Testing
+The code is a strong foundation for a regression test suite.
+
+*   The strict separation between the pure `FrameDecoder` and the I/O-bound `CompanionSession` is excellent.
+*   The tests are comprehensive for the implemented features.
+*   The skippable hardware-in-the-loop test (`test_hardware_app_start_handshake`) is exactly right for a suite that needs to run in different environments (CI vs. developer machine with hardware).
+
+---
+
+In summary, **this is a sound and well-executed implementation for phase 1.** The identified risks are minor and appropriate for this stage of development.
