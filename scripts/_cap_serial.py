@@ -111,6 +111,25 @@ def autodetect_port():
     return ports[0].device
 
 
+# USB VIDs of UART bridges that (a) don't gate TX on DTR and (b) can auto-reset
+# if DTR toggles: SiLabs CP210x (0x10C4), WCH CH34x (0x1A86), FTDI (0x0403).
+# We never auto-assert DTR on these -- a silent bridge means an idle device, not
+# a TX gate, so asserting would only risk a reset. (#386, Gemini review.)
+_UART_BRIDGE_VIDS = {0x10C4, 0x1A86, 0x0403}
+
+
+def _port_vid(port):
+    """USB VID of the given port, or None if unknown."""
+    try:
+        from serial.tools import list_ports
+        for p in list_ports.comports():
+            if p.device == port:
+                return p.vid
+    except Exception:
+        pass
+    return None
+
+
 def _now_stamp():
     return time.strftime("%Y%m%d-%H%M%S", time.localtime())
 
@@ -143,7 +162,9 @@ def main(argv=None):
     ap.add_argument("--no-redact", action="store_true",
                     help="INTERNAL/LOCAL ONLY: disable redaction. Never use when shipping to a tester.")
     ap.add_argument("--dtr", action="store_true",
-                    help="Assert DTR/RTS (needed on ESP32-S3 internal JTAG-CDC to ungate TX).")
+                    help="Force DTR/RTS asserted from the start (ESP32-S3 JTAG-CDC / some nRF52 CDCs gate TX on it).")
+    ap.add_argument("--no-auto-dtr", action="store_true",
+                    help="Disable the auto-assert-DTR-if-silent fallback (fallback is on by default).")
     # Back-compat: allow the old positional form `_cap_serial.py PORT SECS DTR`.
     ap.add_argument("pos", nargs="*", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
@@ -180,16 +201,31 @@ def main(argv=None):
     s.port = port
     s.baudrate = args.baud
     s.timeout = 0.3
-    # DTR/RTS are not wired to EN/BOOT on the internal JTAG-CDC, so asserting
-    # them does not reset the device; it only ungates TX on PID 0002.
+    # DTR/RTS start deasserted unless forced. The ESP32-S3 internal JTAG-CDC and
+    # some nRF52 CDCs gate TX until DTR asserts ("terminal present"), so the line
+    # reads silent without it -- the empty-file footgun a tester hits (#386). But
+    # CP210x/CH340 UART bridges don't need DTR, and on CP210x auto-reset boards
+    # forcing it can reset the device -- so we do NOT assert up front. Instead, if
+    # nothing arrives within AUTO_DTR_SILENCE_S, assume a TX-gated CDC/JTAG and
+    # assert then. Setting DTR==RTS does not drive the classic auto-reset circuit,
+    # and a live UART bridge is never silent, so the fallback never fires on one.
     s.dtr = args.dtr
     s.rts = args.dtr
     s.open()
 
-    print("[[capturing on %s @ %d baud%s%s]]" % (
+    AUTO_DTR_SILENCE_S = 3.0
+    dtr_on = args.dtr
+    auto_dtr = not args.no_auto_dtr and not args.dtr   # only when not already forced
+    if auto_dtr and _port_vid(port) in _UART_BRIDGE_VIDS:
+        auto_dtr = False
+        print("[[%s is a UART bridge -- auto-DTR disabled (pass --dtr only if TX is gated)]]" % port)
+    got_any = False
+
+    print("[[capturing on %s @ %d baud%s%s%s]]" % (
         port, args.baud,
         "" if args.secs is None else " for %.0fs" % args.secs,
-        "" if not args.no_redact else " -- REDACTION OFF"))
+        "" if not args.no_redact else " -- REDACTION OFF",
+        " -- DTR asserted" if dtr_on else (" -- auto-DTR armed" if auto_dtr else "")))
 
     def emit(line):
         line = redact(line)
@@ -205,10 +241,22 @@ def main(argv=None):
         while args.secs is None or (time.time() - t0) < args.secs:
             chunk = s.read(4096)
             if chunk:
+                got_any = True
                 buf += chunk
                 while b"\n" in buf:
                     raw, buf = buf.split(b"\n", 1)
                     emit(raw.decode("utf-8", "replace").rstrip("\r"))
+            elif auto_dtr and not dtr_on and not got_any \
+                    and (time.time() - t0) >= AUTO_DTR_SILENCE_S:
+                # Silent so far -> likely a TX-gated CDC/JTAG. Assert DTR and keep
+                # going. Harmless on a genuinely idle UART (DTR==RTS doesn't hit
+                # the reset circuit); only fires when nothing has ever arrived.
+                s.dtr = True
+                s.rts = True
+                dtr_on = True
+                print("[[no data in %.0fs -- asserting DTR to ungate TX (CDC/JTAG)]]"
+                      % AUTO_DTR_SILENCE_S)
+                sys.stdout.flush()
     except KeyboardInterrupt:
         pass
     except serial.SerialException as e:
