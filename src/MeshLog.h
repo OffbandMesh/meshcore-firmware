@@ -29,6 +29,11 @@ enum MeshLogLevel : uint8_t {
 // Treat as read-only from producers; mutate only via meshLogSetEnabled().
 extern volatile bool g_meshLogEnabled;
 
+// Live-serial mirror flag (#411): when set, captured lines are also echoed to the
+// live serial console. Set false at boot on a USB-serial companion (where Serial
+// carries the framed protocol); true elsewhere. Set only via meshLogSetMirror().
+extern volatile bool g_meshLogMirror;
+
 // Level-name helpers for the `caplog` CLI (#395). Inline + Arduino-free so they
 // are usable everywhere (including native unit tests) without linking MeshLog.cpp.
 inline const char* meshLogLevelName(uint8_t level) {
@@ -52,6 +57,10 @@ inline bool meshLogLevelFromName(const char* name, uint8_t* out_level) {
 // Runtime control (wired to CLI verbs in #395).
 void   meshLogSetEnabled(bool enabled);   // default false
 bool   meshLogIsEnabled();
+// Live-serial mirror (#411): main.cpp sets this at boot from the transport
+// (false on a USB-serial companion where Serial is the protocol line).
+void   meshLogSetMirror(bool on);         // default true
+bool   meshLogMirrorEnabled();
 void   meshLogSetLevel(uint8_t max_level); // capture lines with level <= this
 uint8_t meshLogGetLevel();
 void   meshLogClear();

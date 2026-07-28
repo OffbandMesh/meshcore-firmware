@@ -1,4 +1,5 @@
 #include "EnvironmentSensorManager.h"
+#include <MeshLog.h>  // #411: route GPS status through the serial-capture sink
 
 #include <Wire.h>
 
@@ -1089,14 +1090,16 @@ void EnvironmentSensorManager::loop() {
     next_gps_update = millis() + (gps_update_interval_sec * 1000);
   }
 
-  // Offband (#149): periodic GPS-state line so the chain (enabled->detected->fix->
-  // coords) is visible live on the serial console without a client. Self-throttled.
+  // Offband (#149/#411): periodic GPS-state line (enabled->detected->fix->coords).
+  // Routed through the serial-capture sink so it is captured for download AND
+  // mirrored to the live console where serial is free -- all gated by the
+  // client-settable caplog enable+level, never raw on a USB-serial companion line.
   static uint32_t _gps_log_ms = 0;
   if (millis() - _gps_log_ms >= 5000) {
     _gps_log_ms = millis();
     char _gps_b[160];
     getGpsStatusText(_gps_b, sizeof(_gps_b));
-    Serial.print("[GPS] "); Serial.println(_gps_b);
+    mesh_log_line(MLOG_DEBUG, "[GPS] %s\n", _gps_b);
   }
   #endif
   #if ENV_INCLUDE_BME680_BSEC

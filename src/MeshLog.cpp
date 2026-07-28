@@ -28,6 +28,14 @@ static volatile uint8_t g_max_level = MLOG_DEBUG;
 // Definition of the fast-path flag declared in MeshLog.h.
 volatile bool g_meshLogEnabled = false;
 
+// Live-serial mirror (#411): when a routed line is captured, also echo it to the
+// live serial console -- but ONLY where the console is not the framed companion
+// protocol line. Default true (repeater/observer/BLE-companion/dev: console is
+// free); a USB-serial companion sets it false at boot (meshLogSetMirror) so the
+// capture never corrupts its protocol line. Gated by g_meshLogEnabled + level,
+// so it is the client-settable runtime replacement for the old compile MESH_DEBUG.
+volatile bool g_meshLogMirror = true;
+
 // Short critical section around ring mutation so a producer on another task
 // (e.g. the BLE task) can't interleave with the main loop mid-append. The sink
 // must be called from task context, not a hard ISR.
@@ -54,6 +62,8 @@ volatile bool g_meshLogEnabled = false;
 
 void meshLogSetEnabled(bool enabled) { g_meshLogEnabled = enabled; }
 bool meshLogIsEnabled() { return g_meshLogEnabled; }
+void meshLogSetMirror(bool on) { g_meshLogMirror = on; }
+bool meshLogMirrorEnabled() { return g_meshLogMirror; }
 void meshLogSetLevel(uint8_t max_level) { g_max_level = max_level; }
 uint8_t meshLogGetLevel() { return g_max_level; }
 size_t meshLogCapacity() { return g_ring.capacity(); }
@@ -119,4 +129,11 @@ void mesh_log_line(uint8_t level, const char* fmt, ...) {
   MLOG_ENTER();
   g_ring.append(reinterpret_cast<const uint8_t*>(line), total);
   MLOG_EXIT();
+
+  // Live serial mirror (#411) -- outside the lock, since Serial writes can block.
+  // Only where the console is free of the framed protocol (g_meshLogMirror); a
+  // USB-serial companion keeps this false so nothing raw hits its protocol line.
+  if (g_meshLogMirror) {
+    Serial.write(reinterpret_cast<const uint8_t*>(line), total);
+  }
 }

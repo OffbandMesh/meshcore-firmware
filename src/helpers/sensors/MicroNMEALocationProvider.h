@@ -4,6 +4,7 @@
 #include <MicroNMEA.h>
 #include <RTClib.h>
 #include <helpers/RefCountedDigitalPin.h>
+#include <MeshLog.h>  // #411: [GPSPARSE] routed through the serial-capture sink
 
 #ifndef GPS_EN
     #ifdef PIN_GPS_EN
@@ -200,14 +201,12 @@ public :
         static long _gpsparse_t = 0;
         if (millis() - _gpsparse_t >= 1000) {
             _gpsparse_t = millis();
-            Serial.print("[GPSPARSE] valid="); Serial.print(nmea.isValid() ? 1 : 0);
-            Serial.print(" y="); Serial.print(nmea.getYear());
-            Serial.print(" mo="); Serial.print(nmea.getMonth());
-            Serial.print(" d="); Serial.print(nmea.getDay());
-            Serial.print(" h="); Serial.print(nmea.getHour());
-            Serial.print(" mi="); Serial.print(nmea.getMinute());
-            Serial.print(" s="); Serial.print(nmea.getSecond());
-            Serial.print(" ts="); Serial.println((long)getTimestamp());
+            // #411: route through the sink (captured + mirrored where serial is free).
+            mesh_log_line(MLOG_DEBUG,
+                "[GPSPARSE] valid=%d y=%d mo=%d d=%d h=%d mi=%d s=%d ts=%ld\n",
+                nmea.isValid() ? 1 : 0, (int)nmea.getYear(), (int)nmea.getMonth(),
+                (int)nmea.getDay(), (int)nmea.getHour(), (int)nmea.getMinute(),
+                (int)nmea.getSecond(), (long)getTimestamp());
         }
 #endif
     }
