@@ -71,9 +71,9 @@ size_t meshLogBytesUsed() {
   return n;
 }
 
-size_t meshLogSnapshot(uint8_t* out, size_t out_cap) {
+size_t meshLogSnapshot(uint8_t* out, size_t out_cap, size_t offset) {
   MLOG_ENTER();
-  size_t n = g_ring.snapshot(out, out_cap);
+  size_t n = g_ring.snapshot(out, out_cap, offset);
   MLOG_EXIT();
   return n;
 }

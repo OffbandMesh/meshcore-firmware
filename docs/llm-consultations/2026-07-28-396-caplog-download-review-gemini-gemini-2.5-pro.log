@@ -1,0 +1,27 @@
+Here is an adversarial code review of the provided diff.
+
+### High Severity
+
+1.  **Logging permanently disabled after one download.**
+    -   `MyMesh.cpp:1429`: On download start, `meshLogSetEnabled(false)` is called to freeze the buffer. However, the log is never re-enabled upon successful completion (`caplogDrain` when `n == 0`) or upon termination via `APP_START` (`MyMesh.cpp:1560-1565`). This permanently disables a core diagnostic feature after a single use, which also presents a denial-of-service vector. The original state of the logger should be saved and restored.
+
+2.  **Concurrent stream protocol corruption.**
+    -   `MyMesh.cpp:1428`: The handler for `CMD_OFFBAND_CAPLOG` unconditionally starts a new stream by setting `_caplog_streaming = true`. It does not check for or terminate other in-flight streams like the block-list (`_blk_listing`).
+    -   `MyMesh.cpp:2815`: The `else if` chain prioritizes `_blk_listing` over `_caplog_streaming`.
+    -   **Impact:** A client can request a caplog download while a block-list is streaming. The client will receive `CAPLOG_START`, then a series of unrelated `BLOCK_LIST` frames, and only then the `CAPLOG_CHUNK`s. This is a severe protocol violation that will break the client parser. New stream requests must be mutually exclusive, either by rejecting the new request or by terminating the old stream.
+
+### Medium Severity
+
+1.  **In-flight download can be restarted, violating protocol.**
+    -   `MyMesh.cpp:1428`: If a `CMD_OFFBAND_CAPLOG` request is received while a caplog download is already in progress (`_caplog_streaming == true`), the handler doesn't reject it. Instead, it resets `_caplog_off = 0` and sends a new `START` frame. The client will receive a `START` frame mid-stream, which is unexpected and will break reassembly logic. The handler should ignore new download requests while one is active.
+
+### Low Severity
+
+1.  **END frame sent for empty log before START.**
+    -   `MyMesh.cpp:2646`: If the log is empty (`meshLogBytesUsed() == 0`), `caplogDrain` will be called once. `meshLogSnapshot` will return `n=0`, causing an `END` frame to be sent immediately. This is correct. However, because the `START` frame is sent synchronously from `handleCmdFrame` and the `END` frame is sent asynchronously from the main loop, it is likely the client receives the `START` frame first. This is fine. (Self-correction: Initial thought was a race, but `writeFrame` is queued, so order is preserved. This point is likely fine, but worth double-checking serial queue behavior under load).
+
+2.  **Potentially breaking API change.**
+    -   `MeshLog.h:62`: The signature of `meshLogSnapshot` is changed. The addition of a default argument makes it source-compatible but not ABI-compatible. If this function is used elsewhere in code that is not recompiled, it will lead to a crash. Given the context, this is likely safe, but it is a fragile change.
+
+3.  **Buffer exhaustion logic in `caplogDrain` is fragile.**
+    -   `MyMesh.cpp:2646`: The stream terminates when `meshLogSnapshot` returns 0. The contract says this happens when `offset >= bytesUsed()`. If `bytesUsed()` is an exact multiple of the chunk size (`MAX_FRAME_SIZE - 2`), the last successful read will make `_caplog_off == bytesUsed()`. The next call to `caplogDrain` will correctly see `n=0` and send `END`. This seems correct, but relies heavily on the precise behavior of `meshLogSnapshot`, which is not part of this diff.

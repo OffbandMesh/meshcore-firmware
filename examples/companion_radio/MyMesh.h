@@ -251,6 +251,7 @@ private:
   void loadBlocks();
   void saveBlocks();
   void blockListDrain();   // emit one key frame of an in-flight 0xC2 LIST
+  void caplogDrain();      // #396: emit one chunk frame of an in-flight 0xC3 caplog download
 
   DataStore* _store;
   BlockStore _blocks;   // #241: blocked pubkeys (in-memory; persisted via load/saveBlocks)
@@ -292,6 +293,12 @@ private:
   // #169). Framing: START=[..,0xFF,count] -> [..,idx,key]* -> END=[..,0xFE].
   bool    _blk_listing;
   uint8_t _blk_list_i;
+  // #396: in-flight serial-capture (caplog) download. Capture is frozen (auto-
+  // stopped) at START so the ring is stable; caplogDrain() streams one CHUNK
+  // frame per idle pass from _caplog_off until the buffer is exhausted.
+  bool    _caplog_streaming;
+  size_t  _caplog_off;
+  bool    _caplog_resume;   // capture-enabled state to restore when the download ends
   uint8_t app_target_ver;
   uint8_t *sign_data;
   uint32_t sign_data_len;
