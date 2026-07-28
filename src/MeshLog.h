@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 // MeshLog — the serial-capture tee sink (#393).
 //
@@ -28,6 +29,26 @@ enum MeshLogLevel : uint8_t {
 // Treat as read-only from producers; mutate only via meshLogSetEnabled().
 extern volatile bool g_meshLogEnabled;
 
+// Level-name helpers for the `caplog` CLI (#395). Inline + Arduino-free so they
+// are usable everywhere (including native unit tests) without linking MeshLog.cpp.
+inline const char* meshLogLevelName(uint8_t level) {
+  switch (level) {
+    case MLOG_BOOT:   return "boot";
+    case MLOG_ERROR:  return "error";
+    case MLOG_DEBUG:  return "debug";
+    case MLOG_PACKET: return "packet";
+    default:          return "?";
+  }
+}
+inline bool meshLogLevelFromName(const char* name, uint8_t* out_level) {
+  if (!name || !out_level) return false;
+  if (strcmp(name, "boot")   == 0) { *out_level = MLOG_BOOT;   return true; }
+  if (strcmp(name, "error")  == 0) { *out_level = MLOG_ERROR;  return true; }
+  if (strcmp(name, "debug")  == 0) { *out_level = MLOG_DEBUG;  return true; }
+  if (strcmp(name, "packet") == 0) { *out_level = MLOG_PACKET; return true; }
+  return false;
+}
+
 // Runtime control (wired to CLI verbs in #395).
 void   meshLogSetEnabled(bool enabled);   // default false
 bool   meshLogIsEnabled();
@@ -38,6 +59,9 @@ size_t meshLogBytesUsed();
 size_t meshLogCapacity();
 // Copy up to out_cap captured bytes, oldest-first, into out (for #396 download).
 size_t meshLogSnapshot(uint8_t* out, size_t out_cap);
+// Stream the captured buffer to Serial in chunks (local-console `caplog dump`).
+// Best-effort: stop capture first for a clean dump. Framed remote download is #396.
+void   meshLogDumpSerial();
 
 // The tee sink. printf-style; a "\n"-terminated line is expected. No-op (cheap
 // early-out) when capture is disabled or the level is filtered out.

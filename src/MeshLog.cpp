@@ -78,6 +78,21 @@ size_t meshLogSnapshot(uint8_t* out, size_t out_cap) {
   return n;
 }
 
+void meshLogDumpSerial() {
+  // Read in small chunks, each under a brief lock, writing to Serial between
+  // locks so the critical section stays short (Serial writes can block).
+  uint8_t chunk[128];
+  size_t offset = 0;
+  for (;;) {
+    MLOG_ENTER();
+    size_t n = g_ring.snapshot(chunk, sizeof(chunk), offset);
+    MLOG_EXIT();
+    if (n == 0) break;
+    Serial.write(chunk, n);
+    offset += n;
+  }
+}
+
 void mesh_log_line(uint8_t level, const char* fmt, ...) {
   // Cheap early-out: disabled by default, so stock builds pay one branch.
   if (!g_meshLogEnabled || level > g_max_level) return;

@@ -4,6 +4,7 @@
 #include "AdvertDataHelpers.h"
 #include "TxtDataHelpers.h"
 #include <RTClib.h>
+#include "MeshLog.h"   // serial-capture sink control (#395 caplog verbs)
 
 // Plan 2 v2 Task 11: ObserverCli dispatcher hooked into handleCommand's
 // fall-through. Compiles in only when OFFBAND_OBSERVER is defined
@@ -741,6 +742,42 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
     } else if (sender_timestamp == 0 && memcmp(command, "log", 3) == 0) {
       _callbacks->dumpLogFile();
       strcpy(reply, "   EOF");
+    // #395: serial-capture (caplog). Control + status are un-gated (bounded
+    // replies, reachable over the companion/authenticated channel — same class
+    // as the existing `set`/`ota`/`wifi` verbs, and required for the app flow
+    // where an operator enables capture over the companion link). The full
+    // `caplog dump` is local-console only (`sender_timestamp == 0`); the framed
+    // remote download is #396. Each verb carries a terminator check
+    // (`command[N] == 0 || ' '`) so a longer word (e.g. "caplog startle") is not
+    // swallowed and falls through to "Unknown command".
+    } else if (memcmp(command, "caplog start", 12) == 0 && (command[12] == 0 || command[12] == ' ')) {
+      uint8_t lvl = MLOG_DEBUG;
+      bool ok = true;
+      if (command[12] == ' ' && command[13] != 0) {
+        ok = meshLogLevelFromName(&command[13], &lvl);
+      }
+      if (!ok) {
+        strcpy(reply, "ERR: level = boot|error|debug|packet");
+      } else {
+        meshLogSetLevel(lvl);
+        meshLogSetEnabled(true);
+        snprintf(reply, 160, "caplog on (level %s)", meshLogLevelName(lvl));
+      }
+    } else if (memcmp(command, "caplog stop", 11) == 0 && (command[11] == 0 || command[11] == ' ')) {
+      meshLogSetEnabled(false);
+      strcpy(reply, "caplog off");
+    } else if (memcmp(command, "caplog erase", 12) == 0 && (command[12] == 0 || command[12] == ' ')) {
+      meshLogClear();
+      strcpy(reply, "caplog erased");
+    } else if (sender_timestamp == 0 && memcmp(command, "caplog dump", 11) == 0 && (command[11] == 0 || command[11] == ' ')) {
+      meshLogDumpSerial();
+      strcpy(reply, "   EOF");
+    } else if ((memcmp(command, "caplog status", 13) == 0 && (command[13] == 0 || command[13] == ' '))
+               || (memcmp(command, "caplog", 6) == 0 && command[6] == 0)) {
+      snprintf(reply, 160, "caplog: %s level=%s used=%u/%u",
+               meshLogIsEnabled() ? "on" : "off",
+               meshLogLevelName(meshLogGetLevel()),
+               (unsigned)meshLogBytesUsed(), (unsigned)meshLogCapacity());
     } else if (sender_timestamp == 0 && memcmp(command, "stats-packets", 13) == 0 && (command[13] == 0 || command[13] == ' ')) {
       _callbacks->formatPacketStatsReply(reply);
     } else if (sender_timestamp == 0 && memcmp(command, "stats-radio", 11) == 0 && (command[11] == 0 || command[11] == ' ')) {
