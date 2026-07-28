@@ -1,0 +1,54 @@
+Excellent. Here is the requested adversarial review.
+
+### Summary of Critical Flaws
+
+The design is plausible but contains three high-severity flaws that could lead to deadlocks, crashes, or data corruption:
+1.  **Concurrency Hazard (§1, §2):** The `mesh_log_line()` sink lacks a specified ISR-safe guard model. If called from an ISR context (e.g., a BLE event handler or timer) while the main loop holds a lock, it will deadlock the device.
+2.  **Download Race Condition (§3):** The download mechanism does not define how it will handle the capture buffer being actively written to during a read, leading to a race condition that could send corrupted or incomplete data.
+3.  **Memory Pressure / Allocation (§5):** An 8–16 KB buffer on nRF52 is a significant portion of available RAM. The design does not specify a static vs. dynamic allocation strategy; dynamic allocation of this size is a high risk for heap fragmentation and allocation failure.
+
+---
+
+### 1. Correctness / Feasibility Flaws
+
+- **[HIGH] Concurrency/Reentrancy Hazard in `mesh_log_line()`:** §4.1 states the sink will "mirror CrashLog's guard model." The `CrashLog` model may not be sufficient. `mesh_log_line()` will be called from diverse contexts: the main loop (`Dispatcher`), potentially BLE callbacks (which can run at a high interrupt priority on nRF52), and potentially other ISRs. If the guard is a simple mutex, a call from an ISR while the main loop holds the lock will cause a hard fault or deadlock. The design *must* specify an ISR-safe critical section (`taskENTER_CRITICAL_FROM_ISR` / `portDISABLE_INTERRUPTS` or equivalent) for buffer manipulation.
+- **[HIGH] Boot-Time Race Condition:** §4.1 states "boot lines" will be routed through the sink. If the `CaptureBuffer` is allocated dynamically (e.g., `new` or `malloc` in `setup()`), early boot messages from the core Arduino or pre-`setup()` constructors will call the sink before the buffer exists, causing a null pointer dereference and a crash. The buffer must be statically allocated or the sink must gracefully handle calls before the buffer is initialized.
+- **[LOW] Incomplete Eviction Logic:** §6 mentions "Oldest-line eviction." Ring buffers must handle cases where a new line is larger than the oldest line(s) it needs to overwrite. A naive single-line eviction could fail or corrupt the buffer if the new log entry is larger than the single oldest entry. The eviction logic must be prepared to discard multiple old lines to make space for one new large one.
+
+### 2. The Tee Sink
+
+- **[HIGH] Concurrency/Reentrancy (see §1):** Re-stating here as it's the primary flaw of the sink itself. A non-reentrant sink is not viable. The performance target of 5-15 µs/line (§4.1) is irrelevant if the device deadlocks.
+- **[MEDIUM] Stack Overflow Risk:** The design routes `MESH_DEBUG_PRINTLN` through the sink. This macro expands to `Serial.printf`. If `mesh_log_line()` itself uses `sprintf` or similar variadic functions to format a timestamp or prefix, it creates a risk of significant stack consumption, especially for long log lines. The sink's implementation must be stack-frugal, ideally just performing a `memcpy` of a pre-formatted string.
+- **[LOW] Brittle Corruption Guard:** The live mirror gate `defined(BLE_PIN_CODE) || defined(SERIAL_RX)` (§3.3) is a proxy for "is `Serial` used for the app protocol?". This is brittle. A future variant could use `Serial` for the protocol without defining either of these macros, re-introducing the corruption bug. A more robust method would be to have the `RadioInterface` implementation itself provide a trait like `isConsoleSharedWithProtocol()`.
+
+### 3. Download Contract
+
+- **[HIGH] Active-Write Race Condition:** §7 describes the `CMD_GET_CAPLOG` exchange but omits a critical detail: what happens if new lines are logged to the ring buffer *while* the download is in progress? This is a race condition. Reading the buffer for chunking while another task/ISR is writing to it will lead to inconsistent head/tail pointers and result in a corrupted, duplicated, or truncated log file. The download process must either:
+    1. Lock the buffer for the entire duration (unacceptable; would block all logging).
+    2. Atomically copy the entire buffer's content to a temporary "snapshot" buffer and download from the snapshot. This has memory implications.
+    3. Use a more complex, atomic, chunk-by-chunk read protocol that can safely race with writes.
+- **[MEDIUM] Missing Flow Control:** The START/CHUNK/END protocol (§7) has no acknowledgment or flow control. A fast MCU could easily overwhelm the BLE buffers of a companion app on a noisy connection, leading to packet loss and a failed download. A simple delay between chunks or a windowed ACK protocol is needed.
+
+### 4. The Store Decision
+
+The prompt requires arguing *against* the chosen split.
+The decision in §4.2 to create a separate plain-RAM ring is a premature optimization that prioritizes a specific nRF52 hardware bug over architectural simplicity.
+
+1.  **Increased Complexity:** The split introduces two log buffers, two control mechanisms, and two retrieval paths. This complicates the firmware, the companion app, and developer reasoning. A user experiencing a crash during a debug session now needs to retrieve two separate logs. A unified system is simpler to manage and use.
+2.  **Solves the Wrong Problem:** The primary justification is the nRF52's `.noinit` failure on watchdog reset. This is a platform-specific bug. A better long-term solution is to fix or work around the nRF52 retention issue (e.g., by using the UICR or other non-volatile storage for a "dirty" flag, and having the bootloader cooperate) rather than bifurcating a core logging architecture for all platforms. The current design lets a temporary hardware flaw dictate permanent software architecture.
+3.  **Lost Opportunity for Cohesion:** If a device crashes, the most valuable data is the sequence of events *leading up to* the crash. By separating the live log from the crash breadcrumbs, this direct timeline is fractured. A single, larger, retained ring buffer would preserve this context seamlessly. The 4 KB limit for `CrashLog` is arbitrary; it could be made larger or configurable, serving both purposes.
+
+### 5. Sizing / Memory
+
+- **[HIGH] nRF52 Heap Risk:** An 8–16 KB buffer (§4.2) is dangerously large for the nRF52's limited RAM, where the SoftDevice and application code can leave less than 64 KB of heap. The design fails to specify an allocation strategy. A dynamic `malloc` is almost certain to fail or cause severe heap fragmentation. A static allocation permanently removes this memory from the system, potentially breaking other features. This is the most significant feasibility risk on nRF52.
+- **[MEDIUM] "File spill" is not a simple fallback:** The design hand-waves file spill as an optional follow-up (§4.2, §10). On-device filesystems add significant complexity, flash wear, and performance overhead. Treating this as a simple add-on underestimates the work required and means the initial, high-risk, memory-only implementation will ship first.
+
+### 6. Security
+
+- **[MEDIUM] Relies on Discipline, Not Mechanism:** §8 states secrets "must never reach the sink" and relies on "existing ... discipline." This is a policy, not a control. A single developer error (`MESH_DEBUG_PRINTLN("PSK: %s", key)`) will cause a secret to be persisted in a user-shareable file. A safer design would involve a specific, clearly named logging function for sensitive data (`MESH_SECRET_PRINTLN`) that is programmatically disabled or redacted by the `mesh_log_line` sink, providing a mechanical guardrail against accidental leaks.
+
+### 7. Anything the design missed
+
+- **Log Timestamps:** The design does not specify if log lines will be timestamped. Raw console output lacks timing context. To be useful for diagnostics, `mesh_log_line()` must prepend every line with a consistent timestamp (e.g., `millis()` since boot).
+- **Runtime Verbosity Filter:** The "Open decision" D2 (§5.4) about runtime verbosity is critical. Without it, the feature is of limited use on stock builds (§3.2). The design should treat a runtime verbosity filter as a core requirement, not an open question. The implementation should be a simple bitmask or level check against which log messages are tagged, avoiding complex string parsing in the hot path.
+- **Failure Mode Communication:** The buffer is "live-only" (§4.2). If the device resets for any reason, the capture is lost. The UI/UX in the companion app must make this limitation extremely clear to the user to manage expectations, otherwise it will be perceived as a bug.
