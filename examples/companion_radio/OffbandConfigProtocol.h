@@ -120,10 +120,33 @@ enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUT
 // alone cannot tell an observer-out build from an observer-in one, so the client
 // gates the WHOLE command -- every key, display included -- on WIFI_OBSERVER_SUPPORT
 // (in addition to FIRMWARE_VER_CODE >= 14). There is NO display-without-observer path.
+// === CANONICAL offband_caps BIT ALLOCATION -- SINGLE SOURCE OF TRUTH ===========
+// Firmware OWNS this byte (the client mirrors it, gated per #304). Before claiming
+// a bit, CHECK THIS TABLE -- not just the constants defined below. In-flight bits
+// live on UNMERGED branches, so grepping firmware-base shows fewer bits than are
+// actually reserved. That gap caused the #427-vs-#365 0x08 double-claim; this table
+// closes it. When you reserve a bit, record it HERE (with its issue) in the SAME PR
+// and Agent-Mail the reservation so parallel sessions see it.
+//
+//   bit  value  symbol                        state       issue
+//   ---  -----  ----------------------------  ----------  --------------------------
+//    0   0x01   OFFBAND_CAP_WIFI_OBSERVER     merged      (F4)
+//    1   0x02   OFFBAND_CAP_BLOCK             merged      #241
+//    2   0x04   OFFBAND_CAP_FEM_LNA           merged      #298
+//    3   0x08   OFFBAND_CAP_WIFI_COMPANION    RESERVED    #365 (in-flight, unmerged) -- DO NOT REUSE
+//    4   0x10   (display-config)              RESERVED    owner, in-flight -- DO NOT REUSE
+//    5   0x20   OFFBAND_CAP_CAPLOG            this change  #427 (#396/#417)
+//    6   0x40   -- free --
+//    7   0x80   -- free --
+//   (GPS has NO bit: client uses a loose "any Offband v14+ radio speaks 0xC1"
+//    presence-gate until firmware defines one. If added, take 0x40.)
+// ===============================================================================
 constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: config backend (wifi_observer) compiled in
 constexpr uint8_t OFFBAND_CAP_BLOCK         = 0x02;  // bit 1: user-block list (BlockStore) compiled in (#241)
 constexpr uint8_t OFFBAND_CAP_FEM_LNA       = 0x04;  // bit 2: FEM LNA runtime control available (#298)
-constexpr uint8_t OFFBAND_CAP_CAPLOG        = 0x08;  // bit 3: serial-capture (caplog) available (#427; #396/#417)
+// bit 3 (0x08) RESERVED for OFFBAND_CAP_WIFI_COMPANION (#365, unmerged) -- not defined here to avoid a stub collision
+// bit 4 (0x10) RESERVED for display-config (owner, in-flight)
+constexpr uint8_t OFFBAND_CAP_CAPLOG        = 0x20;  // bit 5: serial-capture (caplog) available (#427; #396/#417). Moved off 0x08 -- collided with #365 WIFI_COMPANION.
 
 // Block-list sync (fork command 0xC2; companion-API only, NEVER on the mesh -- the
 // block list is receive-side only and changes no forwarding/relay/advert path,
