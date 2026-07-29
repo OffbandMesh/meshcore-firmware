@@ -27,6 +27,7 @@ platformio.local.ini
 *.elf
 *.map
 build-logs/
+debug_logs/
 
 # Python bytecode (host tests + script imports under scripts/)
 __pycache__/
