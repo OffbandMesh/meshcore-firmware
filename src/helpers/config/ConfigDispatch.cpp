@@ -40,22 +40,41 @@ bool g_warned_empty;
 // correct build this is 0 forever.
 int g_overlap_count;
 
-// Two key-prefixes "collide" if one is a prefix of the other -- i.e. there is at
-// least one key string both would claim. Equal strings collide (min length is
-// their shared length). Empty strings are treated as non-colliding: a "" prefix
-// would claim everything, which is never a legitimate manifest entry, so we do
-// not let it force-collide with all keys.
+// Manifest-entry convention (#366 review MINOR-3): an entry ENDING in '.' is a
+// PREFIX (claims every key starting with it, e.g. "wifi." -> wifi.ssid/wifi.pwd);
+// an entry NOT ending in '.' is an EXACT leaf key (e.g. "mqtt.iata"). Two entries
+// collide iff some key string would be claimed by both:
+//   - prefix P vs anything X : collide iff X starts with P
+//   - leaf  L vs leaf L2      : collide iff L == L2
+// This avoids the false positive of a leaf "mqtt.iata" shadowing an unrelated
+// "mqtt.iata_x". Empty strings never collide (a "" prefix would claim all keys,
+// which is never a legitimate manifest entry).
 bool prefixesCollide(const char* a, const char* b) {
     if (a == nullptr || b == nullptr || a[0] == '\0' || b[0] == '\0') return false;
     size_t la = strlen(a), lb = strlen(b);
-    size_t n = la < lb ? la : lb;
-    return strncmp(a, b, n) == 0;
+    bool a_prefix = a[la - 1] == '.';
+    bool b_prefix = b[lb - 1] == '.';
+    if (a_prefix && strncmp(b, a, la) == 0) return true;   // b starts with prefix a
+    if (b_prefix && strncmp(a, b, lb) == 0) return true;   // a starts with prefix b
+    if (!a_prefix && !b_prefix) return strcmp(a, b) == 0;  // leaf vs leaf: exact only
+    return false;
 }
 
-// #366: on registration, warn LOUDLY (every target) if the incoming provider's
-// prefixes overlap any already-registered provider's -- the silent
-// first-provider-wins shadow otherwise. Diagnostic only; registration proceeds.
-void warnOnOverlap(const char* new_role,
+// #366: detected collisions are STORED here and printed LAZILY at first dispatch
+// (review BLOCKER-1). registerProvider runs during static init -- before
+// Serial.begin() -- so printing there is unreliable/lost on ESP32 + nRF52. The
+// count still increments at registration (so a host test can assert immediately);
+// the human-visible diagnostic is flushed once, on the first dispatchSet/Get,
+// when Serial is up. Same deferral pattern as warnIfNoProvider below.
+const int kMaxStoredOverlaps = 4;
+struct OverlapRecord { const char* role_a; const char* pfx_a;
+                       const char* role_b; const char* pfx_b; };
+OverlapRecord g_overlaps[kMaxStoredOverlaps];
+int  g_overlaps_stored = 0;
+bool g_overlaps_flushed = false;
+
+// Called from registration (static-init safe: only touches ints/pointers).
+void detectOverlap(const char* new_role,
                    const char* const* new_prefixes, int new_count) {
     if (new_prefixes == nullptr || new_count <= 0) return;
     for (int i = 0; i < new_count; ++i) {
@@ -65,19 +84,40 @@ void warnOnOverlap(const char* new_role,
                 const char* ep = g_providers[p].prefixes[j];
                 if (!prefixesCollide(np, ep)) continue;
                 ++g_overlap_count;
-                const char* er = g_providers[p].role ? g_providers[p].role : "?";
-                const char* nr = new_role ? new_role : "?";
-#ifdef ARDUINO
-                Serial.printf("ERROR: config key-space OVERLAP: '%s' (role %s) "
-                              "collides with '%s' (role %s) -- one silently "
-                              "shadows the other (#366)\n", np, nr, ep, er);
-#else
-                fprintf(stderr, "ERROR: config key-space OVERLAP: '%s' (role %s) "
-                        "collides with '%s' (role %s) -- one silently shadows "
-                        "the other (#366)\n", np, nr, ep, er);
-#endif
+                if (g_overlaps_stored < kMaxStoredOverlaps) {
+                    g_overlaps[g_overlaps_stored++] = {
+                        new_role ? new_role : "?", np,
+                        g_providers[p].role ? g_providers[p].role : "?", ep };
+                }
             }
         }
+    }
+}
+
+// Flush stored overlap diagnostics once, at runtime (Serial up). Latched.
+void flushOverlapWarnings() {
+    if (g_overlaps_flushed || g_overlap_count == 0) return;
+    g_overlaps_flushed = true;
+    for (int i = 0; i < g_overlaps_stored; ++i) {
+        const OverlapRecord& o = g_overlaps[i];
+#ifdef ARDUINO
+        Serial.printf("ERROR: config key-space OVERLAP: '%s' (role %s) collides "
+                      "with '%s' (role %s) -- one silently shadows the other "
+                      "(#366)\n", o.pfx_a, o.role_a, o.pfx_b, o.role_b);
+#else
+        fprintf(stderr, "ERROR: config key-space OVERLAP: '%s' (role %s) collides "
+                "with '%s' (role %s) -- one silently shadows the other (#366)\n",
+                o.pfx_a, o.role_a, o.pfx_b, o.role_b);
+#endif
+    }
+    if (g_overlap_count > g_overlaps_stored) {
+#ifdef ARDUINO
+        Serial.printf("ERROR: config overlap: %d more collision(s) not shown "
+                      "(#366)\n", g_overlap_count - g_overlaps_stored);
+#else
+        fprintf(stderr, "ERROR: config overlap: %d more collision(s) not shown "
+                "(#366)\n", g_overlap_count - g_overlaps_stored);
+#endif
     }
 }
 
@@ -103,8 +143,10 @@ bool registerProvider(SetFn set_fn, GetFn get_fn, const char* role_name,
                       const char* const* key_prefixes, int prefix_count) {
     if (set_fn == nullptr && get_fn == nullptr) return false;
     // #366: check overlap against already-registered providers BEFORE adding
-    // this one, so it never compares against itself.
-    warnOnOverlap(role_name, key_prefixes, prefix_count);
+    // this one, so it never compares against itself. Stores records + bumps the
+    // count here (static-init safe); the human-visible diagnostic is flushed at
+    // first dispatch (Serial up).
+    detectOverlap(role_name, key_prefixes, prefix_count);
     if (g_count >= kMaxProviders) {
         // Loud on every target: a role silently dropped here loses its whole
         // config surface (#364 review MAJOR-1).
@@ -135,6 +177,7 @@ bool dispatchSet(const char* key, const char* value, char* reply, size_t reply_s
     if (key == nullptr || value == nullptr || reply == nullptr || reply_size == 0) return false;
     reply[0] = '\0';
     warnIfNoProvider("set");
+    flushOverlapWarnings();   // #366: emit any registration-time collisions now (Serial up)
     for (int i = 0; i < g_count; ++i) {
         if (g_providers[i].set_fn == nullptr) continue;
         if (g_providers[i].set_fn(key, value, reply, reply_size)) return true;
@@ -146,6 +189,7 @@ bool dispatchGet(const char* key, char* reply, size_t reply_size) {
     if (key == nullptr || reply == nullptr || reply_size == 0) return false;
     reply[0] = '\0';
     warnIfNoProvider("get");
+    flushOverlapWarnings();   // #366: emit any registration-time collisions now (Serial up)
     for (int i = 0; i < g_count; ++i) {
         if (g_providers[i].get_fn == nullptr) continue;
         if (g_providers[i].get_fn(key, reply, reply_size)) return true;

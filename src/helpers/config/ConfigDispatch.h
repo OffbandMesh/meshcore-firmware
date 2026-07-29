@@ -70,22 +70,24 @@ static const int kMaxProviders = 4;
 
 // Register a role's provider.
 //   role_name    : static string, diagnostics only.
-//   key_prefixes : static array of the key strings/prefixes this provider's
-//                  if-chain claims (e.g. observer = {"mqtt.iata","mqtt.broker.",
-//                  "wifi.", ...}). A key is "claimed" if it starts with any
-//                  entry. Exact leaf keys are given verbatim (safe as prefixes:
-//                  dotted config keys are never strict extensions of a leaf).
+//   key_prefixes : static array of the keys this provider claims. CONVENTION:
+//                  an entry ENDING in '.' is a PREFIX ("wifi." claims wifi.ssid,
+//                  wifi.pwd, ...); an entry NOT ending in '.' is an EXACT leaf
+//                  key ("mqtt.iata"). See prefixesCollide in the .cpp.
 //   prefix_count : entries in key_prefixes (0 + nullptr allowed, but then this
 //                  provider is EXEMPT from overlap detection -- discouraged).
 // Returns false if the table is full (SAFELANE 6: the caller must not ignore).
 //
-// OVERLAP DETECTION (#366): at registration, every prefix is checked against
-// each already-registered provider's prefixes. If one is a prefix of the other
-// (i.e. some key would be claimed by both), a LOUD diagnostic naming both roles
-// and the colliding entries is emitted on every target (Serial / stderr). This
-// converts the silent first-provider-wins shadow (the `wifi.` vs `wifi.mode`
-// trap #301 would hit) into a visible boot-time error. Registration still
-// proceeds -- the diagnostic is the signal; it does not change dispatch.
+// OVERLAP DETECTION (#366): at registration, this provider's entries are checked
+// against each already-registered provider's. A collision (some key both would
+// claim -- e.g. observer's `wifi.` prefix vs a repeater's `wifi.mode` leaf, the
+// #301 trap) bumps overlapWarningCount() immediately AND stores a record. The
+// human-visible LOUD diagnostic (Serial / stderr, naming both roles + entries)
+// is emitted LAZILY on the first dispatchSet/dispatchGet -- NOT at registration,
+// which runs during static init before Serial.begin() (review BLOCKER-1). This
+// converts the silent first-provider-wins shadow into a visible error without
+// depending on unready hardware. Registration still proceeds; dispatch is
+// unchanged -- the diagnostic is only a signal.
 bool registerProvider(SetFn set_fn, GetFn get_fn, const char* role_name,
                       const char* const* key_prefixes, int prefix_count);
 
