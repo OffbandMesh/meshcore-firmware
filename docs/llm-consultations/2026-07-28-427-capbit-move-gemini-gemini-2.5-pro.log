@@ -1,0 +1,13 @@
+This change is unsound due to a versioning contract violation.
+
+1.  **Correctness of `0x20`:**
+    *   `OffbandConfigProtocol.h`, line 144: **Correct**. `0x20` is the next free bit after accounting for `0x01`-`0x04` (used) and `0x08`-`0x10` (reserved). The logic is sound.
+
+2.  **Hard-coded values:**
+    *   **None found**. The change correctly modifies the `constexpr` symbol `OFFBAND_CAP_CAPLOG`. Assuming the rest of the codebase (e.g., `MyMesh.cpp`) uses this symbol, no masking errors exist in this diff.
+
+3.  **`FIRMWARE_VER_CODE`:**
+    *   `MyMesh.h`, line 5: **Medium Severity**. Leaving `FIRMWARE_VER_CODE` at 17 is incorrect. It breaks the protocol contract for this version. A client built for the previous v17 expects the caplog bit at `0x08` and will fail to detect the feature on this firmware, leading to silent negotiation failure. A change in the semantic meaning of a field is a breaking protocol change and requires a version bump to 18. The argument that frame *layout* is unchanged is irrelevant; the contract for what v17 *means* has changed.
+
+4.  **Canonical Map Comment:**
+    *   `OffbandConfigProtocol.h`, lines 128-142: **Sound**. The allocation table is accurate and a necessary process improvement that directly addresses the root cause of the collision. Reserving bits via a comment is an acceptable risk, as the table is prominent and its purpose is explicit.

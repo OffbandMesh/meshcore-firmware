@@ -5,7 +5,13 @@
 #include "AbstractUITask.h"
 
 /*------------ Frame Protocol --------------*/
-#define FIRMWARE_VER_CODE 17   // #427: + caplog cap bit (0x08) in device-info. Prior 16 (#298): FEM LNA cap 0x04 / 0xC3 / LNA state
+// FIRMWARE_VER_CODE is a MERGE-ORDERED monotonic contract number, not per-feature:
+// each in-flight branch that changes the device-info caps byte claims the NEXT code
+// AT MERGE, not at branch time. Do not assume a code from an unmerged branch is yours
+// -- check what has actually merged (same split-allocation trap as the cap bits; see
+// the canonical table in OffbandConfigProtocol.h). In-flight claimants after 17:
+// #365 WIFI_COMPANION (0x08) -> 18, display-config (0x10) -> 19, in merge order.
+#define FIRMWARE_VER_CODE 17   // #427: + caplog cap bit (0x20) in device-info. Prior 16 (#298): FEM LNA cap 0x04 / 0xC3 / LNA state
 
 #ifndef FIRMWARE_BUILD_DATE
 #define FIRMWARE_BUILD_DATE "6 Jun 2026"
