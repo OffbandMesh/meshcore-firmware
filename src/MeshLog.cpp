@@ -130,10 +130,18 @@ void mesh_log_line(uint8_t level, const char* fmt, ...) {
   g_ring.append(reinterpret_cast<const uint8_t*>(line), total);
   MLOG_EXIT();
 
-  // Live serial mirror (#411) -- outside the lock, since Serial writes can block.
-  // Only where the console is free of the framed protocol (g_meshLogMirror); a
-  // USB-serial companion keeps this false so nothing raw hits its protocol line.
-  if (g_meshLogMirror) {
+  // Live serial mirror (#411) -- outside the lock. Only where the console is free
+  // of the framed protocol (g_meshLogMirror); a USB-serial companion keeps this
+  // false so nothing raw hits its protocol line.
+  //
+  // #447: the mirror MUST be non-blocking. A plain Serial.write() blocks when the
+  // TX buffer fills with no reader (USB-CDC plugged to a host with no monitor, or a
+  // saturated UART) -- on an Observer/repeater/BLE-companion (mirror ON) that stalls
+  // the main loop and drops WiFi/TCP/BLE. #428's boot auto-resume makes it fire at
+  // boot. So drop the mirror line when the TX buffer can't take it in full: the
+  // capture ring already holds it (append above), so the downloadable capture is
+  // unaffected -- only the best-effort live echo is skipped under back-pressure.
+  if (g_meshLogMirror && Serial.availableForWrite() >= (int)total) {
     Serial.write(reinterpret_cast<const uint8_t*>(line), total);
   }
 }
