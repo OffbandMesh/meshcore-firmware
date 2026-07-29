@@ -68,13 +68,33 @@ typedef bool (*GetFn)(const char* key, char* reply, size_t reply_size);
 // precedent in ObserverCli.h).
 static const int kMaxProviders = 4;
 
-// Register a role's provider. `role_name` is a static string used only in
-// diagnostics. Returns false if the table is full (SAFELANE 6: the caller must
-// not ignore this).
-bool registerProvider(SetFn set_fn, GetFn get_fn, const char* role_name);
+// Register a role's provider.
+//   role_name    : static string, diagnostics only.
+//   key_prefixes : static array of the key strings/prefixes this provider's
+//                  if-chain claims (e.g. observer = {"mqtt.iata","mqtt.broker.",
+//                  "wifi.", ...}). A key is "claimed" if it starts with any
+//                  entry. Exact leaf keys are given verbatim (safe as prefixes:
+//                  dotted config keys are never strict extensions of a leaf).
+//   prefix_count : entries in key_prefixes (0 + nullptr allowed, but then this
+//                  provider is EXEMPT from overlap detection -- discouraged).
+// Returns false if the table is full (SAFELANE 6: the caller must not ignore).
+//
+// OVERLAP DETECTION (#366): at registration, every prefix is checked against
+// each already-registered provider's prefixes. If one is a prefix of the other
+// (i.e. some key would be claimed by both), a LOUD diagnostic naming both roles
+// and the colliding entries is emitted on every target (Serial / stderr). This
+// converts the silent first-provider-wins shadow (the `wifi.` vs `wifi.mode`
+// trap #301 would hit) into a visible boot-time error. Registration still
+// proceeds -- the diagnostic is the signal; it does not change dispatch.
+bool registerProvider(SetFn set_fn, GetFn get_fn, const char* role_name,
+                      const char* const* key_prefixes, int prefix_count);
 
 // Number of registered providers (diagnostics / tests).
 int providerCount();
+
+// #366: total key-space collisions detected across all registerProvider calls.
+// 0 in a correct build. Lets a regression test assert the detector fired.
+int overlapWarningCount();
 
 // Walk providers in registration order; first to claim `key` wins.
 // Returns false if NO provider claimed the key.
@@ -109,8 +129,9 @@ bool parseIndexedKey(const char* key, const char* prefix, int max_index,
 // regardless of translation-unit link order -- and it removes the "a new role
 // forgot to call registerProvider()" failure mode entirely.
 struct ProviderRegistrar {
-    ProviderRegistrar(SetFn set_fn, GetFn get_fn, const char* role_name) {
-        registerProvider(set_fn, get_fn, role_name);
+    ProviderRegistrar(SetFn set_fn, GetFn get_fn, const char* role_name,
+                      const char* const* key_prefixes, int prefix_count) {
+        registerProvider(set_fn, get_fn, role_name, key_prefixes, prefix_count);
     }
 };
 
