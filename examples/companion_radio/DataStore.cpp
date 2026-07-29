@@ -246,6 +246,12 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
     // (LNA ON) intact. A uint8 append is all-or-nothing, so there is no partial-read
     // hazard. Never insert a new field mid-sequence.
     file.read((uint8_t *)&_prefs.radio_fem_rxgain, sizeof(_prefs.radio_fem_rxgain));      // 137
+    // #428: caplog persistence, APPEND-ONLY after radio_fem_rxgain. Files written before
+    // #428 end at 138, so these short-read to EOF and leave the caller-set defaults
+    // (caplog OFF, DEBUG). Each is a uint8 all-or-nothing read. Keep these LAST; any new
+    // field goes after caplog_level. (NodePrefs offset map: ...137 fem, 138 enabled, 139 level.)
+    file.read((uint8_t *)&_prefs.caplog_enabled, sizeof(_prefs.caplog_enabled));          // 138
+    file.read((uint8_t *)&_prefs.caplog_level, sizeof(_prefs.caplog_level));              // 139
 
     file.close();
   }
@@ -288,6 +294,10 @@ void DataStore::savePrefs(const NodePrefs& _prefs, double node_lat, double node_
     file.write((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));     // 121
     // #298: APPEND-ONLY, must stay last -- see the matching note in loadPrefsInt().
     file.write((uint8_t *)&_prefs.radio_fem_rxgain, sizeof(_prefs.radio_fem_rxgain));      // 137
+    // #428: caplog persistence, APPEND-ONLY after radio_fem_rxgain -- must mirror the
+    // read order in loadPrefsInt() exactly. (offsets: 138 enabled, 139 level.)
+    file.write((uint8_t *)&_prefs.caplog_enabled, sizeof(_prefs.caplog_enabled));          // 138
+    file.write((uint8_t *)&_prefs.caplog_level, sizeof(_prefs.caplog_level));              // 139
 
     file.close();
   }
