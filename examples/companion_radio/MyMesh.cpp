@@ -2768,7 +2768,14 @@ void MyMesh::blockListDrain() {
 // being flooded. The ring is frozen (capture auto-stopped at START), so the
 // offset stream is stable. Snapshot returning 0 signals the buffer is exhausted.
 void MyMesh::caplogDrain() {
-  const size_t cap = (size_t)MAX_FRAME_SIZE - 2;   // [0]=code, [1]=sub-code
+  // #450: cap CHUNK data so the frame fits ONE BLE notification. A full
+  // MAX_FRAME_SIZE (176) frame does NOT fit BLE: the device negotiates MTU 176, so an
+  // ATT notification carries only MTU-3 = 173 bytes -- a 176-B frame is clipped to 173,
+  // dropping 3 data bytes per full chunk (only bites near-full downloads over BLE;
+  // serial/TCP have no ATT header). MAX_FRAME_SIZE-6 = 170 data (172-B frame) clears the
+  // 173 BLE limit with margin and matches the '+4 for transport codes' headroom baked
+  // into MAX_FRAME_SIZE. Fits BLE + TCP + serial.
+  const size_t cap = (size_t)MAX_FRAME_SIZE - 6;   // [0]=code, [1]=sub, -4 BLE ATT/transport headroom
   out_frame[0] = RESP_CODE_OFFBAND_CAPLOG;
   size_t n = meshLogSnapshot(&out_frame[2], cap, _caplog_off);
   if (n == 0) {                                    // buffer exhausted -> END
