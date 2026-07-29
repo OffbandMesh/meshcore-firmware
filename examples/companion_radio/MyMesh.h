@@ -5,7 +5,7 @@
 #include "AbstractUITask.h"
 
 /*------------ Frame Protocol --------------*/
-#define FIRMWARE_VER_CODE 16   // #298: + FEM LNA cap bit (0x04) / 0xC3 command / LNA state in device-info
+#define FIRMWARE_VER_CODE 17   // #427: + caplog cap bit (0x08) in device-info. Prior 16 (#298): FEM LNA cap 0x04 / 0xC3 / LNA state
 
 #ifndef FIRMWARE_BUILD_DATE
 #define FIRMWARE_BUILD_DATE "6 Jun 2026"

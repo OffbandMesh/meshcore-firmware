@@ -1,0 +1,28 @@
+This is a sound change.
+
+### Review
+
+1.  **Cap bit & Version (#427)**
+    *   **Correctness:** `OffbandConfigProtocol.h:126`: `0x08` is the next free bit after `0x04`, correctly defined.
+    *   **Unconditional Set:** `MyMesh.cpp:1630`: Setting `OFFBAND_CAP_CAPLOG` unconditionally is correct, justified by the comment that the feature is always compiled into the companion firmware.
+    *   **Version Bump:** `MyMesh.h:7`: A version bump from `16` to `17` is necessary and correct for a change in the device-info frame layout/capabilities.
+    *   **Client Compatibility:** No concerns. The version bump is the correct mechanism to signal the new capability bit to clients. A client aware of v17 will check the bit; an older client will (or should) ignore a version it doesn't recognize or handle it gracefully.
+    *   **Severity:** N/A (Correct)
+
+2.  **Packet Routing & Formatting (#431)**
+    *   **Faithful Reconstruction:** `Dispatcher.cpp:227-246`: The reconstructed `mesh_log_line` calls are faithful to the original multi-part `Serial.print` sequence for both RX and TX logs. The hash is correctly integrated into the RX line and correctly omitted from the TX line, matching the original logic.
+    *   **Buffer Size:** `Dispatcher.cpp:229`: `char hashhex[MAX_HASH_SIZE * 2 + 1];` is the correct size. `Utils::toHex` on `N` bytes produces `2*N` hex characters; the `+1` correctly accommodates the required NUL terminator for use with `%s`. With `MAX_HASH_SIZE=8`, this is `17` bytes, which is safe.
+    *   **Format/Args:** No mismatches. `%d` with `(int)` casts, `%s` for string literals and `getLogDateTime`, and `%02X` with `(unsigned)` for byte values are all correct and safe.
+    *   **Line Length/Truncation:** An estimated max line length is ~160 chars (`date`~23 + `RX...`~110 + `hash`~16 + `endpoints`~10). This is well under the 240-char sink truncation limit. The risk of truncating a line, let alone mid-hash, is negligible.
+    *   **Severity:** N/A (Correct)
+
+3.  **Hot Path Performance (#431)**
+    *   **Short-circuit:** `Dispatcher.cpp:227,344`: The `if (g_meshLogEnabled)` check is sufficient. C++ short-circuiting ensures that when the flag is false, the expensive operations within the block (`calculatePacketHash`, `Utils::toHex`, `getLogDateTime`, `snprintf` inside `mesh_log_line`) are not evaluated.
+    *   **Cost:** The performance impact when logging is disabled is a single boolean check per packet, which is negligible. `calculatePacketHash` is only called when needed.
+    *   **Severity:** N/A (Correct)
+
+4.  **Missed Items (#431)**
+    *   **Dead Code:** The retired `MESH_PACKET_LOGGING` compile-time gate is removed cleanly. No dead code is left behind.
+    *   **Includes:** The old code required `<Arduino.h>` for `Serial`. It's possible this include is no longer strictly necessary *for this specific feature* within `Dispatcher.cpp` if it was gated by `MESH_PACKET_LOGGING`. However, it's likely used elsewhere in the file. (Severity: **Trivial/Info**)
+    *   **`getLogDateTime`:** This function is called within the `if (g_meshLogEnabled)` block, along with the `mesh_log_line` sink. It is safe to assume their availability is linked. No issue.
+    *   **Severity:** N/A (Clean)
