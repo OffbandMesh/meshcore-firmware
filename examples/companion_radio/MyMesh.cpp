@@ -1061,6 +1061,12 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   // (before loadPrefs) so a prefs file written before the field existed short-reads to
   // EOF and leaves this default in place. No-op on boards without a controllable FEM.
   _prefs.radio_fem_rxgain = 1;
+
+  // #428: caplog persistence. Default OFF, DEBUG level. Set BEFORE loadPrefs so a prefs
+  // file written before these fields existed short-reads to EOF and leaves caplog OFF
+  // (a pre-#428 device must never spuriously auto-capture after an upgrade).
+  _prefs.caplog_enabled = 0;
+  _prefs.caplog_level = MLOG_DEBUG;
 }
 
 void MyMesh::begin(bool has_display) {
@@ -1110,6 +1116,18 @@ void MyMesh::begin(bool has_display) {
   _prefs.tx_power_dbm = constrain(_prefs.tx_power_dbm, -9, MAX_LORA_TX_POWER);
   _prefs.gps_enabled = constrain(_prefs.gps_enabled, 0, 1);  // Ensure boolean 0 or 1
   _prefs.gps_interval = constrain(_prefs.gps_interval, 0, 86400);  // Max 24 hours
+
+  // #428: restore caplog capture across reboot. Done here -- right after loadPrefs and
+  // as early as the persisted flag is knowable -- so the sink is live before the mesh /
+  // radio / interface boot diagnostics that follow, and they land in the capture ring.
+  // The ring itself is a static global (always allocated); only the enabled flag needs
+  // restoring. The pre-reboot ring is gone (plain-RAM non-retained); this captures the
+  // FRESH boot log forward, per #428. Level is clamped to a valid MLOG_* band.
+  _prefs.caplog_level = constrain(_prefs.caplog_level, MLOG_BOOT, MLOG_PACKET);
+  if (_prefs.caplog_enabled) {
+    meshLogSetLevel(_prefs.caplog_level);
+    meshLogSetEnabled(true);
+  }
 
 #ifdef BLE_PIN_CODE // 123456 by default
   if (_prefs.ble_pin == 0) {
@@ -1490,6 +1508,13 @@ void MyMesh::handleCmdFrame(size_t len) {
       uint8_t level = (len >= 3) ? cmd_frame[2] : (uint8_t)MLOG_DEBUG;
       meshLogSetLevel(level);
       meshLogSetEnabled(true);
+      // #428: persist enabled+level SYNCHRONOUSLY so a client "enable then reboot"
+      // sequence can't lose the flag -- by the time the reboot fires it's on disk, and
+      // MyMesh::begin() restores capture early on the next boot. Only ENABLE/DISABLE
+      // persist; the transient DOWNLOAD freeze (below) must not touch the stored flag.
+      _prefs.caplog_enabled = 1;
+      _prefs.caplog_level = level;
+      savePrefs();
       out_frame[0] = RESP_CODE_OFFBAND_CAPLOG; out_frame[1] = CAPLOG_RESP_ACK;
       out_frame[2] = CAPLOG_REQ_ENABLE; out_frame[3] = 1;
       _serial->writeFrame(out_frame, 4);
@@ -1497,6 +1522,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
     if (req == CAPLOG_REQ_DISABLE) {
       meshLogSetEnabled(false);
+      // #428: clear the persisted flag so capture does NOT auto-resume on the next boot.
+      _prefs.caplog_enabled = 0;
+      savePrefs();
       out_frame[0] = RESP_CODE_OFFBAND_CAPLOG; out_frame[1] = CAPLOG_RESP_ACK;
       out_frame[2] = CAPLOG_REQ_DISABLE; out_frame[3] = 1;
       _serial->writeFrame(out_frame, 4);

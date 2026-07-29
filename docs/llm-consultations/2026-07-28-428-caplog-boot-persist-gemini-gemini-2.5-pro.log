@@ -1,0 +1,41 @@
+An adversarial review of the proposed changes for feature #428 follows.
+
+The design appears sound and correctly implemented against the stated constraints. The identified potential failure modes have been addressed.
+
+1.  **Append-only correctness: Sound.**
+    -   **Severity: Info.**
+    -   The new fields `caplog_enabled` and `caplog_level` are appended last in the `NodePrefs` struct definition (NodePrefs.h:46-47).
+    -   `DataStore::savePrefs` writes them in that order at the end of the file (DataStore.cpp:295-296).
+    -   `DataStore::loadPrefsInt` reads them in the same order from the end of the file (DataStore.cpp:253-254).
+    -   The order is identical and strictly appended, satisfying the flat-file constraint. There is no offset or order mismatch.
+
+2.  **Backward-compat: Sound.**
+    -   **Severity: Info.**
+    -   The pre-load default pattern in `MyMesh::MyMesh` (MyMesh.cpp:1068-1069) correctly sets `_prefs.caplog_enabled = 0`.
+    -   For a pre-#428 prefs file ending at byte 138, the `file.read()` calls at DataStore.cpp:253 and 254 will short-read to EOF, return 0 bytes read, and leave the pre-set defaults untouched. This correctly ensures that upgraded devices do not spontaneously start capturing logs.
+    -   The hazard of a partial read is nil, as each `uint8_t` is handled by a separate, atomic `read()` call.
+
+3.  **Restore timing: Sound.**
+    -   **Severity: Info.**
+    -   The restore logic at MyMesh.cpp:1117 is placed correctly within `MyMesh::begin()`: it is immediately after `loadPrefs` and subsequent config sanitization.
+    -   The logging sink (`meshLog`) is a static global, guaranteeing it is constructed and available by the time `begin()` is called.
+    -   This placement is early enough to capture subsequent initialization logs for the mesh, radio, and interfaces, as intended. Logs emitted prior to this point (e.g., from static constructors or the `MyMesh` constructor) will be lost, which is an acceptable and typical trade-off.
+
+4.  **Persist points: Sound.**
+    -   **Severity: Info.**
+    -   The `ENABLE` handler correctly persists `enabled=1` and the provided level via `savePrefs()` (MyMesh.cpp:1505).
+    -   The `DISABLE` handler correctly persists `enabled=0` (MyMesh.cpp:1512).
+    -   The absence of `savePrefs()` calls in other caplog-related commands (like `DOWNLOAD` or `ERASE`, per the feature description) is correct. This ensures a reboot during a transient operation (e.g., a log download that temporarily disables the sink) will correctly restore the persisted capture state, not the transient one.
+
+5.  **Level handling: Sound.**
+    -   **Severity: Info.**
+    -   The `ENABLE` handler persists the raw, unclamped level from the client (MyMesh.cpp:1504).
+    -   The restore logic robustly clamps this value to the valid `[MLOG_BOOT, MLOG_PACKET]` range upon boot (MyMesh.cpp:1120).
+    -   This clamp-on-restore pattern is a robust defense against a buggy or malicious client persisting an invalid level, preventing undefined behavior in the logger.
+
+6.  **Anything missed: One minor, pre-existing issue noted.**
+    -   **Severity: Minor.**
+    -   **Flash-wear:** The use of `savePrefs()` on every `ENABLE` and `DISABLE` command (MyMesh.cpp:1505, 1512) writes the entire 140-byte preferences file to flash. While consistent with existing patterns in the codebase, this contributes to flash wear if a client toggles the feature rapidly. This is an acceptable architectural trade-off given the "no-arg MyMesh wrapper" constraint, but worth noting. The implementation is correct within that constraint.
+    -   No races are apparent. Defaults are set correctly before loading.
+
+**Conclusion:** The implementation is correct, safe, and adheres to the significant architectural constraints of the `NodePrefs` system.

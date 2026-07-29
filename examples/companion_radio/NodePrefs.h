@@ -41,4 +41,14 @@ struct NodePrefs {  // persisted to file
   uint8_t autoadd_max_hops;  // 0 = no limit, 1 = direct (0 hops), N = up to N-1 hops (max 64)
   char default_scope_name[31];
   uint8_t default_scope_key[16];
+  // #428: caplog (serial-capture) persistence across reboot. When caplog_enabled,
+  // boot restores the sink at caplog_level early in MyMesh::begin() so the boot log
+  // is captured (Start -> reboot -> keeps capturing until Stop). Like radio_fem_rxgain,
+  // these are serialized LAST in DataStore (offsets 138/139), NOT next to the fields
+  // above -- the prefs file is a flat offset-tracked stream with no version/CRC, so new
+  // fields MUST be appended at the end or they shift every field after them and corrupt
+  // saved config on already-deployed devices. Only the FLAG persists; the capture ring
+  // stays plain-RAM non-retained (empty after reboot, fills with the fresh boot log).
+  uint8_t caplog_enabled;    // 0 = off, 1 = capture-on-boot until an explicit Stop
+  uint8_t caplog_level;      // MLOG_* level to restore (0=boot..3=packet); default DEBUG(2)
 };
