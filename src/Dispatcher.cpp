@@ -216,24 +216,29 @@ void Dispatcher::checkRecv() {
     }
   }
   if (pkt) {
-    #if MESH_PACKET_LOGGING
-    Serial.print(getLogDateTime());
-    Serial.printf(": RX, len=%d (type=%d, route=%s, payload_len=%d) SNR=%d RSSI=%d score=%d time=%d", 
-            pkt->getRawLength(), pkt->getPayloadType(), pkt->isRouteDirect() ? "D" : "F", pkt->payload_len,
-            (int)pkt->getSNR(), (int)_radio->getLastRSSI(), (int)(score*1000), air_time);
-
-    static uint8_t packet_hash[MAX_HASH_SIZE];
-    pkt->calculatePacketHash(packet_hash);
-    Serial.print(" hash=");
-    mesh::Utils::printHex(Serial, packet_hash, MAX_HASH_SIZE);
-
-    if (pkt->getPayloadType() == PAYLOAD_TYPE_PATH || pkt->getPayloadType() == PAYLOAD_TYPE_REQ
-        || pkt->getPayloadType() == PAYLOAD_TYPE_RESPONSE || pkt->getPayloadType() == PAYLOAD_TYPE_TXT_MSG) {
-      Serial.printf(" [%02X -> %02X]\n", (uint32_t)pkt->payload[1], (uint32_t)pkt->payload[0]);
-    } else {
-      Serial.printf("\n");
+    // #431: packet RX line routed through the serial-capture sink at MLOG_PACKET,
+    // gated at runtime by g_meshLogEnabled (retired the #if MESH_PACKET_LOGGING
+    // compile gate). Captured only at `caplog start packet`; short-circuits when off.
+    if (g_meshLogEnabled) {
+      static uint8_t packet_hash[MAX_HASH_SIZE];
+      pkt->calculatePacketHash(packet_hash);
+      char hashhex[MAX_HASH_SIZE * 2 + 1];
+      mesh::Utils::toHex(hashhex, packet_hash, MAX_HASH_SIZE);
+      uint8_t pt = pkt->getPayloadType();
+      if (pt == PAYLOAD_TYPE_PATH || pt == PAYLOAD_TYPE_REQ
+          || pt == PAYLOAD_TYPE_RESPONSE || pt == PAYLOAD_TYPE_TXT_MSG) {
+        mesh_log_line(MLOG_PACKET,
+          "%s: RX, len=%d (type=%d, route=%s, payload_len=%d) SNR=%d RSSI=%d score=%d time=%d hash=%s [%02X -> %02X]\n",
+          getLogDateTime(), pkt->getRawLength(), pt, pkt->isRouteDirect() ? "D" : "F", pkt->payload_len,
+          (int)pkt->getSNR(), (int)_radio->getLastRSSI(), (int)(score * 1000), air_time, hashhex,
+          (unsigned)pkt->payload[1], (unsigned)pkt->payload[0]);
+      } else {
+        mesh_log_line(MLOG_PACKET,
+          "%s: RX, len=%d (type=%d, route=%s, payload_len=%d) SNR=%d RSSI=%d score=%d time=%d hash=%s\n",
+          getLogDateTime(), pkt->getRawLength(), pt, pkt->isRouteDirect() ? "D" : "F", pkt->payload_len,
+          (int)pkt->getSNR(), (int)_radio->getLastRSSI(), (int)(score * 1000), air_time, hashhex);
+      }
     }
-    #endif
     logRx(pkt, pkt->getRawLength(), score);   // hook for custom logging
 
     if (pkt->isRouteFlood()) {
@@ -337,17 +342,19 @@ void Dispatcher::checkSend() {
       }
       outbound_expiry = futureMillis(max_airtime);
 
-    #if MESH_PACKET_LOGGING
-      Serial.print(getLogDateTime());
-      Serial.printf(": TX, len=%d (type=%d, route=%s, payload_len=%d)", 
-            len, outbound->getPayloadType(), outbound->isRouteDirect() ? "D" : "F", outbound->payload_len);
-      if (outbound->getPayloadType() == PAYLOAD_TYPE_PATH || outbound->getPayloadType() == PAYLOAD_TYPE_REQ
-        || outbound->getPayloadType() == PAYLOAD_TYPE_RESPONSE || outbound->getPayloadType() == PAYLOAD_TYPE_TXT_MSG) {
-        Serial.printf(" [%02X -> %02X]\n", (uint32_t)outbound->payload[1], (uint32_t)outbound->payload[0]);
+    // #431: packet TX line -> sink at MLOG_PACKET, runtime-gated (see RX above).
+    if (g_meshLogEnabled) {
+      uint8_t pt = outbound->getPayloadType();
+      if (pt == PAYLOAD_TYPE_PATH || pt == PAYLOAD_TYPE_REQ
+          || pt == PAYLOAD_TYPE_RESPONSE || pt == PAYLOAD_TYPE_TXT_MSG) {
+        mesh_log_line(MLOG_PACKET, "%s: TX, len=%d (type=%d, route=%s, payload_len=%d) [%02X -> %02X]\n",
+          getLogDateTime(), len, pt, outbound->isRouteDirect() ? "D" : "F", outbound->payload_len,
+          (unsigned)outbound->payload[1], (unsigned)outbound->payload[0]);
       } else {
-        Serial.printf("\n");
+        mesh_log_line(MLOG_PACKET, "%s: TX, len=%d (type=%d, route=%s, payload_len=%d)\n",
+          getLogDateTime(), len, pt, outbound->isRouteDirect() ? "D" : "F", outbound->payload_len);
       }
-    #endif
+    }
     }
   }
 }

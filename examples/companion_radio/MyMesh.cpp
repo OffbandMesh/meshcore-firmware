@@ -1627,6 +1627,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     // which FEM chip the runtime probe found, so two V4s can legitimately differ.
     // Deriving the bit from the board keeps the client off model/version guessing.
     if (board.canControlLoRaFemLna()) offband_caps |= offband::OFFBAND_CAP_FEM_LNA;
+    offband_caps |= offband::OFFBAND_CAP_CAPLOG;  // #427: caplog is always compiled into the companion
     out_frame[i++] = offband_caps;           // v14+
     // #298: current FEM LNA state (v16+), so the client renders the toggle on connect
     // without a 0xC3 GET round trip. Appended UNCONDITIONALLY -- the frame layout must
