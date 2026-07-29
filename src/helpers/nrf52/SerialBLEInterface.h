@@ -69,6 +69,10 @@ public:
   bool isWriteBusy() const override;
   size_t writeFrame(const uint8_t src[], size_t len) override;
   size_t checkRecvFrame(uint8_t dest[]) override;
+
+  // #453: BLE deliverable frame = negotiated ATT MTU - 3 (ATT notify header),
+  // never above MAX_FRAME_SIZE. Queried live from the active connection.
+  size_t maxFrameSize() const override;
 };
 
 #if BLE_DEBUG_LOGGING && ARDUINO

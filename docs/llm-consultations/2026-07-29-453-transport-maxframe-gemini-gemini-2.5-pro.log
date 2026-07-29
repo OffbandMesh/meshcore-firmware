@@ -1,0 +1,32 @@
+This is a sound design, but the implementation has a critical underflow vulnerability and is incomplete.
+
+1.  **Correctness of `maxFrameSize()` overrides:** **Correct.**
+    *   **`helpers/esp32/SerialBLEInterface.h:101`, `helpers/nrf52/SerialBLEInterface.cpp:287`**: The `-3` math is correct for the ATT notification header. The `min(mtu, MAX_FRAME_SIZE)` logic, implemented as a ternary, is also correct.
+    *   **`...:102`, `...:288`**: The explicit `mtu > 3 ? ... : 0` check correctly prevents unsigned underflow *within* the `maxFrameSize()` method itself. This is robust.
+    *   The fallback to a default MTU of 23 when not connected is correct, yielding a safe minimum payload size of 20.
+
+2.  **ESP32 MTU caching:** **Correct, with a minor suggestion.**
+    *   The use of `onConnect` and `onMTUChange` is sufficient to establish a correct MTU by the time a companion-driven drain would run. The connection and MTU negotiation precede the command.
+    *   The `uint16_t _att_mtu` read/write is atomic on ESP32, so it is safe against race conditions between the BLE task and the main loop.
+    *   **Severity: Low/Suggestion.** The cached `_att_mtu` is not reset on disconnect. While `onConnect` will overwrite it on the next connection, it's better hygiene to reset it to the default of 23 in `onDisconnect` to avoid retaining a stale (potentially large) value for a disconnected interface.
+
+3.  **nRF52 querying `getMtu()` live:** **Correct.**
+    *   **`helpers/nrf52/SerialBLEInterface.cpp:285`**: The code correctly checks if `_conn_handle` is valid before calling `Bluefruit.Connection()`. This prevents use of an invalid handle. The call itself is a standard library access and is safe from the main loop context where drain operations occur. If `conn` is `nullptr` or not connected, it correctly falls back to MTU 23.
+
+4.  **Builder caps:** **Critical.**
+    *   **`examples/companion_radio/MyMesh.cpp:2778` (and all other builders):** There is a critical unsigned underflow vulnerability. If `_serial->maxFrameSize()` returns a value smaller than the header size (e.g., 0, 1, or 2 for `caplogDrain`), the subtraction `_serial->maxFrameSize() - 2` will wrap the `size_t` `cap` to a huge positive value. This will cause subsequent `memcpy` or `snprintf` calls to read/write far out of bounds, leading to a crash.
+    *   **Severity: Critical.** This must be fixed in all modified builders.
+    *   **Fix:** The subtraction must be guarded. Example for `caplogDrain`:
+        ```cpp
+        const size_t mfs = _serial->maxFrameSize();
+        const size_t cap = mfs > 2 ? mfs - 2 : 0;
+        ```
+    *   The header subtractions themselves (`-2`, `-3`, `-4`) appear correct for their respective frame layouts.
+
+5.  **Missed BLE-reachable frame builders:** **High.**
+    *   **Severity: High.** The fix appears incomplete as it only touches `MyMesh.cpp`. Other variable-length frame builders that might be sent over BLE still use the old hardcoded caps. A repository-wide search for `MAX_FRAME_SIZE -` is required to find all instances.
+    *   Candidates from your list (`export-contact`, `text-message`) almost certainly need this change if they can be sent from device to companion. `device-info` might be small enough to be safe, but should be audited; if its length is composed of variable strings, it needs the fix.
+
+6.  **Anything else:** **Sound.**
+    *   **`helpers/BaseSerialInterface.h:31`**: The default implementation for non-BLE transports correctly returns `MAX_FRAME_SIZE`, ensuring no regression for serial/TCP.
+    *   The behavior when MTU never negotiates (defaults to 23) is handled correctly by both BLE implementations. API usage appears correct.
