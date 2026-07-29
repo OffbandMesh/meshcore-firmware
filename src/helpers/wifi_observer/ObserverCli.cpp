@@ -1176,7 +1176,25 @@ size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size,
 // an unextracted archive member either. Kept as free insurance against a future
 // toolchain/flag change, since the failure mode -- every config key answering
 // "unknown config key" on a deployed fleet -- is severe.
+// #366: the observer's key-space manifest, for registration-time overlap
+// detection. Must mirror what observerConfigSet/observerConfigGet actually
+// claim (see the if-chain above): exact leaf keys verbatim, plus the two BROAD
+// prefixes it owns -- `wifi.` (wifi.ssid/wifi.pwd; also covers wifi.enabled)
+// and `mqtt.broker.`. The `wifi.` entry is exactly the shadow the repeater's
+// `wifi.mode` would hit (#301) -- the detector fires on that at registration.
+// Keep this in sync when adding/removing an observer config key.
+static const char* const kObserverConfigPrefixes[] = {
+    "mqtt.iata",
+    "mqtt.status_interval",
+    "mqtt.broker.",
+    "display.always_on",
+    "display.rotation",
+    "wifi.",
+};
+
 static __attribute__((used)) config::ProviderRegistrar _observer_config_provider(
-    &observerConfigSet, &observerConfigGet, "observer");
+    &observerConfigSet, &observerConfigGet, "observer",
+    kObserverConfigPrefixes,
+    (int)(sizeof(kObserverConfigPrefixes) / sizeof(kObserverConfigPrefixes[0])));
 
 }  // namespace offband
