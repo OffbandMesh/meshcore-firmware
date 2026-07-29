@@ -1297,7 +1297,7 @@ void MyMesh::writeOffbandConfigScalar(uint8_t sub, const char* text) {
   out_frame[0] = offband::RESP_CODE_OFFBAND_CONFIG;
   out_frame[1] = sub;
   size_t n = strlen(text);
-  const size_t cap = MAX_FRAME_SIZE - 3;   // [0],[1] header + trailing NUL
+  const size_t cap = _serial->maxFramePayload(3);   // [0],[1] header + trailing NUL (#453: transport/BLE-aware)
   if (n > cap) n = cap;
   memcpy(&out_frame[2], text, n);
   out_frame[2 + n] = 0;
@@ -1389,7 +1389,7 @@ void MyMesh::offbandStreamDrain() {
       _ob_stream = OB_STREAM_NONE;
       return;
     }
-    const size_t cap = MAX_FRAME_SIZE - 3;
+    const size_t cap = _serial->maxFramePayload(3);   // #453: transport/BLE-aware
     size_t remaining = strlen(&_ob_buf[_ob_off]);
     size_t take = remaining < cap ? remaining : cap;
     out_frame[0] = offband::RESP_CODE_OFFBAND_CONFIG;
@@ -1428,7 +1428,7 @@ void MyMesh::offbandStreamDrain() {
     char* line = &_ob_buf[_ob_off];
     char* nl = strchr(line, '\n');
     size_t linelen = nl ? (size_t)(nl - line) : strlen(line);
-    const size_t cap = MAX_FRAME_SIZE - 4;           // [0],[1],[2]=slot + trailing NUL
+    const size_t cap = _serial->maxFramePayload(4);           // [0],[1],[2]=slot + trailing NUL (#453: transport/BLE-aware)
     if (linelen > cap) linelen = cap;
     if (linelen > 0) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_CONFIG;
@@ -1458,7 +1458,7 @@ void MyMesh::handleCmdFrame(size_t len) {
   if (cmd_frame[0] == CMD_OFFBAND_GPS) {
     out_frame[0] = RESP_CODE_OFFBAND_GPS;
     char* txt = (char*)&out_frame[1];
-    const size_t cap = (size_t)MAX_FRAME_SIZE - 2;   // [0] header + trailing NUL
+    const size_t cap = _serial->maxFramePayload(2);   // [0] header + trailing NUL (#453: transport/BLE-aware)
     int n = snprintf(txt, cap, "enabled=%d ", (int)_prefs.gps_enabled);
     if (n < 0 || (size_t)n >= cap) n = 0;
     sensors.getGpsStatusText(txt + n, cap - (size_t)n);
@@ -2768,14 +2768,12 @@ void MyMesh::blockListDrain() {
 // being flooded. The ring is frozen (capture auto-stopped at START), so the
 // offset stream is stable. Snapshot returning 0 signals the buffer is exhausted.
 void MyMesh::caplogDrain() {
-  // #450: cap CHUNK data so the frame fits ONE BLE notification. A full
-  // MAX_FRAME_SIZE (176) frame does NOT fit BLE: the device negotiates MTU 176, so an
-  // ATT notification carries only MTU-3 = 173 bytes -- a 176-B frame is clipped to 173,
-  // dropping 3 data bytes per full chunk (only bites near-full downloads over BLE;
-  // serial/TCP have no ATT header). MAX_FRAME_SIZE-6 = 170 data (172-B frame) clears the
-  // 173 BLE limit with margin and matches the '+4 for transport codes' headroom baked
-  // into MAX_FRAME_SIZE. Fits BLE + TCP + serial.
-  const size_t cap = (size_t)MAX_FRAME_SIZE - 6;   // [0]=code, [1]=sub, -4 BLE ATT/transport headroom
+  // #453: cap CHUNK data to what the transport can deliver atomically, minus the 2
+  // header bytes ([0]=code, [1]=sub-code). maxFrameSize() is MAX_FRAME_SIZE on serial/
+  // TCP and the negotiated ATT MTU-3 on BLE, so a chunk never overflows a BLE
+  // notification regardless of the negotiated MTU. Retires #450's hardcoded 170, which
+  // only fit MTU 176 and would still clip a lower-MTU link (e.g. 169-payload).
+  const size_t cap = _serial->maxFramePayload(2);
   out_frame[0] = RESP_CODE_OFFBAND_CAPLOG;
   size_t n = meshLogSnapshot(&out_frame[2], cap, _caplog_off);
   if (n == 0) {                                    // buffer exhausted -> END

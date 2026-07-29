@@ -273,6 +273,18 @@ void SerialBLEInterface::disable() {
   _last_health_check = 0;
 }
 
+size_t SerialBLEInterface::maxFrameSize() const {
+  // #453: a single BLE notification carries the negotiated ATT MTU - 3 (ATT header).
+  // Cap to that, never above MAX_FRAME_SIZE. Fall back to the BLE minimum (23-3=20)
+  // when not connected so a pre-negotiation frame is never clipped.
+  uint16_t mtu = 23;
+  BLEConnection* conn = (_conn_handle != BLE_CONN_HANDLE_INVALID)
+                          ? Bluefruit.Connection(_conn_handle) : nullptr;
+  if (conn != nullptr && conn->connected()) mtu = conn->getMtu();
+  uint16_t payload = mtu > 3 ? (uint16_t)(mtu - 3) : 0;
+  return payload < MAX_FRAME_SIZE ? (size_t)payload : (size_t)MAX_FRAME_SIZE;
+}
+
 size_t SerialBLEInterface::writeFrame(const uint8_t src[], size_t len) {
   if (len > MAX_FRAME_SIZE) {
     BLE_DEBUG_PRINTLN("writeFrame(), frame too big, len=%u", (unsigned)len);

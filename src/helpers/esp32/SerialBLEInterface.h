@@ -16,6 +16,7 @@ class SerialBLEInterface : public BaseSerialInterface, NimBLEServerCallbacks, Ni
   bool oldDeviceConnected;
   bool _isEnabled;
   uint16_t last_conn_id;
+  uint16_t _att_mtu;          // #453: negotiated ATT MTU (default 23 = BLE minimum)
   uint32_t _pin_code;
   unsigned long _last_write;
   unsigned long adv_restart_time;
@@ -76,6 +77,7 @@ public:
     _isEnabled = false;
     _last_write = 0;
     last_conn_id = 0;
+    _att_mtu = 23;   // #453: BLE minimum until negotiation (onMTUChange) bumps it
     send_queue_len = recv_queue_len = 0;
   }
 
@@ -97,6 +99,13 @@ public:
   bool isWriteBusy() const override;
   size_t writeFrame(const uint8_t src[], size_t len) override;
   size_t checkRecvFrame(uint8_t dest[]) override;
+
+  // #453: BLE deliverable frame = negotiated ATT MTU - 3 (ATT notify header),
+  // never above MAX_FRAME_SIZE. Tracked from onConnect/onMTUChange.
+  size_t maxFrameSize() const override {
+    uint16_t m = _att_mtu > 3 ? (uint16_t)(_att_mtu - 3) : 0;
+    return m < MAX_FRAME_SIZE ? (size_t)m : (size_t)MAX_FRAME_SIZE;
+  }
 };
 
 #if BLE_DEBUG_LOGGING && ARDUINO

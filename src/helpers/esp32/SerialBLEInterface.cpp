@@ -94,12 +94,15 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
 
 void SerialBLEInterface::onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) {
   uint16_t conn_id = connInfo.getConnHandle();
-  BLE_DEBUG_PRINTLN("onConnect(), conn_id=%d, mtu=%d", conn_id, pServer->getPeerMTU(conn_id));
+  uint16_t mtu = pServer->getPeerMTU(conn_id);
+  BLE_DEBUG_PRINTLN("onConnect(), conn_id=%d, mtu=%d", conn_id, mtu);
   last_conn_id = conn_id;
+  if (mtu >= 23) _att_mtu = mtu;   // #453: initial MTU; onMTUChange updates if it grows
 }
 
 void SerialBLEInterface::onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
   BLE_DEBUG_PRINTLN("onDisconnect(), reason=%d", reason);
+  _att_mtu = 23;   // #453: drop stale MTU; next connection re-negotiates
   if (_isEnabled) {
     adv_restart_time = millis() + ADVERT_RESTART_DELAY;
     // loop() will detect this on next loop, and set deviceConnected to false
@@ -108,6 +111,7 @@ void SerialBLEInterface::onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& con
 
 void SerialBLEInterface::onMTUChange(uint16_t MTU, NimBLEConnInfo& connInfo) {
   BLE_DEBUG_PRINTLN("onMTUChange(), mtu=%d", MTU);
+  if (MTU >= 23) _att_mtu = MTU;   // #453: track negotiated MTU for maxFrameSize()
 }
 
 // -------- NimBLEServerCallbacks: security/pairing events
