@@ -1,0 +1,20 @@
+Answering point-by-point:
+
+1.  **CHUNK size (`MyMesh.cpp:2775`): Sound. Severity: N/A.**
+    The calculation is correct. Capping data at `MAX_FRAME_SIZE - 6` (170 bytes) results in a maximum frame size of `2 (hdr) + 170 (data) = 172` bytes. This fits within the 173-byte deliverable BLE ATT payload with a 1-byte margin. There is no off-by-one error.
+
+2.  **Drain loop correctness: Sound. Severity: N/A.**
+    The drain logic is unaffected by the smaller chunk size. `out_frame` (size 176) is sufficient for the 172-byte frame. The offset `_caplog_off` is advanced correctly by the returned byte count `n`. The termination condition (`n == 0`) is independent of chunk size and remains correct. The only effect is more iterations, which is acceptable.
+
+3.  **MTU safety: Brittle. Severity: Medium.**
+    The fix hard-codes a data cap assuming a negotiated MTU of 176 bytes. While this resolves the immediate bug, it is not robust. If any BLE client negotiates a lower MTU (e.g., a phone enforcing a smaller value, or a future client), this bug will reappear. The transport-agnostic `caplogDrain` function is being made dependent on a specific transport's behavior without being able to query it. A robust solution would derive the cap from a transport-provided `getMaxPayloadSize()`, but given the existing architecture, this fix is a pragmatic if brittle patch.
+
+4.  **Protocol semantics: Sound. Severity: N/A.**
+    The `START` frame's `total` field (`MyMesh.cpp:2703`) is calculated from `meshLogBytesUsed()` before chunking begins and is independent of chunk size. The client-visible protocol does not change; it simply receives more, smaller `CHUNK` frames, which a correctly implemented client must already handle.
+
+5.  **Missed issues: Critical bug uncovered. Severity: High.**
+    The fix is incomplete. The same systemic bug—constructing a frame up to `MAX_FRAME_SIZE` that exceeds the 173-byte BLE payload limit—exists in other code paths. These will still fail with silent data truncation over BLE.
+    *   `handleOffbandGpsCmd` (`MyMesh.cpp:1473`): `cap` is `MAX_FRAME_SIZE - 2`, creating a frame up to 175 bytes. **This is a bug.**
+    *   `writeOffbandConfigScalar` (`MyMesh.cpp:1516`): `cap` is `MAX_FRAME_SIZE - 3`, creating a frame up to 176 bytes. **This is a bug.**
+    *   `offbandStreamDrain` (`MyMesh.cpp:1584`, `1617`): Creates frames up to 176 bytes. **This is a bug.**
+    The logic in this fix must be applied consistently to all other functions that construct potentially full-size frames intended for transport over BLE.
