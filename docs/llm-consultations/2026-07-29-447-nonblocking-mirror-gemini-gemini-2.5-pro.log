@@ -1,0 +1,11 @@
+This fix is sound.
+
+1.  **Correctness:** **OK.** The `(int)total` cast is safe. `total` is derived from `strlen()` on a buffer of size `MLOG_LINE_MAX` (240). On all target platforms, `int` is 32-bit, so 240 fits without any risk of overflow or sign-related issues. The comparison correctly prevents a write that would exceed available buffer space. **Severity: None.**
+
+2.  **Portability:** **OK.** `availableForWrite()` is a standard part of the Arduino `Stream` API and is correctly implemented on ESP32 `HWCDC`/`USBCDC`/`HardwareSerial` and Adafruit's nRF52 TinyUSB CDC. A scenario where it returns 0 when a reader *is not* attached is the exact failure case this fix is designed to handle; it prevents the initial blocking write. It will not permanently block output once a reader is attached and consuming data. **Severity: None.**
+
+3.  **Strategy:** **OK.** Dropping the entire line is the correct approach. A partial mirror line is worse than no line. A partial-buffer state will not block, as the check `availableForWrite() >= total` ensures the entire write is accepted atomically into the driver's buffer. The check is not racy in a harmful way: an intervening TX ISR would only *increase* available space, making the check more likely to pass. **Severity: None.**
+
+4.  **Scope:** **OK.** `meshLogDumpSerial()` is correctly untouched. This function is a user-initiated CLI command where blocking behavior is acceptable and expected, as the user is actively waiting for the dump. The fix is correctly scoped to the non-interactive, hot-path mirror. **Severity: None.**
+
+5.  **Missed Issues:** **OK.** The `g_ring.append()` call remains before the mirror attempt, correctly preserving all log data for later download. The `Serial.write` remains outside the `MLOG_ENTER/EXIT` critical section, introducing no new lock contention or risk of stalling within a lock. **Severity: None.**
