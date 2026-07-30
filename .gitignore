@@ -72,3 +72,26 @@ weather/
 
 # Per-session identity registry — local runtime state (standards#190/#195/#197)
 .claude/sessions/
+
+# Canonical governance artifacts — synced from DifferentWire/standards by preflight.
+# Local/generated; standards is their source of truth. Do NOT track. (standards#249)
+.claude/commands/bootstrap.md
+.claude/commands/refresh-context.md
+.claude/commands/work.md
+.claude/commands/*.pre-canonical.bak
+scripts/llm-consult.py
+.claude/hooks/preflight.sh
+.claude/hooks/pre-commit
+.claude/hooks/commit-msg
+.claude/hooks/post-commit
+.claude/hooks/pre-push
+.claude/hooks/session-state.py
+.claude/hooks/resolve-active-task.py
+.claude/hooks/block-direct-citadel-db.py
+.claude/hooks/block-agent-mail-slug-key.py
+.claude/hooks/block-primary-clone-edit.py
+.claude/hooks/session-identity.py
+.claude/hooks/require-checkpoint.py
+.claude/hooks/checkpoint_write.py
+.claude/hooks/block-skip-bypass.py
+.claude/hooks/dw-approve-bypass.py
