@@ -522,6 +522,16 @@ ContactInfo*  MyMesh::processAck(const uint8_t *data) {
   return checkConnectionsAck(data);
 }
 
+// #456: encode a received-packet RSSI (int dBm) into the int8 reserved1 byte of the
+// v3 msg/data-recv frames. Clamp to the int8 range first: LoRa RSSI can be weaker than
+// -128 dBm, and a raw (int8_t) cast of e.g. -130 would WRAP to a bogus positive value
+// (a false strong signal). 0 stays "no data" (a real RX RSSI is always negative).
+static inline int8_t rssiToInt8(int rssi_dbm) {
+  if (rssi_dbm < -128) return -128;
+  if (rssi_dbm >  127) return  127;
+  return (int8_t)rssi_dbm;
+}
+
 void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packet *pkt,
                           uint32_t sender_timestamp, const uint8_t *extra, int extra_len, const char *text) {
   // #241: receive-side user block -- the ONLY enforcement point. Drop a DM from a
@@ -535,7 +545,7 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
   if (app_target_ver >= 3) {
     out_frame[i++] = RESP_CODE_CONTACT_MSG_RECV_V3;
     out_frame[i++] = (int8_t)(pkt->getSNR() * 4);
-    out_frame[i++] = 0; // reserved1
+    out_frame[i++] = rssiToInt8(_radio->getLastRSSI()); // #456: reserved1 = RX RSSI (int8 dBm). Built at receive time so this is THIS message's RSSI; frozen into the stored frame for sync replay. App gates on non-zero.
     out_frame[i++] = 0; // reserved2
   } else {
     out_frame[i++] = RESP_CODE_CONTACT_MSG_RECV;
@@ -648,7 +658,7 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   if (app_target_ver >= 3) {
     out_frame[i++] = RESP_CODE_CHANNEL_MSG_RECV_V3;
     out_frame[i++] = (int8_t)(pkt->getSNR() * 4);
-    out_frame[i++] = 0; // reserved1
+    out_frame[i++] = rssiToInt8(_radio->getLastRSSI()); // #456: reserved1 = RX RSSI (int8 dBm), same as the contact frame.
     out_frame[i++] = 0; // reserved2
   } else {
     out_frame[i++] = RESP_CODE_CHANNEL_MSG_RECV;
@@ -754,7 +764,7 @@ void MyMesh::onChannelDataRecv(const mesh::GroupChannel &channel, mesh::Packet *
   int i = 0;
   out_frame[i++] = RESP_CODE_CHANNEL_DATA_RECV;
   out_frame[i++] = (int8_t)(pkt->getSNR() * 4);
-  out_frame[i++] = 0; // reserved1
+  out_frame[i++] = rssiToInt8(_radio->getLastRSSI()); // #456: reserved1 = RX RSSI (int8 dBm), same as the msg-recv frames.
   out_frame[i++] = 0; // reserved2
 
   uint8_t channel_idx = findChannelIdx(channel);
