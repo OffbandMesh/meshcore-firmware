@@ -29,6 +29,16 @@ platformio.local.ini
 build-logs/
 debug_logs/
 
+# Scratch firmware images built for bench/tester hand-off — not release artifacts
+test-builds/
+
+# Raw logs — captures and LLM-review transcripts stay local, off GitHub.
+# NOTE: only affects NEW files. The ~30 already-tracked docs/llm-consultations/*.log
+# stay tracked on purpose — PR bodies and issues cite them as review audit artifacts.
+# Sibling *.md under docs/diagnostics/ are findings docs, not logs, and remain tracked.
+docs/llm-consultations/*.log
+docs/diagnostics/*.log
+
 # Python bytecode (host tests + script imports under scripts/)
 __pycache__/
 
