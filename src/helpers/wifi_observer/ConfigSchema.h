@@ -21,7 +21,7 @@ namespace offband {
 constexpr const char* kNvsWifi      = "wifi";      // Plan 1
 constexpr const char* kNvsMqtt      = "mqtt";      // global mqtt keys (iata, status_interval)
 constexpr const char* kNvsObserver  = "observer";  // ring buffer size etc.
-constexpr const char* kNvsOffbandUi = "offband_ui"; // #141: fork UI prefs (display.always_on). Fork-branded so a future upstream NVS namespace can never clash.
+// #370: kNvsOffbandUi + the display keys moved to config/DisplayConfigProvider.cpp.
 
 // Per-broker namespace is generated at runtime: "mqtt_b0".."mqtt_b5".
 // 15-char ceiling tolerates "mqtt_b<digit>" comfortably.
@@ -38,11 +38,6 @@ constexpr uint16_t kDefaultStatusIntervalSec = 30;
 constexpr uint16_t kMinStatusIntervalSec     = 10;
 constexpr uint16_t kMaxStatusIntervalSec     = 3600;
 
-// ---------------------------------------------------------------------------
-// Offband UI keys (in "offband_ui" namespace)
-// ---------------------------------------------------------------------------
-constexpr const char* kKeyDisplayAlwaysOn = "always_on";  // bool; default false (#141)
-constexpr const char* kKeyDisplayRotation = "rotation";   // uint8 0/180; default 0 (#148)
 
 // ---------------------------------------------------------------------------
 // Per-broker keys (in per-broker "mqtt_bN" namespace)
@@ -91,14 +86,9 @@ bool writeGlobalIata(const char* iata);
 uint16_t readStatusIntervalSec();
 bool     writeStatusIntervalSec(uint16_t seconds);
 
-// #141: display always-on toggle. When true, UITask never auto-blanks the
-// screen. Stored in the fork-branded "offband_ui" NVS namespace.
-bool getDisplayAlwaysOn();
-bool setDisplayAlwaysOn(bool on);   // #181: false on NVS failure (logged)
-
-// #148: display rotation in degrees (0 or 180). Stored in "offband_ui".
-uint8_t getDisplayRotation();
-bool    setDisplayRotation(uint8_t deg);   // #181: false on NVS failure (logged)
+// #370: display.* accessors (getDisplayAlwaysOn / setDisplayAlwaysOn /
+// getDisplayRotation / setDisplayRotation) moved to
+// src/helpers/config/DisplayConfigProvider.h -- role-neutral, no schema coupling.
 
 // Broker-slot accessors. Slot range [0, OFFBAND_MAX_BROKERS).
 // Returns sensible defaults on read-miss (e.g., empty url, enabled=false,

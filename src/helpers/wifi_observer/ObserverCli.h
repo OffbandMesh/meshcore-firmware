@@ -79,17 +79,17 @@ size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size,
                               const BrokerRuntimeState* rt = nullptr,
                               const char* owner_default_hex = nullptr);
 
-// #141: register a callback the app provides so a `display always on/off`
-// command applies to the live UITask immediately (no reboot). Raw function
-// pointer (not std::function) to avoid heap on tight-RAM boards.
-void setDisplayAlwaysOnApplier(void (*fn)(bool));
-
-// #148: register the applier for `display rotate`/`display flip` (degrees 0/180).
-void setDisplayRotationApplier(void (*fn)(uint8_t));
-
-// #148: register a query so `display rotate`/`flip` can report "not supported on
-// this display" (instead of a silent no-op) when the live driver has no verified
-// runtime-rotation override (TFT variants, e-ink).
-void setDisplayRotationSupportedQuery(bool (*fn)());
+// #370: the display appliers (setDisplayAlwaysOnApplier / setDisplayRotationApplier
+// / setDisplayRotationSupportedQuery) and the display.* NVS accessors moved to
+// config/DisplayConfigProvider.h. Included below so existing includers of this
+// header (e.g. examples/companion_radio/main.cpp) keep resolving them unchanged.
 
 }  // namespace offband
+
+// #370: forward ONLY the display header, so legacy includers of ObserverCli.h
+// (examples/companion_radio/main.cpp) keep resolving the display appliers +
+// display.* NVS accessors unchanged -- that is the only cross-TU surface they
+// used from this header. The wifi.* handlers are NOT forwarded: the sole caller
+// is ObserverCli.cpp's dispatchObserverCli, which includes WifiConfigProvider.h
+// directly. (Gemini #370 review MINOR-3: keep the transitive surface minimal.)
+#include "../config/DisplayConfigProvider.h"
