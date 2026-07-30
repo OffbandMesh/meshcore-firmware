@@ -1,5 +1,6 @@
 #include "SensorMesh.h"
 #include <SafeBoot.h>
+#include "helpers/diagnostics/CrashLogStandard.h"   // #472: uniform boot-survival CrashLog
 
 #ifdef DISPLAY_CLASS
   #include "UITask.h"
@@ -62,6 +63,8 @@ void setup() {
 
   board.begin();
 
+  offband::crashLogStandardInit(board, "sensor");   // #472: uniform CrashLog (after board.begin() for reset reason)
+
 #ifdef DISPLAY_CLASS
   if (display.begin()) {
     display.startFrame();
@@ -121,6 +124,8 @@ void setup() {
 }
 
 void loop() {
+  offband::crashLogStandardTick(millis());  // #472: deferred previous-boot re-dump for late serial connect
+
   int len = strlen(command);
   while (Serial.available() && len < sizeof(command)-1) {
     char c = Serial.read();

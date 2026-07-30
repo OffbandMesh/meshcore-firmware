@@ -3,6 +3,7 @@
 #include <SafeBoot.h>
 
 #include "MyMesh.h"
+#include "helpers/diagnostics/CrashLogStandard.h"   // #472: uniform boot-survival CrashLog
 
 #ifdef PIN_STATUS_LED
   // Repeater heartbeat status LED (#9). Active-high default;
@@ -869,6 +870,8 @@ void setup() {
 
   board.begin();
 
+  offband::crashLogStandardInit(board, "repeater");   // #472: uniform CrashLog (after board.begin() for reset reason)
+
 #ifdef PIN_STATUS_LED
   pinMode(PIN_STATUS_LED, OUTPUT);
   digitalWrite(PIN_STATUS_LED, !LED_STATE_ON);   // start off
@@ -968,6 +971,7 @@ void setup() {
 }
 
 void loop() {
+  offband::crashLogStandardTick(millis());  // #472: deferred previous-boot re-dump for late serial connect
 #if defined(NRF52_PLATFORM)
   board.feedWatchdog();  // #266: feed from the MAIN LOOP only -> a hung loop trips the WDT
   board.heartbeatTick(); // #275: loop-driven, ungated green-LED heartbeat (freezes on hang)
