@@ -93,6 +93,22 @@ ESP32S3_VENDOR = "303A"
 NRF52_VENDOR = "239A"
 BOOTLOADER_DISCOVER_TIMEOUT = 20   # seconds to wait for re-enumeration
 
+# USB-UART bridge chips (#273/#468): the USB identity belongs to the BRIDGE,
+# not the SoC behind it. Consequences: (a) no bootloader re-enumeration -- the
+# bridge keeps its COM/VID:PID while DTR/RTS reset the SoC into download mode,
+# so the #34 discovery dance must be skipped; (b) passive identity is
+# unavailable -- CH340 has no serial, CP2102 ships with the factory default
+# below -- so board identity is the SoC MAC, verified actively at Tier-A time.
+BRIDGE_VENDORS = {"10C4": "CP2102", "1A86": "CH340"}
+# Factory-default serials shared by every unprogrammed chip of the family.
+# NEVER identity: one recorded default would Tier-1-match any sibling chip.
+DEFAULT_USB_SERIALS = {"0001"}
+
+
+def bridge_chip(vid_pid: str) -> Optional[str]:
+    """CP2102/CH340 name when vid_pid belongs to a USB-UART bridge, else None."""
+    return BRIDGE_VENDORS.get((vid_pid or "").split(":")[0].upper())
+
 
 # ---------------------------------------------------------------------------
 # Output helpers - uniform formatting so the agent can parse refusal messages.
@@ -167,6 +183,15 @@ Get-PnpDevice -Class Ports -PresentOnly | Where-Object { $_.Status -eq 'OK' } | 
             if ($tail -notmatch '&') { $serial = $tail.ToUpper() }
         }
     } catch { }
+    # Non-composite devices (CP2102 and reprogrammed bridges) carry the serial in
+    # their OWN InstanceId tail; the parent is just the hub (#468). Same rule:
+    # serial-form tails contain no '&'.
+    if (-not $serial) {
+        if ($did -match '\\([^\\]+)$') {
+            $tail = $matches[1]
+            if ($tail -notmatch '&') { $serial = $tail.ToUpper() }
+        }
+    }
     # Emit one JSON line per port. ConvertTo-Json with -Compress is single-line.
     @{
         com = $com
@@ -206,6 +231,13 @@ def enumerate_ports() -> list[dict]:
         # Some ports (non-USB) won't have VID/PID. Skip those.
         if d.get("vid_pid") in (None, "", ":"):
             continue
+        # #468: neutralize factory-default serials (e.g. CP2102 '0001') -- shared
+        # by every unprogrammed chip of the family, so they are class markers,
+        # not identity. Keep the raw value for display/transparency only.
+        raw = norm_serial(d.get("usb_serial"))
+        if raw in DEFAULT_USB_SERIALS:
+            d["usb_serial_default"] = d.get("usb_serial")
+            d["usb_serial"] = ""
         ports.append(d)
     return ports
 
@@ -233,6 +265,12 @@ def entry_usb_serials(entry: dict) -> list[str]:
     Accepted at either `usb_serial:` (top level) or
     `discriminators.windows.usb_serial`; a single value or a list. Returned
     normalised via norm_serial().
+
+    NOTE (#468): factory-default serials (DEFAULT_USB_SERIALS, e.g. CP2102
+    '0001') are FILTERED OUT here -- an entry recording one behaves as
+    serial-less everywhere, including the bridge rival-entry check in
+    resolve_device. If a YAML entry visibly carries `usb_serial: "0001"` yet
+    acts unmatched/rival, this filter is why.
     """
     d = (entry.get("discriminators") or {}).get("windows") or {}
     vals = [entry.get("usb_serial"), d.get("usb_serial")]
@@ -244,7 +282,9 @@ def entry_usb_serials(entry: dict) -> list[str]:
             out.extend(norm_serial(x) for x in v if x)
         else:
             out.append(norm_serial(v))
-    return [s for s in out if s]
+    # #468: a recorded factory-default serial must never act as identity --
+    # it would Tier-1-match every unprogrammed chip of that family.
+    return [s for s in out if s and s not in DEFAULT_USB_SERIALS]
 
 
 def find_in_registry(
@@ -358,6 +398,52 @@ def resolve_device(name: str, registry: dict) -> tuple[dict, dict]:
         ]
         known_hashes = [h for h in known_hashes if h]
         if not known_hashes:
+            # #273/#468: bridge-class entries (CP2102/CH340) can NEVER record a
+            # usable passive discriminator -- the bridge hides the SoC and its
+            # own serial is absent (CH340) or a shared factory default (CP2102).
+            # For these, and ONLY these, allow a PROVISIONAL class match under
+            # strict uniqueness: exactly one present port of the class, and this
+            # entry is the only registry entry claiming it. The match is marked
+            # provisional; Tier-A commands MUST then verify the SoC MAC before
+            # touching flash (_verify_bridge_mac). This is not the #323 wildcard:
+            # ambiguity in either direction still refuses.
+            bridge = all(bridge_chip(vp) for vp in entry_vid_pids)
+            if bridge and norm_serial(entry.get("mac")):
+                cands = [p for p in ports if p["vid_pid"] in entry_vid_pids]
+                rivals = [
+                    n for n, e in (registry.get("devices") or {}).items()
+                    if n != name
+                    and set(e.get("vid_pid") or []) & entry_vid_pids
+                    and not entry_usb_serials(e)
+                ]
+                if len(cands) == 1 and not rivals:
+                    port = dict(cands[0])
+                    port["bridge_provisional"] = True
+                    err(
+                        f"NOTE: '{name}' matched PROVISIONALLY as the sole present "
+                        f"{bridge_chip(port['vid_pid'])}-bridged candidate. Bridge "
+                        "chips expose no board identity; Tier-A operations will "
+                        "verify the SoC MAC before touching flash (#468)."
+                    )
+                    return (port, entry)
+                if len(cands) > 1:
+                    refuse(
+                        f"device '{name}' is bridge-class and {len(cands)} ports of "
+                        f"that class are present ({', '.join(p['com'] for p in cands)}). "
+                        "Bridges cannot be told apart passively -- disconnect the "
+                        "others and retry (#468)."
+                    )
+                if rivals:
+                    refuse(
+                        f"device '{name}' is bridge-class but other registry entries "
+                        f"({', '.join(rivals)}) claim the same VID:PID class without a "
+                        "serial. A provisional match would be a guess. Resolve the "
+                        "registry overlap first (#468)."
+                    )
+                refuse(
+                    f"no port of device '{name}' bridge class "
+                    f"{sorted(entry_vid_pids)} is present -- it is not attached."
+                )
             # Previously this accepted ANY port of the right VID:PID class -- the
             # defect behind #323. A chip-family match is not an identity.
             refuse(
@@ -487,7 +573,22 @@ def cmd_list(args, registry):
             tag = f"FOREIGN:{name}"
         else:
             tag = "unregistered"
-        ser = p.get("usb_serial") or "(none)"
+            # #468: an unmatched bridge-class port with exactly one bridge-class
+            # registry candidate is shown as that candidate -- explicitly marked
+            # as unverifiable-until-flash-time, never presented as a match.
+            if bridge_chip(p["vid_pid"]):
+                cands = [
+                    n for n, e in (registry.get("devices") or {}).items()
+                    if p["vid_pid"] in (e.get("vid_pid") or [])
+                    and not entry_usb_serials(e)
+                    and norm_serial(e.get("mac"))
+                ]
+                if len(cands) == 1:
+                    tag = f"bridge-cand:{cands[0]}"
+        ser = p.get("usb_serial") or (
+            f"{p['usb_serial_default']}(default)" if p.get("usb_serial_default")
+            else "(none)"
+        )
         out(
             f"{p['com']:<8} {p['vid_pid']:<12} {ser:<16} {p['instance_hash']:<12} "
             f"{tag:<22} {p['description']}"
@@ -705,6 +806,54 @@ def _touch_1200(com: str) -> None:
         out(f"  (1200-baud touch on {com} raised, normal on reset: {e})")
 
 
+def _read_mac_on_port(com: str) -> str:
+    """Run esptool read_mac on a port and return the normalised MAC (#468).
+    Tier-A side effect: resets the chip into ROM bootloader and back."""
+    try:
+        result = subprocess.run(
+            ["python", "-m", "esptool", "--port", com, "read_mac"],
+            env=env_with_auth(), capture_output=True, text=True, timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        refuse(f"esptool read_mac on {com} timed out (60s)")
+    # Gemini review 2026-07-30: reuse parse_base_mac (#290) rather than a local
+    # regex -- C6/H2 chips print an 8-byte EUI-64 first, which a naive "MAC:"
+    # match would capture, making the identity gate refuse the CORRECT board.
+    mac = parse_base_mac(result.stdout or "")
+    if not mac:
+        refuse(
+            f"could not read MAC on {com} (esptool rc={result.returncode}). "
+            "The board may not be an ESP32 or did not enter download mode. "
+            f"Tail: {(result.stdout or result.stderr or '')[-300:]!r}"
+        )
+    return norm_serial(mac)
+
+
+def _verify_bridge_mac(port: dict, entry: dict, device_name: str) -> None:
+    """Tier-A identity gate for provisionally-matched bridge boards (#468).
+    Reads the SoC MAC through the bridge and hard-refuses on mismatch with the
+    entry's recorded mac:. No-op for ports that resolved by real identity.
+    The chip resets -- acceptable only where a reset was imminent anyway."""
+    if not port.get("bridge_provisional"):
+        return
+    recorded = norm_serial(entry.get("mac"))
+    if not recorded:
+        refuse(
+            f"'{device_name}' is bridge-class but records no mac: -- cannot "
+            "verify identity. Run 'pio-flash bootstrap' guidance in #468."
+        )
+    out(f"Bridge identity check: reading SoC MAC on {port['com']} "
+        "(resets the chip)...")
+    live = _read_mac_on_port(port["com"])
+    if live != recorded:
+        refuse(
+            f"MAC MISMATCH on {port['com']}: live {live} != recorded {recorded} "
+            f"for '{device_name}'. This is NOT the registered board. Refusing "
+            "(#468)."
+        )
+    out(f"Bridge identity VERIFIED: MAC {entry.get('mac')} matches '{device_name}'.")
+
+
 def _esp32_trigger_download(com: str) -> None:
     """Reset an ESP32-S3 into ROM download mode via esptool's default reset.
     The connect then fails because the running USB-CDC port vanishes on reset -
@@ -862,6 +1011,16 @@ def _confirm_artifact(args, token: dict, port: dict) -> int:
         out(f"--in-bootloader: flashing on resolved port {port['com']} "
             f"({port['vid_pid']}) directly; no reset/rediscover dance.")
         bl = port
+    elif bridge_chip(port["vid_pid"]):
+        # #273: USB-UART bridges (Heltec V3 / CP2102) never re-enumerate -- the
+        # bridge keeps its COM while DTR/RTS reset the SoC into download mode.
+        # Waiting for a new 303A port here is what made confirm --artifact
+        # refuse on the V3. Flash the SAME COM; esptool's default-reset does
+        # the classic auto-reset entry itself.
+        out(f"bridge-class ({bridge_chip(port['vid_pid'])}): flashing on the same "
+            f"port {port['com']} -- bridges do not re-enumerate into a download "
+            "port; esptool's DTR/RTS auto-reset enters download mode (#273).")
+        bl = port
     else:
         bl = _enter_bootloader_and_discover(port, platform)
 
@@ -1011,6 +1170,10 @@ def cmd_confirm(args, registry):
             "Re-run preview."
         )
 
+    # #468: provisional bridge match -> verify the SoC MAC before ANY flash
+    # path runs. The chip was about to be reset by the flash anyway.
+    _verify_bridge_mac(port, entry, args.device)
+
     if token.get("mode") == "artifact":
         return _confirm_artifact(args, token, port)
 
@@ -1085,6 +1248,17 @@ def cmd_send(args, registry):
     read window.
     """
     port, _ = resolve_device(args.device, registry)
+    if port.get("bridge_provisional"):
+        # #468: send WRITES config-mutating CLI commands. A provisional bridge
+        # match is a class guess, not identity, and send cannot MAC-verify
+        # without resetting the chip (which would also kill the CLI session).
+        refuse(
+            f"'{args.device}' resolved only provisionally (bridge-class; identity "
+            "unverifiable without a chip reset). Refusing to SEND commands to a "
+            "possibly-wrong board. Use a flash-time-verified operation, or ensure "
+            "this is the only bridge device attached and verify with "
+            f"'pio-flash read-mac {args.device}' first (#468)."
+        )
     out(f"Sending to {args.device} on {port['com']}: {args.command!r}")
     out(f"Reading response for {args.read_time}s...")
 
@@ -1164,6 +1338,16 @@ def cmd_monitor(args, registry):
     observer env's platformio.ini.
     """
     port, _ = resolve_device(args.device, registry)
+    if port.get("bridge_provisional"):
+        # #468: read-only attach; worst case is watching the wrong console.
+        # Loud banner instead of refusal -- monitor must not reset the chip,
+        # so MAC verification is impossible here by design.
+        err(
+            f"UNVERIFIED: '{args.device}' matched provisionally (bridge-class -- "
+            "identity not MAC-verified; monitor cannot verify without resetting "
+            "the chip). If another bridge board could be attached, treat this "
+            "console output with suspicion (#468)."
+        )
     env_suffix = f" (env={args.env})" if args.env else ""
     out(f"Opening monitor on {port['com']} for {args.device} at {args.baud} baud" + env_suffix)
     if not args.env:
@@ -1208,6 +1392,11 @@ def cmd_monitor(args, registry):
 def cmd_info(args, registry):
     """Tier B: meshtastic --info. Reads device state, does not reset."""
     port, _ = resolve_device(args.device, registry)
+    if port.get("bridge_provisional"):
+        err(
+            f"UNVERIFIED: '{args.device}' matched provisionally (bridge-class, "
+            "not MAC-verified). Read-only query; verify output plausibility (#468)."
+        )
     out(f"Running meshtastic --info on {port['com']} for {args.device}")
     cmd = ["meshtastic", "--port", port["com"], "--info"]
     rc = subprocess.call(cmd)
@@ -1224,6 +1413,24 @@ def cmd_info(args, registry):
 def cmd_read_mac(args, registry):
     """Tier A: esptool read_mac. Resets the chip on every invocation."""
     port, entry = resolve_device(args.device, registry)
+    if port.get("bridge_provisional"):
+        # #468: for a bridge board the read IS the verification -- one reset,
+        # compare against the recorded mac:, report, done.
+        live = _read_mac_on_port(port["com"])
+        recorded = norm_serial(entry.get("mac"))
+        verdict = "MATCHES registry" if live == recorded else "MISMATCH vs registry"
+        out(f"MAC read from device: {live} ({verdict}: {entry.get('mac')})")
+        log_history({
+            "ts_unix": int(time.time()),
+            "mode": "read-mac",
+            "device": args.device,
+            "port": port["com"],
+            "bridge_provisional": True,
+            "mac_live": live,
+            "mac_recorded": entry.get("mac"),
+            "exit_code": 0 if live == recorded else 1,
+        })
+        return 0 if live == recorded else 1
     out(f"Running esptool read_mac on {port['com']} for {args.device}")
     out(f"(this WILL reset the chip into ROM bootloader and back)")
     cmd = [
@@ -1259,6 +1466,7 @@ def cmd_backup(args, registry):
     Default size:   0x1000000 (16 MB, full ESP32-S3 flash)
     """
     port, entry = resolve_device(args.device, registry)
+    _verify_bridge_mac(port, entry, args.device)  # #468: chip resets anyway
 
     backups_dir = PROJECT_ROOT / "flash-backups"
     backups_dir.mkdir(exist_ok=True)
@@ -1369,6 +1577,7 @@ def cmd_erase_region(args, registry):
     will reboot after the operation completes.
     """
     port, entry = resolve_device(args.device, registry)
+    _verify_bridge_mac(port, entry, args.device)  # #468: chip resets anyway
 
     if args.offset < 0 or args.size <= 0:
         refuse(f"invalid offset/size: offset={args.offset}, size={args.size}")
@@ -1556,6 +1765,19 @@ def cmd_bootstrap(args, registry):
     if usb_serial:
         new_entry["usb_serial"] = usb_serial
         out(f"Recorded usb_serial: {usb_serial} (port-independent identity)")
+    elif bridge_chip(target["vid_pid"]):
+        # #468: bridge boards can NEVER expose a usable serial (CH340 has none;
+        # CP2102 ships the shared factory default). Telling the operator to
+        # "record usb_serial" is an impossible instruction. Identity for this
+        # class is the SoC MAC just read above, verified actively at Tier-A time.
+        out("")
+        out(f"!! NOTE: {bridge_chip(target['vid_pid'])} USB-UART bridge -- this "
+            "device class has no usable usb_serial.")
+        out(f"!!   Identity is the SoC MAC recorded on this entry ({mac}); Tier-A")
+        out("!!   operations verify it live before touching flash (#468).")
+        out("!!   Passive resolution is provisional: keep only ONE bridge-class")
+        out("!!   board attached when addressing this device by name.")
+        out("")
     else:
         # No silent legacy write. An entry with only a port-path hash follows the
         # USB socket, not the board -- it will mis-resolve after any port swap.
@@ -1621,6 +1843,7 @@ def cmd_factory_reset(args, registry):
     Hardcoded for Heltec V4 ESP32-S3 16MB layout: SPIFFS at 0xc90000, size 0x370000.
     """
     port, entry = resolve_device(args.device, registry)
+    _verify_bridge_mac(port, entry, args.device)  # #468: chip resets anyway
     firmware_bin = FIRMWARE_DIR / ".pio" / "build" / args.env / "firmware.bin"
     if not firmware_bin.exists():
         refuse(f"firmware {firmware_bin} missing. Build first: pio run -e {args.env}")
