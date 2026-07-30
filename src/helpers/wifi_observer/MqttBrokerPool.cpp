@@ -386,6 +386,63 @@ inline bool isTlsTransport(const BrokerConfig& c) {
 }
 }  // namespace
 
+#ifndef MQTT_ROTATE_DWELL_MS
+  #define MQTT_ROTATE_DWELL_MS 60000U   // #175: how long a TLS slot holds the budget
+#endif
+
+// #175: rotate the live TLS set on a dwell timer. Demotes the OLDEST live TLS
+// broker so a parked (HeldNoHeap) one can take the freed budget slot. WORKER-ONLY:
+// called from workerLoop, the sole thread permitted to block on esp_mqtt teardown
+// (#53). We shut the victim down DIRECTLY (a full shutdown() == client_destroy;
+// skipping the destroy leaks ~68KB, #327) rather than via reloadSlot(): reloadSlot
+// re-runs begin() and would bring the victim straight back UP, defeating the
+// rotation. A per-slot cooldown then blocks the victim from reclaiming the budget
+// before the parked broker can, otherwise slot order alone decides the winner and
+// the victim usually wins instantly (reconnect storm, no rotation).
+//
+// The demoted broker keeps its RING CURSOR, so it resumes from where it left off
+// on its next window rather than losing the traffic it missed.
+void MqttBrokerPool::rotateTlsIfDue(uint32_t now_ms) {
+    if (now_ms - last_rotate_ms_ < MQTT_ROTATE_DWELL_MS) return;
+
+    // Count enabled TLS brokers + find whether one is parked waiting for budget.
+    uint8_t tls_enabled = 0;
+    bool    waiting     = false;
+    for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
+        const MqttBroker& b = brokers_[s];
+        if (!b.isConfigured() || !isTlsTransport(b.config())) continue;
+        tls_enabled++;
+        if (b.runtime().state == BrokerState::HeldNoHeap) waiting = true;
+    }
+    // Nothing to share (budget covers all enabled TLS -- PSRAM/large-heap case),
+    // or nobody is actually waiting for the budget: no rotation.
+    if (tls_enabled <= OFFBAND_MAX_LIVE_TLS || !waiting) return;
+
+    // Pick the oldest live TLS slot (largest elapsed since went_up; wrap-safe).
+    uint8_t  victim   = 0xFF;
+    uint32_t best_age = 0;
+    for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
+        if (reconciling_[s]) continue;          // #53: already mid-lifecycle
+        const MqttBroker& b = brokers_[s];
+        if (!b.isConfigured() || !isTlsTransport(b.config())) continue;
+        if (b.runtime().state != BrokerState::Up) continue;
+        uint32_t age = now_ms - b.runtime().went_up_ms;
+        if (victim == 0xFF || age > best_age) { best_age = age; victim = s; }
+    }
+    if (victim == 0xFF) return;
+
+    // Do not thrash: only rotate a slot that has actually held the budget for a
+    // full dwell, so a freshly-promoted broker is not evicted almost immediately.
+    if (best_age < MQTT_ROTATE_DWELL_MS) return;
+
+    last_rotate_ms_ = now_ms;
+    brokers_[victim].shutdown();   // full teardown incl. client_destroy (#327)
+    // Block the victim from reclaiming the freed budget for one dwell, giving the
+    // parked broker first claim on the next re-drive pass.
+    rotated_out_until_ms_[victim] = now_ms + MQTT_ROTATE_DWELL_MS;
+    if (rotated_out_until_ms_[victim] == 0) rotated_out_until_ms_[victim] = 1;  // 0 means "not cooling"
+}
+
 void MqttBrokerPool::workerLoop() {
     for (;;) {
         // Block for a reconcile request, but wake every 500ms to drive the
@@ -406,6 +463,9 @@ void MqttBrokerPool::workerLoop() {
         // the same slot serializes safely (and loopTask only publishes to Up
         // slots, never one the worker is connect-blocking on).
         uint32_t now = millis();
+        // #175: rotate the live TLS set BEFORE counting the budget, so a victim
+        // shut down here frees its context for the parked broker this same pass.
+        rotateTlsIfDue(now);
         // #171: count TLS contexts already live (Up/Connecting). Each holds a
         // ~60KB mbedTLS context; HV3's heap fits ~2 before a 3rd handshake OOM-
         // reboots. We refuse to START a TLS bring-up past OFFBAND_MAX_LIVE_TLS
@@ -430,6 +490,13 @@ void MqttBrokerPool::workerLoop() {
             // sane (#87); HeldNoHeap releases when a TLS slot frees (#171).
             if (st == BrokerState::Down || st == BrokerState::Backoff ||
                 st == BrokerState::HeldNoClock || st == BrokerState::HeldNoHeap) {
+                // #175: skip a slot still in its rotation cooldown, so the parked
+                // broker claims the freed budget instead of the just-evicted victim
+                // reclaiming it. Wrap-safe; 0 means "not cooling".
+                if (rotated_out_until_ms_[s] != 0 &&
+                    (int32_t)(rotated_out_until_ms_[s] - now) > 0) {
+                    continue;
+                }
                 uint32_t biased = now + static_cast<uint32_t>(s) * 1000U;
                 // TLS budget: non-TLS always OK; TLS only if a live slot is free.
                 bool budget_ok = !isTlsTransport(b.config()) ||

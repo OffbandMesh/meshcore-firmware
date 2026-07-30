@@ -46,6 +46,7 @@ enum class BrokerErrorClass : uint8_t {
 struct BrokerRuntimeState {
     BrokerState      state             = BrokerState::Down;
     uint32_t         last_publish_ms   = 0;
+    uint32_t         went_up_ms        = 0;  // #175: set when state -> Up; picks the oldest live TLS slot to rotate out
     uint32_t         last_attempt_ms   = 0;
     uint32_t         last_error_ms     = 0;
     uint32_t         retry_count       = 0;

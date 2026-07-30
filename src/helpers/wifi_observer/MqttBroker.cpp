@@ -486,8 +486,9 @@ void MqttBroker::eventHandler(void* handler_args,
     }
 }
 
-void MqttBroker::onConnected(uint32_t /*now_ms*/) {
+void MqttBroker::onConnected(uint32_t now_ms) {
     rt_.state = BrokerState::Up;
+    rt_.went_up_ms = now_ms;   // #175: dwell clock for TLS rotation
     rt_.retry_count = 0;
     rt_.last_error_class = BrokerErrorClass::None;
 }
