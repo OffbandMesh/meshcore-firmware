@@ -75,9 +75,14 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
 // extra lines). The raw keys are unchanged, so old clients are unaffected.
 int    configBrokerSlotCount();
 bool   configBrokerSlotPopulated(uint8_t slot);
+// #175: ring_lag / ring_lapped are the per-broker send backlog + lap flag from
+// the pool's ring log (additive; -1 lag omits the line for callers without a
+// pool handle). Old clients ignore the unknown keys.
 size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size,
                               const BrokerRuntimeState* rt = nullptr,
-                              const char* owner_default_hex = nullptr);
+                              const char* owner_default_hex = nullptr,
+                              int32_t ring_lag = -1,
+                              bool ring_lapped = false);
 
 // #370: the display appliers (setDisplayAlwaysOnApplier / setDisplayRotationApplier
 // / setDisplayRotationSupportedQuery) and the display.* NVS accessors moved to

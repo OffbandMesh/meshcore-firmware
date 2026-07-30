@@ -840,7 +840,9 @@ bool configBrokerSlotPopulated(uint8_t slot) {
 // result on '\n', emitting one BROKER_KV frame per line.
 size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size,
                               const BrokerRuntimeState* rt,
-                              const char* owner_default_hex) {
+                              const char* owner_default_hex,
+                              int32_t ring_lag,
+                              bool ring_lapped) {
     if (out == nullptr || out_size == 0) return 0;
     out[0] = '\0';
     BrokerConfig cfg;
@@ -875,6 +877,14 @@ size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size,
     if (rt != nullptr) {
         BKV("state=%s\n",      brokerStateWire(rt->state));
         BKV("last_error=%s\n", brokerErrorWire(rt->last_error_class));
+    }
+    // #175: ring send-backlog + lap flag. Non-zero lag = messages published while
+    // this broker was rotated out / down and not yet drained; lapped = the ring
+    // overran its cursor and the overrun was lost (best-effort overflow). Omitted
+    // when ring_lag < 0 (caller had no pool handle).
+    if (ring_lag >= 0) {
+        BKV("ring_lag=%ld\n",    (long)ring_lag);
+        BKV("ring_lapped=%s\n",  ring_lapped ? "yes" : "no");
     }
     // #173: resolved-default placeholders (additive). Emitted ONLY when the raw
     // field is blank, carrying the value the firmware actually uses at connect, so
