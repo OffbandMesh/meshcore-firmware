@@ -1,0 +1,29 @@
+This is a sound change in principle, but has one minor bug and one moderate omission.
+
+**1. Is `(int8_t)(_radio->getLastRSSI())` correct?**
+*   **Line:** `MyMesh.cpp:538`, `MyMesh.cpp:651`
+*   **Severity:** Minor
+*   **Finding:** The `(int8_t)` cast is not safe for the full LoRa RSSI range. RSSI can be weaker than -128dBm (e.g., -130dBm). Casting `-130` to `int8_t` will wrap around to a large positive number (e.g., `+126`), which the app would interpret as a very strong signal. This is a data corruption bug in a corner case. The value should be clamped before casting.
+*   **Fix:** `(int8_t)(max(-128, _radio->getLastRSSI()))`
+
+**2. Receive-time correctness:**
+*   **Line:** `MyMesh.cpp:538`, `MyMesh.cpp:651`
+*   **Severity:** Low / Architectural
+*   **Finding:** The logic relies on `_radio->getLastRSSI()` not being overwritten by a new packet between the ISR and this handler. While likely safe in the current single-threaded radio task, it's fragile. The `pkt` object already carries SNR; for robustness, it should also carry the RSSI from the moment of reception to avoid this temporal coupling. The current implementation is an accepted risk, but not ideal.
+
+**3. Is leaving `postSystemChannelText` `reserved1=0` right?**
+*   **Line:** `MyMesh.cpp:728`
+*   **Severity:** None
+*   **Finding:** Correct. This function synthesizes a message that was not received via radio, so it has no RSSI. `0` correctly signals "no data" to the app.
+
+**4. Any layout/offset impact?**
+*   **Severity:** None
+*   **Finding:** Correct. The change populates an existing reserved byte. Frame length and offsets are unchanged.
+
+**5. Anything missed?**
+*   **Line:** `MyMesh.cpp:787`
+*   **Severity:** Moderate
+*   **Finding:** An analogous frame, `RESP_CODE_CHANNEL_DATA_RECV`, was missed. This frame has the same `[snr, reserved1, reserved2]` layout, but its `reserved1` byte is still hardcoded to `0`. The RSSI feature will be inconsistently absent for this message type.
+*   **Fix:** Add `out_frame[i++] = (int8_t)(_radio->getLastRSSI());` to the `onChannelDataRecv` builder, replacing the hardcoded `0`.
+
+Not sound until #1 and #5 are addressed.
