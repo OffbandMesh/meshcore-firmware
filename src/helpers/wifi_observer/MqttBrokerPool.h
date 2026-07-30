@@ -129,6 +129,19 @@ private:
     // Drain one broker's backlog to its transport. Returns messages published.
     uint8_t drainBroker(uint8_t slot);
 
+    // #175: TLS rotation. When more TLS brokers are enabled than the heap-derived
+    // budget allows, the live set is rotated on a dwell timer so every feed gets
+    // serviced. Degenerates to a no-op when the budget covers every enabled TLS
+    // broker (PSRAM boards), via the same code path. Runs on the worker task
+    // (the only thread allowed to block on esp_mqtt teardown, #53).
+    uint32_t last_rotate_ms_ = 0;
+    // Per-slot cooldown: a rotated-out broker is ineligible for reconnect until
+    // this deadline, so the parked (HeldNoHeap) broker gets first claim on the
+    // freed budget instead of the victim immediately reclaiming it. 0 = not
+    // cooling. Compared wrap-safe via (int32_t)(deadline - now).
+    uint32_t rotated_out_until_ms_[OFFBAND_MAX_BROKERS] = {0};
+    void rotateTlsIfDue(uint32_t now_ms);
+
     // Per-slot guard: true while the lifecycle worker is creating/destroying
     // that slot's client. loopTask publish/status paths SKIP reconciling slots
     // so they never wait on the worker's blocking teardown (#53).
