@@ -1,0 +1,5 @@
+Sound.
+
+1.  **L549-550, L662-663, L770-771**: **Sound**. Emit order is correct in all three frames: `out_frame[i++] = 0;` (for `reserved1`) is immediately followed by `out_frame[i++] = rssiToInt8(...)` (for `reserved2`), matching wire order. No swaps or duplications.
+2.  **L549, L662, L770**: **Sound**. `reserved1` is correctly set to 0 in all cases, appropriate for a received message (not outgoing). The synthesized message frame in `postSystemChannelText` (L733) is also consistent, setting `reserved1` to 0. No conflicting flag setting is clobbered.
+3.  **L549-550, L662-663, L770-771**: **Sound**. The fix is applied completely and correctly to all three specified frames. In each case, RSSI is now in `reserved2`, and no frame was missed or left with an incorrect value.
