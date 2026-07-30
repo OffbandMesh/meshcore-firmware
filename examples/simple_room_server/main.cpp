@@ -3,6 +3,7 @@
 #include <SafeBoot.h>
 
 #include "MyMesh.h"
+#include "helpers/diagnostics/CrashLogStandard.h"   // #472: uniform boot-survival CrashLog
 
 #ifdef DISPLAY_CLASS
   #include "UITask.h"
@@ -27,6 +28,9 @@ void setup() {
   SafeBoot::checkAndMaybeSleep();
 
   board.begin();
+
+  // #472: uniform CrashLog boot-survival (after board.begin() so the reset reason is cached).
+  offband::crashLogStandardInit(board, "room-server");
 
 #ifdef DISPLAY_CLASS
   if (display.begin()) {
@@ -89,6 +93,8 @@ void setup() {
 }
 
 void loop() {
+  offband::crashLogStandardTick(millis());  // #472: deferred previous-boot re-dump for late serial connect
+
   int len = strlen(command);
   while (Serial.available() && len < sizeof(command)-1) {
     char c = Serial.read();

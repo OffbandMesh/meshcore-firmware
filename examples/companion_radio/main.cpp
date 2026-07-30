@@ -16,12 +16,11 @@
   #define CW_PHASE(name) ((void)0)
 #endif
 
-// #377 (Epic #350): boot-survival CrashLog on the nRF52 companion. The observer
-// path (ESP32) already wires CrashLog above; nRF52 companions are non-observer,
-// so include it here. Additive + nRF52-scoped -- does not touch the observer
-// blocks or the runtime-WiFi path.
-#if defined(NRF52_PLATFORM) && !defined(OFFBAND_OBSERVER)
-  #include "helpers/diagnostics/CrashLog.h"
+// #472 (was #377, nRF52-only): uniform boot-survival CrashLog for ALL non-observer
+// companions (ESP32 + nRF52). The observer path includes CrashLog above; every other
+// companion gets it here via the shared helper (which also re-exposes crashLogf).
+#if !defined(OFFBAND_OBSERVER)
+  #include "helpers/diagnostics/CrashLogStandard.h"
 #endif
 
 // Believe it or not, this std C function is busted on some platforms!
@@ -200,19 +199,12 @@ void setup() {
   }
 #endif
 
-#if defined(NRF52_PLATFORM) && !defined(OFFBAND_OBSERVER)
-  // #377 (Epic #350): start the boot-survival breadcrumb on the nRF52 companion.
-  // Delegate the reset reason to the board (#376 decision 2) via a non-capturing
-  // lambda -- it references only the global `board`, so it converts to the
-  // ResetReasonHook function pointer. crashLogBegin() dumps a ring that survived
-  // the previous reset (retained .noinit, #361); the boot line records the reason
-  // AND keeps the ring referenced so ld-2.29 GC can't drop it (#363).
-  offband::crashLogSetResetReasonHook([]() -> const char* {
-    return board.getResetReasonString(board.getResetReason());
-  });
-  offband::crashLogBegin();
-  offband::crashLogf("[boot] nRF52 companion up; reset=%s",
-                     board.getResetReasonString(board.getResetReason()));
+#if !defined(OFFBAND_OBSERVER)
+  // #472 (was #377, nRF52-only): uniform boot-survival CrashLog for ALL non-observer
+  // companions (ESP32 + nRF52). Wires the board reset-reason into CrashLog, dumps a
+  // ring that survived the previous reset, records a boot breadcrumb. The observer
+  // path wires CrashLog via wifiObserverBegin() above.
+  offband::crashLogStandardInit(board, "companion");
 #endif
 
 #ifdef DISPLAY_CLASS
@@ -435,6 +427,9 @@ void setup() {
 }
 
 void loop() {
+#if !defined(OFFBAND_OBSERVER)
+  offband::crashLogStandardTick(millis());  // #472: deferred previous-boot re-dump (all non-observer companions)
+#endif
 #if defined(NRF52_PLATFORM)
   board.feedWatchdog();  // #257: feed from the MAIN LOOP only -> a hung loop trips the WDT
   board.heartbeatTick(); // #275: loop-driven green-LED heartbeat (freezes if the loop hangs)
@@ -445,7 +440,7 @@ void loop() {
     // after a hang shows how long this boot ran. Also keeps the ring referenced.
     static uint32_t s_cl_last_ms = 0;
     uint32_t now_ms = millis();
-    offband::crashLogTick(now_ms);  // #378: deferred previous-boot re-dump for late serial connect
+    // (deferred re-dump now runs uniformly at loop top via crashLogStandardTick; #472)
     if (s_cl_last_ms == 0 || now_ms - s_cl_last_ms >= 30000u) {
       s_cl_last_ms = now_ms;
       offband::crashLogf("[hb] up=%us", (unsigned)(now_ms / 1000));

@@ -4,6 +4,7 @@
 #include <helpers/IdentityStore.h>
 #include <SafeBoot.h>
 #include "KissModem.h"
+#include "helpers/diagnostics/CrashLogStandard.h"   // #472: uniform boot-survival CrashLog
 
 #if defined(NRF52_PLATFORM)
   #include <InternalFileSystem.h>
@@ -83,6 +84,8 @@ void setup() {
 
   board.begin();
 
+  offband::crashLogStandardInit(board, "kiss-modem");   // #472: uniform CrashLog (after board.begin() for reset reason)
+
   if (!radio_init()) {
     halt();
   }
@@ -131,6 +134,7 @@ void setup() {
 }
 
 void loop() {
+  offband::crashLogStandardTick(millis());  // #472: deferred previous-boot re-dump for late serial connect
   modem->loop();
 
   if (!modem->isActuallyTransmitting()) {
