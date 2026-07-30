@@ -125,6 +125,15 @@ void MqttBrokerPool::loop(uint32_t now_ms) {
     // On host builds (no worker) nothing drives connects; the host stubs never
     // connect anyway, so this is correct for tests.
     publishStatusIfDue(now_ms);
+    // #175: drain each Up broker's ring backlog here, on loopTask. This keeps ALL
+    // ring_ access single-threaded -- append (publishPacket), drain (here +
+    // publishPacket), and lag/lapped (broker dump) all run on loopTask and never
+    // preempt each other, so the ring needs no lock. Draining here (every main-loop
+    // pass) also flushes a rotated-back-in broker even when no new packet arrives
+    // to trigger publishPacket. The worker task does NOT touch the ring.
+    for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
+        if (brokers_[s].runtime().state == BrokerState::Up) (void)drainBroker(s);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -436,7 +445,13 @@ void MqttBrokerPool::rotateTlsIfDue(uint32_t now_ms) {
     if (best_age < MQTT_ROTATE_DWELL_MS) return;
 
     last_rotate_ms_ = now_ms;
+    // Guard the slot during teardown so loopTask's drainBroker skips it while the
+    // (possibly multi-second) client_destroy runs. The per-broker client_lock_ is
+    // the true publish-vs-shutdown backstop (publish() re-checks state + client_
+    // under that lock); this just avoids loopTask spinning on a slot mid-destroy.
+    reconciling_[victim] = true;
     brokers_[victim].shutdown();   // full teardown incl. client_destroy (#327)
+    reconciling_[victim] = false;
     // Block the victim from reclaiming the freed budget for one dwell, giving the
     // parked broker first claim on the next re-drive pass.
     rotated_out_until_ms_[victim] = now_ms + MQTT_ROTATE_DWELL_MS;
@@ -482,9 +497,6 @@ void MqttBrokerPool::workerLoop() {
             MqttBroker& b = brokers_[s];
             if (!b.isConfigured()) continue;
             b.loop(now);
-            // #175: a broker that just came Up (or was rotated back in) drains
-            // its backlog here, not only when a new packet arrives.
-            if (b.runtime().state == BrokerState::Up) (void)drainBroker(s);
             BrokerState st = b.runtime().state;
             // Re-drive idle/held slots. HeldNoClock releases when the clock is
             // sane (#87); HeldNoHeap releases when a TLS slot frees (#171).
