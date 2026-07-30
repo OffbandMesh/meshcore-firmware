@@ -110,6 +110,11 @@ public:
     uint8_t enabledCount()    const;
     uint8_t upCount()         const;
     const MqttBroker& broker(uint8_t slot) const { return brokers_[slot]; }
+    // #175: how many published messages this broker has not yet sent (0 = caught
+    // up). Non-zero on a rotated-out or backlogged feed; a persistently large
+    // value means that broker is misbehaving -- see the issue's overflow note.
+    uint32_t brokerLag(uint8_t slot) const { return ring_.lag(slot); }
+    bool     brokerLapped(uint8_t slot) const { return ring_.lapped(slot); }
     // #173: the device's own pubkey as UPPERCASE hex (the connect-time default for a
     // broker's jwt_owner when none is set, #95) -- so the OCFG_BROKERS dump can show
     // the resolved owner as a placeholder. Writes "" if identity unset / host build.
