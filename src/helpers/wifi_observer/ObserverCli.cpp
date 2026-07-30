@@ -4,11 +4,9 @@
 
 #include "ObserverCli.h"
 #include "ConfigSchema.h"
-#include "WifiBootstrap.h"   // Plan 3 Task 10: get wifi.status walks
-                             // WifiBootstrap::state()
-#include "../config/ConfigDispatch.h"   // #364: role-agnostic config dispatch --
-                                        // this file registers the observer's
-                                        // provider at the bottom.
+#include "../config/ConfigDispatch.h"          // #364: role-agnostic config dispatch
+#include "../config/WifiConfigProvider.h"      // #370: wifi.* handlers (moved out of this file)
+#include "../config/DisplayConfigProvider.h"   // #370: display.* handlers + NVS accessors (moved out)
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -371,125 +369,6 @@ static bool handleSetBrokerField(char* reply, size_t reply_size,
     return true;
 }
 
-// "set wifi.ssid <s>"  / "set wifi.pwd <s>"  / "get wifi.ssid"
-// / "get wifi.status" -- Plan 3 Task 10 (Strycher/LoRa#272).
-//
-// First-contact WiFi setup is driven through the BLE system channel
-// (SystemChannelCli) by typing CLI commands as channel messages.
-// Those commands route through the cliPassthrough allowlist into
-// dispatchObserverCli, which is this function. Both set and get
-// halves write/read NVS namespace "wifi" with keys ssid + pwd; the
-// status reply enumerates WifiBootstrapState so the user can confirm
-// state after a set sequence.
-//
-// PSK redacted from reply per CLAUDE.md security note: the set-pwd
-// branch acknowledges "wifi.pwd = (set, length=N)" without echoing
-// the value, and get-pwd is unsupported.
-static bool handleSetWifiField(char* reply, size_t reply_size,
-                               const char* field, const char* value) {
-    if (field == nullptr || value == nullptr) {
-        snprintf(reply, reply_size,
-                 "ERROR: usage: set wifi.ssid <s> | set wifi.pwd <s>\n");
-        return true;
-    }
-    if (!eq(field, "ssid") && !eq(field, "pwd")) {
-        snprintf(reply, reply_size,
-                 "ERROR: unknown wifi field '%s' "
-                 "(supported: ssid, pwd)\n", field);
-        return true;
-    }
-    // Reject empty values: an empty SSID is never useful and would
-    // collide with the no-creds detection in WifiBootstrap::begin.
-    if (value[0] == '\0') {
-        snprintf(reply, reply_size,
-                 "ERROR: empty value for wifi.%s\n", field);
-        return true;
-    }
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin("wifi", /*readOnly=*/false)) {
-        snprintf(reply, reply_size,
-                 "ERROR: cannot open NVS namespace 'wifi'\n");
-        return true;
-    }
-    p.putString(field, value);
-    p.end();
-#endif
-    if (eq(field, "pwd")) {
-        // Never echo the PSK in any code path.
-        snprintf(reply, reply_size,
-                 "wifi.pwd set (%u chars entered). Reboot or run "
-                 "'wifi status' after STA retry.\n",
-                 (unsigned)strlen(value));
-    } else {
-        snprintf(reply, reply_size, "wifi.ssid = %s\n", value);
-    }
-    return true;
-}
-
-static bool handleGetWifi(char* reply, size_t reply_size, const char* field) {
-    if (field == nullptr) {
-        snprintf(reply, reply_size,
-                 "ERROR: usage: get wifi.ssid | wifi status\n");
-        return true;
-    }
-    if (eq(field, "pwd")) {
-        // Refuse to ever read the PSK back. There is no legitimate
-        // workflow where surfacing the saved PSK to a remote caller
-        // is the right answer.
-        snprintf(reply, reply_size,
-                 "ERROR: wifi.pwd is write-only\n");
-        return true;
-    }
-    if (eq(field, "ssid")) {
-#ifdef ARDUINO
-        Preferences p;
-        if (!p.begin("wifi", /*readOnly=*/true)) {
-            snprintf(reply, reply_size,
-                     "ERROR: cannot open NVS namespace 'wifi'\n");
-            return true;
-        }
-        String s = p.getString("ssid", "");
-        p.end();
-        snprintf(reply, reply_size, "wifi.ssid = %s\n",
-                 s.isEmpty() ? "(unset)" : s.c_str());
-#else
-        snprintf(reply, reply_size, "wifi.ssid = (host build)\n");
-#endif
-        return true;
-    }
-    if (eq(field, "status")) {
-#ifdef ARDUINO
-        // Reach into the WifiBootstrap state via the singleton.
-        // Render a single human-readable line summarizing the
-        // current STA state + IP when connected.
-        auto state = wifiBootstrap().state();
-        const char* st = "?";
-        switch (state) {
-            case WifiBootstrapState::Boot:          st = "Boot";          break;
-            case WifiBootstrapState::CliRescue:     st = "CliRescue";     break;
-            case WifiBootstrapState::ApMode:        st = "AwaitingSetup"; break;
-            case WifiBootstrapState::StaConnecting: st = "StaConnecting"; break;
-            case WifiBootstrapState::StaConnected:  st = "StaConnected";  break;
-            case WifiBootstrapState::StaFailed:     st = "StaFailed";     break;
-        }
-        if (state == WifiBootstrapState::StaConnected) {
-            snprintf(reply, reply_size, "wifi.status = %s ip=%s\n",
-                     st, WiFi.localIP().toString().c_str());
-        } else {
-            snprintf(reply, reply_size, "wifi.status = %s\n", st);
-        }
-#else
-        snprintf(reply, reply_size, "wifi.status = (host build)\n");
-#endif
-        return true;
-    }
-    snprintf(reply, reply_size,
-             "ERROR: unknown wifi field '%s' (supported: ssid, status)\n",
-             field);
-    return true;
-}
-
 // "set web.allow_initial <on|off>" -- recovery override that re-allows
 // the derived initial password even after the user has set their own.
 // Cleared automatically after the next successful login via
@@ -521,27 +400,6 @@ static bool handleSetWebAllowInitial(char* reply, size_t reply_size,
 // ---------------------------------------------------------------------------
 // Top-level dispatch
 // ---------------------------------------------------------------------------
-
-// "wifi enable" / "wifi disable" -- #45. Persists an NVS
-// policy flag in namespace "wifi" (key "enabled", default true) that
-// WifiBootstrap::begin() honors at boot. Reboot-to-apply by design: we do
-// NOT tear down a live STA here, because the observer's MQTT uplink and this
-// very _sys channel ride that WiFi link -- the flag only gates the next
-// boot's STA attempt.
-static bool handleSetWifiEnabled(char* reply, size_t reply_size, bool enabled) {
-#ifdef ARDUINO
-    Preferences p;
-    if (!p.begin("wifi", /*readOnly=*/false)) {
-        snprintf(reply, reply_size, "ERROR: cannot open NVS namespace 'wifi'\n");
-        return true;
-    }
-    p.putBool("enabled", enabled);
-    p.end();
-#endif
-    snprintf(reply, reply_size, "wifi.enabled = %d (reboot to apply)\n",
-             enabled ? 1 : 0);
-    return true;
-}
 
 // "get mqtt.broker.<N>.<key>" -- #45: symmetric read for the
 // existing "set mqtt.broker.<N>.<key>". Key vocabulary mirrors
@@ -643,90 +501,6 @@ static bool handleClearBroker(char* reply, size_t reply_size,
              "mqtt slot %d cleared. Default slots re-seed at next reboot; "
              "custom slots stay empty.\n", slot);
     return true;
-}
-
-// ---------------------------------------------------------------------------
-// #141: display always-on toggle (`display always on` / `display always off`).
-// Persists to the fork-branded "offband_ui" NVS namespace, then applies the
-// change to the live display via an applier the app registers at boot (a raw
-// function pointer -- not std::function -- to avoid heap on tight-RAM boards).
-// ---------------------------------------------------------------------------
-static void (*s_display_always_on_applier)(bool) = nullptr;
-
-void setDisplayAlwaysOnApplier(void (*fn)(bool)) {
-    s_display_always_on_applier = fn;
-}
-
-static bool handleDisplayAlwaysOn(char* reply, size_t reply_size, bool on) {
-    // #181: if persistence fails, surface it and do NOT apply to the live display
-    // -- applying a setting that won't survive a reboot would mislead the user
-    // about what's actually stored (SAFELANE 6: state must match the ACK).
-    if (!setDisplayAlwaysOn(on)) {                                     // persist (offband_ui NVS)
-        snprintf(reply, reply_size, "ERROR: failed to save display setting (NVS write failed)\n");
-        return true;
-    }
-    if (s_display_always_on_applier) s_display_always_on_applier(on);  // apply to the live display
-    snprintf(reply, reply_size,
-             on ? "display: always on (screen stays lit)\n"
-                : "display: normal (blanks after 15 s)\n");
-    return true;
-}
-
-// ---------------------------------------------------------------------------
-// #148: display rotation (0/180). Persists to offband_ui; applies live via a
-// raw-fn-pointer applier the app registers at boot (parallel to the always-on
-// applier above).
-// ---------------------------------------------------------------------------
-static void (*s_display_rotation_applier)(uint8_t) = nullptr;
-
-void setDisplayRotationApplier(void (*fn)(uint8_t)) {
-    s_display_rotation_applier = fn;
-}
-
-// #148: capability query (parallel to the applier) so we can refuse rotation on
-// displays whose driver has no verified runtime-rotation override.
-static bool (*s_display_rotation_supported)() = nullptr;
-
-void setDisplayRotationSupportedQuery(bool (*fn)()) {
-    s_display_rotation_supported = fn;
-}
-
-// In-session cache of the current rotation so `display flip` toggles reliably
-// from RAM instead of a write-then-read NVS round-trip (a fresh read-only
-// handle may not observe a just-committed write). Lazily seeded from NVS;
-// updated on every rotate/flip. NVS stays the persistence layer (#148).
-static int s_rotation_cache = -1;   // -1 = not yet loaded
-
-static bool handleDisplayRotate(char* reply, size_t reply_size, uint8_t deg) {
-    // #148: gate to drivers with a verified runtime-rotation override (SSD1306
-    // OLED). Others report unsupported rather than silently no-op'ing; the TFT
-    // (ST7789) override is not yet hardware-verified and is tracked separately.
-    // Deny-by-default: if the capability query was never registered, treat the
-    // display as unsupported (don't fall through to a silent no-op) -- per Gemini review.
-    if (!s_display_rotation_supported || !s_display_rotation_supported()) {
-        snprintf(reply, reply_size, "display: rotation not supported on this display\n");
-        return true;
-    }
-    // #181: persist first; on NVS failure surface it and leave the cache + live
-    // display untouched, so RAM state, NVS, and the ACK all stay consistent.
-    if (!setDisplayRotation(deg)) {                                           // persist (offband_ui NVS)
-        snprintf(reply, reply_size, "ERROR: failed to save display rotation (NVS write failed)\n");
-        return true;
-    }
-    s_rotation_cache = deg;                                                   // keep the in-session cache current
-    if (s_display_rotation_applier) s_display_rotation_applier(deg);          // apply to the live display
-    snprintf(reply, reply_size,
-             deg == 180 ? "display: rotation 180 (flipped)\n"
-                        : "display: rotation 0 (default)\n");
-    return true;
-}
-
-static bool handleDisplayFlip(char* reply, size_t reply_size) {
-    // Toggle from the in-session cache (seeded from NVS on first use), so flip
-    // always inverts 0<->180 without depending on a read-after-write.
-    if (s_rotation_cache < 0) s_rotation_cache = getDisplayRotation();
-    uint8_t other = (s_rotation_cache == 180) ? 0 : 180;
-    return handleDisplayRotate(reply, reply_size, other);
 }
 
 bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
@@ -981,25 +755,9 @@ static bool observerConfigSet(const char* key, const char* value, char* reply, s
     if (eq(key, "mqtt.iata"))            return handleSetIata(reply, reply_size, value);
     if (eq(key, "mqtt.status_interval")) return handleSetStatusInterval(reply, reply_size, value);
 
-    if (eq(key, "display.always_on")) {
-        bool on;
-        if (!parseConfigBool(value, on)) { snprintf(reply, reply_size, "ERROR: display.always_on expects 0|1\n"); return true; }
-        return handleDisplayAlwaysOn(reply, reply_size, on);
-    }
-    if (eq(key, "display.rotation")) {
-        if (eq(value, "0"))   return handleDisplayRotate(reply, reply_size, 0);
-        if (eq(value, "180")) return handleDisplayRotate(reply, reply_size, 180);
-        snprintf(reply, reply_size, "ERROR: display.rotation expects 0|180\n");
-        return true;
-    }
-
-    if (eq(key, "wifi.enabled")) {
-        bool on;
-        if (!parseConfigBool(value, on)) { snprintf(reply, reply_size, "ERROR: wifi.enabled expects 0|1\n"); return true; }
-        return handleSetWifiEnabled(reply, reply_size, on);
-    }
-    if (strncmp(key, "wifi.", 5) == 0)            // wifi.ssid / wifi.pwd
-        return handleSetWifiField(reply, reply_size, key + 5, value);
+    // #370: display.* and wifi.* moved to their own providers
+    // (config/DisplayConfigProvider, config/WifiConfigProvider). The shared
+    // dispatcher routes those key spaces there; this provider owns only mqtt.*.
 
     {
         int slot; const char* field;
@@ -1038,18 +796,7 @@ static bool observerConfigGet(const char* key, char* reply, size_t reply_size) {
     if (key == nullptr || reply == nullptr || reply_size == 0) return false;
     reply[0] = '\0';
 
-    if (eq(key, "wifi.enabled")) {
-#ifdef ARDUINO
-        Preferences p; bool en = true;
-        if (p.begin("wifi", /*readOnly=*/true)) { en = p.getBool("enabled", true); p.end(); }
-        snprintf(reply, reply_size, "wifi.enabled = %d\n", en ? 1 : 0);
-#else
-        snprintf(reply, reply_size, "wifi.enabled = (host build)\n");
-#endif
-        return true;
-    }
-    if (strncmp(key, "wifi.", 5) == 0)             // wifi.ssid (wifi.pwd -> write-only error)
-        return handleGetWifi(reply, reply_size, key + 5);
+    // #370: wifi.* and display.* GETs are served by their own providers now.
 
     if (eq(key, "mqtt.iata")) {
         char iata[8] = {0};
@@ -1059,14 +806,6 @@ static bool observerConfigGet(const char* key, char* reply, size_t reply_size) {
     }
     if (eq(key, "mqtt.status_interval")) {
         snprintf(reply, reply_size, "mqtt.status_interval = %u\n", (unsigned)readStatusIntervalSec());
-        return true;
-    }
-    if (eq(key, "display.always_on")) {
-        snprintf(reply, reply_size, "display.always_on = %d\n", getDisplayAlwaysOn() ? 1 : 0);
-        return true;
-    }
-    if (eq(key, "display.rotation")) {
-        snprintf(reply, reply_size, "display.rotation = %u\n", (unsigned)getDisplayRotation());
         return true;
     }
 
@@ -1168,28 +907,26 @@ size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size,
 // ---------------------------------------------------------------------------
 // __attribute__((used)): belt-and-braces against the compiler/linker dropping an
 // object whose only purpose is its constructor's side effect. NOT a fix for an
-// observed defect -- verified present on the linked ESP32-S3 image (#364 review,
-// BLOCKER-1): .init_array entry 6 == _GLOBAL__sub_I_...setDisplayAlwaysOnApplier,
-// whose whole body is one call to config::registerProvider. ESP-IDF's linker
-// script KEEPs .init_array, and this TU is always pulled in (dispatchObserverCli
-// / configBrokerSlotCount are referenced elsewhere), so it cannot be dropped as
-// an unextracted archive member either. Kept as free insurance against a future
+// observed defect -- the #364 review (BLOCKER-1) verified the registrar's
+// static-init ctor is present in .init_array on the linked ESP32-S3 image, its
+// whole body one call to config::registerProvider. ESP-IDF's linker script KEEPs
+// .init_array, and this TU is always pulled in (dispatchObserverCli /
+// configBrokerSlotCount are referenced elsewhere), so it cannot be dropped as an
+// unextracted archive member either. Kept as free insurance against a future
 // toolchain/flag change, since the failure mode -- every config key answering
-// "unknown config key" on a deployed fleet -- is severe.
+// "unknown config key" on a deployed fleet -- is severe. (#370: the wifi/display
+// providers carry the same `used` insurance in their own TUs.)
 // #366: the observer's key-space manifest, for registration-time overlap
 // detection. Must mirror what observerConfigSet/observerConfigGet actually
-// claim (see the if-chain above): exact leaf keys verbatim, plus the two BROAD
-// prefixes it owns -- `wifi.` (wifi.ssid/wifi.pwd; also covers wifi.enabled)
-// and `mqtt.broker.`. The `wifi.` entry is exactly the shadow the repeater's
-// `wifi.mode` would hit (#301) -- the detector fires on that at registration.
+// claim (see the if-chain above). #370: the observer now owns ONLY `mqtt.*`;
+// `wifi.` moved to WifiConfigProvider and `display.` to DisplayConfigProvider,
+// each declaring its own prefix. The overlap detector fires if any two
+// providers claim the same key space (e.g. #301's `wifi.mode` under `wifi.`).
 // Keep this in sync when adding/removing an observer config key.
 static const char* const kObserverConfigPrefixes[] = {
     "mqtt.iata",
     "mqtt.status_interval",
     "mqtt.broker.",
-    "display.always_on",
-    "display.rotation",
-    "wifi.",
 };
 
 static __attribute__((used)) config::ProviderRegistrar _observer_config_provider(

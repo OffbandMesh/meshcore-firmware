@@ -124,54 +124,11 @@ bool writeStatusIntervalSec(uint16_t seconds) {
     return true;
 }
 
-// #141: display always-on toggle, in the fork-branded "offband_ui" namespace.
-bool getDisplayAlwaysOn() {
-    Preferences p;
-    p.begin(kNvsOffbandUi, /*readOnly=*/true);
-    bool v = p.getBool(kKeyDisplayAlwaysOn, false);
-    p.end();
-    return v;
-}
-
-bool setDisplayAlwaysOn(bool on) {
-    Preferences p;
-    if (!p.begin(kNvsOffbandUi, /*readOnly=*/false)) {
-        logCfgWriteFailure("setDisplayAlwaysOn.begin", kNvsOffbandUi);
-        return false;
-    }
-    size_t wrote = p.putBool(kKeyDisplayAlwaysOn, on);
-    p.end();
-    if (wrote != sizeof(uint8_t)) {     // putBool stores 1 byte; 0 on failure
-        logCfgWriteFailure("setDisplayAlwaysOn.putBool", kNvsOffbandUi);
-        return false;
-    }
-    return true;
-}
-
-// #148: display rotation (0/180) in the "offband_ui" namespace. Clamped to the
-// supported set on both read and write.
-uint8_t getDisplayRotation() {
-    Preferences p;
-    p.begin(kNvsOffbandUi, /*readOnly=*/true);
-    uint8_t v = p.getUChar(kKeyDisplayRotation, 0);
-    p.end();
-    return (v == 180) ? 180 : 0;
-}
-
-bool setDisplayRotation(uint8_t deg) {
-    Preferences p;
-    if (!p.begin(kNvsOffbandUi, /*readOnly=*/false)) {
-        logCfgWriteFailure("setDisplayRotation.begin", kNvsOffbandUi);
-        return false;
-    }
-    size_t wrote = p.putUChar(kKeyDisplayRotation, (deg == 180) ? 180 : 0);
-    p.end();
-    if (wrote != sizeof(uint8_t)) {     // putUChar stores 1 byte; 0 on failure
-        logCfgWriteFailure("setDisplayRotation.putUChar", kNvsOffbandUi);
-        return false;
-    }
-    return true;
-}
+// #370: the display.* NVS accessors (getDisplayAlwaysOn / setDisplayAlwaysOn /
+// getDisplayRotation / setDisplayRotation) moved to
+// src/helpers/config/DisplayConfigProvider.cpp. They were role-neutral
+// "offband_ui" Preferences wrappers with no broker/mqtt coupling, so they belong
+// with the display provider where any role can link them without this schema.
 
 // #182: broker config is stored as individual per-key NVS entries. The #181
 // single-blob attempt was reverted: a ~1.1KB blob needs one large contiguous
