@@ -114,6 +114,14 @@ def bridge_chip(vid_pid: str) -> Optional[str]:
     return BRIDGE_VENDORS.get((vid_pid or "").split(":")[0].upper())
 
 
+# #503 OWNER RULING: any resolution where VID:PID/port-path is the DECIDING
+# factor requires an explicit, per-invocation human approval. Set only by the
+# top-level --approve-class-match flag, which a session may pass only after
+# the owner approves that specific invocation in chat. Serial matches and the
+# #468 live-MAC verification are identity and never need this.
+CLASS_MATCH_APPROVED = False
+
+
 # ---------------------------------------------------------------------------
 # Output helpers - uniform formatting so the agent can parse refusal messages.
 # ---------------------------------------------------------------------------
@@ -145,6 +153,24 @@ def load_registry() -> dict:
         refuse(f"registry at {REGISTRY_PATH} is not a YAML mapping")
     data.setdefault("devices", {})
     data.setdefault("foreign_devices", {})
+    # #503 (Gemini MAJOR): with serial-first matching, a duplicate usb_serial
+    # across entries is a direct wrong-device path -- resolving name A could
+    # flash the board registered as B. Bootstrap refuses dupes at creation;
+    # this catches hand-edited registries. Hard refusal, not a warning.
+    seen: dict = {}
+    for kind_key in ("devices", "foreign_devices"):
+        for name, entry in (data.get(kind_key) or {}).items():
+            if not isinstance(entry, dict):
+                continue
+            for s in entry_usb_serials(entry):
+                if s in seen and seen[s] != name:
+                    refuse(
+                        f"registry integrity: usb_serial {s} appears on BOTH "
+                        f"'{seen[s]}' and '{name}'. A duplicate serial makes "
+                        "serial-first resolution ambiguous (wrong-device risk, "
+                        "#503). Fix hardware-devices.yaml before any operation."
+                    )
+                seen[s] = name
     return data
 
 
@@ -294,37 +320,44 @@ def entry_usb_serials(entry: dict) -> list[str]:
 def find_in_registry(
     registry: dict, vid_pid: str, instance_hash: str, usb_serial: str = ""
 ) -> tuple[Optional[str], Optional[str], Optional[dict]]:
-    # Two-tier match: an exact DeviceID-instance match ALWAYS wins over a weaker
-    # VID:PID-class-only match. A class-only candidate (no instance hash recorded,
-    # e.g. discriminators.windows == null) is settled for ONLY when it is the
-    # *sole* device claiming this VID:PID class. When several registered devices
-    # share the VID:PID (e.g. multiple ESP32-S3 303A:0002 boards) and none match
-    # by instance hash, a class-only guess would mislabel the port -- this is the
-    # recurring "COM<n> shows as LIBT" bug, where LIBT carried a null Windows
-    # discriminator and wildcard-grabbed any unmatched 303A:0002 port (the
-    # companion sitting on a different bench port than its recorded hash). In that
-    # ambiguous case we return UNMATCHED so the caller surfaces an honest
-    # "unidentified" port instead of a confidently-wrong device name.
+    # #503 OWNER RULING: serial-first, GLOBAL, no VID:PID precondition.
+    #
+    # PASS 1 -- the port's usb_serial (chip DEVICEID / MAC-serial) is checked
+    # against EVERY entry, devices and foreign alike, with VID:PID playing no
+    # part. A board that changes USB identity (nRF52 app<->bootloader flips,
+    # ESP32-S3 CDC<->JTAG modes) keeps resolving to its one entry. Foreign
+    # matches return kind "foreign" exactly as before -- callers hard-refuse.
+    # A serial-bearing port that matches nothing is honestly "unregistered":
+    # it NEVER falls through to class matching. VID:PID is a device CLASS,
+    # never an identity -- many identical boards share it on this bench.
+    #
+    # PASS 2 -- only for ports that expose NO serial (CH340/CP2102 bridge
+    # class): the legacy unambiguous port-path-hash match, scoped to entries
+    # that also have no serial (#323: an entry with a serial never matches a
+    # port with a different -- or absent -- serial). vid_pid on entries is
+    # observational metadata everywhere except this serial-less fallback.
+    #
+    # TIER 3 (unchanged, #323): entries with neither serial nor hash are never
+    # candidates -- a class-only wildcard is how a garage-ceiling node was once
+    # reported present on the bench.
     serial_up = norm_serial(usb_serial)
-    legacy_candidates: list[tuple[Optional[str], Optional[str], Optional[dict]]] = []
+    if serial_up in DEFAULT_USB_SERIALS:
+        serial_up = ""  # factory defaults are class markers, not identity (#468)
 
+    if serial_up:
+        for kind_key, kind_label in [("devices", "device"), ("foreign_devices", "foreign")]:
+            for name, entry in (registry.get(kind_key) or {}).items():
+                if serial_up in entry_usb_serials(entry):
+                    return (kind_label, name, entry)
+        return (None, None, None)
+
+    legacy_candidates: list[tuple[Optional[str], Optional[str], Optional[dict]]] = []
     for kind_key, kind_label in [("devices", "device"), ("foreign_devices", "foreign")]:
         for name, entry in (registry.get(kind_key) or {}).items():
-            entry_vid_pids = entry.get("vid_pid") or []
-            if vid_pid not in entry_vid_pids:
+            if entry_usb_serials(entry):
+                continue  # serial-bearing entry never matched by a serial-less port
+            if vid_pid not in (entry.get("vid_pid") or []):
                 continue
-
-            # TIER 1 -- USB serial. Device-unique and port-independent: this IS identity.
-            serials = entry_usb_serials(entry)
-            if serials:
-                if serial_up and serial_up in serials:
-                    return (kind_label, name, entry)
-                # This entry has a serial and it is NOT this port's device. Excluding
-                # it here is what stops a registered board from impersonating another
-                # board that happens to sit in a port it once used.
-                continue
-
-            # TIER 2 -- legacy port-path hash, for entries predating usb_serial.
             d = (entry.get("discriminators") or {}).get("windows") or {}
             known_hashes = [
                 d.get("runtime_deviceid_instance"),
@@ -334,16 +367,8 @@ def find_in_registry(
             if known_hashes and instance_hash in known_hashes:
                 legacy_candidates.append((kind_label, name, entry))
 
-            # TIER 3 -- neither serial nor hash (e.g. discriminators.windows == null).
-            # DELIBERATELY NOT A CANDIDATE (#323). Such an entry matches its whole
-            # VID:PID class, so it silently swallows any unrecognised board of that
-            # chip family. That is how a node physically mounted in the garage ceiling
-            # was reported as sitting on the bench. Unidentified is the honest answer;
-            # a confidently-wrong device name gets firmware written to the wrong board.
-
     # A legacy hash match is accepted only when it is unambiguous. Note this is
-    # weaker than a serial match and follows the socket, not the board -- callers
-    # warn the operator to record usb_serial.
+    # weaker than a serial match and follows the socket, not the board.
     if len(legacy_candidates) == 1:
         return legacy_candidates[0]
     return (None, None, None)
@@ -413,7 +438,14 @@ def resolve_device(name: str, registry: dict) -> tuple[dict, dict]:
             # ambiguity in either direction still refuses.
             bridge = all(bridge_chip(vp) for vp in entry_vid_pids)
             if bridge and norm_serial(entry.get("mac")):
-                cands = [p for p in ports if p["vid_pid"] in entry_vid_pids]
+                # #503: candidates must be SERIAL-LESS ports. A port that carries
+                # a real serial has identity; a serial-less bridge entry may never
+                # claim it via class membership.
+                cands = [
+                    p for p in ports
+                    if p["vid_pid"] in entry_vid_pids
+                    and not norm_serial(p.get("usb_serial"))
+                ]
                 rivals = [
                     n for n, e in (registry.get("devices") or {}).items()
                     if n != name
@@ -461,6 +493,22 @@ def resolve_device(name: str, registry: dict) -> tuple[dict, dict]:
             p for p in ports
             if p["vid_pid"] in entry_vid_pids and p["instance_hash"] in known_hashes
         ]
+        # #503 OWNER RULING: a hash+class match where the PORT exposes a real
+        # serial means a serial-bearing board is being identified by its USB
+        # socket. That is a class-decided match and requires explicit human
+        # approval (--approve-class-match) -- the honest fix is recording the
+        # serial the port is already showing.
+        serial_bearing = [m for m in matches if norm_serial(m.get("usb_serial"))]
+        if serial_bearing and not CLASS_MATCH_APPROVED:
+            m = serial_bearing[0]
+            refuse(
+                f"'{name}' would match {m['com']} only by legacy port-path hash, but "
+                f"that port exposes usb_serial {m.get('usb_serial')} -- identity is "
+                "available and this entry doesn't record it. Record "
+                f"'usb_serial: {m.get('usb_serial')}' on the entry (permanent fix), or "
+                "re-run with --approve-class-match after explicit owner approval in "
+                "chat (#503)."
+            )
         if not matches:
             present_summary = ", ".join(
                 f"{p['com']}={p['vid_pid']} serial={p.get('usb_serial') or '(none)'}"
@@ -873,24 +921,48 @@ def _esp32_trigger_download(com: str) -> None:
 
 
 def _discover_bootloader_port(before: list, vendor: str, running_pid: str,
-                              timeout: int) -> dict:
-    """After a bootloader-entry trigger, poll enumeration until exactly one NEW
-    port appears with the device's vendor VID and a PID different from the
-    running PID (i.e. it transitioned to a bootloader identity). Returns that
-    port. Refuses on zero (timeout) or more than one (ambiguous) - this is what
-    keeps the discovery from ever flashing the wrong device."""
+                              timeout: int, running_serial: str = "") -> dict:
+    """After a bootloader-entry trigger, poll enumeration for the device's NEW
+    (bootloader) port.
+
+    #503: SERIAL-FIRST. The chip serial is constant across USB-mode changes
+    (nRF52 DEVICEID in app/bootloader/DFU; ESP32 MAC-derived serial in
+    CDC/JTAG/ROM modes), so a new port carrying the SAME serial as the running
+    port IS the device -- regardless of what VID:PID the new mode presents.
+    This is what survives boards like the T1000-E whose app identity
+    (2886:0057) and bootloader family (239A:xxxx) share no vendor. The
+    vendor+changed-PID heuristic remains only as the fallback for modes that
+    expose no serial. Refuses on ambiguity -- that is what keeps discovery
+    from ever flashing the wrong device."""
     before_coms = {p["com"] for p in before}
     vendor = vendor.upper()
     running_pid = running_pid.upper()
+    running_serial = norm_serial(running_serial)
     deadline = time.time() + timeout
     last_seen: list = []
     while time.time() < deadline:
         now = enumerate_ports()
         new = [p for p in now if p["com"] not in before_coms]
+        if running_serial:
+            by_serial = [
+                p for p in new
+                if norm_serial(p.get("usb_serial")) == running_serial
+            ]
+            if len(by_serial) == 1:
+                return by_serial[0]
+            if len(by_serial) > 1:
+                coms = ", ".join(f"{p['com']}({p['vid_pid']})" for p in by_serial)
+                refuse(
+                    f"multiple new ports carry the device serial ({coms}) -- "
+                    "enumeration is inconsistent; refusing rather than guessing."
+                )
         cands = [
             p for p in new
             if p["vid_pid"].split(":")[0].upper() == vendor
             and p["vid_pid"].split(":")[1].upper() != running_pid
+            and not norm_serial(p.get("usb_serial"))  # #503: serial-bearing new
+            # ports are claimed ONLY by serial equality above -- the class
+            # heuristic may never grab a port that has identity.
         ]
         last_seen = cands
         if len(cands) == 1:
@@ -904,7 +976,8 @@ def _discover_bootloader_port(before: list, vendor: str, running_pid: str,
         time.sleep(0.5)
     refuse(
         f"no bootloader port appeared within {timeout}s after the trigger "
-        f"(expected a new {vendor} port with PID != {running_pid}). The device "
+        f"(matched neither the device serial {running_serial or '(none)'} nor a "
+        f"new serial-less {vendor} port with PID != {running_pid}). The device "
         "may not have entered bootloader mode. Last candidates: "
         + (", ".join(p["com"] for p in last_seen) or "none")
     )
@@ -924,7 +997,8 @@ def _enter_bootloader_and_discover(running_port: dict, platform: str) -> dict:
     else:
         _esp32_trigger_download(running_port["com"])
     bl = _discover_bootloader_port(before, vendor, running_pid,
-                                   BOOTLOADER_DISCOVER_TIMEOUT)
+                                   BOOTLOADER_DISCOVER_TIMEOUT,
+                                   running_serial=running_port.get("usb_serial", ""))
     out(f"Discovered bootloader port: {bl['com']} "
         f"({bl['vid_pid']}, hash {bl['instance_hash']})")
     return bl
@@ -1340,14 +1414,21 @@ def cmd_monitor(args, registry):
     """
     port, _ = resolve_device(args.device, registry)
     if port.get("bridge_provisional"):
-        # #468: read-only attach; worst case is watching the wrong console.
-        # Loud banner instead of refusal -- monitor must not reset the chip,
-        # so MAC verification is impossible here by design.
+        # #503: a provisional match consumed by a command that never MAC-verifies
+        # is a class-decided identification -- owner approval required.
+        if not CLASS_MATCH_APPROVED:
+            refuse(
+                f"'{args.device}' resolved only provisionally (bridge class). monitor "
+                "cannot MAC-verify (it must not reset the chip), so this would be a "
+                "VID:PID-decided match. Re-run with --approve-class-match after "
+                "explicit owner approval in chat (#503)."
+            )
         err(
             f"UNVERIFIED: '{args.device}' matched provisionally (bridge-class -- "
             "identity not MAC-verified; monitor cannot verify without resetting "
-            "the chip). If another bridge board could be attached, treat this "
-            "console output with suspicion (#468)."
+            "the chip). Owner-approved class match in effect (#503). If another "
+            "bridge board could be attached, treat this console output with "
+            "suspicion (#468)."
         )
     env_suffix = f" (env={args.env})" if args.env else ""
     out(f"Opening monitor on {port['com']} for {args.device} at {args.baud} baud" + env_suffix)
@@ -1394,9 +1475,16 @@ def cmd_info(args, registry):
     """Tier B: meshtastic --info. Reads device state, does not reset."""
     port, _ = resolve_device(args.device, registry)
     if port.get("bridge_provisional"):
+        if not CLASS_MATCH_APPROVED:
+            refuse(
+                f"'{args.device}' resolved only provisionally (bridge class) and info "
+                "does not MAC-verify -- a VID:PID-decided match. Re-run with "
+                "--approve-class-match after explicit owner approval in chat (#503)."
+            )
         err(
             f"UNVERIFIED: '{args.device}' matched provisionally (bridge-class, "
-            "not MAC-verified). Read-only query; verify output plausibility (#468)."
+            "not MAC-verified). Owner-approved class match in effect (#503). "
+            "Read-only query; verify output plausibility (#468)."
         )
     out(f"Running meshtastic --info on {port['com']} for {args.device}")
     cmd = ["meshtastic", "--port", port["com"], "--info"]
@@ -1771,14 +1859,18 @@ def cmd_bootstrap(args, registry):
     new_entry = {
         "mac": mac,
         "role": f"new device registered via bootstrap on {time.strftime('%Y-%m-%d')}",
+        # #503: vid_pid is OBSERVATIONAL metadata (device class), never a gate.
         "vid_pid": [target["vid_pid"]],
-        # Legacy port-path hash retained as a secondary discriminator only. It is
-        # harmless once usb_serial is present (find_in_registry prefers Tier 1),
-        # and still gives a match for hosts/boards that expose no serial.
+        # #503: the port-path hash follows the USB socket, not the board. It is
+        # written ONLY when the device exposes no serial (bridge class) -- a
+        # serial-bearing entry must never carry a socket discriminator it will
+        # never need (matcher is serial-first, and a stale hash invites
+        # class-decided confusion later).
         "discriminators": {
-            "windows": {
-                "runtime_deviceid_instance": target["instance_hash"],
-            },
+            "windows": (
+                {} if usb_serial
+                else {"runtime_deviceid_instance": target["instance_hash"]}
+            ),
         },
         "notes": (
             f"Bootstrapped via pio-flash bootstrap on "
@@ -1961,6 +2053,15 @@ def build_parser() -> argparse.ArgumentParser:
              "--firmware-dir > PIO_FLASH_FIRMWARE_DIR env > default "
              "(Offband repo root). See #27.",
     )
+    p.add_argument(
+        "--approve-class-match",
+        action="store_true",
+        help="HUMAN-APPROVAL flag (#503): permit VID:PID/port-path to DECIDE a "
+             "match for this one invocation (legacy serial-less entries; Tier-B "
+             "use of a provisional bridge match). VID:PID is a device class, "
+             "not an identity -- the owner must approve each use in chat. "
+             "Must precede the subcommand.",
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("list", help="enumerate present ports vs registry (Tier 0)")
@@ -2045,8 +2146,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    global FIRMWARE_DIR
+    global FIRMWARE_DIR, CLASS_MATCH_APPROVED
     args = build_parser().parse_args()
+    if getattr(args, "approve_class_match", False):
+        # #503: loud by design -- every class-decided match is a human-approved
+        # exception, and the transcript must show it.
+        err("NOTICE: --approve-class-match set. VID:PID/port-path may DECIDE a "
+            "match this invocation. This flag requires the owner's per-invocation "
+            "approval in chat (#503).")
+        CLASS_MATCH_APPROVED = True
     if getattr(args, "firmware_dir", None):
         FIRMWARE_DIR = Path(args.firmware_dir).resolve()
     registry = load_registry()
