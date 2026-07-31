@@ -83,6 +83,11 @@ jobs:
           - RAK_3401_room_server
           - RAK_4631_room_server
           - Xiao_S3_room_server
+          # #477: tracker variants ship in every release but were built nowhere
+          # in CI -- variant-specific code (GPS/eink/button paths) was blind.
+          # Owner has bench devices for both as of 2026-07-31.
+          - t1000e_companion_radio_ble
+          - WioTrackerL1_companion_radio_ble
     steps:
       - uses: actions/checkout@v5
 
