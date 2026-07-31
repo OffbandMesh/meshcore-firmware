@@ -75,6 +75,14 @@ jobs:
           - meshsmith_photon_esp32c6_e22p_30dbm_companion_radio_ble   # MeshSmith Photon-1W (ESP32-C6 + E22 1W) coverage -- #193
           - meshsmith_photon_esp32c6_e22p_30dbm_repeater   # Photon-1W repeater (its primary "ridge repeater" role) -- #193
           - meshsmith_photon_nrf52_e22p_30dbm_repeater   # Photon-1W nRF52 repeater coverage -- #194
+          # #477: room_server role was previously built NOWHERE in CI -- caplog-era
+          # cross-role changes could compile-break it invisibly. One env per MCU
+          # family/flavor in active use.
+          - Heltec_v3_room_server
+          - heltec_v4_room_server
+          - RAK_3401_room_server
+          - RAK_4631_room_server
+          - Xiao_S3_room_server
     steps:
       - uses: actions/checkout@v5
 
@@ -116,3 +124,23 @@ jobs:
             .pio/build/${{ matrix.env }}/firmware.uf2
           if-no-files-found: warn
           retention-days: 90
+
+  # #477: single required-status aggregation point. Branch protection on
+  # firmware-base requires ONLY this check -- so matrix edits can never
+  # silently un-require an env, and `gh pr merge --auto` genuinely waits for
+  # the full curated matrix. `needs.build.result` is `success` only when EVERY
+  # matrix leg succeeded (fail-fast is off, so all legs always report).
+  # `if: always()` makes this job run -- and FAIL -- even when a dependency
+  # failed; without it a red build would leave ci-green skipped, and a skipped
+  # required check blocks the PR with no explanation instead of a red X.
+  ci-green:
+    runs-on: ubuntu-latest
+    needs: [config-lint, build]
+    if: always()
+    steps:
+      - name: All required CI jobs green
+        run: |
+          echo "config-lint: ${{ needs.config-lint.result }}"
+          echo "build (all matrix legs): ${{ needs.build.result }}"
+          test "${{ needs.config-lint.result }}" = "success"
+          test "${{ needs.build.result }}" = "success"
