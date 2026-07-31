@@ -1,7 +1,9 @@
 # Curated release env set for release.yml (epic #14 / T3 / #17).
 # One PlatformIO env per line. Lines starting with # and blank lines are ignored.
-# 72 active envs; heltec_v4_repeater_telemetry is gated on #20 (runtime-config
-# secrets) -- uncomment it once #20 lands. Verified against variants/*/platformio.ini.
+# 85 active envs; verified against variants/*/platformio.ini. GATED (CI-built,
+# not released): heltec_v4_repeater_telemetry (#20, runtime-config secrets) and
+# the three companion_radio_wifi envs (#325, runtime WiFi provisioning) -- all
+# bake placeholder creds at compile time; uncomment when their gate issue lands.
 
 # RAK4631 (nRF52)
 RAK_4631_companion_radio_ble
@@ -33,6 +35,15 @@ Xiao_S3_WIO_companion_radio_ble
 Xiao_S3_WIO_companion_radio_usb
 Xiao_S3_WIO_repeater
 Xiao_S3_WIO_room_server
+# Xiao_S3_WIO_companion_radio_wifi -- CI-built but NOT releasable: bakes a
+#   placeholder WIFI_SSID at compile time; unblocked by #325 (runtime WiFi
+#   provisioning). Same gate class as heltec_v4 wifi companions below. (#484)
+
+# Seeed XIAO S3 (ESP32-S3, non-WIO) -- added #484 to match CI matrix coverage
+Xiao_S3_companion_radio_ble
+Xiao_S3_companion_radio_usb
+Xiao_S3_repeater
+Xiao_S3_room_server
 
 # Seeed XIAO C3 (ESP32-C3)
 Xiao_C3_companion_radio_ble
@@ -106,6 +117,8 @@ heltec_v4_companion_radio_usb
 heltec_v4_repeater
 #heltec_v4_repeater_telemetry   # GATED: uncomment after #20 (runtime-config secrets)
 heltec_v4_room_server
+# heltec_v4_companion_radio_wifi -- CI-built but NOT releasable: bakes a
+#   placeholder WIFI_SSID at compile time; unblocked by #325. (#484)
 
 # Heltec V4 TFT (ESP32-S3) -- includes observer
 heltec_v4_tft_companion_observer_wifi
@@ -113,6 +126,8 @@ heltec_v4_tft_companion_radio_ble
 heltec_v4_tft_companion_radio_usb
 heltec_v4_tft_repeater
 heltec_v4_tft_room_server
+# heltec_v4_tft_companion_radio_wifi -- CI-built but NOT releasable: bakes a
+#   placeholder WIFI_SSID at compile time; unblocked by #325. (#484)
 
 # LILYGO T-Echo (nRF52)
 LilyGo_T-Echo_companion_radio_ble
