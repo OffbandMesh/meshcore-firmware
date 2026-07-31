@@ -94,6 +94,25 @@ jobs:
           # (No observer env exists: observer is ESP32/WiFi-only.)
           - Heltec_t096_repeater
           - Heltec_t096_companion_radio_ble
+          # #482: owner-directed role-coverage expansion (2026-07-31). T096 WiFi
+          # observer was requested but cannot exist (nRF52, no WiFi); C6 lacks
+          # room_server/usb/wifi-companion envs; S3 non-WIO lacks wifi/observer.
+          - Heltec_v3_companion_radio_ble
+          - Heltec_v3_repeater
+          - heltec_v4_tft_companion_radio_ble
+          - heltec_v4_tft_companion_radio_wifi
+          - heltec_v4_companion_radio_wifi
+          - RAK_4631_companion_radio_usb
+          - RAK_4631_companion_radio_ble
+          - Xiao_S3_repeater
+          - Xiao_S3_companion_radio_ble
+          - Xiao_S3_companion_radio_usb
+          - Xiao_S3_WIO_repeater
+          - Xiao_S3_WIO_room_server
+          - Xiao_S3_WIO_companion_radio_ble
+          - Xiao_S3_WIO_companion_radio_usb
+          - Xiao_S3_WIO_companion_radio_wifi
+          - Xiao_C6_repeater_
     steps:
       - uses: actions/checkout@v5
 
