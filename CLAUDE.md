@@ -83,6 +83,12 @@ Device inventory, RF chain (FEM / TX power), per-device MACs/roles, slot/pin map
 
 - **Release approval gate** — never push a release tag (`-rc` or stable) without first posting a concise **release preview** (version, `-rc`/stable, the CHANGELOG entry, any user-facing string change) and getting an explicit human "ship it." Validation/feedback ("it works" / "happy with it") is **not** release authorization. Scale the preview to the change — keep it light, not ceremony. Full rationale + format in [`VERSIONING.md`](VERSIONING.md) ("Release approval gate").
 
+## PR definition-of-done (#477 — CI matrix is a required merge gate)
+
+- `firmware-base` branch protection requires the **`ci-green`** check (aggregates `config-lint` + the FULL curated build matrix, incl. nRF52 + room_server envs). `gh pr merge --auto --rebase` therefore **waits for the matrix** — enabling auto-merge is no longer merging.
+- **A PR task is NOT complete — and must not be closed in Citadel — until `gh pr view <n> --json state` reports `MERGED`.** A red matrix leaves the PR sitting unmerged; closing the task anyway is the SAFELANE §5 "declaring success without the artifact" violation. If `ci-green` fails, fixing the build (all matrix envs, not just the ones you tested on — the #350/#463 lesson) is part of the same task.
+- Do not shrink or bypass the matrix to get green; matrix changes are owner-approved only.
+
 ## Follow-ups (bootstrap gaps to close)
 
 - `/work` slash command + `session-state.py` compaction-recovery hook: **now published canonically** (standards @27b3ec7 — `/work` #112, `session-state.py` #107). `/work` auto-syncs into `.claude/commands/` via preflight; `session-state.py` is a hook copy-in (not auto-synced). Port deferred by owner — do when picked up.
