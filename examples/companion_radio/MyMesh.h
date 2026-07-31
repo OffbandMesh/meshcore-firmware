@@ -10,8 +10,10 @@
 // AT MERGE, not at branch time. Do not assume a code from an unmerged branch is yours
 // -- check what has actually merged (same split-allocation trap as the cap bits; see
 // the canonical table in OffbandConfigProtocol.h). In-flight claimants after 17:
-// #365 WIFI_COMPANION (0x08) -> 18, display-config (0x10) -> 19, in merge order.
-#define FIRMWARE_VER_CODE 17   // #427: + caplog cap bit (0x20) in device-info. Prior 16 (#298): FEM LNA cap 0x04 / 0xC3 / LNA state
+// #365 WIFI_COMPANION (0x08), display-config (0x10), and #508 (caps byte 2) are all
+// in flight; whichever merges first takes 18, and the others rebase. The value below
+// is PROVISIONAL for this branch -- reconcile it against firmware-base at merge.
+#define FIRMWARE_VER_CODE 18   // #508 (PROVISIONAL, see above): + second caps byte at frame offset 84. Prior 17 (#427): caplog cap bit 0x20. Prior 16 (#298): FEM LNA cap 0x04 / 0xC3 / LNA state
 
 #ifndef FIRMWARE_BUILD_DATE
 #define FIRMWARE_BUILD_DATE "6 Jun 2026"

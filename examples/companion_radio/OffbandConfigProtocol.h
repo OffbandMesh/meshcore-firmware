@@ -136,10 +136,33 @@ enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUT
 //    3   0x08   OFFBAND_CAP_WIFI_COMPANION    RESERVED    #365 (in-flight, unmerged) -- DO NOT REUSE
 //    4   0x10   (display-config)              RESERVED    owner, in-flight -- DO NOT REUSE
 //    5   0x20   OFFBAND_CAP_CAPLOG            this change  #427 (#396/#417)
-//    6   0x40   -- free --
-//    7   0x80   -- free --
+//    6   0x40   -- free --  (RESERVE for GPS, see note)
+//    7   0x80   -- free --  (last byte-1 bit: HEADROOM, do not spend casually)
 //   (GPS has NO bit: client uses a loose "any Offband v14+ radio speaks 0xC1"
 //    presence-gate until firmware defines one. If added, take 0x40.)
+//
+// === offband_caps BYTE 2 (#508) -- frame offset 84 =============================
+// Byte 1 above is effectively exhausted: one genuinely free bit (0x80) with two
+// reservations (0x08, 0x10) still unmerged. Rather than spend the last bit and force
+// the NEXT feature to extend the frame under pressure -- the condition that produced
+// the #427-vs-#365 0x08 double-claim -- byte 2 was added while nothing was blocked.
+//
+// ⚠ POSITION: byte 2 is at the END of the device-info frame (offset 84), NOT adjacent
+// to byte 1 (offset 82). The FEM LNA state byte sits at 83 and the client reads all of
+// these at FIXED ABSOLUTE OFFSETS (meshcore_connector.dart: parseOffbandCaps ->
+// frame[82], parseFemLnaState -> frame[83]). Inserting byte 2 adjacent to byte 1 would
+// shift the FEM state and every shipped client would misread a bitmask as the LNA
+// toggle. Client reads byte 2 as: frame.length >= 85 ? frame[84] : null.
+//
+// Same reservation discipline as byte 1 -- record the bit HERE with its issue in the
+// SAME PR, and Agent-Mail the reservation so parallel sessions see it. Grepping
+// firmware-base shows only MERGED bits; in-flight claims live on unmerged branches.
+//
+//   bit  value  symbol                        state       issue
+//   ---  -----  ----------------------------  ----------  --------------------------
+//    0   0x01   -- free --                                (first taker: #509 button matrix)
+//    1   0x02   -- free --                                (then: #510 notification scope)
+//    2-7 0x04.. -- free --
 // ===============================================================================
 constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: config backend (wifi_observer) compiled in
 constexpr uint8_t OFFBAND_CAP_BLOCK         = 0x02;  // bit 1: user-block list (BlockStore) compiled in (#241)
