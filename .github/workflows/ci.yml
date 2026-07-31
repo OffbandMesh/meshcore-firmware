@@ -88,6 +88,7 @@ jobs:
           # Owner has bench devices for both as of 2026-07-31.
           - t1000e_companion_radio_ble
           - WioTrackerL1_companion_radio_ble
+          - SenseCap_Solar_repeater   # fleet-deployed fixed solar nodes (owner, 2026-07-31)
     steps:
       - uses: actions/checkout@v5
 
