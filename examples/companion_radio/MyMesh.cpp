@@ -1674,6 +1674,23 @@ void MyMesh::handleCmdFrame(size_t len) {
     // stay fixed for a given version code; the cap bit above, not this byte's presence,
     // is what tells the client whether to show the control. Reads 0 when not capable.
     out_frame[i++] = board.isLoRaFemLnaEnabled() ? 1 : 0;   // v16+
+    // #508: SECOND capability byte. Byte 1 (offset 82) is exhausted -- see the
+    // canonical allocation table in OffbandConfigProtocol.h.
+    //
+    // POSITION IS DELIBERATE: this goes at the END of the frame, NOT adjacent to
+    // byte 1. The client reads both byte 1 and the FEM LNA state at FIXED absolute
+    // offsets (meshcore-client meshcore_connector.dart parseOffbandCaps -> frame[82],
+    // parseFemLnaState -> frame[83]). Inserting here-adjacent would shift the FEM
+    // state to 84 and every shipped client would read a capability bitmask as the
+    // LNA toggle state. Byte 1 stays at 82, FEM state stays at 83, byte 2 is 84.
+    //
+    // Appended UNCONDITIONALLY, same rule as the FEM byte above: the frame layout is
+    // fixed for a given version code, and capability is signalled by BITS, never by a
+    // byte's presence. Ships all-zero -- this change establishes the byte only; #509
+    // and #510 allocate the first bits from it. Pre-v18 clients read a shorter frame
+    // and never see it.
+    uint8_t offband_caps2 = 0;
+    out_frame[i++] = offband_caps2;          // v18+
     _serial->writeFrame(out_frame, i);
   } else if (cmd_frame[0] == CMD_APP_START &&
              len >= 8) { // sent when app establishes connection, respond with node ID
