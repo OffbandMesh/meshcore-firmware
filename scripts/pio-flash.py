@@ -63,7 +63,11 @@ from firmware_identity import get_firmware_identity  # noqa: E402
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY_PATH = PROJECT_ROOT / "hardware-devices.yaml"
 FLASH_HISTORY_PATH = PROJECT_ROOT / "flash-history.jsonl"
-TOKEN_TTL_SEC = 300   # 5 min per Standards design note #1
+# #500 OWNER RULING: tokens have NO wall-clock expiry. ONE APPROVAL = ONE
+# FLASH; the owner's GO does not rot while he is away. A token is single-use
+# (deleted on confirm) and hard-invalidates on real state drift — port,
+# DeviceID, or artifact-sha change since preview. Time is not a safety
+# property; never reintroduce a TTL on a human approval.
 
 # Directory holding the firmware tree (platformio.ini + variants/) for build +
 # upload + monitor invocations. Post-migration the Offband repo root IS the
@@ -537,12 +541,9 @@ def read_token(path: Path) -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         refuse(f"token file {path} is not valid JSON: {e}")
-    age = int(time.time()) - int(data.get("created_unix", 0))
-    if age > TOKEN_TTL_SEC:
-        refuse(
-            f"token at {path} expired ({age}s old, TTL {TOKEN_TTL_SEC}s). "
-            "Re-run 'pio-flash preview'."
-        )
+    # #500: no age check. The owner's approval does not expire — the token is
+    # consumed by exactly one confirm, and cmd_confirm re-verifies port,
+    # DeviceID, and artifact sha against the previewed state before flashing.
     return data
 
 
@@ -717,8 +718,8 @@ def _preview_artifact(args, port: dict, entry: dict) -> int:
     out("------------------------------------------------------------")
     out("To proceed, get explicit user GO in chat naming the device, then run:")
     out(f"  scripts/pio-flash confirm {args.device} --token {token_path(args.device)}")
-    out(f"Token TTL: {TOKEN_TTL_SEC}s. Token invalidates if port/DeviceID/")
-    out("artifact sha changes before confirm.")
+    out("Token: single-use, NO expiry (one approval = one flash, #500).")
+    out("Invalidates only if port/DeviceID/artifact sha changes before confirm.")
     out("============================================================")
 
     payload = {
@@ -1109,8 +1110,8 @@ def cmd_preview(args, registry):
     out("To proceed, get explicit user GO in chat naming the device,")
     out("then run:")
     out(f"  scripts/pio-flash confirm {args.device} --token {token_path(args.device)}")
-    out(f"Token TTL: {TOKEN_TTL_SEC}s. Token invalidates if port/DeviceID/")
-    out("firmware sha changes before confirm.")
+    out("Token: single-use, NO expiry (one approval = one flash, #500).")
+    out("Invalidates only if port/DeviceID/firmware sha changes before confirm.")
     out("============================================================")
 
     # #200 (LoRa-wek): identity is read from firmware_bin's embedded XWIRE
@@ -1691,41 +1692,70 @@ def cmd_bootstrap(args, registry):
     out(f"Hash          : {target['instance_hash']}   (port-path, legacy)")
     out(f"Description   : {target['description']}")
     out("")
-    out("Reading MAC via esptool (this is the ONE authorized device touch)...")
-    out("")
+    # #501: platform-aware identity capture. esptool only speaks to Espressif
+    # silicon — running it against an nRF52 (239A Adafruit, 2886 Seeed) can
+    # never succeed, which made those boards unregistrable. For non-Espressif
+    # ports the usb_serial (chip DEVICEID) already in hand IS the identity the
+    # #323 matcher prefers; MAC stays null per the long-standing HARDWARE.md
+    # convention (capture from the boot log if ever needed). Espressif-native
+    # (303A) and bridge-class ports (10C4/1A86 — the MAC is the identity, #468)
+    # keep the esptool read.
+    vendor = target["vid_pid"].split(":")[0].upper()
+    espressif_read = vendor == ESP32S3_VENDOR or bridge_chip(target["vid_pid"]) is not None
+    mac = None
+    if espressif_read:
+        out("Reading MAC via esptool (this is the ONE authorized device touch)...")
+        out("")
 
-    env = os.environ.copy()
-    env["PIO_FLASH_AUTHORIZED"] = "1"
-    try:
-        result = subprocess.run(
-            ["python", "-m", "esptool", "--port", com, "read_mac"],
-            capture_output=True, text=True, env=env, timeout=30,
-        )
-    except subprocess.TimeoutExpired:
-        refuse(f"esptool read_mac timed out on {com}")
-    if result.returncode != 0:
-        refuse(
-            f"esptool read_mac failed (rc={result.returncode}). "
-            f"stderr: {result.stderr.strip()}"
-        )
+        env = os.environ.copy()
+        env["PIO_FLASH_AUTHORIZED"] = "1"
+        try:
+            result = subprocess.run(
+                ["python", "-m", "esptool", "--port", com, "read_mac"],
+                capture_output=True, text=True, env=env, timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            refuse(f"esptool read_mac timed out on {com}")
+        if result.returncode != 0:
+            refuse(
+                f"esptool read_mac failed (rc={result.returncode}). "
+                f"stderr: {result.stderr.strip()}"
+            )
 
-    # Parse MAC from esptool output. Prefer the BASE MAC line so 802.15.4 chips
-    # (C6/H2) don't record the EUI-64 head instead of the base MAC (#290).
-    mac = parse_base_mac(result.stdout)
-    if mac is None:
-        out(result.stdout)
-        refuse("could not parse MAC from esptool output (see stdout above)")
-    out(f"MAC read from device: {mac}")
+        # Parse MAC from esptool output. Prefer the BASE MAC line so 802.15.4 chips
+        # (C6/H2) don't record the EUI-64 head instead of the base MAC (#290).
+        mac = parse_base_mac(result.stdout)
+        if mac is None:
+            out(result.stdout)
+            refuse("could not parse MAC from esptool output (see stdout above)")
+        out(f"MAC read from device: {mac}")
+    else:
+        if not (target.get("usb_serial") or "").strip():
+            refuse(
+                f"non-Espressif device ({target['vid_pid']}) exposes no usb_serial — "
+                "no identity available to register. Refusing rather than minting a "
+                "port-path-only entry (#323/#501)."
+            )
+        out(f"Non-Espressif device ({target['vid_pid']}): skipping esptool MAC read "
+            "(#501). usb_serial is the identity; no device touch performed.")
 
-    # Cross-check: does this MAC already belong to a different registered name?
+    # Cross-check: does this identity already belong to a different registered
+    # name? MAC for Espressif/bridge paths; usb_serial for the #501 nRF52 path.
+    serial_norm = norm_serial(target.get("usb_serial"))
     for kind_key in ("devices", "foreign_devices"):
         for existing_name, existing_entry in (registry.get(kind_key) or {}).items():
-            if (existing_entry.get("mac") or "").lower() == mac:
+            if mac and (existing_entry.get("mac") or "").lower() == mac:
                 refuse(
                     f"MAC {mac} is already registered as '{existing_name}' "
                     f"under {kind_key}:. Refusing to register the same MAC under "
                     f"a second name '{name}'. If this is a re-bootstrap, edit "
                     f"the YAML by hand or use a different name."
+                )
+            if serial_norm and serial_norm in entry_usb_serials(existing_entry):
+                refuse(
+                    f"usb_serial {target.get('usb_serial')} is already registered "
+                    f"as '{existing_name}' under {kind_key}:. Refusing to register "
+                    f"the same board under a second name '{name}' (#501)."
                 )
 
     # Build new entry. v1: assumes ESP32-S3 dual-mode; user can edit later.
@@ -1821,7 +1851,14 @@ def cmd_bootstrap(args, registry):
     })
 
     out("")
-    out(f"Registered '{name}' with MAC {mac} in {REGISTRY_PATH}")
+    ser = (target.get("usb_serial") or "").strip()
+    if mac and ser:
+        ident_desc = f"usb_serial {ser} (primary identity) + MAC {mac}"
+    elif mac:
+        ident_desc = f"MAC {mac}"
+    else:
+        ident_desc = f"usb_serial {ser} (primary identity)"
+    out(f"Registered '{name}' with {ident_desc} in {REGISTRY_PATH}")
     out("Review the file and add bootloader discriminator on next bootloader-mode "
         "observation.")
     return 0
