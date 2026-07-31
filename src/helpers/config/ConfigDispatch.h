@@ -103,6 +103,26 @@ int overlapWarningCount();
 bool dispatchSet(const char* key, const char* value, char* reply, size_t reply_size);
 bool dispatchGet(const char* key, char* reply, size_t reply_size);
 
+// #462: role-agnostic string-CLI bridge. Parses a generic
+//   set <key> <value>   -> dispatchSet(key, value, ...)
+//   get <key>           -> dispatchGet(key, ...)
+// and routes to the registered providers, so ANY role's CommonCLI fall-through
+// can expose the SAME shared config commands (wifi.*/mqtt.*/display.*) the wire
+// path (CMD_OFFBAND_CONFIG) exposes -- no per-role grammar duplication.
+//
+// This is the string-CLI counterpart of dispatchSet/dispatchGet, which already
+// route the WIRE path. `set` splits on the FIRST space (value = remainder
+// verbatim, matching the wire's OCFG_SET); `get` takes the key token only
+// (trailing args ignored). Returns true iff a provider handled the key (incl. an
+// "ERROR: ..." reply); false if the line is not a config verb OR no provider
+// claims the key -- the caller then falls through to its own unknown-command path.
+//
+// Callers gate the call behind `#if defined(OFFBAND_CONFIG_CLI)` so envs that do
+// not compile helpers/config don't reference this symbol. Deliberately NOT
+// enabled on observer envs (they keep dispatchObserverCli's richer grammar);
+// unifying the observer onto this bridge is #511. See #462.
+bool dispatchCliLine(const char* cmd, char* reply, size_t reply_size);
+
 // ---------------------------------------------------------------------------
 // Shared, role-agnostic parse helpers (moved verbatim in behaviour from
 // ObserverCli.cpp so every role parses config values identically).
