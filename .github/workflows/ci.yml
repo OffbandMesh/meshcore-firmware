@@ -89,6 +89,11 @@ jobs:
           - t1000e_companion_radio_ble
           - WioTrackerL1_companion_radio_ble
           - SenseCap_Solar_repeater   # fleet-deployed fixed solar nodes (owner, 2026-07-31)
+          # #479: Heltec T096 (nRF52) -- in active use; repeater-improvement work
+          # incoming, so its primary role + BLE companion must build in CI.
+          # (No observer env exists: observer is ESP32/WiFi-only.)
+          - Heltec_t096_repeater
+          - Heltec_t096_companion_radio_ble
     steps:
       - uses: actions/checkout@v5
 
