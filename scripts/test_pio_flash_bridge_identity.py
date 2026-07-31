@@ -169,3 +169,74 @@ if FAILURES:
     print(f"{len(FAILURES)} FAILURE(S): {FAILURES}")
     sys.exit(1)
 print("ALL PASS")
+
+# --- #503: serial-first, global, no VID:PID precondition ------------------
+reg503 = {
+    "devices": {
+        "t1000e": {"usb_serial": "ACEDFAE4BC94D153", "vid_pid": ["239A:8029"], "mac": None},
+        "legacy-hash-only": {"vid_pid": ["303A:0002"], "mac": "aa:bb:cc:00:11:22",
+                              "discriminators": {"windows": {"runtime_deviceid_instance": "8&AAAA"}}},
+    },
+    "foreign_devices": {
+        "desk-unit": {"usb_serial": "F0F0F0F0F0F0", "vid_pid": ["1A86:7522"]},
+    },
+}
+# 1. Cross-VID serial match: board flips to its app identity (2886:0057) --
+#    entry lists only 239A:8029. Serial must still win, VID:PID irrelevant.
+kind, name, _ = pf.find_in_registry(reg503, "2886:0057", "", "ACEDFAE4BC94D153")
+check("503: serial matches across VID:PID change", (kind, name) == ("device", "t1000e"),
+      f"got {(kind, name)}")
+# 2. Foreign matched by serial cross-VID still returns foreign (callers refuse).
+kind, name, _ = pf.find_in_registry(reg503, "303A:1001", "", "F0F0F0F0F0F0")
+check("503: foreign refusal survives serial-first", (kind, name) == ("foreign", "desk-unit"),
+      f"got {(kind, name)}")
+# 3. A serial-bearing port that matches nothing NEVER falls to class/hash match.
+kind, name, _ = pf.find_in_registry(reg503, "303A:0002", "8&AAAA", "DEADBEEF0001AA")
+check("503: unknown serial never class-matches", (kind, name) == (None, None),
+      f"got {(kind, name)}")
+# 4. Serial-less port still hash-matches the legacy entry (bridge-class fallback).
+kind, name, _ = pf.find_in_registry(reg503, "303A:0002", "8&AAAA", "")
+check("503: serial-less hash fallback intact", (kind, name) == ("device", "legacy-hash-only"),
+      f"got {(kind, name)}")
+# 5. #323 preserved: entry with serial never matches a port with different serial.
+kind, name, _ = pf.find_in_registry(reg503, "239A:8029", "", "1111222233334444")
+check("503: no impersonation across serials", (kind, name) == (None, None),
+      f"got {(kind, name)}")
+
+# 6. resolve_device: legacy-hash entry vs serial-bearing port -> refuse without
+#    approval; matches with CLASS_MATCH_APPROVED.
+S3_PORT = {"com": "COM8", "vid_pid": "303A:0002", "instance_hash": "8&AAAA",
+           "deviceid_full": "USB\VID_303A&PID_0002&MI_00\8&AAAA&0&0000",
+           "usb_serial": "F85B1BA61450", "description": "USB Serial Device"}
+reg_legacy = {"devices": {"legacy-hash-only": reg503["devices"]["legacy-hash-only"]},
+              "foreign_devices": {}}
+with_ports([S3_PORT])
+pf.CLASS_MATCH_APPROVED = False
+try:
+    pf.resolve_device("legacy-hash-only", reg_legacy)
+    check("503: class-decided match refused w/o approval", False, "no refusal")
+except Refusal as e:
+    check("503: class-decided match refused w/o approval", "--approve-class-match" in str(e))
+pf.CLASS_MATCH_APPROVED = True
+port, _ = pf.resolve_device("legacy-hash-only", reg_legacy)
+check("503: approval flag unlocks legacy match", port["com"] == "COM8")
+pf.CLASS_MATCH_APPROVED = False
+
+# 7. Bridge provisional requires a SERIAL-LESS port: a bridge entry may not
+#    claim a serial-bearing port of its class.
+reg_bridge = {"devices": {"hv3": {"vid_pid": ["10C4:EA60"], "mac": "3c:0f:02:eb:f9:0c",
+                                    "discriminators": {"windows": {}}}},
+              "foreign_devices": {}}
+SERIAL_CP2102 = dict(BRIDGE_PORT, usb_serial="REPROGRAMMED123")
+with_ports([SERIAL_CP2102])
+try:
+    pf.resolve_device("hv3", reg_bridge)
+    check("503: bridge cannot claim serial-bearing port", False, "no refusal")
+except Refusal:
+    check("503: bridge cannot claim serial-bearing port", True)
+
+print()
+if FAILURES:
+    print(f"{len(FAILURES)} FAILURE(S): {FAILURES}")
+    sys.exit(1)
+print("ALL PASS (503)")
