@@ -154,8 +154,16 @@ bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg,
 
 #if defined(ESP_PLATFORM)
     esp_mqtt_client_config_t mqcfg = {};
+    // #506: esp-mqtt defaults the MQTT keepalive to 120 s, but a broker can cap it
+    // via max_keepalive and REJECT an over-limit CONNECT with a MISLEADING CONNACK
+    // 0x02 "identifier rejected" (confirmed live against mqtt2.okimesh.org, which
+    // sets max_keepalive 60 -- a paho client is accepted at k=60, rejected at k=120,
+    // identical to this firmware). 60 s is accepted by capped brokers and by
+    // uncapped ones. #516 makes this per-broker configurable.
+    const int keepalive_sec = 60;
 #if ESP_IDF_VERSION_MAJOR >= 5
     mqcfg.broker.address.uri = cfg_.url;
+    mqcfg.session.keepalive = keepalive_sec;
     if (cfg_.transport == BrokerTransport::Tls ||
         cfg_.transport == BrokerTransport::Wss) {
         const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
@@ -163,6 +171,7 @@ bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg,
     }
 #else
     mqcfg.uri = cfg_.url;
+    mqcfg.keepalive = keepalive_sec;
     if (cfg_.transport == BrokerTransport::Tls ||
         cfg_.transport == BrokerTransport::Wss) {
         const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
@@ -435,17 +444,38 @@ void MqttBroker::eventHandler(void* handler_args,
             break;
         case MQTT_EVENT_ERROR: {
             BrokerErrorClass err = BrokerErrorClass::Other;
-            if (event != nullptr && event->error_handle != nullptr) {
+            const esp_mqtt_error_codes_t* eh =
+                (event != nullptr) ? event->error_handle : nullptr;
+            if (eh != nullptr) {
                 // Classify by error_type. Connection refused is auth-y;
                 // TLS errors get their own class.
-                if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
+                if (eh->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
                     err = BrokerErrorClass::Auth;
-                } else if (event->error_handle->esp_tls_last_esp_err != 0 ||
-                           event->error_handle->esp_tls_stack_err != 0) {
+                } else if (eh->esp_tls_last_esp_err != 0 ||
+                           eh->esp_tls_stack_err != 0) {
                     err = BrokerErrorClass::Tls;
-                } else if (event->error_handle->esp_transport_sock_errno != 0) {
+                } else if (eh->esp_transport_sock_errno != 0) {
                     err = BrokerErrorClass::Tcp;
                 }
+                // SAFELANE no-silent-failure: surface the ACTUAL reason
+                // esp-mqtt/esp-tls reported, not just the coarse class.
+                //   sock_errno   -> ECONNREFUSED(111)=refused, EHOSTUNREACH(113/118)
+                //                   =unreachable, ETIMEDOUT(110)=timeout (TCP layer)
+                //   tls_stack_err+cert_flags -> mbedTLS rejected the chain
+                //   connack      -> MQTT CONNACK refusal code (a max_keepalive-exceeded
+                //                   rejection also surfaces here as connack=2, #506)
+                Serial.printf(
+                    "[mqtt-err] s%u type=%d sock_errno=%d tls_esp_err=0x%X "
+                    "tls_stack_err=-0x%04X cert_flags=0x%08X connack=%d -> class=%d\n",
+                    (unsigned)self->slot_, (int)eh->error_type,
+                    eh->esp_transport_sock_errno,
+                    (unsigned)eh->esp_tls_last_esp_err,
+                    (unsigned)(-eh->esp_tls_stack_err),
+                    (unsigned)eh->esp_tls_cert_verify_flags,
+                    (int)eh->connect_return_code, (int)err);
+            } else {
+                Serial.printf("[mqtt-err] s%u (no error_handle)\n",
+                              (unsigned)self->slot_);
             }
             self->onError(now_ms, err);
             break;

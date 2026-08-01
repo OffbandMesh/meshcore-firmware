@@ -197,6 +197,43 @@ bool dispatchGet(const char* key, char* reply, size_t reply_size) {
     return false;   // no role claims this key
 }
 
+// #462: string-CLI bridge -- parse a generic `set <key> <value>` / `get <key>`
+// line and route to dispatchSet/dispatchGet. See ConfigDispatch.h. The `set`
+// value is the remainder after the FIRST space, taken verbatim (a value may
+// contain spaces, e.g. a WiFi PSK) -- matching the wire OCFG_SET split; a `set`
+// with a key but no value passes "" so the provider emits its own field error.
+bool dispatchCliLine(const char* cmd, char* reply, size_t reply_size) {
+    if (cmd == nullptr || reply == nullptr || reply_size == 0) return false;
+
+    const char* rest = nullptr;
+    bool is_set = false;
+    if (strncmp(cmd, "set ", 4) == 0)      { rest = cmd + 4; is_set = true;  }
+    else if (strncmp(cmd, "get ", 4) == 0) { rest = cmd + 4; is_set = false; }
+    else return false;                     // not a config CLI verb -- not ours
+
+    while (*rest == ' ') ++rest;           // skip spaces before the key
+    if (*rest == '\0') return false;       // no key -- not ours
+
+    // key = up to the first space.
+    char key[64];
+    size_t ki = 0;
+    while (*rest && *rest != ' ' && ki + 1 < sizeof(key)) key[ki++] = *rest++;
+    key[ki] = '\0';
+
+    // #462 review MAJOR-1: if the key hit the buffer limit (next char is neither a
+    // space nor end-of-string), it was TRUNCATED. Reject rather than route a
+    // truncated key -- a truncation could prefix-match a provider and set the
+    // WRONG field. An over-long key is not a valid config key anyway.
+    if (*rest != '\0' && *rest != ' ') return false;
+
+    if (!is_set)
+        return dispatchGet(key, reply, reply_size);   // get: trailing args ignored
+
+    // set: value = remainder after exactly ONE delimiter space (verbatim); "" if none.
+    const char* value = (*rest == ' ') ? rest + 1 : "";
+    return dispatchSet(key, value, reply, reply_size);
+}
+
 // ---------------------------------------------------------------------------
 // Shared parse helpers
 // ---------------------------------------------------------------------------
