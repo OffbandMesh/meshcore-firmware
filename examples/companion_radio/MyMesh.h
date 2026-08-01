@@ -158,6 +158,12 @@ protected:
   bool filterRecvFloodPacket(mesh::Packet* packet) override;
   bool allowPacketForward(const mesh::Packet* packet) override;
 
+  // #510: notification-scope helpers. textMentionsSelf() implements the `@[name]`
+  // bracketed, case-insensitive rule that is a CONTRACT with the client -- see the
+  // definition in MyMesh.cpp before changing it.
+  bool textMentionsSelf(const char* text) const;
+  bool channelMsgShouldNotify(const char* text) const;
+
   void sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis);
   void sendFloodScoped(const ContactInfo& recipient, mesh::Packet* pkt, uint32_t delay_millis=0) override;
   void sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis=0) override;

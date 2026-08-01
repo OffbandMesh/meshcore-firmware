@@ -581,11 +581,60 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
   bool should_display = txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN;
   if (should_display && _ui) {
     _ui->newMsg(path_len, from.name, text, offline_queue_len);
-    if (!_serial->isConnected()) {
+    // #510: a DM is by definition addressed to this node, so it sounds in both ALL and
+    // SELF; only NONE suppresses it. No text match needed.
+    //
+    // NOT gated on _serial->isConnected(). Upstream only sounded the buzzer when NO
+    // client was attached, on the assumption the phone would do the notifying. That
+    // assumption does not hold for this feature: the whole point is a pocketed tracker
+    // audibly telling you a DM or an @[mention] arrived, and it is paired to the phone
+    // exactly when you want that. The scope pref is now the single authority on whether
+    // a sound happens; client connection state is irrelevant to it.
+    if (_prefs.notify_scope != NOTIFY_SCOPE_NONE) {
       _ui->notify(UIEventType::contactMessage);
     }
   }
 #endif
+}
+
+// #510: does `text` @[mention] this node by its advert name?
+//
+// CONTRACT WITH THE CLIENT -- do not change this rule unilaterally. The Offband client
+// (meshcore-client, lib/connector/meshcore_connector.dart, _mentionsSelf) matches a
+// case-insensitive `@[name]`, bracketed form only. Firmware matches the SAME rule so a
+// message that beeps the device is exactly the set that notifies the app. Widening this
+// (e.g. to accept a bare `@name`) is a BREAKING cross-repo change and must ship in the
+// same aligned firmware+client build pair, never on one side alone.
+//
+// Bracketed-only is also what makes this safe: a bare-substring match on a short advert
+// name would fire on ordinary prose constantly. The `@[` sigil and the closing `]` make
+// a mention explicit.
+//
+// Independently implemented from that behavioural spec. Deliberately NOT derived from
+// the wadamesh fork's equivalent -- that project is GPL-3 and Offband is MIT.
+bool MyMesh::textMentionsSelf(const char* text) const {
+  if (text == NULL || _prefs.node_name[0] == 0) return false;
+  const size_t name_len = strlen(_prefs.node_name);
+  if (name_len == 0) return false;
+
+  for (const char* p = text; *p != 0; p++) {
+    if (p[0] != '@' || p[1] != '[') continue;
+    const char* candidate = p + 2;
+    if (strncasecmp(candidate, _prefs.node_name, name_len) != 0) continue;
+    if (candidate[name_len] == ']') return true;   // full name, properly closed
+  }
+  return false;
+}
+
+// #510: should a received CHANNEL message make a sound, given the current scope?
+// ALL  -> always. SELF -> only when it @[mentions] us. NONE -> never.
+bool MyMesh::channelMsgShouldNotify(const char* text) const {
+  switch (_prefs.notify_scope) {
+    case NOTIFY_SCOPE_NONE: return false;
+    case NOTIFY_SCOPE_SELF: return textMentionsSelf(text);
+    case NOTIFY_SCOPE_ALL:
+    default:                return true;
+  }
 }
 
 bool MyMesh::filterRecvFloodPacket(mesh::Packet* packet) {
@@ -685,11 +734,24 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
     uint8_t frame[1];
     frame[0] = PUSH_CODE_MSG_WAITING; // send push 'tickle'
     _serial->writeFrame(frame, 1);
-  } else {
-#ifdef DISPLAY_CLASS
-    if (_ui) _ui->notify(UIEventType::channelMessage);
-#endif
   }
+#ifdef DISPLAY_CLASS
+  // #510: the notification scope decides whether this sounds -- NOT the client
+  // connection state.
+  //
+  // This deliberately runs whether or not a client is attached. Upstream had the
+  // notify() call in the `else` of the isConnected() branch, so a device with a phone
+  // paired NEVER sounded; that silently made this entire feature inoperative in the
+  // configuration it exists for (a pocketed tracker, phone paired, wanting to hear a
+  // DM or an @[mention]). The push 'tickle' above still fires for the client; these
+  // are independent concerns and are no longer nested.
+  //
+  // The text is available HERE but not inside notify(), which takes only an event
+  // type -- so the policy decision stays in the mesh layer and the UI layer stays
+  // dumb. That also avoids changing the AbstractUITask signature, which all three
+  // UITask implementations (ui-orig, ui-new, ui-tiny) would otherwise have to follow.
+  if (_ui && channelMsgShouldNotify(text)) _ui->notify(UIEventType::channelMessage);
+#endif
 #ifdef DISPLAY_CLASS
   // Get the channel name from the channel index
   const char *channel_name = "Unknown";
@@ -1073,6 +1135,19 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   // (before loadPrefs) so a prefs file written before the field existed short-reads to
   // EOF and leaves this default in place. No-op on boards without a controllable FEM.
   _prefs.radio_fem_rxgain = 1;
+
+  // #510: notification scope. Default ALL = today's behaviour. Set BEFORE loadPrefs for
+  // the same reason as caplog below: a prefs file written before this field existed
+  // short-reads to EOF and keeps this default, so upgrading an existing device never
+  // silently mutes it.
+  _prefs.notify_scope = NOTIFY_SCOPE_ALL;
+
+  // #509: button-matrix defaults preserve today's hardcoded behaviour exactly.
+  // Single press stays UNASSIGNED (owner: opt-in only, never defaulted on).
+  _prefs.button_actions[OFFBAND_UI_SEQ_SINGLE] = OFFBAND_UI_ACTION_NONE;
+  _prefs.button_actions[OFFBAND_UI_SEQ_DOUBLE] = OFFBAND_UI_ACTION_ADVERT;
+  _prefs.button_actions[OFFBAND_UI_SEQ_TRIPLE] = OFFBAND_UI_ACTION_CYCLE_SCOPE;
+  _prefs.button_actions[OFFBAND_UI_SEQ_QUAD]   = OFFBAND_UI_ACTION_GPS_TOGGLE;
 
   // #428: caplog persistence. Default OFF, DEBUG level. Set BEFORE loadPrefs so a prefs
   // file written before these fields existed short-reads to EOF and leaves caplog OFF
@@ -1605,6 +1680,122 @@ void MyMesh::handleCmdFrame(size_t len) {
   // only this node's own receive front-end, touching no forwarding/relay/advert path).
   // The client emits this only when OFFBAND_CAP_FEM_LNA is set, so the not-capable
   // branch is purely defensive against a mis-gated or stale client.
+  // #509/#510: device-UI command. ONE code, sub-typed -- canonical wire contract is
+  // documented in OffbandConfigProtocol.h and is the single source of truth shared
+  // with the client. Gated on PIN_BUZZER because the capability bit is; a board that
+  // never advertises OFFBAND_CAP2_NOTIFY_SCOPE must not answer 0xC5 either.
+  if (cmd_frame[0] == offband::CMD_OFFBAND_DEVICE_UI && len >= 2) {
+    uint8_t sub = cmd_frame[1];
+#ifndef PIN_BUZZER
+    // No buzzer on this board -> the whole surface is unsupported. Answer with the
+    // typed error carrying a REASON, not a bare ERR_CODE_ILLEGAL_ARG: the client is
+    // required to show the user WHY, and "this board has no buzzer" is a different
+    // answer from "unknown action".
+    out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+    out_frame[1] = offband::OFFBAND_UI_ERR;
+    out_frame[2] = offband::OFFBAND_UI_ERR_NO_BUZZER;
+    _serial->writeFrame(out_frame, 3);
+    return;
+#else
+    if (sub == offband::OFFBAND_UI_SCOPE_GET) {
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = _prefs.notify_scope;
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
+    if (sub == offband::OFFBAND_UI_SCOPE_SET && len >= 3) {
+      uint8_t want = cmd_frame[2];
+      if (want >= NOTIFY_SCOPE_COUNT) {
+        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+        out_frame[1] = offband::OFFBAND_UI_ERR;
+        out_frame[2] = offband::OFFBAND_UI_ERR_MALFORMED;
+        _serial->writeFrame(out_frame, 3);
+        return;
+      }
+      // Persist only on a real change -- a client control bound to onChange can emit a
+      // burst of SETs, and an unconditional savePrefs() would put that burst on flash.
+      if (_prefs.notify_scope != want) {
+        _prefs.notify_scope = want;
+        // Keep the low-level mute consistent with the scope so a reboot restores the
+        // same audible behaviour, matching what the triple-press handler does.
+        _prefs.buzzer_quiet = (want == NOTIFY_SCOPE_NONE) ? 1 : 0;
+        savePrefs();
+      }
+      // Reply the STORED state rather than echoing the request, so a rejected or
+      // clamped value shows the client the truth instead of a silent lie.
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = _prefs.notify_scope;
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
+    if (sub == offband::OFFBAND_UI_MATRIX_GET) {
+      // mask: which actions this BOARD can do. #474 requires the client render the
+      // device-reported set, never a hardcoded list.
+      uint8_t mask = (1 << OFFBAND_UI_ACTION_NONE) | (1 << OFFBAND_UI_ACTION_ADVERT);
+#ifdef ENV_INCLUDE_GPS
+      mask |= (1 << OFFBAND_UI_ACTION_GPS_TOGGLE);
+#endif
+      mask |= (1 << OFFBAND_UI_ACTION_CYCLE_SCOPE);   // buzzer present in this branch
+      mask |= (1 << OFFBAND_UI_ACTION_BATTERY_BEEP);
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = mask;
+      out_frame[3] = OFFBAND_UI_SEQ_COUNT;
+      uint8_t k = 4;
+      for (uint8_t s = 0; s < OFFBAND_UI_SEQ_COUNT; s++) {
+        out_frame[k++] = s;
+        out_frame[k++] = _prefs.button_actions[s];
+      }
+      _serial->writeFrame(out_frame, k);
+      return;
+    }
+    if (sub == offband::OFFBAND_UI_MATRIX_SET && len >= 4) {
+      uint8_t seq = cmd_frame[2];
+      uint8_t action = cmd_frame[3];
+      if (seq >= OFFBAND_UI_SEQ_COUNT) {
+        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+        out_frame[1] = offband::OFFBAND_UI_ERR;
+        out_frame[2] = offband::OFFBAND_UI_ERR_UNKNOWN_SEQUENCE;
+        _serial->writeFrame(out_frame, 3);
+        return;
+      }
+      if (action >= OFFBAND_UI_ACTION_COUNT) {
+        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+        out_frame[1] = offband::OFFBAND_UI_ERR;
+        out_frame[2] = offband::OFFBAND_UI_ERR_UNSUPPORTED_ACTION;
+        _serial->writeFrame(out_frame, 3);
+        return;
+      }
+#ifndef ENV_INCLUDE_GPS
+      if (action == OFFBAND_UI_ACTION_GPS_TOGGLE) {
+        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+        out_frame[1] = offband::OFFBAND_UI_ERR;
+        out_frame[2] = offband::OFFBAND_UI_ERR_NO_GPS;
+        _serial->writeFrame(out_frame, 3);
+        return;
+      }
+#endif
+      if (_prefs.button_actions[seq] != action) {
+        _prefs.button_actions[seq] = action;
+        savePrefs();
+      }
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = seq;
+      out_frame[3] = _prefs.button_actions[seq];
+      _serial->writeFrame(out_frame, 4);
+      return;
+    }
+    // Unknown sub-code -> typed error, never a silent fall-through.
+    out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+    out_frame[1] = offband::OFFBAND_UI_ERR;
+    out_frame[2] = offband::OFFBAND_UI_ERR_MALFORMED;
+    _serial->writeFrame(out_frame, 3);
+    return;
+#endif  // PIN_BUZZER
+  }
   if (cmd_frame[0] == offband::CMD_OFFBAND_FEM_LNA && len >= 2) {
     uint8_t sub = cmd_frame[1];
     if (!board.canControlLoRaFemLna()) {
@@ -1690,6 +1881,12 @@ void MyMesh::handleCmdFrame(size_t len) {
     // and #510 allocate the first bits from it. Pre-v18 clients read a shorter frame
     // and never see it.
     uint8_t offband_caps2 = 0;
+#ifdef PIN_BUZZER
+    // #510: only advertise notification scope where the device can actually sound.
+    // Gated on the hardware, same principle as OFFBAND_CAP_FEM_LNA above -- a client
+    // must never render a control that cannot do anything on this board.
+    offband_caps2 |= offband::OFFBAND_CAP2_NOTIFY_SCOPE;
+#endif
     out_frame[i++] = offband_caps2;          // v18+
     _serial->writeFrame(out_frame, i);
   } else if (cmd_frame[0] == CMD_APP_START &&

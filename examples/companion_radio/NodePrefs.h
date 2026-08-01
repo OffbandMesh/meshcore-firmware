@@ -51,4 +51,46 @@ struct NodePrefs {  // persisted to file
   // stays plain-RAM non-retained (empty after reboot, fills with the fresh boot log).
   uint8_t caplog_enabled;    // 0 = off, 1 = capture-on-boot until an explicit Stop
   uint8_t caplog_level;      // MLOG_* level to restore (0=boot..3=packet); default DEBUG(2)
+  // #510: notification scope -- which received messages are allowed to make a sound.
+  // Replaces the old binary buzzer mute as the user-facing control (buzzer_quiet above
+  // is now the low-level mute the buzzer driver itself honours).
+  //   0 = ALL   every received message sounds (today's behaviour, the default)
+  //   1 = SELF  only a DM, or a channel message that @[mentions] this node's name
+  //   2 = NONE  nothing sounds
+  // Serialized LAST in DataStore (offset 140), append-only, for the same reason as
+  // radio_fem_rxgain and the caplog fields above: the prefs file is a flat
+  // offset-tracked stream with no version/length/CRC, so inserting mid-sequence
+  // shifts every later field and corrupts saved config on deployed devices.
+  uint8_t notify_scope;
+  // #509: button-action matrix. One action per press-count sequence, indexed by
+  // OFFBAND_UI_SEQ_*. Serialized after notify_scope (offsets 141..144), append-only.
+  // Long press is deliberately NOT in this array -- it is the CLI-rescue / power-off
+  // escape hatch and must never be user-remappable, or a bad assignment can leave a
+  // board unrecoverable.
+  uint8_t button_actions[4];
 };
+
+// #509: button-sequence indices. Order is the press count, so the array index IS the
+// sequence id on the wire.
+#define OFFBAND_UI_SEQ_SINGLE  0
+#define OFFBAND_UI_SEQ_DOUBLE  1
+#define OFFBAND_UI_SEQ_TRIPLE  2
+#define OFFBAND_UI_SEQ_QUAD    3
+#define OFFBAND_UI_SEQ_COUNT   4
+
+// #509: assignable actions. Values are wire values -- see the 0xC5 contract in
+// OffbandConfigProtocol.h. Append only; never renumber.
+#define OFFBAND_UI_ACTION_NONE          0
+#define OFFBAND_UI_ACTION_ADVERT        1
+#define OFFBAND_UI_ACTION_GPS_TOGGLE    2
+#define OFFBAND_UI_ACTION_CYCLE_SCOPE   3
+#define OFFBAND_UI_ACTION_BATTERY_BEEP  4
+#define OFFBAND_UI_ACTION_COUNT         5
+
+// #510: values for NodePrefs::notify_scope. Kept as an enum-like constant set rather
+// than a bare magic number so the CLI, the button handler and the config command all
+// agree. Order is the triple-press cycle order: ALL -> SELF -> NONE -> ALL.
+#define NOTIFY_SCOPE_ALL    0
+#define NOTIFY_SCOPE_SELF   1
+#define NOTIFY_SCOPE_NONE   2
+#define NOTIFY_SCOPE_COUNT  3
