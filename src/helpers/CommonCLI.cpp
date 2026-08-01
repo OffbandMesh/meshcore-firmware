@@ -14,6 +14,15 @@
   #include "wifi_observer/WifiObserver.h"  // wifiObserverPool() accessor
 #endif
 
+// #462: role-agnostic shared config-CLI bridge. Any role that compiles
+// helpers/config AND defines OFFBAND_CONFIG_CLI routes generic `set/get <key>`
+// through the shared dispatcher here. NOT defined on observer envs -- observer
+// keeps dispatchObserverCli's richer grammar and stays byte-identical (see #462;
+// unifying observer onto the bridge is deferred to #511).
+#if defined(OFFBAND_CONFIG_CLI)
+  #include "config/ConfigDispatch.h"
+#endif
+
 // #200 / LoRa-wek: embed the Offband identity blob in .rodata so the
 // flash-history parser (scripts/firmware_identity.py) can recover BUILD-time
 // identity by scanning the firmware binary, rather than re-running git at
@@ -1462,6 +1471,13 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
                                             offband::wifiObserverPool())) {
     // handled by Plan 2 v2 observer CLI (mqtt status / enable / disable /
     // set mqtt.iata / set mqtt.status_interval / set mqtt.broker.<N>.*).
+#endif
+#if defined(OFFBAND_CONFIG_CLI)
+  } else if (offband::config::dispatchCliLine(command, reply, /*reply_size=*/1024)) {
+    // #462: shared config-CLI bridge -- generic `set <key> <value>` / `get <key>`
+    // routed to the registered config providers. Runs AFTER the observer CLI so
+    // a combined build lets the observer's richer grammar win first; on a
+    // non-observer role this is the whole config CLI surface.
 #endif
   } else {
     strcpy(reply, "Err - ??");
