@@ -612,16 +612,139 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
 //
 // Independently implemented from that behavioural spec. Deliberately NOT derived from
 // the wadamesh fork's equivalent -- that project is GPL-3 and Offband is MIT.
+// #510: render `len` bytes of UTF-8 as human-inspectable text into the mesh log.
+//
+// Printable ASCII passes through literally so the string stays readable; anything
+// else -- emoji, variation selectors, control chars, non-breaking spaces -- prints
+// as <U+XXXX>. Two names that render identically on a terminal (the U+FE0F trap)
+// therefore print DIFFERENTLY here, which is the entire point.
+//
+// Long values are SPLIT across numbered continuation lines rather than truncated.
+// A truncated diagnostic is worse than none: it looks authoritative while having
+// thrown away the tail, which is exactly where a stray codepoint hides.
+static void logCodepoints(const char* label, const char* s, size_t len) {
+  char out[160];
+  size_t o = 0;
+  int part = 1;
+  size_t i = 0;
+  while (i < len) {
+    unsigned char c = (unsigned char)s[i];
+    uint32_t cp; int adv;
+    if (c < 0x80)            { cp = c;            adv = 1; }
+    else if ((c & 0xE0)==0xC0){ cp = c & 0x1F;    adv = 2; }
+    else if ((c & 0xF0)==0xE0){ cp = c & 0x0F;    adv = 3; }
+    else if ((c & 0xF8)==0xF0){ cp = c & 0x07;    adv = 4; }
+    else                     { cp = c;            adv = 1; }  // stray byte
+    for (int k = 1; k < adv && (i + k) < len; k++) cp = (cp << 6) | ((unsigned char)s[i+k] & 0x3F);
+
+    char piece[12];
+    int plen;
+    if (cp >= 0x20 && cp < 0x7F) { piece[0] = (char)cp; piece[1] = 0; plen = 1; }
+    else                         { plen = snprintf(piece, sizeof(piece), "<U+%04X>", (unsigned)cp); }
+
+    if (o + plen >= sizeof(out) - 1) {                 // flush this line, continue
+      out[o] = 0;
+      MESH_DEBUG_PRINTLN("[mention] %s(%d) = %s", label, part, out);
+      part++; o = 0;
+    }
+    memcpy(&out[o], piece, plen); o += plen;
+    i += adv;
+  }
+  out[o] = 0;
+  if (part == 1) MESH_DEBUG_PRINTLN("[mention] %s = %s", label, out);
+  else           MESH_DEBUG_PRINTLN("[mention] %s(%d) = %s", label, part, out);
+}
+
+// #510: name the first codepoint where two strings diverge, in plain terms, so the
+// difference does not have to be spotted by eye between two look-alike lines.
+static void logFirstDifference(const char* a, size_t alen, const char* b, size_t blen) {
+  size_t i = 0, cp_idx = 0;
+  while (i < alen && i < blen && a[i] == b[i]) {
+    if (((unsigned char)a[i] & 0xC0) != 0x80) cp_idx++;
+    i++;
+  }
+  unsigned av = (i < alen) ? (unsigned char)a[i] : 0;
+  unsigned bv = (i < blen) ? (unsigned char)b[i] : 0;
+  MESH_DEBUG_PRINTLN("[mention] differ at codepoint %u (byte %u): name=0x%02X cand=0x%02X",
+                     (unsigned)cp_idx, (unsigned)i, av, bv);
+}
+
+// #524: ASCII whitespace test, byte-explicit on purpose.
+//
+// NOT isspace(): its argument is an int that must be representable as unsigned char
+// or EOF, and passing a plain (signed) char >= 0x80 is undefined behaviour. Every
+// byte of a multi-byte UTF-8 sequence is >= 0x80, so isspace() on a name containing
+// an emoji is UB by construction. Comparing bytes explicitly also guarantees a UTF-8
+// continuation byte can never be mistaken for whitespace and eaten off an edge.
+static inline bool isAsciiSpace(char c) {
+  return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+// #524: narrow [begin,len) to its whitespace-trimmed interior. Returns a VIEW --
+// offset and length -- and never copies or modifies the source. The stored
+// node_name is not touched: this is match-time tolerance only.
+static void trimView(const char* s, size_t len, const char** out_begin, size_t* out_len) {
+  size_t a = 0, b = len;
+  while (a < b && isAsciiSpace(s[a])) a++;
+  while (b > a && isAsciiSpace(s[b - 1])) b--;
+  *out_begin = s + a;
+  *out_len   = b - a;
+}
+
 bool MyMesh::textMentionsSelf(const char* text) const {
   if (text == NULL || _prefs.node_name[0] == 0) return false;
   const size_t name_len = strlen(_prefs.node_name);
   if (name_len == 0) return false;
 
+  // #524: the trimmed VIEW of our own name, computed once. Stored name unmodified.
+  const char* tname; size_t tname_len;
+  trimView(_prefs.node_name, name_len, &tname, &tname_len);
+
+  const char* best_cand = NULL;      // #510: remember the closest near-miss to report
+  size_t      best_len  = 0;
+
   for (const char* p = text; *p != 0; p++) {
     if (p[0] != '@' || p[1] != '[') continue;
-    const char* candidate = p + 2;
-    if (strncasecmp(candidate, _prefs.node_name, name_len) != 0) continue;
-    if (candidate[name_len] == ']') return true;   // full name, properly closed
+    const char* cand = p + 2;
+    const char* close = strchr(cand, ']');
+    if (close == NULL) continue;                     // unterminated -- not a mention
+    const size_t cand_len = (size_t)(close - cand);
+    if (best_cand == NULL) { best_cand = cand; best_len = cand_len; }
+
+    // TIER 1 -- exact. The sender emitted our name byte-for-byte, which is what a
+    // conforming sender is required to do (client#497 contract clause).
+    if (cand_len == name_len && strncasecmp(cand, _prefs.node_name, name_len) == 0) {
+      return true;
+    }
+
+    // TIER 2 -- whitespace-tolerant. #524 owner ruling: we cannot control or
+    // guarantee client behaviour, so a mention composed by a client that trimmed
+    // (or padded) the name must still resolve. Both sides are trimmed, which covers
+    // every combination -- name padded and token not, token padded and name not,
+    // leading or trailing, either side.
+    //
+    // Tolerance stops here. Only whitespace at the EDGES is forgiven; any
+    // difference in a non-whitespace codepoint, or in interior whitespace, still
+    // fails. This is not a fuzzy match.
+    const char* tcand; size_t tcand_len;
+    trimView(cand, cand_len, &tcand, &tcand_len);
+    if (tname_len != 0 && tcand_len == tname_len &&
+        strncasecmp(tcand, tname, tname_len) == 0) {
+      return true;
+    }
+  }
+
+  // NO SILENT FAILURE (SAFELANE §6). A mention that did not match used to produce
+  // nothing at all, so a field failure left zero evidence and cost several test
+  // cycles to reconstruct. If the message carried a bracketed token but it did not
+  // match us, say so and show BOTH sides in full, codepoint-rendered.
+  if (best_cand != NULL) {
+    MESH_DEBUG_PRINTLN("[mention] NO MATCH: tried exact AND whitespace-trimmed (#524)");
+    MESH_DEBUG_PRINTLN("[mention] name %u bytes (%u trimmed), candidate %u bytes",
+                       (unsigned)name_len, (unsigned)tname_len, (unsigned)best_len);
+    logCodepoints("name", _prefs.node_name, name_len);
+    logCodepoints("cand", best_cand, best_len);
+    logFirstDifference(_prefs.node_name, name_len, best_cand, best_len);
   }
   return false;
 }
@@ -1153,6 +1276,12 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   // file written before these fields existed short-reads to EOF and leaves caplog OFF
   // (a pre-#428 device must never spuriously auto-capture after an upgrade).
   _prefs.caplog_enabled = 0;
+#ifdef CAPLOG_ON_BOOT
+  // Bench-diagnostic builds only (-DCAPLOG_ON_BOOT): start capture at boot so the
+  // mention/notify logging is live with no client action required. NEVER set this on
+  // a shipping env -- #428's default-OFF rule stands for released firmware.
+  _prefs.caplog_enabled = 1;
+#endif
   _prefs.caplog_level = MLOG_DEBUG;
 }
 
@@ -1722,6 +1851,17 @@ void MyMesh::handleCmdFrame(size_t len) {
         _prefs.buzzer_quiet = (want == NOTIFY_SCOPE_NONE) ? 1 : 0;
         savePrefs();
       }
+      // Apply to the HARDWARE unconditionally, even when the pref already matched.
+      //
+      // This line is the whole bug this handler shipped with: setting the scope over
+      // 0xC5 updated the pref and left the buzzer driver in whatever state boot put it
+      // in. genericBuzzer::play() returns early while _is_quiet, so the device stayed
+      // silent while replying success -- indistinguishable from a working feature.
+      //
+      // Unconditional, not inside the change guard, so a device whose driver has
+      // drifted out of sync self-heals on any SET rather than needing a reboot. Same
+      // rationale as the FEM LNA handler below: persist on change, apply always.
+      if (_ui) _ui->applyBuzzerMute(_prefs.buzzer_quiet != 0);
       // Reply the STORED state rather than echoing the request, so a rejected or
       // clamped value shows the client the truth instead of a silent lie.
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;

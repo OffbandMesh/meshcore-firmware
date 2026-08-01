@@ -839,3 +839,13 @@ void UITask::toggleBuzzer() {
     _next_refresh = 0;  // trigger refresh
   #endif
 }
+
+// #510: apply the mute to the buzzer DRIVER, not just the pref. Without this a scope
+// set over 0xC5 records the value and leaves the hardware muted until the next reboot.
+void UITask::applyBuzzerMute(bool quiet) {
+#ifdef PIN_BUZZER
+  buzzer.quiet(quiet);
+#else
+  (void)quiet;
+#endif
+}
