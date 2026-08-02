@@ -71,7 +71,7 @@ public:
   // #509: button-action dispatch. Every press sequence resolves through
   // runButtonAction() against the stored matrix, so a sequence can be reassigned
   // from the client without editing a handler.
-  void runButtonAction(uint8_t action);
+  void runButtonAction(uint8_t seq, uint8_t action);
   void cycleNotifyScope();
   void loop() override;
 
