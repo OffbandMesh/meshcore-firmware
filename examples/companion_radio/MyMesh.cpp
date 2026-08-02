@@ -1878,6 +1878,14 @@ void MyMesh::handleCmdFrame(size_t len) {
         _prefs.buzzer_quiet = (want == NOTIFY_SCOPE_NONE) ? 1 : 0;
         savePrefs();
       }
+      // #510: log the resulting state for the same reason the button path does -- a
+      // scope change over the wire must be as visible in caplog as one from a press,
+      // or the record depends on which route the user happened to take.
+      MESH_DEBUG_PRINTLN("[0xC5] notify scope -> %s (%d) via client",
+                         _prefs.notify_scope == NOTIFY_SCOPE_ALL  ? "ALL"  :
+                         _prefs.notify_scope == NOTIFY_SCOPE_SELF ? "SELF" : "NONE",
+                         (int)_prefs.notify_scope);
+
       // Apply to the HARDWARE unconditionally, even when the pref already matched.
       //
       // This line is the whole bug this handler shipped with: setting the scope over
@@ -1951,6 +1959,9 @@ void MyMesh::handleCmdFrame(size_t len) {
         _prefs.button_actions[seq] = action;
         savePrefs();
       }
+      // #509: a reassignment is a durable config change with no visible confirmation
+      // on a screenless board -- log it.
+      MESH_DEBUG_PRINTLN("[0xC5] button seq=%d -> action=%d", (int)seq, (int)action);
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = sub;
       out_frame[2] = seq;
