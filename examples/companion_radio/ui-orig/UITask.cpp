@@ -415,6 +415,10 @@ void UITask::handleButtonDoublePress() {
 // Actions unsupported by the hardware no-op safely here; the 0xC5 SET path is what
 // REFUSES them up front with a typed reason, so the client can say why.
 void UITask::runButtonAction(uint8_t action) {
+  // #509: record WHICH action a press resolved to. Without this, caplog shows that a
+  // press happened but not what it did -- and on a screenless board there is no other
+  // record, because _alert renders nowhere.
+  MESH_DEBUG_PRINTLN("[btn] action=%d dispatched", (int)action);
   switch (action) {
     case OFFBAND_UI_ACTION_NONE:
       break;                       // unassigned -- the default for single press
@@ -533,6 +537,14 @@ void UITask::cycleNotifyScope() {
         sprintf(_alert, "Notify: NONE");
         break;
     }
+
+    // #510: log the RESULTING state, not just that a change happened. The tone tells
+    // you something moved if you are listening; this tells you WHERE it landed, which
+    // is the only durable record on a device with no screen.
+    MESH_DEBUG_PRINTLN("[btn] notify scope -> %s (%d), buzzer quiet=%d",
+                       scope == NOTIFY_SCOPE_ALL  ? "ALL"  :
+                       scope == NOTIFY_SCOPE_SELF ? "SELF" : "NONE",
+                       (int)scope, buzzer.isQuiet() ? 1 : 0);
 
     // Keep the low-level mute flag consistent with the scope so a reboot restores the
     // same audible behaviour: NONE persists as quiet, ALL/SELF persist as un-quiet and
