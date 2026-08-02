@@ -252,6 +252,15 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
     // field goes after caplog_level. (NodePrefs offset map: ...137 fem, 138 enabled, 139 level.)
     file.read((uint8_t *)&_prefs.caplog_enabled, sizeof(_prefs.caplog_enabled));          // 138
     file.read((uint8_t *)&_prefs.caplog_level, sizeof(_prefs.caplog_level));              // 139
+    // #510: notification scope, APPEND-ONLY after caplog_level. Files written before
+    // #510 end at 140, so this short-reads to EOF and leaves the caller-set default
+    // (NOTIFY_SCOPE_ALL = today's behaviour) intact -- an existing device is never
+    // silently muted by upgrading. uint8 is all-or-nothing, so no partial-read hazard.
+    // Keep this LAST; any new field goes after it.
+    file.read((uint8_t *)&_prefs.notify_scope, sizeof(_prefs.notify_scope));             // 140
+    // #509: button-action matrix, APPEND-ONLY after notify_scope (offsets 141..144).
+    // Short-reads to EOF on pre-#509 files, leaving the caller-set defaults.
+    file.read((uint8_t *)_prefs.button_actions, sizeof(_prefs.button_actions));           // 141
 
     file.close();
   }
@@ -298,6 +307,11 @@ void DataStore::savePrefs(const NodePrefs& _prefs, double node_lat, double node_
     // read order in loadPrefsInt() exactly. (offsets: 138 enabled, 139 level.)
     file.write((uint8_t *)&_prefs.caplog_enabled, sizeof(_prefs.caplog_enabled));          // 138
     file.write((uint8_t *)&_prefs.caplog_level, sizeof(_prefs.caplog_level));              // 139
+    // #510: notification scope, APPEND-ONLY after caplog_level -- must mirror the read
+    // order in loadPrefsInt() exactly. (offset 140.)
+    file.write((uint8_t *)&_prefs.notify_scope, sizeof(_prefs.notify_scope));             // 140
+    // #509: button-action matrix, APPEND-ONLY -- mirror of the read order. (141..144)
+    file.write((uint8_t *)_prefs.button_actions, sizeof(_prefs.button_actions));           // 141
 
     file.close();
   }

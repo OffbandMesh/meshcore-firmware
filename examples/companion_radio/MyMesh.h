@@ -10,10 +10,16 @@
 // AT MERGE, not at branch time. Do not assume a code from an unmerged branch is yours
 // -- check what has actually merged (same split-allocation trap as the cap bits; see
 // the canonical table in OffbandConfigProtocol.h). In-flight claimants after 17:
-// #365 WIFI_COMPANION (0x08), display-config (0x10), and #508 (caps byte 2) are all
-// in flight; whichever merges first takes 18, and the others rebase. The value below
-// is PROVISIONAL for this branch -- reconcile it against firmware-base at merge.
-#define FIRMWARE_VER_CODE 18   // #508 (PROVISIONAL, see above): + second caps byte at frame offset 84. Prior 17 (#427): caplog cap bit 0x20. Prior 16 (#298): FEM LNA cap 0x04 / 0xC3 / LNA state
+// #508 (caps byte 2) MERGED and took 18. Still in flight and NOT yet allocated:
+// #365 WIFI_COMPANION (0x08) and display-config (0x10) -- they take 20 and beyond in
+// merge order, NOT 19, which this branch is claiming. The value below is PROVISIONAL
+// for this branch -- reconcile it against firmware-base at merge.
+//
+// Why a bump at all when byte 2 already exists: precedent is that ADDING A CAP BIT
+// bumps the code even without a frame-layout change -- 17 was "+ caplog cap bit
+// (0x20)", 16 was "FEM LNA cap 0x04 / 0xC3". This change sets caps2 bit 0x01 and adds
+// the 0xC5 command, so it follows the same rule.
+#define FIRMWARE_VER_CODE 19   // #510 (PROVISIONAL, see above): + caps2 bit 0x01 NOTIFY_SCOPE, + 0xC5 device-UI command. Prior 18 (#508): second caps byte at frame offset 84. Prior 17 (#427): caplog cap bit 0x20
 
 #ifndef FIRMWARE_BUILD_DATE
 #define FIRMWARE_BUILD_DATE "6 Jun 2026"
@@ -157,6 +163,12 @@ protected:
   uint8_t getExtraAckTransmitCount() const override;
   bool filterRecvFloodPacket(mesh::Packet* packet) override;
   bool allowPacketForward(const mesh::Packet* packet) override;
+
+  // #510: notification-scope helpers. textMentionsSelf() implements the `@[name]`
+  // bracketed, case-insensitive rule that is a CONTRACT with the client -- see the
+  // definition in MyMesh.cpp before changing it.
+  bool textMentionsSelf(const char* text) const;
+  bool channelMsgShouldNotify(const char* text) const;
 
   void sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis);
   void sendFloodScoped(const ContactInfo& recipient, mesh::Packet* pkt, uint32_t delay_millis=0) override;

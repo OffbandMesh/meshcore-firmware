@@ -52,12 +52,62 @@ namespace offband {
 // 0xC-RANGE ALLOCATION MAP (frame byte[0]) -- keep this current when adding a
 // code. NOTE: some codes are #defined in MyMesh.cpp (GPS, CAPLOG), not here, so
 // grep the WHOLE 0xC range before claiming one (a partial grep missed FEM_LNA
-// and collided CAPLOG onto 0xC3 -- #408). Next free: 0xC5.
+// and collided CAPLOG onto 0xC3 -- #408). Next free: 0xC6.
 //   0xC0 CMD_OFFBAND_CONFIG    (this file)
 //   0xC1 CMD_OFFBAND_GPS       (MyMesh.cpp)
 //   0xC2 CMD_OFFBAND_BLOCK     (this file)
 //   0xC3 CMD_OFFBAND_FEM_LNA   (this file)
 //   0xC4 CMD_OFFBAND_CAPLOG    (MyMesh.cpp, #396)
+//   0xC5 CMD_OFFBAND_DEVICE_UI (this file, #509/#510)
+
+// === 0xC5 DEVICE-UI COMMAND -- CANONICAL WIRE CONTRACT (#509/#510) ============
+// Owner-directed 2026-08-01: FIRMWARE OWNS THIS CONTRACT. The client codes to what
+// is written here; this file is the single source of truth for both repos. Do not
+// negotiate a divergent shape in chat or in the client and back-fill it here.
+//
+// ONE command code, sub-typed -- deliberately not two codes. Both surfaces
+// (notification scope, button-action matrix) are one settings channel, and the
+// 0xC range is a contended resource that has already produced two collisions
+// (#408 0xC3, #427-vs-#365 on the caps bits). One code, many sub-codes, scales.
+//
+//   REQUEST                          REPLY
+//   [0xC5][0x01]                     [0xC5][0x01][scope]              scope GET
+//   [0xC5][0x02][scope]              [0xC5][0x02][scope]              scope SET (echo)
+//   [0xC5][0x03]                     [0xC5][0x03][mask][n]([seq][action])*n   matrix GET
+//   [0xC5][0x04][seq][action]        [0xC5][0x04][seq][action]        matrix SET (echo)
+//   (any, on failure)                [0xC5][0x7F][reason]             error
+//
+// scope   : NOTIFY_SCOPE_ALL 0 / SELF 1 / NONE 2 (see NodePrefs.h)
+// seq     : 0 single, 1 double, 2 triple, 3 quadruple.
+//           LONG PRESS IS NOT ASSIGNABLE -- it is the CLI-rescue / power-off escape
+//           hatch and must never be user-remappable, or a board can be rendered
+//           unrecoverable by a bad assignment.
+// action  : 0 none, 1 send advert, 2 toggle GPS, 3 cycle notify scope,
+//           4 battery/status beep
+// mask    : bit N set = action N is supported ON THIS BOARD. Required by #474 --
+//           the client renders the DEVICE-reported action set, never a hardcoded
+//           list. A buzzer-less board clears bit 3/4; a GPS-less board clears bit 2.
+// reason  : 1 unsupported action on this board, 2 unknown sequence,
+//           3 no buzzer, 4 no GPS, 5 malformed frame.
+//           A distinct reason byte -- NOT the generic ERR_CODE_ILLEGAL_ARG -- because
+//           both epics require the user be shown WHY an assignment was refused.
+//
+// Gated on OFFBAND_CAP2_NOTIFY_SCOPE (caps byte 2, bit 0). A client that does not
+// see the bit must never emit 0xC5.
+// ==============================================================================
+constexpr uint8_t CMD_OFFBAND_DEVICE_UI       = 0xC5;
+constexpr uint8_t RESP_CODE_OFFBAND_DEVICE_UI = 0xC5;
+constexpr uint8_t OFFBAND_UI_SCOPE_GET  = 0x01;
+constexpr uint8_t OFFBAND_UI_SCOPE_SET  = 0x02;
+constexpr uint8_t OFFBAND_UI_MATRIX_GET = 0x03;
+constexpr uint8_t OFFBAND_UI_MATRIX_SET = 0x04;
+constexpr uint8_t OFFBAND_UI_ERR        = 0x7F;
+// error reason bytes
+constexpr uint8_t OFFBAND_UI_ERR_UNSUPPORTED_ACTION = 1;
+constexpr uint8_t OFFBAND_UI_ERR_UNKNOWN_SEQUENCE   = 2;
+constexpr uint8_t OFFBAND_UI_ERR_NO_BUZZER          = 3;
+constexpr uint8_t OFFBAND_UI_ERR_NO_GPS             = 4;
+constexpr uint8_t OFFBAND_UI_ERR_MALFORMED          = 5;
 constexpr uint8_t CMD_OFFBAND_CONFIG       = 0xC0;  // request:  cmd_frame[0]
 constexpr uint8_t RESP_CODE_OFFBAND_CONFIG = 0xC0;  // response: out_frame[0]
 
@@ -160,10 +210,15 @@ enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUT
 //
 //   bit  value  symbol                        state       issue
 //   ---  -----  ----------------------------  ----------  --------------------------
-//    0   0x01   -- free --                                (first taker: #509 button matrix)
-//    1   0x02   -- free --                                (then: #510 notification scope)
+//    0   0x01   OFFBAND_CAP2_NOTIFY_SCOPE     this change  #510
+//    1   0x02   -- free --                                (next: #509 button matrix set/get)
 //    2-7 0x04.. -- free --
 // ===============================================================================
+// bit 0 (0x01): device notification scope ALL/SELF/NONE is supported and settable.
+// Set only where the device can actually make a sound -- gated on PIN_BUZZER, exactly
+// as OFFBAND_CAP_FEM_LNA is gated on canControlLoRaFemLna(). A board with no buzzer
+// must not advertise it, or the client renders a control that does nothing.
+constexpr uint8_t OFFBAND_CAP2_NOTIFY_SCOPE = 0x01;
 constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: config backend (wifi_observer) compiled in
 constexpr uint8_t OFFBAND_CAP_BLOCK         = 0x02;  // bit 1: user-block list (BlockStore) compiled in (#241)
 constexpr uint8_t OFFBAND_CAP_FEM_LNA       = 0x04;  // bit 2: FEM LNA runtime control available (#298)

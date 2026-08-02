@@ -411,16 +411,52 @@ void UITask::handleButtonDoublePress() {
 
 void UITask::handleButtonTriplePress() {
   MESH_DEBUG_PRINTLN("UITask: triple press triggered");
-  // Toggle buzzer quiet mode
+  // #510: cycle notification scope ALL -> SELF -> NONE -> ALL.
+  //
+  // This replaces the old binary buzzer Off/On toggle, which had a real defect on a
+  // screenless board: turning the buzzer OFF played no sound and wrote its status to
+  // _alert, which renders nowhere under NullDisplayDriver. The success condition was
+  // indistinguishable from a no-op, so the natural response was to press again -- which
+  // turned it back on. Every state below is therefore announced AUDIBLY and distinctly.
+  //
+  // NONE is the hard case: the confirmation is the thing being disabled. It is announced
+  // by playing its descending cue BEFORE the mute takes effect, then draining the buzzer
+  // so the tone is not cut off mid-note.
   #ifdef PIN_BUZZER
-    if (buzzer.isQuiet()) {
-      buzzer.quiet(false);
-      notify(UIEventType::ack);
-      sprintf(_alert, "Buzzer: ON");
-    } else {
-      buzzer.quiet(true);
-      sprintf(_alert, "Buzzer: OFF");
+    uint8_t scope = (_node_prefs->notify_scope + 1) % NOTIFY_SCOPE_COUNT;
+    _node_prefs->notify_scope = scope;
+
+    switch (scope) {
+      case NOTIFY_SCOPE_ALL:
+        buzzer.quiet(false);
+        // rising three-note: "everything is on"
+        buzzer.play("scopeAll:d=32,o=6,b=180:c,e,g");
+        sprintf(_alert, "Notify: ALL");
+        break;
+      case NOTIFY_SCOPE_SELF:
+        buzzer.quiet(false);
+        // single mid note: "only for me"
+        buzzer.play("scopeSelf:d=16,o=6,b=180:e");
+        sprintf(_alert, "Notify: SELF");
+        break;
+      case NOTIFY_SCOPE_NONE:
+      default:
+        // Announce BEFORE muting, else the cue never sounds. Drain it with a bounded
+        // loop (same fail-safe shape as shutdown()) so the mute lands after the tone.
+        buzzer.quiet(false);
+        buzzer.play("scopeNone:d=32,o=6,b=180:g,e,c");
+        {
+          uint32_t drain_start = millis();
+          while (buzzer.isPlaying() && (millis() - drain_start) < 1500) buzzer.loop();
+        }
+        buzzer.quiet(true);
+        sprintf(_alert, "Notify: NONE");
+        break;
     }
+
+    // Keep the low-level mute flag consistent with the scope so a reboot restores the
+    // same audible behaviour: NONE persists as quiet, ALL/SELF persist as un-quiet and
+    // let the per-message scope check decide.
     _node_prefs->buzzer_quiet = buzzer.isQuiet();
     the_mesh.savePrefs();
     _need_refresh = true;
@@ -457,4 +493,14 @@ void UITask::handleButtonLongPress() {
   } else {
     shutdown();
   }
+}
+
+// #510: apply the mute to the buzzer DRIVER, not just the pref. Without this a scope
+// set over 0xC5 records the value and leaves the hardware muted until the next reboot.
+void UITask::applyBuzzerMute(bool quiet) {
+#ifdef PIN_BUZZER
+  buzzer.quiet(quiet);
+#else
+  (void)quiet;
+#endif
 }

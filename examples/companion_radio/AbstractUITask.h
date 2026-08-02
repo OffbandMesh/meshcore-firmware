@@ -42,5 +42,16 @@ public:
   virtual void msgRead(int msgcount) = 0;
   virtual void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) = 0;
   virtual void notify(UIEventType t = UIEventType::none) = 0;
+  // #510: push the low-level buzzer mute to the hardware driver.
+  //
+  // The buzzer is a MEMBER of each UITask implementation, not a global, so the mesh
+  // layer cannot reach it. Setting the notification scope over 0xC5 updated only the
+  // pref and left the driver in whatever state boot put it in -- play() then returned
+  // early and the device stayed silent while reporting success. This exists so a
+  // scope change applies to the hardware immediately instead of at the next reboot.
+  //
+  // Non-pure with a no-op default: implementations without a buzzer inherit the
+  // default and are unaffected.
+  virtual void applyBuzzerMute(bool quiet) { (void)quiet; }
   virtual void loop() = 0;
 };
