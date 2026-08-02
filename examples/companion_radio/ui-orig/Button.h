@@ -103,5 +103,6 @@ private:
     bool readButton() const;
     void pushEdge(uint32_t ms, bool pressed);
     bool popEdge(Edge& out);
+    void drainSequencer(uint32_t at);
     void triggerEvent(EventType event);
 };
