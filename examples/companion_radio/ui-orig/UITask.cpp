@@ -362,7 +362,7 @@ void UITask::loop() {
 }
 
 void UITask::handleButtonAnyPress() {
-  MESH_DEBUG_PRINTLN("UITask: any press triggered");
+  MESH_DEBUG_PRINTLN("[btn] edge: a press was seen (count not yet resolved)");
   // called on any button press before other events, to wake up the display quickly
   // do not refresh the display here, as it may block the button handler
   if (_display != NULL) {
@@ -375,7 +375,6 @@ void UITask::handleButtonAnyPress() {
 }
 
 void UITask::handleButtonShortPress() {
-  MESH_DEBUG_PRINTLN("UITask: short press triggered");
   if (_display != NULL) {
     // Display housekeeping is NOT an assignable action -- it is how the screen
     // behaves, not what the button "does". Runs regardless of the assignment.
@@ -392,12 +391,11 @@ void UITask::handleButtonShortPress() {
   }
   // #509: single press is UNASSIGNED by default -- the owner requires it be opt-in,
   // never defaulted on. runButtonAction() no-ops on ACTION_NONE.
-  runButtonAction(_node_prefs->button_actions[OFFBAND_UI_SEQ_SINGLE]);
+  runButtonAction(OFFBAND_UI_SEQ_SINGLE, _node_prefs->button_actions[OFFBAND_UI_SEQ_SINGLE]);
 }
 
 void UITask::handleButtonDoublePress() {
-  MESH_DEBUG_PRINTLN("UITask: double press triggered");
-  runButtonAction(_node_prefs->button_actions[OFFBAND_UI_SEQ_DOUBLE]);
+  runButtonAction(OFFBAND_UI_SEQ_DOUBLE, _node_prefs->button_actions[OFFBAND_UI_SEQ_DOUBLE]);
 }
 
 // #509: THE BUTTON-ACTION DISPATCH TABLE.
@@ -414,11 +412,32 @@ void UITask::handleButtonDoublePress() {
 //
 // Actions unsupported by the hardware no-op safely here; the 0xC5 SET path is what
 // REFUSES them up front with a typed reason, so the client can say why.
-void UITask::runButtonAction(uint8_t action) {
-  // #509: record WHICH action a press resolved to. Without this, caplog shows that a
-  // press happened but not what it did -- and on a screenless board there is no other
-  // record, because _alert renders nowhere.
-  MESH_DEBUG_PRINTLN("[btn] action=%d dispatched", (int)action);
+static const char* seqName(uint8_t seq) {
+  switch (seq) {
+    case OFFBAND_UI_SEQ_SINGLE: return "SINGLE";
+    case OFFBAND_UI_SEQ_DOUBLE: return "DOUBLE";
+    case OFFBAND_UI_SEQ_TRIPLE: return "TRIPLE";
+    case OFFBAND_UI_SEQ_QUAD:   return "QUAD";
+    default:                    return "?";
+  }
+}
+static const char* actionName(uint8_t a) {
+  switch (a) {
+    case OFFBAND_UI_ACTION_NONE:         return "NONE";
+    case OFFBAND_UI_ACTION_ADVERT:       return "ADVERT";
+    case OFFBAND_UI_ACTION_GPS_TOGGLE:   return "GPS_TOGGLE";
+    case OFFBAND_UI_ACTION_CYCLE_SCOPE:  return "CYCLE_SCOPE";
+    case OFFBAND_UI_ACTION_BATTERY_BEEP: return "BATTERY_BEEP";
+    default:                             return "?";
+  }
+}
+
+void UITask::runButtonAction(uint8_t seq, uint8_t action) {
+  // #509: ONE line naming the press sequence AND what it resolved to, in words.
+  // "action=3 dispatched" could not answer the only question that matters when a
+  // press appears to do nothing: was it even detected as a TRIPLE? Now it says so.
+  MESH_DEBUG_PRINTLN("[btn] %s press -> %s (seq=%d action=%d)",
+                     seqName(seq), actionName(action), (int)seq, (int)action);
   switch (action) {
     case OFFBAND_UI_ACTION_NONE:
       break;                       // unassigned -- the default for single press
@@ -494,7 +513,6 @@ void UITask::runButtonAction(uint8_t action) {
 // #510: cycle notification scope ALL -> SELF -> NONE -> ALL. Extracted from the
 // triple-press handler so it can be ASSIGNED to any sequence, not just triple.
 void UITask::cycleNotifyScope() {
-  MESH_DEBUG_PRINTLN("UITask: triple press triggered");
   // #510: cycle notification scope ALL -> SELF -> NONE -> ALL.
   //
   // This replaces the old binary buzzer Off/On toggle, which had a real defect on a
@@ -556,17 +574,15 @@ void UITask::cycleNotifyScope() {
 }
 
 void UITask::handleButtonTriplePress() {
-  MESH_DEBUG_PRINTLN("UITask: triple press triggered");
-  runButtonAction(_node_prefs->button_actions[OFFBAND_UI_SEQ_TRIPLE]);
+  runButtonAction(OFFBAND_UI_SEQ_TRIPLE, _node_prefs->button_actions[OFFBAND_UI_SEQ_TRIPLE]);
 }
 
 void UITask::handleButtonQuadruplePress() {
-  MESH_DEBUG_PRINTLN("UITask: quad press triggered");
-  runButtonAction(_node_prefs->button_actions[OFFBAND_UI_SEQ_QUAD]);
+  runButtonAction(OFFBAND_UI_SEQ_QUAD, _node_prefs->button_actions[OFFBAND_UI_SEQ_QUAD]);
 }
 
 void UITask::handleButtonLongPress() {
-  MESH_DEBUG_PRINTLN("UITask: long press triggered");
+  MESH_DEBUG_PRINTLN("[btn] LONG press -> fixed (rescue/power-off, not assignable)");
   if (millis() - ui_started_at < 8000) {   // long press in first 8 seconds since startup -> CLI/rescue
     the_mesh.enterCLIRescue();
   } else {
