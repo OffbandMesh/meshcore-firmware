@@ -119,6 +119,24 @@ void Button::captureEdgeFromISR() {
 #endif
 }
 
+// Pull events out of the sequencer until it has nothing more to say at `at`. One call
+// can only return a single event, and a deferred edge followed by a resolved count
+// produces two.
+void Button::drainSequencer(uint32_t at) {
+    for (;;) {
+        ButtonSequencer::Event ev = _seq.tick(at);
+        switch (ev) {
+            case ButtonSequencer::EV_NONE:      return;
+            case ButtonSequencer::EV_PRESS_EDGE: triggerEvent(ANY_PRESS); break;
+            case ButtonSequencer::EV_SHORT:     triggerEvent(SHORT_PRESS); break;
+            case ButtonSequencer::EV_DOUBLE:    triggerEvent(DOUBLE_PRESS); break;
+            case ButtonSequencer::EV_TRIPLE:    triggerEvent(TRIPLE_PRESS); break;
+            case ButtonSequencer::EV_QUADRUPLE: triggerEvent(QUADRUPLE_PRESS); break;
+            case ButtonSequencer::EV_LONG:      triggerEvent(LONG_PRESS); break;
+        }
+    }
+}
+
 void Button::update() {
     uint32_t now = millis();
 
@@ -155,28 +173,20 @@ void Button::update() {
     // Consumer. Drain everything captured since the last call, at the timestamps the
     // edges actually carried -- this is what makes a late loop cost latency instead of
     // dropped presses.
+    //
+    // Tick to each edge's own timestamp BEFORE feeding it. An edge deferred by the
+    // chatter window happened before this one did, so it has to be applied first or the
+    // two arrive out of order.
     Edge e;
     while (popEdge(e)) {
+        drainSequencer(e.ms);
         if (_seq.onEdge(e.ms, e.pressed) == ButtonSequencer::EV_PRESS_EDGE) {
             triggerEvent(ANY_PRESS);
         }
     }
 
-    // Resolve gestures whose window has now closed. Drain in a loop: one call can only
-    // return a single event, and a long press followed by a pending count could produce
-    // two.
-    for (;;) {
-        ButtonSequencer::Event ev = _seq.tick(now);
-        if (ev == ButtonSequencer::EV_NONE) break;
-        switch (ev) {
-            case ButtonSequencer::EV_SHORT:     triggerEvent(SHORT_PRESS); break;
-            case ButtonSequencer::EV_DOUBLE:    triggerEvent(DOUBLE_PRESS); break;
-            case ButtonSequencer::EV_TRIPLE:    triggerEvent(TRIPLE_PRESS); break;
-            case ButtonSequencer::EV_QUADRUPLE: triggerEvent(QUADRUPLE_PRESS); break;
-            case ButtonSequencer::EV_LONG:      triggerEvent(LONG_PRESS); break;
-            default: break;
-        }
-    }
+    // Resolve anything whose window has now closed.
+    drainSequencer(now);
 
     // SAFELANE §6: a dropped edge is lost user input. Report it once per occurrence
     // rather than letting a miscounted press look like a press that never happened.
