@@ -77,11 +77,17 @@ bool Button::readButton() const {
     return (digitalRead(_pin) == _activeState);
 }
 
-// Producer side. Safe to call from an ISR: it only advances _q_head, which no other
-// context writes.
+// Power of two so the wrap below is a mask rather than a division -- this runs in an
+// ISR on the interrupt-capture path.
+static_assert((BUTTON_EDGE_QUEUE_LEN & (BUTTON_EDGE_QUEUE_LEN - 1)) == 0,
+              "BUTTON_EDGE_QUEUE_LEN must be a power of two");
+
+// Producer side. Only ever advances _q_head, which the consumer never writes. Callers
+// must guarantee it is not re-entered -- the ISR owns it outright, and update()'s poll
+// path masks interrupts around its call for exactly that reason.
 void Button::pushEdge(uint32_t ms, bool pressed) {
     uint8_t head = _q_head;
-    uint8_t next = (uint8_t)((head + 1) % BUTTON_EDGE_QUEUE_LEN);
+    uint8_t next = (uint8_t)((head + 1) & (BUTTON_EDGE_QUEUE_LEN - 1));
     if (next == _q_tail) {
         _dropped++;                  // full -- record the loss rather than hide it
         return;
@@ -98,7 +104,7 @@ bool Button::popEdge(Edge& out) {
     if (tail == _q_head) return false;
     out.ms = _queue[tail].ms;
     out.pressed = _queue[tail].pressed;
-    _q_tail = (uint8_t)((tail + 1) % BUTTON_EDGE_QUEUE_LEN);
+    _q_tail = (uint8_t)((tail + 1) & (BUTTON_EDGE_QUEUE_LEN - 1));
     return true;
 }
 
@@ -119,13 +125,31 @@ void Button::update() {
     // Polled producer. Under BUTTON_IRQ_CAPTURE this is a backstop: the ISR has usually
     // already published the edge and _produced_level matches, so this adds nothing. It
     // still runs, so a missed or unattachable interrupt degrades to the old sampling
-    // behaviour instead of a dead button.
+    // behaviour instead of a dead button. That matters for more than completeness: if a
+    // RELEASE edge were ever lost, the sequencer would still believe the button is held
+    // and fire a long press 3 s later -- which on the T1000-E is power-off. This resyncs
+    // within one sample.
     if ((uint32_t)(now - _lastReadTime) >= BUTTON_READ_INTERVAL_MS) {
         _lastReadTime = now;
+
+        // The ISR is the OTHER producer of this queue, so the two must take turns.
+        // pushEdge() writes a multi-word slot and then republishes _produced_level; an
+        // interrupt landing in the middle of that overwrites one of the two edges --
+        // precisely the silent-input-loss bug this whole change exists to remove. Mask
+        // across the entire read-check-push, not just the push: deciding on a level
+        // sampled before the mask can queue an edge the pin has already moved past.
+        //
+        // The window is a digitalRead plus a few stores (~1 us at 64 MHz), far short of
+        // anything the SoftDevice notices, and it is skipped outright when no interrupt
+        // is attached -- which is every non-t1000-e env, where the poll is the only
+        // producer and no masking is needed.
+        const bool mask = (_irq_slot >= 0);
+        if (mask) noInterrupts();
         bool level = readButton();
         if (level != _produced_level) {
             pushEdge(now, level);
         }
+        if (mask) interrupts();
     }
 
     // Consumer. Drain everything captured since the last call, at the timestamps the
