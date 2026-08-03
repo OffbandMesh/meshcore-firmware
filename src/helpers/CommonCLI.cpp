@@ -667,6 +667,39 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       sprintf(reply, "led: %s, controllable: %s",
               _prefs->ui_led_enabled ? "on" : "off",
               _board->canControlLed() ? "yes" : "no");
+    } else if (memcmp(command, "display always on", 17) == 0) {
+#ifdef DISPLAY_CLASS
+      _prefs->ui_display_mode = DISPLAY_MODE_ALWAYS_ON;
+      savePrefs();
+      strcpy(reply, "display: always on (screen stays lit)");
+#else
+      strcpy(reply, "display: unsupported (no display on this build)");
+#endif
+    } else if (memcmp(command, "display always off", 18) == 0) {
+#ifdef DISPLAY_CLASS
+      _prefs->ui_display_mode = DISPLAY_MODE_ALWAYS_OFF;
+      savePrefs();
+      strcpy(reply, "display: always off (screen dark)");
+#else
+      strcpy(reply, "display: unsupported (no display on this build)");
+#endif
+    } else if (memcmp(command, "display auto", 12) == 0) {
+#ifdef DISPLAY_CLASS
+      _prefs->ui_display_mode = DISPLAY_MODE_AUTO;
+      savePrefs();
+      strcpy(reply, "display: auto (on, blanks after timeout)");
+#else
+      strcpy(reply, "display: unsupported (no display on this build)");
+#endif
+    } else if (memcmp(command, "display", 7) == 0) {
+#ifdef DISPLAY_CLASS
+      const char* m = _prefs->ui_display_mode == DISPLAY_MODE_ALWAYS_ON  ? "always on"
+                    : _prefs->ui_display_mode == DISPLAY_MODE_ALWAYS_OFF ? "always off"
+                    : "auto";
+      sprintf(reply, "display: %s", m);
+#else
+      strcpy(reply, "display: unsupported (no display on this build)");
+#endif
 #ifdef ENABLE_WIFI_TELEMETRY
     } else if (memcmp(command, "telemetry off", 13) == 0) {
       wifi_telemetry_set_disabled(1);
