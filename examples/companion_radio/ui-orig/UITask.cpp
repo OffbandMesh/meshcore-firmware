@@ -362,7 +362,7 @@ void UITask::loop() {
 }
 
 void UITask::handleButtonAnyPress() {
-  MESH_DEBUG_PRINTLN("UITask: any press triggered");
+  MESH_DEBUG_PRINTLN("[btn] edge: a press was seen (count not yet resolved)");
   // called on any button press before other events, to wake up the display quickly
   // do not refresh the display here, as it may block the button handler
   if (_display != NULL) {
@@ -375,15 +375,13 @@ void UITask::handleButtonAnyPress() {
 }
 
 void UITask::handleButtonShortPress() {
-  MESH_DEBUG_PRINTLN("UITask: short press triggered");
   if (_display != NULL) {
-    // Only clear message preview if display was already on before button press
+    // Display housekeeping is NOT an assignable action -- it is how the screen
+    // behaves, not what the button "does". Runs regardless of the assignment.
     if (_displayWasOn) {
-      // If display was on and showing message preview, clear it
       if (_origin[0] && _msg[0]) {
         clearMsgPreview();
       } else {
-        // Otherwise, refresh the display
         _need_refresh = true;
       }
     } else {
@@ -391,26 +389,130 @@ void UITask::handleButtonShortPress() {
     }
     // Note: Display turn-on and auto-off timer extension are handled by handleButtonAnyPress
   }
+  // #509: single press is UNASSIGNED by default -- the owner requires it be opt-in,
+  // never defaulted on. runButtonAction() no-ops on ACTION_NONE.
+  runButtonAction(OFFBAND_UI_SEQ_SINGLE, _node_prefs->button_actions[OFFBAND_UI_SEQ_SINGLE]);
 }
 
 void UITask::handleButtonDoublePress() {
-  MESH_DEBUG_PRINTLN("UITask: double press triggered, sending advert");
-  // ADVERT
-  #ifdef PIN_BUZZER
-      notify(UIEventType::ack);
-  #endif
-  if (the_mesh.advert()) {
-    MESH_DEBUG_PRINTLN("Advert sent!");
-    sprintf(_alert, "Advert sent!");
-  } else {
-    MESH_DEBUG_PRINTLN("Advert failed!");
-    sprintf(_alert, "Advert failed..");
-  }
-  _need_refresh = true;
+  runButtonAction(OFFBAND_UI_SEQ_DOUBLE, _node_prefs->button_actions[OFFBAND_UI_SEQ_DOUBLE]);
 }
 
-void UITask::handleButtonTriplePress() {
-  MESH_DEBUG_PRINTLN("UITask: triple press triggered");
+// #509: THE BUTTON-ACTION DISPATCH TABLE.
+//
+// Every press sequence resolves through here instead of doing a fixed thing, so a
+// sequence can be reassigned from the client (0xC5 matrix SET) without touching any
+// handler. Adding an action means adding one case; adding a device means reusing
+// this whole block. Previously each handler hardcoded its own behaviour, which is
+// what made the matrix unassignable.
+//
+// LONG PRESS IS DELIBERATELY ABSENT. It is the CLI-rescue / power-off escape hatch
+// and must never be remappable, or a bad assignment could leave a board with no way
+// back. handleButtonLongPress() keeps its fixed behaviour.
+//
+// Actions unsupported by the hardware no-op safely here; the 0xC5 SET path is what
+// REFUSES them up front with a typed reason, so the client can say why.
+static const char* seqName(uint8_t seq) {
+  switch (seq) {
+    case OFFBAND_UI_SEQ_SINGLE: return "SINGLE";
+    case OFFBAND_UI_SEQ_DOUBLE: return "DOUBLE";
+    case OFFBAND_UI_SEQ_TRIPLE: return "TRIPLE";
+    case OFFBAND_UI_SEQ_QUAD:   return "QUAD";
+    default:                    return "?";
+  }
+}
+static const char* actionName(uint8_t a) {
+  switch (a) {
+    case OFFBAND_UI_ACTION_NONE:         return "NONE";
+    case OFFBAND_UI_ACTION_ADVERT:       return "ADVERT";
+    case OFFBAND_UI_ACTION_GPS_TOGGLE:   return "GPS_TOGGLE";
+    case OFFBAND_UI_ACTION_CYCLE_SCOPE:  return "CYCLE_SCOPE";
+    case OFFBAND_UI_ACTION_BATTERY_BEEP: return "BATTERY_BEEP";
+    default:                             return "?";
+  }
+}
+
+void UITask::runButtonAction(uint8_t seq, uint8_t action) {
+  // #509: ONE line naming the press sequence AND what it resolved to, in words.
+  // "action=3 dispatched" could not answer the only question that matters when a
+  // press appears to do nothing: was it even detected as a TRIPLE? Now it says so.
+  MESH_DEBUG_PRINTLN("[btn] %s press -> %s (seq=%d action=%d)",
+                     seqName(seq), actionName(action), (int)seq, (int)action);
+  switch (action) {
+    case OFFBAND_UI_ACTION_NONE:
+      break;                       // unassigned -- the default for single press
+
+    case OFFBAND_UI_ACTION_ADVERT:
+      #ifdef PIN_BUZZER
+        notify(UIEventType::ack);
+      #endif
+      if (the_mesh.advert()) {
+        MESH_DEBUG_PRINTLN("Advert sent!");
+        sprintf(_alert, "Advert sent!");
+      } else {
+        MESH_DEBUG_PRINTLN("Advert failed!");
+        sprintf(_alert, "Advert failed..");
+      }
+      _need_refresh = true;
+      break;
+
+    case OFFBAND_UI_ACTION_GPS_TOGGLE:
+      if (_sensors != NULL) {
+        int num = _sensors->getNumSettings();
+        for (int i = 0; i < num; i++) {
+          if (strcmp(_sensors->getSettingName(i), "gps") == 0) {
+            if (strcmp(_sensors->getSettingValue(i), "1") == 0) {
+              _sensors->setSettingValue("gps", "0");
+              notify(UIEventType::ack);
+              sprintf(_alert, "GPS: Disabled");
+            } else {
+              _sensors->setSettingValue("gps", "1");
+              notify(UIEventType::ack);
+              sprintf(_alert, "GPS: Enabled");
+            }
+            break;
+          }
+        }
+      }
+      _need_refresh = true;
+      break;
+
+    case OFFBAND_UI_ACTION_CYCLE_SCOPE:
+      cycleNotifyScope();
+      break;
+
+    case OFFBAND_UI_ACTION_BATTERY_BEEP:
+      // Audible battery read for a screenless device: one chirp per 25%, so 4 chirps
+      // is full and 1 is nearly flat. Countable without looking at anything.
+      #ifdef PIN_BUZZER
+      {
+        uint16_t mv = getBattMilliVolts();
+        int pct = ((int)mv - BATT_MIN_MILLIVOLTS) * 100 / (BATT_MAX_MILLIVOLTS - BATT_MIN_MILLIVOLTS);
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        int chirps = (pct / 25) + 1;      // 1..5, never zero so "flat" is still audible
+        if (chirps > 4) chirps = 4;
+        for (int i = 0; i < chirps; i++) {
+          buzzer.play("bat:d=32,o=7,b=200:c");
+          uint32_t t0 = millis();
+          while (buzzer.isPlaying() && (millis() - t0) < 400) buzzer.loop();
+          delay(90);
+        }
+        sprintf(_alert, "Batt: %d%%", pct);
+        _need_refresh = true;
+      }
+      #endif
+      break;
+
+    default:
+      MESH_DEBUG_PRINTLN("UITask: unknown button action %d ignored", (int)action);
+      break;
+  }
+}
+
+// #510: cycle notification scope ALL -> SELF -> NONE -> ALL. Extracted from the
+// triple-press handler so it can be ASSIGNED to any sequence, not just triple.
+void UITask::cycleNotifyScope() {
   // #510: cycle notification scope ALL -> SELF -> NONE -> ALL.
   //
   // This replaces the old binary buzzer Off/On toggle, which had a real defect on a
@@ -454,6 +556,14 @@ void UITask::handleButtonTriplePress() {
         break;
     }
 
+    // #510: log the RESULTING state, not just that a change happened. The tone tells
+    // you something moved if you are listening; this tells you WHERE it landed, which
+    // is the only durable record on a device with no screen.
+    MESH_DEBUG_PRINTLN("[btn] notify scope -> %s (%d), buzzer quiet=%d",
+                       scope == NOTIFY_SCOPE_ALL  ? "ALL"  :
+                       scope == NOTIFY_SCOPE_SELF ? "SELF" : "NONE",
+                       (int)scope, buzzer.isQuiet() ? 1 : 0);
+
     // Keep the low-level mute flag consistent with the scope so a reboot restores the
     // same audible behaviour: NONE persists as quiet, ALL/SELF persist as un-quiet and
     // let the per-message scope check decide.
@@ -463,31 +573,16 @@ void UITask::handleButtonTriplePress() {
   #endif
 }
 
+void UITask::handleButtonTriplePress() {
+  runButtonAction(OFFBAND_UI_SEQ_TRIPLE, _node_prefs->button_actions[OFFBAND_UI_SEQ_TRIPLE]);
+}
+
 void UITask::handleButtonQuadruplePress() {
-  MESH_DEBUG_PRINTLN("UITask: quad press triggered");
-  if (_sensors != NULL) {
-    // toggle GPS onn/off
-    int num = _sensors->getNumSettings();
-    for (int i = 0; i < num; i++) {
-      if (strcmp(_sensors->getSettingName(i), "gps") == 0) {
-        if (strcmp(_sensors->getSettingValue(i), "1") == 0) {
-          _sensors->setSettingValue("gps", "0");
-          notify(UIEventType::ack);
-          sprintf(_alert, "GPS: Disabled");
-        } else {
-          _sensors->setSettingValue("gps", "1");
-          notify(UIEventType::ack);
-          sprintf(_alert, "GPS: Enabled");
-        }
-        break;
-      }
-    }
-  }
-  _need_refresh = true;
+  runButtonAction(OFFBAND_UI_SEQ_QUAD, _node_prefs->button_actions[OFFBAND_UI_SEQ_QUAD]);
 }
 
 void UITask::handleButtonLongPress() {
-  MESH_DEBUG_PRINTLN("UITask: long press triggered");
+  MESH_DEBUG_PRINTLN("[btn] LONG press -> fixed (rescue/power-off, not assignable)");
   if (millis() - ui_started_at < 8000) {   // long press in first 8 seconds since startup -> CLI/rescue
     the_mesh.enterCLIRescue();
   } else {

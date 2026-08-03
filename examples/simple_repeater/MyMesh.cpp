@@ -1,5 +1,8 @@
 #include "MyMesh.h"
 #include <algorithm>
+// #537: mesh-packet feed into the shared broker pool (self-guards on
+// OFFBAND_MQTT_POOL; a no-op include otherwise).
+#include "helpers/wifi_telemetry/RepeaterMqttPool.h"
 
 /* ------------------------------ Config -------------------------------- */
 
@@ -470,6 +473,12 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
   mesh::Utils::printHex(Serial, raw, len);
   Serial.println();
 #endif
+#ifdef OFFBAND_MQTT_POOL
+  // #537: tee every raw RX into the broker pool (/raw), parallel to the
+  // observer's logRxRaw hook. Non-blocking (ring-log enqueue); inert until the
+  // pool is started + brokers configured.
+  offband::repeaterMqttPool().publishRaw(raw, (size_t)len, rssi, snr);
+#endif
 }
 
 void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
@@ -496,6 +505,19 @@ void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
       f.close();
     }
   }
+#ifdef OFFBAND_MQTT_POOL
+  // #537: tee the PARSED packet into the pool (/packets, the CoreScope-ingested
+  // topic), parallel to the observer's logRx hook. rssi/snr/airtime are valid
+  // here (same checkRecv iteration); score is scaled to MeshCore's milli
+  // convention. Non-blocking; inert until the pool is started + configured.
+  if (pkt != nullptr) {
+    int   rssi        = (int)_radio->getLastRSSI();
+    float snr         = _radio->getLastSNR();
+    int   score_milli = (int)(score * 1000.0f);
+    int   duration    = (int)_radio->getEstAirtimeFor(len);
+    offband::repeaterMqttPool().publishParsed(*pkt, rssi, snr, score_milli, duration);
+  }
+#endif
 }
 
 void MyMesh::logTx(mesh::Packet *pkt, int len) {

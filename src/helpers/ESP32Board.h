@@ -14,11 +14,13 @@
 #include <Wire.h>
 #include "soc/rtc.h"
 #include "esp_system.h"
+#include "esp_task_wdt.h"
 
 class ESP32Board : public mesh::MainBoard {
 protected:
   uint8_t startup_reason;
   bool inhibit_sleep = false;
+  bool _wdt_started = false;   // #446: runtime task watchdog armed
   static inline portMUX_TYPE sleepMux = portMUX_INITIALIZER_UNLOCKED;
 
 public:
@@ -66,7 +68,53 @@ public:
     return P_LORA_DIO_1; // default for SX1262
   }
 
+  // #446: runtime watchdog via the ESP-IDF Task WDT. startWatchdog() once after
+  // begin(); feedWatchdog() from the MAIN LOOP each iteration, so a hung loop
+  // trips it -> panic-reset (esp_reset_reason() == ESP_RST_TASK_WDT next boot).
+  // The Arduino core pre-inits the TWDT (panic on) but only watches the idle
+  // task(s); we (re)apply our timeout and subscribe the loop task.
+  void startWatchdog(uint32_t timeout_secs) override {
+    if (_wdt_started) return;
+    esp_err_t err;
+#if ESP_IDF_VERSION_MAJOR >= 5
+    esp_task_wdt_config_t cfg = {};
+    cfg.timeout_ms     = timeout_secs * 1000;
+    cfg.idle_core_mask = (1 << portNUM_PROCESSORS) - 1;  // keep idle-task monitoring
+    cfg.trigger_panic  = true;                            // reset on timeout
+    err = esp_task_wdt_init(&cfg);
+    if (err == ESP_ERR_INVALID_STATE) {
+      err = esp_task_wdt_reconfigure(&cfg);   // already inited by the Arduino core
+    }
+#else
+    // IDF 4.x: init-or-update. When the TWDT is already initialized this updates
+    // the timeout + panic config in place (per esp_task_wdt.h).
+    err = esp_task_wdt_init(timeout_secs, true);
+#endif
+    // Degrade gracefully: if configuration failed (e.g. ESP_ERR_NO_MEM), leave the
+    // watchdog DISARMED rather than falsely reporting it armed. Not ESP_ERROR_CHECK()
+    // -- that aborts on error, which would turn a reliability primitive into a crash.
+    if (err != ESP_OK) {
+      MESH_DEBUG_PRINTLN("WDT: init failed (err=%d); NOT armed", (int)err);
+      return;
+    }
+    // Subscribe the current (main loop) task. ESP_ERR_INVALID_ARG == already
+    // subscribed by the Arduino core, which is fine; any other error is a failure.
+    err = esp_task_wdt_add(NULL);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_ARG) {
+      MESH_DEBUG_PRINTLN("WDT: loop-task subscribe failed (err=%d); NOT armed", (int)err);
+      return;
+    }
+    _wdt_started = true;
+  }
+
+  void feedWatchdog() override {
+    if (_wdt_started) esp_task_wdt_reset();
+  }
+
   void sleep(uint32_t secs) override {
+    // #446: feed on the way into (light) sleep so a long sleep window is not
+    // mistaken for a hung loop.
+    if (_wdt_started) esp_task_wdt_reset();
     // Skip if not allow to sleep
     if (inhibit_sleep) {
       delay(1); // Give MCU to OTA to run

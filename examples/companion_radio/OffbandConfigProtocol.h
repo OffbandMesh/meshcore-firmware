@@ -211,7 +211,7 @@ enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUT
 //   bit  value  symbol                        state       issue
 //   ---  -----  ----------------------------  ----------  --------------------------
 //    0   0x01   OFFBAND_CAP2_NOTIFY_SCOPE     this change  #510
-//    1   0x02   -- free --                                (next: #509 button matrix set/get)
+//    1   0x02   OFFBAND_CAP2_BUTTON_MATRIX    this change  #509
 //    2-7 0x04.. -- free --
 // ===============================================================================
 // bit 0 (0x01): device notification scope ALL/SELF/NONE is supported and settable.
@@ -219,6 +219,11 @@ enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUT
 // as OFFBAND_CAP_FEM_LNA is gated on canControlLoRaFemLna(). A board with no buzzer
 // must not advertise it, or the client renders a control that does nothing.
 constexpr uint8_t OFFBAND_CAP2_NOTIFY_SCOPE = 0x01;
+// bit 1 (0x02): the button-action matrix is supported and settable.
+// Gated on PIN_USER_BTN, NOT PIN_BUZZER -- reassigning a press needs a button, not a
+// speaker. A board with a button and no buzzer can still map "send advert" to double
+// press, so gating this on the buzzer would refuse a feature the hardware can do.
+constexpr uint8_t OFFBAND_CAP2_BUTTON_MATRIX = 0x02;
 constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: config backend (wifi_observer) compiled in
 constexpr uint8_t OFFBAND_CAP_BLOCK         = 0x02;  // bit 1: user-block list (BlockStore) compiled in (#241)
 constexpr uint8_t OFFBAND_CAP_FEM_LNA       = 0x04;  // bit 2: FEM LNA runtime control available (#298)

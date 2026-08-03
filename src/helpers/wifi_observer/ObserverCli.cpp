@@ -1,12 +1,26 @@
 // src/helpers/wifi_observer/ObserverCli.cpp
 //
 // Plan 2 v2 Task 10.
+//
+// #538 (Option A): this file provides CLI verbs for BOTH the observer and the
+// repeater. The BROKER verbs (mqtt.* / set|get mqtt.broker.*), the typed config
+// providers (observerConfigSet/Get), and the broker enumeration are common to
+// both roles and stay unguarded. The observer-only verbs (wifi.*, display.*,
+// web.*) pull the observer's wifiBootstrap + config providers and are guarded
+// behind OFFBAND_OBSERVER, so the repeater compiles this file for the broker
+// verbs alone, without that observer-pipeline dependency.
 
 #include "ObserverCli.h"
 #include "ConfigSchema.h"
 #include "../config/ConfigDispatch.h"          // #364: role-agnostic config dispatch
+// #538 (Option A): the wifi.*/display.* handlers pull the observer's WiFi
+// bootstrap (wifiBootstrap), which the repeater has no equivalent for. Their CLI
+// verbs are guarded behind OFFBAND_OBSERVER below, so the repeater compiles this
+// file for the BROKER verbs only and never links the wifi/display providers.
+#ifdef OFFBAND_OBSERVER
 #include "../config/WifiConfigProvider.h"      // #370: wifi.* handlers (moved out of this file)
 #include "../config/DisplayConfigProvider.h"   // #370: display.* handlers + NVS accessors (moved out)
+#endif
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -369,6 +383,7 @@ static bool handleSetBrokerField(char* reply, size_t reply_size,
     return true;
 }
 
+#ifdef OFFBAND_OBSERVER
 // "set web.allow_initial <on|off>" -- recovery override that re-allows
 // the derived initial password even after the user has set their own.
 // Cleared automatically after the next successful login via
@@ -396,6 +411,7 @@ static bool handleSetWebAllowInitial(char* reply, size_t reply_size,
     snprintf(reply, reply_size, "web.allow_initial = %s\n", value);
     return true;
 }
+#endif  // OFFBAND_OBSERVER (web handler -- observer-only, #538 Option A)
 
 // ---------------------------------------------------------------------------
 // Top-level dispatch
@@ -560,6 +576,7 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
         return true;
     }
 
+#ifdef OFFBAND_OBSERVER   // #538 (Option A): display/wifi verbs are observer-only
     // "display ..." commands -- #141: display always-on toggle.
     const char* disp_rest = skipPrefix(cmd, "display");
     if (disp_rest != nullptr) {
@@ -598,6 +615,7 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
                  "ERROR: unknown wifi subcommand (status | enable | disable)\n");
         return true;
     }
+#endif  // OFFBAND_OBSERVER (display/wifi verbs -- #538 Option A)
 
     // "get wifi.<field>" -- Plan 3 Task 10 (Strycher/LoRa#272). This
     // is the first `get` verb the observer CLI handles; all earlier
@@ -607,6 +625,7 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
     // allowlist surface.
     rest = skipPrefix(cmd, "get");
     if (rest != nullptr) {
+#ifdef OFFBAND_OBSERVER   // #538 (Option A): get wifi.* is observer-only
         if (strncmp(rest, "wifi.", 5) == 0) {
             const char* field = rest + 5;
             // Extract just the field name; ignore any trailing args
@@ -620,6 +639,7 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
             fbuf[fi] = '\0';
             return handleGetWifi(reply, reply_size, fbuf);
         }
+#endif  // OFFBAND_OBSERVER (get wifi.* -- #538 Option A)
         // "get mqtt.broker.<N>.<key>" -- #45 symmetric read (mirrors the
         // "set mqtt.broker.<N>.<key>" parse below).
         if (strncmp(rest, "mqtt.broker.", 12) == 0) {
@@ -666,6 +686,7 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
         while (*v == ' ') v++;
         return handleSetStatusInterval(reply, reply_size, v);
     }
+#ifdef OFFBAND_OBSERVER   // #538 (Option A): set web.*/wifi.* are observer-only
     if (strncmp(rest, "web.allow_initial", 17) == 0) {
         const char* v = rest + 17;
         while (*v == ' ') v++;
@@ -683,6 +704,7 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
         while (*p == ' ') ++p;   // value starts here
         return handleSetWifiField(reply, reply_size, field, p);
     }
+#endif  // OFFBAND_OBSERVER (set web.*/wifi.* -- #538 Option A)
     if (strncmp(rest, "mqtt.broker.", 12) == 0) {
         const char* p = rest + 12;
         int slot = parseSlot(p);

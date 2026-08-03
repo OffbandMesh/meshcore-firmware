@@ -6,11 +6,22 @@
 #include <RTClib.h>
 #include "MeshLog.h"   // serial-capture sink control (#395 caplog verbs)
 
-// Plan 2 v2 Task 11: ObserverCli dispatcher hooked into handleCommand's
-// fall-through. Compiles in only when OFFBAND_OBSERVER is defined
-// (observer envs); other envs have zero impact.
-#ifdef OFFBAND_OBSERVER
+// Plan 2 v2 Task 11 / #538 / #554: ObserverCli dispatcher (the broker-config
+// CLI). Reached as a fall-through from the real command terminals -- bare
+// "mqtt ..." verbs in handleCommand, "set mqtt.*" in handleSetCmd, and
+// "get mqtt.*" in handleGetCmd (search "#554"). Compiles in for OFFBAND_OBSERVER
+// (observer) and OFFBAND_MQTT_POOL (repeater multi-broker pool); other envs have
+// zero impact.
+//   #554 note: the Plan 2 v2 wiring lived inside handleRegionCmd, which is only
+//   entered for "region"-prefixed input -- so mqtt verbs never reached it and the
+//   broker CLI was unreachable over serial AND over the client RemoteCommand path
+//   on the repeater. Moving it to the actual terminals fixed that.
+// ObserverCli.h declares BOTH dispatchObserverCli and wifiObserverPool(); the
+// observer pipeline header (WifiObserver.h) stays observer-only.
+#if defined(OFFBAND_OBSERVER) || defined(OFFBAND_MQTT_POOL)
   #include "wifi_observer/ObserverCli.h"
+#endif
+#ifdef OFFBAND_OBSERVER
   #include "wifi_observer/WifiObserver.h"  // wifiObserverPool() accessor
 #endif
 
@@ -810,6 +821,26 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       _callbacks->formatRadioStatsReply(reply);
     } else if (sender_timestamp == 0 && memcmp(command, "stats-core", 10) == 0 && (command[10] == 0 || command[10] == ' ')) {
       _callbacks->formatStatsReply(reply);
+#if defined(OFFBAND_OBSERVER) || defined(OFFBAND_MQTT_POOL)
+    // #554: broker-config CLI fall-through for BARE "mqtt ..." verbs
+    // (status/enable/disable/view/clear). "get mqtt.*" / "set mqtt.*" are caught
+    // earlier by the "get "/"set " intercepts (-> handleGetCmd / handleSetCmd),
+    // which carry their own dispatchObserverCli fall-through.
+    //
+    // Previously the only dispatchObserverCli call site was stranded in
+    // handleRegionCmd (reachable only via a "region"-prefixed command), so the
+    // broker CLI was unreachable on the repeater (#554) -- both the serial admin
+    // console and the client-over-RemoteCommand path route through here.
+    //
+    // reply is the CLI's fixed 160-byte reply contract (e.g. serial reply[160]);
+    // handleCommand carries no reply_size, so 160 is the only size safe on every
+    // caller. dispatchObserverCli is fully snprintf-bounded to reply_size, so this
+    // never overruns; long "mqtt status" dumps truncate at 160 -- "mqtt view <N>"
+    // gives full per-broker detail within the frame.
+    } else if (offband::dispatchObserverCli(command, reply, /*reply_size=*/160,
+                                             offband::wifiObserverPool())) {
+      // handled by the broker-config CLI
+#endif
     } else {
       strcpy(reply, "Unknown command");
     }
@@ -1102,6 +1133,14 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       _prefs->adc_multiplier = 0.0f;
       strcpy(reply, "Error: unsupported by this board");
     };
+#if defined(OFFBAND_OBSERVER) || defined(OFFBAND_MQTT_POOL)
+  // #554: "set mqtt.*" (mqtt.broker.<N>.*, mqtt.iata, mqtt.status_interval) ->
+  // broker CLI. dispatchObserverCli strips the "set " head itself. 160 = the
+  // fixed CLI reply contract (see handleCommand note); set-echo replies are short.
+  } else if (offband::dispatchObserverCli(command, reply, /*reply_size=*/160,
+                                          offband::wifiObserverPool())) {
+    // handled by the broker-config CLI
+#endif
   } else {
     strcpy(reply, "unknown config: ");
     StrHelper::strncpy(&reply[16], config, 160-17);
@@ -1290,6 +1329,14 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     sprintf(reply, "> %u mV", _board->getBootVoltage());
 #else
     strcpy(reply, "ERROR: Power management not supported");
+#endif
+#if defined(OFFBAND_OBSERVER) || defined(OFFBAND_MQTT_POOL)
+  // #554: "get mqtt.broker.<N>.<key>" -> broker CLI (symmetric read of the
+  // "set mqtt.broker.*" surface). dispatchObserverCli strips the "get " head.
+  // 160 = the fixed CLI reply contract (see handleCommand note).
+  } else if (offband::dispatchObserverCli(command, reply, /*reply_size=*/160,
+                                          offband::wifiObserverPool())) {
+    // handled by the broker-config CLI
 #endif
   } else {
     sprintf(reply, "??: %s", config);
@@ -1483,12 +1530,10 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
     if (len == 0) {
       strcpy(reply, "-none-");
     }
-#ifdef OFFBAND_OBSERVER
-  } else if (offband::dispatchObserverCli(command, reply, /*reply_size=*/1024,
-                                            offband::wifiObserverPool())) {
-    // handled by Plan 2 v2 observer CLI (mqtt status / enable / disable /
-    // set mqtt.iata / set mqtt.status_interval / set mqtt.broker.<N>.*).
-#endif
+  // #554: the dispatchObserverCli fall-through that used to sit HERE was dead --
+  // handleRegionCmd is only entered for "region"-prefixed commands, so mqtt verbs
+  // never reached it. Moved to the real terminals of handleCommand / handleSetCmd
+  // / handleGetCmd (search "#554"). Left this note so it is not re-added here.
 #if defined(OFFBAND_CONFIG_CLI)
   } else if (offband::config::dispatchCliLine(command, reply, /*reply_size=*/1024)) {
     // #462: shared config-CLI bridge -- generic `set <key> <value>` / `get <key>`

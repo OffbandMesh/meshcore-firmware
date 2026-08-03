@@ -549,16 +549,22 @@ void MqttBrokerPool::workerLoop() {
             static uint32_t s_rot_log_ms = 0;
             if (now - s_rot_log_ms >= 10000U) {
                 s_rot_log_ms = now;
-                char L[220]; int o = 0; uint8_t en = 0;
+                // #554: tls_cfg = configured TLS/WSS brokers the rotation
+                // scheduler tracks (rotation-eligible). This is NOT the enabled
+                // count -- it ignores cfg.enabled entirely. Do NOT confuse the
+                // "tls=" field with `mqtt status`'s "enabled=" (enabledCount()):
+                // a slot can be configured-TLS here yet disabled there. The field
+                // was previously mislabeled "en=", which read as "enabled".
+                char L[220]; int o = 0; uint8_t tls_cfg = 0;
                 for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
                     const MqttBroker& b = brokers_[s];
-                    if (b.isConfigured() && isTlsTransport(b.config())) en++;
+                    if (b.isConfigured() && isTlsTransport(b.config())) tls_cfg++;
                 }
                 uint32_t dwleft = (now - last_rotate_ms_ < MQTT_ROTATE_DWELL_MS)
                                   ? (MQTT_ROTATE_DWELL_MS - (now - last_rotate_ms_)) / 1000U : 0U;
                 o += snprintf(L + o, (size_t)(sizeof(L) - o),
-                              "[rot] heap=%u en=%u live=%u/%u dwleft=%us |",
-                              (unsigned)ESP.getFreeHeap(), (unsigned)en, (unsigned)tls_live,
+                              "[rot] heap=%u tls=%u live=%u/%u dwleft=%us |",
+                              (unsigned)ESP.getFreeHeap(), (unsigned)tls_cfg, (unsigned)tls_live,
                               (unsigned)OFFBAND_MAX_LIVE_TLS, (unsigned)dwleft);
                 static const char* AB[] = {"DN","CO","UP","BK","HC","HH"};
                 for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS && o < (int)sizeof(L) - 24; ++s) {

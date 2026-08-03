@@ -47,6 +47,9 @@ enum class RemoteCmd : uint8_t {
     WIFI_KEEPALIVE   = 4,    // wifi_on (no ota_start); window_sec required
     REBOOT           = 5,    // calls reboot after a brief response-publish delay
     SAFETY_LOG_DUMP  = 6,    // read-only; returns full safety log text
+    CLI              = 7,    // #538: run a CLI line (params.cmd) via handleCommand;
+                             // post-auth like every action. Used for repeater
+                             // broker config (`set mqtt.broker.N.*`, `mqtt enable`).
 };
 
 // ---------------------------------------------------------------------------
@@ -60,6 +63,8 @@ struct RemoteCommandRequest {
     uint32_t  cmd_id;                  // HTTP path: server-assigned cmd_id for response
                                        // correlation. MQTT path: 0 (no correlation needed).
                                        // Included in response payload when nonzero.
+    char      cli_cmd[192];            // #538: CLI line for RemoteCmd::CLI (from
+                                       // params.cmd); empty for every other action.
 };
 
 // ---------------------------------------------------------------------------
@@ -108,6 +113,16 @@ public:
 
     // Read full safety log text into buf. Truncates if log exceeds buflen.
     virtual void getSafetyLog(char* buf, size_t buflen) = 0;
+
+    // #538: run a CLI line (post-auth) and write its human reply into `reply`.
+    // Returns true if executed. Default no-op (false) so non-repeater callback
+    // implementations don't have to provide it. The repeater routes this to
+    // MyMesh::handleCommand, which reaches the broker-config CLI.
+    virtual bool runCli(const char* cmd, char* reply, size_t reply_size) {
+        (void)cmd;
+        if (reply != nullptr && reply_size > 0) reply[0] = '\0';
+        return false;
+    }
 
     // Log an event to the persistent safety log. Used by RemoteCommandHandler
     // for forensic record of every accept and reject. The detail string is
@@ -199,7 +214,7 @@ private:
 
     // Per-action last-accept timestamps for rate limiting.
     // Index by static_cast<uint8_t>(RemoteCmd). Slot 0 (UNKNOWN) unused.
-    static constexpr size_t kRateLimitSlots = 7;
+    static constexpr size_t kRateLimitSlots = 8;   // #538: +1 for RemoteCmd::CLI
     uint32_t _last_accept_ms[kRateLimitSlots];
 
     // Per-action minimum interval between accepts (milliseconds).

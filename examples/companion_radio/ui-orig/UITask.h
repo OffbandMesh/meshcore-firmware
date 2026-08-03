@@ -68,6 +68,11 @@ public:
   void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) override;
   void notify(UIEventType t = UIEventType::none) override;
   void applyBuzzerMute(bool quiet) override;
+  // #509: button-action dispatch. Every press sequence resolves through
+  // runButtonAction() against the stored matrix, so a sequence can be reassigned
+  // from the client without editing a handler.
+  void runButtonAction(uint8_t seq, uint8_t action);
+  void cycleNotifyScope();
   void loop() override;
 
   void shutdown(bool restart = false);

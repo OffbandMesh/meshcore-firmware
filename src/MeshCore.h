@@ -119,6 +119,13 @@ public:
   virtual uint8_t getShutdownReason() const { return 0; }
   virtual const char* getShutdownReasonString(uint8_t reason) { return "Not available"; }
 
+  // Runtime watchdog (#446 / mirrors nRF52 #257). startWatchdog() once after
+  // begin(); feedWatchdog() from the MAIN LOOP each iteration, so a hung loop
+  // trips it -> auto-reset. Default no-op; boards with a runtime watchdog
+  // (nRF52, ESP32) override these.
+  virtual void startWatchdog(uint32_t timeout_secs) { (void)timeout_secs; }
+  virtual void feedWatchdog() { }
+
   // External LoRa FEM LNA control (boards with a controllable FEM override these).
   // Default: not supported (boards without an external FEM, or without a controllable LNA path).
   virtual bool setLoRaFemLnaEnabled(bool enable) { return false; }

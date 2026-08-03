@@ -1818,17 +1818,41 @@ void MyMesh::handleCmdFrame(size_t len) {
   // never advertises OFFBAND_CAP2_NOTIFY_SCOPE must not answer 0xC5 either.
   if (cmd_frame[0] == offband::CMD_OFFBAND_DEVICE_UI && len >= 2) {
     uint8_t sub = cmd_frame[1];
+    // #509: gate PER SUB-COMMAND, not for the whole command.
+    //
+    // This used to be one blanket `#ifndef PIN_BUZZER -> ERR_NO_BUZZER` covering the
+    // entire 0xC5 surface. That was right when 0xC5 only carried notification scope,
+    // and became wrong the moment it also carried the button matrix: a board with a
+    // button and no buzzer was refused a feature its hardware can do perfectly well
+    // (mapping "send advert" to double press needs nothing that makes noise).
+    //
+    // The two capabilities are independent and are advertised independently
+    // (OFFBAND_CAP2_NOTIFY_SCOPE on PIN_BUZZER, OFFBAND_CAP2_BUTTON_MATRIX on
+    // PIN_USER_BTN), so the command surface must match that split exactly.
+    const bool is_scope_sub  = (sub == offband::OFFBAND_UI_SCOPE_GET ||
+                                sub == offband::OFFBAND_UI_SCOPE_SET);
+    const bool is_matrix_sub = (sub == offband::OFFBAND_UI_MATRIX_GET ||
+                                sub == offband::OFFBAND_UI_MATRIX_SET);
 #ifndef PIN_BUZZER
-    // No buzzer on this board -> the whole surface is unsupported. Answer with the
-    // typed error carrying a REASON, not a bare ERR_CODE_ILLEGAL_ARG: the client is
-    // required to show the user WHY, and "this board has no buzzer" is a different
-    // answer from "unknown action".
-    out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
-    out_frame[1] = offband::OFFBAND_UI_ERR;
-    out_frame[2] = offband::OFFBAND_UI_ERR_NO_BUZZER;
-    _serial->writeFrame(out_frame, 3);
-    return;
-#else
+    if (is_scope_sub) {
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = offband::OFFBAND_UI_ERR;
+      out_frame[2] = offband::OFFBAND_UI_ERR_NO_BUZZER;
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
+#endif
+#ifndef PIN_USER_BTN
+    if (is_matrix_sub) {
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = offband::OFFBAND_UI_ERR;
+      out_frame[2] = offband::OFFBAND_UI_ERR_UNSUPPORTED_ACTION;
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
+#endif
+    (void)is_scope_sub; (void)is_matrix_sub;
+{
     if (sub == offband::OFFBAND_UI_SCOPE_GET) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = sub;
@@ -1854,6 +1878,14 @@ void MyMesh::handleCmdFrame(size_t len) {
         _prefs.buzzer_quiet = (want == NOTIFY_SCOPE_NONE) ? 1 : 0;
         savePrefs();
       }
+      // #510: log the resulting state for the same reason the button path does -- a
+      // scope change over the wire must be as visible in caplog as one from a press,
+      // or the record depends on which route the user happened to take.
+      MESH_DEBUG_PRINTLN("[0xC5] notify scope -> %s (%d) via client",
+                         _prefs.notify_scope == NOTIFY_SCOPE_ALL  ? "ALL"  :
+                         _prefs.notify_scope == NOTIFY_SCOPE_SELF ? "SELF" : "NONE",
+                         (int)_prefs.notify_scope);
+
       // Apply to the HARDWARE unconditionally, even when the pref already matched.
       //
       // This line is the whole bug this handler shipped with: setting the scope over
@@ -1880,8 +1912,11 @@ void MyMesh::handleCmdFrame(size_t len) {
 #ifdef ENV_INCLUDE_GPS
       mask |= (1 << OFFBAND_UI_ACTION_GPS_TOGGLE);
 #endif
-      mask |= (1 << OFFBAND_UI_ACTION_CYCLE_SCOPE);   // buzzer present in this branch
+#ifdef PIN_BUZZER
+      // Both of these need a speaker: one cycles the sound mode, the other IS a sound.
+      mask |= (1 << OFFBAND_UI_ACTION_CYCLE_SCOPE);
       mask |= (1 << OFFBAND_UI_ACTION_BATTERY_BEEP);
+#endif
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = sub;
       out_frame[2] = mask;
@@ -1924,6 +1959,9 @@ void MyMesh::handleCmdFrame(size_t len) {
         _prefs.button_actions[seq] = action;
         savePrefs();
       }
+      // #509: a reassignment is a durable config change with no visible confirmation
+      // on a screenless board -- log it.
+      MESH_DEBUG_PRINTLN("[0xC5] button seq=%d -> action=%d", (int)seq, (int)action);
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = sub;
       out_frame[2] = seq;
@@ -1937,7 +1975,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     out_frame[2] = offband::OFFBAND_UI_ERR_MALFORMED;
     _serial->writeFrame(out_frame, 3);
     return;
-#endif  // PIN_BUZZER
+}
   }
   if (cmd_frame[0] == offband::CMD_OFFBAND_FEM_LNA && len >= 2) {
     uint8_t sub = cmd_frame[1];
@@ -2029,6 +2067,12 @@ void MyMesh::handleCmdFrame(size_t len) {
     // Gated on the hardware, same principle as OFFBAND_CAP_FEM_LNA above -- a client
     // must never render a control that cannot do anything on this board.
     offband_caps2 |= offband::OFFBAND_CAP2_NOTIFY_SCOPE;
+#endif
+#ifdef PIN_USER_BTN
+    // #509: button-action matrix. Gated on the BUTTON, not the buzzer -- reassigning
+    // a press needs something to press. These are independent capabilities and a
+    // board may have either without the other.
+    offband_caps2 |= offband::OFFBAND_CAP2_BUTTON_MATRIX;
 #endif
     out_frame[i++] = offband_caps2;          // v18+
     _serial->writeFrame(out_frame, i);
