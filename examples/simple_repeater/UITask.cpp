@@ -30,6 +30,7 @@ void UITask::begin(NodePrefs* node_prefs, const char* build_date, const char* fi
   _prevBtnState = HIGH;
   _auto_off = millis() + AUTO_OFF_MILLIS;
   _node_prefs = node_prefs;
+  _last_disp_mode = _node_prefs->ui_display_mode;   // #542 A2: seed so loop() sees no false transition
   if (_node_prefs->ui_display_mode == DISPLAY_MODE_ALWAYS_OFF) {
     _display->turnOff();          // #542 A2: boot dark
   } else {
@@ -98,9 +99,17 @@ void UITask::renderCurrScreen() {
 
 void UITask::loop() {
   uint8_t disp_mode = _node_prefs->ui_display_mode;   // #542 A2
+  if (disp_mode != _last_disp_mode) {                 // mode changed via CLI -> apply cleanly
+    _last_disp_mode = disp_mode;
+    if (disp_mode == DISPLAY_MODE_ALWAYS_OFF) {
+      _display->turnOff();
+    } else {                                          // auto / always-on: relight + fresh timer
+      _display->turnOn();
+      _auto_off = millis() + AUTO_OFF_MILLIS;
+    }
+  }
   if (disp_mode == DISPLAY_MODE_ALWAYS_OFF) {
-    if (_display->isOn()) _display->turnOff();
-    return;                        // no button-wake, no render while dark
+    return;                        // stay dark; a button does not wake a deliberately-off screen
   }
 #ifdef PIN_USER_BTN
   if (millis() >= _next_read) {
@@ -131,8 +140,5 @@ void UITask::loop() {
     if (disp_mode != DISPLAY_MODE_ALWAYS_ON && millis() > _auto_off) {
       _display->turnOff();
     }
-  } else if (disp_mode == DISPLAY_MODE_ALWAYS_ON) {
-    _display->turnOn();            // mode switched to always-on while blanked
-    _auto_off = millis() + AUTO_OFF_MILLIS;
   }
 }

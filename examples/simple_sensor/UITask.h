@@ -8,6 +8,7 @@ class UITask {
   unsigned long _next_read, _next_refresh, _auto_off;
   int _prevBtnState;
   NodePrefs* _node_prefs;
+  uint8_t _last_disp_mode = 0;   // #542 A2: detect live display-mode changes
   char _version_info[32];
 
   void renderCurrScreen();
