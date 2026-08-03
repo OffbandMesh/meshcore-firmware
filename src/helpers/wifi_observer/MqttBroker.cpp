@@ -103,7 +103,10 @@ void MqttBroker::initLock() {
 #endif
 }
 
-void MqttBroker::shutdown() {
+// #175: connection teardown ONLY -- no deconfigure. shutdown() is this plus the
+// #98 slot wipe; TLS rotation uses this directly so the victim stays configured
+// (and therefore visible to the pool loops, which all gate on isConfigured()).
+void MqttBroker::releaseClient() {
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     ClientLockGuard _g(client_lock_);
     if (client_ != nullptr) {
@@ -118,6 +121,18 @@ void MqttBroker::shutdown() {
         auth_ = nullptr;
     }
     rt_ = BrokerRuntimeState{};
+    // slot_ and cfg_ deliberately RETAINED -- that is the whole difference from
+    // shutdown(). A rotated-out broker must stay configured so the pool can see
+    // it, honor its cooldown, and promote it back via reconcileSlot->tryConnect.
+}
+
+void MqttBroker::shutdown() {
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    // Recursive mutex: releaseClient() re-takes it. Holding it across the
+    // slot_/cfg_ wipe preserves the original single-critical-section behaviour.
+    ClientLockGuard _g(client_lock_);
+#endif
+    releaseClient();   // client + auth teardown + rt_ reset
     // #98: reset to UNCONFIGURED (slot_ = 0xFF) so isConfigured() goes false and
     // `mqtt status` drops the slot immediately after a clear/empty reload, rather
     // than showing its stale cached cfg_ until the next reboot. begin() re-sets
@@ -461,7 +476,9 @@ void MqttBroker::eventHandler(void* handler_args,
                 // esp-mqtt/esp-tls reported, not just the coarse class.
                 //   sock_errno   -> ECONNREFUSED(111)=refused, EHOSTUNREACH(113/118)
                 //                   =unreachable, ETIMEDOUT(110)=timeout (TCP layer)
-                //   tls_stack_err+cert_flags -> mbedTLS rejected the chain
+                //   tls_stack_err+cert_flags -> mbedTLS rejected the chain; cert_flags
+                //                   are MBEDTLS_X509_BADCERT_* bits (e.g. a pinned
+                //                   X1-only CA that can't build an ECDSA/X2 path)
                 //   connack      -> MQTT CONNACK refusal code (a max_keepalive-exceeded
                 //                   rejection also surfaces here as connack=2, #506)
                 Serial.printf(
@@ -484,6 +501,14 @@ void MqttBroker::eventHandler(void* handler_args,
             // PUBLISHED, SUBSCRIBED, etc. -- no state change needed.
             break;
     }
+}
+
+bool MqttBroker::hasClient() const {
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    return client_ != nullptr;
+#else
+    return true;   // host stub: no real client; never force a reconcile
+#endif
 }
 
 void MqttBroker::onConnected(uint32_t now_ms) {

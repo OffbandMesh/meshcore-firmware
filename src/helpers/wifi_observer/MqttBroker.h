@@ -73,7 +73,20 @@ public:
 #endif
 
     // Tear down: stop client, destroy client, free auth. Idempotent.
+    // #98: ALSO deconfigures the slot (slot_ = 0xFF, cfg_ cleared) so a cleared
+    // slot drops out of `mqtt status` immediately. That makes shutdown() the
+    // wrong verb for a TEMPORARY demotion -- see releaseClient().
     void shutdown();
+
+    // #175: release the live connection WITHOUT deconfiguring the slot.
+    // Destroys the esp_mqtt client + auth (reclaiming the ~60KB mbedTLS context,
+    // same as shutdown -- verified ~56KB on hardware) but RETAINS slot_ and cfg_,
+    // so isConfigured() stays true. This is what TLS rotation needs: shutdown()'s
+    // #98 deconfigure makes the victim invisible to every pool loop (all of which
+    // are gated on isConfigured()), stranding it permanently -- one-way eviction
+    // instead of round-robin. With the slot still configured, the pool's normal
+    // cooldown -> budget -> reconcileSlot -> tryConnect path can promote it back.
+    void releaseClient();
 
     // Create the per-broker client mutex. Call ONCE from the pool on
     // loopTask, before the lifecycle worker task starts (#53),
@@ -110,6 +123,14 @@ public:
     uint8_t                    slot()    const { return slot_; }
     const BrokerConfig&        config()  const { return cfg_; }
     const BrokerRuntimeState&  runtime() const { return rt_; }
+
+    // #175: true if the esp_mqtt client handle currently exists. shutdown()
+    // destroys it (client_ = nullptr) to free the ~60KB TLS context without
+    // leaking (#327); tryConnect can only START an existing client, never create
+    // one, so the pool must recreate (reconcileSlot -> begin) a rotated-out
+    // broker before it can be brought back up. Host build: always true (no real
+    // client, nothing to recreate).
+    bool hasClient() const;
     bool                       isConfigured() const { return slot_ != 0xFF; }
 
 private:

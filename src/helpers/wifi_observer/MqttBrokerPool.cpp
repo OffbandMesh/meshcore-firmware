@@ -445,13 +445,30 @@ void MqttBrokerPool::rotateTlsIfDue(uint32_t now_ms) {
     if (best_age < MQTT_ROTATE_DWELL_MS) return;
 
     last_rotate_ms_ = now_ms;
+#if defined(ARDUINO)
+    Serial.printf("[rot] ROTATE-OUT s%u age=%us heapBefore=%u -> cooldown %us\n",
+                  (unsigned)victim, (unsigned)(best_age / 1000U),
+                  (unsigned)ESP.getFreeHeap(), (unsigned)(MQTT_ROTATE_DWELL_MS / 1000U));
+#endif
     // Guard the slot during teardown so loopTask's drainBroker skips it while the
     // (possibly multi-second) client_destroy runs. The per-broker client_lock_ is
     // the true publish-vs-shutdown backstop (publish() re-checks state + client_
     // under that lock); this just avoids loopTask spinning on a slot mid-destroy.
     reconciling_[victim] = true;
-    brokers_[victim].shutdown();   // full teardown incl. client_destroy (#327)
+    // #175: releaseClient(), NOT shutdown(). Both destroy the client (the ~60KB
+    // mbedTLS reclaim, #327), but shutdown() ALSO deconfigures the slot (#98:
+    // slot_ = 0xFF, cfg_ cleared) -- and every pool loop, including the re-drive
+    // that would promote this broker back, is gated on isConfigured(). Using
+    // shutdown() here made rotation a ONE-WAY EVICTION: the victim vanished from
+    // the scheduler permanently (verified on hardware: en 5->4, victim absent
+    // from [rot] for the rest of the run). releaseClient() keeps slot_/cfg_ so
+    // the cooldown -> budget -> reconcileSlot -> tryConnect path can bring it back.
+    brokers_[victim].releaseClient();
     reconciling_[victim] = false;
+#if defined(ARDUINO)
+    Serial.printf("[rot] post-shutdown s%u heapAfter=%u\n",
+                  (unsigned)victim, (unsigned)ESP.getFreeHeap());
+#endif
     // Block the victim from reclaiming the freed budget for one dwell, giving the
     // parked broker first claim on the next re-drive pass.
     rotated_out_until_ms_[victim] = now_ms + MQTT_ROTATE_DWELL_MS;
@@ -492,6 +509,45 @@ void MqttBrokerPool::workerLoop() {
             BrokerState st = b.runtime().state;
             if (st == BrokerState::Up || st == BrokerState::Connecting) tls_live++;
         }
+#if defined(ARDUINO)
+        // #175 diag: low-rate scheduler-state line (one line / 10s -- rule-10 safe)
+        // so rotation decisions are visible on serial: why a held TLS broker is or
+        // is not being promoted. Fields: heap, enabled-TLS, live/budget, dwell-left,
+        // then per-TLS-slot state[/age-if-up][/cooldown-remaining].
+        {
+            static uint32_t s_rot_log_ms = 0;
+            if (now - s_rot_log_ms >= 10000U) {
+                s_rot_log_ms = now;
+                char L[220]; int o = 0; uint8_t en = 0;
+                for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
+                    const MqttBroker& b = brokers_[s];
+                    if (b.isConfigured() && isTlsTransport(b.config())) en++;
+                }
+                uint32_t dwleft = (now - last_rotate_ms_ < MQTT_ROTATE_DWELL_MS)
+                                  ? (MQTT_ROTATE_DWELL_MS - (now - last_rotate_ms_)) / 1000U : 0U;
+                o += snprintf(L + o, (size_t)(sizeof(L) - o),
+                              "[rot] heap=%u en=%u live=%u/%u dwleft=%us |",
+                              (unsigned)ESP.getFreeHeap(), (unsigned)en, (unsigned)tls_live,
+                              (unsigned)OFFBAND_MAX_LIVE_TLS, (unsigned)dwleft);
+                static const char* AB[] = {"DN","CO","UP","BK","HC","HH"};
+                for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS && o < (int)sizeof(L) - 24; ++s) {
+                    const MqttBroker& b = brokers_[s];
+                    if (!b.isConfigured() || !isTlsTransport(b.config())) continue;
+                    uint8_t stv = (uint8_t)b.runtime().state;
+                    o += snprintf(L + o, (size_t)(sizeof(L) - o), " s%u:%s", (unsigned)s,
+                                  stv < 6 ? AB[stv] : "?");
+                    if (b.runtime().state == BrokerState::Up)
+                        o += snprintf(L + o, (size_t)(sizeof(L) - o), "/%us",
+                                      (unsigned)((now - b.runtime().went_up_ms) / 1000U));
+                    uint32_t cd = (rotated_out_until_ms_[s] != 0 &&
+                                   (int32_t)(rotated_out_until_ms_[s] - now) > 0)
+                                  ? (rotated_out_until_ms_[s] - now) / 1000U : 0U;
+                    if (cd) o += snprintf(L + o, (size_t)(sizeof(L) - o), "/cd%us", (unsigned)cd);
+                }
+                Serial.println(L);
+            }
+        }
+#endif
         for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
             if (reconciling_[s]) continue;
             MqttBroker& b = brokers_[s];
@@ -513,6 +569,22 @@ void MqttBrokerPool::workerLoop() {
                 // TLS budget: non-TLS always OK; TLS only if a live slot is free.
                 bool budget_ok = !isTlsTransport(b.config()) ||
                                  (tls_live < OFFBAND_MAX_LIVE_TLS);
+                // #175 fix: rotation demotes a TLS broker via shutdown(), which
+                // DESTROYS its esp_mqtt client (client_ = nullptr) to free the
+                // ~60KB context without leaking (#327). tryConnect can only START
+                // an existing client -- it cannot recreate one -- so a rotated-out
+                // broker would sit Down forever and the freed budget would never
+                // refill (verified on HV3: rotation empties the budget and strands
+                // it). When we're actually about to bring this TLS broker up
+                // (budget available), recreate its client first via reconcileSlot
+                // (-> begin) so tryConnect has a client to start. Only fires for a
+                // genuinely client-less broker (the rotation victim): a failed
+                // connect goes to Backoff and KEEPS its client, so this is not a
+                // reconnect storm. We are on the worker task -- the only caller
+                // allowed to run reconcileSlot's blocking begin().
+                if (isTlsTransport(b.config()) && budget_ok && !b.hasClient()) {
+                    reconcileSlot(s);
+                }
                 (void)b.tryConnect(biased, budget_ok);
                 // Consume a budget slot if this TLS broker just began bringing up.
                 if (isTlsTransport(b.config()) &&
