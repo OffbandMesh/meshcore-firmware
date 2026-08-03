@@ -30,7 +30,11 @@ void UITask::begin(NodePrefs* node_prefs, const char* build_date, const char* fi
   _prevBtnState = HIGH;
   _auto_off = millis() + AUTO_OFF_MILLIS;
   _node_prefs = node_prefs;
-  _display->turnOn();
+  if (_node_prefs->ui_display_mode == DISPLAY_MODE_ALWAYS_OFF) {
+    _display->turnOff();          // #542 A2: boot dark
+  } else {
+    _display->turnOn();           // auto + always-on both start lit
+  }
 
   // strip off dash and commit hash by changing dash to null terminator
   // e.g: v1.2.3-abcdef -> v1.2.3
@@ -93,6 +97,11 @@ void UITask::renderCurrScreen() {
 }
 
 void UITask::loop() {
+  uint8_t disp_mode = _node_prefs->ui_display_mode;   // #542 A2
+  if (disp_mode == DISPLAY_MODE_ALWAYS_OFF) {
+    if (_display->isOn()) _display->turnOff();
+    return;                        // no button-wake, no render while dark
+  }
 #ifdef PIN_USER_BTN
   if (millis() >= _next_read) {
     int btnState = digitalRead(PIN_USER_BTN);
@@ -119,8 +128,11 @@ void UITask::loop() {
 
       _next_refresh = millis() + 1000;   // refresh every second
     }
-    if (millis() > _auto_off) {
+    if (disp_mode != DISPLAY_MODE_ALWAYS_ON && millis() > _auto_off) {
       _display->turnOff();
     }
+  } else if (disp_mode == DISPLAY_MODE_ALWAYS_ON) {
+    _display->turnOn();            // mode switched to always-on while blanked
+    _auto_off = millis() + AUTO_OFF_MILLIS;
   }
 }
