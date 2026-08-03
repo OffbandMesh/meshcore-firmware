@@ -134,6 +134,18 @@ public:
     bool                       isConfigured() const { return slot_ != 0xFF; }
 
 private:
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    // #532: fill the transport-level fields of an esp_mqtt config -- uri,
+    // keepalive, and CA cert. The config is rebuilt in THREE places (begin() and
+    // the two JWT-refresh paths in tryConnect()/loop()), and the refresh paths
+    // used to set only uri+cert. esp_mqtt_set_config() would then leave keepalive
+    // at esp-mqtt's default 120, so a JWT broker behind a max_keepalive cap
+    // silently reverted after a token refresh and drew the misleading CONNACK
+    // 0x02 diagnosed in #506. Centralizing it makes every build site identical.
+    // Auth is applied by the caller AFTER this (auth_->apply()).
+    void populateBaseConfig(esp_mqtt_client_config_t& mqcfg) const;
+#endif
+
     uint8_t              slot_  = 0xFF;
     BrokerConfig         cfg_;
     BrokerRuntimeState   rt_;

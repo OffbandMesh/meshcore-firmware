@@ -89,6 +89,46 @@ const char* lookupCaCertPem(const char* name) {
 }
 
 // ---------------------------------------------------------------------------
+// populateBaseConfig -- the ONE place transport-level esp_mqtt fields are set.
+// ---------------------------------------------------------------------------
+// #506: esp-mqtt defaults the MQTT keepalive to 120 s, but a broker can cap it
+// via max_keepalive and REJECT an over-limit CONNECT with a MISLEADING CONNACK
+// 0x02 "identifier rejected" (confirmed live against a broker with
+// max_keepalive 60 -- a paho client is accepted at k=60, rejected at k=120,
+// identical to this firmware). 60 s is accepted by capped and uncapped brokers
+// alike; OWNER RULING 2026-08-02: it stays a FIXED 60 (#516, per-broker
+// configurability, is deferred and must not be gated on).
+//
+// #532: this is called from ALL THREE config build sites -- begin() and the two
+// JWT-refresh paths in tryConnect()/loop(). The refresh paths previously set
+// only uri+cert and pushed that through esp_mqtt_set_config(), leaving keepalive
+// at the 120 default, so a JWT broker behind a cap silently reverted after a
+// token refresh. Any new field that must survive a refresh belongs HERE, not in
+// an individual call site.
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+void MqttBroker::populateBaseConfig(esp_mqtt_client_config_t& mqcfg) const {
+    const int keepalive_sec = 60;
+#if ESP_IDF_VERSION_MAJOR >= 5
+    mqcfg.broker.address.uri = cfg_.url;
+    mqcfg.session.keepalive  = keepalive_sec;
+    if (cfg_.transport == BrokerTransport::Tls ||
+        cfg_.transport == BrokerTransport::Wss) {
+        const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
+        if (pem != nullptr) mqcfg.broker.verification.certificate = pem;
+    }
+#else
+    mqcfg.uri       = cfg_.url;
+    mqcfg.keepalive = keepalive_sec;
+    if (cfg_.transport == BrokerTransport::Tls ||
+        cfg_.transport == BrokerTransport::Wss) {
+        const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
+        if (pem != nullptr) mqcfg.cert_pem = pem;
+    }
+#endif
+}
+#endif
+
+// ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 MqttBroker::~MqttBroker() {
@@ -169,30 +209,7 @@ bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg,
 
 #if defined(ESP_PLATFORM)
     esp_mqtt_client_config_t mqcfg = {};
-    // #506: esp-mqtt defaults the MQTT keepalive to 120 s, but a broker can cap it
-    // via max_keepalive and REJECT an over-limit CONNECT with a MISLEADING CONNACK
-    // 0x02 "identifier rejected" (confirmed live against mqtt2.okimesh.org, which
-    // sets max_keepalive 60 -- a paho client is accepted at k=60, rejected at k=120,
-    // identical to this firmware). 60 s is accepted by capped brokers and by
-    // uncapped ones. #516 makes this per-broker configurable.
-    const int keepalive_sec = 60;
-#if ESP_IDF_VERSION_MAJOR >= 5
-    mqcfg.broker.address.uri = cfg_.url;
-    mqcfg.session.keepalive = keepalive_sec;
-    if (cfg_.transport == BrokerTransport::Tls ||
-        cfg_.transport == BrokerTransport::Wss) {
-        const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
-        if (pem != nullptr) mqcfg.broker.verification.certificate = pem;
-    }
-#else
-    mqcfg.uri = cfg_.url;
-    mqcfg.keepalive = keepalive_sec;
-    if (cfg_.transport == BrokerTransport::Tls ||
-        cfg_.transport == BrokerTransport::Wss) {
-        const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
-        if (pem != nullptr) mqcfg.cert_pem = pem;
-    }
-#endif
+    populateBaseConfig(mqcfg);   // #532: uri + keepalive + CA cert
 
     // Apply auth strategy (sets username + password/token fields).
     if (!auth_->apply(mqcfg, /*now_ms=*/0)) {
@@ -294,21 +311,10 @@ bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
     // time and the token may have aged out before first connect attempt.
     if (auth_ != nullptr && auth_->needsRefresh(now_ms)) {
         esp_mqtt_client_config_t mqcfg = {};
-#if ESP_IDF_VERSION_MAJOR >= 5
-        mqcfg.broker.address.uri = cfg_.url;
-        if (cfg_.transport == BrokerTransport::Tls ||
-            cfg_.transport == BrokerTransport::Wss) {
-            const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
-            if (pem != nullptr) mqcfg.broker.verification.certificate = pem;
-        }
-#else
-        mqcfg.uri = cfg_.url;
-        if (cfg_.transport == BrokerTransport::Tls ||
-            cfg_.transport == BrokerTransport::Wss) {
-            const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
-            if (pem != nullptr) mqcfg.cert_pem = pem;
-        }
-#endif
+        // #532: MUST include keepalive -- this config is pushed via
+        // esp_mqtt_set_config() below, and omitting it reverted a capped broker
+        // to esp-mqtt's default 120 (-> CONNACK 0x02, #506).
+        populateBaseConfig(mqcfg);
         if (!auth_->apply(mqcfg, now_ms)) {
             rt_.state = BrokerState::Backoff;
             rt_.retry_count++;
@@ -364,21 +370,10 @@ void MqttBroker::loop(uint32_t now_ms) {
     if (rt_.state == BrokerState::Up && client_ != nullptr) {
         if (auth_->needsRefresh(now_ms)) {
             esp_mqtt_client_config_t mqcfg = {};
-#if ESP_IDF_VERSION_MAJOR >= 5
-            mqcfg.broker.address.uri = cfg_.url;
-            if (cfg_.transport == BrokerTransport::Tls ||
-                cfg_.transport == BrokerTransport::Wss) {
-                const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
-                if (pem != nullptr) mqcfg.broker.verification.certificate = pem;
-            }
-#else
-            mqcfg.uri = cfg_.url;
-            if (cfg_.transport == BrokerTransport::Tls ||
-                cfg_.transport == BrokerTransport::Wss) {
-                const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
-                if (pem != nullptr) mqcfg.cert_pem = pem;
-            }
-#endif
+            // #532: same reassert requirement as the tryConnect() path -- this is
+            // the mid-session JWT refresh, where a silent revert to 120 would only
+            // surface on the NEXT reconnect, making it especially hard to trace.
+            populateBaseConfig(mqcfg);
             if (auth_->apply(mqcfg, now_ms)) {
                 esp_mqtt_set_config(client_, &mqcfg);
             }
