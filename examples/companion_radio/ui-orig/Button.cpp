@@ -85,7 +85,7 @@ static_assert((BUTTON_EDGE_QUEUE_LEN & (BUTTON_EDGE_QUEUE_LEN - 1)) == 0,
 // Producer side. Only ever advances _q_head, which the consumer never writes. Callers
 // must guarantee it is not re-entered -- the ISR owns it outright, and update()'s poll
 // path masks interrupts around its call for exactly that reason.
-void Button::pushEdge(uint32_t ms, bool pressed) {
+void Button::pushEdge(uint32_t ms, bool pressed, bool from_isr) {
     uint8_t head = _q_head;
     uint8_t next = (uint8_t)((head + 1) & (BUTTON_EDGE_QUEUE_LEN - 1));
     if (next == _q_tail) {
@@ -94,6 +94,7 @@ void Button::pushEdge(uint32_t ms, bool pressed) {
     }
     _queue[head].ms = ms;
     _queue[head].pressed = pressed;
+    _queue[head].from_isr = from_isr;
     _q_head = next;                  // publish only after the slot is fully written
     _produced_level = pressed;
 }
@@ -104,6 +105,7 @@ bool Button::popEdge(Edge& out) {
     if (tail == _q_head) return false;
     out.ms = _queue[tail].ms;
     out.pressed = _queue[tail].pressed;
+    out.from_isr = _queue[tail].from_isr;
     _q_tail = (uint8_t)((tail + 1) & (BUTTON_EDGE_QUEUE_LEN - 1));
     return true;
 }
@@ -115,7 +117,8 @@ void Button::captureEdgeFromISR() {
     // debounces on timestamps and ignores anything that is not a transition.
     bool pressed = (digitalRead(_pin) == _activeState);
     if (pressed == _produced_level) return;   // nothing new to record
-    pushEdge(millis(), pressed);
+    _raw_isr++;
+    pushEdge(millis(), pressed, true);
 #endif
 }
 
@@ -125,14 +128,26 @@ void Button::captureEdgeFromISR() {
 void Button::drainSequencer(uint32_t at) {
     for (;;) {
         ButtonSequencer::Event ev = _seq.tick(at);
+        if (ev == ButtonSequencer::EV_NONE) return;
+        if (ev == ButtonSequencer::EV_PRESS_EDGE) { triggerEvent(ANY_PRESS); continue; }
+
+        // A gesture just resolved. Report what the PRODUCERS saw during it, before the
+        // sequencer's interpretation. A triple that logs isr=6 was captured correctly
+        // and miscounted; one that logs isr=2 was never captured at all. Those are
+        // different bugs in different layers and they look identical from the outside.
+        MESH_DEBUG_PRINTLN("[btn] capture: isr=%d poll=%d dropped=%d irq=%s",
+                           (int)_raw_isr, (int)_raw_poll, (int)_dropped,
+                           (_irq_slot >= 0) ? "armed" : "OFF");
+        _raw_isr = 0;
+        _raw_poll = 0;
+
         switch (ev) {
-            case ButtonSequencer::EV_NONE:      return;
-            case ButtonSequencer::EV_PRESS_EDGE: triggerEvent(ANY_PRESS); break;
             case ButtonSequencer::EV_SHORT:     triggerEvent(SHORT_PRESS); break;
             case ButtonSequencer::EV_DOUBLE:    triggerEvent(DOUBLE_PRESS); break;
             case ButtonSequencer::EV_TRIPLE:    triggerEvent(TRIPLE_PRESS); break;
             case ButtonSequencer::EV_QUADRUPLE: triggerEvent(QUADRUPLE_PRESS); break;
             case ButtonSequencer::EV_LONG:      triggerEvent(LONG_PRESS); break;
+            default: break;
         }
     }
 }
@@ -165,7 +180,8 @@ void Button::update() {
         if (mask) noInterrupts();
         bool level = readButton();
         if (level != _produced_level) {
-            pushEdge(now, level);
+            _raw_poll++;
+            pushEdge(now, level, false);
         }
         if (mask) interrupts();
     }
@@ -180,6 +196,11 @@ void Button::update() {
     Edge e;
     while (popEdge(e)) {
         drainSequencer(e.ms);
+        // #527 diagnostics: every edge the hardware produced, at the timestamp it was
+        // captured, naming its producer. This is the ground truth the gesture lines are
+        // derived FROM -- if a press is missing here, nothing downstream can recover it.
+        MESH_DEBUG_PRINTLN("[btn] raw t=%d %s src=%s", (int)e.ms,
+                           e.pressed ? "DOWN" : "UP", e.from_isr ? "isr" : "poll");
         if (_seq.onEdge(e.ms, e.pressed) == ButtonSequencer::EV_PRESS_EDGE) {
             triggerEvent(ANY_PRESS);
         }
