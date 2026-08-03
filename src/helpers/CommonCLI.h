@@ -69,7 +69,15 @@ struct NodePrefs { // persisted to file
   // #542: status/traffic LED enable (1 = normal, 0 = suppressed). Default 1 (ON).
   // Only meaningful where MainBoard::canControlLed() is true.
   uint8_t ui_led_enabled;
+  // #542 A2: OLED mode. 0 = auto (on, blanks after timeout — default/today), 1 = always on
+  // (no blank), 2 = always off (dark). Only meaningful on builds with a DISPLAY_CLASS.
+  uint8_t ui_display_mode;
 };
+
+// #542 A2: values for NodePrefs::ui_display_mode.
+#define DISPLAY_MODE_AUTO        0
+#define DISPLAY_MODE_ALWAYS_ON   1
+#define DISPLAY_MODE_ALWAYS_OFF  2
 
 class CommonCLICallbacks {
 public:

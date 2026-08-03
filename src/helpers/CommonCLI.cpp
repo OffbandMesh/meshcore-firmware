@@ -193,7 +193,8 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *)&_prefs->flood_max_unscoped, sizeof(_prefs->flood_max_unscoped));        // 292
     file.read((uint8_t *)&_prefs->flood_max_advert, sizeof(_prefs->flood_max_advert));            // 293
     file.read((uint8_t *)&_prefs->ui_led_enabled, sizeof(_prefs->ui_led_enabled));                // 294
-    // next: 295
+    file.read((uint8_t *)&_prefs->ui_display_mode, sizeof(_prefs->ui_display_mode));              // 295
+    // next: 296
     // NOTE: radio_fem_rxgain stays at offset 291 (its pre-1.16 offset) so existing Offband prefs
     // files survive the 1.16.0 base-update; the new upstream flood fields append after it. For old
     // SPIFFS files predating a field, file.read returns 0 bytes and the field keeps its in-memory
@@ -229,6 +230,7 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     _prefs->rx_boosted_gain = constrain(_prefs->rx_boosted_gain, 0, 1); // boolean
     _prefs->radio_fem_rxgain = constrain(_prefs->radio_fem_rxgain, 0, 1); // boolean
     _prefs->ui_led_enabled = constrain(_prefs->ui_led_enabled, 0, 1); // boolean (#542)
+    _prefs->ui_display_mode = constrain(_prefs->ui_display_mode, 0, 2); // #542 A2 tristate
 
     file.close();
   }
@@ -294,7 +296,8 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)&_prefs->flood_max_unscoped, sizeof(_prefs->flood_max_unscoped));       // 292
     file.write((uint8_t *)&_prefs->flood_max_advert, sizeof(_prefs->flood_max_advert));           // 293
     file.write((uint8_t *)&_prefs->ui_led_enabled, sizeof(_prefs->ui_led_enabled));               // 294
-    // next: 295
+    file.write((uint8_t *)&_prefs->ui_display_mode, sizeof(_prefs->ui_display_mode));             // 295
+    // next: 296
 
     file.close();
   }
