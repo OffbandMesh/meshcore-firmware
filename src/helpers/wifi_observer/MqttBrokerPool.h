@@ -8,6 +8,7 @@
 #include "WifiObserverConfig.h"
 #include "MqttBroker.h"
 #include "MqttRingLog.h"
+#include <atomic>   // #531: reconciling_ is a cross-task flag
 
 // #175: every broker slot is a ring reader, so the ring must have at least as
 // many cursors as there are broker slots. Caught at compile time rather than
@@ -159,7 +160,28 @@ private:
     // Per-slot guard: true while the lifecycle worker is creating/destroying
     // that slot's client. loopTask publish/status paths SKIP reconciling slots
     // so they never wait on the worker's blocking teardown (#53).
-    volatile bool reconciling_[OFFBAND_MAX_BROKERS] = {false};
+    // #531: cross-task guard -- written by the lifecycle worker (rotateTlsIfDue,
+    // workerLoop) and read by loopTask (drainBroker, the publish fan-outs, the
+    // status/[rot] enumerations). Was `volatile bool`, which forbids the compiler
+    // caching it in a register but is only a COMPILER barrier: it carries no
+    // memory-ordering or cross-core visibility guarantee, so on a dual-core ESP32
+    // there is no formal happens-before between the worker's write and loopTask's
+    // read. std::atomic (seq_cst by default) supplies that ordering and states the
+    // contract in the type.
+    //
+    // NOT a bug fix: correctness rests on the per-broker client_lock_ inside
+    // MqttBroker::publish(), which re-checks client_ != nullptr, so a mis-ordered
+    // read of this flag cannot produce a use-after-free. This flag is an
+    // optimization (skip slots mid-lifecycle instead of blocking on that lock).
+    // The value is making the contract self-enforcing for future code that touches
+    // a broker WITHOUT taking client_lock_ -- that is the change which would turn
+    // today's benign race into a real one.
+    // `= {}` value-initializes every element to false. std::atomic's default
+    // constructor is trivial in C++17 and leaves the value INDETERMINATE, so the
+    // initializer is required, not decorative -- the old `= {false}` on a plain
+    // volatile array was doing that job. begin() also assigns false per slot
+    // before the worker task starts; this covers any read before that.
+    std::atomic<bool> reconciling_[OFFBAND_MAX_BROKERS] = {};
 
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     // Lifecycle worker: owns ALL blocking esp_mqtt ops so loopTask never
