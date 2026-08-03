@@ -70,10 +70,7 @@ public:
     void captureEdgeFromISR();
 
 private:
-    // from_isr rides along so the drain can say WHICH producer saw each edge. Without
-    // it, "we captured 6 edges" cannot distinguish a working interrupt from a poll that
-    // happened to be lucky.
-    struct Edge { uint32_t ms; bool pressed; bool from_isr; };
+    struct Edge { uint32_t ms; bool pressed; };
 
     uint8_t _pin;
     bool _activeState;
@@ -91,11 +88,12 @@ private:
     volatile uint32_t _dropped = 0;
     volatile bool     _produced_level = false;   // last level PUSHED, by either producer
 
-    // #527 diagnostics: how many edges each PRODUCER actually captured, counted
-    // separately from what the sequencer made of them. This is the only way to tell a
-    // capture failure (the pin moved and we never saw it) from an interpretation
-    // failure (we saw every edge and still miscounted) -- the two have identical
-    // symptoms from the outside, and guessing between them has already cost a round.
+    // #527: how many edges each PRODUCER captured, counted separately from what the
+    // sequencer made of them. Reported once per resolved gesture. `isr` is the number
+    // of times the pin actually changed -- two per press -- so a gesture that resolves
+    // to fewer clicks than the user intended is readable straight from the log as a
+    // contact that never opened, rather than a counting bug. That distinction cost
+    // several rounds to establish; keeping the number is cheap.
     volatile uint16_t _raw_isr = 0;
     volatile uint16_t _raw_poll = 0;
 
@@ -112,7 +110,7 @@ private:
     EventCallback _onAnyPress = nullptr;
 
     bool readButton() const;
-    void pushEdge(uint32_t ms, bool pressed, bool from_isr);
+    void pushEdge(uint32_t ms, bool pressed);
     bool popEdge(Edge& out);
     void drainSequencer(uint32_t at);
     void triggerEvent(EventType event);
