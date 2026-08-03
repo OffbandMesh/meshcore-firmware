@@ -10,9 +10,14 @@
 
 #pragma once
 
-#ifndef OFFBAND_OBSERVER
-  #error "WifiObserverConfig.h included without OFFBAND_OBSERVER defined. \
-          Check env build_flags or remove the include."
+// #536: the broker-pool engine (MqttBrokerPool/MqttBroker) legitimately needs
+// the engine tunables below (OFFBAND_MAX_BROKERS / OFFBAND_MAX_LIVE_TLS /
+// OFFBAND_TLS_HEAP_FLOOR_BYTES) on the REPEATER too, without the observer
+// pipeline. Accept OFFBAND_MQTT_POOL as an alternative gate. The AP-SSID / CLI-
+// rescue tunables further down are observer-only but harmless to the repeater.
+#if !defined(OFFBAND_OBSERVER) && !defined(OFFBAND_MQTT_POOL)
+  #error "WifiObserverConfig.h needs OFFBAND_OBSERVER or OFFBAND_MQTT_POOL \
+          (the broker-pool engine, #536) defined. Check env build_flags."
 #endif
 
 // ---------------------------------------------------------------------------
