@@ -23,12 +23,12 @@ void HeltecV4Board::begin() {
   }
 
   void HeltecV4Board::onBeforeTransmit(void) {
-    digitalWrite(P_LORA_TX_LED, HIGH);   // turn TX LED on
+    if (_led_enabled) digitalWrite(P_LORA_TX_LED, HIGH);   // turn TX LED on
     loRaFEMControl.setTxModeEnable();
   }
 
   void HeltecV4Board::onAfterTransmit(void) {
-    digitalWrite(P_LORA_TX_LED, LOW);   // turn TX LED off
+    if (_led_enabled) digitalWrite(P_LORA_TX_LED, LOW);   // turn TX LED off
     loRaFEMControl.setRxModeEnable();
   }
 
@@ -130,3 +130,16 @@ void HeltecV4Board::begin() {
   bool HeltecV4Board::isLoRaFemLnaEnabled() const {
     return loRaFEMControl.isLnaEnabled();
   }
+
+  // #542: status/traffic LED control. When disabled, the TX LED is forced LOW and
+  // the transmit hooks stop driving it. The LED is a plain GPIO, always controllable
+  // on this board, so canControlLed() is unconditionally true.
+  bool HeltecV4Board::setLedEnabled(bool on) {
+    _led_enabled = on;
+    if (!on) digitalWrite(P_LORA_TX_LED, LOW);  // ensure it's dark immediately
+    return true;
+  }
+
+  bool HeltecV4Board::canControlLed() const { return true; }
+
+  bool HeltecV4Board::isLedEnabled() const { return _led_enabled; }

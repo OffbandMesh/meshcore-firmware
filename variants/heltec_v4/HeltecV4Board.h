@@ -14,6 +14,7 @@ class HeltecV4Board : public ESP32Board {
 
 protected:
   float adc_mult = ADC_MULTIPLIER;
+  bool _led_enabled = true;   // #542: default on = today's behavior
 
 public:
   RefCountedDigitalPin periph_power;
@@ -32,6 +33,11 @@ public:
   bool setLoRaFemLnaEnabled(bool enable) override;
   bool canControlLoRaFemLna() const override;
   bool isLoRaFemLnaEnabled() const override;
+
+  // Status/traffic (TX) LED runtime control (`led on/off` CLI). #542.
+  bool setLedEnabled(bool on) override;
+  bool canControlLed() const override;
+  bool isLedEnabled() const override;
 
   bool setAdcMultiplier(float multiplier) override {
     if (multiplier == 0.0f) {
