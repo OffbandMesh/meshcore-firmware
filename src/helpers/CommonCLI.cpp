@@ -192,7 +192,8 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *)&_prefs->radio_fem_rxgain, sizeof(_prefs->radio_fem_rxgain));            // 291
     file.read((uint8_t *)&_prefs->flood_max_unscoped, sizeof(_prefs->flood_max_unscoped));        // 292
     file.read((uint8_t *)&_prefs->flood_max_advert, sizeof(_prefs->flood_max_advert));            // 293
-    // next: 294
+    file.read((uint8_t *)&_prefs->ui_led_enabled, sizeof(_prefs->ui_led_enabled));                // 294
+    // next: 295
     // NOTE: radio_fem_rxgain stays at offset 291 (its pre-1.16 offset) so existing Offband prefs
     // files survive the 1.16.0 base-update; the new upstream flood fields append after it. For old
     // SPIFFS files predating a field, file.read returns 0 bytes and the field keeps its in-memory
@@ -227,6 +228,7 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     // sanitise settings
     _prefs->rx_boosted_gain = constrain(_prefs->rx_boosted_gain, 0, 1); // boolean
     _prefs->radio_fem_rxgain = constrain(_prefs->radio_fem_rxgain, 0, 1); // boolean
+    _prefs->ui_led_enabled = constrain(_prefs->ui_led_enabled, 0, 1); // boolean (#542)
 
     file.close();
   }
@@ -291,7 +293,8 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)&_prefs->radio_fem_rxgain, sizeof(_prefs->radio_fem_rxgain));            // 291
     file.write((uint8_t *)&_prefs->flood_max_unscoped, sizeof(_prefs->flood_max_unscoped));       // 292
     file.write((uint8_t *)&_prefs->flood_max_advert, sizeof(_prefs->flood_max_advert));           // 293
-    // next: 294
+    file.write((uint8_t *)&_prefs->ui_led_enabled, sizeof(_prefs->ui_led_enabled));               // 294
+    // next: 295
 
     file.close();
   }
@@ -647,6 +650,20 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
               _prefs->radio_fem_rxgain ? "on" : "off",
               _board->canControlLoRaFemLna() ? "yes" : "no",
               _board->isLoRaFemLnaEnabled() ? "on" : "off");
+    } else if (memcmp(command, "led on", 6) == 0) {
+      _prefs->ui_led_enabled = 1;
+      _board->setLedEnabled(true);
+      savePrefs();
+      strcpy(reply, "ok");
+    } else if (memcmp(command, "led off", 7) == 0) {
+      _prefs->ui_led_enabled = 0;
+      _board->setLedEnabled(false);
+      savePrefs();
+      strcpy(reply, "ok");
+    } else if (memcmp(command, "led", 3) == 0) {
+      sprintf(reply, "led: %s, controllable: %s",
+              _prefs->ui_led_enabled ? "on" : "off",
+              _board->canControlLed() ? "yes" : "no");
 #ifdef ENABLE_WIFI_TELEMETRY
     } else if (memcmp(command, "telemetry off", 13) == 0) {
       wifi_telemetry_set_disabled(1);
