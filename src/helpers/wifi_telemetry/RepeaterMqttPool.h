@@ -26,7 +26,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-namespace mesh { class LocalIdentity; }
+namespace mesh { class LocalIdentity; class Packet; }
 
 namespace offband {
 
@@ -49,6 +49,14 @@ public:
     // number of brokers published to (0 if not started).
     uint8_t publish(const uint8_t* payload, size_t len);
 
+    // #537: mesh-packet feed — tee the traffic the repeater HEARS into the pool,
+    // parallel to the observer's logRxRaw/logRx hooks. Both no-op until started.
+    //   publishRaw    — pre-parse raw bytes  -> the /raw topic.
+    //   publishParsed — post-parse Packet    -> the /packets topic (CoreScope).
+    void publishRaw(const uint8_t* raw, size_t len, float rssi, float snr);
+    void publishParsed(const mesh::Packet& packet, int rssi, float snr,
+                       int score, int duration);
+
     // Tear the pool down. Idempotent.
     void shutdown();
 
@@ -57,6 +65,10 @@ public:
 private:
     bool started_ = false;
 };
+
+// Process-wide singleton so the RX hooks (MyMesh::logRxRaw/logRx) and the
+// lifecycle driver (wifi_telemetry setup/loop) share one pool.
+RepeaterMqttPool& repeaterMqttPool();
 
 }  // namespace offband
 

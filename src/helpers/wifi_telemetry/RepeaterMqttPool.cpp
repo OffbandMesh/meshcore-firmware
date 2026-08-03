@@ -44,11 +44,33 @@ uint8_t RepeaterMqttPool::publish(const uint8_t* payload, size_t len) {
     return started_ ? thePool().publishPacket(payload, len) : 0;
 }
 
+void RepeaterMqttPool::publishRaw(const uint8_t* raw, size_t len, float rssi, float snr) {
+#ifdef ARDUINO
+    if (started_) thePool().publishRawFromBytes(raw, len, rssi, snr);
+#else
+    (void)raw; (void)len; (void)rssi; (void)snr;
+#endif
+}
+
+void RepeaterMqttPool::publishParsed(const mesh::Packet& packet, int rssi, float snr,
+                                     int score, int duration) {
+#ifdef ARDUINO
+    if (started_) thePool().publishParsedPacket(packet, rssi, snr, score, duration);
+#else
+    (void)packet; (void)rssi; (void)snr; (void)score; (void)duration;
+#endif
+}
+
 void RepeaterMqttPool::shutdown() {
     if (started_) {
         thePool().shutdown();
         started_ = false;
     }
+}
+
+RepeaterMqttPool& repeaterMqttPool() {
+    static RepeaterMqttPool inst;
+    return inst;
 }
 
 }  // namespace offband
