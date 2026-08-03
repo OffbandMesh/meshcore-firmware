@@ -9,8 +9,14 @@
 // Plan 2 v2 Task 11: ObserverCli dispatcher hooked into handleCommand's
 // fall-through. Compiles in only when OFFBAND_OBSERVER is defined
 // (observer envs); other envs have zero impact.
-#ifdef OFFBAND_OBSERVER
+// #538: dispatchObserverCli (the broker-config CLI) is reused on the repeater
+// under OFFBAND_MQTT_POOL. ObserverCli.h declares BOTH dispatchObserverCli and
+// wifiObserverPool(); the observer pipeline header (WifiObserver.h) stays
+// observer-only. The observer keeps both includes (byte-identical).
+#if defined(OFFBAND_OBSERVER) || defined(OFFBAND_MQTT_POOL)
   #include "wifi_observer/ObserverCli.h"
+#endif
+#ifdef OFFBAND_OBSERVER
   #include "wifi_observer/WifiObserver.h"  // wifiObserverPool() accessor
 #endif
 
@@ -1466,11 +1472,13 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
     if (len == 0) {
       strcpy(reply, "-none-");
     }
-#ifdef OFFBAND_OBSERVER
+#if defined(OFFBAND_OBSERVER) || defined(OFFBAND_MQTT_POOL)
   } else if (offband::dispatchObserverCli(command, reply, /*reply_size=*/1024,
                                             offband::wifiObserverPool())) {
-    // handled by Plan 2 v2 observer CLI (mqtt status / enable / disable /
+    // handled by the broker-config CLI (mqtt status / enable / disable /
     // set mqtt.iata / set mqtt.status_interval / set mqtt.broker.<N>.*).
+    // #538: also active on the repeater under OFFBAND_MQTT_POOL, operating on
+    // the repeater's pool via its wifiObserverPool() accessor.
 #endif
 #if defined(OFFBAND_CONFIG_CLI)
   } else if (offband::config::dispatchCliLine(command, reply, /*reply_size=*/1024)) {
