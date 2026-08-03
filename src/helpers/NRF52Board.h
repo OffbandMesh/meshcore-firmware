@@ -65,8 +65,9 @@ public:
   // #257: hardware watchdog (independent of NRF52_POWER_MANAGEMENT).
   // startWatchdog() once at boot; feedWatchdog() from the MAIN LOOP only, so a
   // hung loop trips it -> auto-reboot + RESETREAS=DOG ("Watchdog") at next boot.
-  void startWatchdog(uint32_t timeout_secs);
-  void feedWatchdog();
+  // #446: now overrides the MainBoard runtime-watchdog interface.
+  void startWatchdog(uint32_t timeout_secs) override;
+  void feedWatchdog() override;
 
   // #275 (P0): true, ungated green-LED heartbeat. startHeartbeat() once at boot;
   // heartbeatTick() from the MAIN LOOP only. The LED toggle is loop-driven (so a hung
