@@ -426,7 +426,17 @@ python scripts/llm-consult.py --backend gemini --model gemini-2.5-pro \
 ```
 Fix every finding or justify it in the PR body.
 
-- [ ] **Step 3: Hardware verify on a Heltec V4 repeater (Tier-2 flash — needs explicit per-flash owner GO)**
+- [x] **Step 3: Hardware verify on a Heltec V4 repeater — DONE, PASSED 2026-08-03**
+
+Verified on **hv4-bench-1** (Heltec V4.3 repeater, COM16) with the A1 `heltec_v4_repeater` build
+(artifact sha `d2a9c121`, owner-authorized flash + BOOT/RST bootloader entry):
+- `led` → `on, controllable: yes` (default-on path, old prefs short-read to default)
+- `led off` → `ok`; `led` → `off, controllable: yes`
+- **soft `reboot` → `led` → `off`** (persistence proven across reboot)
+- `led on` → `ok`; `led` → `on`
+Device left restored to `led on`.
+
+- [ ] ~~**Step 3 (original): Hardware verify on a Heltec V4 repeater (Tier-2 flash — needs explicit per-flash owner GO)**~~
 
 Stage via `pio-flash preview`, get the owner's explicit go naming the device, then `confirm`. On device:
 - `led` → reports `on, controllable: yes`
