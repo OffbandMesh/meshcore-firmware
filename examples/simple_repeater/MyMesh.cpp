@@ -920,6 +920,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 
   // External FEM LNA enabled by default (boards without controllable FEM ignore this).
   _prefs.radio_fem_rxgain = 1;
+  _prefs.ui_led_enabled = 1;   // #542 default: LED on (set before loadPrefs so old blobs default on)
 
   pending_discover_tag = 0;
   pending_discover_until = 0;
@@ -972,6 +973,10 @@ void MyMesh::begin(FILESYSTEM *fs) {
   // Apply persisted FEM LNA enable. No-op on boards without a controllable FEM.
   if (board.canControlLoRaFemLna()) {
     board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain != 0);
+  }
+  // #542: apply persisted LED enable. No-op on boards without a controllable LED.
+  if (board.canControlLed()) {
+    board.setLedEnabled(_prefs.ui_led_enabled != 0);
   }
 
   updateAdvertTimer();
