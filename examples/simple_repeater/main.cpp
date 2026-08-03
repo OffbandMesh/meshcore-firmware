@@ -29,6 +29,7 @@
 #include "../../src/helpers/wifi_telemetry/WifiTelemetry.h"
 #include "../../src/helpers/wifi_telemetry/WifiMqttTransport.h"
 #include "../../src/helpers/wifi_telemetry/RemoteCommand.h"  // issue #86 - remote OTA trigger
+#include "../../src/helpers/wifi_telemetry/RepeaterMqttPool.h"  // #537 - multi-broker mesh-packet feed (self-guards on OFFBAND_MQTT_POOL)
 
 #ifndef FIRMWARE_HW_MODEL
 #define FIRMWARE_HW_MODEL "Heltec V4"
@@ -166,6 +167,18 @@ static void wifi_telemetry_setup() {
         FIRMWARE_BUILD_DATE,
         FIRMWARE_HW_MODEL
     );
+
+#ifdef OFFBAND_MQTT_POOL
+    // #537: bring up the shared multi-broker pool (mesh-packet feed -> CoreScope
+    // /map sinks), PARALLEL to the HA telemetry above. Seeded broker slots are
+    // disabled by default, so this is inert until brokers are configured (#538);
+    // the RX hooks (MyMesh::logRxRaw/logRx) enqueue to the pool's ring-log, which
+    // drains per-broker once brokers are enabled + WiFi is up. self_id is loaded
+    // before this runs.
+    offband::repeaterMqttPool().begin(the_mesh.self_id, WIFI_TELEMETRY_NODE_ID,
+                                      WIFI_TELEMETRY_FRIENDLY_NAME,
+                                      FIRMWARE_VERSION, FIRMWARE_HW_MODEL);
+#endif
 
     g_tel_reset_reason = board.getResetReasonString(board.getResetReason());
 
@@ -350,6 +363,18 @@ static void wifi_telemetry_loop() {
     // the issue-#86 remote command callback to fire when persistent-mode WiFi
     // is up. No-op when transport not ready.
     if (g_tel_transport) g_tel_transport->loop();
+#ifdef OFFBAND_MQTT_POOL
+    // #537: drive the multi-broker pool (per-broker connects, dwell rotation,
+    // ring-log drain) ONLY while WiFi is up. The repeater duty-cycles WiFi
+    // (burst mode); the pool engine has no WiFi.status() gate of its own (the
+    // observer's WiFi is persistent, so it never needed one), and running its
+    // connect/rotation logic with WiFi down would churn esp-mqtt reconnects and
+    // risk heap fragmentation (Gemini review MAJOR). RX packets still enqueue to
+    // the ring-log via the logRx hooks regardless of WiFi; the pool drains them
+    // once WiFi returns. (Sustaining wss brokers realistically needs persistent
+    // WiFi mode -- a #539 verification point.)
+    if (WiFi.status() == WL_CONNECTED) offband::repeaterMqttPool().loop(millis());
+#endif
 
     // Issue #86: deferred reboot check. Set by PatioRemoteCallbacks::rebootAfter
     // (called from REBOOT command dispatch). Honored regardless of telemetry
