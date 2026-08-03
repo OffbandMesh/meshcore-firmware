@@ -66,6 +66,9 @@ struct NodePrefs { // persisted to file
   // External FEM LNA enable (1 = LNA on, 0 = bypass). Default 1 (ON).
   // Only meaningful on boards where MainBoard::canControlLoRaFemLna() returns true.
   uint8_t radio_fem_rxgain;
+  // #542: status/traffic LED enable (1 = normal, 0 = suppressed). Default 1 (ON).
+  // Only meaningful where MainBoard::canControlLed() is true.
+  uint8_t ui_led_enabled;
 };
 
 class CommonCLICallbacks {
