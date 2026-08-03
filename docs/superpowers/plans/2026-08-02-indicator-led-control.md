@@ -354,7 +354,22 @@ git commit -m "feat(#542): apply ui_led_enabled at boot where the role supports 
 
 ---
 
-### Task 8: Prefs-offset regression test (native)
+### Task 8: ~~Prefs-offset regression test (native)~~ — INFEASIBLE, superseded by on-device test (owner-approved 2026-08-03)
+
+**Corrected during execution.** The plan assumed `test/test_config_overlap/` guarded the prefs-blob
+offsets — it does not; it tests config-key **prefix shadowing** (#366), unrelated. And `[env:native]`
+compiles only `Utils.cpp` / `CaptureRing.cpp` / `ConfigDispatch.cpp` — **not** `CommonCLI.cpp` or
+`DataStore.cpp` (they pull in Arduino/LittleFS/board). There is no FS mock. LED is a `uint8_t` bool
+with no extractable pure logic, and "offset 294" is a *file* offset (sequential `file.write`), not a
+struct `offsetof` — so an offsetof test would be invalid, not just weak.
+
+**Decision (owner, 2026-08-03):** the meaningful test for A1 is the **on-device round-trip** (Task 9
+Step 3). A native FS-mock + prefs-serialization harness was offered as the alternative and deferred
+as separate reusable scope. No native unit test is written for A1. The blob layout is protected by
+the append-only `// 294` / `// next: 295` comment convention (matched read/write) + the on-device
+persistence check.
+
+<details><summary>Original (infeasible) task text, retained for the record</summary>
 
 The one piece with native-testable logic: the appended field must not collide with an existing offset. `test/test_config_overlap/` already guards blob layout.
 
@@ -385,6 +400,8 @@ Expected: `[PASSED]` for the suite (note the cosmetic "0 test cases" summary qui
 git add test/test_config_overlap/test_config_overlap.cpp
 git commit -m "test(#542): assert ui_led_enabled prefs offset does not overlap"
 ```
+
+</details>
 
 ---
 
