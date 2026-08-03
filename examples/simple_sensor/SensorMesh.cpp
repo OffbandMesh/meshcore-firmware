@@ -721,6 +721,7 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
   _prefs.bw = LORA_BW;
   _prefs.cr = LORA_CR;
   _prefs.tx_power_dbm = LORA_TX_POWER;
+  _prefs.ui_led_enabled = 1;   // #542 default: LED on (set before loadPrefs)
   _prefs.advert_interval = 1;  // default to 2 minutes for NEW installs
   _prefs.flood_advert_interval = 0;   // disabled
   _prefs.disable_fwd = true;
@@ -771,6 +772,11 @@ void SensorMesh::begin(FILESYSTEM* fs) {
   updateFloodAdvertTimer();
 
    board.setAdcMultiplier(_prefs.adc_multiplier);
+
+  // #542: apply persisted LED enable. No-op on boards without a controllable LED.
+  if (board.canControlLed()) {
+    board.setLedEnabled(_prefs.ui_led_enabled != 0);
+  }
 
 #if ENV_INCLUDE_GPS == 1
   applyGpsPrefs();
