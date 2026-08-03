@@ -70,7 +70,10 @@ public:
     void captureEdgeFromISR();
 
 private:
-    struct Edge { uint32_t ms; bool pressed; };
+    // from_isr rides along so the drain can say WHICH producer saw each edge. Without
+    // it, "we captured 6 edges" cannot distinguish a working interrupt from a poll that
+    // happened to be lucky.
+    struct Edge { uint32_t ms; bool pressed; bool from_isr; };
 
     uint8_t _pin;
     bool _activeState;
@@ -88,6 +91,14 @@ private:
     volatile uint32_t _dropped = 0;
     volatile bool     _produced_level = false;   // last level PUSHED, by either producer
 
+    // #527 diagnostics: how many edges each PRODUCER actually captured, counted
+    // separately from what the sequencer made of them. This is the only way to tell a
+    // capture failure (the pin moved and we never saw it) from an interpretation
+    // failure (we saw every edge and still miscounted) -- the two have identical
+    // symptoms from the outside, and guessing between them has already cost a round.
+    volatile uint16_t _raw_isr = 0;
+    volatile uint16_t _raw_poll = 0;
+
     uint32_t _lastReadTime = 0;
     uint32_t _dropped_reported = 0;
     int8_t   _irq_slot = -1;
@@ -101,7 +112,7 @@ private:
     EventCallback _onAnyPress = nullptr;
 
     bool readButton() const;
-    void pushEdge(uint32_t ms, bool pressed);
+    void pushEdge(uint32_t ms, bool pressed, bool from_isr);
     bool popEdge(Edge& out);
     void drainSequencer(uint32_t at);
     void triggerEvent(EventType event);
