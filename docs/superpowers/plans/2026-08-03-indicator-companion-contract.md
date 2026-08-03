@@ -19,20 +19,42 @@
 - The matrix sub-codes (0x03/0x04) and their internal logic stay FuchsiaCreek's — this plan only
   lifts the outer buzzer gate into the scope arm and adds the led/display arms.
 
-## Execution blockers (do not start coding until both clear)
+## ⚠ CORRECTED by FuchsiaCreek coordination (msgs 375/376, 2026-08-03)
 
-1. **FuchsiaCreek confirms** the `0xC5` dispatch block isn't mid-edit by their button work (msg 374).
-2. **A1 (#546) + A2 (#548) merged.** This branch is stacked on A2; the companion prefs re-apply A1's
-   reverted companion patch and add display. Rebase onto `firmware-base` once A1+A2 land.
+Their #509/#510 work is **committed but unpushed**, so a branch scan couldn't see it. Two of this
+plan's original assumptions were wrong:
 
-## Merge-ordered shared enums (announced msg 365; re-verify before claiming)
+1. **The `0xC5` gate is ALREADY per-sub-code** on `feat/509-button-dispatch @ 5becb6aa` — the blanket
+   `#ifndef PIN_BUZZER` reject is gone (scope→`PIN_BUZZER`, matrix→`PIN_USER_BTN`). **Task 5 is no
+   longer a restructure** — it is purely additive: two predicates (`is_display_sub`/`is_led_sub`),
+   two gate arms (led runtime `board.canControlLed()` modeled on `CMD_OFFBAND_FEM_LNA` @ MyMesh.cpp:1977,
+   display compile-time `DISPLAY_CLASS`), add both bools to the `(void)` line (:1851, or `-Werror`
+   breaks on the full matrix), handlers before the unknown-sub tail (:1969).
+2. **caps2 `0x02` is TAKEN** (`OFFBAND_CAP2_BUTTON_MATRIX`, #509). **Use `0x04`.**
+
+## Execution — split by dependency
+
+- **Companion-internal half (Tasks 2, 3, 4) — DO NOW, conflict-free.** `NodePrefs`/`DataStore` prefs
+  (append after the already-**merged** `button_actions`) + `ui-new` tristate + boot-apply. Zero
+  overlap with FuchsiaCreek (they're in `ui-orig/Button*` for #527).
+- **Contract/dispatch half (Tasks 1, 5, 6) — GATED on #509/#510 landing.** Stack on their branch (not
+  `firmware-base`) so the dispatch is already per-sub-code and the registry (0x01/0x02) is settled.
+  **Owner decides** whether to land #509/#510 ahead of the #527 button work (FuchsiaCreek deferred it
+  to Ben). Also still stacked behind A1 (#546) + A2 (#548).
+
+## Merge-ordered shared enums (CORRECTED per msgs 375/376)
 
 | Allocation | Value |
 |---|---|
-| `OFFBAND_UI_DISPLAY_GET` / `SET` | `0xC5` sub `0x05` / `0x06` |
-| `OFFBAND_UI_LED_GET` / `SET` | `0xC5` sub `0x07` / `0x08` |
-| `OFFBAND_CAP2_INDICATORS` | caps byte 2 bit 1 (`0x02`) |
-| `FIRMWARE_VER_CODE` | 19 → **20** (led+display values appended to device-info) |
+| `OFFBAND_UI_DISPLAY_GET` / `SET` | `0xC5` sub `0x05` / `0x06` (free — confirmed) |
+| `OFFBAND_UI_LED_GET` / `SET` | `0xC5` sub `0x07` / `0x08` (free — confirmed) |
+| `OFFBAND_CAP2_INDICATORS` | caps byte 2 bit **2 (`0x04`)** — 0x02 taken by BUTTON_MATRIX |
+| error reason byte | **6** (`UNSUPPORTED_INDICATOR`) — 1-5 taken |
+| `FIRMWARE_VER_CODE` | **read the merged value at rebase** (20 on FuchsiaCreek's branch; do NOT hardcode 21) |
+
+**Conventions to keep in the SET arms (FuchsiaCreek):** compare-before-`savePrefs()` (a client
+`onChange` control emits a SET burst; unconditional save = flash burn), and echo the STORED value back
+(client renders what the device holds).
 
 ## Ground truth (verified)
 
