@@ -185,7 +185,8 @@ void MqttBroker::shutdown() {
 
 #ifdef ARDUINO
 bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg,
-                       const mesh::LocalIdentity& identity) {
+                       const mesh::LocalIdentity& identity,
+                       bool may_alloc_client) {
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     ClientLockGuard _g(client_lock_);
 #endif
@@ -200,6 +201,19 @@ bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg,
     // Enabling later routes through reloadSlot()->begin() which creates it.
     if (!cfg.enabled) {
         rt_ = BrokerRuntimeState{};
+        return true;
+    }
+    // #534: TLS/wss allocation admission. When the pool already holds its full
+    // quota of TLS clients, store the config and stay CONFIGURED BUT CLIENT-LESS
+    // rather than allocating a ~18KB client this broker cannot use. HeldNoHeap
+    // marks it as deferred-not-failed (same semantics tryConnect uses), so the
+    // pool's re-drive promotes it via reconcileSlot() once budget frees. NOT a
+    // failure: return true. tcp brokers hold no mbedTLS context and are exempt.
+    if (!may_alloc_client &&
+        (cfg.transport == BrokerTransport::Tls ||
+         cfg.transport == BrokerTransport::Wss)) {
+        rt_ = BrokerRuntimeState{};
+        rt_.state = BrokerState::HeldNoHeap;
         return true;
     }
     auth_ = makeAuth(cfg, identity);

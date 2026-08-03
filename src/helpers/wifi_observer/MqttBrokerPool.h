@@ -134,6 +134,15 @@ private:
     // Drain one broker's backlog to its transport. Returns messages published.
     uint8_t drainBroker(uint8_t slot);
 
+    // #534: how many TLS/wss brokers currently hold an allocated esp_mqtt client.
+    // This -- not the count of LIVE (Up/Connecting) connections -- is the correct
+    // admission metric for ALLOCATION: at boot nothing is live yet, so a
+    // live-based check would admit every slot and allocate a client for each,
+    // which is exactly the heap deadlock #534 fixes. Cheap: an O(slots) scan of
+    // hasClient(), no locking (client_ transitions are already serialized by the
+    // reconciling_ guard + the per-broker client_lock_).
+    uint8_t tlsClientsAllocated() const;
+
     // #175: TLS rotation. When more TLS brokers are enabled than the heap-derived
     // budget allows, the live set is rotated on a dwell timer so every feed gets
     // serviced. Degenerates to a no-op when the budget covers every enabled TLS

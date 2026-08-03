@@ -65,9 +65,24 @@ public:
     // Bind slot to config. Allocates esp_mqtt_client + MqttAuth.
     // Does NOT start the connection; pool decides via tryConnect().
     // Returns false if cfg is invalid (empty URL, unknown auth, etc.).
+    //
+    // #534: may_alloc_client is the pool's ALLOCATION admission for TLS/wss
+    // slots -- REQUIRED (no default, mirroring tryConnect's tls_budget_ok #171)
+    // so no caller can silently bypass it. false means the pool already holds
+    // OFFBAND_MAX_LIVE_TLS TLS clients, so this slot stores its config and stays
+    // CONFIGURED BUT CLIENT-LESS -- the same state releaseClient() leaves a
+    // rotated-out broker in (#175). Previously every enabled slot allocated a
+    // client at configure time, so brokers parked at HeldNoHeap still held a
+    // ~18KB client they could not use; on HV3 that pushed free heap below
+    // OFFBAND_TLS_HEAP_FLOOR_BYTES and deadlocked the pool -- admission fired
+    // only AFTER the cost was paid. The pool promotes a client-less broker via
+    // the existing reconcileSlot() -> begin(..., true) path once budget frees.
+    // Ignored for tcp brokers (they hold no mbedTLS context) and for disabled
+    // slots (they never allocate).
 #ifdef ARDUINO
     bool begin(uint8_t slot, const BrokerConfig& cfg,
-               const mesh::LocalIdentity& identity);
+               const mesh::LocalIdentity& identity,
+               bool may_alloc_client);
 #else
     bool begin(uint8_t slot, const BrokerConfig& cfg);  // host stub (no identity needed)
 #endif
