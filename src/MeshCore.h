@@ -125,6 +125,12 @@ public:
   virtual bool canControlLoRaFemLna() const { return false; }
   virtual bool isLoRaFemLnaEnabled() const { return false; }
 
+  // Status/traffic indicator LED control (boards with a controllable LED override these).
+  // Default: not supported. #542.
+  virtual bool setLedEnabled(bool /*on*/) { return false; }
+  virtual bool canControlLed() const { return false; }
+  virtual bool isLedEnabled() const { return true; }  // default: LED behaves normally
+
   // D9 / issue #63: app-level boot rollback safety. Boards with ESP-IDF
   // rollback APIs override these. Default no-op for non-ESP32 boards.
   // beginBootSafety()    - call EARLY in setup(); increments NVS boot counter
