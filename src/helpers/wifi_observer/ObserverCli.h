@@ -46,6 +46,12 @@ namespace offband {
 bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
                          MqttBrokerPool& pool);
 
+// The pool accessor dispatchObserverCli reads live state from (and that CommonCLI
+// passes as the `pool` arg). Each role provides one definition: the observer via
+// its pipeline (WifiObserver), the repeater via RepeaterMqttPool (#538). Declared
+// here so CommonCLI sees it on both roles.
+MqttBrokerPool& wifiObserverPool();
+
 // Epic F (#165): typed config dispatch -- the wire path's set/get backend.
 // A config key routes straight to the same handlers the _sys CLI uses (above),
 // WITHOUT re-parsing a CLI string. Consumed by the companion-API config command

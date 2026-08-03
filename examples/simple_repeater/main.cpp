@@ -706,6 +706,21 @@ public:
     void logSafetyEvent(uint8_t event_type, const char* detail) override {
         board.appendSafetyEvent(event_type, detail);
     }
+
+    // #538: route an authenticated CLI line to the mesh CLI (CommonCLI ->
+    // dispatchObserverCli), the same entry point the serial admin uses -- this is
+    // how the client configures the repeater's brokers over RemoteCommand. Copy
+    // into a mutable buffer first: handleCommand may tokenize the command
+    // in place. CommonCLI sizes its own 1024-byte reply, so `reply` must be >=1024.
+    bool runCli(const char* cmd, char* reply, size_t reply_size) override {
+        if (cmd == nullptr || reply == nullptr || reply_size == 0) return false;
+        reply[0] = '\0';
+        char cmdbuf[192];
+        strncpy(cmdbuf, cmd, sizeof(cmdbuf) - 1);
+        cmdbuf[sizeof(cmdbuf) - 1] = '\0';
+        the_mesh.handleCommand(0, cmdbuf, reply);
+        return true;
+    }
 };
 
 // publishResponseShim: function-pointer adapter so RemoteCommandHandler can

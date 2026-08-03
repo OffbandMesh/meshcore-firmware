@@ -73,6 +73,17 @@ RepeaterMqttPool& repeaterMqttPool() {
     return inst;
 }
 
+#ifndef OFFBAND_OBSERVER
+// #538: ObserverCli (the broker-config CLI, reused on the repeater) both takes a
+// MqttBrokerPool& param AND calls offband::wifiObserverPool() internally for
+// live-state reads. On the repeater (no observer pipeline) point that accessor
+// at the SAME pool this adapter drives, so `mqtt status` / `set mqtt.broker.N.*`
+// operate on the repeater's brokers. The observer defines its own
+// wifiObserverPool() elsewhere; repeater builds never define OFFBAND_OBSERVER,
+// so there is no double-definition.
+MqttBrokerPool& wifiObserverPool() { return thePool(); }
+#endif
+
 }  // namespace offband
 
 #ifdef ARDUINO

@@ -39,6 +39,7 @@ const uint32_t RemoteCommandHandler::kRateLimitMs[kRateLimitSlots] = {
     60 * 1000,       // WIFI_KEEPALIVE    - 1 min
     60 * 1000,       // REBOOT            - 1 min
     30 * 1000,       // SAFETY_LOG_DUMP   - 30 sec (read-only, lighter rate-limit)
+    1000,            // CLI (#538)        - 1 sec; allows a config sequence, blocks flooding
 };
 
 // ---------------------------------------------------------------------------
@@ -71,6 +72,7 @@ static RemoteCmd parseActionString(const char* s)
     if (strcmp(s, "wifi_keepalive")  == 0) return RemoteCmd::WIFI_KEEPALIVE;
     if (strcmp(s, "reboot")          == 0) return RemoteCmd::REBOOT;
     if (strcmp(s, "safety_log_dump") == 0) return RemoteCmd::SAFETY_LOG_DUMP;
+    if (strcmp(s, "cli")             == 0) return RemoteCmd::CLI;
     return RemoteCmd::UNKNOWN;
 }
 
@@ -83,6 +85,7 @@ static const char* actionToString(RemoteCmd a)
         case RemoteCmd::WIFI_KEEPALIVE:  return "wifi_keepalive";
         case RemoteCmd::REBOOT:          return "reboot";
         case RemoteCmd::SAFETY_LOG_DUMP: return "safety_log_dump";
+        case RemoteCmd::CLI:             return "cli";
         default:                         return "unknown";
     }
 }
@@ -237,6 +240,19 @@ bool RemoteCommandHandler::parseFromJson(JsonObject cmd_obj, RemoteCommandReques
     } else if (!cmd_obj["window_sec"].isNull()) {
         out.window_sec = cmd_obj["window_sec"].as<unsigned long>();
     }
+
+    // #538: CLI line for RemoteCmd::CLI -- prefer params.cmd, fall back to a
+    // top-level cmd for flattened senders. Empty for every other action.
+    out.cli_cmd[0] = '\0';
+    const char* cli = nullptr;
+    if (!params.isNull() && params.is<JsonObject>()) {
+        cli = params.as<JsonObject>()["cmd"];
+    }
+    if (cli == nullptr) cli = cmd_obj["cmd"];
+    if (cli != nullptr) {
+        strncpy(out.cli_cmd, cli, sizeof(out.cli_cmd) - 1);
+        out.cli_cmd[sizeof(out.cli_cmd) - 1] = '\0';
+    }
     return true;
 }
 
@@ -292,6 +308,14 @@ bool RemoteCommandHandler::parse(const uint8_t* payload, size_t len,
     // clamping in onMessage().
     uint32_t window_default = 600;
     out.window_sec = doc["window_sec"] | window_default;
+
+    // #538: CLI line for RemoteCmd::CLI (flat MQTT shape). Empty otherwise.
+    out.cli_cmd[0] = '\0';
+    const char* cli = doc["cmd"];
+    if (cli != nullptr) {
+        strncpy(out.cli_cmd, cli, sizeof(out.cli_cmd) - 1);
+        out.cli_cmd[sizeof(out.cli_cmd) - 1] = '\0';
+    }
 
     // auth not extracted here - re-extracted in onMessage for the
     // constant-time compare. Keeping the auth handling localized makes
@@ -464,6 +488,42 @@ void RemoteCommandHandler::dispatch(const RemoteCommandRequest& req,
             strcpy(data_json, "{}");
         } else {
             strcpy(message, "Safety log dump");
+        }
+        break;
+    }
+    case RemoteCmd::CLI: {
+        // #538: run the CLI line (post-auth) via the callback -> MyMesh::
+        // handleCommand -> the broker-config CLI. The reply may contain newlines
+        // and quotes, so it goes into `data.reply` through ArduinoJson (RFC-8259
+        // escaped), exactly like SAFETY_LOG_DUMP; `message` stays a short,
+        // control-char-free summary (it is snprintf'd UNescaped below).
+        if (req.cli_cmd[0] == '\0') {
+            action_ok = false;
+            strcpy(status_str, "error");
+            strcpy(message, "cli: empty command");
+            break;
+        }
+        static char cli_reply[1024];   // static (BSS): loopTask stack budget, #206
+        cli_reply[0] = '\0';
+        if (!_callbacks.runCli(req.cli_cmd, cli_reply, sizeof(cli_reply))) {
+            action_ok = false;
+            strcpy(status_str, "error");
+            strcpy(message, "cli: not available on this build");
+            break;
+        }
+        bool truncated = false;
+        if (strlen(cli_reply) > 400) { cli_reply[400] = '\0'; truncated = true; }
+        JsonDocument doc;
+        doc["reply"] = cli_reply;
+        if (truncated) doc["truncated"] = true;
+        size_t n = serializeJson(doc, data_json, sizeof(data_json));
+        if (n == 0) {
+            action_ok = false;
+            strcpy(status_str, "error");
+            strcpy(message, "cli reply serialization overflowed");
+            strcpy(data_json, "{}");
+        } else {
+            strcpy(message, "cli executed");
         }
         break;
     }
