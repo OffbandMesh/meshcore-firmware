@@ -305,7 +305,19 @@ Scrutinize: offset 295 append correctness (read==write order); the `loop()` mode
 hoist in `begin()` doesn't read a null pointer; DISPLAY_CLASS guard covers every arm. Fix or justify
 every finding.
 
-- [ ] **Step 3: Hardware verify on hv4-bench-1 (Tier-2 flash — explicit per-flash owner GO)**
+- [x] **Step 3: Hardware verify on hv4-bench-1 — DONE, PASSED 2026-08-03**
+
+Verified on hv4-bench-1 (Heltec V4.3 repeater, A2 build sha `ccb2e018`, owner-authorized flash):
+- boot → `display` = `auto`, OLED lit then blanks (default preserved)
+- `display always on` → OLED stays lit past 20 s (owner-confirmed "still lit")
+- `display always off` → OLED goes dark; **button press does NOT wake it** (owner-confirmed the deliberate design)
+- **reboot → `display` = `always off`, OLED stays dark through boot** (persistence)
+- `display auto` → OLED **relights** then blanks on timer (owner-confirmed — the always-off→auto transition Gemini caught the stuck-dark bug on; fix verified on hardware)
+
+Two Gemini-found MAJOR transition bugs (always_on→auto stale-timer, always_off→auto stuck-dark) were
+fixed with `_last_disp_mode` transition detection and confirmed both by Gemini re-review and on-device.
+
+- [ ] ~~**Step 3 (original): Hardware verify on hv4-bench-1 (Tier-2 flash — explicit per-flash owner GO)**~~
 
 Round-trip (stage `preview`, get owner GO naming the device, `confirm`):
 - `display` → `auto`; screen lit, blanks after ~20 s (observe)
