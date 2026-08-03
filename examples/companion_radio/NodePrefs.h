@@ -68,6 +68,10 @@ struct NodePrefs {  // persisted to file
   // escape hatch and must never be user-remappable, or a bad assignment can leave a
   // board unrecoverable.
   uint8_t button_actions[4];
+  // #542: status/traffic LED enable (1 = normal, 0 = suppressed). Default 1 (ON).
+  // Serialized LAST in DataStore (offset 145), append-only, same reason as the fields
+  // above: the prefs file is a flat offset-tracked stream with no version/CRC.
+  uint8_t ui_led_enabled;
 };
 
 // #509: button-sequence indices. Order is the press count, so the array index IS the
