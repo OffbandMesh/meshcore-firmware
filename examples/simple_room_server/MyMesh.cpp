@@ -644,6 +644,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _prefs.cr = LORA_CR;
   _prefs.tx_power_dbm = LORA_TX_POWER;
   _prefs.ui_led_enabled = 1;   // #542 default: LED on (set before loadPrefs)
+  _prefs.ui_display_mode = DISPLAY_MODE_AUTO;   // #542 A2 default: today's on-with-timeout
   _prefs.disable_fwd = 1;
   _prefs.advert_interval = 1;        // default to 2 minutes for NEW installs
   _prefs.flood_advert_interval = 47; // 47 hours

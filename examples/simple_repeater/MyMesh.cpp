@@ -943,6 +943,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   // External FEM LNA enabled by default (boards without controllable FEM ignore this).
   _prefs.radio_fem_rxgain = 1;
   _prefs.ui_led_enabled = 1;   // #542 default: LED on (set before loadPrefs so old blobs default on)
+  _prefs.ui_display_mode = DISPLAY_MODE_AUTO;   // #542 A2 default: today's on-with-timeout
 
   pending_discover_tag = 0;
   pending_discover_until = 0;
