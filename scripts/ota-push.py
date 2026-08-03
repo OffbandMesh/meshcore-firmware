@@ -77,7 +77,17 @@ except ImportError:
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY_PATH = PROJECT_ROOT / "hardware-devices.yaml"
 FLASH_HISTORY_PATH = PROJECT_ROOT / "flash-history.jsonl"
-SECRETS_PATH = PROJECT_ROOT / "meshcore-firmware" / "platformio.local.ini"
+# Secrets source. LoRa#209 moved secrets out of a co-located (and now
+# deprecated) platformio.local.ini into a canonical file the BUILD reads via
+# `extra_configs = ${sysenv.PIO_SECRETS_FILE}` (see platformio.ini). ota-push
+# must read the SAME file, or it resolves stale/absent credentials. The prior
+# value (PROJECT_ROOT / "meshcore-firmware" / "platformio.local.ini") assumed
+# the pre-migration nested layout AND the deprecated filename -- doubly wrong
+# after the OffbandMesh cutover, so every OTA push refused. Prefer the env var
+# (single source of truth with the build); fall back to the legacy in-repo path
+# only when it is unset, so a mis-configured host gets a clear message.
+_PIO_SECRETS_FILE = os.environ.get("PIO_SECRETS_FILE", "").strip()
+SECRETS_PATH = Path(_PIO_SECRETS_FILE) if _PIO_SECRETS_FILE else (PROJECT_ROOT / "platformio.local.ini")
 
 # Default timeouts. Generous; tunable per-call.
 DEFAULT_UPLOAD_TIMEOUT_SEC = 180     # curl-equivalent ceiling
@@ -273,7 +283,12 @@ def log_history(entry: dict) -> None:
 # log. Source of truth is the embedded XWIRE marker blob in the firmware
 # binary; git is the fallback for pre-#200 builds. See
 # scripts/firmware_identity.py for the orchestration / fallback policy.
-FIRMWARE_DIR = PROJECT_ROOT / "meshcore-firmware"
+# Post-migration the repo root IS the firmware source tree (the pre-cutover
+# nested "meshcore-firmware/" subdir no longer exists). Used only for the
+# git-fallback identity path (offband binaries carry #200 markers, so this is
+# rarely hit); a stale path here degrades identity to "unknown" rather than
+# failing, but point it at the real tree regardless.
+FIRMWARE_DIR = PROJECT_ROOT
 
 
 # ---------------------------------------------------------------------------
