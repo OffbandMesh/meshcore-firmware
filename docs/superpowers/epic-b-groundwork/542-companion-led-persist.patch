@@ -1,0 +1,60 @@
+diff --git a/examples/companion_radio/DataStore.cpp b/examples/companion_radio/DataStore.cpp
+index df7a19df..96558156 100644
+--- a/examples/companion_radio/DataStore.cpp
++++ b/examples/companion_radio/DataStore.cpp
+@@ -261,6 +261,9 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
+     // #509: button-action matrix, APPEND-ONLY after notify_scope (offsets 141..144).
+     // Short-reads to EOF on pre-#509 files, leaving the caller-set defaults.
+     file.read((uint8_t *)_prefs.button_actions, sizeof(_prefs.button_actions));           // 141
++    // #542: LED enable, APPEND-ONLY after button_actions. Short-reads to EOF on older
++    // files, leaving the caller-set default (ui_led_enabled = 1).
++    file.read((uint8_t *)&_prefs.ui_led_enabled, sizeof(_prefs.ui_led_enabled));          // 145
+ 
+     file.close();
+   }
+@@ -312,6 +315,7 @@ void DataStore::savePrefs(const NodePrefs& _prefs, double node_lat, double node_
+     file.write((uint8_t *)&_prefs.notify_scope, sizeof(_prefs.notify_scope));             // 140
+     // #509: button-action matrix, APPEND-ONLY -- mirror of the read order. (141..144)
+     file.write((uint8_t *)_prefs.button_actions, sizeof(_prefs.button_actions));           // 141
++    file.write((uint8_t *)&_prefs.ui_led_enabled, sizeof(_prefs.ui_led_enabled));          // 145 (#542)
+ 
+     file.close();
+   }
+diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
+index b95a486a..23467a2a 100644
+--- a/examples/companion_radio/MyMesh.cpp
++++ b/examples/companion_radio/MyMesh.cpp
+@@ -1258,6 +1258,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
+   // (before loadPrefs) so a prefs file written before the field existed short-reads to
+   // EOF and leaves this default in place. No-op on boards without a controllable FEM.
+   _prefs.radio_fem_rxgain = 1;
++  _prefs.ui_led_enabled = 1;   // #542 default: LED on (set before loadPrefs; old blobs short-read to default)
+ 
+   // #510: notification scope. Default ALL = today's behaviour. Set BEFORE loadPrefs for
+   // the same reason as caplog below: a prefs file written before this field existed
+@@ -1405,6 +1406,10 @@ void MyMesh::begin(bool has_display) {
+   if (board.canControlLoRaFemLna()) {
+     board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain != 0);
+   }
++  // #542: apply persisted LED enable. No-op on boards without a controllable LED.
++  if (board.canControlLed()) {
++    board.setLedEnabled(_prefs.ui_led_enabled != 0);
++  }
+ }
+ 
+ const char *MyMesh::getNodeName() {
+diff --git a/examples/companion_radio/NodePrefs.h b/examples/companion_radio/NodePrefs.h
+index 1e3f18e9..5edf9b1b 100644
+--- a/examples/companion_radio/NodePrefs.h
++++ b/examples/companion_radio/NodePrefs.h
+@@ -68,6 +68,10 @@ struct NodePrefs {  // persisted to file
+   // escape hatch and must never be user-remappable, or a bad assignment can leave a
+   // board unrecoverable.
+   uint8_t button_actions[4];
++  // #542: status/traffic LED enable (1 = normal, 0 = suppressed). Default 1 (ON).
++  // Serialized LAST in DataStore (offset 145), append-only, same reason as the fields
++  // above: the prefs file is a flat offset-tracked stream with no version/CRC.
++  uint8_t ui_led_enabled;
+ };
+ 
+ // #509: button-sequence indices. Order is the press count, so the array index IS the

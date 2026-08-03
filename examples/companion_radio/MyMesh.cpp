@@ -1258,7 +1258,6 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   // (before loadPrefs) so a prefs file written before the field existed short-reads to
   // EOF and leaves this default in place. No-op on boards without a controllable FEM.
   _prefs.radio_fem_rxgain = 1;
-  _prefs.ui_led_enabled = 1;   // #542 default: LED on (set before loadPrefs; old blobs short-read to default)
 
   // #510: notification scope. Default ALL = today's behaviour. Set BEFORE loadPrefs for
   // the same reason as caplog below: a prefs file written before this field existed
@@ -1405,10 +1404,6 @@ void MyMesh::begin(bool has_display) {
   // which needs a matching client change; until that ships the pref stays at its default.
   if (board.canControlLoRaFemLna()) {
     board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain != 0);
-  }
-  // #542: apply persisted LED enable. No-op on boards without a controllable LED.
-  if (board.canControlLed()) {
-    board.setLedEnabled(_prefs.ui_led_enabled != 0);
   }
 }
 

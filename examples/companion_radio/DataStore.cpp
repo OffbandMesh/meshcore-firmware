@@ -261,9 +261,6 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
     // #509: button-action matrix, APPEND-ONLY after notify_scope (offsets 141..144).
     // Short-reads to EOF on pre-#509 files, leaving the caller-set defaults.
     file.read((uint8_t *)_prefs.button_actions, sizeof(_prefs.button_actions));           // 141
-    // #542: LED enable, APPEND-ONLY after button_actions. Short-reads to EOF on older
-    // files, leaving the caller-set default (ui_led_enabled = 1).
-    file.read((uint8_t *)&_prefs.ui_led_enabled, sizeof(_prefs.ui_led_enabled));          // 145
 
     file.close();
   }
@@ -315,7 +312,6 @@ void DataStore::savePrefs(const NodePrefs& _prefs, double node_lat, double node_
     file.write((uint8_t *)&_prefs.notify_scope, sizeof(_prefs.notify_scope));             // 140
     // #509: button-action matrix, APPEND-ONLY -- mirror of the read order. (141..144)
     file.write((uint8_t *)_prefs.button_actions, sizeof(_prefs.button_actions));           // 141
-    file.write((uint8_t *)&_prefs.ui_led_enabled, sizeof(_prefs.ui_led_enabled));          // 145 (#542)
 
     file.close();
   }
