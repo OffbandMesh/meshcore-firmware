@@ -693,8 +693,15 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 
   _node_prefs = node_prefs;
 
+  // #542 B1: seed the display mode from prefs and set the boot state accordingly.
+  _disp_mode = (_node_prefs != NULL) ? _node_prefs->ui_display_mode : 0;
+  _always_on = (_disp_mode == 1);
   if (_display != NULL) {
-    _display->turnOn();
+    if (_disp_mode == 2) {
+      _display->turnOff();   // always-off: boot dark
+    } else {
+      _display->turnOn();
+    }
   }
 
 #ifdef PIN_BUZZER
@@ -718,13 +725,23 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 
 // #141: display always-on toggle. Persisted in NVS (offband_ui); applied here
 // live by the observer CLI (and at boot) via the applier registered in main.cpp.
+// #542 B1: reconciled onto the tristate — always-on is mode 1, normal is mode 0 (auto).
 void UITask::setAlwaysOn(bool on) {
-  _always_on = on;
+  setDisplayMode(on ? 1 : 0);
+}
+
+// #542 B1: OLED mode. 0 auto (on, blanks after timeout), 1 always-on, 2 always-off (dark).
+// Applied live; the loop's blank decision honours _disp_mode. Reused by the observer
+// #141 applier (via setAlwaysOn above) and the 0xC5 display SET sub-code.
+void UITask::setDisplayMode(uint8_t mode) {
+  _disp_mode = mode;
+  _always_on = (mode == 1);
   if (_display == NULL) return;
-  if (on) {
-    if (!_display->isOn()) _display->turnOn();   // light it now; the loop's auto-off is gated on _always_on
+  if (mode == 2) {
+    if (_display->isOn()) _display->turnOff();     // always-off: dark now, stays dark
   } else {
-    _auto_off = millis() + AUTO_OFF_MILLIS;      // resume the normal timeout from now (no abrupt blank)
+    if (!_display->isOn()) _display->turnOn();      // auto / always-on: light it now
+    _auto_off = millis() + AUTO_OFF_MILLIS;         // fresh timeout (no abrupt blank)
   }
 }
 
@@ -788,7 +805,7 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   setCurrScreen(msg_preview);
 
   if (_display != NULL) {
-    if (!_display->isOn() && !hasConnection()) {
+    if (!_display->isOn() && !hasConnection() && _disp_mode != 2) {  // #542 B1: not in always-off
 #ifdef OFFBAND_OBSERVER
       offband::crashLogf("[ui] newMsg: display off + no conn -> turnOn");
 #endif
@@ -1001,7 +1018,9 @@ void UITask::loop() {
       _auto_off = millis() + AUTO_OFF_MILLIS;
     }
 #endif
-    if (!_always_on && millis() > _auto_off) {   // #141: always-on skips the auto-blank (+ KEEP_DISPLAY_ON_USB above)
+    // #542 B1: mode 2 (always-off) enforces dark every loop — self-corrects any relight.
+    // #141: always-on (mode 1) skips the auto-blank; auto (mode 0) blanks on timeout.
+    if (_disp_mode == 2 || (!_always_on && millis() > _auto_off)) {
       _display->turnOff();
     }
 #endif
@@ -1037,7 +1056,7 @@ void UITask::loop() {
 
 char UITask::checkDisplayOn(char c) {
   if (_display != NULL) {
-    if (!_display->isOn()) {
+    if (!_display->isOn() && _disp_mode != 2) {   // #542 B1: button does not wake a deliberately-off screen
       _display->turnOn();   // turn display on and consume event
       c = 0;
     }
