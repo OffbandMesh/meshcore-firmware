@@ -70,11 +70,19 @@ void MqttBrokerPool::begin(const mesh::LocalIdentity& identity,
     // Initialize each configured slot. begin() stores config always and
     // creates a live client ONLY if the slot is enabled (#53); disabled or
     // url-empty slots stay client-less.
+    //
+    // #534: TLS/wss slots additionally pass the pool's ALLOCATION admission.
+    // The metric is clients already ALLOCATED (tlsClientsAllocated()), not
+    // connections live -- at boot nothing is Up/Connecting yet, so a live-based
+    // check would admit every slot and allocate a client for each, which is the
+    // deadlock this fixes. Surplus TLS slots stay configured-but-client-less and
+    // are promoted later by the re-drive's reconcileSlot() path.
     for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
         BrokerConfig cfg;
         if (!readBrokerConfig(slot, cfg)) continue;
         if (cfg.url[0] == '\0') continue;  // skip unused slots
-        brokers_[slot].begin(slot, cfg, identity);
+        brokers_[slot].begin(slot, cfg, identity,
+                             tlsClientsAllocated() < OFFBAND_MAX_LIVE_TLS);
     }
 
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
@@ -379,12 +387,35 @@ void MqttBrokerPool::reconcileSlot(uint8_t slot) {
     // rt_.state as evidence. begin() returns false on bad auth / client-init OOM;
     // a DISABLED slot returns true with no client (expected, not a failure).
     // URL is omitted from the log -- a broker URL may carry inline credentials.
-    if (!brokers_[slot].begin(slot, cfg, *identity_) && cfg.enabled) {
+    // #534: allocation admission. This slot's own client (if any) is destroyed by
+    // begin()'s shutdown() before reallocation, so exclude it from the count --
+    // otherwise a plain reload of an already-allocated slot would count itself
+    // and refuse to re-allocate.
+    const bool may_alloc =
+        (tlsClientsAllocated() - (brokers_[slot].hasClient() ? 1u : 0u))
+            < OFFBAND_MAX_LIVE_TLS;
+    if (!brokers_[slot].begin(slot, cfg, *identity_, may_alloc) && cfg.enabled) {
         crashLogf("[pool] reconcileSlot %u begin FAILED state=%d err_class=%d",
                   (unsigned)slot,
                   (int)brokers_[slot].runtime().state,
                   (int)brokers_[slot].runtime().last_error_class);
     }
+}
+
+// #534: count TLS/wss brokers holding an allocated esp_mqtt client. See the
+// header for why allocation admission counts CLIENTS, not live connections.
+uint8_t MqttBrokerPool::tlsClientsAllocated() const {
+    uint8_t n = 0;
+    for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
+        const MqttBroker& b = brokers_[s];
+        if (!b.isConfigured()) continue;
+        const BrokerConfig& c = b.config();
+        if ((c.transport == BrokerTransport::Tls ||
+             c.transport == BrokerTransport::Wss) && b.hasClient()) {
+            n++;
+        }
+    }
+    return n;
 }
 
 namespace {
