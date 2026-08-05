@@ -19,7 +19,7 @@
 // bumps the code even without a frame-layout change -- 17 was "+ caplog cap bit
 // (0x20)", 16 was "FEM LNA cap 0x04 / 0xC3". This change sets caps2 bit 0x01 and adds
 // the 0xC5 command, so it follows the same rule.
-#define FIRMWARE_VER_CODE 20   // #509: + caps2 bit 0x02 BUTTON_MATRIX (gated on PIN_USER_BTN). Prior 19 (#510): caps2 bit 0x01 NOTIFY_SCOPE + 0xC5. Prior 18 (#508): second caps byte at offset 84
+#define FIRMWARE_VER_CODE 21   // #542: + caps2 bit 0x04 INDICATORS + 0xC5 led/display sub-codes + led/display state in device-info. Prior 20 (#509): caps2 0x02 BUTTON_MATRIX. Prior 19 (#510): caps2 0x01 NOTIFY_SCOPE + 0xC5. Prior 18 (#508): second caps byte at offset 84
 
 #ifndef FIRMWARE_BUILD_DATE
 #define FIRMWARE_BUILD_DATE "6 Jun 2026"
