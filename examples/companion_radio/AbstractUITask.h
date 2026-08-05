@@ -53,5 +53,9 @@ public:
   // Non-pure with a no-op default: implementations without a buzzer inherit the
   // default and are unaffected.
   virtual void applyBuzzerMute(bool quiet) { (void)quiet; }
+  // #542 B1: OLED mode (0 auto, 1 always-on, 2 always-off). No-op default: UIs
+  // without a controllable display inherit it and are unaffected. Applied live from
+  // the 0xC5 display SET sub-code and at boot.
+  virtual void setDisplayMode(uint8_t mode) { (void)mode; }
   virtual void loop() = 0;
 };

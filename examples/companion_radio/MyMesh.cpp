@@ -1258,6 +1258,8 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   // (before loadPrefs) so a prefs file written before the field existed short-reads to
   // EOF and leaves this default in place. No-op on boards without a controllable FEM.
   _prefs.radio_fem_rxgain = 1;
+  _prefs.ui_led_enabled = 1;    // #542 B1 default: LED on (set before loadPrefs)
+  _prefs.ui_display_mode = 0;   // #542 B1 default: display auto
 
   // #510: notification scope. Default ALL = today's behaviour. Set BEFORE loadPrefs for
   // the same reason as caplog below: a prefs file written before this field existed
@@ -1404,6 +1406,11 @@ void MyMesh::begin(bool has_display) {
   // which needs a matching client change; until that ships the pref stays at its default.
   if (board.canControlLoRaFemLna()) {
     board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain != 0);
+  }
+  // #542 B1: apply persisted LED enable. No-op on boards without a controllable LED.
+  // (Display mode is applied by ui_task.begin(), which reads the pref directly.)
+  if (board.canControlLed()) {
+    board.setLedEnabled(_prefs.ui_led_enabled != 0);
   }
 }
 
@@ -1833,6 +1840,11 @@ void MyMesh::handleCmdFrame(size_t len) {
                                 sub == offband::OFFBAND_UI_SCOPE_SET);
     const bool is_matrix_sub = (sub == offband::OFFBAND_UI_MATRIX_GET ||
                                 sub == offband::OFFBAND_UI_MATRIX_SET);
+    // #542 B1: indicator sub-codes, gated on their own capability (not the buzzer).
+    const bool is_display_sub = (sub == offband::OFFBAND_UI_DISPLAY_GET ||
+                                 sub == offband::OFFBAND_UI_DISPLAY_SET);
+    const bool is_led_sub     = (sub == offband::OFFBAND_UI_LED_GET ||
+                                 sub == offband::OFFBAND_UI_LED_SET);
 #ifndef PIN_BUZZER
     if (is_scope_sub) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
@@ -1851,7 +1863,26 @@ void MyMesh::handleCmdFrame(size_t len) {
       return;
     }
 #endif
-    (void)is_scope_sub; (void)is_matrix_sub;
+    // #542 B1: display needs a display (compile-time DISPLAY_CLASS); led needs a
+    // controllable LED (runtime, like FEM LNA). Same NO_BUZZER-style typed error so
+    // the client shows WHY, not a bare illegal-arg.
+#ifndef DISPLAY_CLASS
+    if (is_display_sub) {
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = offband::OFFBAND_UI_ERR;
+      out_frame[2] = offband::OFFBAND_UI_ERR_UNSUPPORTED_INDICATOR;
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
+#endif
+    if (is_led_sub && !board.canControlLed()) {
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = offband::OFFBAND_UI_ERR;
+      out_frame[2] = offband::OFFBAND_UI_ERR_UNSUPPORTED_INDICATOR;
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
+    (void)is_scope_sub; (void)is_matrix_sub; (void)is_display_sub; (void)is_led_sub;
 {
     if (sub == offband::OFFBAND_UI_SCOPE_GET) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
@@ -1969,6 +2000,57 @@ void MyMesh::handleCmdFrame(size_t len) {
       _serial->writeFrame(out_frame, 4);
       return;
     }
+    // #542 B1: OLED mode (0 auto, 1 always-on, 2 always-off). Gated above on DISPLAY_CLASS.
+    if (sub == offband::OFFBAND_UI_DISPLAY_GET) {
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = _prefs.ui_display_mode;
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
+    if (sub == offband::OFFBAND_UI_DISPLAY_SET && len >= 3) {
+      uint8_t want = cmd_frame[2];
+      if (want > 2) {
+        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+        out_frame[1] = offband::OFFBAND_UI_ERR;
+        out_frame[2] = offband::OFFBAND_UI_ERR_MALFORMED;
+        _serial->writeFrame(out_frame, 3);
+        return;
+      }
+      // Persist only on a real change -- a client control bound to onChange can emit a
+      // SET burst; an unconditional savePrefs() would put that burst on flash.
+      if (_prefs.ui_display_mode != want) {
+        _prefs.ui_display_mode = want;
+        savePrefs();
+      }
+      if (_ui) _ui->setDisplayMode(want);   // apply live
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = _prefs.ui_display_mode;   // echo stored value
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
+    // #542 B1: status/traffic LED. Gated above on board.canControlLed().
+    if (sub == offband::OFFBAND_UI_LED_GET) {
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = _prefs.ui_led_enabled ? 1 : 0;
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
+    if (sub == offband::OFFBAND_UI_LED_SET && len >= 3) {
+      uint8_t want = cmd_frame[2] ? 1 : 0;
+      if (_prefs.ui_led_enabled != want) {
+        _prefs.ui_led_enabled = want;
+        savePrefs();
+      }
+      board.setLedEnabled(want != 0);   // apply live
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = _prefs.ui_led_enabled ? 1 : 0;
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
     // Unknown sub-code -> typed error, never a silent fall-through.
     out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
     out_frame[1] = offband::OFFBAND_UI_ERR;
@@ -2074,7 +2156,19 @@ void MyMesh::handleCmdFrame(size_t len) {
     // board may have either without the other.
     offband_caps2 |= offband::OFFBAND_CAP2_BUTTON_MATRIX;
 #endif
+    // #542 B1: led/display indicator control. DISPLAY_CLASS boards always advertise it
+    // (they have an OLED); non-display boards advertise it only if the LED is controllable.
+    // Independent of NOTIFY_SCOPE so a buzzer-less display board still gets the control.
+#ifdef DISPLAY_CLASS
+    offband_caps2 |= offband::OFFBAND_CAP2_INDICATORS;
+#else
+    if (board.canControlLed()) offband_caps2 |= offband::OFFBAND_CAP2_INDICATORS;
+#endif
     out_frame[i++] = offband_caps2;          // v18+
+    // #542 B1: current indicator state, so the client renders the toggles on connect
+    // with no extra GET round-trip (the FEM-LNA precedent). Appended UNCONDITIONALLY.
+    out_frame[i++] = _prefs.ui_led_enabled;   // v21+
+    out_frame[i++] = _prefs.ui_display_mode;  // v21+
     _serial->writeFrame(out_frame, i);
   } else if (cmd_frame[0] == CMD_APP_START &&
              len >= 8) { // sent when app establishes connection, respond with node ID
