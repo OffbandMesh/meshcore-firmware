@@ -72,6 +72,13 @@ struct NodePrefs { // persisted to file
   // #542 A2: OLED mode. 0 = auto (on, blanks after timeout — default/today), 1 = always on
   // (no blank), 2 = always off (dark). Only meaningful on builds with a DISPLAY_CLASS.
   uint8_t ui_display_mode;
+  // #562: caplog (MeshLog capture) persistence -- common across all CommonCLI
+  // roles (repeater / observer / room-server / sensor). Append-only at the END
+  // of the prefs layout. Defaulted in CommonCLI::loadPrefs() (not in-class, to
+  // keep NodePrefs an aggregate) so a role that never loads a prefs file, and an
+  // old file predating these fields, both get the common default (OFF, DEBUG).
+  uint8_t caplog_enabled; // 0 = off (default), 1 = on
+  uint8_t caplog_level;   // MLOG_* level; capture lines with level <= this
 };
 
 // #542 A2: values for NodePrefs::ui_display_mode.

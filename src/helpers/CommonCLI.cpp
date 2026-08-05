@@ -100,6 +100,9 @@ extern "C" {
   void wifi_telemetry_set_persistent(uint32_t duration_ms);
   int  wifi_telemetry_is_persistent(void);
   uint32_t wifi_telemetry_persistent_remaining_ms(void);
+#ifdef WIFI_SYSLOG_HOST
+  void wifi_telemetry_caplog_forward(uint32_t window_sec);  // #561 live syslog forward
+#endif
 #ifdef CMD_TRANSPORT_HTTP
   // LoRa#216: HTTP cmd-poll controls
   void     wifi_telemetry_cmd_poll_now(void);
@@ -128,6 +131,11 @@ static bool isValidName(const char *n) {
 }
 
 void CommonCLI::loadPrefs(FILESYSTEM* fs) {
+  // #562: common caplog defaults, set before any file load. An old prefs file
+  // predating these fields short-reads to EOF in loadPrefsInt and leaves these
+  // intact; a fresh node with no prefs file keeps them too.
+  _prefs->caplog_enabled = 0;
+  _prefs->caplog_level = MLOG_DEBUG;
   if (fs->exists("/com_prefs")) {
     loadPrefsInt(fs, "/com_prefs");   // new filename
   } else if (fs->exists("/node_prefs")) {
@@ -194,7 +202,9 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *)&_prefs->flood_max_advert, sizeof(_prefs->flood_max_advert));            // 293
     file.read((uint8_t *)&_prefs->ui_led_enabled, sizeof(_prefs->ui_led_enabled));                // 294
     file.read((uint8_t *)&_prefs->ui_display_mode, sizeof(_prefs->ui_display_mode));              // 295
-    // next: 296
+    file.read((uint8_t *)&_prefs->caplog_enabled, sizeof(_prefs->caplog_enabled));                // 296  (#562)
+    file.read((uint8_t *)&_prefs->caplog_level, sizeof(_prefs->caplog_level));                    // 297  (#562)
+    // next: 298
     // NOTE: radio_fem_rxgain stays at offset 291 (its pre-1.16 offset) so existing Offband prefs
     // files survive the 1.16.0 base-update; the new upstream flood fields append after it. For old
     // SPIFFS files predating a field, file.read returns 0 bytes and the field keeps its in-memory
@@ -231,6 +241,14 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     _prefs->radio_fem_rxgain = constrain(_prefs->radio_fem_rxgain, 0, 1); // boolean
     _prefs->ui_led_enabled = constrain(_prefs->ui_led_enabled, 0, 1); // boolean (#542)
     _prefs->ui_display_mode = constrain(_prefs->ui_display_mode, 0, 2); // #542 A2 tristate
+    _prefs->caplog_enabled = constrain(_prefs->caplog_enabled, 0, 1);       // #562 boolean
+    _prefs->caplog_level = constrain(_prefs->caplog_level, 0, MLOG_PACKET); // #562 level bound
+
+    // #562: apply persisted caplog state at boot (common across roles). Capture
+    // is independent of the serial mirror, so this is safe on a USB-serial
+    // companion too.
+    meshLogSetLevel(_prefs->caplog_level);
+    meshLogSetEnabled(_prefs->caplog_enabled != 0);
 
     file.close();
   }
@@ -297,7 +315,9 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)&_prefs->flood_max_advert, sizeof(_prefs->flood_max_advert));           // 293
     file.write((uint8_t *)&_prefs->ui_led_enabled, sizeof(_prefs->ui_led_enabled));               // 294
     file.write((uint8_t *)&_prefs->ui_display_mode, sizeof(_prefs->ui_display_mode));             // 295
-    // next: 296
+    file.write((uint8_t *)&_prefs->caplog_enabled, sizeof(_prefs->caplog_enabled));              // 296  (#562)
+    file.write((uint8_t *)&_prefs->caplog_level, sizeof(_prefs->caplog_level));                  // 297  (#562)
+    // next: 298
 
     file.close();
   }
@@ -834,10 +854,38 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       } else {
         meshLogSetLevel(lvl);
         meshLogSetEnabled(true);
+        _prefs->caplog_level = lvl;        // #562: persist so capture survives reboot
+        _prefs->caplog_enabled = 1;
+        savePrefs();
         snprintf(reply, 160, "caplog on (level %s)", meshLogLevelName(lvl));
       }
+    } else if (memcmp(command, "caplog forward", 14) == 0 && (command[14] == 0 || command[14] == ' ')) {
+      // #561: live syslog forward -- stream captured lines off-device during a
+      // bounded window (survives a reboot the RAM ring cannot). Telemetry-only.
+#if defined(ENABLE_WIFI_TELEMETRY) && defined(WIFI_SYSLOG_HOST)
+      const char* arg = (command[14] == ' ') ? &command[15] : "";
+      if (memcmp(arg, "off", 3) == 0) {
+        wifi_telemetry_caplog_forward(0);
+        meshLogSetEnabled(false);
+        _prefs->caplog_enabled = 0;
+        savePrefs();
+        strcpy(reply, "caplog forward off");
+      } else {
+        uint32_t sec = (*arg) ? (uint32_t)_atoi(arg) : 300;   // bare -> 5 min default
+        if (sec < 30) sec = 30;                                // floor: focused test
+        meshLogSetEnabled(true);
+        _prefs->caplog_enabled = 1;
+        savePrefs();
+        wifi_telemetry_caplog_forward(sec);
+        snprintf(reply, 160, "caplog forward on %us (streaming to syslog)", (unsigned)sec);
+      }
+#else
+      strcpy(reply, "caplog forward: not available on this build");
+#endif
     } else if (memcmp(command, "caplog stop", 11) == 0 && (command[11] == 0 || command[11] == ' ')) {
       meshLogSetEnabled(false);
+      _prefs->caplog_enabled = 0;          // #562: persist off across reboot
+      savePrefs();
       strcpy(reply, "caplog off");
     } else if (memcmp(command, "caplog erase", 12) == 0 && (command[12] == 0 || command[12] == ' ')) {
       meshLogClear();

@@ -36,6 +36,14 @@ public:
   // The offset lets the download path stream the buffer in chunks.
   size_t snapshot(uint8_t* out, size_t out_cap, size_t offset = 0) const;
 
+  // #561: copy oldest WHOLE lines that fit in out_cap into out (oldest-first)
+  // and REMOVE them from the ring; returns bytes copied. Unlike snapshot (a
+  // read-only peek), consume advances past what it returns, so a log forwarder
+  // can drain new lines without tracking offsets across eviction. Always makes
+  // progress — if no '\n' fits within out_cap it takes out_cap bytes — so a
+  // drain loop never stalls.
+  size_t consume(uint8_t* out, size_t out_cap);
+
   // Drop all contents.
   void clear();
 

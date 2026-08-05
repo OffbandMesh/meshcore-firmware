@@ -130,6 +130,67 @@ TEST(CaptureRing, SnapshotOffsetClampsToRemaining) {
   EXPECT_EQ(0, memcmp(out, "lo\n", 3));
 }
 
+// #561: consume() — the forwarder drain. Copies oldest whole lines that fit in
+// out_cap AND removes them, so a drain loop pulls new lines without tracking
+// offsets across eviction.
+TEST(CaptureRing, ConsumeReturnsAndRemovesWholeLines) {
+  uint8_t buf[64];
+  CaptureRing r(buf, sizeof(buf));
+  appendStr(r, "one\ntwo\nthree\n");        // 14 bytes
+  uint8_t out[64];
+  size_t n = r.consume(out, sizeof(out));
+  EXPECT_EQ(14u, n);
+  EXPECT_EQ(0, memcmp(out, "one\ntwo\nthree\n", 14));
+  EXPECT_EQ(0u, r.bytesUsed());              // consumed content is gone
+}
+
+TEST(CaptureRing, ConsumeTakesWholeLinesFittingInCap) {
+  uint8_t buf[64];
+  CaptureRing r(buf, sizeof(buf));
+  appendStr(r, "aaaa\nbbbb\ncccc\n");        // 15 bytes, three 5-byte lines
+  uint8_t out[12];
+  size_t n = r.consume(out, sizeof(out));    // cap 12 -> whole lines up to last '\n' <=12
+  EXPECT_EQ(10u, n);
+  EXPECT_EQ(0, memcmp(out, "aaaa\nbbbb\n", 10));
+  EXPECT_EQ(5u, r.bytesUsed());              // "cccc\n" remains
+  size_t n2 = r.consume(out, sizeof(out));
+  EXPECT_EQ(5u, n2);
+  EXPECT_EQ(0, memcmp(out, "cccc\n", 5));
+  EXPECT_EQ(0u, r.bytesUsed());
+}
+
+TEST(CaptureRing, ConsumeEmptyReturnsZero) {
+  uint8_t buf[16];
+  CaptureRing r(buf, sizeof(buf));
+  uint8_t out[16];
+  EXPECT_EQ(0u, r.consume(out, sizeof(out)));
+}
+
+TEST(CaptureRing, ConsumeThenAppendContinues) {
+  uint8_t buf[64];
+  CaptureRing r(buf, sizeof(buf));
+  uint8_t out[64];
+  appendStr(r, "first\n");
+  EXPECT_EQ(6u, r.consume(out, sizeof(out)));
+  appendStr(r, "second\n");
+  size_t n = r.consume(out, sizeof(out));
+  EXPECT_EQ(7u, n);
+  EXPECT_EQ(0, memcmp(out, "second\n", 7));
+}
+
+// A trailing unterminated line (e.g. a line truncated at MLOG_LINE_MAX) must
+// not stall the drain — consume takes it rather than waiting forever.
+TEST(CaptureRing, ConsumeNoNewlineForcesProgress) {
+  uint8_t buf[16];
+  CaptureRing r(buf, sizeof(buf));
+  appendStr(r, "abc");                       // no newline
+  uint8_t out[16];
+  size_t n = r.consume(out, sizeof(out));
+  EXPECT_EQ(3u, n);
+  EXPECT_EQ(0, memcmp(out, "abc", 3));
+  EXPECT_EQ(0u, r.bytesUsed());
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

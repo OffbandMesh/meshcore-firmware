@@ -70,6 +70,11 @@ size_t meshLogCapacity();
 // bytes in — lets the #396 download stream the buffer in chunks. Returns bytes
 // copied (0 when offset >= bytesUsed()).
 size_t meshLogSnapshot(uint8_t* out, size_t out_cap, size_t offset = 0);
+// #561: drain oldest whole lines into out (removing them from the ring) under
+// the sink lock; returns bytes copied. Lets a main-loop log forwarder pull new
+// lines and ship them off-device (syslog/UDP) without offset-tracking across
+// eviction. Network I/O by the caller happens OUTSIDE this lock.
+size_t meshLogConsume(uint8_t* out, size_t out_cap);
 // Stream the captured buffer to Serial in chunks (local-console `caplog dump`).
 // Best-effort: stop capture first for a clean dump. Framed remote download is #396.
 void   meshLogDumpSerial();
