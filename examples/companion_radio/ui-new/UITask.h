@@ -99,7 +99,7 @@ public:
   // #542 B1: reconciled onto the tristate — setAlwaysOn(on) == setDisplayMode(on ? 1 : 0).
   void setAlwaysOn(bool on);
   // #542 B1: OLED mode. 0 auto (on, blanks after timeout), 1 always-on, 2 always-off (dark).
-  void setDisplayMode(uint8_t mode);
+  void setDisplayMode(uint8_t mode) override;
 
   // #148: request a display rotation (deg 0/180); applied at the next render cycle.
   void requestRotation(uint8_t deg);
