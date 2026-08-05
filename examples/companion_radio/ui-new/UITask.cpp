@@ -727,6 +727,10 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 // live by the observer CLI (and at boot) via the applier registered in main.cpp.
 // #542 B1: reconciled onto the tristate — always-on is mode 1, normal is mode 0 (auto).
 void UITask::setAlwaysOn(bool on) {
+  // #542 B1: the legacy bool cannot express always-off (mode 2). If the user set
+  // always-off explicitly (via the 0xC5 command), a legacy setAlwaysOn(false) must
+  // NOT silently downgrade it to auto -- the newer, more specific control wins.
+  if (_disp_mode == 2) return;
   setDisplayMode(on ? 1 : 0);
 }
 
@@ -741,7 +745,7 @@ void UITask::setDisplayMode(uint8_t mode) {
     if (_display->isOn()) _display->turnOff();     // always-off: dark now, stays dark
   } else {
     if (!_display->isOn()) _display->turnOn();      // auto / always-on: light it now
-    _auto_off = millis() + AUTO_OFF_MILLIS;         // fresh timeout (no abrupt blank)
+    if (mode == 0) _auto_off = millis() + AUTO_OFF_MILLIS;  // fresh timeout only for auto (always-on never blanks)
   }
 }
 
