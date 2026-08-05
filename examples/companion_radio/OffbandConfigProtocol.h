@@ -101,6 +101,12 @@ constexpr uint8_t OFFBAND_UI_SCOPE_GET  = 0x01;
 constexpr uint8_t OFFBAND_UI_SCOPE_SET  = 0x02;
 constexpr uint8_t OFFBAND_UI_MATRIX_GET = 0x03;
 constexpr uint8_t OFFBAND_UI_MATRIX_SET = 0x04;
+// #542 B1: indicator sub-codes. Gated on OFFBAND_CAP2_INDICATORS (NOT the buzzer) --
+// a display/LED setting needs no buzzer. display mode: 0 auto, 1 always-on, 2 always-off.
+constexpr uint8_t OFFBAND_UI_DISPLAY_GET = 0x05;  // -> [0xC5][0x05][mode]
+constexpr uint8_t OFFBAND_UI_DISPLAY_SET = 0x06;  // [0xC5][0x06][mode] -> echo
+constexpr uint8_t OFFBAND_UI_LED_GET     = 0x07;  // -> [0xC5][0x07][on]
+constexpr uint8_t OFFBAND_UI_LED_SET     = 0x08;  // [0xC5][0x08][on]   -> echo
 constexpr uint8_t OFFBAND_UI_ERR        = 0x7F;
 // error reason bytes
 constexpr uint8_t OFFBAND_UI_ERR_UNSUPPORTED_ACTION = 1;
@@ -108,6 +114,7 @@ constexpr uint8_t OFFBAND_UI_ERR_UNKNOWN_SEQUENCE   = 2;
 constexpr uint8_t OFFBAND_UI_ERR_NO_BUZZER          = 3;
 constexpr uint8_t OFFBAND_UI_ERR_NO_GPS             = 4;
 constexpr uint8_t OFFBAND_UI_ERR_MALFORMED          = 5;
+constexpr uint8_t OFFBAND_UI_ERR_UNSUPPORTED_INDICATOR = 6;  // #542 B1: no controllable LED/display
 constexpr uint8_t CMD_OFFBAND_CONFIG       = 0xC0;  // request:  cmd_frame[0]
 constexpr uint8_t RESP_CODE_OFFBAND_CONFIG = 0xC0;  // response: out_frame[0]
 
@@ -212,7 +219,8 @@ enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUT
 //   ---  -----  ----------------------------  ----------  --------------------------
 //    0   0x01   OFFBAND_CAP2_NOTIFY_SCOPE     this change  #510
 //    1   0x02   OFFBAND_CAP2_BUTTON_MATRIX    this change  #509
-//    2-7 0x04.. -- free --
+//    2   0x04   OFFBAND_CAP2_INDICATORS      this change  #542
+//    3-7 0x08.. -- free --
 // ===============================================================================
 // bit 0 (0x01): device notification scope ALL/SELF/NONE is supported and settable.
 // Set only where the device can actually make a sound -- gated on PIN_BUZZER, exactly
@@ -224,6 +232,10 @@ constexpr uint8_t OFFBAND_CAP2_NOTIFY_SCOPE = 0x01;
 // speaker. A board with a button and no buzzer can still map "send advert" to double
 // press, so gating this on the buzzer would refuse a feature the hardware can do.
 constexpr uint8_t OFFBAND_CAP2_BUTTON_MATRIX = 0x02;
+// bit 2 (0x04): led/display indicator control is supported and settable. Gated on
+// canControlLed() || DISPLAY_CLASS, independent of NOTIFY_SCOPE -- a buzzer-less display
+// board (e.g. Heltec V4) advertises THIS but not scope. #542 B1.
+constexpr uint8_t OFFBAND_CAP2_INDICATORS = 0x04;
 constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: config backend (wifi_observer) compiled in
 constexpr uint8_t OFFBAND_CAP_BLOCK         = 0x02;  // bit 1: user-block list (BlockStore) compiled in (#241)
 constexpr uint8_t OFFBAND_CAP_FEM_LNA       = 0x04;  // bit 2: FEM LNA runtime control available (#298)
