@@ -63,6 +63,26 @@ size_t CaptureRing::snapshot(uint8_t* out, size_t out_cap, size_t offset) const 
   return n;
 }
 
+size_t CaptureRing::consume(uint8_t* out, size_t out_cap) {
+  if (_count == 0 || out_cap == 0) return 0;
+  size_t limit = _count < out_cap ? _count : out_cap;
+  // Take through the last '\n' that fits in out_cap so we hand back only whole
+  // lines. If no '\n' fits (a line longer than out_cap, or an unterminated
+  // trailing line), take `limit` bytes anyway so the drain always progresses.
+  size_t last_nl = 0;
+  bool found = false;
+  for (size_t i = 0; i < limit; ++i) {
+    if (_buf[ring_wrap(_tail + i, _cap)] == '\n') { last_nl = i + 1; found = true; }
+  }
+  size_t take = found ? last_nl : limit;
+  for (size_t i = 0; i < take; ++i) {
+    out[i] = _buf[ring_wrap(_tail + i, _cap)];
+  }
+  _tail = ring_wrap(_tail + take, _cap);
+  _count -= take;
+  return take;
+}
+
 void CaptureRing::clear() {
   _tail = 0;
   _count = 0;

@@ -88,6 +88,16 @@ size_t meshLogSnapshot(uint8_t* out, size_t out_cap, size_t offset) {
   return n;
 }
 
+size_t meshLogConsume(uint8_t* out, size_t out_cap) {
+  // #561: copy + REMOVE oldest whole lines under the lock (short critical
+  // section: pure memory move, no I/O). The caller ships `out` off-device
+  // outside the lock, then calls again until this returns 0.
+  MLOG_ENTER();
+  size_t n = g_ring.consume(out, out_cap);
+  MLOG_EXIT();
+  return n;
+}
+
 void meshLogDumpSerial() {
   // Read in small chunks, each under a brief lock, writing to Serial between
   // locks so the critical section stays short (Serial writes can block).
