@@ -16,6 +16,71 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-06
+
+The **field-diagnostics** release. Adds an end-to-end crash/observability stack —
+persistent CrashLog on every role, a live **caplog** capture-and-forward pipeline
+(RAM ring → client download, or live UDP syslog to a remote sink), a runtime
+watchdog on both ESP32 and nRF52, and an operator **command surface** to drive it
+all without a serial cable. Plus user-controllable indicators (kill the LED/OLED
+light show), headless-device notification scope + button-action matrix, and the
+shared multi-broker MQTT engine the repeater-telemetry genericization builds on.
+
+Most changes are additive — existing nodes keep working. One caveat: the repeater
+multi-broker engine is **foundation only** this release (not yet operator-configurable
+end-to-end); the field-provisionable binary is a future release (#295).
+
+### Added
+
+**Field diagnostics — caplog (capture + forward)**
+- **caplog capture** — a serial-capture tee into a static RAM ring, with CLI verbs
+  (`caplog start/stop/erase/status/dump`) and level filtering (boot/error/debug/packet). (#401, #403, #432)
+- **Client download (Companion)** — framed caplog download to the companion app over
+  the companion API (`0xC4`), BLE-MTU-aware chunking. (#406, #418, #451, #454)
+- **Live syslog forward (Repeater, WiFi-telemetry builds)** — stream captured lines
+  off-device as UDP syslog to a remote rsyslog sink during an operator-armed window,
+  so a panic's lead-up survives the reboot the RAM ring can't hold. Sink host/port
+  are a runtime pref (`set syslog.host/port`). (#561, #566)
+- **Common across roles** — caplog and its persisted enabled-state run on
+  repeater / observer / room-server / sensor, with early boot-log capture and a
+  non-blocking serial mirror. (#562, #435, #448)
+- **Command surface (`offband-cmd`)** — queue commands, poll status, fetch results,
+  arm/tail caplog over the cmdrelay HTTP API — drive a headless node with no SSH —
+  plus a receiver setup script and operator guide (`docs/remote-diagnostics.md`). (#567, #569)
+- **Test harness + redaction** — companion protocol test harness (frame core +
+  caplog round-trips, hardware-verified) and a redacting serial-capture tool that
+  never leaks an SSID. (#414, #421, #380, #382)
+
+**Crash observability — CrashLog**
+- **Persistent CrashLog on every role** — relocated to a portable `diagnostics/`
+  core; compiles and runs on nRF52 (`.noinit` retained RAM); deferred re-dump for a
+  late serial connect; uniform boot-survival across all roles. (#367, #376, #377, #361, #463, #475)
+
+**Runtime watchdog**
+- **nRF52 hardware watchdog** — auto-recovers a hung main loop with a visible reset
+  reason; true loop-driven green-LED heartbeat. (#257, #266, #275)
+- **ESP32 runtime watchdog** — board-layer `esp_task_wdt` plumbing, activated
+  sensor-first. (#518, #519)
+- Gated debug CLI (`hangtest`, `resetreason`) + internal-DRAM heap-headroom in stats. (#357, #358)
+
+**User-controllable indicators (#542)**
+- Kill the light show: `led on|off|status` and `display auto|always-on|always-off`
+  CLI, persisted and applied at boot across all roles; companion `0xC5` client
+  control + capability bit so the app can render toggles. `FIRMWARE_VER_CODE` → 21.
+
+**Headless-device UI**
+- **Notification scope** ALL/SELF/NONE + whitespace-tolerant mention matching, via
+  `0xC5`. (#510, #524, #525)
+- **Button-action matrix** — dispatch button presses through a stored action matrix;
+  edge-capture (not sampling) with a debounced, race-free queue on the T1000-E. (#550, #551)
+
+**Repeater multi-broker engine** *(foundation for the telemetry-genericization feature — not yet operator-configurable end-to-end)*
+- Shared `MqttBrokerPool` + round-robin TLS scheduler made reusable from the
+  repeater: dwell-timer rotation, per-broker ring-log drain, heap-gated concurrency
+  (measured ceiling `OFFBAND_MAX_LIVE_TLS=4`), repeater broker-config CLI over serial
+  + client. (#175, #536, #537, #538, #539, #506, #512, #554)
+- Per-message RSSI populated in the v3 message / data-recv frames. (#460, #465)
+
 ### Changed
 - **Default broker slots reseated** — the OKI Mesh's own two brokers now hold slots 0
   and 1: slot 0 `mqtt1.okimesh.org` (relabelled from "CoreScope Dayton", same host) and
@@ -25,8 +90,19 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
   supported and can be added by hand in any free slot (`gts-r4` still resolves). Every
   seeded slot still ships disabled per #262. Because seeding is skip-if-present, this
   only affects fresh-NVS devices; existing devices keep their current layout. (#317)
+- **Role-agnostic config dispatch** — `wifi.*` / `display.*` / broker config
+  extracted into shared providers with a registration-time key-space overlap
+  detector. (#364, #366, #486, #512)
 
 ### Fixed
+- caplog command code `0xC3`→`0xC4` (FEM/LNA collision); cap bit `0x08`→`0x20`. (#409, #434)
+- MQTT keepalive capped at 60 s + `[mqtt-err]` connect errors surfaced; keepalive
+  re-asserted on JWT-refresh rebuilds; esp_mqtt client allocated on promotion, not at
+  configure time. (#506, #532, #534)
+- **Flash tooling** — one-approval-one-flash token TTL; serial-first device matching
+  (VID:PID demoted to a gated class fallback); bootstrap records `usb_serial`;
+  bridge-board (CP2102/CH340) identity + flash path. (#500, #501, #503, #355, #273, #468)
+- GPS routed through the log sink with runtime client-controllable debug. (#424)
 - **NVS round-trip test asserted a stale default** — the test still required slot 0 to
   seed as *enabled*, which #262 changed to disabled on 2026-07-02 without updating the
   assertion. Corrected alongside the #317 layout change. (#317)
