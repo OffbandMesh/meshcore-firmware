@@ -95,13 +95,12 @@ static uint16_t g_wifi_on_pct_last_24h_x100 = 0;  // 0-10000 = 0.00-100.00%
 // #561: caplog live syslog forward. During an operator-armed, bounded window,
 // stream captured log lines off-device as UDP syslog datagrams to a remote sink
 // (rsyslog on the Pi) so a panic's lead-up survives the reboot the RAM ring
-// cannot hold. Compiled in only when WIFI_SYSLOG_HOST is defined (repeater
-// telemetry env); a no-op otherwise. Drains via meshLogConsume() in the MAIN
-// LOOP so the hot-path sink (mesh_log_line) is untouched.
-#ifdef WIFI_SYSLOG_HOST
-  #ifndef WIFI_SYSLOG_PORT
-    #define WIFI_SYSLOG_PORT 514
-  #endif
+// cannot hold. #566: compiled in for all telemetry builds; the sink host/port
+// are a RUNTIME pref (syslog.host / syslog.port), seeded from WIFI_SYSLOG_HOST/
+// PORT build flags if present, so any node targets any sink without a rebuild
+// (empty host = forward off). Drains via meshLogConsume() in the MAIN LOOP so
+// the hot-path sink (mesh_log_line) is untouched.
+#ifdef ENABLE_WIFI_TELEMETRY
   #include <WiFiUdp.h>
   #include "../../src/MeshLog.h"
   static WiFiUDP  g_caplog_udp;
@@ -520,7 +519,7 @@ static void wifi_telemetry_loop() {
     }
 #endif
 
-#ifdef WIFI_SYSLOG_HOST
+#ifdef ENABLE_WIFI_TELEMETRY
     // #561: ship any newly-captured lines while a forward window is open + WiFi up.
     wifi_telemetry_caplog_forward_service();
 #endif
@@ -613,7 +612,7 @@ void wifi_telemetry_set_persistent(uint32_t duration_ms) {
     g_tel_next_publish_ms = millis();
 }
 
-#ifdef WIFI_SYSLOG_HOST
+#ifdef ENABLE_WIFI_TELEMETRY
 // #561: arm/disarm caplog live syslog forward for `window_sec`. Opens the
 // forward window and brings WiFi up (persistent) for the same window so lines
 // stream live; capture-enable is done by the CLI verb. window_sec == 0 disarms.
@@ -900,7 +899,7 @@ static void wifi_telemetry_http_cmd_poll() {
 }
 #endif // CMD_TRANSPORT_HTTP
 
-#ifdef WIFI_SYSLOG_HOST
+#ifdef ENABLE_WIFI_TELEMETRY
 // #561: drain new caplog lines and ship each as a UDP syslog datagram. Called
 // each servicing pass while the forward window is open and WiFi is up. All I/O
 // here is network — meshLogConsume() already released the sink's critical
@@ -912,6 +911,10 @@ static void wifi_telemetry_caplog_forward_service() {
         return;
     }
     if (WiFi.status() != WL_CONNECTED) return;
+    // #566: runtime sink from prefs. Empty host = no sink configured -> nothing
+    // to forward (the build-flag WIFI_SYSLOG_HOST only seeds the default).
+    NodePrefs* prefs = the_mesh.getNodePrefs();
+    if (prefs->syslog_host[0] == '\0') return;
     static uint8_t buf[512];
     // Bounded per call: drain ONE chunk (<=512 B, a few lines) per loop pass, NOT
     // the whole ring. A full 16 KB ring drained in one call would be a burst of
@@ -930,7 +933,7 @@ static void wifi_telemetry_caplog_forward_service() {
             if (eol || i + 1 == n) {
                 size_t end = eol ? i : i + 1;   // exclude the trailing '\n'
                 if (end > start) {
-                    g_caplog_udp.beginPacket(WIFI_SYSLOG_HOST, WIFI_SYSLOG_PORT);
+                    g_caplog_udp.beginPacket(prefs->syslog_host, prefs->syslog_port);
                     // Clean RFC-3164-ish TAG so rsyslog parses programname reliably:
                     // "caplog-<node>:" -> filter `programname startswith 'caplog-'`.
                     g_caplog_udp.printf("<134>caplog-%s: ", WIFI_TELEMETRY_NODE_ID);
@@ -942,7 +945,7 @@ static void wifi_telemetry_caplog_forward_service() {
         }
     }
 }
-#endif // WIFI_SYSLOG_HOST
+#endif // ENABLE_WIFI_TELEMETRY (#561 caplog forward)
 
 // Constructs the remote command handler + callbacks, registers the
 // transport-level message callback. Called once from wifi_telemetry_setup().

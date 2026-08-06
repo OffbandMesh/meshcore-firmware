@@ -79,6 +79,11 @@ struct NodePrefs { // persisted to file
   // old file predating these fields, both get the common default (OFF, DEBUG).
   uint8_t caplog_enabled; // 0 = off (default), 1 = on
   uint8_t caplog_level;   // MLOG_* level; capture lines with level <= this
+  // #566: runtime caplog syslog-forward target (empty host = no sink / forward
+  // off). Seeded from the WIFI_SYSLOG_HOST/PORT build flags; settable at runtime
+  // via `set syslog.host` / `set syslog.port`. Append-only at the end.
+  char     syslog_host[64];
+  uint16_t syslog_port;
 };
 
 // #542 A2: values for NodePrefs::ui_display_mode.
