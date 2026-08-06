@@ -100,9 +100,7 @@ extern "C" {
   void wifi_telemetry_set_persistent(uint32_t duration_ms);
   int  wifi_telemetry_is_persistent(void);
   uint32_t wifi_telemetry_persistent_remaining_ms(void);
-#ifdef WIFI_SYSLOG_HOST
-  void wifi_telemetry_caplog_forward(uint32_t window_sec);  // #561 live syslog forward
-#endif
+  void wifi_telemetry_caplog_forward(uint32_t window_sec);  // #561 live syslog forward (#566: runtime target)
 #ifdef CMD_TRANSPORT_HTTP
   // LoRa#216: HTTP cmd-poll controls
   void     wifi_telemetry_cmd_poll_now(void);
@@ -136,6 +134,19 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
   // intact; a fresh node with no prefs file keeps them too.
   _prefs->caplog_enabled = 0;
   _prefs->caplog_level = MLOG_DEBUG;
+  // #566: seed the syslog forward sink from build flags (if any); a node with no
+  // flag starts with no sink (forward off until `set syslog.host`).
+#ifdef WIFI_SYSLOG_HOST
+  strncpy(_prefs->syslog_host, WIFI_SYSLOG_HOST, sizeof(_prefs->syslog_host) - 1);
+  _prefs->syslog_host[sizeof(_prefs->syslog_host) - 1] = '\0';
+#else
+  _prefs->syslog_host[0] = '\0';
+#endif
+#ifdef WIFI_SYSLOG_PORT
+  _prefs->syslog_port = WIFI_SYSLOG_PORT;
+#else
+  _prefs->syslog_port = 514;
+#endif
   if (fs->exists("/com_prefs")) {
     loadPrefsInt(fs, "/com_prefs");   // new filename
   } else if (fs->exists("/node_prefs")) {
@@ -204,7 +215,9 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     file.read((uint8_t *)&_prefs->ui_display_mode, sizeof(_prefs->ui_display_mode));              // 295
     file.read((uint8_t *)&_prefs->caplog_enabled, sizeof(_prefs->caplog_enabled));                // 296  (#562)
     file.read((uint8_t *)&_prefs->caplog_level, sizeof(_prefs->caplog_level));                    // 297  (#562)
-    // next: 298
+    file.read((uint8_t *)_prefs->syslog_host, sizeof(_prefs->syslog_host));                       // 298  (#566)
+    file.read((uint8_t *)&_prefs->syslog_port, sizeof(_prefs->syslog_port));                      // 362  (#566)
+    // next: 364
     // NOTE: radio_fem_rxgain stays at offset 291 (its pre-1.16 offset) so existing Offband prefs
     // files survive the 1.16.0 base-update; the new upstream flood fields append after it. For old
     // SPIFFS files predating a field, file.read returns 0 bytes and the field keeps its in-memory
@@ -243,6 +256,8 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     _prefs->ui_display_mode = constrain(_prefs->ui_display_mode, 0, 2); // #542 A2 tristate
     _prefs->caplog_enabled = constrain(_prefs->caplog_enabled, 0, 1);       // #562 boolean
     _prefs->caplog_level = constrain(_prefs->caplog_level, 0, MLOG_PACKET); // #562 level bound
+    _prefs->syslog_host[sizeof(_prefs->syslog_host) - 1] = '\0';            // #566 NUL-terminate
+    if (_prefs->syslog_port == 0) _prefs->syslog_port = 514;                // #566 sane default
 
     // #562: apply persisted caplog state at boot (common across roles). Capture
     // is independent of the serial mirror, so this is safe on a USB-serial
@@ -317,7 +332,9 @@ void CommonCLI::savePrefs(FILESYSTEM* fs) {
     file.write((uint8_t *)&_prefs->ui_display_mode, sizeof(_prefs->ui_display_mode));             // 295
     file.write((uint8_t *)&_prefs->caplog_enabled, sizeof(_prefs->caplog_enabled));              // 296  (#562)
     file.write((uint8_t *)&_prefs->caplog_level, sizeof(_prefs->caplog_level));                  // 297  (#562)
-    // next: 298
+    file.write((uint8_t *)_prefs->syslog_host, sizeof(_prefs->syslog_host));                     // 298  (#566)
+    file.write((uint8_t *)&_prefs->syslog_port, sizeof(_prefs->syslog_port));                    // 362  (#566)
+    // next: 364
 
     file.close();
   }
@@ -862,7 +879,9 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
     } else if (memcmp(command, "caplog forward", 14) == 0 && (command[14] == 0 || command[14] == ' ')) {
       // #561: live syslog forward -- stream captured lines off-device during a
       // bounded window (survives a reboot the RAM ring cannot). Telemetry-only.
-#if defined(ENABLE_WIFI_TELEMETRY) && defined(WIFI_SYSLOG_HOST)
+      // #566: gated on ENABLE_WIFI_TELEMETRY only -- the sink host/port is a
+      // runtime pref (set syslog.host/port), no longer a build-time flag.
+#if defined(ENABLE_WIFI_TELEMETRY)
       const char* arg = (command[14] == ' ') ? &command[15] : "";
       if (memcmp(arg, "off", 3) == 0) {
         wifi_telemetry_caplog_forward(0);
@@ -1088,6 +1107,21 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     } else {
       strcpy(reply, "Error, max 64");
     }
+  } else if (memcmp(config, "syslog.host ", 12) == 0) {
+    // #566: runtime caplog syslog-forward sink host (empty = forward off).
+    strncpy(_prefs->syslog_host, &config[12], sizeof(_prefs->syslog_host) - 1);
+    _prefs->syslog_host[sizeof(_prefs->syslog_host) - 1] = '\0';
+    savePrefs();
+    strcpy(reply, "OK");
+  } else if (memcmp(config, "syslog.port ", 12) == 0) {
+    int p = atoi(&config[12]);
+    if (p > 0 && p <= 65535) {
+      _prefs->syslog_port = (uint16_t)p;
+      savePrefs();
+      strcpy(reply, "OK");
+    } else {
+      strcpy(reply, "Error, port 1-65535");
+    }
   } else if (memcmp(config, "flood.max ", 10) == 0) {
     uint8_t m = atoi(&config[10]);
     if (m <= 64) {
@@ -1310,6 +1344,10 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     sprintf(reply, "> %d", (uint32_t)_prefs->flood_max);
   } else if (isKey(config, "direct.txdelay")) {
     sprintf(reply, "> %s", StrHelper::ftoa(_prefs->direct_tx_delay_factor));
+  } else if (isKey(config, "syslog.host")) {
+    sprintf(reply, "> %s", _prefs->syslog_host);       // #566 (empty = forward off)
+  } else if (isKey(config, "syslog.port")) {
+    sprintf(reply, "> %d", (uint32_t)_prefs->syslog_port); // #566
   } else if (isKey(config, "owner.info")) {
     auto start = reply;
     *reply++ = '>';
