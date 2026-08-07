@@ -150,9 +150,9 @@ int main() {
     // populateDefaultBrokers — Plan 2 v2 Task 3 Step 5
     // -----------------------------------------------------------------------
     // Slot 2 was just written above with a custom URL ("mqtt.example.org").
-    // Slots 0 + 1 + 3 are still virgin. populateDefaultBrokers should (#317):
-    //   - fill slot 0 with OKIMesh mqtt1 (tcp/anon, disabled since #262)
-    //   - fill slot 1 with OKIMesh mqtt2 (tcp/anon, disabled)
+    // Slots 0 + 1 + 3 are still virgin. populateDefaultBrokers should (#592):
+    //   - fill slot 0 with OKIMesh mqtt1 (wss/anon, letsencrypt CA, disabled)
+    //   - fill slot 1 with OKIMesh mqtt2 (wss/anon, letsencrypt CA, disabled)
     //   - fill slot 3 with Eastme.sh (wss/jwt, disabled, letsencrypt CA)
     //   - LEAVE slot 2 alone (already has user-set URL -- would otherwise be
     //     MeshMapper under the #317 layout)
@@ -165,13 +165,14 @@ int main() {
     if (!readBrokerConfig(2, slot2)) { puts("FAIL read slot 2"); return 1; }
     if (!readBrokerConfig(3, slot3)) { puts("FAIL read slot 3"); return 1; }
 
-    // Slot 0 = OKIMesh mqtt1: plaintext + anonymous. Ships DISABLED (#262 --
-    // a fresh flash must not auto-publish anywhere).
-    if (strcmp(slot0.url, "mqtt://mqtt1.okimesh.org:1883") != 0) {  // #170: was mqtt.w8oof.net
+    // Slot 0 = OKIMesh mqtt1 (#592): wss + anonymous over TLS ("letsencrypt" CA).
+    // Auth stays None -- TLS secures the transport, no MQTT credential. Ships
+    // DISABLED (#262 -- a fresh flash must not auto-publish anywhere).
+    if (strcmp(slot0.url, "wss://mqtt1.okimesh.org:9002/mqtt") != 0) {  // #592: was mqtt://:1883
         printf("FAIL slot 0 url after populate: '%s'\n", slot0.url);
         return 1;
     }
-    if (slot0.transport != BrokerTransport::Tcp) {
+    if (slot0.transport != BrokerTransport::Wss) {
         printf("FAIL slot 0 transport: %d\n", (int)slot0.transport);
         return 1;
     }
@@ -179,23 +180,39 @@ int main() {
         printf("FAIL slot 0 auth_type: %d\n", (int)slot0.auth_type);
         return 1;
     }
+    if (strcmp(slot0.ca_cert_name, "letsencrypt") != 0) {
+        printf("FAIL slot 0 ca_cert_name: '%s'\n", slot0.ca_cert_name);
+        return 1;
+    }
+    if (slot0.jwt_audience[0] != '\0') {
+        printf("FAIL slot 0 jwt_audience should be empty (anon): '%s'\n", slot0.jwt_audience);
+        return 1;
+    }
     if (slot0.enabled) {
         printf("FAIL slot 0 (OKIMesh mqtt1) should default to DISABLED (#262)\n");
         return 1;
     }
 
-    // Slot 1 = OKIMesh mqtt2 (#317): same plaintext/anon config as mqtt1,
-    // also disabled. Replaced LetsMesh-US, which is no longer seeded.
-    if (strcmp(slot1.url, "mqtt://mqtt2.okimesh.org:1883") != 0) {
+    // Slot 1 = OKIMesh mqtt2 (#592): same wss/anon/letsencrypt config as mqtt1,
+    // also disabled. (#317 put mqtt2 here, replacing LetsMesh-US.)
+    if (strcmp(slot1.url, "wss://mqtt2.okimesh.org:9002/mqtt") != 0) {
         printf("FAIL slot 1 url after populate: '%s'\n", slot1.url);
         return 1;
     }
-    if (slot1.transport != BrokerTransport::Tcp) {
+    if (slot1.transport != BrokerTransport::Wss) {
         printf("FAIL slot 1 transport: %d\n", (int)slot1.transport);
         return 1;
     }
     if (slot1.auth_type != BrokerAuthType::None) {
         printf("FAIL slot 1 auth_type: %d\n", (int)slot1.auth_type);
+        return 1;
+    }
+    if (strcmp(slot1.ca_cert_name, "letsencrypt") != 0) {
+        printf("FAIL slot 1 ca_cert_name: '%s'\n", slot1.ca_cert_name);
+        return 1;
+    }
+    if (slot1.jwt_audience[0] != '\0') {
+        printf("FAIL slot 1 jwt_audience should be empty (anon): '%s'\n", slot1.jwt_audience);
         return 1;
     }
     if (slot1.enabled) {

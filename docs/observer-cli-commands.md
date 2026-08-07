@@ -134,12 +134,12 @@ mqtt status
   eastme.sh; some brokers expect a `v1_<pubkey>` prefix. If a wss slot won't
   authenticate, try the other form. (Defaulting this per broker is #95.)
 
-### Seeded broker slots (#317)
+### Seeded broker slots (#317, #592)
 
 | Slot | Broker | url | ca_cert | jwt_audience |
 |---|---|---|---|---|
-| 0 | OKIMesh mqtt1 | `mqtt://mqtt1.okimesh.org:1883` | — (tcp / anon) | — |
-| 1 | OKIMesh mqtt2 | `mqtt://mqtt2.okimesh.org:1883` | — (tcp / anon) | — |
+| 0 | OKIMesh mqtt1 | `wss://mqtt1.okimesh.org:9002/mqtt` | `letsencrypt` | — (anon) |
+| 1 | OKIMesh mqtt2 | `wss://mqtt2.okimesh.org:9002/mqtt` | `letsencrypt` | — (anon) |
 | 2 | MeshMapper | `wss://mqtt.meshmapper.net:443/mqtt` | `isrg-x2` | `mqtt.meshmapper.net` |
 | 3 | eastme.sh | `wss://mqtt.eastme.sh:443/mqtt` | `letsencrypt` | `mqtt.eastme.sh` |
 | 4 | Eastmesh.au | `wss://mqtt2.eastmesh.au:443/mqtt` | `letsencrypt` | `mqtt2.eastmesh.au` |
@@ -165,10 +165,12 @@ mqtt status
   mis-configured right after a `set` (#67). Do your `set`s, then
   `mqtt enable <N>` (which reloads), or reboot. If a field looks wrong, re-apply
   it while the slot is enabled.
-- **wss/TLS brokers need a valid wall clock** (cert validity + JWT `exp`). Until
-  the clock syncs (NTP, or a GPS fix), such a slot reads `state=held(no-clock)`
-  in `mqtt status` — that's *deferred, not failing*; it connects on its own once
-  the clock is sane. tcp brokers (CoreScope) never wait on the clock.
+- **wss/TLS brokers need a valid wall clock** (cert validity, and JWT `exp` where
+  used). Until the clock syncs (NTP, or a GPS fix), such a slot reads
+  `state=held(no-clock)` in `mqtt status` — that's *deferred, not failing*; it
+  connects on its own once the clock is sane. This now includes the OKIMesh
+  slots (0, 1), which moved to wss in #592; a plain-`mqtt://` tcp broker (e.g. a
+  hand-added LAN Mosquitto) never waits on the clock.
 
 ## First-time bring-up (minimal)
 
