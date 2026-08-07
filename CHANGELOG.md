@@ -16,6 +16,14 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+### Changed
+- **OKIMesh broker slots 0-1 moved to wss/TLS** — the two seeded OKIMesh brokers now use
+  `wss://mqtt{1,2}.okimesh.org:9002/mqtt` over TLS (`letsencrypt` CA) instead of plaintext
+  `mqtt://…:1883`. Auth stays anonymous (TLS secures the transport; no MQTT credential).
+  Both remain disabled by default (#262). Note: as wss/TLS, these slots now wait for a
+  valid wall clock — `mqtt status` shows `held(no-clock)` until NTP/GPS, then connects.
+  Fresh-NVS only; existing devices keep their stored config. (#592)
+
 ## [1.3.0] - 2026-08-06
 
 The **field-diagnostics** release. Adds an end-to-end crash/observability stack —

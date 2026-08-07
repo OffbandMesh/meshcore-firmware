@@ -327,26 +327,32 @@ bool clearBrokerConfig(uint8_t slot) {
 // changing this layout does NOT re-shuffle slots on a device already seeded
 // under an older layout; it takes effect only on a fresh NVS.)
 //
-//   slot 0  OKIMesh mqtt1      mqtt://mqtt1.okimesh.org:1883    tcp / anon   disabled  (#262)
-//   slot 1  OKIMesh mqtt2      mqtt://mqtt2.okimesh.org:1883    tcp / anon   disabled  (#317)
+//   slot 0  OKIMesh mqtt1      wss://mqtt1.okimesh.org:9002/mqtt  wss / anon   disabled  (#592)
+//   slot 1  OKIMesh mqtt2      wss://mqtt2.okimesh.org:9002/mqtt  wss / anon   disabled  (#592)
 //   slot 2  MeshMapper         wss://mqtt.meshmapper.net        wss / jwt    disabled
 //   slot 3  Eastme.sh          wss://mqtt.eastme.sh             wss / jwt    disabled
 //   slot 4  Eastmesh.au        wss://mqtt2.eastmesh.au          wss / jwt    disabled
 //   slots 5-9  (MQTT Custom)   left empty for the operator to fill
 //
-// #317 reseat: the OKI Mesh's own two brokers now hold slots 0-1 (mqtt1 was
-// formerly labelled "CoreScope Dayton"; mqtt2 is new and shares mqtt1's
-// plaintext/anon/1883 config). LetsMesh-US and LetsMesh-EU were DROPPED from
-// the seed to make room -- they remain fully supported for operators who add
-// them by hand ("gts-r4" still resolves in lookupCaCertPem(), and the bare-host
-// audience note below still applies). MeshMapper and Eastme.sh swapped to 2/3;
-// Eastmesh.au moved 5 -> 4.
+// #317 reseat: the OKI Mesh's own two brokers hold slots 0-1 (mqtt1 was
+// formerly labelled "CoreScope Dayton"; mqtt2 is new). LetsMesh-US and
+// LetsMesh-EU were DROPPED from the seed to make room -- they remain fully
+// supported for operators who add them by hand ("gts-r4" still resolves in
+// lookupCaCertPem(), and the bare-host audience note below still applies).
+// MeshMapper and Eastme.sh swapped to 2/3; Eastmesh.au moved 5 -> 4.
+//
+// #592: slots 0-1 moved from plaintext mqtt://:1883 to wss://:9002/mqtt over
+// TLS with a "letsencrypt" CA. Auth stays anonymous (BrokerAuthType::None) --
+// TLS secures the transport; there is no MQTT-layer credential, so no JWT
+// audience/owner and no username. Unlike the plaintext form, a wss slot cannot
+// complete its TLS handshake until the wall clock is sane (NTP/GPS), so it
+// reads state=held(no-clock) in `mqtt status` until then -- deferred, not
+// failing (#69).
 //
 // As of #262 NO slot is enabled by default -- a fresh flash must not
-// auto-publish to any upstream broker. Slot 0 (plaintext + anon, no TLS cert /
-// no JWT; validated live on HV3 -- #42/#48) was formerly the sole
-// default-enabled slot, which made out-of-region fresh flashes feed
-// OKIMesh CoreScope tagged as Dayton/HAO.
+// auto-publish to any upstream broker. Slot 0 was formerly the sole
+// default-enabled slot (validated live on HV3 -- #42/#48), which made
+// out-of-region fresh flashes feed OKIMesh CoreScope tagged as Dayton/HAO.
 // The wss brokers stay disabled until the operator opts in; their ca_cert
 // names ("letsencrypt", "isrg-x2" -- plus "gts-r4" for a hand-added LetsMesh)
 // all resolve in MqttBroker.cpp's lookupCaCertPem(), and while disabled they
@@ -387,8 +393,8 @@ struct DefaultBrokerSpec {
 // Slots 0-4. Slots 5-9 (MQTT Custom) are intentionally absent so they stay empty.
 // jwt_audience is the BARE host (#95); ca_cert names resolve in MqttBroker.cpp.
 constexpr DefaultBrokerSpec kDefaultBrokerSpecs[] = {
-    {false, "mqtt://mqtt1.okimesh.org:1883",          BrokerTransport::Tcp, 1883, BrokerAuthType::None, "",                        ""},
-    {false, "mqtt://mqtt2.okimesh.org:1883",          BrokerTransport::Tcp, 1883, BrokerAuthType::None, "",                        ""},
+    {false, "wss://mqtt1.okimesh.org:9002/mqtt",      BrokerTransport::Wss, 9002, BrokerAuthType::None, "",                        "letsencrypt"},
+    {false, "wss://mqtt2.okimesh.org:9002/mqtt",      BrokerTransport::Wss, 9002, BrokerAuthType::None, "",                        "letsencrypt"},
     {false, "wss://mqtt.meshmapper.net:443/mqtt",     BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt.meshmapper.net",     "isrg-x2"},
     {false, "wss://mqtt.eastme.sh:443/mqtt",          BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt.eastme.sh",          "letsencrypt"},
     {false, "wss://mqtt2.eastmesh.au:443/mqtt",       BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt2.eastmesh.au",       "letsencrypt"},
