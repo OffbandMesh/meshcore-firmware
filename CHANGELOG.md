@@ -16,6 +16,18 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+### Fixed
+- **Future-poisoned clocks are now recoverable** (#607, PRs #612): owner-authenticated
+  time sets (client sync, CLI `time`/`clock sync`) are accepted in **both directions** —
+  "clock cannot go backwards" refusals are gone. Automated clock sources (GPS decode,
+  boot-time contacts bootstrap) are bounded by a plausibility window (firmware build
+  date → +20 y), so a GPS week-rollover mis-decode can no longer poison the clock, and
+  contact `lastmod` values written under a poisoned clock are clamped on load — stores
+  self-heal at first boot. Every accepted clock set (and boot-capped rejections) emits a
+  `[clock]` audit line on serial/caplog. **Note for recovered nodes:** peers that heard a
+  node's poisoned (future) timestamps may ignore its messages until their per-contact
+  recency view catches up; re-adding the contact on the peer resolves it immediately.
+
 ### Changed
 - **OKIMesh broker slots 0-1 moved to wss/TLS** — the two seeded OKIMesh brokers now use
   `wss://mqtt{1,2}.okimesh.org:9002/mqtt` over TLS (`letsencrypt` CA) instead of plaintext
