@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "CommonCLI.h"
+#include "ClockSanity.h"  // #607
 #include "TxtDataHelpers.h"
 #include "AdvertDataHelpers.h"
 #include "TxtDataHelpers.h"
@@ -437,15 +438,15 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       _callbacks->sendSelfAdvertisement(1500, true);  // longer delay, give CLI response time to be sent first
       strcpy(reply, "OK - Advert sent");
     } else if (memcmp(command, "clock sync", 10) == 0) {
+      // #607 OWNER DECISION: authenticated admin path (serial console or
+      // logged-in remote CLI) -- accepted in BOTH directions. The old
+      // "cannot go backwards" refusal locked in future-poisoned clocks.
       uint32_t curr = getRTCClock()->getCurrentTime();
-      if (sender_timestamp > curr) {
-        getRTCClock()->setCurrentTime(sender_timestamp + 1);
-        uint32_t now = getRTCClock()->getCurrentTime();
-        DateTime dt = DateTime(now);
-        sprintf(reply, "OK - clock set: %02d:%02d - %d/%d/%d UTC", dt.hour(), dt.minute(), dt.day(), dt.month(), dt.year());
-      } else {
-        strcpy(reply, "ERR: clock cannot go backwards");
-      }
+      getRTCClock()->setCurrentTime(sender_timestamp + 1);
+      offband::logClockSet("cli-clock-sync", curr, sender_timestamp + 1);
+      uint32_t now = getRTCClock()->getCurrentTime();
+      DateTime dt = DateTime(now);
+      sprintf(reply, "OK - clock set: %02d:%02d - %d/%d/%d UTC", dt.hour(), dt.minute(), dt.day(), dt.month(), dt.year());
     } else if (memcmp(command, "start ota", 9) == 0) {
       if (!_board->startOTAUpdate(_prefs->node_name, reply)) {
         strcpy(reply, "Error");
@@ -457,8 +458,10 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
     } else if (memcmp(command, "time ", 5) == 0) {  // set time (to epoch seconds)
       uint32_t secs = _atoi(&command[5]);
       uint32_t curr = getRTCClock()->getCurrentTime();
-      if (secs > curr) {
+      // #607 OWNER DECISION: authenticated owner path -- both directions.
+      if (secs > 0) {
         getRTCClock()->setCurrentTime(secs);
+        offband::logClockSet("cli-time", curr, secs);
         uint32_t now = getRTCClock()->getCurrentTime();
         DateTime dt = DateTime(now);
         sprintf(reply, "OK - clock set: %02d:%02d - %d/%d/%d UTC", dt.hour(), dt.minute(), dt.day(), dt.month(), dt.year());

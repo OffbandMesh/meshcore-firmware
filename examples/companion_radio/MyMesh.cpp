@@ -3,6 +3,7 @@
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
 #include <MeshLog.h>  // #396: serial-capture buffer access for the caplog download
+#include <helpers/ClockSanity.h>  // #607: owner-path clock sets + audit log
 
 // Offband fork-only companion-API frame codes (config 0xC0 / GPS 0xC1 / block 0xC2)
 // + shared enums. Self-contained (only <stdint.h>); included unconditionally so the
@@ -2427,13 +2428,16 @@ void MyMesh::handleCmdFrame(size_t len) {
   } else if (cmd_frame[0] == CMD_SET_DEVICE_TIME && len >= 5) {
     uint32_t secs;
     memcpy(&secs, &cmd_frame[1], 4);
+    // #607 OWNER DECISION: this is an authenticated owner path (PIN-paired
+    // BLE / USB session) -- accepted in BOTH directions, no plausibility
+    // gate. The old `secs >= curr` refusal made a future-poisoned clock
+    // permanently uncorrectable from the client. Direction is never a
+    // reason to reject an owner set; every set is logged for the audit
+    // trail (caplog tees the serial stream).
     uint32_t curr = getRTCClock()->getCurrentTime();
-    if (secs >= curr) {
-      getRTCClock()->setCurrentTime(secs);
-      writeOKFrame();
-    } else {
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    }
+    getRTCClock()->setCurrentTime(secs);
+    offband::logClockSet("client-set-time", curr, secs);
+    writeOKFrame();
   } else if (cmd_frame[0] == CMD_SEND_SELF_ADVERT) {
     mesh::Packet* pkt;
     if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
