@@ -19,7 +19,7 @@
 // bumps the code even without a frame-layout change -- 17 was "+ caplog cap bit
 // (0x20)", 16 was "FEM LNA cap 0x04 / 0xC3". This change sets caps2 bit 0x01 and adds
 // the 0xC5 command, so it follows the same rule.
-#define FIRMWARE_VER_CODE 21   // #542: + caps2 bit 0x04 INDICATORS + 0xC5 led/display sub-codes + led/display state in device-info. Prior 20 (#509): caps2 0x02 BUTTON_MATRIX. Prior 19 (#510): caps2 0x01 NOTIFY_SCOPE + 0xC5. Prior 18 (#508): second caps byte at offset 84
+#define FIRMWARE_VER_CODE 22   // #611: + caps2 bit 0x08 PKT_HASH + 0xC6 packet-hash query. Prior 21 (#542): caps2 0x04 INDICATORS + 0xC5 led/display sub-codes + led/display state in device-info. Prior 20 (#509): caps2 0x02 BUTTON_MATRIX. Prior 19 (#510): caps2 0x01 NOTIFY_SCOPE + 0xC5. Prior 18 (#508): second caps byte at offset 84
 
 #ifndef FIRMWARE_BUILD_DATE
 #define FIRMWARE_BUILD_DATE "6 Jun 2026"
@@ -84,6 +84,10 @@
 
 #include <helpers/BaseChatMesh.h>
 #include <helpers/TransportKeyStore.h>
+// #611: the packet-hash ring is sized from the canonical wire contract
+// (OFFBAND_PKTHASH_RING_SLOTS) rather than a duplicated literal. Safe to include
+// here -- this header pulls only <stdint.h> and defines no types of its own.
+#include "OffbandConfigProtocol.h"
 
 /* -------------------------------------------------------------------------------------- */
 
@@ -97,6 +101,18 @@ struct AdvertPath {
   char    name[32];
   uint32_t recv_timestamp;
   uint8_t path[MAX_PATH_SIZE];
+};
+
+// #611: one retained on-air packet hash for an outgoing channel message, so the
+// client can correlate its own send with an observer's sighting (0xC6 query).
+// Keyed by (msg_timestamp, channel_idx) -- both already arrive in
+// CMD_SEND_CHANNEL_TXT_MSG, so no change to that (stock-client) frame.
+// 13 bytes per entry; OFFBAND_PKTHASH_RING_SLOTS of them = 104 bytes.
+struct SentPktHash {
+  uint32_t msg_timestamp;
+  uint8_t  channel_idx;
+  uint8_t  hash[MAX_HASH_SIZE];
+  bool     used;               // false = empty slot (a hash of all-zero is legal)
 };
 
 class MyMesh : public BaseChatMesh, public DataStoreHost {
@@ -242,6 +258,15 @@ public:
   bool hasPendingWork() const;
 
 private:
+  // #611: retained hashes of recent outgoing channel messages, for the 0xC6 query.
+  // FIFO by _pkthash_next; a duplicate (timestamp, channel) overwrites in place so a
+  // repeat key never yields a stale hash. Not persisted -- correlation is only useful
+  // for the current session, and CoreScope sightings are queried promptly.
+  SentPktHash _pkthash_ring[offband::OFFBAND_PKTHASH_RING_SLOTS];
+  uint8_t     _pkthash_next = 0;
+  void recordSentPktHash(uint32_t msg_timestamp, uint8_t channel_idx, const uint8_t* hash);
+  const uint8_t* lookupSentPktHash(uint32_t msg_timestamp, uint8_t channel_idx) const;
+
   void writeOKFrame();
   void writeErrFrame(uint8_t err_code);
   void writeDisabledFrame();

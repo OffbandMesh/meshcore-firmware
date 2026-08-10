@@ -52,13 +52,14 @@ namespace offband {
 // 0xC-RANGE ALLOCATION MAP (frame byte[0]) -- keep this current when adding a
 // code. NOTE: some codes are #defined in MyMesh.cpp (GPS, CAPLOG), not here, so
 // grep the WHOLE 0xC range before claiming one (a partial grep missed FEM_LNA
-// and collided CAPLOG onto 0xC3 -- #408). Next free: 0xC6.
+// and collided CAPLOG onto 0xC3 -- #408). Next free: 0xC7.
 //   0xC0 CMD_OFFBAND_CONFIG    (this file)
 //   0xC1 CMD_OFFBAND_GPS       (MyMesh.cpp)
 //   0xC2 CMD_OFFBAND_BLOCK     (this file)
 //   0xC3 CMD_OFFBAND_FEM_LNA   (this file)
 //   0xC4 CMD_OFFBAND_CAPLOG    (MyMesh.cpp, #396)
 //   0xC5 CMD_OFFBAND_DEVICE_UI (this file, #509/#510)
+//   0xC6 CMD_OFFBAND_PKT_HASH  (this file, #611)
 
 // === 0xC5 DEVICE-UI COMMAND -- CANONICAL WIRE CONTRACT (#509/#510) ============
 // Owner-directed 2026-08-01: FIRMWARE OWNS THIS CONTRACT. The client codes to what
@@ -107,6 +108,60 @@ constexpr uint8_t OFFBAND_UI_DISPLAY_GET = 0x05;  // -> [0xC5][0x05][mode]
 constexpr uint8_t OFFBAND_UI_DISPLAY_SET = 0x06;  // [0xC5][0x06][mode] -> echo
 constexpr uint8_t OFFBAND_UI_LED_GET     = 0x07;  // -> [0xC5][0x07][on]
 constexpr uint8_t OFFBAND_UI_LED_SET     = 0x08;  // [0xC5][0x08][on]   -> echo
+
+// === 0xC6 PACKET-HASH QUERY -- CANONICAL WIRE CONTRACT (#611) =================
+// FIRMWARE OWNS THIS CONTRACT (same discipline as 0xC5). Agreed with the client
+// (QuietSnow) 2026-08-10; owner-approved. The client codes to what is written here.
+//
+// PURPOSE: let the client correlate its OWN outgoing channel message with an
+// observer's sighting of the same on-air packet (CoreScope observer_count). The
+// client cannot reproduce this hash itself -- for outgoing channel messages it
+// stamps a plaintext content hash, and the on-air hash is over the ENCRYPTED
+// payload, needing byte-exact parity on the "<sender>: " prefix, the timestamp and
+// the channel encryption.
+//
+//   REQUEST                          REPLY
+//   [0xC6][0x01][ts:4][chan:1]       [0xC6][0x01][ts:4][chan:1][hash:8]   hash GET
+//   (any, on failure)                [0xC6][0x7F][reason]                 error
+//
+// ts     : uint32 LE -- the msg_timestamp the client sent in CMD_SEND_CHANNEL_TXT_MSG
+// chan   : uint8    -- the channel_idx from that same command
+// hash   : MAX_HASH_SIZE (8) bytes -- Packet::calculatePacketHash of the sent packet
+// reason : 1 unknown key (never sent this session, or evicted from the ring)
+//          2 malformed frame (bad length)
+//
+// The reply ECHOES the key so the client can match reply->request without relying on
+// ordering (same precedent as the 0xC5 SET echoes). Request 7 B, reply 15 B -- far
+// under the ATT MTU-3 floor, so never chunked.
+//
+// WHY A CLIENT-ISSUED QUERY, NOT AN EXTENDED OK: capability bits advertise
+// firmware->client, so the firmware cannot know whether the CONNECTED client is
+// hash-capable. Gating an extended reply on a cap bit is therefore impossible --
+// firmware would have to mutate the channel-send OK for everyone or no one. A
+// client-initiated query inverts it: only a capable client ever emits 0xC6, so
+// writeOKFrame() on the channel-send path is untouched. Zero stock-client surface.
+//
+// KEY UNIQUENESS IS THE CLIENT'S RESPONSIBILITY. (ts, chan) is not inherently
+// unique -- msg_timestamp is Unix SECONDS. Utils::encrypt is AES-128 ECB with no IV,
+// so it is deterministic: two sends with the SAME text/ts/chan produce an identical
+// hash (harmless -- either ring entry is correct). Only DIFFERENT text under the same
+// (ts, chan) is ambiguous, and it would silently return the wrong hash. The client
+// supplies msg_timestamp, so it must never reuse a (ts, chan) pair for two different
+// message texts (bump ts by 1 s on collision). A firmware-side correlation tag was
+// rejected: it would mean changing CMD_SEND_CHANNEL_TXT_MSG, i.e. the stock-client
+// surface this design exists to avoid touching.
+//
+// Gated on OFFBAND_CAP2_PKT_HASH (caps byte 2, bit 3) + FIRMWARE_VER_CODE >= 22.
+// ==============================================================================
+constexpr uint8_t CMD_OFFBAND_PKT_HASH       = 0xC6;
+constexpr uint8_t RESP_CODE_OFFBAND_PKT_HASH = 0xC6;
+constexpr uint8_t OFFBAND_PKTHASH_GET        = 0x01;  // [0xC6][0x01][ts:4][chan:1]
+constexpr uint8_t OFFBAND_PKTHASH_ERR        = 0x7F;  // [0xC6][0x7F][reason]
+constexpr uint8_t OFFBAND_PKTHASH_ERR_UNKNOWN_KEY = 1;
+constexpr uint8_t OFFBAND_PKTHASH_ERR_MALFORMED   = 2;
+// Outstanding sends retained for correlation. 8 entries x 13 B = 104 B. FIFO;
+// duplicate-key insert overwrites (most-recent-wins).
+constexpr uint8_t OFFBAND_PKTHASH_RING_SLOTS = 8;
 constexpr uint8_t OFFBAND_UI_ERR        = 0x7F;
 // error reason bytes
 constexpr uint8_t OFFBAND_UI_ERR_UNSUPPORTED_ACTION = 1;
@@ -220,7 +275,8 @@ enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUT
 //    0   0x01   OFFBAND_CAP2_NOTIFY_SCOPE     this change  #510
 //    1   0x02   OFFBAND_CAP2_BUTTON_MATRIX    this change  #509
 //    2   0x04   OFFBAND_CAP2_INDICATORS      this change  #542
-//    3-7 0x08.. -- free --
+//    3   0x08   OFFBAND_CAP2_PKT_HASH         this change  #611
+//    4-7 0x10.. -- free --
 // ===============================================================================
 // bit 0 (0x01): device notification scope ALL/SELF/NONE is supported and settable.
 // Set only where the device can actually make a sound -- gated on PIN_BUZZER, exactly
@@ -236,6 +292,11 @@ constexpr uint8_t OFFBAND_CAP2_BUTTON_MATRIX = 0x02;
 // canControlLed() || DISPLAY_CLASS, independent of NOTIFY_SCOPE -- a buzzer-less display
 // board (e.g. Heltec V4) advertises THIS but not scope. #542 B1.
 constexpr uint8_t OFFBAND_CAP2_INDICATORS = 0x04;
+// bit 3 (0x08): the device can report the on-air packet hash of an outgoing channel
+// message, queried via 0xC6 (#611). Unconditional on Offband companion builds -- it
+// needs no hardware, only the send path. A client that does not see this bit (or sees
+// FIRMWARE_VER_CODE < 22) must never emit 0xC6.
+constexpr uint8_t OFFBAND_CAP2_PKT_HASH = 0x08;
 constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: config backend (wifi_observer) compiled in
 constexpr uint8_t OFFBAND_CAP_BLOCK         = 0x02;  // bit 1: user-block list (BlockStore) compiled in (#241)
 constexpr uint8_t OFFBAND_CAP_FEM_LNA       = 0x04;  // bit 2: FEM LNA runtime control available (#298)

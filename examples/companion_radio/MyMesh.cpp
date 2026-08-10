@@ -209,6 +209,42 @@ namespace offband { MqttBrokerPool& wifiObserverPool(); }
 #define AUTO_ADD_ROOM_SERVER      (1 << 3)  // 0x08 - auto-add Room Server (ADV_TYPE_ROOM)
 #define AUTO_ADD_SENSOR           (1 << 4)  // 0x10 - auto-add Sensor (ADV_TYPE_SENSOR)
 
+// #611: record the on-air hash of an outgoing channel message. A repeat of the same
+// (timestamp, channel) key OVERWRITES in place rather than adding a second entry, so
+// a lookup can never return a stale hash for a key the client is asking about now.
+// The client is responsible for not reusing a key across two DIFFERENT message texts
+// (see the 0xC6 contract in OffbandConfigProtocol.h) -- same text under the same key
+// is deterministic (AES-128 ECB, no IV) and therefore yields the same hash anyway.
+void MyMesh::recordSentPktHash(uint32_t msg_timestamp, uint8_t channel_idx, const uint8_t* hash) {
+  for (uint8_t s = 0; s < offband::OFFBAND_PKTHASH_RING_SLOTS; s++) {
+    if (_pkthash_ring[s].used &&
+        _pkthash_ring[s].msg_timestamp == msg_timestamp &&
+        _pkthash_ring[s].channel_idx == channel_idx) {
+      memcpy(_pkthash_ring[s].hash, hash, MAX_HASH_SIZE);
+      return;
+    }
+  }
+  SentPktHash& e = _pkthash_ring[_pkthash_next];
+  e.msg_timestamp = msg_timestamp;
+  e.channel_idx   = channel_idx;
+  memcpy(e.hash, hash, MAX_HASH_SIZE);
+  e.used = true;
+  _pkthash_next = (uint8_t)((_pkthash_next + 1) % offband::OFFBAND_PKTHASH_RING_SLOTS);
+}
+
+// #611: returns the retained hash for a key, or nullptr if it was never sent this
+// session or has been evicted (caller replies OFFBAND_PKTHASH_ERR_UNKNOWN_KEY).
+const uint8_t* MyMesh::lookupSentPktHash(uint32_t msg_timestamp, uint8_t channel_idx) const {
+  for (uint8_t s = 0; s < offband::OFFBAND_PKTHASH_RING_SLOTS; s++) {
+    if (_pkthash_ring[s].used &&
+        _pkthash_ring[s].msg_timestamp == msg_timestamp &&
+        _pkthash_ring[s].channel_idx == channel_idx) {
+      return _pkthash_ring[s].hash;
+    }
+  }
+  return nullptr;
+}
+
 void MyMesh::writeOKFrame() {
   uint8_t buf[1];
   buf[0] = RESP_CODE_OK;
@@ -1212,6 +1248,16 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
       _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store), _ui(ui) {
   _iter_started = false;
   _cli_rescue = false;
+  // #611: clear the packet-hash ring here rather than relying on the_mesh having
+  // static storage duration (which zero-initializes it today). That guarantee is
+  // non-local -- it silently disappears if this object is ever heap-allocated -- and
+  // a garbage `used` flag would make lookupSentPktHash() return a bogus hash, which
+  // the client would then correlate against CoreScope. Matches this constructor's
+  // body-init convention.
+  for (uint8_t s = 0; s < offband::OFFBAND_PKTHASH_RING_SLOTS; s++) {
+    _pkthash_ring[s].used = false;
+  }
+  _pkthash_next = 0;
 #ifdef OFFBAND_OBSERVER
   // Strycher/LoRa#325: init the USB-serial observer-CLI accumulator here
   // (matching this constructor's body-init convention) so _obs_cli_len is
@@ -1824,6 +1870,51 @@ void MyMesh::handleCmdFrame(size_t len) {
   // documented in OffbandConfigProtocol.h and is the single source of truth shared
   // with the client. Gated on PIN_BUZZER because the capability bit is; a board that
   // never advertises OFFBAND_CAP2_NOTIFY_SCOPE must not answer 0xC5 either.
+  // #611: on-air packet-hash query. Canonical contract in OffbandConfigProtocol.h.
+  // Read-only lookup against the send-path ring -- no hardware gate (every companion
+  // build has a channel-send path), so OFFBAND_CAP2_PKT_HASH is advertised
+  // unconditionally and this needs no #ifdef.
+  if (cmd_frame[0] == offband::CMD_OFFBAND_PKT_HASH && len >= 2) {
+    if (cmd_frame[1] == offband::OFFBAND_PKTHASH_GET) {
+      // [0xC6][0x01][ts:4][chan:1] -- exactly 7 bytes. Strict equality, not >=:
+      // the contract documents a fixed length, so a longer frame is a client bug and
+      // silently ignoring trailing bytes would hide it (Gemini review, #611).
+      if (len != 7) {
+        out_frame[0] = offband::RESP_CODE_OFFBAND_PKT_HASH;
+        out_frame[1] = offband::OFFBAND_PKTHASH_ERR;
+        out_frame[2] = offband::OFFBAND_PKTHASH_ERR_MALFORMED;
+        _serial->writeFrame(out_frame, 3);
+        return;
+      }
+      uint32_t ts;
+      memcpy(&ts, &cmd_frame[2], 4);
+      uint8_t chan = cmd_frame[6];
+      const uint8_t* h = lookupSentPktHash(ts, chan);
+      if (h == nullptr) {
+        out_frame[0] = offband::RESP_CODE_OFFBAND_PKT_HASH;
+        out_frame[1] = offband::OFFBAND_PKTHASH_ERR;
+        out_frame[2] = offband::OFFBAND_PKTHASH_ERR_UNKNOWN_KEY;
+        _serial->writeFrame(out_frame, 3);
+        return;
+      }
+      // Echo the key so the client can match reply->request without relying on
+      // ordering (the 0xC5 SET-echo precedent).
+      int o = 0;
+      out_frame[o++] = offband::RESP_CODE_OFFBAND_PKT_HASH;
+      out_frame[o++] = offband::OFFBAND_PKTHASH_GET;
+      memcpy(&out_frame[o], &ts, 4); o += 4;
+      out_frame[o++] = chan;
+      memcpy(&out_frame[o], h, MAX_HASH_SIZE); o += MAX_HASH_SIZE;
+      _serial->writeFrame(out_frame, o);
+      return;
+    }
+    out_frame[0] = offband::RESP_CODE_OFFBAND_PKT_HASH;
+    out_frame[1] = offband::OFFBAND_PKTHASH_ERR;
+    out_frame[2] = offband::OFFBAND_PKTHASH_ERR_MALFORMED;  // unknown sub-code
+    _serial->writeFrame(out_frame, 3);
+    return;
+  }
+
   if (cmd_frame[0] == offband::CMD_OFFBAND_DEVICE_UI && len >= 2) {
     uint8_t sub = cmd_frame[1];
     // #509: gate PER SUB-COMMAND, not for the whole command.
@@ -2165,6 +2256,10 @@ void MyMesh::handleCmdFrame(size_t len) {
 #else
     if (board.canControlLed()) offband_caps2 |= offband::OFFBAND_CAP2_INDICATORS;
 #endif
+    // #611: on-air packet-hash query (0xC6). No hardware dependency -- it only needs
+    // the channel-send path, which every companion build has -- so unlike the bits
+    // above this is advertised unconditionally.
+    offband_caps2 |= offband::OFFBAND_CAP2_PKT_HASH;
     out_frame[i++] = offband_caps2;          // v18+
     // #542 B1: current indicator state, so the client renders the toggles on connect
     // with no extra GET round-trip (the FEM-LNA precedent). Appended UNCONDITIONALLY.
@@ -2330,7 +2425,12 @@ void MyMesh::handleCmdFrame(size_t len) {
     } else {
       ChannelDetails channel;
       bool success = getChannel(channel_idx, channel);
-      if (success && sendGroupMessage(msg_timestamp, channel.channel, _prefs.node_name, text, len - i)) {
+      // #611: capture the on-air packet hash so a capable client can correlate this
+      // send with an observer sighting via the 0xC6 query. The reply below stays a
+      // bare writeOKFrame() -- unchanged for stock/alternate clients.
+      uint8_t sent_hash[MAX_HASH_SIZE];
+      if (success && sendGroupMessage(msg_timestamp, channel.channel, _prefs.node_name, text, len - i, sent_hash)) {
+        recordSentPktHash(msg_timestamp, channel_idx, sent_hash);
         writeOKFrame();
       } else {
         writeErrFrame(ERR_CODE_NOT_FOUND); // bad channel_idx
