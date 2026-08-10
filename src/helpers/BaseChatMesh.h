@@ -151,7 +151,15 @@ public:
   mesh::Packet* createSelfAdvert(const char* name, double lat, double lon);
   int  sendMessage(const ContactInfo& recipient, uint32_t timestamp, uint8_t attempt, const char* text, uint32_t& expected_ack, uint32_t& est_timeout);
   int  sendCommandData(const ContactInfo& recipient, uint32_t timestamp, uint8_t attempt, const char* text, uint32_t& est_timeout);
-  bool sendGroupMessage(uint32_t timestamp, mesh::GroupChannel& channel, const char* sender_name, const char* text, int text_len);
+  // #611: out_pkt_hash (optional) receives the transmitted packet's
+  // Packet::calculatePacketHash -- MAX_HASH_SIZE bytes -- so a caller can
+  // correlate its own outgoing channel message with an observer's sighting of
+  // the same on-air packet (CoreScope). Defaults to nullptr, so every existing
+  // caller is unaffected. Needed because the packet does not escape this
+  // function: it is handed to sendFloodScoped and only a bool comes back, so
+  // the hash cannot be obtained at the call site.
+  bool sendGroupMessage(uint32_t timestamp, mesh::GroupChannel& channel, const char* sender_name, const char* text, int text_len,
+                        uint8_t* out_pkt_hash = nullptr);
   bool sendGroupData(mesh::GroupChannel& channel, uint8_t* path, uint8_t path_len, uint16_t data_type, const uint8_t* data, int data_len);
   int  sendLogin(const ContactInfo& recipient, const char* password, uint32_t& est_timeout);
   int  sendAnonReq(const ContactInfo& recipient, const uint8_t* data, uint8_t len, uint32_t& tag, uint32_t& est_timeout);

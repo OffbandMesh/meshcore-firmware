@@ -483,7 +483,8 @@ int  BaseChatMesh::sendCommandData(const ContactInfo& recipient, uint32_t timest
   return rc;
 }
 
-bool BaseChatMesh::sendGroupMessage(uint32_t timestamp, mesh::GroupChannel& channel, const char* sender_name, const char* text, int text_len) {
+bool BaseChatMesh::sendGroupMessage(uint32_t timestamp, mesh::GroupChannel& channel, const char* sender_name, const char* text, int text_len,
+                                    uint8_t* out_pkt_hash) {
   uint8_t temp[5+MAX_TEXT_LEN+32];
   memcpy(temp, &timestamp, 4);   // mostly an extra blob to help make packet_hash unique
   temp[4] = 0;  // TXT_TYPE_PLAIN
@@ -498,6 +499,14 @@ bool BaseChatMesh::sendGroupMessage(uint32_t timestamp, mesh::GroupChannel& chan
 
   auto pkt = createGroupDatagram(PAYLOAD_TYPE_GRP_TXT, channel, temp, 5 + prefix_len + text_len);
   if (pkt) {
+    // #611: capture the hash HERE -- before sendFloodScoped(). Once the packet is
+    // queued for transmission the pool may recycle it, so reading it afterwards is
+    // a use-after-recycle. The hash is over the packet's own bytes (payload type +
+    // encrypted payload), so it is final the moment createGroupDatagram returns and
+    // does not depend on when the packet actually goes on air.
+    if (out_pkt_hash != nullptr) {
+      pkt->calculatePacketHash(out_pkt_hash);
+    }
     sendFloodScoped(channel, pkt);
     return true;
   }
