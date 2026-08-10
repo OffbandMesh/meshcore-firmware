@@ -1,4 +1,5 @@
 #include <helpers/BaseChatMesh.h>
+#include <helpers/ClockSanity.h>
 #include <Utils.h>
 
 #ifndef SERVER_RESPONSE_DELAY
@@ -62,8 +63,18 @@ void BaseChatMesh::bootstrapRTCfromContacts() {
       latest = contacts[i].lastmod;
     }
   }
+  // #607: this is an AUTOMATED clock source -- a poisoned contacts store must
+  // not re-poison the RTC at every boot (mechanism 2 of the unrecoverable
+  // future-clock bug). Implausible values are skipped, not clamped: leaving
+  // the clock at its power-on default is honest; inventing a time is not.
   if (latest != 0) {
-    getRTCClock()->setCurrentTime(latest + 1);
+    if (offband::plausibleEpoch(latest + 1)) {
+      uint32_t old_t = getRTCClock()->getCurrentTime();
+      getRTCClock()->setCurrentTime(latest + 1);
+      offband::logClockSet("contacts-bootstrap", old_t, latest + 1);
+    } else {
+      offband::logClockReject("contacts-bootstrap", getRTCClock()->getCurrentTime(), latest + 1);
+    }
   }
 }
 
