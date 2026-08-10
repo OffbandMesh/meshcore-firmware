@@ -1,5 +1,6 @@
 #include "EnvironmentSensorManager.h"
 #include <MeshLog.h>  // #411: route GPS status through the serial-capture sink
+#include <helpers/ClockSanity.h>  // #607: plausibility bounds on GPS clock sets
 
 #include <Wire.h>
 
@@ -1053,10 +1054,22 @@ void EnvironmentSensorManager::loop() {
     // self-sync; this writes the same value, harmless.)
     mesh::RTCClock* gps_clk = _location->getClock();
     long gps_epoch = _location->getTimestamp();
-    if (gps_clk != nullptr && gps_epoch >= (long)GPS_CLOCK_SANE_MIN) {
+    // #607: GPS is an AUTOMATED clock source. The old check only bounded the
+    // LOW side; a week-rollover mis-decode (~+19.6y per rollover) sailed
+    // through and poisoned the RTC decades into the future (the car-node
+    // case: ~+59y = 3 rollovers). plausibleEpoch bounds BOTH directions.
+    if (gps_clk != nullptr && gps_epoch >= (long)GPS_CLOCK_SANE_MIN &&
+        !offband::plausibleEpoch((uint32_t)gps_epoch)) {
+      // Rejection is visible but boot-capped (logClockReject); the sync
+      // timestamp is NOT updated, so a recovered GPS syncs next pass.
+      offband::logClockReject("gps", gps_clk->getCurrentTime(), (uint32_t)gps_epoch);
+    } else if (gps_clk != nullptr && gps_epoch >= (long)GPS_CLOCK_SANE_MIN &&
+        offband::plausibleEpoch((uint32_t)gps_epoch)) {
       if (_last_gps_clock_sync == 0 ||
           (millis() - _last_gps_clock_sync) > GPS_CLOCK_SYNC_INTERVAL) {
+        uint32_t old_t = gps_clk->getCurrentTime();
         gps_clk->setCurrentTime((uint32_t)gps_epoch);
+        offband::logClockSet("gps", old_t, (uint32_t)gps_epoch);
         _last_gps_clock_sync = millis();
       }
     }

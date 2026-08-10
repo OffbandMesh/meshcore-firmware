@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "DataStore.h"
+#include <helpers/ClockSanity.h>
 
 #if defined(EXTRAFS) || defined(QSPIFLASH)
   #define MAX_BLOBRECS 100
@@ -346,6 +347,12 @@ File file = openRead(_getContactsChannelsFS(), "/contacts3");
         success = success && (file.read((uint8_t *)&c.gps_lon, 4) == 4);
 
         if (!success) break; // EOF
+
+        // #607: heal lastmod values persisted under a poisoned clock BEFORE
+        // they reach bootstrapRTCfromContacts -- otherwise a once-future
+        // clock re-poisons the RTC on every boot (the unrecoverable car-node
+        // case). Implausible values collapse to the firmware build date.
+        c.lastmod = offband::clampLastmod(c.lastmod);
 
         c.id = mesh::Identity(pub_key);
         if (!host->onContactLoaded(c)) full = true;
