@@ -68,10 +68,27 @@
 
 namespace offband {
 
+// WHICH OFFSET TABLE TO READ WITH -- not "who wrote the file". The distinction
+// matters: an Offband build older than v1.2.0 wrote a companion record byte-
+// identical to upstream's, because Offband had not yet appended anything. For
+// such a record `Upstream` is the correct *answer* even though Offband wrote
+// it, because the two layouts coincide there.
 enum class PrefsLayout : uint8_t {
   Unknown  = 0,  // undetermined -- caller MUST NOT migrate
-  Upstream = 1,  // stock MeshCore wrote this record
-  Offband  = 2,  // Offband wrote this record
+  Upstream = 1,  // read with upstream's offsets
+  Offband  = 2,  // read with Offband's offsets
+};
+
+// Which of the two prefs subsystems a record belongs to. Needed because BOTH
+// subsystems fall back to the same legacy filename `/node_prefs`, and a device
+// re-flashed into a different role can therefore meet a `/node_prefs` written
+// by the *other* subsystem. Dispatching on the running role would then read a
+// repeater record with the companion table. The length sets are disjoint
+// (A: 291..298, 364 | B: 137, 138, 147) so the file identifies its own family.
+enum class PrefsFamily : uint8_t {
+  Unknown   = 0,
+  Common    = 1,  // CommonCLI record: /com_prefs (repeater, room-server, sensor)
+  Companion = 2,  // companion record: /new_prefs
 };
 
 // Why a decision was reached. Surfaced so the caller can log the deciding
@@ -84,6 +101,8 @@ enum class PrefsLayoutReason : uint8_t {
   AmbiguousLength      = 4,  // collision, and no other signal resolved it
   UnknownLength        = 5,  // matches no known release (truncated/corrupt?)
   TailUnavailable      = 6,  // record too short to hold the contested bytes
+  ContentContradiction = 7,  // contested bytes fit NEITHER layout -- corrupt
+  LengthTableOverlap   = 8,  // a length claimed by both tables: refuse (bug guard)
 };
 
 // Bytes 290..294 of the record -- the contested window. `valid` is false when
@@ -105,17 +124,31 @@ struct PrefsLayoutResult {
   PrefsLayoutReason reason = PrefsLayoutReason::UnknownLength;
 };
 
-// Path A: the CommonCLI record (/com_prefs, /node_prefs) used by repeater,
-// room-server and sensor roles.
+// Path A: the CommonCLI record (/com_prefs) used by repeater, room-server and
+// sensor roles.
 PrefsLayoutResult detectCommonPrefsLayout(const PrefsLayoutEvidence& ev);
 
-// Path B: the companion record (/new_prefs, /node_prefs). Offband appends
-// strictly after upstream's end, so a wrong read here loses the appended
-// fields rather than mis-assigning -- but it is still a wrong read.
+// Path B: the companion record (/new_prefs). Offband appends strictly after
+// upstream's end, so a wrong read here loses the appended fields rather than
+// mis-assigning -- but it is still a wrong read.
 PrefsLayoutResult detectCompanionPrefsLayout(const PrefsLayoutEvidence& ev);
+
+struct PrefsIdentity {
+  PrefsFamily       family = PrefsFamily::Unknown;
+  PrefsLayout       layout = PrefsLayout::Unknown;
+  PrefsLayoutReason reason = PrefsLayoutReason::UnknownLength;
+};
+
+// PREFER THIS over calling the per-path functions directly, and use it always
+// for `/node_prefs`. It identifies the family from the record itself instead of
+// trusting the running role, which is what makes a role-swapped device safe.
+// A caller that already knows the family (e.g. it opened `/com_prefs`) may use
+// the per-path function, but must still honour PrefsLayout::Unknown.
+PrefsIdentity identifyLegacyPrefs(const PrefsLayoutEvidence& ev);
 
 // Human-readable forms, for the mandatory log line.
 const char* toString(PrefsLayout v);
+const char* toString(PrefsFamily v);
 const char* toString(PrefsLayoutReason v);
 
 }  // namespace offband
