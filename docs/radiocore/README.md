@@ -2,6 +2,10 @@
 
 Working notes for the **Heltec RadioCore** beta hardware. Tracking: [#622](https://github.com/OffbandMesh/meshcore-firmware/issues/622) (feature), [#623](https://github.com/OffbandMesh/meshcore-firmware/issues/623) RC32 · [#624](https://github.com/OffbandMesh/meshcore-firmware/issues/624) RCC6 · [#625](https://github.com/OffbandMesh/meshcore-firmware/issues/625) RC52.
 
+> **Snapshot, not live state.** Everything here was captured 2026-08-10 against
+> `firmware-base` @ `5e15510e` (MeshCore 1.16.0 base) and upstream MeshCore @ `companion-v1.17.0`.
+> Re-verify before relying on any of it.
+
 ## What RadioCore is
 
 A socket system, not three separate boards: interchangeable **core modules** (MCU + radio) on a common **20-pin board-to-board connector**, sharing identical power/reset pins and a common display. Heltec's silkscreen calls it a "Wireless Barebone System."
@@ -13,49 +17,89 @@ A socket system, not three separate boards: interchangeable **core modules** (MC
 | **RC52** | nRF52840 | SX1262 + FEM (RA62A-HF) | BLE / serial companion, repeater — **no WiFi** |
 | HT-HC01 V2 | (host: ESP32-S3) | Morse Micro MM6108, 802.11ah | deferred — see below |
 
-Common header pins on all three: `1 GND · 2 VBAT · 3 GND · 4 5V … 18 RST · 19 3V3/VDD · 20 GND`.
+### Connector
+
+Two rows of ten. Pins **1–10** on one edge, **11–20** on the other, numbered from the
+end opposite the module's keying triangle. Power/reset pins are identical on all three
+modules `[verified: the three vendor pinout diagrams]`:
+
+```
+ 1 GND    2 VBAT   3 GND    4 5V        18 RST   19 3V3 / VDD   20 GND
+```
+
+`[not captured: connector pitch, mating part number, mechanical drawing, current ratings.]`
+Those are in the vendor diagrams / Heltec's mechanical docs only — see `vendor/` below.
 
 ## Why the pinout images are not in this repo
 
 The Heltec pinout artwork, Heltec's verbatim beta-programme message, and third-party
 screenshots are **not redistributable under this repo's MIT licence**, and amount to
-~19 MB of binaries that git history cannot later shed. They live locally, gitignored, in:
+~19 MB of binaries that git history could never later shed. They live locally, gitignored,
+in `docs/radiocore/vendor/` — see [`vendor/README.md`](./vendor/README.md) for the manifest.
 
-```
-docs/radiocore/vendor/          <- gitignored, local only
-  RC32_ESP32/RC32.jpg           Heltec RC32 pinout
-  RCC6/RCC6.jpg                 Heltec RCC6 pinout
-  RC52_nRF52/image.png          Heltec RC52 pinout
-  Heltec_RadioCore_Beta_Feedback.md   Heltec beta brief, verbatim
-  DUBS_LCD_image1.png           third-party device photo
-  n30nex_stats_image.png        third-party dashboard screenshot
-```
+The pin data and electrical facts needed for bring-up are transcribed below. **The
+transcription is not a complete substitute for the diagrams** — see *What is not
+transcribed* at the end.
 
-**Everything load-bearing from those images is transcribed below**, so the data survives
-without them.
+## Pin maps
 
-## Pin maps (transcribed from the vendor diagrams)
+All tables below: `[verified: transcribed by hand from the vendor pinout diagrams,
+2026-08-10]`. Hand transcription can introduce errors — check against the board before
+trusting a single pin.
 
 ### RC32 — ESP32-S3
 
-Header-exposed GPIO: `4, 5, 6, 16, 17, 0` (pins 10→5) and `44, 43, 42, 41, 40, 39, 38` (pins 11→17).
+**Header-exposed GPIO**, with the alternate functions the diagram marks:
+
+| Pin | GPIO | Also |
+|---|---|---|
+| 10 | 4 | ADC1_CH3, TOUCH4 |
+| 9 | 5 | ADC1_CH4, TOUCH5 |
+| 8 | 6 | ADC1_CH5, TOUCH6, FSPIQ |
+| 7 | 16 | ADC2_CH5, U0CTS, XTAL_32K_N |
+| 6 | 17 | ADC2_CH6, U1TXD |
+| 5 | 0 | USER button (pull-up) |
+| 11 | 44 | U0RXD, CLK_OUT2 |
+| 12 | 43 | U0TXD, CLK_OUT1 |
+| 13 | 42 | MTMS |
+| 14 | 41 | MTDI, CLK_OUT1 |
+| 15 | 40 | MTDO, CLK_OUT2 |
+| 16 | 39 | MTCK, CLK_OUT3, SUBSPICS1 |
+| 17 | 38 | FSPIWP, SUBSPIWP |
 
 | Function | Pins |
 |---|---|
 | TFT | `SCL=17  SDA=38  CS=39  DC=16  RST=4  EN=6 (active LOW)  BL=5 (active HIGH)` |
-| LoRa *(module-internal, not on header)* | `NSS=10  RESET=9  BUSY=1  SCLK=11  MISO=13  MOSI=12  DIO1=14` |
-| Battery *(module-internal)* | `ADC_CTRL=15  VBAT_READ=7  ADC_CTRL_ENABLED=HIGH  multiplier 4.9` |
+| LoRa — **module-internal, none on the header** | `NSS=10  RESET=9  BUSY=1  SCLK=11  MISO=13  MOSI=12  DIO1=14` |
+| Battery — **module-internal** | `ADC_CTRL=15  VBAT_READ=7  ADC_CTRL_ENABLED=HIGH  multiplier 4.9` |
 
-⚠ Upstream MeshCore's `variants/heltec_rc32` additionally assigns **buzzer 48, TX LED 47,
-sensor power 46, sensor reset 2, I²C SDA 21 / SCL 18, GPS enable 45** — none of which the
-bare module brings out on its 20-pin header. That variant appears written against a
-complete Heltec product rather than a socketed core module. Confirm the physical unit
-before assuming those pins exist.
+⚠ **Upstream's `variants/heltec_rc32` assigns pins that are NOT on this module's 20-pin
+header**: buzzer 48, TX LED 47, sensor power 46, sensor reset 2, I²C SDA 21 / SCL 18,
+GPS enable 45. `[verified: upstream variants/heltec_rc32/platformio.ini + variant.h,
+compared against the header list above]` The TFT pins *are* all on the header; those are
+not. `[hypothesis: untested]` The likeliest explanation is that the variant targets a
+complete Heltec product rather than a bare socketed module — but the mechanism is not
+confirmed, so establish what our physical unit exposes before trusting those pins.
 
 ### RCC6 — ESP32-C6
 
-Header-exposed GPIO: `0, 1, 2, 3, 4, 9` (pins 10→5) and `17, 16, 23, 22, 21, 18, 15` (pins 11→17).
-Pins 13/14/15 (GPIO 23/22/21) are marked **LoRa Module** on the diagram.
+**Header-exposed GPIO:**
+
+| Pin | GPIO | Also |
+|---|---|---|
+| 10 | 0 | ADC1_CH0, XTAL_32K_P, LP_UART_DTRN |
+| 9 | 1 | ADC1_CH1, XTAL_32K_N, LP_UART_DSRN |
+| 8 | 2 | ADC1_CH2, FSPIQ, LP_UART_RTSN |
+| 7 | 3 | ADC1_CH3, LP_UART_CTSN |
+| 6 | 4 | ADC1_CH4, FSPIHD, MTMS, LP_UART_RXD |
+| 5 | 9 | USER button (pull-up) |
+| 11 | 17 | U0RXD, FSPICS1 |
+| 12 | 16 | U0TXD, FSPICS0 |
+| 13 | 23 | SDIO_DATA3 — **shared with LoRa module** |
+| 14 | 22 | SDIO_DATA2 — **shared with LoRa module** |
+| 15 | 21 | SDIO_DATA1, FSPICS5 — **shared with LoRa module** |
+| 16 | 18 | SDIO_CMD, FSPICS2 |
+| 17 | 15 | — |
 
 | Function | Pins |
 |---|---|
@@ -63,6 +107,11 @@ Pins 13/14/15 (GPIO 23/22/21) are marked **LoRa Module** on the diagram.
 | LoRa | `SCLK=21  MISO=20  MOSI=22  NSS=23  DIO1=19  BUSY=10  RESET=8` |
 | Battery | `ADC_CTRL=5  VBAT_READ=6  multiplier 4.95` |
 | Button | `9` |
+
+**Only three LoRa pins reach the header** — `SCLK=21`, `MOSI=22`, `NSS=23`, which is
+exactly the block the diagram rings with a dashed "LoRa Module" box (pins 13/14/15).
+`MISO=20`, `DIO1=19`, `BUSY=10` and `RESET=8` are **module-internal and not broken out**.
+Do not expect to probe the whole LoRa bus on the connector.
 
 ### RC52 — nRF52840
 
@@ -73,13 +122,47 @@ Pins 13/14/15 (GPIO 23/22/21) are marked **LoRa Module** on the diagram.
 | Battery | `ADC_Ctrl=P0.04` gating `ADC_IN=P0.31` |
 | Other | `USER=P1.10  nRF_RST=P0.18  SWDIO=P0.30  NFC1=P0.10  nRF_RX=P0.07  nRF_TX=P0.08` |
 
-⚠ **`ADC_Ctrl` gates the battery divider — the same shape that bricked the Wio Tracker L1
-Pro (#602/#620).** Any SafeBoot battery config for RC52 must take its polarity from
-measuring *this* board, never from a sibling variant.
+Header-exposed: `P0.10 (NFC1, AIN7)`, `P0.09`, `P1.13`, `P0.28`, `P0.30 (SWDIO)`,
+`P1.10 (USER)` on pins 10–5; `P0.08 (AIN6, nRF_TX)`, `P0.07 (AIN5, nRF_RX)`, `P0.20`,
+`P1.01`, `P1.06`, `P1.04`, `P1.02`, `P0.18 (RST)` on pins 11–18.
 
-✅ **`FEM_LNA_CTRL` (P1.07) is an independent LNA line** — RC52 would be only the second
-board class able to exercise Offband's FEM/LNA control (cap bit `0x04`, `0xC3`), after the
-Heltec V4.3 / KCT8103L.
+## Hardware hazards
+
+### RC52 — enable-gated battery divider (the #602 shape)
+
+`ADC_Ctrl` (P0.04) gates the divider feeding `ADC_IN` (P0.31). **This is the same pattern
+that bricked the Seeed Wio Tracker L1 Pro on 2026-08-10**: `SAFEBOOT_VBAT_ENABLE_ACTIVE`
+was copied from `xiao_nrf52` without checking which way that board drives the pin, so
+SafeBoot disabled the divider, sampled it dead, read below `SLEEP_MV` and deep-slept
+before USB init — at full charge, presenting as a completely dead board. See #602 / #620.
+
+**Rule: any SafeBoot battery config for RC52 takes its polarity from measuring _this_
+board. Never copy it from a sibling variant.** `[verified: RC52 pinout diagram shows the
+gate; the #602 failure mode is documented in HARDWARE.local.md]`
+
+### RCC6 — ESP32-C6 heap headroom
+
+The C6 has materially less usable SRAM than the S3, and Offband's WiFi/TLS observer path
+has a hard heap floor: `OFFBAND_TLS_HEAP_FLOOR_BYTES` = **80 KB**, guarding a ~72 KB TLS
+handshake transient. `[verified: src/helpers/wifi_observer/WifiObserverConfig.h:85]`
+
+A community RCC6 repeater dashboard reports **free heap 91 KB, minimum 17 KB** — i.e. a
+working C6 build sits only ~11 KB above that floor, with a low-water mark far beneath it.
+`[hypothesis: untested — that figure is from a third-party build, not ours]`
+
+If it holds on our hardware, an Offband TLS observer on RCC6 would land in the same shape
+as the HV3 heap-floor deadlock (#521, fixed by #534 lazy client allocation). **Measure
+real heap on the board before designing any WiFi/Observer work for it** — that is the
+first gating task on #624, ahead of feature work. A web UI, TLS broker, or high contact
+count on this module can exhaust memory in ways that present as intractable runtime
+faults rather than clean failures.
+
+### RC52 — opportunity, not hazard
+
+`FEM_LNA_CTRL` (P1.07) is an independent LNA control line. `[verified: Offband's
+FEM/LNA control (cap bit 0x04, 0xC3) is exercised today only on Heltec V4.3 / KCT8103L;
+GC1109 and SKY66122 boards structurally lack an RX-path bypass — see HARDWARE.local.md]`
+RC52 would therefore be a second bench target for that path.
 
 ## Display — T108 / NV3001B
 
@@ -87,11 +170,13 @@ Heltec V4.3 / KCT8103L.
 Full driver notes, init sequence and troubleshooting in [`RCC6 TFT Guide.md`](./RCC6%20TFT%20Guide.md);
 standalone Arduino test in [`radiocore-c6-tft-test.ino`](./radiocore-c6-tft-test.ino).
 
-**Unresolved:** the guide (hardware-tested here) states the panel is portrait and *must*
-run rotation 0, with landscape producing a garbled 128×128 square. The n30nex community
-firmware describes the same panel as 220×128 landscape. Both cannot be literally true —
-most likely MeshCore's `NV3001BDisplay` handles rotation the bare test sketch does not,
-but that is untested. Settle it on hardware.
+**UNRESOLVED — do not treat either answer as settled.** The guide (bench-tested here)
+states the panel is portrait and *must* run rotation 0, with landscape producing a
+garbled 128×128 square. The n30nex community firmware describes the same panel as
+220×128 landscape. Both cannot be literally true. `[hypothesis: untested]` The likeliest
+reconciliation is that MeshCore's `NV3001BDisplay` handles rotation in a way the bare
+test sketch does not — unverified. Settle it on hardware before building UI work on
+either assumption.
 
 ## Prior art
 
@@ -102,19 +187,45 @@ but that is untested. Settle it on hardware.
 | RC52 | none | BLE companion, headless repeater, room server ± TFT |
 
 `variants/heltec_rc32` and `src/helpers/ui/NV3001BDisplay.*` landed upstream in commit
-`17d68e32` (2026-07-08) — **after 1.16.0, inside 1.17.0**. Offband is on the 1.16.0 base,
-so RadioCore support is coupled to the 1.17.0 base update (#614) or to cherry-picking that
-commit. All three n30nex firmwares are 1.17.0-based too.
+`17d68e32`, dated **2026-07-08** — after the 1.16.0 release (2026-06-06) and inside
+1.17.0 (2026-08-09). `[verified: git merge-base --is-ancestor 17d68e32 companion-v1.16.0
+→ NO; … companion-v1.17.0 → YES]`
+
+Offband is on the **1.16.0** base, so RadioCore support is coupled either to the 1.17.0
+base update (#614) or to cherry-picking that commit onto 1.16.0. The base update carries
+a separate config-migration hazard — see #614 / #615 before assuming it is a clean pull.
 
 ## Wi-Fi HaLow — deferred
 
 HT-HC01 V2 is a **Morse Micro MM6108**: 802.11ah, 863–870 / 902–928 MHz, 1/2/4/8 MHz
 channels, up to 32 Mbps, 27 ±1 dBm at 915 MHz, VDD 3.0–3.6 V with **VFEM at 5 V**. It is a
 **companion module requiring a host** over SDIO 2.0 or UART, driven by the Morse Micro SDK.
+`[verified: heltec.org HT-HC01 V2 product page, 2026-08-10]`
 
 It carries IP, not MeshCore packets — it is not a longer-range LoRa and not a drop-in for
-one. Owner-deferred; likely belongs outside a MeshCore fork entirely. `dut.md` notes HaLow
-is populated optionally.
+one. **Owner-deferred**; likely belongs outside a MeshCore fork entirely. `dut.md` notes
+HaLow is populated optionally, so it may be a board option rather than a separate unit.
+
+## What is not transcribed
+
+Honest limits of this document — these live only in `vendor/`, or nowhere:
+
+- Connector pitch, mating part number, and mechanical/keying drawing.
+- Pin voltage tolerance, rail current limits, and other electrical characteristics.
+- Physical placement of buttons, LEDs, antenna connectors and the display mount.
+- Full multiplexed-function lists per pin (the tables above carry the functions the
+  diagrams label, not every ESP32/nRF alternate function).
+- Anything about the two HC01 HaLow units beyond the module datasheet.
+
+## Files here
+
+| File | What it is |
+|---|---|
+| `README.md` | this document |
+| `RCC6 TFT Guide.md` | T108 / NV3001B display guide — identity, wiring, init, troubleshooting |
+| `radiocore-c6-tft-test.ino` | standalone Arduino NV3001B test sketch (see its attribution header) |
+| `dut.md` | device-under-test plan for the beta units — power measurement (PPK2 / INA228 / FNB58), integration, stress, Pi 5 reporting. Owner's working notes; terse by design |
+| `vendor/` | **gitignored** — third-party assets, see `vendor/README.md` |
 
 ## References
 

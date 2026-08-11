@@ -16,6 +16,28 @@
 // the first that fills the panel cleanly; larger windows wrap and glitch).
 // Init sequence matches the Arduino_NV3001B class from Quency-D/Arduino_GFX
 // @ 4d5afb0 (the library used by Meshtastic PR #11041, tested on RCC6).
+//
+// ---------------------------------------------------------------------------
+// Derivation and licensing
+// ---------------------------------------------------------------------------
+// The NV3001B initialisation register block below is derived from the
+// Arduino_NV3001B driver in Quency-D/Arduino_GFX, itself a fork of
+// moononournation/Arduino_GFX, which is distributed under the BSD 2-Clause
+// licence:
+//
+//     Copyright (c) 2012 Adafruit Industries.  All rights reserved.
+//
+// BSD 2-Clause requires that redistributions of source code retain the above
+// copyright notice, the list of conditions, and the disclaimer.  Full licence
+// text: https://github.com/Quency-D/Arduino_GFX/blob/master/license.txt
+//
+// The surrounding sketch (SPI setup, probe, fill/draw primitives, 5x7 font) is
+// original work in this repository under the repo's MIT licence.
+//
+// NOTE: if any of this file is a verbatim copy rather than a re-expression of
+// the register values, the full BSD licence text must be reproduced here, not
+// merely referenced.  Confirm before redistributing.
+// ---------------------------------------------------------------------------
 
 #include <SPI.h>
 
