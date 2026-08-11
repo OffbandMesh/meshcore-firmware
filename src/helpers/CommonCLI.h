@@ -238,7 +238,7 @@ protected:
   }
 
 public:
-  NodePrefs() : ConfigSerializer(), bridge(this), gps(this), radio(this), power(this), repeat(this), room(this), ui(this), log(this) {
+  NodePrefs() : ConfigSerializer(), radio(this), bridge(this), gps(this), power(this), repeat(this), room(this), ui(this), log(this) {  // order MUST match declaration order (-Wreorder)
     node_name[0] = 0;
     password[0] = 0;
     guest_password[0] = 0;

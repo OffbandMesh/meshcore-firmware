@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "DataStore.h"
+#include <helpers/prefs/PrefsLayout.h>   // #627
 #include <helpers/ClockSanity.h>
 
 #if defined(EXTRAFS) || defined(QSPIFLASH)
@@ -205,10 +206,39 @@ void DataStore::loadPrefs(NodePrefs& prefs) {
       prefs.loadSerial(file);   // new Serial prefs
       file.close();
     }
-  } else if (_fs->exists("/new_prefs")) {
-    loadPrefsInt("/new_prefs", prefs);
-    if (savePrefs(prefs) ) {                // save to new format
-      //_fs->remove("/new_prefs"); // remove old
+  } else {
+    // #627: same discipline as CommonCLI -- decide which writer produced the
+    // legacy record before reading it. Path B is append-only (Offband appends
+    // after upstream's end at 137), so a wrong read drops our appended fields
+    // rather than mis-assigning them -- still a wrong read, and it still fails
+    // closed rather than guessing.
+    const char* legacy = _fs->exists("/new_prefs") ? "/new_prefs"
+                       : (_fs->exists("/node_prefs") ? "/node_prefs" : NULL);
+    if (legacy) {
+      offband::PrefsLayoutEvidence ev;
+      {
+        File f = openRead(_fs, legacy);
+        if (f) { ev.length = (size_t)f.size(); f.close(); }
+      }
+      offband::PrefsIdentity id = offband::identifyLegacyPrefs(ev);
+      MESH_DEBUG_PRINTLN("[prefs] legacy %s len=%u -> layout=%s (%s)",
+                         legacy, (unsigned)ev.length,
+                         offband::toString(id.layout), offband::toString(id.reason));
+      if (id.layout != offband::PrefsLayout::Unknown) {
+        // Both layouts are byte-identical up to upstream's end and Offband only
+        // appends, so one reader serves both: on an upstream-written record it
+        // short-reads to EOF and the appended fields keep their defaults.
+        loadPrefsInt(legacy, prefs);
+        if (!savePrefs(prefs)) {
+          MESH_DEBUG_PRINTLN("[prefs] ERROR: migrated %s but FAILED to write "
+                             "/prefs.json -- will be retried next boot.", legacy);
+        }
+        // legacy file deliberately retained -- recovery path
+      } else {
+        MESH_DEBUG_PRINTLN("[prefs] ERROR: cannot determine legacy layout of %s "
+                           "(len=%u) -- MIGRATION REFUSED, booting on defaults.",
+                           legacy, (unsigned)ev.length);
+      }
     }
   }
 }

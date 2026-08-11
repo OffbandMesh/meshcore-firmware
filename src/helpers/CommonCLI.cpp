@@ -216,12 +216,22 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
                          legacy, (unsigned)ev.length,
                          offband::toString(id.family), offband::toString(id.layout),
                          offband::toString(id.reason));
-      if (id.layout == offband::PrefsLayout::Offband) {
-        loadPrefsInt(fs, legacy);            // Offband offsets
-        savePrefs(fs);
-      } else if (id.layout == offband::PrefsLayout::Upstream) {
-        loadPrefsUpstreamInt(fs, legacy);    // stock MeshCore offsets
-        savePrefs(fs);
+      if (id.layout == offband::PrefsLayout::Offband || id.layout == offband::PrefsLayout::Upstream) {
+        if (id.layout == offband::PrefsLayout::Offband) {
+          loadPrefsInt(fs, legacy);          // Offband offsets
+        } else {
+          loadPrefsUpstreamInt(fs, legacy);  // stock MeshCore offsets
+        }
+        // The values are loaded either way; persisting them is what completes the
+        // migration. If the write fails (filesystem full, I/O error) /prefs.json
+        // never appears and this whole path re-runs on EVERY boot -- so surface it
+        // rather than let it retry silently forever. The node still runs on the
+        // values just loaded; only the persist failed.
+        if (!savePrefs(fs)) {
+          MESH_DEBUG_PRINTLN("[prefs] ERROR: migrated %s but FAILED to write "
+                             "/prefs.json -- running on the loaded values, and this "
+                             "migration will be retried on next boot.", legacy);
+        }
       } else {
         // FAIL CLOSED. Do NOT migrate and do NOT fall back to either table --
         // guessing here is the corruption path this whole mechanism exists to
