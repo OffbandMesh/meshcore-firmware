@@ -29,6 +29,22 @@ runs:
     - name: Extract Version from Git Tag
       shell: bash
       run: |
-        GIT_TAG_NAME="${GITHUB_REF#refs/tags/}"
-        GIT_TAG_VERSION=$(echo "$GIT_TAG_NAME" | sed -E 's/.*-(v[0-9].*)$/\1/')
-        echo "GIT_TAG_VERSION=${GIT_TAG_VERSION}" >> $GITHUB_ENV
+        if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+          # Triggered by a tag push. NOTE: upstream uses "${GIT_TAG_NAME##*-}"
+          # here, which takes the text after the LAST hyphen. That is wrong for
+          # Offband tags, which carry pre-release suffixes and multi-hyphen
+          # prefixes -- "offband-v1.3.0-rc1" would yield "rc1", and
+          # "safeboot-simple-repeater-v1.2.3-rc1" likewise. The sed below
+          # captures the v<digits>... suffix from anywhere in the tag instead,
+          # giving "v1.3.0-rc1". build-safeboot-firmwares.yml depends on the
+          # same regex -- keep the two in step.
+          GIT_TAG_NAME="${GITHUB_REF#refs/tags/}"
+          VERSION_STRING=$(echo "$GIT_TAG_NAME" | sed -E 's/.*-(v[0-9].*)$/\1/')
+        else
+          # triggered by a workflow dispatch (e.g: refs/heads/main) -- upstream
+          # addition, kept: the new firmware-builder.yml is dispatch-triggered.
+          # strip "refs/heads/" prefix and replace any remaining "/" with "-" to protect file paths
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          VERSION_STRING=$(echo "$BRANCH_NAME" | tr '/' '-')
+        fi
+        echo "GIT_TAG_VERSION=${VERSION_STRING}" >> $GITHUB_ENV

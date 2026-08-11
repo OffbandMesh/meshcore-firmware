@@ -1,5 +1,9 @@
 #include <Arduino.h>
 #include "CommonCLI.h"
+#include "prefs/PrefsLayout.h"   // #627 legacy-layout detection
+#if defined(ESP32)
+  #include <Preferences.h>   // #627: cw_boot marker probe
+#endif
 #include "ClockSanity.h"  // #607
 #include "TxtDataHelpers.h"
 #include "AdvertDataHelpers.h"
@@ -129,6 +133,44 @@ static bool isValidName(const char *n) {
   return true;
 }
 
+
+// #627: collect the evidence identifyLegacyPrefs() decides on. Reads only the
+// file length and bytes 290-294 -- the window where the two layouts disagree --
+// plus, on ESP32, whether Offband's cw_boot NVS namespace exists. cw_boot is
+// written every boot by heartbeatBegin() via crashLogStandardInit(), and
+// upstream opens NO NVS namespace at all, so its presence proves an Offband
+// boot. It is a no-op on nRF52, hence corroboration only, never a requirement.
+offband::PrefsLayoutEvidence CommonCLI::gatherLegacyEvidence(FILESYSTEM* fs, const char* filename) {
+  offband::PrefsLayoutEvidence ev;
+#if defined(RP2040_PLATFORM)
+  File file = fs->open(filename, "r");
+#else
+  File file = fs->open(filename);
+#endif
+  if (file) {
+    ev.length = (size_t)file.size();
+    if (ev.length >= 295) {
+      file.seek(290);
+      uint8_t buf[5] = {0, 0, 0, 0, 0};
+      if (file.read(buf, sizeof(buf)) == sizeof(buf)) {
+        ev.tail.valid = true;
+        ev.tail.b290 = buf[0]; ev.tail.b291 = buf[1]; ev.tail.b292 = buf[2];
+        ev.tail.b293 = buf[3]; ev.tail.b294 = buf[4];
+      }
+    }
+    file.close();
+  }
+#if defined(ESP32)
+  {
+    Preferences p;
+    // readOnly open succeeds only if the namespace already exists.
+    if (p.begin("cw_boot", true)) { ev.offband_nvs_marker = true; p.end(); }
+    ev.nvs_marker_supported = true;
+  }
+#endif
+  return ev;
+}
+
 void CommonCLI::loadPrefs(FILESYSTEM* fs) {
   // #562: common caplog defaults, set before any file load. An old prefs file
   // predating these fields short-reads to EOF in loadPrefsInt and leaves these
@@ -148,16 +190,54 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
 #else
   _prefs->syslog_port = 514;
 #endif
-  if (fs->exists("/com_prefs")) {
-    loadPrefsInt(fs, "/com_prefs");   // new filename
-  } else if (fs->exists("/node_prefs")) {
-    loadPrefsInt(fs, "/node_prefs");
-    savePrefs(fs);  // save to new filename
-    fs->remove("/node_prefs");  // remove old
+  if (fs->exists("/prefs.json")) {
+#if defined(RP2040_PLATFORM)
+    File file = fs->open("/prefs.json", "r");
+#else
+    File file = fs->open("/prefs.json");
+#endif
+    if (file) {
+      _prefs->loadSerial(file);   // keyed format -- offsets no longer exist
+      file.close();
+    }
+  } else {
+    // One-time migration of the legacy binary record into /prefs.json.
+    //
+    // The record may have been written by Offband OR by stock MeshCore, and the
+    // two put DIFFERENT FIELDS at offsets 291-294. Reading one with the other's
+    // table silently mis-assigns values that are then persisted -- so decide
+    // which writer produced it before reading a single field. #627.
+    const char* legacy = fs->exists("/com_prefs") ? "/com_prefs"
+                       : (fs->exists("/node_prefs") ? "/node_prefs" : NULL);
+    if (legacy) {
+      offband::PrefsLayoutEvidence ev = gatherLegacyEvidence(fs, legacy);
+      offband::PrefsIdentity id = offband::identifyLegacyPrefs(ev);
+      MESH_DEBUG_PRINTLN("[prefs] legacy %s len=%u -> family=%s layout=%s (%s)",
+                         legacy, (unsigned)ev.length,
+                         offband::toString(id.family), offband::toString(id.layout),
+                         offband::toString(id.reason));
+      if (id.layout == offband::PrefsLayout::Offband) {
+        loadPrefsInt(fs, legacy);            // Offband offsets
+        savePrefs(fs);
+      } else if (id.layout == offband::PrefsLayout::Upstream) {
+        loadPrefsUpstreamInt(fs, legacy);    // stock MeshCore offsets
+        savePrefs(fs);
+      } else {
+        // FAIL CLOSED. Do NOT migrate and do NOT fall back to either table --
+        // guessing here is the corruption path this whole mechanism exists to
+        // prevent. Leave the legacy file untouched, run this boot on defaults,
+        // and make it loud so an operator intervenes (SAFELANE 6).
+        MESH_DEBUG_PRINTLN("[prefs] ERROR: cannot determine legacy layout of %s "
+                           "(len=%u) -- MIGRATION REFUSED, booting on defaults. "
+                           "The legacy file is untouched.", legacy, (unsigned)ev.length);
+      }
+      // NOTE: the legacy file is deliberately RETAINED after a successful
+      // migration too, so a wrong determination stays recoverable.
+    }
   }
 }
 
-void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
+void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {  // Legacy prefs loader
 #if defined(RP2040_PLATFORM)
   File file = fs->open(filename, "r");
 #else
@@ -265,80 +345,136 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {
     // companion too.
     meshLogSetLevel(_prefs->caplog_level);
     meshLogSetEnabled(_prefs->caplog_enabled != 0);
+    _prefs->cad_enabled = constrain(_prefs->cad_enabled, 0, 1); // boolean
 
     file.close();
   }
 }
 
-void CommonCLI::savePrefs(FILESYSTEM* fs) {
-#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
-  fs->remove("/com_prefs");
-  File file = fs->open("/com_prefs", FILE_O_WRITE);
-#elif defined(RP2040_PLATFORM)
-  File file = fs->open("/com_prefs", "w");
+// #627: legacy reader for a record written by STOCK MeshCore. Identical to
+// loadPrefsInt() up to offset 290, then upstream's field order for 290-294 --
+// where the two layouts disagree (they permute fem_rxgain against the flood
+// limits). Selected by identifyLegacyPrefs(); never guessed.
+void CommonCLI::loadPrefsUpstreamInt(FILESYSTEM* fs, const char* filename) {
+#if defined(RP2040_PLATFORM)
+  File file = fs->open(filename, "r");
 #else
-  File file = fs->open("/com_prefs", "w", true);
+  File file = fs->open(filename);
 #endif
   if (file) {
     uint8_t pad[8];
-    memset(pad, 0, sizeof(pad));
 
-    file.write((uint8_t *)&_prefs->airtime_factor, sizeof(_prefs->airtime_factor));    // 0
-    file.write((uint8_t *)&_prefs->node_name, sizeof(_prefs->node_name));              // 4
-    file.write(pad, 4);                                                                // 36
-    file.write((uint8_t *)&_prefs->node_lat, sizeof(_prefs->node_lat));                // 40
-    file.write((uint8_t *)&_prefs->node_lon, sizeof(_prefs->node_lon));                // 48
-    file.write((uint8_t *)&_prefs->password[0], sizeof(_prefs->password));             // 56
-    file.write((uint8_t *)&_prefs->freq, sizeof(_prefs->freq));                        // 72
-    file.write((uint8_t *)&_prefs->tx_power_dbm, sizeof(_prefs->tx_power_dbm));        // 76
-    file.write((uint8_t *)&_prefs->disable_fwd, sizeof(_prefs->disable_fwd));          // 77
-    file.write((uint8_t *)&_prefs->advert_interval, sizeof(_prefs->advert_interval));  // 78
-    file.write(pad, 1);                                                                // 79 : 1 byte unused (rx_boosted_gain moved to end)
-    file.write((uint8_t *)&_prefs->rx_delay_base, sizeof(_prefs->rx_delay_base));      // 80
-    file.write((uint8_t *)&_prefs->tx_delay_factor, sizeof(_prefs->tx_delay_factor));  // 84
-    file.write((uint8_t *)&_prefs->guest_password[0], sizeof(_prefs->guest_password)); // 88
-    file.write((uint8_t *)&_prefs->direct_tx_delay_factor, sizeof(_prefs->direct_tx_delay_factor)); // 104
-    file.write(pad, 4); // 108 : 4 byte unused
-    file.write((uint8_t *)&_prefs->sf, sizeof(_prefs->sf));                                         // 112
-    file.write((uint8_t *)&_prefs->cr, sizeof(_prefs->cr));                                         // 113
-    file.write((uint8_t *)&_prefs->allow_read_only, sizeof(_prefs->allow_read_only));               // 114
-    file.write((uint8_t *)&_prefs->multi_acks, sizeof(_prefs->multi_acks));                         // 115
-    file.write((uint8_t *)&_prefs->bw, sizeof(_prefs->bw));                                         // 116
-    file.write((uint8_t *)&_prefs->agc_reset_interval, sizeof(_prefs->agc_reset_interval));         // 120
-    file.write((uint8_t *)&_prefs->path_hash_mode, sizeof(_prefs->path_hash_mode));                 // 121
-    file.write((uint8_t *)&_prefs->loop_detect, sizeof(_prefs->loop_detect));                       // 122
-    file.write(pad, 1);                                                                             // 123
-    file.write((uint8_t *)&_prefs->flood_max, sizeof(_prefs->flood_max));                           // 124
-    file.write((uint8_t *)&_prefs->flood_advert_interval, sizeof(_prefs->flood_advert_interval));   // 125
-    file.write((uint8_t *)&_prefs->interference_threshold, sizeof(_prefs->interference_threshold)); // 126
-    file.write((uint8_t *)&_prefs->bridge_enabled, sizeof(_prefs->bridge_enabled));                 // 127
-    file.write((uint8_t *)&_prefs->bridge_delay, sizeof(_prefs->bridge_delay));                     // 128
-    file.write((uint8_t *)&_prefs->bridge_pkt_src, sizeof(_prefs->bridge_pkt_src));                 // 130
-    file.write((uint8_t *)&_prefs->bridge_baud, sizeof(_prefs->bridge_baud));                       // 131
-    file.write((uint8_t *)&_prefs->bridge_channel, sizeof(_prefs->bridge_channel));                 // 135
-    file.write((uint8_t *)&_prefs->bridge_secret, sizeof(_prefs->bridge_secret));                   // 136
-    file.write((uint8_t *)&_prefs->powersaving_enabled, sizeof(_prefs->powersaving_enabled));       // 152
-    file.write(pad, 3);                                                                             // 153
-    file.write((uint8_t *)&_prefs->gps_enabled, sizeof(_prefs->gps_enabled));                       // 156
-    file.write((uint8_t *)&_prefs->gps_interval, sizeof(_prefs->gps_interval));                     // 157
-    file.write((uint8_t *)&_prefs->advert_loc_policy, sizeof(_prefs->advert_loc_policy));           // 161
-    file.write((uint8_t *)&_prefs->discovery_mod_timestamp, sizeof(_prefs->discovery_mod_timestamp)); // 162
-    file.write((uint8_t *)&_prefs->adc_multiplier, sizeof(_prefs->adc_multiplier));                 // 166
-    file.write((uint8_t *)_prefs->owner_info, sizeof(_prefs->owner_info));                          // 170
-    file.write((uint8_t *)&_prefs->rx_boosted_gain, sizeof(_prefs->rx_boosted_gain));              // 290
-    file.write((uint8_t *)&_prefs->radio_fem_rxgain, sizeof(_prefs->radio_fem_rxgain));            // 291
-    file.write((uint8_t *)&_prefs->flood_max_unscoped, sizeof(_prefs->flood_max_unscoped));       // 292
-    file.write((uint8_t *)&_prefs->flood_max_advert, sizeof(_prefs->flood_max_advert));           // 293
-    file.write((uint8_t *)&_prefs->ui_led_enabled, sizeof(_prefs->ui_led_enabled));               // 294
-    file.write((uint8_t *)&_prefs->ui_display_mode, sizeof(_prefs->ui_display_mode));             // 295
-    file.write((uint8_t *)&_prefs->caplog_enabled, sizeof(_prefs->caplog_enabled));              // 296  (#562)
-    file.write((uint8_t *)&_prefs->caplog_level, sizeof(_prefs->caplog_level));                  // 297  (#562)
-    file.write((uint8_t *)_prefs->syslog_host, sizeof(_prefs->syslog_host));                     // 298  (#566)
-    file.write((uint8_t *)&_prefs->syslog_port, sizeof(_prefs->syslog_port));                    // 362  (#566)
-    // next: 364
+    file.read((uint8_t *)&_prefs->airtime_factor, sizeof(_prefs->airtime_factor));    // 0
+    file.read((uint8_t *)&_prefs->node_name, sizeof(_prefs->node_name));              // 4
+    file.read(pad, 4);                                                                // 36
+    file.read((uint8_t *)&_prefs->node_lat, sizeof(_prefs->node_lat));                // 40
+    file.read((uint8_t *)&_prefs->node_lon, sizeof(_prefs->node_lon));                // 48
+    file.read((uint8_t *)&_prefs->password[0], sizeof(_prefs->password));             // 56
+    file.read((uint8_t *)&_prefs->freq, sizeof(_prefs->freq));                        // 72
+    file.read((uint8_t *)&_prefs->tx_power_dbm, sizeof(_prefs->tx_power_dbm));        // 76
+    file.read((uint8_t *)&_prefs->disable_fwd, sizeof(_prefs->disable_fwd));          // 77
+    file.read((uint8_t *)&_prefs->advert_interval, sizeof(_prefs->advert_interval));  // 78
+    file.read(pad, 1);                                                                // 79 : 1 byte unused (was rx_boosted_gain in v1.14.1, moved to end for upgrade compat)
+    file.read((uint8_t *)&_prefs->rx_delay_base, sizeof(_prefs->rx_delay_base));      // 80
+    file.read((uint8_t *)&_prefs->tx_delay_factor, sizeof(_prefs->tx_delay_factor));  // 84
+    file.read((uint8_t *)&_prefs->guest_password[0], sizeof(_prefs->guest_password)); // 88
+    file.read((uint8_t *)&_prefs->direct_tx_delay_factor, sizeof(_prefs->direct_tx_delay_factor)); // 104
+    file.read(pad, 4); // 108 : 4 bytes unused
+    file.read((uint8_t *)&_prefs->sf, sizeof(_prefs->sf));                                         // 112
+    file.read((uint8_t *)&_prefs->cr, sizeof(_prefs->cr));                                         // 113
+    file.read((uint8_t *)&_prefs->allow_read_only, sizeof(_prefs->allow_read_only));               // 114
+    file.read((uint8_t *)&_prefs->multi_acks, sizeof(_prefs->multi_acks));                         // 115
+    file.read((uint8_t *)&_prefs->bw, sizeof(_prefs->bw));                                         // 116
+    file.read((uint8_t *)&_prefs->agc_reset_interval, sizeof(_prefs->agc_reset_interval));         // 120
+    file.read((uint8_t *)&_prefs->path_hash_mode, sizeof(_prefs->path_hash_mode));                 // 121
+    file.read((uint8_t *)&_prefs->loop_detect, sizeof(_prefs->loop_detect));                       // 122
+    file.read(pad, 1);                                                                             // 123
+    file.read((uint8_t *)&_prefs->flood_max, sizeof(_prefs->flood_max));                           // 124
+    file.read((uint8_t *)&_prefs->flood_advert_interval, sizeof(_prefs->flood_advert_interval));   // 125
+    file.read((uint8_t *)&_prefs->interference_threshold, sizeof(_prefs->interference_threshold)); // 126
+    file.read((uint8_t *)&_prefs->bridge_enabled, sizeof(_prefs->bridge_enabled));                 // 127
+    file.read((uint8_t *)&_prefs->bridge_delay, sizeof(_prefs->bridge_delay));                     // 128
+    file.read((uint8_t *)&_prefs->bridge_pkt_src, sizeof(_prefs->bridge_pkt_src));                 // 130
+    file.read((uint8_t *)&_prefs->bridge_baud, sizeof(_prefs->bridge_baud));                       // 131
+    file.read((uint8_t *)&_prefs->bridge_channel, sizeof(_prefs->bridge_channel));                 // 135
+    file.read((uint8_t *)&_prefs->bridge_secret, sizeof(_prefs->bridge_secret));                   // 136
+    file.read((uint8_t *)&_prefs->powersaving_enabled, sizeof(_prefs->powersaving_enabled));       // 152
+    file.read(pad, 3);                                                                             // 153
+    file.read((uint8_t *)&_prefs->gps_enabled, sizeof(_prefs->gps_enabled));                       // 156
+    file.read((uint8_t *)&_prefs->gps_interval, sizeof(_prefs->gps_interval));                     // 157
+    file.read((uint8_t *)&_prefs->advert_loc_policy, sizeof (_prefs->advert_loc_policy));          // 161
+    file.read((uint8_t *)&_prefs->discovery_mod_timestamp, sizeof(_prefs->discovery_mod_timestamp)); // 162
+    file.read((uint8_t *)&_prefs->adc_multiplier, sizeof(_prefs->adc_multiplier));                 // 166
+    file.read((uint8_t *)_prefs->owner_info, sizeof(_prefs->owner_info));                          // 170
+    file.read((uint8_t *)&_prefs->rx_boosted_gain, sizeof(_prefs->rx_boosted_gain));               // 290
+    file.read((uint8_t *)&_prefs->flood_max_unscoped, sizeof(_prefs->flood_max_unscoped));         // 291
+    file.read((uint8_t *)&_prefs->flood_max_advert, sizeof(_prefs->flood_max_advert));             // 292
+    file.read((uint8_t *)&_prefs->radio_fem_rxgain, sizeof(_prefs->radio_fem_rxgain));             // 293
+    file.read((uint8_t *)&_prefs->cad_enabled, sizeof(_prefs->cad_enabled));                       // 294
+    // next: 295
+
+    // sanitise bad pref values
+    _prefs->rx_delay_base = constrain(_prefs->rx_delay_base, 0, 20.0f);
+    _prefs->tx_delay_factor = constrain(_prefs->tx_delay_factor, 0, 2.0f);
+    _prefs->direct_tx_delay_factor = constrain(_prefs->direct_tx_delay_factor, 0, 2.0f);
+    _prefs->airtime_factor = constrain(_prefs->airtime_factor, 0, 9.0f);
+    _prefs->freq = constrain(_prefs->freq, 150.0f, 2500.0f);
+    _prefs->bw = constrain(_prefs->bw, 7.8f, 500.0f);
+    _prefs->sf = constrain(_prefs->sf, 5, 12);
+    _prefs->cr = constrain(_prefs->cr, 5, 8);
+    _prefs->tx_power_dbm = constrain(_prefs->tx_power_dbm, -9, 30);
+    _prefs->multi_acks = constrain(_prefs->multi_acks, 0, 1);
+    _prefs->adc_multiplier = constrain(_prefs->adc_multiplier, 0.0f, 10.0f);
+    _prefs->path_hash_mode = constrain(_prefs->path_hash_mode, 0, 2);   // NOTE: mode 3 reserved for future
+
+    // sanitise bad bridge pref values
+    _prefs->bridge_enabled = constrain(_prefs->bridge_enabled, 0, 1);
+    _prefs->bridge_delay = constrain(_prefs->bridge_delay, 0, 10000);
+    _prefs->bridge_pkt_src = constrain(_prefs->bridge_pkt_src, 0, 1);
+    _prefs->bridge_baud = constrain(_prefs->bridge_baud, 9600, BRIDGE_MAX_BAUD);
+    _prefs->bridge_channel = constrain(_prefs->bridge_channel, 0, 14);
+
+    _prefs->powersaving_enabled = constrain(_prefs->powersaving_enabled, 0, 1);
+
+    _prefs->gps_enabled = constrain(_prefs->gps_enabled, 0, 1);
+    _prefs->advert_loc_policy = constrain(_prefs->advert_loc_policy, 0, 2);
+
+    // sanitise settings
+    _prefs->rx_boosted_gain = constrain(_prefs->rx_boosted_gain, 0, 1); // boolean
+    _prefs->radio_fem_rxgain = constrain(_prefs->radio_fem_rxgain, 0, 1); // boolean
+    _prefs->ui_led_enabled = constrain(_prefs->ui_led_enabled, 0, 1); // boolean (#542)
+    _prefs->ui_display_mode = constrain(_prefs->ui_display_mode, 0, 2); // #542 A2 tristate
+    _prefs->caplog_enabled = constrain(_prefs->caplog_enabled, 0, 1);       // #562 boolean
+    _prefs->caplog_level = constrain(_prefs->caplog_level, 0, MLOG_PACKET); // #562 level bound
+    _prefs->syslog_host[sizeof(_prefs->syslog_host) - 1] = '\0';            // #566 NUL-terminate
+    if (_prefs->syslog_port == 0) _prefs->syslog_port = 514;                // #566 sane default
+
+    // #562: apply persisted caplog state at boot (common across roles). Capture
+    // is independent of the serial mirror, so this is safe on a USB-serial
+    // companion too.
+    meshLogSetLevel(_prefs->caplog_level);
+    meshLogSetEnabled(_prefs->caplog_enabled != 0);
+    _prefs->cad_enabled = constrain(_prefs->cad_enabled, 0, 1); // boolean
 
     file.close();
   }
+}
+
+bool CommonCLI::savePrefs(FILESYSTEM* fs) {
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+  fs->remove("/prefs.json");
+  File file = fs->open("/prefs.json", FILE_O_WRITE);
+#elif defined(RP2040_PLATFORM)
+  File file = fs->open("/prefs.json", "w");
+#else
+  File file = fs->open("/prefs.json", "w", true);
+#endif
+  if (file) {
+    bool success = _prefs->saveSerial(file);
+    file.close();
+    return success;
+  }
+  return false;
 }
 
 #define MIN_LOCAL_ADVERT_INTERVAL   60
@@ -974,6 +1110,10 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     _prefs->interference_threshold = atoi(&config[11]);
     savePrefs();
     strcpy(reply, "OK");
+  } else if (memcmp(config, "cad ", 4) == 0) {
+    _prefs->cad_enabled = memcmp(&config[4], "on", 2) == 0;
+    savePrefs();
+    strcpy(reply, "OK");
   } else if (memcmp(config, "agc.reset.interval ", 19) == 0) {
     _prefs->agc_reset_interval = atoi(&config[19]) / 4;
     savePrefs();
@@ -1035,13 +1175,37 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     _prefs->disable_fwd = memcmp(&config[7], "off", 3) == 0;
     savePrefs();
     strcpy(reply, _prefs->disable_fwd ? "OK - repeat is now OFF" : "OK - repeat is now ON");
-#if defined(USE_SX1262) || defined(USE_SX1268) || defined(USE_LR1110)
   } else if (memcmp(config, "radio.rxgain ", 13) == 0) {
-    _prefs->rx_boosted_gain = memcmp(&config[13], "on", 2) == 0;
-    strcpy(reply, "OK");
+    bool enabled = memcmp(&config[13], "on", 2) == 0;
+    _prefs->rx_boosted_gain = enabled;
     savePrefs();
-    _callbacks->setRxBoostedGain(_prefs->rx_boosted_gain);
-#endif
+    if (_callbacks->setRxBoostedGain(enabled)) {
+      strcpy(reply, "OK");
+    } else {
+      strcpy(reply, "Error: unsupported");
+    }
+  } else if (memcmp(config, "radio.fem.rxgain ", 17) == 0) {
+    if (!_board->canControlLoRaFemLna()) {
+      strcpy(reply, "Error: unsupported");
+    } else if (memcmp(&config[17], "on", 2) == 0) {
+      if (_board->setLoRaFemLnaEnabled(true)) {
+        _prefs->radio_fem_rxgain = 1;
+        savePrefs();
+        strcpy(reply, "OK - LoRa FEM RX gain on");
+      } else {
+        strcpy(reply, "Error: failed to apply LoRa FEM RX gain");
+      }
+    } else if (memcmp(&config[17], "off", 3) == 0) {
+      if (_board->setLoRaFemLnaEnabled(false)) {
+        _prefs->radio_fem_rxgain = 0;
+        savePrefs();
+        strcpy(reply, "OK - LoRa FEM RX gain off");
+      } else {
+        strcpy(reply, "Error: failed to apply LoRa FEM RX gain");
+      }
+    } else {
+      strcpy(reply, "Error: state must be on or off");
+    }
   } else if (memcmp(config, "radio ", 6) == 0) {
     strcpy(tmp, &config[6]);
     // #299: parse one MORE part than we consume. parseTextParts silently discards
@@ -1252,7 +1416,7 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       }
     } else {
       _prefs->adc_multiplier = 0.0f;
-      strcpy(reply, "Error: unsupported by this board");
+      strcpy(reply, "Error: unsupported");
     };
 #if defined(OFFBAND_OBSERVER) || defined(OFFBAND_MQTT_POOL)
   // #554: "set mqtt.*" (mqtt.broker.<N>.*, mqtt.iata, mqtt.status_interval) ->
@@ -1262,6 +1426,28 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
                                           offband::wifiObserverPool())) {
     // handled by the broker-config CLI
 #endif
+  #if defined(USE_LR2021)
+  } else if (memcmp(config, "extra.sf ", 9) == 0) {
+    strcpy(tmp, &config[9]);
+    const char *parts[4];
+    uint8_t sideDetSFs[4];
+    int num = mesh::Utils::parseTextParts(tmp, parts, 4);
+    if (num > 3) {
+      sprintf(reply, "Invalid extra SF config");
+    } else {
+      for (int i = 0; i < num; i++) {
+        sideDetSFs[i] = atoi(parts[i]);
+      }
+      sideDetSFs[num] = 0;
+      if (_callbacks->configSideDetectors(sideDetSFs, num, _prefs->bw)) {
+        for (int i = 0; i <= num; i++) _prefs->extra_sf[i] = sideDetSFs[i];
+        savePrefs();
+        sprintf(reply, "OK - extra SFs set");
+      } else {
+        sprintf(reply, "Invalid extra SF config");
+      }
+    }
+  #endif
   } else {
     strcpy(reply, "unknown config: ");
     StrHelper::strncpy(&reply[16], config, 160-17);
@@ -1302,6 +1488,9 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
   } else if (isKey(config, "int.thresh")) {
     sprintf(reply, "> %d", (uint32_t) _prefs->interference_threshold);
   } else if (isKey(config, "agc.reset.interval")) {
+  } else if (memcmp(config, "cad", 3) == 0) {
+    sprintf(reply, "> %s", _prefs->cad_enabled ? "on" : "off");
+  } else if (memcmp(config, "agc.reset.interval", 18) == 0) {
     sprintf(reply, "> %d", ((uint32_t) _prefs->agc_reset_interval) * 4);
   } else if (isKey(config, "multi.acks")) {
     sprintf(reply, "> %d", (uint32_t) _prefs->multi_acks);
@@ -1331,6 +1520,15 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     sprintf(reply, "> %s", _prefs->rx_boosted_gain ? "on" : "off");
 #endif
   } else if (isKey(config, "radio")) {
+  } else if (memcmp(config, "radio.rxgain", 12) == 0) {
+    sprintf(reply, "> %s", _prefs->rx_boosted_gain ? "on" : "off");
+  } else if (memcmp(config, "radio.fem.rxgain", 16) == 0) {
+    if (!_board->canControlLoRaFemLna()) {
+      strcpy(reply, "Error: unsupported");
+    } else {
+      sprintf(reply, "> %s", _board->isLoRaFemLnaEnabled() ? "on" : "off");
+    }
+  } else if (memcmp(config, "radio", 5) == 0) {
     char freq[16], bw[16];
     strcpy(freq, StrHelper::ftoa3(_prefs->freq));
     strcpy(bw, StrHelper::ftoa3(_prefs->bw));
@@ -1419,12 +1617,12 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
           strcpy(reply, "> unknown");
       }
   #else
-      strcpy(reply, "ERROR: unsupported");
+      strcpy(reply, "Error: unsupported");
   #endif
   } else if (isKey(config, "adc.multiplier")) {
     float adc_mult = _board->getAdcMultiplier();
     if (adc_mult == 0.0f) {
-      strcpy(reply, "Error: unsupported by this board");
+      strcpy(reply, "Error: unsupported");
     } else {
       sprintf(reply, "> %.3f", adc_mult);
     }
@@ -1450,6 +1648,11 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     strcpy(reply, "ERROR: Power management not supported");
 #endif
   } else if (isKey(config, "pwrmgt.bootmv")) {
+  } else if (memcmp(config, "pwrmgt.bootreason", 17) == 0) {
+    sprintf(reply, "> Reset: %s; Shutdown: %s",
+      _board->getResetReasonString(_board->getResetReason()),
+      _board->getShutdownReasonString(_board->getShutdownReason()));
+  } else if (memcmp(config, "pwrmgt.bootmv", 13) == 0) {
 #ifdef NRF52_POWER_MANAGEMENT
     sprintf(reply, "> %u mV", _board->getBootVoltage());
 #else
@@ -1463,6 +1666,14 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
                                           offband::wifiObserverPool())) {
     // handled by the broker-config CLI
 #endif
+  } else if (memcmp(config, "extra.sf", 8) == 0) {
+    char* tmp = reply;
+    for (int i = 0; i < 3 && _prefs->extra_sf[i] != 0; i++) {
+      tmp += sprintf(tmp, "%s%d", (i == 0) ? "" : ",", _prefs->extra_sf[i]);
+    } 
+    if (tmp == reply) {
+      sprintf(reply, "No extra SF configured");
+    }
   } else {
     sprintf(reply, "??: %s", config);
   }

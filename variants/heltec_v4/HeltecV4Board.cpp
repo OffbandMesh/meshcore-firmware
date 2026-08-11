@@ -32,33 +32,12 @@ void HeltecV4Board::begin() {
     loRaFEMControl.setRxModeEnable();
   }
 
-  void HeltecV4Board::enterDeepSleep(uint32_t secs, int pin_wake_btn) {
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+  void HeltecV4Board::powerOff() {
+    // Turn off PA
+    digitalWrite(P_LORA_PA_POWER, LOW);
+    rtc_gpio_hold_en((gpio_num_t)P_LORA_PA_POWER);
 
-    // Make sure the DIO1 and NSS GPIOs are hold on required levels during deep sleep
-    rtc_gpio_set_direction((gpio_num_t)P_LORA_DIO_1, RTC_GPIO_MODE_INPUT_ONLY);
-    rtc_gpio_pulldown_en((gpio_num_t)P_LORA_DIO_1);
-
-    rtc_gpio_hold_en((gpio_num_t)P_LORA_NSS);
-
-    loRaFEMControl.setRxModeEnableWhenMCUSleep();//It also needs to be enabled in receive mode
-
-    if (pin_wake_btn < 0) {
-      esp_sleep_enable_ext1_wakeup( (1L << P_LORA_DIO_1), ESP_EXT1_WAKEUP_ANY_HIGH);  // wake up on: recv LoRa packet
-    } else {
-      esp_sleep_enable_ext1_wakeup( (1L << P_LORA_DIO_1) | (1L << pin_wake_btn), ESP_EXT1_WAKEUP_ANY_HIGH);  // wake up on: recv LoRa packet OR wake btn
-    }
-
-    if (secs > 0) {
-      esp_sleep_enable_timer_wakeup(secs * 1000000);
-    }
-
-    // Finally set ESP32 into sleep
-    esp_deep_sleep_start();   // CPU halts here and never returns!
-  }
-
-  void HeltecV4Board::powerOff()  {
-    enterDeepSleep(0);
+    ESP32Board::powerOff();
   }
 
   uint16_t HeltecV4Board::getBattMilliVolts()  {
@@ -110,30 +89,42 @@ void HeltecV4Board::begin() {
 #endif
   }
 
-  // Runtime control of the external FEM LNA. The TX/RX mode switching happens
-  // automatically on each transmit (via onBeforeTransmit/onAfterTransmit);
-  // changing the LNA enable flag here takes effect on the next RX-mode entry.
-  // To make the change immediate, re-enter RX mode now.
+  // Runtime control of the external FEM LNA. TX/RX mode switching happens
+  // automatically on each transmit (via onBeforeTransmit/onAfterTransmit), so
+  // changing the enable flag alone would only take effect on the next RX-mode
+  // entry -- setRxModeEnable() below applies it immediately.
+  //
+  // Upstream 1.17.0 guards on isLnaCanControl() before touching the FEM. Kept:
+  // the Offband version drove setLNAEnable()/setRxModeEnable() even on a GC1109
+  // (V4.2), which has no independent LNA path, so the pin writes were pointless
+  // RF state changes. Return value is equivalent for the caller either way.
   bool HeltecV4Board::setLoRaFemLnaEnabled(bool enable) {
+    if (!loRaFEMControl.isLnaCanControl()) {
+      return false;
+    }
+
     loRaFEMControl.setLNAEnable(enable);
-    // Apply the change to the current chip state if we're not mid-TX.
-    // setRxModeEnable() drives the CTX/PA pins per the new lna_enabled flag.
     loRaFEMControl.setRxModeEnable();
-    return loRaFEMControl.isLnaCanControl();
+    return true;
   }
 
   bool HeltecV4Board::canControlLoRaFemLna() const {
-    // const_cast: LoRaFEMControl::isLnaCanControl is non-const by upstream design.
-    return const_cast<LoRaFEMControl&>(loRaFEMControl).isLnaCanControl();
+    // Upstream made LoRaFEMControl::isLnaCanControl() const in 1.17.0, so the
+    // const_cast the Offband version needed here is gone.
+    return loRaFEMControl.isLnaCanControl();
   }
 
   bool HeltecV4Board::isLoRaFemLnaEnabled() const {
-    return loRaFEMControl.isLnaEnabled();
+    return loRaFEMControl.isLNAEnabled();
   }
 
-  // #542: status/traffic LED control. When disabled, the TX LED is forced LOW and
-  // the transmit hooks stop driving it. The LED is a plain GPIO, always controllable
-  // on this board, so canControlLed() is unconditionally true.
+  // #542: status/traffic LED control. OFFBAND-ONLY -- upstream's MainBoard has no
+  // LED control interface at all, so these have no upstream counterpart and must
+  // survive the merge. HeltecV4Board.h declares all three `override`, so dropping
+  // them here is a link error, not a silent loss.
+  // When disabled, the TX LED is forced LOW and the transmit hooks stop driving
+  // it. The LED is a plain GPIO, always controllable on this board, so
+  // canControlLed() is unconditionally true.
   bool HeltecV4Board::setLedEnabled(bool on) {
     _led_enabled = on;
     if (!on) digitalWrite(P_LORA_TX_LED, LOW);  // ensure it's dark immediately

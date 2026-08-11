@@ -4,6 +4,7 @@
 #include <esp_ota_ops.h>
 #include <nvs.h>
 #include <nvs_flash.h>
+#include <target.h>
 
 #if defined(ADMIN_PASSWORD) && !defined(DISABLE_WIFI_OTA)   // Repeater or Room Server only
 #include <WiFi.h>
@@ -190,8 +191,7 @@ static const char* k_nvs_safety_ns = "ota_safety";
 static const char* k_nvs_boot_count = "boot_count";
 static bool s_validation_pending = false;
 
-// =============================================================================
-// Epic E (#64) / E1 #65: Persistent safety/diagnostic event ring buffer.
+// ======================================================================// Epic E (#64) / E1 #65: Persistent safety/diagnostic event ring buffer.
 //
 // SAFELANE Error Visibility violation fix discovered during D7 (#61) testing:
 // D9 SAFETY logs and OTA events were emitted only via Serial.println, lost if
@@ -673,4 +673,45 @@ void ESP32Board::getPartitionsInfo(char* buf, size_t buflen) {
   }
 }
 
+void ESP32Board::powerOff() {
+  enterDeepSleep(0); // Do not wakeup
+}
+
+void ESP32Board::enterDeepSleep(uint32_t secs) {
+  // Power off the display if any
+#ifdef DISPLAY_CLASS
+  display.turnOff();
+#endif
+
+  // Power off LoRa
+  radio_driver.powerOff();
+
+  // Keep LoRa inactive during deepsleep
+  digitalWrite(P_LORA_NSS, HIGH);
+#if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32C6)
+  gpio_hold_en((gpio_num_t)P_LORA_NSS);
+#else
+  rtc_gpio_hold_en((gpio_num_t)P_LORA_NSS);
+#endif
+
+  // Power off GPS if any
+  if (sensors.getLocationProvider() != NULL) {
+    sensors.getLocationProvider()->stop();
+  }
+
+  // Flush serial buffers
+  Serial.flush();
+  delay(100);
+
+  // Clear stale wakeup sources to avoid ghost wakeup
+  // This is required when Power Management and automatic lightsleep are enabled
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+
+  if (secs > 0) {
+    esp_sleep_enable_timer_wakeup(secs * 1000000ULL);
+  }
+
+  // Finally set ESP32 into deepsleep
+  esp_deep_sleep_start(); // CPU halts here and never returns!
+}
 #endif
