@@ -113,4 +113,5 @@ harness.exe
 # RadioCore vendor assets (Heltec pinout artwork, vendor text, third-party
 # screenshots) -- local reference only, not redistributable, ~19 MB of binaries.
 # See docs/radiocore/README.md.
-docs/radiocore/vendor/
+docs/radiocore/vendor/*
+!docs/radiocore/vendor/README.md
