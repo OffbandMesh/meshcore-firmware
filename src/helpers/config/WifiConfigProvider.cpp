@@ -10,15 +10,23 @@
 
 #include "WifiConfigProvider.h"
 #include "ConfigDispatch.h"
-#include "../wifi_observer/WifiBootstrap.h"   // wifi.status reads WifiBootstrap
-                                              // (observer bring-up; see header --
-                                              // #365 supplies its own off-observer)
 #include <cstdio>
 #include <cstring>
 
 #ifdef ARDUINO
   #include <Preferences.h>
-  #include <WiFi.h>   // WiFi.localIP() for wifi.status
+  #include <WiFi.h>   // WiFi.status()/localIP() for wifi.status
+#endif
+
+// #684: wifi.status reports ONE uniform vocabulary across every WiFi-capable
+// role (owner D1/D3, 2026-08-01). On an OBSERVER build the authoritative source
+// is the WifiBootstrap STA/AP bring-up machine. A non-observer build (companion
+// #365, repeater #301) runs no such machine, so it derives the SAME words from
+// the raw WiFi driver + stored creds. The observer header is pulled ONLY on
+// observer builds -- that is exactly what lets WifiConfigProvider link with zero
+// wifi_observer/ sources off-observer (the gap #370 left; unblocks #462).
+#ifdef OFFBAND_OBSERVER
+  #include "../wifi_observer/WifiBootstrap.h"
 #endif
 
 namespace offband {
@@ -165,10 +173,10 @@ bool handleGetWifi(char* reply, size_t reply_size, const char* field) {
         return true;
     }
     if (config::strEq(field, "status")) {
-#ifdef ARDUINO
-        // Reach into the WifiBootstrap state via the singleton.
-        // Render a single human-readable line summarizing the
-        // current STA state + IP when connected.
+#if defined(ARDUINO) && defined(OFFBAND_OBSERVER)
+        // Observer: authoritative state from the WifiBootstrap STA/AP machine.
+        // Render a single human-readable line summarizing the current STA state
+        // + IP when connected.
         auto state = wifiBootstrap().state();
         const char* st = "?";
         switch (state) {
@@ -202,6 +210,42 @@ bool handleGetWifi(char* reply, size_t reply_size, const char* field) {
             }
         } else {
             snprintf(reply, reply_size, "wifi.status = %s\n", st);
+        }
+#elif defined(ARDUINO)
+        // Non-observer (companion #365 / repeater #301): no WifiBootstrap
+        // machine. Derive the SAME vocabulary from stored creds + the raw WiFi
+        // driver, so the meshcore-client#375 contract holds unchanged:
+        //   no SSID stored           -> AwaitingSetup   (not provisioned)
+        //   WL_CONNECTED             -> StaConnected ip=<addr>
+        //   NO_SSID/FAILED/LOST      -> StaFailed
+        //   otherwise (idle/dscn/scn)-> StaConnecting
+        String ssid;
+        {
+            Preferences p;
+            if (p.begin("wifi", /*readOnly=*/true)) { ssid = p.getString("ssid", ""); p.end(); }
+        }
+        if (ssid.isEmpty()) {
+            snprintf(reply, reply_size, "wifi.status = AwaitingSetup\n");
+        } else {
+            wl_status_t ws = WiFi.status();
+            if (ws == WL_CONNECTED) {
+                snprintf(reply, reply_size, "wifi.status = StaConnected ip=%s\n",
+                         WiFi.localIP().toString().c_str());
+            } else if ((WiFi.getMode() & WIFI_MODE_STA) == 0 ||
+                       ws == WL_NO_SSID_AVAIL || ws == WL_CONNECT_FAILED ||
+                       ws == WL_CONNECTION_LOST) {
+                // Not connected AND not actively attempting: either STA was never
+                // brought up (creds stored but WiFi.begin() not called -- the
+                // on-demand / burst-WiFi repeater #301 case), or a terminal
+                // failure. Report StaFailed rather than the false-positive
+                // StaConnecting (Gemini 2.5 review, #684). getMode() returns
+                // WIFI_MODE_NULL when WiFi is uninitialised -- safe.
+                snprintf(reply, reply_size, "wifi.status = StaFailed\n");
+            } else {
+                // STA is up and working toward a link (transient IDLE /
+                // DISCONNECTED / SCAN during an active attempt).
+                snprintf(reply, reply_size, "wifi.status = StaConnecting\n");
+            }
         }
 #else
         snprintf(reply, reply_size, "wifi.status = (host build)\n");
