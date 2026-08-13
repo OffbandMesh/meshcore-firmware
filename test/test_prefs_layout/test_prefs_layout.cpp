@@ -270,6 +270,38 @@ TEST(Family, RoleSwappedNodePrefsIsNotMisreadAsCompanion) {
   EXPECT_EQ(direct.reason, PrefsLayoutReason::UnknownLength);
 }
 
+// REGRESSION (#668 review) -- the CALLERS must gate on FAMILY, not just layout.
+//
+// RoleSwappedNodePrefsIsNotMisreadAsCompanion (above) asserts that
+// detectCompanionPrefsLayout() refuses a 294-byte record. But NEITHER loader calls
+// that function -- both call identifyLegacyPrefs(), which for 294 returns
+// family=Common with a PERFECTLY VALID layout=Offband. A caller checking only
+// `layout != Unknown` therefore accepted it and read a CommonCLI record with the
+// companion offset table.
+//
+// These assertions pin the property the loaders now enforce: for a cross-family
+// length the layout is NOT Unknown, so layout alone can never be a sufficient
+// guard. If someone "simplifies" a loader back to a layout-only check, the
+// comments here explain why that is wrong even though the tests still pass.
+TEST(Family, LayoutAloneIsNotASufficientGuardForEitherLoader) {
+  // Path A lengths: valid layout, but a COMPANION loader must refuse them.
+  for (size_t len : {292u, 294u, 364u}) {
+    auto id = identifyLegacyPrefs(evA(len));
+    EXPECT_EQ(id.family, PrefsFamily::Common) << "length " << len;
+    EXPECT_NE(id.layout, PrefsLayout::Unknown)
+        << "length " << len << " -- layout is VALID here, which is exactly why a "
+           "layout-only check in DataStore::loadPrefs was unsafe";
+  }
+  // Path B lengths: valid layout, but a COMMON loader must refuse them.
+  for (size_t len : {141u, 143u, 148u, 150u}) {
+    auto id = identifyLegacyPrefs(evA(len));
+    EXPECT_EQ(id.family, PrefsFamily::Companion) << "length " << len;
+    EXPECT_NE(id.layout, PrefsLayout::Unknown)
+        << "length " << len << " -- layout is VALID here, which is exactly why a "
+           "layout-only check in CommonCLI::loadPrefs was unsafe";
+  }
+}
+
 TEST(Family, UnknownLengthsIdentifyAsUnknownFamily) {
   for (size_t len : {0u, 100u, 136u, 200u, 289u, 400u}) {
     auto id = identifyLegacyPrefs(evA(len));

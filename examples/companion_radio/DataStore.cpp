@@ -241,7 +241,15 @@ void DataStore::loadPrefs(NodePrefs& prefs) {
       MESH_DEBUG_PRINTLN("[prefs] legacy %s len=%u -> layout=%s (%s)",
                          legacy, (unsigned)ev.length,
                          offband::toString(id.layout), offband::toString(id.reason));
-      if (id.layout != offband::PrefsLayout::Unknown) {
+      // #668-review: the FAMILY must match, not just the layout. A Path A record
+      // left at /node_prefs -- the documented role-swap case, a node that ran as a
+      // repeater and was re-flashed as a companion -- identifies as
+      // family=Common layout=Offband. A layout-only check passed that and read a
+      // 294-byte CommonCLI record with the COMPANION offset table. The existing
+      // regression test guards detectCompanionPrefsLayout(), which is NOT the
+      // function this caller uses, so it never caught it.
+      if (id.family == offband::PrefsFamily::Companion &&
+          id.layout != offband::PrefsLayout::Unknown) {
         // Both layouts are byte-identical up to upstream's end and Offband only
         // appends, so one reader serves both: on an upstream-written record it
         // short-reads to EOF and the appended fields keep their defaults.

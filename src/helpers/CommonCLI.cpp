@@ -262,7 +262,16 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
              id.layout == offband::PrefsLayout::Upstream)
                 ? mesh::EVT_PREFS_MIGRATED : mesh::EVT_PREFS_REFUSED, d);
       }
-      if (id.layout == offband::PrefsLayout::Offband || id.layout == offband::PrefsLayout::Upstream) {
+      // #668-review: the FAMILY must match this loader's path, not just the layout.
+      // identifyLegacyPrefs() reports which RECORD FAMILY the length belongs to, and
+      // that was previously computed, logged, and then ignored -- so a Path B record
+      // sitting at /com_prefs (role swap: a node that ran as a companion, re-flashed
+      // as a repeater, leaving a 150-byte /new_prefs-shaped file) came back as
+      // family=Companion layout=Offband, passed a layout-only check, and would have
+      // been read with the Path A offset table. That is the silent cross-family
+      // corruption this whole mechanism exists to prevent.
+      if (id.family == offband::PrefsFamily::Common &&
+          (id.layout == offband::PrefsLayout::Offband || id.layout == offband::PrefsLayout::Upstream)) {
         if (id.layout == offband::PrefsLayout::Offband) {
           loadPrefsInt(fs, legacy);          // Offband offsets
         } else {
