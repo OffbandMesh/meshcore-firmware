@@ -330,7 +330,7 @@ bool clearBrokerConfig(uint8_t slot) {
 //   slot 0  OKIMesh mqtt1      wss://mqtt1.okimesh.org:9002/mqtt  wss / anon   disabled  (#592)
 //   slot 1  OKIMesh mqtt2      wss://mqtt2.okimesh.org:9002/mqtt  wss / anon   disabled  (#592)
 //   slot 2  MeshMapper         wss://mqtt.meshmapper.net        wss / jwt    disabled
-//   slot 3  Eastme.sh          wss://mqtt.eastme.sh             wss / jwt    disabled
+//   slot 3  CoreComms.net      wss://mqtt.corecomms.net         wss / jwt    disabled  (#677)
 //   slot 4  Eastmesh.au        wss://mqtt2.eastmesh.au          wss / jwt    disabled
 //   slots 5-9  (MQTT Custom)   left empty for the operator to fill
 //
@@ -374,8 +374,8 @@ bool clearBrokerConfig(uint8_t slot) {
 //
 // Audiences are the BARE host (e.g. "mqtt-us-v1.letsmesh.net"), NOT the
 // scheme-qualified "https://..." form: LetsMesh validates the "aud" claim
-// strictly and rejects the scheme form; Eastme.sh is lenient (#95, verified
-// live 2026-06-11).
+// strictly and rejects the scheme form; CoreComms.net is lenient (#95, verified
+// live 2026-06-11 as Eastme.sh -- the service rebranded, #677 / PR #282).
 //
 // Invoke once at WifiObserver::begin() before MqttBrokerPool::begin().
 
@@ -396,8 +396,12 @@ constexpr DefaultBrokerSpec kDefaultBrokerSpecs[] = {
     {false, "wss://mqtt1.okimesh.org:9002/mqtt",      BrokerTransport::Wss, 9002, BrokerAuthType::None, "",                        "letsencrypt"},
     {false, "wss://mqtt2.okimesh.org:9002/mqtt",      BrokerTransport::Wss, 9002, BrokerAuthType::None, "",                        "letsencrypt"},
     {false, "wss://mqtt.meshmapper.net:443/mqtt",     BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt.meshmapper.net",     "isrg-x2"},
-    {false, "wss://mqtt.eastme.sh:443/mqtt",          BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt.eastme.sh",          "letsencrypt"},
-    {false, "wss://mqtt2.eastmesh.au:443/mqtt",       BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt2.eastmesh.au",       "letsencrypt"},
+    // #677: Eastme.sh rebranded to CoreComms.net (re-implements external PR
+    // #282 with credit). Both rows' chains verified live 2026-08-13: they now
+    // terminate at GTS Root R4, not ISRG X1 -- the old "letsencrypt" pin on
+    // eastmesh.au no longer validates at all.
+    {false, "wss://mqtt.corecomms.net:443/mqtt",      BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt.corecomms.net",      "gts-r4"},
+    {false, "wss://mqtt2.eastmesh.au:443/mqtt",       BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt2.eastmesh.au",       "gts-r4"},
 };
 constexpr uint8_t kNumDefaultBrokers =
     sizeof(kDefaultBrokerSpecs) / sizeof(kDefaultBrokerSpecs[0]);

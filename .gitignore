@@ -105,3 +105,7 @@ scripts/llm-consult.py
 .claude/hooks/checkpoint_write.py
 .claude/hooks/block-skip-bypass.py
 .claude/hooks/dw-approve-bypass.py
+
+# native test-harness build leftovers (scripts/test_observer_nvs_round_trip.py et al.)
+harness.obj
+harness.exe

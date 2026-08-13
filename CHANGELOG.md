@@ -29,6 +29,16 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
   recency view catches up; re-adding the contact on the peer resolves it immediately.
 
 ### Changed
+- **Eastme.sh broker seed renamed to CoreComms.net** (#677) — the seeded slot-3 broker
+  follows the service's rebrand: `wss://mqtt.corecomms.net:443/mqtt`, JWT audience
+  `mqtt.corecomms.net`, CA anchor `gts-r4` (endpoint + full TLS chain verified live
+  2026-08-13). Slot 4 (Eastmesh.au) also repinned `letsencrypt` → `gts-r4`: its live
+  chain moved to GTS Root R4, so the old anchor no longer validates at all. Fresh-NVS
+  only (#262 semantics); existing devices keep their stored config — operators with an
+  old seeded slot can `mqtt clear <N>` + reboot to reseed. Re-implements external
+  PR #282; thanks to **EldoonNemar** for the original contribution and the rebrand
+  heads-up.
+
 - **OKIMesh broker slots 0-1 moved to wss/TLS** — the two seeded OKIMesh brokers now use
   `wss://mqtt{1,2}.okimesh.org:9002/mqtt` over TLS (`letsencrypt` CA) instead of plaintext
   `mqtt://…:1883`. Auth stays anonymous (TLS secures the transport; no MQTT credential).

@@ -89,7 +89,7 @@ bool MqttAuthJwt::apply(esp_mqtt_client_config_t& cfg, uint32_t now_ms) {
     // #95: default the JWT "owner" claim to THIS device's own pubkey (UPPERCASE
     // hex -- the same form as the token's publicKey claim) when no jwt_owner was
     // configured. owner==device-pubkey is the verified-working convention across
-    // every target broker (eastme.sh / LetsMesh), so this makes wss zero-touch:
+    // every target broker (CoreComms.net / LetsMesh), so this makes wss zero-touch:
     // no per-slot jwt_owner entry needed. An explicit jwt_owner still overrides.
     // Built once (pubkey is constant); owner_[65] holds exactly 64 hex + NUL.
     if (owner_[0] == '\0') {
@@ -118,7 +118,8 @@ bool MqttAuthJwt::apply(esp_mqtt_client_config_t& cfg, uint32_t now_ms) {
     // #68: build the MQTT CONNECT username once -- "v1_" + UPPERCASE hex of the
     // device pubkey. The broker strips "v1_" and verifies the token's publicKey
     // claim against it; a null username is rejected (CONNACK rc=5) even with a
-    // valid token -- proven live against mqtt.eastme.sh. Same convention for
+    // valid token -- proven live against mqtt.eastme.sh (the service has since
+    // rebranded to mqtt.corecomms.net -- #677). Same convention for
     // LetsMesh. The pubkey is constant, so build it only on first apply().
     if (username_[0] == '\0' && identity_ != nullptr) {
         char hex[2 * PUB_KEY_SIZE + 1];
