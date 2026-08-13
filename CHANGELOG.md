@@ -16,6 +16,19 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-13
+
+### Added
+- **Settings survive the 1.16 → 1.17 upgrade** (#627/#659/#665): a legacy-prefs layout
+  detector with Offband-aware offsets migrates existing device preferences across the
+  upstream prefs-layout change; cross-family records are refused rather than mis-read;
+  caplog settings now apply on the 1.17 `/prefs.json` path; and every migration outcome
+  leaves a persistent event record that survives reboot. Hardware-verified across 7
+  device/architecture cells.
+- **On-air packet hash returned on channel-send confirmation** (#611, capability-gated):
+  lets the client correlate an outgoing channel message with CoreScope observer counts
+  by packet hash.
+
 ### Fixed
 - **Future-poisoned clocks are now recoverable** (#607, PRs #612): owner-authenticated
   time sets (client sync, CLI `time`/`clock sync`) are accepted in **both directions** —
@@ -27,8 +40,17 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
   `[clock]` audit line on serial/caplog. **Note for recovered nodes:** peers that heard a
   node's poisoned (future) timestamps may ignore its messages until their per-contact
   recency view catches up; re-adding the contact on the peer resolves it immediately.
+- **nRF52 BLE companions crash-boot loop on the 1.17.0 base** (#668): RAK4631 and
+  T1000-E BLE companions double-initialized BLE and crash-looped ~4 s after boot;
+  never in a tagged release, listed for bench-build testers.
+- **Caplog retrieval uses one shared redaction pass on both paths** (#667): closes a
+  gap where one retrieval path could return lines the other would have redacted.
+- **Wio Tracker L1: stale SafeBoot battery-divider gate removed** (#620).
 
 ### Changed
+- **MeshCore base updated 1.16.0 → 1.17.0** (#628/#643): full upstream refresh of the
+  fork base, bringing upstream 1.17.0 fixes and board support forward under the
+  Offband feature set.
 - **Eastme.sh broker seed renamed to CoreComms.net** (#677) — the seeded slot-3 broker
   follows the service's rebrand: `wss://mqtt.corecomms.net:443/mqtt`, JWT audience
   `mqtt.corecomms.net`, CA anchor `gts-r4` (endpoint + full TLS chain verified live
