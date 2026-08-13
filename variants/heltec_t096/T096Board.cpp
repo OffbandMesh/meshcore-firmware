@@ -112,27 +112,23 @@ void T096Board::variant_shutdown() {
 }
 
 void T096Board::powerOff() {
-#if ENV_INCLUDE_GPS == 1
-    pinMode(PIN_GPS_EN, OUTPUT);
-    digitalWrite(PIN_GPS_EN, !PIN_GPS_EN_ACTIVE);
-#endif
-    loRaFEMControl.setSleepModeEnable();
-    variant_shutdown();
-    sd_power_system_off();
+  loRaFEMControl.setSleepModeEnable();
+  nrf_gpio_cfg_default(PIN_GPS_EN); // 363uA down to 39uA
+  NRF52Board::powerOff();
 }
 
 const char* T096Board::getManufacturerName() const {
   return "Heltec T096";
 }
 
-// #298: runtime control of the external FEM LNA (mirrors HeltecV4Board). TX/RX mode
-// switching happens automatically on each transmit via onBeforeTransmit/
-// onAfterTransmit; changing the enable flag here only takes effect on the next
-// RX-mode entry, so re-enter RX mode to apply it immediately.
 bool T096Board::setLoRaFemLnaEnabled(bool enable) {
+  if (!loRaFEMControl.isLnaCanControl()) {
+    return false;
+  }
+
   loRaFEMControl.setLNAEnable(enable);
   loRaFEMControl.setRxModeEnable();
-  return loRaFEMControl.isLnaCanControl();
+  return true;
 }
 
 bool T096Board::canControlLoRaFemLna() const {
@@ -140,5 +136,5 @@ bool T096Board::canControlLoRaFemLna() const {
 }
 
 bool T096Board::isLoRaFemLnaEnabled() const {
-  return loRaFEMControl.isLnaEnabled();
+  return loRaFEMControl.isLNAEnabled();
 }

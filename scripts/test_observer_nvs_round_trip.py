@@ -153,17 +153,18 @@ int main() {
     // Slots 0 + 1 + 3 are still virgin. populateDefaultBrokers should (#592):
     //   - fill slot 0 with OKIMesh mqtt1 (wss/anon, letsencrypt CA, disabled)
     //   - fill slot 1 with OKIMesh mqtt2 (wss/anon, letsencrypt CA, disabled)
-    //   - fill slot 3 with Eastme.sh (wss/jwt, disabled, letsencrypt CA)
+    //   - fill slot 3 with CoreComms.net (wss/jwt, disabled, gts-r4 CA -- #677)
     //   - LEAVE slot 2 alone (already has user-set URL -- would otherwise be
     //     MeshMapper under the #317 layout)
 
     populateDefaultBrokers();
 
-    BrokerConfig slot0, slot1, slot2, slot3;
+    BrokerConfig slot0, slot1, slot2, slot3, slot4;
     if (!readBrokerConfig(0, slot0)) { puts("FAIL read slot 0"); return 1; }
     if (!readBrokerConfig(1, slot1)) { puts("FAIL read slot 1"); return 1; }
     if (!readBrokerConfig(2, slot2)) { puts("FAIL read slot 2"); return 1; }
     if (!readBrokerConfig(3, slot3)) { puts("FAIL read slot 3"); return 1; }
+    if (!readBrokerConfig(4, slot4)) { puts("FAIL read slot 4"); return 1; }
 
     // Slot 0 = OKIMesh mqtt1 (#592): wss + anonymous over TLS ("letsencrypt" CA).
     // Auth stays None -- TLS secures the transport, no MQTT credential. Ships
@@ -220,18 +221,19 @@ int main() {
         return 1;
     }
 
-    // Slot 3 = Eastme.sh (#317, moved from slot 2): wss/jwt, letsencrypt CA,
-    // BARE audience (#95 -- the scheme-qualified "https://" form is rejected
-    // by strict validators like LetsMesh).
-    if (strcmp(slot3.url, "wss://mqtt.eastme.sh:443/mqtt") != 0) {
+    // Slot 3 = CoreComms.net (#317 moved it from slot 2; #677 renamed it from
+    // Eastme.sh and repinned to gts-r4): wss/jwt, BARE audience (#95 -- the
+    // scheme-qualified "https://" form is rejected by strict validators like
+    // LetsMesh).
+    if (strcmp(slot3.url, "wss://mqtt.corecomms.net:443/mqtt") != 0) {
         printf("FAIL slot 3 url after populate: '%s'\n", slot3.url);
         return 1;
     }
-    if (strcmp(slot3.jwt_audience, "mqtt.eastme.sh") != 0) {
+    if (strcmp(slot3.jwt_audience, "mqtt.corecomms.net") != 0) {
         printf("FAIL slot 3 jwt_audience (want bare host): '%s'\n", slot3.jwt_audience);
         return 1;
     }
-    if (strcmp(slot3.ca_cert_name, "letsencrypt") != 0) {
+    if (strcmp(slot3.ca_cert_name, "gts-r4") != 0) {
         printf("FAIL slot 3 ca_cert_name: '%s'\n", slot3.ca_cert_name);
         return 1;
     }
@@ -248,6 +250,25 @@ int main() {
     if (slot3.jwt_owner[0] != '\0' || slot3.jwt_email[0] != '\0' || slot3.username[0] != '\0') {
         printf("FAIL slot 3 identity claims should be empty: own='%s' eml='%s' usr='%s'\n",
                slot3.jwt_owner, slot3.jwt_email, slot3.username);
+        return 1;
+    }
+
+    // Slot 4 = Eastmesh.au: #677 repinned its CA anchor letsencrypt -> gts-r4
+    // (the live chain moved to GTS Root R4; the old pin no longer validates).
+    if (strcmp(slot4.url, "wss://mqtt2.eastmesh.au:443/mqtt") != 0) {
+        printf("FAIL slot 4 url after populate: '%s'\n", slot4.url);
+        return 1;
+    }
+    if (strcmp(slot4.ca_cert_name, "gts-r4") != 0) {
+        printf("FAIL slot 4 ca_cert_name (#677 anchor fix): '%s'\n", slot4.ca_cert_name);
+        return 1;
+    }
+    if (strcmp(slot4.jwt_audience, "mqtt2.eastmesh.au") != 0) {
+        printf("FAIL slot 4 jwt_audience (want bare host): '%s'\n", slot4.jwt_audience);
+        return 1;
+    }
+    if (slot4.enabled) {
+        printf("FAIL slot 4 (wss/jwt) should default to disabled\n");
         return 1;
     }
 

@@ -43,7 +43,7 @@ public:
     MqttBrokerPool& operator=(const MqttBrokerPool&) = delete;
 
     // Initialize the pool. Calls populateDefaultBrokers() (idempotent;
-    // seeds slots 0-2 with EastMesh/LetsMesh defaults if empty), then
+    // seeds slots 0-4 with the public-broker defaults if empty), then
     // reads each slot's config and brings up brokers where enabled.
     //
     // device_id / node_name / version strings are stored for later
@@ -92,7 +92,7 @@ public:
     // PARSED mesh::Packet + rssi/snr/score/duration. Pool builds the
     // parsed-field JSON ONCE via buildPacketJson (route, payload_type,
     // dedupe hash, path, ...) then fans out per-broker via publishPacket.
-    // This is the CoreScope/EastMesh-ingested topic. Fed by MyMesh::logRx
+    // This is the CoreScope/CoreComms.net-ingested topic. Fed by MyMesh::logRx
     // (the post-parse hook) -- unlike publishRawFromBytes which is fed by
     // the pre-parse logRxRaw hook and can only emit /raw.
     uint8_t publishParsedPacket(const mesh::Packet& packet, int rssi,

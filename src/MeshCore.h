@@ -74,6 +74,14 @@ enum SafetyEventType : uint8_t {
   EVT_NVS_FAIL         = 10, // nvs_open or commit failed in safety codepath
   EVT_REMOTE_CMD_ACCEPTED = 11, // MQTT remote command accepted (auth+rate-limit passed); issue #86
   EVT_REMOTE_CMD_REJECTED = 12, // MQTT remote command rejected (auth fail, rate limit, etc.); issue #86
+  // Prefs migration (#627/#631). These MUST go to the persistent safety log, not
+  // to MESH_DEBUG_PRINTLN: the migration runs inside loadPrefs(), i.e. BEFORE the
+  // caplog enable is known, so a debug line there is unconditionally discarded on
+  // a fresh boot. A one-shot, irreversible-looking data migration that leaves no
+  // record is exactly the silent failure this log exists to prevent.
+  EVT_PREFS_MIGRATED      = 13, // legacy record migrated to /prefs.json (detail: layout+len)
+  EVT_PREFS_REFUSED       = 14, // layout undetermined -- FAIL CLOSED, booted on defaults
+  EVT_PREFS_SAVE_FAIL     = 15, // migration read OK but /prefs.json write failed; will retry next boot
 };
 
 class MainBoard {
