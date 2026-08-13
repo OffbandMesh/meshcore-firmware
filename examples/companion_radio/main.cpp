@@ -108,62 +108,14 @@ MultiSerialInterface interface_manager;
   DataStore store(SPIFFS, rtc_clock);
 #endif
 
-#ifdef ESP32
-  #ifdef WIFI_SSID
-    // SECURITY (Offband #167/#168): SerialWifiInterface is a TCP server on
-    // TCP_PORT (5000) with NO connection auth -- any host on the LAN that reaches
-    // it becomes the companion peer (full companion-API control). Do NOT pair
-    // WIFI_SSID with OFFBAND_OBSERVER: the config command would land on this
-    // unauthenticated socket (a compile-time #error in OffbandConfigProtocol.h
-    // enforces that). Authenticating this transport is tracked in #167 (P1).
-    #include <helpers/esp32/SerialWifiInterface.h>
-    SerialWifiInterface serial_interface;
-    #ifndef TCP_PORT
-      #define TCP_PORT 5000
-    #endif
-  #elif defined(BLE_PIN_CODE)
-    #include <helpers/esp32/SerialBLEInterface.h>
-    SerialBLEInterface serial_interface;
-  #elif defined(SERIAL_RX)
-    #include <helpers/ArduinoSerialInterface.h>
-    ArduinoSerialInterface serial_interface;
-    HardwareSerial companion_serial(1);
-  #else
-    #include <helpers/ArduinoSerialInterface.h>
-    ArduinoSerialInterface serial_interface;
-  #endif
-#elif defined(RP2040_PLATFORM)
-  //#ifdef WIFI_SSID
-  //  #include <helpers/rp2040/SerialWifiInterface.h>
-  //  SerialWifiInterface serial_interface;
-  //  #ifndef TCP_PORT
-  //    #define TCP_PORT 5000
-  //  #endif
-  // #elif defined(BLE_PIN_CODE)
-  //   #include <helpers/rp2040/SerialBLEInterface.h>
-  //   SerialBLEInterface serial_interface;
-  #if defined(SERIAL_RX)
-    #include <helpers/ArduinoSerialInterface.h>
-    ArduinoSerialInterface serial_interface;
-    HardwareSerial companion_serial(1);
-  #else
-    #include <helpers/ArduinoSerialInterface.h>
-    ArduinoSerialInterface serial_interface;
-  #endif
-#elif defined(NRF52_PLATFORM)
-  #ifdef BLE_PIN_CODE
-    #include <helpers/nrf52/SerialBLEInterface.h>
-    SerialBLEInterface serial_interface;
-  #else
-    #include <helpers/ArduinoSerialInterface.h>
-    ArduinoSerialInterface serial_interface;
-  #endif
-#elif defined(STM32_PLATFORM)
-  #include <helpers/ArduinoSerialInterface.h>
-  ArduinoSerialInterface serial_interface;
-#else
-  #error "need to define a serial interface"
-#endif
+// #668: the legacy per-platform `serial_interface` declarations lived here.
+// 1.17.0 replaced them with the interface objects declared above
+// (bluetooth_interface / wifi_interface / usb_serial_interface /
+// ethernet_interface / hardware_serial_interface) registered into
+// interface_manager. The merge added those WITHOUT removing these, so every
+// companion build carried a second, fully-allocated interface object -- 4,624
+// bytes of dead .bss on ESP32, and on nRF52 a second SerialBLEInterface whose
+// begin() was still being called, double-initialising the BLE stack (#668).
 
 /* GLOBAL OBJECTS */
 #ifdef DISPLAY_CLASS
@@ -325,16 +277,13 @@ void setup() {
     #endif
   );
 
-#ifdef BLE_PIN_CODE
-  serial_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
-#else
-  serial_interface.begin(Serial);
-#endif
-  the_mesh.startInterface(serial_interface);
-  // #411: mirror captured serial-log lines to the live console EXCEPT where the
-  // framed protocol runs on Serial itself (USB-serial companion) -- there it stays
-  // capture-only so nothing raw corrupts the protocol line.
-  meshLogSetMirror(!serial_interface.isConsoleSharedWithProtocol());
+  // #668: interface bring-up for EVERY platform now happens once, below, via
+  // interface_manager. The legacy single-serial_interface block that used to sit
+  // here was NOT removed when 1.17.0's MultiSerialInterface was ported -- only the
+  // ESP32 branch got ported -- so on nRF52 SerialBLEInterface::begin() ran TWICE
+  // (once here, once at the common block) and the second full BLE bring-up
+  // crash-looped the board. USB companions survived it only because a duplicated
+  // ArduinoSerialInterface::begin(Serial) just re-binds a stream.
 #elif defined(RP2040_PLATFORM)
   LittleFS.begin();
   store.begin();
@@ -353,18 +302,10 @@ void setup() {
   //   char dev_name[32+16];
   //   sprintf(dev_name, "%s%s", BLE_NAME_PREFIX, the_mesh.getNodeName());
   //   serial_interface.begin(dev_name, the_mesh.getBLEPin());
-  #if defined(SERIAL_RX)
-    companion_serial.setPins(SERIAL_RX, SERIAL_TX);
-    companion_serial.begin(115200);
-    serial_interface.begin(companion_serial);
-  #else
-    serial_interface.begin(Serial);
-  #endif
-    the_mesh.startInterface(serial_interface);
-  // #411: mirror captured serial-log lines to the live console EXCEPT where the
-  // framed protocol runs on Serial itself (USB-serial companion) -- there it stays
-  // capture-only so nothing raw corrupts the protocol line.
-  meshLogSetMirror(!serial_interface.isConsoleSharedWithProtocol());
+  // #668: same as the nRF52 branch above -- interface bring-up is owned by
+  // interface_manager below. RP2040's duplication was never fatal because its BLE
+  // path is commented out, so it only ever double-bound an ArduinoSerialInterface,
+  // but it is the same defect and is removed with it.
 #elif defined(ESP32)
   CW_PHASE("ESP32:before SPIFFS.begin");
   SPIFFS.begin(true);
