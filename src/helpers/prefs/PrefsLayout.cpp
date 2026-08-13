@@ -6,40 +6,104 @@ namespace offband {
 
 namespace {
 
-// ---- Path A (/com_prefs): record lengths at RELEASED versions -------------
+// ---- HOW THESE NUMBERS WERE OBTAINED -- read before editing them ----------
 //
-// Derived by extracting the record end offset at every release tag, not from
-// dev-tree commits (the tree passed through lengths no release ever shipped).
+// COMPUTE the lengths. Do NOT read them off the `// <offset>` comments in
+// CommonCLI.cpp / DataStore.cpp, and do not derive them by hand.
 //
-//   Offband  v0.17.0 .. v0.19.0-rc1 -> 292
-//            v1.0.0  .. v1.2.0      -> 294
-//            v1.3.0                 -> 364
-//   upstream companion-v1.15.0      -> 291
-//            companion-v1.16.0      -> 293
-//            companion-v1.17.0      -> 295
+// The length of a record is the sum of the byte counts its save/load sequence
+// actually moves -- i.e. every `sizeof(_prefs.field)` resolved against the
+// field's DECLARED TYPE. #665 shipped a table built by reading the offset
+// comments instead: DataStore.cpp's comments treat `uint32_t gps_interval` as
+// one byte, so every Path B offset after it is wrong by 3, and every Path B
+// entry in this file was a length no firmware has ever written. Path A's
+// comments happen to be correct, which is exactly why the error went unnoticed
+// -- half the evidence agreed.
 //
-// Disjoint across releases. 295/296/298 additionally existed in unreleased
-// Offband dev/bench builds; 295 is the one that collides with upstream 1.17.0
-// and is therefore NOT listed as Offband-unique -- it routes to the tiebreakers.
+// The generator lives in the #665 issue thread; it parses the read sequence at
+// a given tag or commit and sums it. Re-run it rather than hand-editing.
+
+// ---- Path A (/com_prefs): computed at every release tag -------------------
+//
+//   upstream repeater-v1.10.0            -> 166
+//            repeater-v1.11.0            -> 170
+//            repeater-v1.12.0 .. v1.14.1 -> 290
+//            repeater-v1.15.0            -> 291
+//            repeater-v1.16.0            -> 293
+//            repeater-v1.17.0            -> 295
+//   Offband  v0.17.0 .. v0.19.0-rc1      -> 292
+//            v1.0.0  .. v1.2.0           -> 294
+//            v1.3.0                      -> 364
+//
+// Disjoint across releases. 296/298 additionally existed in unreleased Offband
+// dev/bench builds; 295 collides with upstream 1.17.0 and is therefore NOT
+// listed as Offband-unique -- it routes to the tiebreakers.
+//
+// SAFETY OF THE OLDER UPSTREAM LENGTHS -- verified by comparing the field ->
+// offset MAP at each tag against 1.17.0's (comparing read INDEX instead is
+// misleading: pad merges/splits shift the index without moving any field).
+//
+//   1.10.0 / 1.11.0 / 1.12.0 / 1.13.0 -- zero fields moved. 1.14.0 replaced a
+//     3-byte zero pad at 121 with path_hash_mode@121 + loop_detect@122 + a
+//     1-byte pad, so byte 124 onward realigns exactly. An older record reads
+//     those two as 0 (the pad was memset to 0), which is their default.
+//   1.14.1 -- ONE real move: rx_boosted_gain sat at byte 79 (a pad slot in
+//     every other version) and 1.15.0 relocated it to 290. A 1.14.1 record read
+//     with this table therefore LOSES that one setting -- byte 79 is skipped as
+//     pad and offset 290 is past EOF, so it short-reads to the default. Nothing
+//     is mis-assigned. This is exactly what upstream 1.17.0 does with the same
+//     file: upstream has no length check at all, it just reads. We match it.
+//
+// That is the standard for this table: accepting a length must produce the same
+// result upstream's own migration would. Refusing it does not protect the user,
+// it factory-resets them.
 
 constexpr size_t kCollidingLengthA = 295;
 
 constexpr size_t kOffbandLengthsA[]  = {292, 294, 296, 298, 364};  // incl. bench-only 296/298
-constexpr size_t kUpstreamLengthsA[] = {291, 293};                 // 295 handled separately
+constexpr size_t kUpstreamLengthsA[] = {166, 170, 290, 291, 293};  // 295 handled separately
 
 // ---- Path B (/new_prefs): companion record --------------------------------
 //
-// Upstream: 1.15.0 / 1.16.0 / 1.17.0 all end at 137 (after default_scope_key
-// @121, 16 bytes). Offband: <= v1.1.2 also 137 -- byte-identical, nothing
-// appended yet -- then v1.2.0 -> 138 (radio_fem_rxgain @137) and v1.3.0 -> 147
-// (caplog 138/139, notify_scope 140, button_actions 141..144, ui_led 145,
-// ui_display_mode 146).
+// Path B is PURE APPEND from upstream 1.10.0 all the way through Offband
+// v1.3.0 -- verified by comparing the field -> offset map at every tag: ZERO
+// fields move. Every historical length is therefore a strict prefix of the
+// current layout, and reading one with this table short-reads the missing
+// fields to their caller-set defaults. That is precisely what upstream 1.17.0
+// does, since upstream applies no length check at all.
 //
-// 137 is shared, and that is harmless: at that length the two layouts are the
-// same bytes, so reading it with upstream's table is correct whoever wrote it.
+// Upstream lengths (computed):
+//   84   1.7.0 .. 1.10.0        91   1.12.0 / 1.13.0      93   1.14.1
+//   85   1.11.0                 92   1.14.0              140   1.15.0 .. 1.17.0
+//
+// 140 is ALSO written by Offband v0.17.0 .. v1.2.0-beta1 -- Offband had appended
+// nothing yet, so at that length the layouts are the same bytes and "upstream"
+// is the correct table whichever wrote it.
+//
+// Offband append boundaries (computed at the commit that introduced each):
+//   141  + radio_fem_rxgain @140                    (#298, bfa3fb74) [v1.2.0]
+//   143  + caplog_enabled/caplog_level @141,142      (#435, 44dc242a)
+//   148  + notify_scope @143 + button_actions @144..147 (#510/#509, 9de49edd)
+//   150  + ui_led_enabled/ui_display_mode @148,149   (#542, dd20fabc) [v1.3.0]
+//
+// Note 144 is NOT a boundary: notify_scope and button_actions landed in ONE
+// commit. Deriving the ladder by hand invents it; computing it does not.
+//
+// THE LENGTH ON DISK IS WRITTEN BY THE FIRMWARE THAT LAST CALLED savePrefs(),
+// NOT BY THE FIRMWARE THAT IS RUNNING. A device that upgraded across several
+// appends without the user ever changing a setting still holds the OLD, shorter
+// record -- which is why every boundary above must be listed, not just the ones
+// that coincide with a release tag.
+//
+// Do NOT relax this to `>= 141`. #627 removed exactly that rule because it
+// swallowed a truncated Path A record (292 bytes) or a file with garbage
+// appended and read it with the companion table.
+//
+// APPENDING A NEW FIELD? Add its new end-length here in the SAME PR. Miss it
+// and every device that upgrades without re-saving factory-resets itself.
 
-constexpr size_t kUpstreamLengthB   = 137;
-constexpr size_t kOffbandLengthsB[] = {138, 147};
+constexpr size_t kUpstreamLengthsB[] = {84, 85, 91, 92, 93, 140};
+constexpr size_t kOffbandLengthsB[]  = {141, 143, 148, 150};
 
 template <size_t N>
 bool contains(const size_t (&arr)[N], size_t v) {
@@ -152,9 +216,10 @@ PrefsLayoutResult detectCommonPrefsLayout(const PrefsLayoutEvidence& ev) {
 PrefsLayoutResult detectCompanionPrefsLayout(const PrefsLayoutEvidence& ev) {
   PrefsLayoutResult r;
 
-  if (ev.length == kUpstreamLengthB) {
-    // Shared length, but the layouts coincide there, so this is correct
-    // whichever build wrote it.
+  if (contains(kUpstreamLengthsB, ev.length)) {
+    // Includes 140, which Offband <= v1.2.0-beta1 also wrote. Offband had
+    // appended nothing by then, so the layouts coincide and this is the correct
+    // table whichever build wrote it.
     r.layout = PrefsLayout::Upstream;
     r.reason = PrefsLayoutReason::LengthUniqueUpstream;
     return r;
@@ -180,7 +245,7 @@ PrefsIdentity identifyLegacyPrefs(const PrefsLayoutEvidence& ev) {
   const bool looks_common = (ev.length == kCollidingLengthA) ||
                             contains(kOffbandLengthsA, ev.length) ||
                             contains(kUpstreamLengthsA, ev.length);
-  const bool looks_companion = (ev.length == kUpstreamLengthB) ||
+  const bool looks_companion = contains(kUpstreamLengthsB, ev.length) ||
                                contains(kOffbandLengthsB, ev.length);
 
   // The two families' length sets are disjoint by construction; if that ever

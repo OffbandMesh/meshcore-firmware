@@ -137,7 +137,7 @@ class MyMesh : public BaseChatMesh, ContactVisitor {
     File file = _fs->open("/contacts", "w", true);
 #endif
     if (file) {
-      ContactsIterator iter;
+      ContactsIterator iter = startContactsIterator();
       ContactInfo c;
       uint8_t unused = 0;
       uint32_t reserved = 0;
@@ -566,6 +566,9 @@ void setup() {
   board.begin();
 
   offband::crashLogStandardInit(board, "secure-chat");   // #472: uniform CrashLog (after board.begin() for reset reason)
+#ifdef HAS_EXTERNAL_WATCHDOG
+  external_watchdog.begin();
+#endif
 
   if (!radio_init()) { halt(); }
 
@@ -599,4 +602,7 @@ void loop() {
   offband::crashLogStandardTick(millis());  // #472: deferred previous-boot re-dump for late serial connect
   the_mesh.loop();
   rtc_clock.tick();
+#ifdef HAS_EXTERNAL_WATCHDOG
+  external_watchdog.loop();
+#endif
 }
