@@ -1226,7 +1226,19 @@ void loop() {
 #ifdef HAS_EXTERNAL_WATCHDOG
   external_watchdog.loop();
 #endif
-  if (the_mesh.getNodePrefs()->powersaving_enabled && !the_mesh.hasPendingWork()) {
+  // #597: skip the idle light-sleep while a persistent-WiFi window is armed
+  // (OTA, `wifi on N`, or a caplog-forward stream). OTA already sets
+  // Board::inhibit_sleep so board.sleep() no-ops during a firmware upload, but
+  // the caplog-forward path does not — without this, a forward window still
+  // light-sleeps between LoRa events and throttles the live syslog stream.
+  // wifi_telemetry_is_persistent() tracks g_tel_persistent_until_ms, which every
+  // persistent-WiFi op (OTA, wifi-on, forward) sets — the common signal.
+  bool wifi_window_armed = false;
+#ifdef ENABLE_WIFI_TELEMETRY
+  wifi_window_armed = (wifi_telemetry_is_persistent() != 0);
+#endif
+  if (the_mesh.getNodePrefs()->powersaving_enabled && !the_mesh.hasPendingWork()
+      && !wifi_window_armed) {
 #if defined(NRF52_PLATFORM)
     board.sleep(0); // nrf ignores seconds param, sleeps whenever possible
 #else
