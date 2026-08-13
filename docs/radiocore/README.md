@@ -2,8 +2,9 @@
 
 Working notes for the **Heltec RadioCore** beta hardware. Tracking: [#622](https://github.com/OffbandMesh/meshcore-firmware/issues/622) (feature), [#623](https://github.com/OffbandMesh/meshcore-firmware/issues/623) RC32 · [#624](https://github.com/OffbandMesh/meshcore-firmware/issues/624) RCC6 · [#625](https://github.com/OffbandMesh/meshcore-firmware/issues/625) RC52.
 
-> **Snapshot, not live state.** Everything here was captured 2026-08-10 against
-> `firmware-base` @ `5e15510e` (MeshCore 1.16.0 base) and upstream MeshCore @ `companion-v1.17.0`.
+> **Snapshot, not live state.** Captured 2026-08-10, revised 2026-08-13 against
+> `firmware-base` @ `117d719d` — which is now on the **MeshCore 1.17.0 base** (merged
+> `78a84df7`, PR #644, ci-green 45/45; released as `offband-v1.4.0`).
 > Re-verify before relying on any of it.
 
 ## What RadioCore is
@@ -164,6 +165,22 @@ FEM/LNA control (cap bit 0x04, 0xC3) is exercised today only on Heltec V4.3 / KC
 GC1109 and SKY66122 boards structurally lack an RX-path bypass — see HARDWARE.local.md]`
 RC52 would therefore be a second bench target for that path.
 
+⚠ **The FEM implementation underneath that feature is changing.** `LoRaFEMControl` is
+Heltec's (Quency-D, `9312fe78`, 2026-02-26) and was already in our 1.16.0 base — we
+inherited it. Upstream independently added FEM CLI control + `radio_fem_rxgain`
+(`8435464c`, authored 2026-03-24, merged after our base point); Offband added its own
+`radio_fem_rxgain` separately (`0a813249`, 2026-05-12). Parallel development on a
+vendor-provided class, **not** upstream adopting ours.
+
+Owner decision: **adopt upstream's FEM, retire our divergence, keep our client surface on
+top** — tracked as **#629**. So scope any RC52 FEM work against #629's outcome rather
+than today's Offband implementation. `[verified: FoggyCanyon provenance audit + owner
+ruling, AM msg 423]`
+
+Related: upstream's `def("fem_rxgain", _parent->rx_boosted_gain)` is a real copy-paste bug
+(`radio_fem_rxgain` declared but never serialized). **Do not file it** — upstream PR #3137
+already fixes it and is open and actively iterating.
+
 ## Display — T108 / NV3001B
 
 128 × 220, 16-bit RGB565, 4-wire write-only SPI, no MISO. `RDDID` returns `0x300101`.
@@ -180,20 +197,65 @@ either assumption.
 
 ## Prior art
 
-| Board | Upstream MeshCore | Community (n30nex, MIT) |
+| Board | In `firmware-base` today | Community (n30nex, MIT) |
 |---|---|---|
-| RC32 | **full `variants/heltec_rc32`**, 16 envs + `NV3001BDisplay` | — |
-| RCC6 | none | companion BLE/USB/WiFi/Web-AP, repeater, room server, MQTT observer + WebUI |
-| RC52 | none | BLE companion, headless repeater, room server ± TFT |
+| RC32 | ✅ **`variants/heltec_rc32`**, 16 envs + `NV3001BDisplay` — arrived with the 1.17.0 base | — |
+| RCC6 | ❌ none | companion BLE/USB/WiFi/Web-AP, repeater, room server, MQTT observer + WebUI |
+| RC52 | ❌ none | BLE companion, headless repeater, room server ± TFT |
 
-`variants/heltec_rc32` and `src/helpers/ui/NV3001BDisplay.*` landed upstream in commit
-`17d68e32`, dated **2026-07-08** — after the 1.16.0 release (2026-06-06) and inside
+`variants/heltec_rc32` and `src/helpers/ui/NV3001BDisplay.*` were authored upstream in
+commit `17d68e32`, dated **2026-07-08** — after the 1.16.0 release (2026-06-06) and inside
 1.17.0 (2026-08-09). `[verified: git merge-base --is-ancestor 17d68e32 companion-v1.16.0
 → NO; … companion-v1.17.0 → YES]`
 
-Offband is on the **1.16.0** base, so RadioCore support is coupled either to the 1.17.0
-base update (#614) or to cherry-picking that commit onto 1.16.0. The base update carries
-a separate config-migration hazard — see #614 / #615 before assuming it is a clean pull.
+**They are now in our tree.** The 1.17.0 base update (#614/#628) merged on 2026-08-13, so
+the earlier framing — RadioCore being gated on that update, or needing `17d68e32`
+cherry-picked onto 1.16.0 — is **historical**. The variant is present; what remains is
+validating it against our actual hardware.
+
+Author note: `heltec_rc32` and `NV3001BDisplay` are by **Quency-D**, a Heltec vendor
+engineer — 98 upstream commits, essentially all on Heltec variants (`heltec_v4` ×31,
+`heltec_rc32` ×21, tracker/tower/solar/t096/vision_master, plus the `boards/heltec_*.json`
+definitions). `[verified: FoggyCanyon provenance audit, AM msg 423]` So this is
+vendor-maintained board support, not a community contribution — relevant to how much we
+should diverge from it.
+
+### ⚠ Adopting `heltec_rc32` envs requires six Offband-specific lines
+
+Upstream's rc32 companion envs arrive **Bluedroid-shaped**. Offband migrated ESP32 BLE to
+**NimBLE** (#288), and our `SerialBLEInterface.h` includes `<NimBLEDevice.h>`
+unconditionally while companion envs pull `+<helpers/esp32/*.cpp>` with a greedy wildcard —
+so every upstream-new ESP32 env compiles a BLE interface it cannot link against.
+
+```
+heltec_rc32_companion_radio_ble                  + ${esp32_ble.lib_deps}
+heltec_rc32_companion_radio_usb                  + ${esp32_no_ble.build_src_filter}
+heltec_rc32_companion_radio_wifi                 + ${esp32_no_ble.build_src_filter}
+heltec_rc32_without_display_companion_radio_ble  + ${esp32_ble.lib_deps}
+heltec_rc32_without_display_companion_radio_usb  + ${esp32_no_ble.build_src_filter}
+heltec_rc32_without_display_companion_radio_wifi + ${esp32_no_ble.build_src_filter}
+```
+
+`[verified: FoggyCanyon, AM msg 432 — 21 envs across 6 upstream-new board families failed
+config-lint on first CI (#645); rc32 was 6 of them. heltec_rc32_companion_radio_ble builds
+SUCCESS with the additions.]` These are a standing Offband invariant, not a 1.17.0
+artifact — they would have been needed on any base.
+
+**None of the rc32 envs are in the CI matrix**, so CI will not catch a break there. Two
+guards run in `config-lint` if envs are added: `scripts/check_esp32_ble_deps.py` (#199 —
+can the env link) and `scripts/check_env_capability_claims.py` (#649 — does the config
+match what the env *name* claims; an `..._companion_radio_ble` env must really have
+`BLE_PIN_CODE`, and on ESP32 `WIFI_SSID` must be absent since WiFi wins the `#if` chain).
+
+### nRF52 companions on the 1.17.0 base
+
+`fix(#668)`: nRF52 BLE companions crash-boot looped on 1.17.0 — the merge ported only the
+ESP32 branch to upstream's `MultiSerialInterface`, leaving the nRF52/STM32 legacy
+`serial_interface.begin()` live alongside the new common block, so
+`SerialBLEInterface::begin()` ran twice. Fixed; confirmed on a RAK4631 and a T1000-E.
+Relevant to **RC52** (#625), which is nRF52840 — branch from a base containing #668.
+Side benefit: the fix recovered **4,624 bytes of static RAM on every companion build**,
+ESP32 included. `[verified: FoggyCanyon, AM msg 441]`
 
 ## Wi-Fi HaLow — deferred
 
