@@ -171,6 +171,12 @@ offband::PrefsLayoutEvidence CommonCLI::gatherLegacyEvidence(FILESYSTEM* fs, con
   return ev;
 }
 
+// #631 diagnostics: single choke point for applying the caplog setting.
+static inline void offband_applyCaplog(uint8_t level, bool enabled) {
+  meshLogSetLevel(level);
+  meshLogSetEnabled(enabled);
+}
+
 void CommonCLI::loadPrefs(FILESYSTEM* fs) {
   // #562: common caplog defaults, set before any file load. An old prefs file
   // predating these fields short-reads to EOF in loadPrefsInt and leaves these
@@ -200,6 +206,15 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
       _prefs->loadSerial(file);   // keyed format -- offsets no longer exist
       file.close();
     }
+    // REGRESSION FIX: apply the loaded caplog settings.
+    //
+    // The two LEGACY loaders (loadPrefsInt / loadPrefsUpstreamInt) both end with
+    // this pair, but the 1.17 /prefs.json path did not -- so once a node had
+    // migrated, g_meshLogEnabled stayed false forever regardless of what
+    // caplog_enabled said. `caplog start` persisted (#562) and was then silently
+    // dropped on every reboot, killing runtime diagnostics fleet-wide on upgrade.
+    // That is why a crash-looping node reported nothing at all.
+    offband_applyCaplog(_prefs->caplog_level, _prefs->caplog_enabled != 0);
   } else {
     // One-time migration of the legacy binary record into /prefs.json.
     //
@@ -216,6 +231,19 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
                          legacy, (unsigned)ev.length,
                          offband::toString(id.family), offband::toString(id.layout),
                          offband::toString(id.reason));
+      // Persistent record. MESH_DEBUG_PRINTLN above is runtime-gated on caplog,
+      // which CANNOT be on this early (its enable lives in the file being
+      // migrated), so the debug line is discarded on exactly the boot that
+      // matters. The safety log is NVS-backed and survives the reboot.
+      {
+        char d[48];
+        snprintf(d, sizeof(d), "%s len=%u %s", offband::toString(id.layout),
+                 (unsigned)ev.length, offband::toString(id.reason));
+        _board->appendSafetyEvent(
+            (id.layout == offband::PrefsLayout::Offband ||
+             id.layout == offband::PrefsLayout::Upstream)
+                ? mesh::EVT_PREFS_MIGRATED : mesh::EVT_PREFS_REFUSED, d);
+      }
       if (id.layout == offband::PrefsLayout::Offband || id.layout == offband::PrefsLayout::Upstream) {
         if (id.layout == offband::PrefsLayout::Offband) {
           loadPrefsInt(fs, legacy);          // Offband offsets
@@ -231,6 +259,7 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
           MESH_DEBUG_PRINTLN("[prefs] ERROR: migrated %s but FAILED to write "
                              "/prefs.json -- running on the loaded values, and this "
                              "migration will be retried on next boot.", legacy);
+          _board->appendSafetyEvent(mesh::EVT_PREFS_SAVE_FAIL, legacy);
         }
       } else {
         // FAIL CLOSED. Do NOT migrate and do NOT fall back to either table --
@@ -353,8 +382,7 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {  // Legacy 
     // #562: apply persisted caplog state at boot (common across roles). Capture
     // is independent of the serial mirror, so this is safe on a USB-serial
     // companion too.
-    meshLogSetLevel(_prefs->caplog_level);
-    meshLogSetEnabled(_prefs->caplog_enabled != 0);
+    offband_applyCaplog(_prefs->caplog_level, _prefs->caplog_enabled != 0);
     _prefs->cad_enabled = constrain(_prefs->cad_enabled, 0, 1); // boolean
 
     file.close();
@@ -462,8 +490,7 @@ void CommonCLI::loadPrefsUpstreamInt(FILESYSTEM* fs, const char* filename) {
     // #562: apply persisted caplog state at boot (common across roles). Capture
     // is independent of the serial mirror, so this is safe on a USB-serial
     // companion too.
-    meshLogSetLevel(_prefs->caplog_level);
-    meshLogSetEnabled(_prefs->caplog_enabled != 0);
+    offband_applyCaplog(_prefs->caplog_level, _prefs->caplog_enabled != 0);
     _prefs->cad_enabled = constrain(_prefs->cad_enabled, 0, 1); // boolean
 
     file.close();
@@ -510,6 +537,34 @@ uint8_t CommonCLI::buildAdvertData(uint8_t node_type, uint8_t* app_data) {
 }
 
 void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* reply) {
+#ifdef OFFBAND_CLI_TRACE
+    // #657 DIAGNOSTIC -- opt-in via -D OFFBAND_CLI_TRACE, never in a shipping
+    // image. `led` and `display` fall through to "Unknown command" on the
+    // 1.17.0 base while `fem` (the branch immediately above) and `telemetry`
+    // (immediately below) both answer. Source, DWARF line table and the emitted
+    // memcmp were all verified correct, so the only remaining question is what
+    // bytes actually reach this function -- and whether memcmp agrees with them
+    // HERE, at entry, on the same pointer the chain will use.
+    {
+      const size_t n = strlen(command);
+      Serial.printf("[cli] len=%u raw='", (unsigned)n);
+      for (size_t i = 0; i < n && i < 40; i++) {
+        const unsigned char c = (unsigned char)command[i];
+        if (c >= 32 && c < 127) Serial.print((char)c); else Serial.printf("\\x%02X", c);
+      }
+      Serial.print("' hex=");
+      for (size_t i = 0; i < n && i < 16; i++) Serial.printf("%02X ", (unsigned char)command[i]);
+      // Same comparisons the chain performs, evaluated at entry. If these
+      // disagree with the chain's behaviour, something between here and the
+      // branch is mutating `command`.
+      Serial.printf("| memcmp led=%d fem=%d display=%d ptr=%p\n",
+                    memcmp(command, "led", 3),
+                    memcmp(command, "fem", 3),
+                    memcmp(command, "display", 7),
+                    (void*)command);
+      Serial.flush();
+    }
+#endif
     if (memcmp(command, "poweroff", 8) == 0 || memcmp(command, "shutdown", 8) == 0) {
       _board->powerOff();  // doesn't return
     } else if (memcmp(command, "reboot", 6) == 0) {
@@ -1034,7 +1089,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       const char* arg = (command[14] == ' ') ? &command[15] : "";
       if (memcmp(arg, "off", 3) == 0) {
         wifi_telemetry_caplog_forward(0);
-        meshLogSetEnabled(false);
+        offband_applyCaplog(_prefs->caplog_level, false);
         _prefs->caplog_enabled = 0;
         savePrefs();
         strcpy(reply, "caplog forward off");
@@ -1051,7 +1106,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       strcpy(reply, "caplog forward: not available on this build");
 #endif
     } else if (memcmp(command, "caplog stop", 11) == 0 && (command[11] == 0 || command[11] == ' ')) {
-      meshLogSetEnabled(false);
+      offband_applyCaplog(_prefs->caplog_level, false);
       _prefs->caplog_enabled = 0;          // #562: persist off across reboot
       savePrefs();
       strcpy(reply, "caplog off");

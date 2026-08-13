@@ -230,6 +230,9 @@ using mesh::EVT_OTA_START;
 using mesh::EVT_OTA_PROGRESS;
 using mesh::EVT_OTA_RESTART;
 using mesh::EVT_NVS_FAIL;
+using mesh::EVT_PREFS_MIGRATED;
+using mesh::EVT_PREFS_REFUSED;
+using mesh::EVT_PREFS_SAVE_FAIL;
 
 struct __attribute__((packed)) SafetyEvent {
   uint32_t seq;       // monotonic across boots (from evt_seq NVS counter)
@@ -290,6 +293,9 @@ static const char* safety_event_type_str(uint8_t t) {
     case EVT_BOOT_INC:        return "boot_inc";
     case EVT_BOOT_THRESHOLD:  return "threshold";
     case EVT_BOOT_ROLLBACK:   return "rollback";
+    case EVT_PREFS_MIGRATED:  return "prefs_migrated";
+    case EVT_PREFS_REFUSED:   return "prefs_REFUSED";
+    case EVT_PREFS_SAVE_FAIL: return "prefs_save_FAIL";
     case EVT_BOOT_PENDING:    return "pending";
     case EVT_BOOT_VALID:      return "valid";
     case EVT_BOOT_VALID_FAIL: return "valid_fail";
