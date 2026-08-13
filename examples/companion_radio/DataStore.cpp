@@ -2,6 +2,7 @@
 #include "DataStore.h"
 #include <helpers/prefs/PrefsLayout.h>   // #627
 #include <helpers/ClockSanity.h>
+#include <MeshLog.h>                     // #631 diagnostics: OFFBAND_FORCE_CAPLOG
 
 #if defined(EXTRAFS) || defined(QSPIFLASH)
   #define MAX_BLOBRECS 100
@@ -200,6 +201,14 @@ bool DataStore::saveMainIdentity(const mesh::LocalIdentity &identity) {
 }
 
 void DataStore::loadPrefs(NodePrefs& prefs) {
+#ifdef OFFBAND_FORCE_CAPLOG
+  // DIAGNOSTIC BUILD ONLY -- never shipped. The companion does NOT call
+  // CommonCLI::loadPrefs, so the force in that function never runs on this
+  // role; the migration below logged into a disabled sink and a real
+  // MIGRATION REFUSED went unrecorded on the owner's paired device (#631).
+  meshLogSetLevel(MLOG_DEBUG);
+  meshLogSetEnabled(true);
+#endif
   if (_fs->exists("/prefs.json")) {
     File file = openRead(_fs, "/prefs.json");
     if (file) {

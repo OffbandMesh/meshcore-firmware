@@ -172,12 +172,30 @@ offband::PrefsLayoutEvidence CommonCLI::gatherLegacyEvidence(FILESYSTEM* fs, con
 }
 
 // #631 diagnostics: single choke point for applying the caplog setting.
+// Under OFFBAND_FORCE_CAPLOG the setting is IGNORED and logging is pinned on, so
+// a diagnostic build cannot be silenced by stored prefs or by `caplog stop`.
 static inline void offband_applyCaplog(uint8_t level, bool enabled) {
+#ifdef OFFBAND_FORCE_CAPLOG
+  (void)level; (void)enabled;
+  meshLogSetLevel(MLOG_DEBUG);
+  meshLogSetEnabled(true);
+#else
   meshLogSetLevel(level);
   meshLogSetEnabled(enabled);
+#endif
 }
 
 void CommonCLI::loadPrefs(FILESYSTEM* fs) {
+#ifdef OFFBAND_FORCE_CAPLOG
+  // DIAGNOSTIC BUILD ONLY -- opt-in via -D OFFBAND_FORCE_CAPLOG, never shipped.
+  // Forces runtime logging ON before anything else runs, and the `caplog stop`
+  // verb cannot turn it back off (see handleCommand). Needed because every
+  // MESH_DEBUG_PRINTLN in the firmware is gated on g_meshLogEnabled, which is
+  // false until prefs load -- so the entire boot path, including the prefs
+  // migration itself, is mute on exactly the boot being investigated.
+  meshLogSetLevel(MLOG_DEBUG);
+  meshLogSetEnabled(true);
+#endif
   // #562: common caplog defaults, set before any file load. An old prefs file
   // predating these fields short-reads to EOF in loadPrefsInt and leaves these
   // intact; a fresh node with no prefs file keeps them too.
