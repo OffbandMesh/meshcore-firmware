@@ -70,11 +70,15 @@ bool ESP32Board::startOTAUpdateOverSTA(const char* id, const char* password, cha
     return false;
   }
 
-  // If an OTA server is already running, refuse — caller should stopOTAUpdate first.
+  // #598: a prior OTA server may still be up — most often a stale AP-mode server
+  // from an earlier attempt, or a previous STA session that was never stopped.
+  // Rather than refusing (which forced an out-of-band `ota end` before a retry
+  // could work), tear the old server down and continue. stopOTAUpdate() ends and
+  // frees the server, clears g_ota_url, drops any AP interface, and clears
+  // inhibit_sleep — which we re-arm just below. STA WiFi was already confirmed up
+  // by the WL_CONNECTED check above and is left untouched.
   if (g_ota_server != nullptr) {
-    snprintf(reply, 80, "ERR: OTA already running at %s",
-             g_ota_url[0] ? g_ota_url : "(unknown)");
-    return false;
+    stopOTAUpdate();
   }
 
   inhibit_sleep = true;   // prevent sleep during OTA
