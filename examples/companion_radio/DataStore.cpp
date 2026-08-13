@@ -209,7 +209,7 @@ void DataStore::loadPrefs(NodePrefs& prefs) {
   } else {
     // #627: same discipline as CommonCLI -- decide which writer produced the
     // legacy record before reading it. Path B is append-only (Offband appends
-    // after upstream's end at 137), so a wrong read drops our appended fields
+    // after upstream's end at 140), so a wrong read drops our appended fields
     // rather than mis-assigning them -- still a wrong read, and it still fails
     // closed rather than guessing.
     const char* legacy = _fs->exists("/new_prefs") ? "/new_prefs"
@@ -219,6 +219,14 @@ void DataStore::loadPrefs(NodePrefs& prefs) {
       {
         File f = openRead(_fs, legacy);
         if (f) { ev.length = (size_t)f.size(); f.close(); }
+        else {
+          // #631: exists() said yes but the open failed. ev.length stays 0,
+          // which matches no table entry, so the migration is REFUSED for a
+          // reason that has nothing to do with the record's layout. Silence
+          // here is indistinguishable from "unrecognised format".
+          MESH_DEBUG_PRINTLN("[prefs] ERROR: %s exists but openRead FAILED "
+                             "-- length unknown, migration will refuse.", legacy);
+        }
       }
       offband::PrefsIdentity id = offband::identifyLegacyPrefs(ev);
       MESH_DEBUG_PRINTLN("[prefs] legacy %s len=%u -> layout=%s (%s)",
@@ -272,35 +280,35 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs) {
     file.read((uint8_t *)&_prefs.buzzer_quiet, sizeof(_prefs.buzzer_quiet));               // 84
     file.read((uint8_t *)&_prefs.gps_enabled, sizeof(_prefs.gps_enabled));                 // 85
     file.read((uint8_t *)&_prefs.gps_interval, sizeof(_prefs.gps_interval));               // 86
-    file.read((uint8_t *)&_prefs.autoadd_config, sizeof(_prefs.autoadd_config));           // 87
-    file.read((uint8_t *)&_prefs.autoadd_max_hops, sizeof(_prefs.autoadd_max_hops));       // 88
-    file.read((uint8_t *)&_prefs.rx_boosted_gain, sizeof(_prefs.rx_boosted_gain));         // 89
-    file.read((uint8_t *)_prefs.default_scope_name, sizeof(_prefs.default_scope_name));    // 90
-    file.read((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));     // 121
+    file.read((uint8_t *)&_prefs.autoadd_config, sizeof(_prefs.autoadd_config));           // 90
+    file.read((uint8_t *)&_prefs.autoadd_max_hops, sizeof(_prefs.autoadd_max_hops));       // 91
+    file.read((uint8_t *)&_prefs.rx_boosted_gain, sizeof(_prefs.rx_boosted_gain));         // 92
+    file.read((uint8_t *)_prefs.default_scope_name, sizeof(_prefs.default_scope_name));    // 93
+    file.read((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));     // 124
     // #298: APPEND-ONLY, must stay last. Prefs files written before this field ended at
-    // 137, so on those this read short-reads to EOF and leaves the caller-set default
+    // 140, so on those this read short-reads to EOF and leaves the caller-set default
     // (LNA ON) intact. A uint8 append is all-or-nothing, so there is no partial-read
     // hazard. Never insert a new field mid-sequence.
-    file.read((uint8_t *)&_prefs.radio_fem_rxgain, sizeof(_prefs.radio_fem_rxgain));      // 137
+    file.read((uint8_t *)&_prefs.radio_fem_rxgain, sizeof(_prefs.radio_fem_rxgain));      // 140
     // #428: caplog persistence, APPEND-ONLY after radio_fem_rxgain. Files written before
-    // #428 end at 138, so these short-read to EOF and leave the caller-set defaults
+    // #435 end at 141, so these short-read to EOF and leave the caller-set defaults
     // (caplog OFF, DEBUG). Each is a uint8 all-or-nothing read. Keep these LAST; any new
-    // field goes after caplog_level. (NodePrefs offset map: ...137 fem, 138 enabled, 139 level.)
-    file.read((uint8_t *)&_prefs.caplog_enabled, sizeof(_prefs.caplog_enabled));          // 138
-    file.read((uint8_t *)&_prefs.caplog_level, sizeof(_prefs.caplog_level));              // 139
+    // field goes after caplog_level. (Offset map: ...140 fem, 141 enabled, 142 level.)
+    file.read((uint8_t *)&_prefs.caplog_enabled, sizeof(_prefs.caplog_enabled));          // 141
+    file.read((uint8_t *)&_prefs.caplog_level, sizeof(_prefs.caplog_level));              // 142
     // #510: notification scope, APPEND-ONLY after caplog_level. Files written before
-    // #510 end at 140, so this short-reads to EOF and leaves the caller-set default
+    // #510 end at 143, so this short-reads to EOF and leaves the caller-set default
     // (NOTIFY_SCOPE_ALL = today's behaviour) intact -- an existing device is never
     // silently muted by upgrading. uint8 is all-or-nothing, so no partial-read hazard.
     // Keep this LAST; any new field goes after it.
-    file.read((uint8_t *)&_prefs.notify_scope, sizeof(_prefs.notify_scope));             // 140
-    // #509: button-action matrix, APPEND-ONLY after notify_scope (offsets 141..144).
+    file.read((uint8_t *)&_prefs.notify_scope, sizeof(_prefs.notify_scope));             // 143
+    // #509: button-action matrix, APPEND-ONLY after notify_scope (offsets 144..147).
     // Short-reads to EOF on pre-#509 files, leaving the caller-set defaults.
-    file.read((uint8_t *)_prefs.button_actions, sizeof(_prefs.button_actions));           // 141
+    file.read((uint8_t *)_prefs.button_actions, sizeof(_prefs.button_actions));           // 144
     // #542 B1: indicator prefs, APPEND-ONLY after button_actions. Short-read to EOF on
     // older files leaves the caller-set defaults (led on / display auto).
-    file.read((uint8_t *)&_prefs.ui_led_enabled, sizeof(_prefs.ui_led_enabled));          // 145
-    file.read((uint8_t *)&_prefs.ui_display_mode, sizeof(_prefs.ui_display_mode));         // 146
+    file.read((uint8_t *)&_prefs.ui_led_enabled, sizeof(_prefs.ui_led_enabled));          // 148
+    file.read((uint8_t *)&_prefs.ui_display_mode, sizeof(_prefs.ui_display_mode));         // 149
 
     // migrate old fields
     _prefs.setRepeatEn(_prefs._client_repeat != 0);
