@@ -35,7 +35,7 @@ namespace offband {
 //   set mqtt.broker.<N>.jwt_email <s>            -- #63 JWT "email" claim; "" clears
 //   set mqtt.broker.<N>.iata_override <code>
 //   set mqtt.broker.<N>.topic_prefix <s>
-//   set mqtt.broker.<N>.ca_cert <name>           -- letsencrypt, eastmesh, ""
+//   set mqtt.broker.<N>.ca_cert <name>           -- letsencrypt, gts-r4, isrg-x2, ""
 //   display always on | display normal           -- #141: keep the screen lit / restore the 15 s blank
 //                                                    ("display always off" is accepted as an alias for "display normal")
 //   display rotate <0|180> | display flip         -- #148: rotate the display 0/180 ("flip" toggles)

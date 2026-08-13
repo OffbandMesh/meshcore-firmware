@@ -109,7 +109,7 @@ struct BrokerConfig {
     char             topic_prefix[32] = {0};  // defaults to kDefaultTopicPrefix at read
     char             iata_override[8] = {0};
     // ----- Plan 2 v2 additions (used only when auth_type=Jwt / transport=Tls|Wss)
-    char             jwt_audience[96] = {0};   // e.g. "https://mqtt2.eastmesh.au"
+    char             jwt_audience[96] = {0};   // BARE host (#95), e.g. "mqtt.corecomms.net"
     uint32_t         jwt_refresh_sec = 3600;   // re-mint token every N seconds
     char             ca_cert_name[24] = {0};   // ref into MqttCaCerts.h; "" = system store / no verify
     // ----- #63 additions: per-broker JWT identity claims
@@ -125,11 +125,11 @@ bool clearBrokerConfig(uint8_t slot);
 
 // Phase 2 (#48; layout revised in #95): seed the public-broker registry into
 // empty slots only (cfg.url[0] == '\0'); never overwrites user-set values;
-// idempotent. As of #262 ALL seeded slots ship DISABLED (slot 0 = CoreScope
-// tcp/anon; slots 1-5 wss/jwt: LetsMesh-US, Eastme.sh, MeshMapper, LetsMesh-EU,
-// Eastmesh.au) -- a fresh flash must not auto-publish to any upstream broker;
-// the operator opts in per slot (+ JWT identity claims for the wss brokers).
-// Slots 6-9 are left empty for operator-custom brokers.
+// idempotent. As of #262 ALL seeded slots ship DISABLED (#317/#592/#677
+// layout: slots 0-1 OKIMesh wss/anon; slots 2-4 wss/jwt: MeshMapper,
+// CoreComms.net, Eastmesh.au) -- a fresh flash must not auto-publish to any
+// upstream broker; the operator opts in per slot (+ JWT identity claims for
+// the jwt brokers). Slots 5-9 are left empty for operator-custom brokers.
 void populateDefaultBrokers();
 
 // #182: one-time boot migration of an upgraded observer to the per-key / no-blank
