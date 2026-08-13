@@ -1,8 +1,9 @@
 // test/test_prefs_layout/test_prefs_layout.cpp -- Offband #627
 //
-// Byte-exact fixtures for legacy-prefs layout detection. Every released
-// Offband and upstream record length is covered, plus the one colliding
-// length, truncation, and the fail-closed paths.
+// Byte-exact fixtures for legacy-prefs layout detection. Covers every length
+// real firmware can leave on disk -- which on Path B means every APPEND
+// BOUNDARY, not merely the lengths that coincide with a release tag (#631) --
+// plus the one colliding length, truncation, and the fail-closed paths.
 //
 // Folder MUST stay `test_`-prefixed and this file provides its own main() --
 // this repo does not link gtest_main.
@@ -57,9 +58,17 @@ TEST(PathA, ReleasedOffbandLengthsAreOffband) {
 }
 
 TEST(PathA, ReleasedUpstreamLengthsAreUpstream) {
-  // 291 = companion-v1.15.0, 293 = companion-v1.16.0. 295 is the collision
-  // and is covered separately -- it must NOT resolve on length alone.
-  for (size_t len : {291u, 293u}) {
+  // Computed at every upstream tag (#665): 166 = 1.10.0, 170 = 1.11.0,
+  // 290 = 1.12.0..1.14.1, 291 = 1.15.0, 293 = 1.16.0. 295 is the collision and
+  // is covered separately -- it must NOT resolve on length alone.
+  //
+  // 290 spans four releases with two internal arrangements: 1.14.0 replaced a
+  // zero pad at 121 with path_hash_mode + loop_detect, so an older record reads
+  // those as 0 (their default) and byte 124 onward realigns exactly. 1.14.1
+  // additionally kept rx_boosted_gain at byte 79, which 1.15.0 moved to 290, so
+  // a 1.14.1 record loses that one setting to a short-read. Nothing is
+  // mis-assigned, and it matches what upstream 1.17.0 does with the same file.
+  for (size_t len : {166u, 170u, 290u, 291u, 293u}) {
     auto r = detectCommonPrefsLayout(evA(len));
     EXPECT_EQ(r.layout, PrefsLayout::Upstream) << "length " << len;
     EXPECT_EQ(r.reason, PrefsLayoutReason::LengthUniqueUpstream) << "length " << len;
@@ -169,8 +178,10 @@ TEST(PathA, MarkerAloneNeverOverridesAnUnambiguousLength) {
 }
 
 TEST(PathA, TruncatedRecordFailsClosed) {
-  // A short write must never be read with either table.
-  for (size_t len : {0u, 1u, 100u, 290u, 300u, 363u, 365u, 1024u}) {
+  // A short write must never be read with either table. NOTE 290 is NOT here:
+  // it is upstream 1.12.0-1.14.1's real record length (#665), and asserting it
+  // corrupt is what kept those users failing closed.
+  for (size_t len : {0u, 1u, 100u, 289u, 300u, 363u, 365u, 1024u}) {
     auto r = detectCommonPrefsLayout(evA(len, tail(1, 64, 8, 1, 0)));
     EXPECT_EQ(r.layout, PrefsLayout::Unknown) << "length " << len;
     EXPECT_EQ(r.reason, PrefsLayoutReason::UnknownLength) << "length " << len;
@@ -214,16 +225,32 @@ TEST(PathA, AllZeroTailAtCollisionFailsClosed) {
 // ---------------------------------------------------- family identification --
 
 TEST(Family, PathALengthsIdentifyAsCommon) {
-  for (size_t len : {291u, 292u, 293u, 294u, 296u, 298u, 364u}) {
+  for (size_t len : {166u, 170u, 290u, 291u, 292u, 293u, 294u, 296u, 298u, 364u}) {
     auto id = identifyLegacyPrefs(evA(len));
     EXPECT_EQ(id.family, PrefsFamily::Common) << "length " << len;
   }
 }
 
 TEST(Family, PathBLengthsIdentifyAsCompanion) {
-  for (size_t len : {137u, 138u, 147u}) {
+  for (size_t len : {84u, 85u, 91u, 92u, 93u, 140u, 141u, 143u, 148u, 150u}) {
     auto id = identifyLegacyPrefs(evA(len));
     EXPECT_EQ(id.family, PrefsFamily::Companion) << "length " << len;
+  }
+}
+
+// The two families' length sets must stay disjoint or identifyLegacyPrefs()
+// refuses with LengthTableOverlap. Adding Path B entries is the change most
+// likely to break that, so assert it directly rather than trusting inspection.
+TEST(Family, PathALengthsAndPathBLengthsStayDisjoint) {
+  for (size_t len : {84u, 85u, 91u, 92u, 93u, 140u, 141u, 143u, 148u, 150u}) {
+    auto id = identifyLegacyPrefs(evA(len));
+    EXPECT_NE(id.reason, PrefsLayoutReason::LengthTableOverlap) << "length " << len;
+    EXPECT_EQ(id.family, PrefsFamily::Companion) << "length " << len;
+  }
+  for (size_t len : {166u, 170u, 290u, 291u, 292u, 293u, 294u, 296u, 298u, 364u}) {
+    auto id = identifyLegacyPrefs(evA(len));
+    EXPECT_NE(id.reason, PrefsLayoutReason::LengthTableOverlap) << "length " << len;
+    EXPECT_EQ(id.family, PrefsFamily::Common) << "length " << len;
   }
 }
 
@@ -243,8 +270,40 @@ TEST(Family, RoleSwappedNodePrefsIsNotMisreadAsCompanion) {
   EXPECT_EQ(direct.reason, PrefsLayoutReason::UnknownLength);
 }
 
+// REGRESSION (#668 review) -- the CALLERS must gate on FAMILY, not just layout.
+//
+// RoleSwappedNodePrefsIsNotMisreadAsCompanion (above) asserts that
+// detectCompanionPrefsLayout() refuses a 294-byte record. But NEITHER loader calls
+// that function -- both call identifyLegacyPrefs(), which for 294 returns
+// family=Common with a PERFECTLY VALID layout=Offband. A caller checking only
+// `layout != Unknown` therefore accepted it and read a CommonCLI record with the
+// companion offset table.
+//
+// These assertions pin the property the loaders now enforce: for a cross-family
+// length the layout is NOT Unknown, so layout alone can never be a sufficient
+// guard. If someone "simplifies" a loader back to a layout-only check, the
+// comments here explain why that is wrong even though the tests still pass.
+TEST(Family, LayoutAloneIsNotASufficientGuardForEitherLoader) {
+  // Path A lengths: valid layout, but a COMPANION loader must refuse them.
+  for (size_t len : {292u, 294u, 364u}) {
+    auto id = identifyLegacyPrefs(evA(len));
+    EXPECT_EQ(id.family, PrefsFamily::Common) << "length " << len;
+    EXPECT_NE(id.layout, PrefsLayout::Unknown)
+        << "length " << len << " -- layout is VALID here, which is exactly why a "
+           "layout-only check in DataStore::loadPrefs was unsafe";
+  }
+  // Path B lengths: valid layout, but a COMMON loader must refuse them.
+  for (size_t len : {141u, 143u, 148u, 150u}) {
+    auto id = identifyLegacyPrefs(evA(len));
+    EXPECT_EQ(id.family, PrefsFamily::Companion) << "length " << len;
+    EXPECT_NE(id.layout, PrefsLayout::Unknown)
+        << "length " << len << " -- layout is VALID here, which is exactly why a "
+           "layout-only check in CommonCLI::loadPrefs was unsafe";
+  }
+}
+
 TEST(Family, UnknownLengthsIdentifyAsUnknownFamily) {
-  for (size_t len : {0u, 100u, 136u, 200u, 290u, 400u}) {
+  for (size_t len : {0u, 100u, 136u, 200u, 289u, 400u}) {
     auto id = identifyLegacyPrefs(evA(len));
     EXPECT_EQ(id.family, PrefsFamily::Unknown) << "length " << len;
     EXPECT_EQ(id.layout, PrefsLayout::Unknown) << "length " << len;
@@ -262,28 +321,79 @@ TEST(Family, IdentityAgreesWithThePerPathFunction) {
 
 // ---------------------------------------------------------------- Path B ---
 
-TEST(PathB, ReleasedLengths) {
-  // 137 is written by upstream 1.15.0/1.16.0/1.17.0 AND by Offband <= v1.1.2.
-  // Shared, but harmless: Offband had appended nothing yet, so the layouts are
-  // byte-identical there and "upstream" is the correct table for either writer.
-  auto up = detectCompanionPrefsLayout(evA(137));
-  EXPECT_EQ(up.layout, PrefsLayout::Upstream);
-  EXPECT_EQ(up.reason, PrefsLayoutReason::LengthUniqueUpstream);
+// Every upstream length, computed at each tag (#665). Path B is pure append
+// from 1.10.0 onward -- zero fields move -- so each of these is a strict prefix
+// of the current layout and short-reads the rest to defaults. That is exactly
+// what upstream 1.17.0's own migration does; refusing them protects nobody.
+TEST(PathB, EveryUpstreamLengthIsUpstream) {
+  //  84 = 1.7.0..1.10.0   85 = 1.11.0   91 = 1.12.0/1.13.0
+  //  92 = 1.14.0          93 = 1.14.1   140 = 1.15.0..1.17.0
+  for (size_t len : {84u, 85u, 91u, 92u, 93u, 140u}) {
+    auto r = detectCompanionPrefsLayout(evA(len));
+    EXPECT_EQ(r.layout, PrefsLayout::Upstream) << "length " << len;
+    EXPECT_EQ(r.reason, PrefsLayoutReason::LengthUniqueUpstream) << "length " << len;
+  }
+}
 
-  // 138 = Offband v1.2.0 (radio_fem_rxgain @137); 147 = v1.3.0.
-  for (size_t len : {138u, 147u}) {
+// EVERY Offband append boundary, computed at the commit that introduced it --
+// not derived, and not limited to the boundaries that coincide with a tag. The
+// on-disk length is written by whatever firmware last called savePrefs(), so a
+// device that upgraded across appends without changing a setting still carries
+// the older, shorter record.
+TEST(PathB, EveryAppendBoundaryIsOffband) {
+  //  141 radio_fem_rxgain (#298, v1.2.0)   143 caplog (#435)
+  //  148 notify_scope + button_actions (#510/#509, ONE commit)
+  //  150 ui_led/ui_display_mode (#542, v1.3.0)
+  for (size_t len : {141u, 143u, 148u, 150u}) {
     auto r = detectCompanionPrefsLayout(evA(len));
     EXPECT_EQ(r.layout, PrefsLayout::Offband) << "length " << len;
     EXPECT_EQ(r.reason, PrefsLayoutReason::LengthUniqueOffband) << "length " << len;
   }
 }
 
-// REGRESSION -- an earlier version accepted any length > 137 as Offband, which
+// REGRESSION (#631/#665) -- observed on the owner's paired companion, and the
+// case that exposed the whole table as fiction.
+//
+// The board ran offband-v1.3.0-6-g5e15510 (which WRITES 150) while its
+// /new_prefs was still 140 -- the shared base, last written before v1.2.0 and
+// never re-saved. 140 should resolve as Upstream: Offband had appended nothing
+// at that length, so the layouts are the same bytes.
+//
+// It refused because the table claimed upstream was 137. 137 is not a length
+// any firmware has ever written; it came from reading DataStore.cpp's offset
+// comments, which treat `uint32_t gps_interval` as one byte and are therefore
+// wrong by 3 from that field on. EVERY Path B entry was off by the same 3.
+TEST(PathB, Regression631_SharedBaseRecordFromAnOlderBuildThanTheOneRunning) {
+  auto r = detectCompanionPrefsLayout(evA(140));
+  EXPECT_EQ(r.layout, PrefsLayout::Upstream);
+  EXPECT_EQ(r.reason, PrefsLayoutReason::LengthUniqueUpstream);
+
+  auto id = identifyLegacyPrefs(evA(140));
+  EXPECT_EQ(id.family, PrefsFamily::Companion);
+  EXPECT_EQ(id.layout, PrefsLayout::Upstream);
+}
+
+// REGRESSION -- the lengths the OLD table claimed were real. None of these is
+// written by any firmware, upstream or Offband; they are the off-by-3 artefacts.
+// If one of them ever resolves again, the comment-derived table is back.
+TEST(PathB, OffByThreeArtefactLengthsAreRefused) {
+  for (size_t len : {137u, 138u, 145u, 147u}) {
+    auto r = detectCompanionPrefsLayout(evA(len));
+    EXPECT_EQ(r.layout, PrefsLayout::Unknown) << "length " << len;
+    EXPECT_EQ(r.reason, PrefsLayoutReason::UnknownLength) << "length " << len;
+  }
+}
+
+// An earlier version accepted any length > upstream's end as Offband, which
 // would have swallowed a truncated Path-A record or a file with garbage
 // appended and read it with the companion table.
-TEST(PathB, UnreleasedOrCorruptLengthsAreRefused) {
-  for (size_t len : {0u, 100u, 121u, 136u, 139u, 140u, 141u, 145u, 146u,
-                     148u, 200u, 292u, 294u, 364u}) {
+//
+// 142/144..147/149 stay refused deliberately: each would land MID-append
+// (caplog is a pair; notify_scope + button_actions landed together; ui_led +
+// ui_display are a pair), so no build ever wrote them.
+TEST(PathB, NonBoundaryOrCorruptLengthsAreRefused) {
+  for (size_t len : {0u, 83u, 86u, 90u, 94u, 121u, 136u, 139u, 142u, 144u,
+                     146u, 149u, 151u, 200u, 292u, 294u, 364u}) {
     auto r = detectCompanionPrefsLayout(evA(len));
     EXPECT_EQ(r.layout, PrefsLayout::Unknown) << "length " << len;
     EXPECT_EQ(r.reason, PrefsLayoutReason::UnknownLength) << "length " << len;

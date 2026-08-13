@@ -946,6 +946,13 @@ void EnvironmentSensorManager::rakGPSInit(){
 
 bool EnvironmentSensorManager::gpsIsAwake(uint8_t ioPin){
 
+  #if defined(ETHERNET_ENABLED) && defined(RAK_BOARD)
+    if (ioPin == WB_IO2) {
+      // WB_IO2 powers the Ethernet module on RAK baseboards.
+      return false;
+    }
+  #endif
+
   //set initial waking state
   pinMode(ioPin,OUTPUT);
   digitalWrite(ioPin,LOW);
@@ -1037,7 +1044,7 @@ void EnvironmentSensorManager::stop_gps() {
 void EnvironmentSensorManager::loop() {
 
   #if ENV_INCLUDE_GPS
-  static long next_gps_update = 0;
+  static unsigned long next_gps_update = 0;
   if (gps_active) {
     #if defined(ESP32)
     if (!_gps_baud_locked) {
@@ -1075,7 +1082,7 @@ void EnvironmentSensorManager::loop() {
     }
     }
   }
-  if (millis() > next_gps_update) {
+  if ((long)(millis() - next_gps_update) > 0) {
 
     if (gps_active
         #if defined(ESP32)

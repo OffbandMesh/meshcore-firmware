@@ -10,6 +10,17 @@ bool SSD1306Display::i2c_probe(TwoWire& wire, uint8_t addr) {
   return (error == 0);
 }
 
+// Color scheme
+ColorVal UIColor::window_bkg = SSD1306_BLACK;
+ColorVal UIColor::title_bkg = SSD1306_BLACK;
+ColorVal UIColor::title_txt = SSD1306_WHITE;
+ColorVal UIColor::primary_txt = SSD1306_WHITE;
+ColorVal UIColor::secondary_txt = SSD1306_WHITE;
+ColorVal UIColor::warning_txt = SSD1306_WHITE;
+ColorVal UIColor::popup_bkg = SSD1306_BLACK;
+ColorVal UIColor::popup_txt = SSD1306_WHITE;
+ColorVal UIColor::corp_blue = SSD1306_WHITE;
+
 bool SSD1306Display::begin() {
   if (!_isOn) {
     if (_peripher_power) _peripher_power->claim();
@@ -61,7 +72,7 @@ void SSD1306Display::clear() {
   display.display();
 }
 
-void SSD1306Display::startFrame(Color bkg) {
+void SSD1306Display::startFrame(ColorVal bkg) {
   display.clearDisplay();  // TODO: apply 'bkg'
   _color = SSD1306_WHITE;
   display.setTextColor(_color);
@@ -73,8 +84,8 @@ void SSD1306Display::setTextSize(int sz) {
   display.setTextSize(sz);
 }
 
-void SSD1306Display::setColor(Color c) {
-  _color = (c != 0) ? SSD1306_WHITE : SSD1306_BLACK;
+void SSD1306Display::setColor(ColorVal c) {
+  _color = c;
   display.setTextColor(_color);
 }
 
@@ -95,7 +106,7 @@ void SSD1306Display::drawRect(int x, int y, int w, int h) {
 }
 
 void SSD1306Display::drawXbm(int x, int y, const uint8_t* bits, int w, int h) {
-  display.drawBitmap(x, y, bits, w, h, SSD1306_WHITE);
+  display.drawBitmap(x, y, bits, w, h, _color);
 }
 
 uint16_t SSD1306Display::getTextWidth(const char* str) {
