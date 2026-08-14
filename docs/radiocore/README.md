@@ -174,8 +174,8 @@ vendor-provided class, **not** upstream adopting ours.
 
 Owner decision: **adopt upstream's FEM, retire our divergence, keep our client surface on
 top** — tracked as **#629**. So scope any RC52 FEM work against #629's outcome rather
-than today's Offband implementation. `[verified: FoggyCanyon provenance audit + owner
-ruling, AM msg 423]`
+than today's Offband implementation. `[owner decision, recorded on #629 — read that
+issue for the current position rather than this summary]`
 
 Related: upstream's `def("fem_rxgain", _parent->rx_boosted_gain)` is a real copy-paste bug
 (`radio_fem_rxgain` declared but never serialized). **Do not file it** — upstream PR #3137
@@ -216,36 +216,63 @@ validating it against our actual hardware.
 Author note: `heltec_rc32` and `NV3001BDisplay` are by **Quency-D**, a Heltec vendor
 engineer — 98 upstream commits, essentially all on Heltec variants (`heltec_v4` ×31,
 `heltec_rc32` ×21, tracker/tower/solar/t096/vision_master, plus the `boards/heltec_*.json`
-definitions). `[verified: FoggyCanyon provenance audit, AM msg 423]` So this is
+definitions). `[verified: git log --author=Quency-D upstream/main -- variants/ ]` So this is
 vendor-maintained board support, not a community contribution — relevant to how much we
 should diverge from it.
 
-### ⚠ Adopting `heltec_rc32` envs requires six Offband-specific lines
+### rc32 BLE config: nothing to do
 
-Upstream's rc32 companion envs arrive **Bluedroid-shaped**. Offband migrated ESP32 BLE to
-**NimBLE** (#288), and our `SerialBLEInterface.h` includes `<NimBLEDevice.h>`
-unconditionally while companion envs pull `+<helpers/esp32/*.cpp>` with a greedy wildcard —
-so every upstream-new ESP32 env compiles a BLE interface it cannot link against.
+**For `heltec_rc32`, no config changes are needed.** The NimBLE declarations Offband
+requires are already present on `firmware-base`, on all six companion envs. Do not add
+them; they are there.
+
+Verify in one command:
 
 ```
-heltec_rc32_companion_radio_ble                  + ${esp32_ble.lib_deps}
-heltec_rc32_companion_radio_usb                  + ${esp32_no_ble.build_src_filter}
-heltec_rc32_companion_radio_wifi                 + ${esp32_no_ble.build_src_filter}
-heltec_rc32_without_display_companion_radio_ble  + ${esp32_ble.lib_deps}
-heltec_rc32_without_display_companion_radio_usb  + ${esp32_no_ble.build_src_filter}
-heltec_rc32_without_display_companion_radio_wifi + ${esp32_no_ble.build_src_filter}
+grep -cE "esp32_ble\.lib_deps|esp32_no_ble\.build_src_filter" variants/heltec_rc32/platformio.ini
 ```
 
-`[verified: FoggyCanyon, AM msg 432 — 21 envs across 6 upstream-new board families failed
-config-lint on first CI (#645); rc32 was 6 of them. heltec_rc32_companion_radio_ble builds
-SUCCESS with the additions.]` These are a standing Offband invariant, not a 1.17.0
-artifact — they would have been needed on any base.
+`[verified: → 6 as of 2026-08-14]` They arrived via `42cdf09a` — *"fix(#645): declare the
+#199 NimBLE escape hatch on 21 upstream-new ESP32 envs"* — which
+`git merge-base --is-ancestor 42cdf09a 78a84df7` places **inside the 1.17.0 merge**.
 
-**None of the rc32 envs are in the CI matrix**, so CI will not catch a break there. Two
-guards run in `config-lint` if envs are added: `scripts/check_esp32_ble_deps.py` (#199 —
-can the env link) and `scripts/check_env_capability_claims.py` (#649 — does the config
-match what the env *name* claims; an `..._companion_radio_ble` env must really have
-`BLE_PIN_CODE`, and on ESP32 `WIFI_SSID` must be absent since WiFi wins the `#if` chain).
+If that grep ever returns fewer than 6, the declarations have been lost and the section
+below explains what to restore.
+
+#### Why the declaration is needed — background, for *other* modules
+
+This matters when adding a **new** upstream-derived ESP32 env, not for rc32.
+
+Offband migrated ESP32 BLE from Bluedroid to **NimBLE** (#288). `SerialBLEInterface.h:4`
+includes `<NimBLEDevice.h>` **unconditionally**, and companion envs pull
+`+<helpers/esp32/*.cpp>` with a greedy wildcard — which drags
+`helpers/esp32/SerialBLEInterface.cpp` into *every* ESP32 env, BLE or not. Upstream envs
+arrive Bluedroid-shaped and declare neither escape hatch, so they fail. The two hatches
+work differently:
+
+| Declaration | What it actually does |
+|---|---|
+| `${esp32_ble.lib_deps}` | adds `h2zero/NimBLE-Arduino @ ^2.0.0` so `<NimBLEDevice.h>` resolves |
+| `${esp32_no_ble.build_src_filter}` | `-<helpers/esp32/SerialBLEInterface.cpp>` — removes the file from the build entirely |
+
+`[verified: platformio.ini [esp32_ble] / [esp32_no_ble]; src/helpers/esp32/SerialBLEInterface.h:4]`
+
+So a non-BLE env that omits its hatch fails at **compile** time on an unresolvable header,
+not at link time — the `.cpp` is compiled when it should not have been built at all.
+
+#### CI does not cover rc32
+
+As of 2026-08-14, no rc32 env appears in `.github/workflows/ci.yml` or
+`.github/release-envs.txt` (`grep -c rc32` → 0 in both), so **CI will not catch an rc32
+break — verify current status rather than assuming coverage.** Adding an rc32 env to the
+matrix is a separate, owner-approved decision; the matrix is a required merge gate and is
+not grown or shrunk casually.
+
+`scripts/check_esp32_ble_deps.py` (#199) runs in `config-lint` and catches this class.
+A second cross-check, `scripts/check_env_capability_claims.py` (#649), is **not in the
+tree** — check whether it exists before relying on it. Its absence is deliberate, not an
+oversight; consult PR #650 itself for status rather than inferring intent from the
+issue/PR state.
 
 ### nRF52 companions on the 1.17.0 base
 
@@ -255,7 +282,8 @@ ESP32 branch to upstream's `MultiSerialInterface`, leaving the nRF52/STM32 legac
 `SerialBLEInterface::begin()` ran twice. Fixed; confirmed on a RAK4631 and a T1000-E.
 Relevant to **RC52** (#625), which is nRF52840 — branch from a base containing #668.
 Side benefit: the fix recovered **4,624 bytes of static RAM on every companion build**,
-ESP32 included. `[verified: FoggyCanyon, AM msg 441]`
+ESP32 included. `[verified: commit fix(#668) on firmware-base — read its body for the
+measurement and the two-begin() call trace]`
 
 ## Wi-Fi HaLow — deferred
 
