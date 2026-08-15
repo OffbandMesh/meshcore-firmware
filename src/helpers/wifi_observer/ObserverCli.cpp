@@ -103,7 +103,11 @@ static const char* stateStr(BrokerState s) {
         case BrokerState::Up:          return "up";
         case BrokerState::Backoff:     return "backoff";
         case BrokerState::HeldNoClock: return "held(no-clock)";
-        case BrokerState::HeldNoHeap:  return "held(no-heap)";
+        // #715: distinct human strings. "waiting-turn" is deliberately plain --
+        // it is the NORMAL state of a rotating pool, not an error, and the old
+        // "held(no-heap)" wording sent operators hunting for a memory problem.
+        case BrokerState::HeldNoHeap:  return "held(low-heap)";
+        case BrokerState::HeldBudget:  return "waiting-turn";
         default:                       return "?";
     }
 }
@@ -118,7 +122,15 @@ static const char* brokerStateWire(BrokerState s) {
         case BrokerState::Up:          return "up";
         case BrokerState::Backoff:     return "backoff";
         case BrokerState::HeldNoClock: return "held_no_clock";
+        // #715: WIRE VALUE DELIBERATELY UNCHANGED FOR BOTH.
+        // brokerStateWire() values are pinned to the client contract (#172 /
+        // OffbandConfigProtocol.h), so emitting a new "held_budget" token would be
+        // a breaking change for clients that switch on this string. The internal
+        // split lands first; the wire token is a separate, coordinated change.
+        // Until then both report held_no_heap and the client cannot distinguish --
+        // that is the remaining half of #715, not an oversight.
         case BrokerState::HeldNoHeap:  return "held_no_heap";
+        case BrokerState::HeldBudget:  return "held_no_heap";
         default:                       return "down";
     }
 }
