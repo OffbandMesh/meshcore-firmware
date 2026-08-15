@@ -611,8 +611,16 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
         }
         if (eq(rest, "enable"))  return handleSetWifiEnabled(reply, reply_size, true);
         if (eq(rest, "disable")) return handleSetWifiEnabled(reply, reply_size, false);
+        // #689/#696: "wifi clear" / "wifi clear pwd" / "wifi clear all".
+        // skipPrefix returns the remainder after the subcommand (empty
+        // string when bare), which handleClearWifi treats as "pwd".
+        const char* clr_rest = skipPrefix(rest, "clear");
+        if (clr_rest != nullptr) {
+            return handleClearWifi(reply, reply_size, clr_rest);
+        }
         snprintf(reply, reply_size,
-                 "ERROR: unknown wifi subcommand (status | enable | disable)\n");
+                 "ERROR: unknown wifi subcommand "
+                 "(status | enable | disable | clear)\n");
         return true;
     }
 #endif  // OFFBAND_OBSERVER (display/wifi verbs -- #538 Option A)

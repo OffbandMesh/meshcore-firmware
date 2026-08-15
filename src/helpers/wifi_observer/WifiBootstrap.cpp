@@ -50,9 +50,42 @@ void WifiBootstrap::deriveApSsid(const uint8_t* mac_bytes, char* out,
 }
 
 // -------------------------------------------------------------------------
+// #696: STA disconnect-reason table. Pure + host-testable; deliberately
+// NOT a full mirror of WIFI_REASON_* -- only the codes that actually
+// discriminate a field failure, so the string table stays small on a
+// flash-constrained observer. Unknown codes return nullptr and the
+// caller prints the raw number (never a wrong label).
+// -------------------------------------------------------------------------
+const char* WifiBootstrap::disconnectReasonName(uint8_t reason) {
+    switch (reason) {
+        case 2:   return "AUTH_EXPIRE";
+        case 4:   return "ASSOC_EXPIRE";
+        case 15:  return "4WAY_HANDSHAKE_TIMEOUT";  // PSK rejected by AP
+        case 200: return "BEACON_TIMEOUT";
+        case 201: return "NO_AP_FOUND";             // SSID never matched a
+                                                    // scan result meeting the
+                                                    // auth threshold
+        case 202: return "AUTH_FAIL";
+        case 203: return "ASSOC_FAIL";
+        case 204: return "HANDSHAKE_TIMEOUT";
+        case 205: return "CONNECTION_FAIL";
+        default:  return nullptr;
+    }
+}
+
+// -------------------------------------------------------------------------
 // Lifecycle (Arduino target only; host build skips).
 // -------------------------------------------------------------------------
 #ifdef ARDUINO
+
+// Written from the WiFi event task, read from the main loop and from the
+// `wifi status` handler. Single byte, so the read is atomic on xtensa --
+// no tearing, and a stale-by-one-event read is harmless for a diagnostic.
+static volatile uint8_t s_last_disc_reason = 0;
+
+uint8_t WifiBootstrap::lastDisconnectReason() const {
+    return s_last_disc_reason;
+}
 
 void WifiBootstrap::begin() {
     // ----------------------------------------------------------------------
@@ -118,6 +151,18 @@ void WifiBootstrap::begin() {
             p2.end();
         }
         // PSK redacted from logs per CLAUDE.md security note.
+        //
+        // #696: capture the disconnect reason before the first association
+        // attempt, so nothing is missed. Registered here rather than at
+        // construction because WiFi.onEvent needs the event loop, which
+        // WiFi.mode() below brings up. The handler only records -- it must
+        // not touch the state machine, since it runs on the WiFi task.
+        WiFi.onEvent(
+            [](arduino_event_id_t, arduino_event_info_t info) {
+                s_last_disc_reason =
+                    (uint8_t)info.wifi_sta_disconnected.reason;
+            },
+            ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
         WiFi.mode(WIFI_STA);
         // Meshtastic V4 coex fix: yield 2.4 GHz radio between DTIM beacons
         // so BT controller can schedule advertising/connection slots.
@@ -149,8 +194,20 @@ void WifiBootstrap::loop() {
 #endif
             } else if (millis() - last_attempt_ms_ > 10000) {
                 sta_retry_count_++;
-                Serial.printf("[WifiBootstrap] STA retry #%u\n",
-                              sta_retry_count_);
+                // #696: carry the last disconnect reason on the retry line.
+                // Without it this loop printed a bare counter forever and a
+                // never-associating node was indistinguishable from a
+                // rejected-PSK one (#692).
+                const uint8_t reason = s_last_disc_reason;
+                const char* rname = disconnectReasonName(reason);
+                if (reason == 0) {
+                    Serial.printf("[WifiBootstrap] STA retry #%u\n",
+                                  sta_retry_count_);
+                } else {
+                    Serial.printf("[WifiBootstrap] STA retry #%u last_reason=%u(%s)\n",
+                                  sta_retry_count_, (unsigned)reason,
+                                  rname ? rname : "UNKNOWN");
+                }
                 WiFi.reconnect();
                 last_attempt_ms_ = millis();
             }
@@ -217,6 +274,9 @@ WifiBootstrap& wifiBootstrap() {
 void WifiBootstrap::begin() {}
 void WifiBootstrap::loop() {}
 bool WifiBootstrap::isStaConnected() const { return false; }
+// #696: no WiFi stack on the host build, so no disconnect event can
+// ever have fired -- the same sentinel the Arduino path uses at boot.
+uint8_t WifiBootstrap::lastDisconnectReason() const { return 0; }
 WifiBootstrap& wifiBootstrap() {
     static WifiBootstrap inst;
     return inst;
