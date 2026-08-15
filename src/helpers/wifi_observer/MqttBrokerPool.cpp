@@ -668,6 +668,27 @@ void MqttBrokerPool::workerLoop() {
                 last_served_epoch_[pick] = ++service_epoch_;
             }
         }
+
+        // #708: every candidate that did NOT win must STILL be driven with
+        // budget_ok=false so it self-defers into HeldBudget.
+        //
+        // This is not cosmetic. rotateTlsIfDue() only runs when some broker reads
+        // as "waiting" (HeldBudget/HeldNoHeap), and a broker reaches that state
+        // ONLY through tryConnect's deferral path. Leaving non-winners untouched
+        // leaves them Down, nothing ever reads as waiting, rotation never fires,
+        // and the first broker to take the budget holds it forever.
+        //
+        // Caught on hardware, not in tests: slot 3 held the budget for 8.2 h while
+        // slots 1/2/4 sat Down with all five brokers enabled. The unit tests take
+        // `eligible` as an INPUT and only exercise the choice -- they cannot see
+        // that the caller also owns the state transition which makes a broker
+        // eligible in the first place. Extracting the decision without the
+        // transition is what broke it.
+        for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
+            if (!cand[s].eligible) continue;   // winners already cleared above
+            uint32_t biased = now + static_cast<uint32_t>(s) * 1000U;
+            (void)brokers_[s].tryConnect(biased, /*budget_ok=*/false);
+        }
     }
     worker_task_ = nullptr;
     vTaskDelete(nullptr);
