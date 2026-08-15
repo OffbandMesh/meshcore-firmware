@@ -29,6 +29,18 @@ public:
   bool isConnected() const override;
 
   bool isWriteBusy() const override;
+  // #718 CONTRACT: returns `len` on success, or 0 meaning THE FRAME WAS NOT SENT and
+  // nothing was written to the wire. It never returns a short count -- a partial frame
+  // would desync the length-prefixed protocol for every frame that follows.
+  //
+  // A caller that needs delivery MUST retry the same frame; a caller that fires and
+  // forgets now silently drops the frame under back-pressure instead of corrupting the
+  // stream, which is the better of the two failures but IS a behaviour change.
+  //
+  // REQUIRES the underlying Stream to implement availableForWrite() meaningfully.
+  // The base Stream returns 0, which this reads as "no room" and would refuse forever;
+  // every transport actually bound here (HWCDC, USBCDC, HardwareSerial, Adafruit USB
+  // CDC) implements it. Do not bind a Stream that does not.
   size_t writeFrame(const uint8_t src[], size_t len) override;
   size_t checkRecvFrame(uint8_t dest[]) override;
 

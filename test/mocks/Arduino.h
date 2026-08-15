@@ -27,15 +27,21 @@ inline void interrupts() {}
 
 // Sink for MeshLog's console mirror. Discards output -- the tests assert on the
 // capture ring, never on what reached the console.
-class MockSerial : public Print {
+//
+// #718: derives from Stream, not Print. ArduinoSerialInterface compares its
+// target against `&Serial` (isConsoleSharedWithProtocol, #411) via a
+// static_cast<Stream*>, which does not compile if the mock Serial is not a
+// Stream -- and that comparison is on the path of anything that unit-tests the
+// framed serial transport natively.
+class MockSerial : public Stream {
 public:
   size_t write(uint8_t) override { return 1; }
   size_t write(const uint8_t*, size_t size) override { return size; }
   void begin(unsigned long) {}
   // MeshLog throttles its console mirror on this; a large constant means
   // "never backpressure", which is what a discarding sink should report.
-  int availableForWrite() { return 1024; }
-  void flush() {}
+  int availableForWrite() override { return 1024; }
+  void flush() override {}
   operator bool() const { return true; }
 };
 inline MockSerial Serial;
