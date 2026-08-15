@@ -64,6 +64,15 @@ jobs:
       - name: Install PlatformIO
         run: pip install --upgrade platformio
 
+      # Required even though nothing here is flashed: PlatformIO parses the WHOLE
+      # platformio.ini (including the ${node_secrets...} interpolations used by the
+      # device envs) before it can resolve [env:native], so without this every native
+      # suite ERRORs with "No section: 'node_secrets'". Mirrors config-lint and build.
+      - name: Generate dummy secrets stub (test-only; never flashed)
+        run: |
+          printf '[node_secrets]\nadmin_password = ci-dummy\n[wifi_secrets]\nssid = ci-dummy\npassword = ci-dummy\n[mqtt_secrets]\nhost = mqtt.example.com\nport = 1883\nuser = ci-dummy\npassword = ci-dummy\n[ota_secrets]\ntrigger_secret = ci-dummy\n[cmdrelay]\nurl = http://cmdrelay.example.com/cmd\n' > "$RUNNER_TEMP/ci-secrets.ini"
+          echo "PIO_SECRETS_FILE=$RUNNER_TEMP/ci-secrets.ini" >> "$GITHUB_ENV"
+
       - name: Discover native test environments
         id: envs
         run: |
