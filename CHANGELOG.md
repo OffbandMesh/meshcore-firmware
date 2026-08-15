@@ -16,7 +16,7 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
-## [1.5.0-beta1] - 2026-08-15
+## [1.5.0] - 2026-08-15
 
 ### Added
 - **`wifi clear` and a visible reason for WiFi disconnects** (#696): an observer on an
