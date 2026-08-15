@@ -3,6 +3,7 @@
 // Plan 2 v2 Task 8.
 
 #include "MqttBrokerPool.h"
+#include "BrokerRotationSelect.h"   // #708: fair TLS promotion
 #include "MqttPayload.h"
 #include <helpers/diagnostics/CrashLog.h>   // #181: crashLogf() -- worker has no user ACK channel
 #include <cstring>
@@ -618,6 +619,15 @@ void MqttBrokerPool::workerLoop() {
             }
         }
 #endif
+        // #708: build the TLS candidate set while driving per-broker lifecycle.
+        // Promotion order used to be "first eligible by slot index", whose only
+        // fairness mechanism was #175's per-victim cooldown -- which uniquely
+        // determines a winner at exactly TWO candidates and does nothing at three
+        // or more. Measured on hv3-bench with three enabled TLS brokers: 36/35/0
+        // promotions over 481 samples; slot 3 never ran. Selection now lives in
+        // selectTlsPromotion() (BrokerRotationSelect.h) so it is unit-testable --
+        // the defect was invisible at N=2, which is the arity it was validated at.
+        TlsCandidate cand[OFFBAND_MAX_BROKERS];
         for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
             if (reconciling_[s]) continue;
             MqttBroker& b = brokers_[s];
@@ -636,10 +646,17 @@ void MqttBrokerPool::workerLoop() {
                     (int32_t)(rotated_out_until_ms_[s] - now) > 0) {
                     continue;
                 }
+                // #708: TLS slots compete for the budget and are decided below by
+                // waiting time. Non-TLS hold no mbedTLS context, never contend, and
+                // are driven immediately exactly as before.
+                if (isTlsTransport(b.config())) {
+                    cand[s].eligible          = true;
+                    cand[s].cooling           = false;   // cooldown handled above
+                    cand[s].last_served_epoch = last_served_epoch_[s];
+                    continue;
+                }
                 uint32_t biased = now + static_cast<uint32_t>(s) * 1000U;
-                // TLS budget: non-TLS always OK; TLS only if a live slot is free.
-                bool budget_ok = !isTlsTransport(b.config()) ||
-                                 (tls_live < OFFBAND_MAX_LIVE_TLS);
+                const bool budget_ok = true;   // non-TLS: never budget-limited
                 // #175 fix: rotation demotes a TLS broker via shutdown(), which
                 // DESTROYS its esp_mqtt client (client_ = nullptr) to free the
                 // ~60KB context without leaking (#327). tryConnect can only START
@@ -653,15 +670,36 @@ void MqttBrokerPool::workerLoop() {
                 // connect goes to Backoff and KEEPS its client, so this is not a
                 // reconnect storm. We are on the worker task -- the only caller
                 // allowed to run reconcileSlot's blocking begin().
-                if (isTlsTransport(b.config()) && budget_ok && !b.hasClient()) {
-                    reconcileSlot(s);
-                }
                 (void)b.tryConnect(biased, budget_ok);
-                // Consume a budget slot if this TLS broker just began bringing up.
-                if (isTlsTransport(b.config()) &&
-                    b.runtime().state == BrokerState::Connecting) {
-                    tls_live++;
-                }
+            }
+        }
+
+        // #708: award the free TLS budget to whoever has waited longest, one slot
+        // at a time until the budget is full. Loops rather than promoting once so
+        // it stays correct if OFFBAND_MAX_LIVE_TLS is ever raised above 1.
+        for (;;) {
+            uint8_t pick = selectTlsPromotion(cand, OFFBAND_MAX_BROKERS,
+                                              tls_live, OFFBAND_MAX_LIVE_TLS);
+            if (pick == kNoSlot) break;
+            cand[pick].eligible = false;          // decided this pass either way
+            MqttBroker& b = brokers_[pick];
+            // #175 fix: rotation demotes a TLS broker via releaseClient(), which
+            // DESTROYS its esp_mqtt client to free the ~60KB context without
+            // leaking (#327). tryConnect can only START an existing client -- it
+            // cannot recreate one -- so a rotated-out broker would sit Down forever
+            // and the freed budget would never refill (verified on HV3). Recreate
+            // the client first via reconcileSlot (-> begin). Only fires for a
+            // genuinely client-less broker: a failed connect goes to Backoff and
+            // KEEPS its client, so this is not a reconnect storm. We are on the
+            // worker task -- the only caller allowed to run the blocking begin().
+            if (!b.hasClient()) reconcileSlot(pick);
+            uint32_t biased = now + static_cast<uint32_t>(pick) * 1000U;
+            (void)b.tryConnect(biased, /*budget_ok=*/true);
+            if (b.runtime().state == BrokerState::Connecting) {
+                tls_live++;
+                // Stamp service only on an actual bring-up, so a broker that fails
+                // to start does not lose its place in the queue.
+                last_served_epoch_[pick] = ++service_epoch_;
             }
         }
     }

@@ -159,6 +159,12 @@ private:
     // freed budget instead of the victim immediately reclaiming it. 0 = not
     // cooling. Compared wrap-safe via (int32_t)(deadline - now).
     uint32_t rotated_out_until_ms_[OFFBAND_MAX_BROKERS] = {0};
+    // #708: fair promotion state. service_epoch_ increments on each TLS
+    // bring-up; last_served_epoch_[s] records when slot s last got the budget
+    // (0 = never served, so a fresh slot outranks everyone). A counter, not a
+    // timestamp -- no millis() wraparound to reason about.
+    uint32_t service_epoch_ = 0;
+    uint32_t last_served_epoch_[OFFBAND_MAX_BROKERS] = {0};
     void rotateTlsIfDue(uint32_t now_ms);
 
     // Per-slot guard: true while the lifecycle worker is creating/destroying
