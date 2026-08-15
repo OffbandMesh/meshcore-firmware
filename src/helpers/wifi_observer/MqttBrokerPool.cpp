@@ -483,7 +483,9 @@ void MqttBrokerPool::rotateTlsIfDue(uint32_t now_ms) {
         const MqttBroker& b = brokers_[s];
         if (!b.isConfigured() || !isTlsTransport(b.config())) continue;
         tls_enabled++;
-        if (b.runtime().state == BrokerState::HeldNoHeap) waiting = true;
+        // #715: HeldBudget and HeldNoHeap are both 'deferred, wants the budget'.
+        if (b.runtime().state == BrokerState::HeldNoHeap ||
+            b.runtime().state == BrokerState::HeldBudget) waiting = true;
     }
     // Nothing to share (budget covers all enabled TLS -- PSRAM/large-heap case),
     // or nobody is actually waiting for the budget: no rotation.
@@ -597,13 +599,13 @@ void MqttBrokerPool::workerLoop() {
                               "[rot] heap=%u tls=%u live=%u/%u dwleft=%us |",
                               (unsigned)ESP.getFreeHeap(), (unsigned)tls_cfg, (unsigned)tls_live,
                               (unsigned)OFFBAND_MAX_LIVE_TLS, (unsigned)dwleft);
-                static const char* AB[] = {"DN","CO","UP","BK","HC","HH"};
+                static const char* AB[] = {"DN","CO","UP","BK","HC","HH","HB"};  // #715: HB=held(budget)
                 for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS && o < (int)sizeof(L) - 24; ++s) {
                     const MqttBroker& b = brokers_[s];
                     if (!b.isConfigured() || !isTlsTransport(b.config())) continue;
                     uint8_t stv = (uint8_t)b.runtime().state;
                     o += snprintf(L + o, (size_t)(sizeof(L) - o), " s%u:%s", (unsigned)s,
-                                  stv < 6 ? AB[stv] : "?");
+                                  stv < 7 ? AB[stv] : "?");
                     if (b.runtime().state == BrokerState::Up)
                         o += snprintf(L + o, (size_t)(sizeof(L) - o), "/%us",
                                       (unsigned)((now - b.runtime().went_up_ms) / 1000U));
@@ -625,7 +627,8 @@ void MqttBrokerPool::workerLoop() {
             // Re-drive idle/held slots. HeldNoClock releases when the clock is
             // sane (#87); HeldNoHeap releases when a TLS slot frees (#171).
             if (st == BrokerState::Down || st == BrokerState::Backoff ||
-                st == BrokerState::HeldNoClock || st == BrokerState::HeldNoHeap) {
+                st == BrokerState::HeldNoClock || st == BrokerState::HeldNoHeap ||
+                st == BrokerState::HeldBudget) {   // #715
                 // #175: skip a slot still in its rotation cooldown, so the parked
                 // broker claims the freed budget instead of the just-evicted victim
                 // reclaiming it. Wrap-safe; 0 means "not cooling".
