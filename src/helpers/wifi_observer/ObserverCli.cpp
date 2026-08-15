@@ -881,7 +881,8 @@ size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size,
                               const BrokerRuntimeState* rt,
                               const char* owner_default_hex,
                               int32_t ring_lag,
-                              bool ring_lapped) {
+                              bool ring_lapped,
+                              uint32_t ring_dropped) {
     if (out == nullptr || out_size == 0) return 0;
     out[0] = '\0';
     BrokerConfig cfg;
@@ -924,6 +925,11 @@ size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size,
     if (ring_lag >= 0) {
         BKV("ring_lag=%ld\n",    (long)ring_lag);
         BKV("ring_lapped=%s\n",  ring_lapped ? "yes" : "no");
+        // #710: ring_lapped is derived from the CURRENT cursor, so it reads "no"
+        // again as soon as a rotated-out broker drains -- it erases its own
+        // evidence. ring_dropped is monotonic and is the field to trust when
+        // asking "has this broker ever lost published packets".
+        BKV("ring_dropped=%lu\n", (unsigned long)ring_dropped);
     }
     // #173: resolved-default placeholders (additive). Emitted ONLY when the raw
     // field is blank, carrying the value the firmware actually uses at connect, so
