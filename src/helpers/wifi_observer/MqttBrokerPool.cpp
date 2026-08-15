@@ -142,6 +142,37 @@ void MqttBrokerPool::loop(uint32_t now_ms) {
     for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
         if (brokers_[s].runtime().state == BrokerState::Up) (void)drainBroker(s);
     }
+#if defined(ARDUINO)
+    // #710: publish-ring overrun report (one line / 60s -- rule-10 safe).
+    //
+    // Emitted HERE on loopTask and deliberately NOT beside the [rot] line in
+    // workerLoop(): "The worker task does NOT touch the ring" (above) is the
+    // invariant that lets the ring run lock-free, and reading dropped_ from the
+    // worker would break exactly what the #175 concurrency review established.
+    //
+    // Covers EVERY configured slot, not just TLS ones -- [rot] filters to
+    // isTlsTransport() because it is the rotation diagnostic, which makes it
+    // structurally blind to the plaintext always-on primary (#707). That broker is
+    // the one that must never drop, so it is the one this line most needs to show.
+    //
+    // Unconditional: prints zeros when healthy. An edge-triggered line would make
+    // silence ambiguous ("no drops" vs "reporting broken"), which is the same class
+    // of silent failure this counter exists to remove.
+    {
+        static uint32_t s_ring_log_ms = 0;
+        if (now_ms - s_ring_log_ms >= 60000U) {
+            s_ring_log_ms = now_ms;
+            char L[160];
+            int o = snprintf(L, sizeof(L), "[ring] head=%u drops", (unsigned)ring_.head());
+            for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS && o < (int)sizeof(L) - 16; ++s) {
+                if (!brokers_[s].isConfigured()) continue;
+                o += snprintf(L + o, (size_t)(sizeof(L) - o), " s%u=%u",
+                              (unsigned)s, (unsigned)ring_.droppedCount(s));
+            }
+            Serial.println(L);
+        }
+    }
+#endif
 }
 
 // ---------------------------------------------------------------------------

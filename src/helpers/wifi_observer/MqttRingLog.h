@@ -27,7 +27,7 @@ public:
     MqttRingLog() {
         memset(len_, 0, sizeof(len_));
         memset(seq_, 0, sizeof(seq_));
-        for (int i = 0; i < MQTT_RING_MAX_READERS; i++) cursor_[i] = 0;
+        for (int i = 0; i < MQTT_RING_MAX_READERS; i++) { cursor_[i] = 0; dropped_[i] = 0; }
     }
 
     // Append a payload. Returns its sequence number (1-based), or 0 if rejected
@@ -60,7 +60,21 @@ public:
         return (head_ > c) ? (head_ - c) : 0;
     }
 
+    // #710: monotonic count of messages destroyed before this reader consumed
+    // them. Unlike lapped(), this must NOT reset when the reader catches up --
+    // lapped() is derived from the current cursor position, so it erases its own
+    // evidence the moment a rotated-out broker drains, which is why silent
+    // publish-ring loss was undetectable in the field.
+    //
+    // Counted in commit() ONLY -- the single site that mutates cursor_. lag() and
+    // peek() clamp a local copy and are const, so counting there would re-tally
+    // the same loss on every poll.
+    uint32_t droppedCount(uint8_t reader) const {
+        return (reader < MQTT_RING_MAX_READERS) ? dropped_[reader] : 0;
+    }
+
     // True when the writer overran this reader's cursor (data was lost).
+    // NOTE: transient -- see droppedCount() for the durable measure.
     bool lapped(uint8_t reader) const {
         if (reader >= MQTT_RING_MAX_READERS) return false;
         return head_ > MQTT_RING_SLOTS && cursor_[reader] < tailMinus1();
@@ -89,12 +103,23 @@ public:
     void commit(uint8_t reader) {
         if (reader >= MQTT_RING_MAX_READERS) return;
         uint32_t c = cursor_[reader];
-        if (c < tailMinus1()) c = tailMinus1();
+        const uint32_t t = tailMinus1();
+        // #710: the clamp below IS the data-loss event -- the writer overran this
+        // reader and (t - c) messages were destroyed unread. Count before
+        // clamping; monotonic, so it survives the reader catching up (lapped()
+        // does not, which is why field loss was invisible).
+        if (c < t) { dropped_[reader] += (t - c); c = t; }
         if (c < head_) cursor_[reader] = c + 1;
     }
 
     // Abandon the backlog and jump to the head (used when a reader is hopelessly
     // lapped, or a broker is (re)attached and should not replay stale traffic).
+    //
+    // #710: deliberately does NOT count toward droppedCount(). resync() serves two
+    // purposes -- discarding a hopeless backlog (real loss) and attaching a broker
+    // that must not replay stale traffic (not loss) -- and the caller knows which.
+    // Counting both would make the metric ambiguous, so droppedCount() means
+    // strictly "destroyed by writer overrun", never "deliberately skipped".
     void resync(uint8_t reader) {
         if (reader >= MQTT_RING_MAX_READERS) return;
         cursor_[reader] = head_;
@@ -111,5 +136,6 @@ private:
     uint16_t len_[MQTT_RING_SLOTS];
     uint32_t seq_[MQTT_RING_SLOTS];
     uint32_t cursor_[MQTT_RING_MAX_READERS];
+    uint32_t dropped_[MQTT_RING_MAX_READERS];   // #710: monotonic overrun loss
     uint32_t head_ = 0;
 };

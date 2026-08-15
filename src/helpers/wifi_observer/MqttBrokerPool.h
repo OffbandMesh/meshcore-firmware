@@ -116,6 +116,10 @@ public:
     // value means that broker is misbehaving -- see the issue's overflow note.
     uint32_t brokerLag(uint8_t slot) const { return ring_.lag(slot); }
     bool     brokerLapped(uint8_t slot) const { return ring_.lapped(slot); }
+    // #710: monotonic count of messages destroyed by writer overrun before this
+    // broker consumed them. Unlike brokerLapped(), does not reset when the broker
+    // catches up -- the boolean erases its own evidence on drain.
+    uint32_t brokerDropped(uint8_t slot) const { return ring_.droppedCount(slot); }
     // #173: the device's own pubkey as UPPERCASE hex (the connect-time default for a
     // broker's jwt_owner when none is set, #95) -- so the OCFG_BROKERS dump can show
     // the resolved owner as a placeholder. Writes "" if identity unset / host build.
