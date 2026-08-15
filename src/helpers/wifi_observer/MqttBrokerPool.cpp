@@ -431,11 +431,26 @@ void MqttBrokerPool::reconcileSlot(uint8_t slot) {
     const bool may_alloc =
         (tlsClientsAllocated() - (brokers_[slot].hasClient() ? 1u : 0u))
             < OFFBAND_MAX_LIVE_TLS;
-    // #710: the slot is about to (re)attach a client. Ask loopTask to move this
-    // reader to the ring head so it does not replay stale backlog and does not
-    // book boot-time loss as rotation loss. Flag only -- the worker must not
-    // touch ring_.
-    pending_resync_[slot] = true;
+    // #723: resync on FIRST attach ONLY -- never on a rotation re-entry.
+    //
+    // #710 asked loopTask to move a (re)attaching reader to the ring head so it
+    // does not replay stale boot backlog. But reconcileSlot() runs on EVERY
+    // rotation re-entry too: a rotated-out broker had releaseClient() called, so
+    // hasClient() is false and it takes this path every single time it returns.
+    // Resyncing there threw away exactly the backlog the ring exists to hold --
+    // see publishPacket: "a broker that is down (rotated out, backoff,
+    // HeldNoHeap) resumes where it left off instead of losing the traffic".
+    //
+    // Shipped in v1.5.0-beta1 and caught in the field: an observer published the
+    // first message to CoreScope and silently discarded the next two, which had
+    // arrived while its broker was rotated out. The drop counter read zero the
+    // whole time, because resync() means "deliberately skipped", not "overrun".
+    //
+    // Flag only -- the worker must not touch ring_ (see loop()).
+    if (!first_attach_done_[slot]) {
+        first_attach_done_[slot] = true;
+        pending_resync_[slot]    = true;
+    }
     if (!brokers_[slot].begin(slot, cfg, *identity_, may_alloc) && cfg.enabled) {
         crashLogf("[pool] reconcileSlot %u begin FAILED state=%d err_class=%d",
                   (unsigned)slot,

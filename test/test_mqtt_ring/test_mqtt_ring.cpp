@@ -146,6 +146,60 @@ TEST(MqttRingLogDrops, RepeatedOverrunsAccumulate) {
     EXPECT_EQ(ring.droppedCount(0), 5u);
 }
 
+// ---------------------------------------------------------------------------
+// #723: a rotated-out reader must KEEP its cursor across re-attach.
+//
+// v1.5.0-beta1 resynced on every rotation re-entry, discarding exactly the
+// backlog the ring exists to hold. Field symptom: an observer published the
+// first message and silently dropped the next two, which had arrived while its
+// broker was rotated out. resync() is for FIRST attach only.
+// ---------------------------------------------------------------------------
+
+TEST(MqttRingLogDrops, BacklogSurvivesWhenReaderIsAwayAndReturns) {
+    MqttRingLog ring;
+    uint8_t m[4]; fill(m, sizeof(m), 0x66);
+    uint8_t out[MQTT_RING_MSG_MAX]; size_t out_len = 0; uint32_t seq = 0;
+
+    // Reader 0 is up and consumes message 1.
+    ring.append(m, sizeof(m));
+    ASSERT_TRUE(ring.peek(0, out, sizeof(out), out_len, seq));
+    EXPECT_EQ(seq, 1u);
+    ring.commit(0);
+
+    // Reader 0 rotates OUT. Two more messages arrive while it is away.
+    ring.append(m, sizeof(m));   // seq 2
+    ring.append(m, sizeof(m));   // seq 3
+
+    // Reader 0 rotates back IN. Without a resync it must resume at seq 2 --
+    // the backlog is the whole point of the ring.
+    ASSERT_TRUE(ring.peek(0, out, sizeof(out), out_len, seq))
+        << "backlog discarded on re-entry -- the beta1 regression";
+    EXPECT_EQ(seq, 2u);
+    ring.commit(0);
+    ASSERT_TRUE(ring.peek(0, out, sizeof(out), out_len, seq));
+    EXPECT_EQ(seq, 3u);
+    ring.commit(0);
+
+    EXPECT_FALSE(ring.peek(0, out, sizeof(out), out_len, seq));  // fully caught up
+    EXPECT_EQ(ring.droppedCount(0), 0u);                         // nothing lost
+}
+
+TEST(MqttRingLogDrops, ResyncStillSkipsBacklogWhenExplicitlyCalled) {
+    MqttRingLog ring;
+    uint8_t m[4]; fill(m, sizeof(m), 0x77);
+    uint8_t out[MQTT_RING_MSG_MAX]; size_t out_len = 0; uint32_t seq = 0;
+
+    for (int i = 0; i < 5; i++) ring.append(m, sizeof(m));
+    ring.resync(0);                       // first-attach behaviour (#710 intent)
+    EXPECT_FALSE(ring.peek(0, out, sizeof(out), out_len, seq));
+    EXPECT_EQ(ring.lag(0), 0u);
+    EXPECT_EQ(ring.droppedCount(0), 0u);  // deliberate skip is not a drop
+
+    ring.append(m, sizeof(m));            // and it tracks new traffic from there
+    ASSERT_TRUE(ring.peek(0, out, sizeof(out), out_len, seq));
+    EXPECT_EQ(seq, 6u);
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
