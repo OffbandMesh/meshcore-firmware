@@ -5,8 +5,7 @@
 
 #define I2C_SCL 18
 #define I2C_SDA 21
-// #704: SENSOR_INT_PIN 42 removed -- dead define, and GPIO42 is the
-//       vendor's motor-IN2 / servo-PWM2 accessory pin.
+#define SENSOR_INT_PIN 42
 #define PERIPHERAL_WARMUP_MS 100
 
 #define LORA_SCK 11
