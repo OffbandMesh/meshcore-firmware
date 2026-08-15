@@ -12,8 +12,28 @@
 // Deliberately dependency-free (no Arduino/ESP headers) so it builds in
 // [env:native] and is unit-testable in isolation -- same pattern as BlockStore.h.
 
+// #710: 16 -> 32 slots (+8,192 B, funded by the #701 trim which freed 14,660 B).
+//
+// SIZED FROM MEASURED FLEET DATA, not a guess. A rotated-out broker must survive
+// (N-1) x MQTT_ROTATE_DWELL_MS without its cursor being overrun; it drops when
+//     packets_in >  MQTT_RING_SLOTS       i.e.   lambda > SLOTS / T_out
+//
+// CoreScope, 68 active observers (map.okimesh.org /api/observers, packetsLastHour):
+//     mean 0.93/min   p50 0.20   p90 2.77   max 6.57
+// Excluding the top 5 (non-Offband and suspected multi-reporting outliers) the
+// busiest legitimate observer is 3.08/min. The 24 h network histogram puts
+// minute-level peaks at ~2.3x the mean, so budget ~7.1/min burst for that node:
+//     4 rotating brokers (180 s out): 7.1 x 3 = ~21 slots
+//     5 rotating brokers (240 s out): 7.1 x 4 = ~28 slots
+// 32 covers the busiest observed node through a p99 burst at up to 5 rotating
+// TLS brokers. 16 was adequate only up to 3 brokers on SUSTAINED rates and had
+// no burst margin.
+//
+// This is still one extrapolation deep (hourly average x network burst ratio).
+// droppedCount() now measures it directly -- re-size from real drop counts on a
+// busy observer rather than from this arithmetic.
 #ifndef MQTT_RING_SLOTS
-  #define MQTT_RING_SLOTS 16
+  #define MQTT_RING_SLOTS 32
 #endif
 #ifndef MQTT_RING_MSG_MAX
   #define MQTT_RING_MSG_MAX 512
