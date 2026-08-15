@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <cstring>
+#include <vector>
 #include "helpers/wifi_observer/MqttRingLog.h"
 
 static void fill(uint8_t* b, size_t n, uint8_t v) { memset(b, v, n); }
@@ -144,6 +145,38 @@ TEST(MqttRingLogDrops, RepeatedOverrunsAccumulate) {
     for (int i = 0; i < MQTT_RING_SLOTS + 3; i++) ring.append(m, sizeof(m));
     while (ring.peek(0, out, sizeof(out), out_len, seq)) ring.commit(0);
     EXPECT_EQ(ring.droppedCount(0), 5u);
+}
+
+// ---------------------------------------------------------------------------
+// #726: the ring must accept anything publishParsedPacket() can build.
+//
+// That function writes the /packets JSON into char json[1024]. The ring capped
+// at 512, so every payload from 513..1023 bytes was refused and discarded with
+// no log and no counter -- a ~98-byte packet ceiling, invisible. These pin the
+// contract: MQTT_RING_MSG_MAX >= the builder's buffer, and a refusal is COUNTED.
+// ---------------------------------------------------------------------------
+
+TEST(MqttRingLogDrops, AcceptsAnythingTheJsonBuilderCanProduce) {
+    MqttRingLog ring;
+    // The largest body publishParsedPacket can hand us: json[1024] minus NUL.
+    std::vector<uint8_t> big(1023, 0x5A);
+    EXPECT_EQ(ring.append(big.data(), big.size()), 1u)
+        << "ring refuses a payload the JSON builder can legally produce";
+    EXPECT_EQ(ring.rejectedCount(), 0u);
+
+    // A worst-case 255-byte MeshCore packet builds an ~826 B body.
+    std::vector<uint8_t> worst(826, 0x5B);
+    EXPECT_EQ(ring.append(worst.data(), worst.size()), 2u);
+    EXPECT_EQ(ring.rejectedCount(), 0u);
+}
+
+TEST(MqttRingLogDrops, OversizeIsCountedNotSilent) {
+    MqttRingLog ring;
+    std::vector<uint8_t> toobig(MQTT_RING_MSG_MAX + 1, 0x5C);
+    EXPECT_EQ(ring.append(toobig.data(), toobig.size()), 0u);
+    EXPECT_EQ(ring.rejectedCount(), 1u);          // counted, not discarded quietly
+    EXPECT_EQ(ring.droppedCount(0), 0u);          // and NOT confused with overrun
+    EXPECT_EQ(ring.head(), 0u);                   // nothing entered the ring
 }
 
 int main(int argc, char **argv) {

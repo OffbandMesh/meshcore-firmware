@@ -32,11 +32,35 @@
 // This is still one extrapolation deep (hourly average x network burst ratio).
 // droppedCount() now measures it directly -- re-size from real drop counts on a
 // busy observer rather than from this arithmetic.
+// #726: 32 -> 20. MQTT_RING_MSG_MAX had to double (see below) so parsed packets
+// stop being rejected; slot count comes down to pay for it. 20 x 1024 = 20,480 B
+// (+4,096 over the old 32 x 512), which fits the headroom #701 freed.
+//
+// Depth trade: 20 messages covers ~3 rotating TLS brokers at the measured busiest
+// observer (3.08/min sustained, ~7.1/min burst); it is marginal at 4+. Dropping the
+// derived JSON fields CoreScope never reads (packet_type/payload_len/route/path/
+// hash/len/time/date, ~130 B) would buy the depth back -- tracked separately.
 #ifndef MQTT_RING_SLOTS
-  #define MQTT_RING_SLOTS 32
+  #define MQTT_RING_SLOTS 20
 #endif
+// #726: 512 -> 1024. MUST be >= the buffer buildPacketJson() writes into.
+// publishParsedPacket() builds the /packets JSON into char json[1024] and hands it
+// to publishPacket() -> append(). At 512 every payload between 513 and 1023 bytes
+// was REJECTED and silently discarded: append returned 0, nothing logged, no
+// counter moved (droppedCount tracks cursor overrun at commit(), not a refused
+// append). The JSON embeds "raw":"<whole packet in hex>", so with 316 B of other
+// fields the ceiling was ~98 BYTES of packet -- a max 255 B MeshCore packet builds
+// an 826 B body and never reached any broker. Transport-independent: the drop is
+// upstream of broker fan-out, so a plaintext always-on slot was hit identically.
+//
+// Introduced by #175 (62ad4439 added the ring at 512 while the builder already used
+// 1024) and found in the field on v1.5.0-beta1: an observer published the first,
+// smaller message to CoreScope and silently dropped the two larger ones.
+//
+// KEEP THIS >= the json[] buffer in publishParsedPacket(). If that buffer grows,
+// this must grow with it, or the same silent hole reopens.
 #ifndef MQTT_RING_MSG_MAX
-  #define MQTT_RING_MSG_MAX 512
+  #define MQTT_RING_MSG_MAX 1024
 #endif
 #ifndef MQTT_RING_MAX_READERS
   #define MQTT_RING_MAX_READERS 10
@@ -48,14 +72,22 @@ public:
         memset(len_, 0, sizeof(len_));
         memset(seq_, 0, sizeof(seq_));
         for (int i = 0; i < MQTT_RING_MAX_READERS; i++) { cursor_[i] = 0; dropped_[i] = 0; }
+        rejected_ = 0;
     }
 
     // Append a payload. Returns its sequence number (1-based), or 0 if rejected
     // (empty or larger than MQTT_RING_MSG_MAX). Overwrites the oldest slot when
     // full -- a reader that has not kept up loses the overrun (documented,
     // best-effort; see lapped()).
+    // #726: count refused appends. An oversize payload never enters the ring at
+    // all, so droppedCount() (cursor overrun) cannot see it -- that is exactly how
+    // the 512-byte ceiling stayed invisible for so long. Separate counter, so
+    // "too big to publish" and "reader fell behind" are never confused again.
+    uint32_t rejectedCount() const { return rejected_; }
+
     uint32_t append(const uint8_t* payload, size_t len) {
-        if (payload == nullptr || len == 0 || len > MQTT_RING_MSG_MAX) return 0;
+        if (payload == nullptr || len == 0) return 0;
+        if (len > MQTT_RING_MSG_MAX) { rejected_++; return 0; }
         uint32_t s = ++head_;
         uint32_t idx = (s - 1) % MQTT_RING_SLOTS;
         memcpy(buf_[idx], payload, len);
@@ -157,5 +189,6 @@ private:
     uint32_t seq_[MQTT_RING_SLOTS];
     uint32_t cursor_[MQTT_RING_MAX_READERS];
     uint32_t dropped_[MQTT_RING_MAX_READERS];   // #710: monotonic overrun loss
+    uint32_t rejected_ = 0;                     // #726: payloads too big to append
     uint32_t head_ = 0;
 };
