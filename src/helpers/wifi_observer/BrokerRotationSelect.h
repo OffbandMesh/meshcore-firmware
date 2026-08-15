@@ -34,6 +34,19 @@ struct TlsCandidate {
 
 // Choose which candidate gets the next TLS budget slot.
 // Returns kNoSlot when the budget is full or nothing is promotable.
+//
+// CALLER CONTRACT -- READ THIS BEFORE WIRING IT UP.
+// This function decides WHO WINS. It does not, and cannot, drive the losers.
+// Every candidate that is not promoted must still be driven so it self-defers
+// into HeldBudget, because the rotation scheduler only runs when at least one
+// broker reads as "waiting". Skip that and the losers stay Down, nothing ever
+// reads as waiting, rotation never fires, and the first broker to take the
+// budget keeps it forever -- worse than the starvation this replaced.
+//
+// That exact mistake shipped once and was caught only on hardware (slot 3 held
+// the budget 8.2 h while three enabled brokers sat Down). The unit tests take
+// `eligible` as an INPUT, so they verify the choice and are structurally blind
+// to the state transition that produces a candidate.
 inline uint8_t selectTlsPromotion(const TlsCandidate* c, uint8_t n,
                                   uint8_t tls_live, uint8_t max_live) {
     if (c == nullptr || tls_live >= max_live) return kNoSlot;
