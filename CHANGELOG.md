@@ -16,6 +16,17 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+## [1.5.0-beta1] - 2026-08-15
+
+### Added
+- **`wifi clear` and a visible reason for WiFi disconnects** (#696): an observer on an
+  open, passwordless network could sit at `StaConnecting` indefinitely with no reason
+  available anywhere, and a stored PSK could not be cleared without an NVS wipe that
+  destroys the device identity. `wifi clear [pwd|all]` now removes stored credentials
+  properly, and STA disconnect reasons appear in the `wifi status` reply as well as the
+  retry log — the status reply being the load-bearing half, since a remote reporter
+  cannot read a serial console. Association behaviour is unchanged.
+
 ### Fixed
 - **Observer multi-broker rotation actually rotates** (#708): with more than two TLS
   brokers enabled, promotion was a first-eligible-by-slot-index scan whose only
