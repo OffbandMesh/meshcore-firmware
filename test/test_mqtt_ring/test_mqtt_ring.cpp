@@ -55,6 +55,97 @@ TEST(MqttRingLog, OversizeRejected) {
     EXPECT_EQ(ring.head(), 0u);
 }
 
+// ---------------------------------------------------------------------------
+// #710: publish-ring overrun must be COUNTED, not silently clamped.
+//
+// The ring drops messages when the writer overruns a stalled reader (a broker
+// rotated out for a TLS dwell). Today that loss is invisible: the cursor is
+// silently clamped to the oldest retained message, nothing is counted, nothing
+// is logged, and lapped() -- the only indicator -- is derived from the current
+// cursor, so it reads false again the moment the reader catches up.
+// ---------------------------------------------------------------------------
+
+TEST(MqttRingLogDrops, CountIsExactAfterOverrun) {
+    MqttRingLog ring;
+    uint8_t m[4]; fill(m, sizeof(m), 0x11);
+
+    // Overrun reader 0 by exactly 4 messages.
+    const int N = MQTT_RING_SLOTS + 4;
+    for (int i = 0; i < N; i++) ring.append(m, sizeof(m));
+    // head=N, tail=N-SLOTS+1, so seqs 1..4 are destroyed before reader 0 read them.
+    ASSERT_TRUE(ring.lapped(0));
+
+    uint8_t out[MQTT_RING_MSG_MAX]; size_t out_len = 0; uint32_t seq = 0;
+    ASSERT_TRUE(ring.peek(0, out, sizeof(out), out_len, seq));
+    EXPECT_EQ(seq, (uint32_t)(N - MQTT_RING_SLOTS + 1));  // jumped to oldest kept
+    ring.commit(0);                                       // the clamp that loses 4
+
+    EXPECT_EQ(ring.droppedCount(0), 4u);
+}
+
+TEST(MqttRingLogDrops, CountSurvivesReaderCatchingUp) {
+    MqttRingLog ring;
+    uint8_t m[4]; fill(m, sizeof(m), 0x22);
+
+    const int N = MQTT_RING_SLOTS + 4;
+    for (int i = 0; i < N; i++) ring.append(m, sizeof(m));
+
+    uint8_t out[MQTT_RING_MSG_MAX]; size_t out_len = 0; uint32_t seq = 0;
+    while (ring.peek(0, out, sizeof(out), out_len, seq)) ring.commit(0);
+
+    // The transient flag has erased its own evidence -- this is the defect.
+    EXPECT_FALSE(ring.lapped(0));
+    EXPECT_EQ(ring.lag(0), 0u);
+    // The durable counter must NOT erase.
+    EXPECT_EQ(ring.droppedCount(0), 4u);
+}
+
+TEST(MqttRingLogDrops, NoDropsWhenReaderKeepsUp) {
+    MqttRingLog ring;
+    uint8_t m[4]; fill(m, sizeof(m), 0x33);
+    uint8_t out[MQTT_RING_MSG_MAX]; size_t out_len = 0; uint32_t seq = 0;
+
+    for (int i = 0; i < MQTT_RING_SLOTS * 3; i++) {
+        ring.append(m, sizeof(m));
+        ASSERT_TRUE(ring.peek(0, out, sizeof(out), out_len, seq));
+        ring.commit(0);
+    }
+    EXPECT_FALSE(ring.lapped(0));
+    EXPECT_EQ(ring.droppedCount(0), 0u);
+}
+
+TEST(MqttRingLogDrops, CountIsPerReaderNotGlobal) {
+    MqttRingLog ring;
+    uint8_t m[4]; fill(m, sizeof(m), 0x44);
+    uint8_t out[MQTT_RING_MSG_MAX]; size_t out_len = 0; uint32_t seq = 0;
+
+    // Reader 0 keeps up; reader 1 never reads.
+    for (int i = 0; i < MQTT_RING_SLOTS + 5; i++) {
+        ring.append(m, sizeof(m));
+        if (ring.peek(0, out, sizeof(out), out_len, seq)) ring.commit(0);
+    }
+    ring.commit(1);   // reader 1 finally advances, discovering the loss
+
+    EXPECT_EQ(ring.droppedCount(0), 0u);
+    EXPECT_EQ(ring.droppedCount(1), 5u);
+}
+
+TEST(MqttRingLogDrops, RepeatedOverrunsAccumulate) {
+    MqttRingLog ring;
+    uint8_t m[4]; fill(m, sizeof(m), 0x55);
+    uint8_t out[MQTT_RING_MSG_MAX]; size_t out_len = 0; uint32_t seq = 0;
+
+    // First overrun: lose 2, then resume.
+    for (int i = 0; i < MQTT_RING_SLOTS + 2; i++) ring.append(m, sizeof(m));
+    while (ring.peek(0, out, sizeof(out), out_len, seq)) ring.commit(0);
+    ASSERT_EQ(ring.droppedCount(0), 2u);
+
+    // Second overrun: lose 3 more. Counter accumulates, never resets.
+    for (int i = 0; i < MQTT_RING_SLOTS + 3; i++) ring.append(m, sizeof(m));
+    while (ring.peek(0, out, sizeof(out), out_len, seq)) ring.commit(0);
+    EXPECT_EQ(ring.droppedCount(0), 5u);
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

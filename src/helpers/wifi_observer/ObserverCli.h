@@ -88,7 +88,12 @@ size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size,
                               const BrokerRuntimeState* rt = nullptr,
                               const char* owner_default_hex = nullptr,
                               int32_t ring_lag = -1,
-                              bool ring_lapped = false);
+                              bool ring_lapped = false,
+                              // #710: monotonic count of messages destroyed by
+                              // writer overrun. ring_lapped is transient and reads
+                              // false again once the broker drains, so it cannot
+                              // evidence past loss; this can.
+                              uint32_t ring_dropped = 0);
 
 // #370: the display appliers (setDisplayAlwaysOnApplier / setDisplayRotationApplier
 // / setDisplayRotationSupportedQuery) and the display.* NVS accessors moved to
