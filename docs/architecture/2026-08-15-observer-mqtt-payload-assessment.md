@@ -212,6 +212,33 @@ confirmation.
 
 ---
 
+## 7a. Better move: change what the ring STORES, not what we send
+
+The memory cost is not really the unread fields — it is that the ring stores the
+**rendered JSON**, so every slot is sized for the largest possible body (~826 B, because
+hex doubles the packet before ~316 B of fields are added).
+
+Store the packet record instead and render at drain:
+
+```
+raw bytes (<=255) + raw_len + rx_time + rssi/snr/score/duration
++ packet_type/payload_len/route/path_info        ~294 B  -> ~320 B slots
+
+now      : 20 slots x 1024 =  20,480 B
+proposed : 24 slots x  320 =   7,680 B    ~12,800 B returned, AND more depth
+```
+
+**Published bytes are unchanged** — same topic, same keys, same values. So this needs no
+consumer confirmation at all: the CoreComms blocker in §7 does not apply to it. Tracked as
+#727.
+
+Hard constraint: **`rx_time` must be captured at receive and stored.** Rendering at drain
+while calling `time(nullptr)` would stamp a backlogged broker's messages with the drain
+time — silently wrong timestamps in exactly the rotated-out case the ring exists to serve.
+
+Dropping the unread fields (§6) remains worthwhile but is now a *separate, optional*
+follow-up rather than the main prize, and it stays blocked per §7.
+
 ## 8. Decision
 
 **BLOCKED.** No payload field is removed until CoreComms confirms.
