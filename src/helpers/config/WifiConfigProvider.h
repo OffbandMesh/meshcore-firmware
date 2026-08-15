@@ -43,4 +43,11 @@ bool handleGetWifi(char* reply, size_t reply_size, const char* field);
 // wifi.enabled policy flag (NVS "wifi"/"enabled", default true; reboot-to-apply).
 bool handleSetWifiEnabled(char* reply, size_t reply_size, bool enabled);
 
+// #689/#696: credential clear. `what` is nullptr/""/"pwd" (clear the PSK only,
+// the default) or "all" (also clear the SSID). Uses Preferences::remove(), NOT
+// putString(""), which does not reliably clear an ESP32 NVS key (#98). This is
+// the only escape from a stored PSK, which otherwise raises the STA scan-auth
+// threshold and permanently blocks OPEN-network association (#692).
+bool handleClearWifi(char* reply, size_t reply_size, const char* what);
+
 }  // namespace offband

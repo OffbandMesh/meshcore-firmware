@@ -69,6 +69,70 @@ bool handleSetWifiField(char* reply, size_t reply_size,
     return true;
 }
 
+bool handleClearWifi(char* reply, size_t reply_size, const char* what) {
+    // #689/#696: the only way to un-set WiFi creds. `set wifi.pwd ""` is
+    // deliberately rejected (empty SSID collides with the no-creds
+    // detection in WifiBootstrap::begin), which left a stored PSK
+    // permanently stuck -- and a stored PSK raises the STA scan-auth
+    // threshold to WPA2, so the node can never join an OPEN network
+    // again (#692). Before this, the only escape was a full NVS wipe,
+    // which also destroys the device identity.
+    //
+    // Default (no argument) clears the password only: that is the
+    // recoverable case, and dropping the SSID too would silently send
+    // the node back to "awaiting setup" when the user asked for less.
+    bool clear_ssid = false;
+    if (what == nullptr || what[0] == '\0' || config::strEq(what, "pwd")) {
+        clear_ssid = false;
+    } else if (config::strEq(what, "all")) {
+        clear_ssid = true;
+    } else {
+        snprintf(reply, reply_size,
+                 "ERROR: usage: wifi clear [pwd|all]\n");
+        return true;
+    }
+#ifdef ARDUINO
+    Preferences p;
+    if (!p.begin("wifi", /*readOnly=*/false)) {
+        snprintf(reply, reply_size,
+                 "ERROR: cannot open NVS namespace 'wifi'\n");
+        return true;
+    }
+    // remove(), NOT putString("") -- per #98, writing an empty string does
+    // not reliably clear an ESP32 NVS key, which would leave the very
+    // stale-PSK state this command exists to escape.
+    //
+    // The return value MUST be checked: this command exists to rescue a
+    // device stranded by a stale PSK, so reporting success on a failed
+    // erase would send the user away believing they are fixed when the
+    // node is still unable to join an open AP.
+    //
+    // But remove() also returns false when the key was simply ABSENT
+    // (nvs_erase_key -> ESP_ERR_NVS_NOT_FOUND), which is the common case:
+    // a device that never had a PSK, or a second `wifi clear`. Treating
+    // that as failure would report a scary NVS error for a no-op. isKey()
+    // separates the two: only a key that exists and refuses to erase is
+    // a real failure.
+    const bool pwd_erase_failed  = p.isKey("pwd")  && !p.remove("pwd");
+    const bool ssid_erase_failed = clear_ssid && p.isKey("ssid") && !p.remove("ssid");
+    p.end();
+    if (pwd_erase_failed || ssid_erase_failed) {
+        snprintf(reply, reply_size,
+                 "ERROR: could not clear wifi.%s (NVS erase failed)\n",
+                 pwd_erase_failed ? "pwd" : "ssid");
+        return true;
+    }
+#endif
+    if (clear_ssid) {
+        snprintf(reply, reply_size,
+                 "wifi cleared (ssid + pwd). Reboot to apply.\n");
+    } else {
+        snprintf(reply, reply_size,
+                 "wifi.pwd cleared. Reboot to join an open network.\n");
+    }
+    return true;
+}
+
 bool handleGetWifi(char* reply, size_t reply_size, const char* field) {
     if (field == nullptr) {
         snprintf(reply, reply_size,
@@ -118,6 +182,24 @@ bool handleGetWifi(char* reply, size_t reply_size, const char* field) {
         if (state == WifiBootstrapState::StaConnected) {
             snprintf(reply, reply_size, "wifi.status = %s ip=%s\n",
                      st, WiFi.localIP().toString().c_str());
+        } else if (state == WifiBootstrapState::StaConnecting) {
+            // #696: the field cannot read the serial log -- a remote
+            // reporter only ever sees this line. A bare "StaConnecting"
+            // is indistinguishable between "SSID never matched" and
+            // "PSK rejected", which is what stalled #692. Carry the
+            // retry count and the last disconnect reason here.
+            const uint8_t reason = wifiBootstrap().lastDisconnectReason();
+            const char* rname = WifiBootstrap::disconnectReasonName(reason);
+            if (reason == 0) {
+                snprintf(reply, reply_size,
+                         "wifi.status = %s retry=%u (no disconnect event yet)\n",
+                         st, (unsigned)wifiBootstrap().staRetryCount());
+            } else {
+                snprintf(reply, reply_size,
+                         "wifi.status = %s retry=%u last_reason=%u(%s)\n",
+                         st, (unsigned)wifiBootstrap().staRetryCount(),
+                         (unsigned)reason, rname ? rname : "UNKNOWN");
+            }
         } else {
             snprintf(reply, reply_size, "wifi.status = %s\n", st);
         }
@@ -163,6 +245,12 @@ bool wifiConfigSet(const char* key, const char* value, char* reply, size_t reply
         if (!config::parseBool(value, on)) { snprintf(reply, reply_size, "ERROR: wifi.enabled expects 0|1\n"); return true; }
         return handleSetWifiEnabled(reply, reply_size, on);
     }
+    // #689/#696: wire-path parity for the clear. MUST be tested before the
+    // generic "wifi." prefix below for the same reason wifi.enabled is --
+    // otherwise this falls through to handleSetWifiField and writes an NVS
+    // key literally named "clear" instead of removing the password.
+    if (config::strEq(key, "wifi.clear"))
+        return handleClearWifi(reply, reply_size, value);
     if (strncmp(key, "wifi.", 5) == 0)            // wifi.ssid / wifi.pwd
         return handleSetWifiField(reply, reply_size, key + 5, value);
 
