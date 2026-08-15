@@ -38,7 +38,20 @@ public:
   #define MAX_CONTACTS  32
 #endif
 
-#define MAX_ANON_CONTACTS  8
+// #701: overridable so heap-constrained roles can shrink the anon-contact pool.
+// DEFAULT IS UNCHANGED AT 8 -- every env that does not pass -D MAX_ANON_CONTACTS
+// compiles byte-identically to before. Only the observer envs override it, where
+// the node is a raw packet tap (ObserverPipeline::onRawReceived -> publish raw
+// bytes) and never resolves a sender, so the OBSERVER pipeline needs none of it.
+// Note the observer envs are also BLE companions, so shrinking this does cap
+// what the companion half can hold -- a deliberate trade, not free.
+// Each slot costs sizeof(ContactInfo) = 184 B in .bss on the global mesh object.
+// Lowering this reduces how many simultaneous UNKNOWN senders a node can track
+// before recycling (BaseChatMesh.cpp:86-101) -- the one behavioural effect, and
+// the reason this is a per-env opt-in rather than a new global default.
+#ifndef MAX_ANON_CONTACTS
+  #define MAX_ANON_CONTACTS  8
+#endif
 
 #ifndef MAX_CONNECTIONS
   #define MAX_CONNECTIONS  16
