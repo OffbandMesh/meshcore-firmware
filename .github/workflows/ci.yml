@@ -43,11 +43,15 @@ jobs:
       - name: Every ESP32 env compiling SerialBLEInterface.cpp declares NimBLE
         run: python scripts/check_esp32_ble_deps.py
 
-  # #712: the [env:native] googletest suites existed but NOTHING ran them in CI, so every
-  # invariant they encode was unenforced on PRs. That is how #711 (a regression of #450)
-  # reached the field: the frame-size ceiling had no mechanical guard, only a comment.
-  # Runs the whole native suite, not just the frame-size one -- 14 suites / 153 cases were
-  # already green locally when this job was added, so it gates on real, passing coverage.
+  # #712: the googletest suites existed but NOTHING ran them in CI, so every invariant they
+  # encode was unenforced on PRs. That is how #711 (a regression of #450) reached the field:
+  # the frame-size ceiling had no mechanical guard, only a comment.
+  #
+  # Envs are DISCOVERED, not listed. There are two native test envs today ([env:native] and
+  # [env:native_kiss_modem], the latter excluded from the former via test_ignore), and a
+  # hardcoded `pio test -e native` silently skipped the second one -- the same "looks
+  # covered, isn't" failure this job exists to end. Any future env with `platform = native`
+  # is picked up automatically.
   native-tests:
     runs-on: ubuntu-latest
     steps:
@@ -60,8 +64,37 @@ jobs:
       - name: Install PlatformIO
         run: pip install --upgrade platformio
 
+      - name: Discover native test environments
+        id: envs
+        run: |
+          set -euo pipefail
+          envs=$(python - <<'PY'
+          import configparser
+          cfg = configparser.ConfigParser(strict=False)
+          cfg.read('platformio.ini')
+          names = [s.split(':', 1)[1] for s in cfg.sections()
+                   if s.startswith('env:')
+                   and cfg.get(s, 'platform', fallback='').strip() == 'native']
+          print(' '.join(sorted(names)))
+          PY
+          )
+          echo "Discovered native test envs: ${envs:-<none>}"
+          # Fail loudly rather than passing green having run nothing. A test job that
+          # silently executes zero tests is worse than no job at all: it reports success.
+          if [ -z "$envs" ]; then
+            echo "::error::No native test environments found in platformio.ini" >&2
+            exit 1
+          fi
+          echo "envs=$envs" >> "$GITHUB_OUTPUT"
+
       - name: Run native unit tests
-        run: pio test -e native
+        run: |
+          set -euo pipefail
+          for e in ${{ steps.envs.outputs.envs }}; do
+            echo "::group::pio test -e $e"
+            pio test -e "$e"
+            echo "::endgroup::"
+          done
 
   build:
     runs-on: ubuntu-latest
