@@ -169,7 +169,11 @@ void MqttBrokerPool::loop(uint32_t now_ms) {
         if (now_ms - s_ring_log_ms >= 60000U) {
             s_ring_log_ms = now_ms;
             char L[160];
-            int o = snprintf(L, sizeof(L), "[ring] head=%u drops", (unsigned)ring_.head());
+            // #726: rej= counts payloads REFUSED by append (too large for the ring),
+            // which is a different failure from drops= (reader fell behind). Confusing
+            // the two is what let an ~98-byte publish ceiling hide for months.
+            int o = snprintf(L, sizeof(L), "[ring] head=%u rej=%u drops",
+                             (unsigned)ring_.head(), (unsigned)ring_.rejectedCount());
             for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS && o < (int)sizeof(L) - 16; ++s) {
                 if (!brokers_[s].isConfigured()) continue;
                 o += snprintf(L + o, (size_t)(sizeof(L) - o), " s%u=%u",
