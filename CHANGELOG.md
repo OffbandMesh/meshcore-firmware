@@ -18,6 +18,15 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [1.5.0] - 2026-08-15
 
+### Fixed (beta2)
+- **Rotated-out brokers no longer lose the traffic they missed** (#723): a regression in
+  `beta1`. Re-attaching a broker resynced its ring cursor to the head, which was meant to
+  stop a *newly enabled* broker replaying stale boot backlog — but the same path runs on
+  every rotation re-entry, so a broker returning from its dwell discarded exactly the
+  backlog the ring exists to hold. On an observer with rotating TLS brokers this silently
+  dropped most of the feed, and the drop counter read zero throughout because a resync is
+  a deliberate skip, not an overrun. Resync now happens on first attach only.
+
 ### Added
 - **`wifi clear` and a visible reason for WiFi disconnects** (#696): an observer on an
   open, passwordless network could sit at `StaConnecting` indefinitely with no reason
