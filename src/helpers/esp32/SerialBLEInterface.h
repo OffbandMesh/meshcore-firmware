@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../BaseSerialInterface.h"
+#include "../BleFrameSizing.h"   // #711: testable ATT frame-sizing arithmetic
 #include <NimBLEDevice.h>
 
 // NimBLE merges security callbacks INTO NimBLEServerCallbacks (Bluedroid had
@@ -16,7 +17,7 @@ class SerialBLEInterface : public BaseSerialInterface, NimBLEServerCallbacks, Ni
   bool oldDeviceConnected;
   bool _isEnabled;
   uint16_t last_conn_id;
-  uint16_t _att_mtu;          // #453: negotiated ATT MTU (default 23 = BLE minimum)
+  uint16_t _att_mtu;          // #711: EFFECTIVE ATT MTU = min(peer, our own configured MTU)
   uint32_t _pin_code;
   unsigned long _last_write;
   unsigned long adv_restart_time;
@@ -59,6 +60,11 @@ protected:
   void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override;
   void onMTUChange(uint16_t MTU, NimBLEConnInfo& connInfo) override;
 
+  // #711: record the EFFECTIVE connection MTU, i.e. min(reported, our own configured
+  // local MTU). A peer-reported value alone is not the connection's MTU: ATT settles
+  // on the minimum of the two sides. Called from onConnect and onMTUChange.
+  void setEffectiveMtu(uint16_t reported);
+
   // NimBLEServerCallbacks: security/pairing events (merged from BLESecurityCallbacks)
   uint32_t onPassKeyDisplay() override;
   void onConfirmPassKey(NimBLEConnInfo& connInfo, uint32_t pin) override;
@@ -100,11 +106,18 @@ public:
   size_t writeFrame(const uint8_t src[], size_t len) override;
   size_t checkRecvFrame(uint8_t dest[]) override;
 
-  // #453: BLE deliverable frame = negotiated ATT MTU - 3 (ATT notify header),
-  // never above MAX_FRAME_SIZE. Tracked from onConnect/onMTUChange.
+  // #453/#711: BLE deliverable frame = EFFECTIVE ATT MTU - 3 (ATT notify header),
+  // never above MAX_FRAME_SIZE (the frame buffer bound).
+  //
+  // #711: `_att_mtu` MUST already be the effective (both-sides) MTU. The connection
+  // MTU is min(local, peer), and begin() pins our local side to MAX_FRAME_SIZE via
+  // NimBLEDevice::setMTU(), so on this transport the deliverable is at most
+  // MAX_FRAME_SIZE - 3 and the MAX_FRAME_SIZE ceiling below is unreachable in
+  // practice. Caching the PEER's MTU here (which can be far larger, e.g. Android's
+  // 517) made this saturate at MAX_FRAME_SIZE and clipped 3 bytes off every full
+  // frame -- the #450 bug, reintroduced. See setEffectiveMtu().
   size_t maxFrameSize() const override {
-    uint16_t m = _att_mtu > 3 ? (uint16_t)(_att_mtu - 3) : 0;
-    return m < MAX_FRAME_SIZE ? (size_t)m : (size_t)MAX_FRAME_SIZE;
+    return ble_frame::deliverableFrame(_att_mtu, MAX_FRAME_SIZE);
   }
 };
 

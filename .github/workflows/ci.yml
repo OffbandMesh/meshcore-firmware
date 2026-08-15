@@ -43,6 +43,26 @@ jobs:
       - name: Every ESP32 env compiling SerialBLEInterface.cpp declares NimBLE
         run: python scripts/check_esp32_ble_deps.py
 
+  # #712: the [env:native] googletest suites existed but NOTHING ran them in CI, so every
+  # invariant they encode was unenforced on PRs. That is how #711 (a regression of #450)
+  # reached the field: the frame-size ceiling had no mechanical guard, only a comment.
+  # Runs the whole native suite, not just the frame-size one -- 14 suites / 153 cases were
+  # already green locally when this job was added, so it gates on real, passing coverage.
+  native-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Run native unit tests
+        run: pio test -e native
+
   build:
     runs-on: ubuntu-latest
     strategy:
@@ -165,12 +185,14 @@ jobs:
   # required check blocks the PR with no explanation instead of a red X.
   ci-green:
     runs-on: ubuntu-latest
-    needs: [config-lint, build]
+    needs: [config-lint, native-tests, build]
     if: always()
     steps:
       - name: All required CI jobs green
         run: |
           echo "config-lint: ${{ needs.config-lint.result }}"
+          echo "native-tests: ${{ needs.native-tests.result }}"
           echo "build (all matrix legs): ${{ needs.build.result }}"
           test "${{ needs.config-lint.result }}" = "success"
+          test "${{ needs.native-tests.result }}" = "success"
           test "${{ needs.build.result }}" = "success"
