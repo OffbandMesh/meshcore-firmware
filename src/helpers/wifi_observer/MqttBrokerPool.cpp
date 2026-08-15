@@ -141,6 +141,11 @@ void MqttBrokerPool::loop(uint32_t now_ms) {
     // pass) also flushes a rotated-back-in broker even when no new packet arrives
     // to trigger publishPacket. The worker task does NOT touch the ring.
     for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
+        // #710: a freshly-attached broker starts at the ring head instead of
+        // replaying an arbitrarily old backlog. Done HERE on loopTask, not in
+        // reconcileSlot() where the client is created, because that runs on the
+        // worker and the worker must never touch ring_.
+        if (pending_resync_[s].exchange(false)) ring_.resync(s);
         if (brokers_[s].runtime().state == BrokerState::Up) (void)drainBroker(s);
     }
 }
@@ -395,6 +400,11 @@ void MqttBrokerPool::reconcileSlot(uint8_t slot) {
     const bool may_alloc =
         (tlsClientsAllocated() - (brokers_[slot].hasClient() ? 1u : 0u))
             < OFFBAND_MAX_LIVE_TLS;
+    // #710: the slot is about to (re)attach a client. Ask loopTask to move this
+    // reader to the ring head so it does not replay stale backlog and does not
+    // book boot-time loss as rotation loss. Flag only -- the worker must not
+    // touch ring_.
+    pending_resync_[slot] = true;
     if (!brokers_[slot].begin(slot, cfg, *identity_, may_alloc) && cfg.enabled) {
         crashLogf("[pool] reconcileSlot %u begin FAILED state=%d err_class=%d",
                   (unsigned)slot,
@@ -594,7 +604,24 @@ void MqttBrokerPool::workerLoop() {
         // promotions over 481 samples; slot 3 never ran. Selection now lives in
         // selectTlsPromotion() (BrokerRotationSelect.h) so it is unit-testable --
         // the defect was invisible at N=2, which is the arity it was validated at.
-        TlsCandidate cand[OFFBAND_MAX_BROKERS];
+        // = {} is redundant -- TlsCandidate carries default member initializers,
+        // so plain declaration already zeroes every element. Kept explicit so a
+        // future edit that drops the NSDMIs cannot silently introduce garbage.
+        // #708 (Gemini review): stamp service on the transition INTO Up -- the
+        // definitive 'this broker actually got its turn' signal. Stamping at
+        // Connecting counted a bring-up that may fail 1-8 s later in the async
+        // handshake, letting a flaky broker consume turns while publishing
+        // nothing. A broker that never reaches Up keeps its old epoch and is
+        // retried; its own Backoff schedule prevents it monopolising selection.
+        for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
+            const BrokerState now_st = brokers_[s].runtime().state;
+            if (now_st == BrokerState::Up && last_known_state_[s] != BrokerState::Up) {
+                last_served_epoch_[s] = ++service_epoch_;
+            }
+            last_known_state_[s] = now_st;
+        }
+
+        TlsCandidate cand[OFFBAND_MAX_BROKERS] = {};
         for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
             if (reconciling_[s]) continue;
             MqttBroker& b = brokers_[s];
@@ -661,11 +688,16 @@ void MqttBrokerPool::workerLoop() {
             if (!b.hasClient()) reconcileSlot(pick);
             uint32_t biased = now + static_cast<uint32_t>(pick) * 1000U;
             (void)b.tryConnect(biased, /*budget_ok=*/true);
+            // Budget is consumed the moment a bring-up STARTS -- the mbedTLS
+            // context is allocated at Connecting, not at Up.
+            //
+            // The service epoch is NOT stamped here (#708, Gemini review):
+            // esp_mqtt_client_start() is async and the handshake takes 1-8 s
+            // (measured). A broker that reaches Connecting and then fails TLS
+            // would have consumed its turn without publishing anything. Service
+            // is stamped on the actual transition to Up, at the top of the pass.
             if (b.runtime().state == BrokerState::Connecting) {
                 tls_live++;
-                // Stamp service only on an actual bring-up, so a broker that fails
-                // to start does not lose its place in the queue.
-                last_served_epoch_[pick] = ++service_epoch_;
             }
         }
 
