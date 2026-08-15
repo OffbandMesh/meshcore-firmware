@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../BaseSerialInterface.h"
+#include "../BleFrameSizing.h"   // #711: shared, unit-tested ATT frame-sizing arithmetic
 #include <bluefruit.h>
 
 #ifndef BLE_TX_POWER

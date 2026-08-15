@@ -92,12 +92,25 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
 // callback that receives a NimBLEConnInfo&. conn_id is reachable via
 // connInfo.getConnHandle(); peer MTU via pServer->getPeerMTU(handle).
 
+// #711: the connection's ATT MTU is min(local, peer) -- ATT negotiation settles on the
+// smaller of the two sides. begin() pins our local side with NimBLEDevice::setMTU(MAX_FRAME_SIZE),
+// so a peer advertising more (Android commonly 517) does NOT raise what this link can carry.
+// Storing the peer value unclamped made maxFrameSize() saturate at MAX_FRAME_SIZE and emit
+// 176-byte frames onto a 173-byte pipe, silently losing 3 bytes per full frame (#450 regression).
+void SerialBLEInterface::setEffectiveMtu(uint16_t reported) {
+  uint16_t local = NimBLEDevice::getMTU();      // what begin() configured for our side
+  _att_mtu = ble_frame::effectiveMtu(reported, local);
+  BLE_DEBUG_PRINTLN("setEffectiveMtu(): reported=%d local=%d -> effective=%d (deliverable frame=%d)",
+                    (int)reported, (int)local, (int)_att_mtu,
+                    (int)ble_frame::deliverableFrame(_att_mtu, MAX_FRAME_SIZE));
+}
+
 void SerialBLEInterface::onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) {
   uint16_t conn_id = connInfo.getConnHandle();
   uint16_t mtu = pServer->getPeerMTU(conn_id);
   BLE_DEBUG_PRINTLN("onConnect(), conn_id=%d, mtu=%d", conn_id, mtu);
   last_conn_id = conn_id;
-  if (mtu >= 23) _att_mtu = mtu;   // #453: initial MTU; onMTUChange updates if it grows
+  setEffectiveMtu(mtu);            // #711: clamp to our own configured MTU, never the peer's alone
 }
 
 void SerialBLEInterface::onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
@@ -111,7 +124,7 @@ void SerialBLEInterface::onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& con
 
 void SerialBLEInterface::onMTUChange(uint16_t MTU, NimBLEConnInfo& connInfo) {
   BLE_DEBUG_PRINTLN("onMTUChange(), mtu=%d", MTU);
-  if (MTU >= 23) _att_mtu = MTU;   // #453: track negotiated MTU for maxFrameSize()
+  setEffectiveMtu(MTU);            // #711: same clamp -- a renegotiation cannot exceed our local MTU
 }
 
 // -------- NimBLEServerCallbacks: security/pairing events
