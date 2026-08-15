@@ -165,6 +165,21 @@ private:
     // timestamp -- no millis() wraparound to reason about.
     uint32_t service_epoch_ = 0;
     uint32_t last_served_epoch_[OFFBAND_MAX_BROKERS] = {0};
+    // #708 (Gemini review): service is stamped on the transition INTO Up, not on
+    // Connecting. esp_mqtt_client_start() is async and the handshake runs 1-8 s
+    // (measured), so a broker that reaches Connecting and then fails TLS would
+    // have burned its turn without publishing. Worker-task-owned.
+    BrokerState last_known_state_[OFFBAND_MAX_BROKERS] = {};
+    // #710 (Gemini review): a broker attaching after traffic has started inherits
+    // the whole ring backlog -- it replays stale packets and its drop counter is
+    // polluted with boot-time loss. It must resync to the head.
+    //
+    // The worker sets this flag; loopTask performs the ring_.resync(). Gemini
+    // proposed calling resync() directly in reconcileSlot(), but reconcileSlot
+    // runs on the WORKER task and 'the worker task does NOT touch the ring' is
+    // the invariant that keeps the ring lock-free (1f9da010). This hand-off keeps
+    // every ring access on loopTask.
+    std::atomic<bool> pending_resync_[OFFBAND_MAX_BROKERS] = {};
     void rotateTlsIfDue(uint32_t now_ms);
 
     // Per-slot guard: true while the lifecycle worker is creating/destroying
