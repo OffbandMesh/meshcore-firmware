@@ -214,9 +214,6 @@ TEST(MqttRingRecord, MaxSizePacketRoundTrips) {
     in.rssi         = -97;
     in.snr          = -7.5f;
     in.score        = 123;
-    in.duration     = 456;
-    in.payload_type = 4;
-    in.payload_len  = 237;
     in.raw_len      = 255;                       // worst-case MeshCore packet
     for (int i = 0; i < 255; i++) in.raw[i] = (uint8_t)i;
 

@@ -22,6 +22,10 @@ static_assert(sizeof(offband::PacketRecord) <= MQTT_RING_MSG_MAX,
 
 namespace offband {
 
+#ifndef MQTT_ROTATE_DWELL_MS
+  #define MQTT_ROTATE_DWELL_MS 60000U   // #175: how long a TLS slot holds the budget
+#endif
+
 // ---------------------------------------------------------------------------
 // begin
 // ---------------------------------------------------------------------------
@@ -247,6 +251,25 @@ uint8_t MqttBrokerPool::drainBroker(uint8_t slot) {
         if (len != sizeof(PacketRecord)) { ring_.commit(slot); continue; }
         PacketRecord rec;
         memcpy(&rec, buf, sizeof(rec));
+#if defined(ARDUINO)
+        // #727 sec4: rx_time observability. If this record was queued while the
+        // broker was rotated out, it is being published LATER than it arrived --
+        // and it must still carry its RECEIVE time, not "now". Emit the lag so a
+        // backlogged delivery is a VISIBLE event and the receive-time guarantee
+        // is provable on serial instead of silent. Rate-limited to one line per
+        // drain pass (the oldest record in the burst).
+        {
+            uint32_t nowsec = (uint32_t)time(nullptr);
+            uint32_t age = (nowsec > rec.rx_time) ? (nowsec - rec.rx_time) : 0;
+            static uint32_t s_last_backlog_ms = 0;
+            if (age >= (MQTT_ROTATE_DWELL_MS / 1000U) &&
+                (uint32_t)millis() - s_last_backlog_ms >= 10000U) {
+                s_last_backlog_ms = (uint32_t)millis();
+                Serial.printf("[ring] backlog s%u age=%us rx=%u (publishing receive-time)\n",
+                              (unsigned)slot, (unsigned)age, (unsigned)rec.rx_time);
+            }
+        }
+#endif
         char json[1024];
         int n = buildPacketJsonFromRecord(json, sizeof(json), rec,
                                           /*is_tx=*/false, ctx);
@@ -502,10 +525,6 @@ inline bool isTlsTransport(const BrokerConfig& c) {
            c.transport == BrokerTransport::Wss;
 }
 }  // namespace
-
-#ifndef MQTT_ROTATE_DWELL_MS
-  #define MQTT_ROTATE_DWELL_MS 60000U   // #175: how long a TLS slot holds the budget
-#endif
 
 // #175: rotate the live TLS set on a dwell timer. Demotes the OLDEST live TLS
 // broker so a parked (HeldNoHeap) one can take the freed budget slot. WORKER-ONLY:

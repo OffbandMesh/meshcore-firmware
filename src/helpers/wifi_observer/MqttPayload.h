@@ -102,30 +102,27 @@ int buildStatusJson(char* buf, size_t buf_size,
 // case the ring exists to serve. Capture at receive, carry it through.
 //
 // POD by design: it is memcpy'd into the ring as opaque bytes.
-// MeshCore's MAX_HASH_SIZE, restated rather than #included: this header only
-// forward-declares mesh::Packet on purpose, to stay light. A static_assert in
-// MqttPayload.cpp pins this to the real value, so the two cannot drift.
-static constexpr size_t kPacketHashSize = 8;
-
+//
+// #727 sec4: holds ONLY what a consumer reads off /packets. CoreScope (and every
+// fork of it -- CoreComms/EastMesh included, confirmed from public source)
+// decodes the raw hex itself and reads none of the parsed fields, so
+// packet_type / payload_len / route / path / hash / len / time / date /
+// duration / origin_id were computed on-device and thrown away. Dropping them
+// removes the on-device parse, shrinks the record, and kills a class of "we
+// compute it and no one reads it" bugs -- the packet hash being the poster child
+// (a SHA256 per packet, discarded).
 struct PacketRecord {
     uint32_t rx_time;                  // unix seconds, captured AT RECEIVE
     int32_t  rssi;
     float    snr;
-    int32_t  score;
-    int32_t  duration;
-    uint8_t  hash[kPacketHashSize];      // precomputed: the packet is not kept
-    uint8_t  payload_type;
-    uint8_t  payload_len;
-    uint8_t  route_direct;             // 1 = direct route, 0 = flood
-    uint8_t  path_hash_count;
-    uint8_t  path_hash_size;
-    uint8_t  path_byte_len;
+    int32_t  score;                    // <0 => omit the score field
     uint16_t raw_len;
     uint8_t  raw[256];
 };
 
 // Capture everything the /packets body needs from a live packet, so the packet
-// itself does not have to survive until publish time.
+// itself does not have to survive until publish time. (`duration` is accepted
+// for call-site compatibility but no longer stored -- no consumer reads it.)
 void fillPacketRecord(PacketRecord& rec, const mesh::Packet& packet,
                       int rssi, float snr, int score, int duration,
                       uint32_t rx_time);

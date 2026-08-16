@@ -50,14 +50,22 @@
 //   #175  : 32 x  512 = 16,384 B   (and packets over ~98 B silently dropped)
 //   #726  : 20 x 1024 = 20,480 B
 //   #727  : 32 x  320 = 10,240 B   -- more depth than either, ~10 KB less memory
+// #727 sec4: 40 slots x 288 B = 11,520 B. The slim PacketRecord (276 B measured)
+// freed room to deepen the ring past #727's 32 while staying ~11 KB under the
+// pre-#701 baseline. Fleet data (map.okimesh.org) put the busiest real observer
+// at ~20 slots of sustained need; 40 is burst insurance. Owner-set depth.
 #ifndef MQTT_RING_SLOTS
-  #define MQTT_RING_SLOTS 32
+  #define MQTT_RING_SLOTS 40
 #endif
 // MUST stay >= sizeof(PacketRecord). A static_assert in MqttBrokerPool.cpp enforces
 // it -- #726 was exactly this invariant violated silently, so it is now a compile
 // error rather than a field report.
+// #727 sec4: slim PacketRecord (~276 B, was ~296). MSG_MAX drops to 288 -- the
+// static_assert in MqttBrokerPool.cpp verifies 288 >= sizeof(PacketRecord).
+// Slot COUNT held at 32 pending the owner's depth/memory call with measured
+// sizeof (per the #727 sequencing: shrink first, then size).
 #ifndef MQTT_RING_MSG_MAX
-  #define MQTT_RING_MSG_MAX 320
+  #define MQTT_RING_MSG_MAX 288
 #endif
 #ifndef MQTT_RING_MAX_READERS
   #define MQTT_RING_MAX_READERS 10
