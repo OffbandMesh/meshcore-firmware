@@ -4,6 +4,13 @@
 
 #include "MqttBrokerPool.h"
 #include "BrokerRotationSelect.h"   // #708: fair TLS promotion
+
+// #727: the ring must be able to hold what publishParsedPacket() writes.
+// #726 was this invariant broken silently -- the writer produced a body the
+// ring refused, append() returned 0, and nothing counted or logged it. Make it
+// a compile error instead of a field report.
+static_assert(sizeof(offband::PacketRecord) <= MQTT_RING_MSG_MAX,
+              "MQTT_RING_MSG_MAX must be >= sizeof(PacketRecord)");
 #include "MqttPayload.h"
 #include <helpers/diagnostics/CrashLog.h>   // #181: crashLogf() -- worker has no user ACK channel
 #include <cstring>
@@ -234,7 +241,23 @@ uint8_t MqttBrokerPool::drainBroker(uint8_t slot) {
     // Bound the burst: at most MQTT_RING_SLOTS messages per pass.
     for (uint8_t i = 0; i < MQTT_RING_SLOTS; ++i) {
         if (!ring_.peek(slot, buf, sizeof(buf), len, seq)) break;
-        if (!b.publish(topic, buf, len, /*retain=*/false)) break;  // retry next pass
+        // #727: the ring holds a PacketRecord; render the body here, per broker.
+        // A short read means a record written by a different build -- skip it
+        // rather than publish garbage.
+        if (len != sizeof(PacketRecord)) { ring_.commit(slot); continue; }
+        PacketRecord rec;
+        memcpy(&rec, buf, sizeof(rec));
+        char json[1024];
+        int n = buildPacketJsonFromRecord(json, sizeof(json), rec,
+                                          /*is_tx=*/false, ctx);
+        if (n <= 0 || static_cast<size_t>(n) >= sizeof(json)) {
+            ring_.commit(slot);   // unrenderable: drop it, do not wedge the queue
+            continue;
+        }
+        if (!b.publish(topic, reinterpret_cast<const uint8_t*>(json),
+                       static_cast<size_t>(n), /*retain=*/false)) {
+            break;  // retry next pass
+        }
         ring_.commit(slot);
         sent++;
     }
@@ -324,13 +347,21 @@ uint8_t MqttBrokerPool::publishParsedPacket(const mesh::Packet& packet,
     ctx.firmware_version = firmware_version_;
     ctx.model            = model_;
 
-    char json[1024];
-    int n = buildPacketJson(json, sizeof(json), packet, /*is_tx=*/false,
-                            rssi, snr, score, duration, ctx);
-    if (n <= 0 || static_cast<size_t>(n) >= sizeof(json)) return 0;
+    // #727: store the PACKET RECORD, not the rendered body. The JSON embeds
+    // "raw":"<packet in hex>", and hex doubles the packet before ~316 B of
+    // fields are added -- a 255 B packet rendered to ~826 B, so every ring slot
+    // had to be sized for that. The record is ~296 B. Rendering moves to
+    // drainBroker(). Published bytes are unchanged.
+    //
+    // rx_time is captured HERE, at receive. Rendering at drain with
+    // time(nullptr) would stamp a backlogged broker's messages with the drain
+    // time -- wrong in exactly the rotated-out case the ring exists for.
+    PacketRecord rec;
+    fillPacketRecord(rec, packet, rssi, snr, score, duration,
+                     static_cast<uint32_t>(time(nullptr)));
+    if (rec.raw_len == 0) return 0;   // unserialisable packet
 
-    return publishPacket(reinterpret_cast<const uint8_t*>(json),
-                         static_cast<size_t>(n));
+    return publishPacket(reinterpret_cast<const uint8_t*>(&rec), sizeof(rec));
 }
 
 // ---------------------------------------------------------------------------

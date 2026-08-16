@@ -22,6 +22,11 @@
 
 namespace offband {
 
+// #727: MqttPayload.h restates the hash size to avoid including MeshCore.h.
+// Pin it to the real definition here, where MeshCore.h IS in scope.
+static_assert(kPacketHashSize == MAX_HASH_SIZE,
+              "kPacketHashSize must track MeshCore's MAX_HASH_SIZE");
+
 // ---------------------------------------------------------------------------
 // Helpers — ported verbatim from MqttUplink.cpp:371-456
 // ---------------------------------------------------------------------------
@@ -211,25 +216,48 @@ int buildStatusJson(char* buf, size_t buf_size,
 // (MAX_HASH_SIZE). The host test harness in Task 5 skips packet tests; if
 // needed later, a stub Packet in the harness can re-enable host-side tests.
 
-int buildPacketJson(char* buf, size_t buf_size,
-                    const mesh::Packet& packet, bool is_tx,
-                    int rssi, float snr, int score, int duration,
-                    const MqttPayloadCtx& ctx) {
+// #727: capture what the body needs while the packet is still alive.
+void fillPacketRecord(PacketRecord& rec, const mesh::Packet& packet,
+                      int rssi, float snr, int score, int duration,
+                      uint32_t rx_time) {
+    memset(&rec, 0, sizeof(rec));
+    rec.rx_time  = rx_time;      // AT RECEIVE -- see the header comment
+    rec.rssi     = rssi;
+    rec.snr      = snr;
+    rec.score    = score;
+    rec.duration = duration;
+    int n = packet.writeTo(rec.raw);
+    rec.raw_len  = (n > 0 && (size_t)n <= sizeof(rec.raw)) ? (uint16_t)n : 0;
+    packet.calculatePacketHash(rec.hash);
+    rec.payload_type    = packet.getPayloadType();
+    rec.payload_len     = packet.payload_len;
+    rec.route_direct    = packet.isRouteDirect() ? 1 : 0;
+    rec.path_hash_count = (uint8_t)packet.getPathHashCount();
+    rec.path_hash_size  = (uint8_t)packet.getPathHashSize();
+    rec.path_byte_len   = (uint8_t)packet.getPathByteLen();
+}
+
+int buildPacketJsonFromRecord(char* buf, size_t buf_size,
+                              const PacketRecord& rec, bool is_tx,
+                              const MqttPayloadCtx& ctx) {
     if (buf == nullptr || buf_size == 0) return -1;
 
-    uint8_t raw[256];
-    int raw_len = packet.writeTo(raw);
+    const int   raw_len = (int)rec.raw_len;
+    const int   rssi    = (int)rec.rssi;
+    const float snr     = rec.snr;
+    const int   score   = (int)rec.score;
+    const int   duration = (int)rec.duration;
+
     // Stack buffer instead of heap alloc (vendored used allocScratchBuffer(520);
     // 520 bytes is well within ESP32 task stack budget).
     char raw_hex[520];
-    bytesToHexUpper(raw, raw_len, raw_hex, sizeof(raw_hex));
+    bytesToHexUpper(rec.raw, (size_t)raw_len, raw_hex, sizeof(raw_hex));
 
-    uint8_t packet_hash[MAX_HASH_SIZE];
-    packet.calculatePacketHash(packet_hash);
     char hash_hex[(MAX_HASH_SIZE * 2) + 1];
-    bytesToHexUpper(packet_hash, MAX_HASH_SIZE, hash_hex, sizeof(hash_hex));
+    bytesToHexUpper(rec.hash, MAX_HASH_SIZE, hash_hex, sizeof(hash_hex));
 
-    time_t now = time(nullptr);
+    // #727: the RECEIVE time, not time(nullptr). Drain can be a dwell later.
+    time_t now = (time_t)rec.rx_time;
     char ts[32];
     formatIsoTimestamp(now, ts, sizeof(ts));
     struct tm tm_utc;
@@ -251,12 +279,12 @@ int buildPacketJson(char* buf, size_t buf_size,
 
     const char* device_id = ctx.device_id != nullptr ? ctx.device_id : "";
 
-    if (packet.isRouteDirect() && packet.path_len > 0) {
+    if (rec.route_direct && rec.path_byte_len > 0) {
         char path_info[128];
         snprintf(path_info, sizeof(path_info), "path_%dx%d_%db",
-                 (int)packet.getPathHashCount(),
-                 (int)packet.getPathHashSize(),
-                 (int)packet.getPathByteLen());
+                 (int)rec.path_hash_count,
+                 (int)rec.path_hash_size,
+                 (int)rec.path_byte_len);
         if (score >= 0) {
             return snprintf(buf, buf_size,
                 "{\"origin\":\"%s\",\"origin_id\":\"%s\",\"timestamp\":\"%s\",\"type\":\"PACKET\","
@@ -264,7 +292,7 @@ int buildPacketJson(char* buf, size_t buf_size,
                 "\"route\":\"D\",\"payload_len\":\"%u\",\"raw\":\"%s\",\"SNR\":\"%.1f\",\"RSSI\":\"%d\","
                 "\"score\":\"%d\",\"duration\":\"%d\",\"hash\":\"%s\",\"path\":\"%s\"}",
                 origin, device_id, ts, is_tx ? "tx" : "rx", time_only, date_only, raw_len,
-                packet.getPayloadType(), packet.payload_len, raw_hex, snr, rssi, score, duration, hash_hex,
+                rec.payload_type, rec.payload_len, raw_hex, snr, rssi, score, duration, hash_hex,
                 path_info);
         }
         return snprintf(buf, buf_size,
@@ -273,7 +301,7 @@ int buildPacketJson(char* buf, size_t buf_size,
             "\"route\":\"D\",\"payload_len\":\"%u\",\"raw\":\"%s\",\"SNR\":\"%.1f\",\"RSSI\":\"%d\","
             "\"hash\":\"%s\",\"path\":\"%s\"}",
             origin, device_id, ts, is_tx ? "tx" : "rx", time_only, date_only, raw_len,
-            packet.getPayloadType(), packet.payload_len, raw_hex, snr, rssi, hash_hex, path_info);
+            rec.payload_type, rec.payload_len, raw_hex, snr, rssi, hash_hex, path_info);
     }
 
     if (score >= 0) {
@@ -283,7 +311,7 @@ int buildPacketJson(char* buf, size_t buf_size,
             "\"route\":\"F\",\"payload_len\":\"%u\",\"raw\":\"%s\",\"SNR\":\"%.1f\",\"RSSI\":\"%d\","
             "\"score\":\"%d\",\"duration\":\"%d\",\"hash\":\"%s\"}",
             origin, device_id, ts, is_tx ? "tx" : "rx", time_only, date_only, raw_len,
-            packet.getPayloadType(), packet.payload_len, raw_hex, snr, rssi, score, duration, hash_hex);
+            rec.payload_type, rec.payload_len, raw_hex, snr, rssi, score, duration, hash_hex);
     }
     return snprintf(buf, buf_size,
         "{\"origin\":\"%s\",\"origin_id\":\"%s\",\"timestamp\":\"%s\",\"type\":\"PACKET\","
@@ -291,7 +319,7 @@ int buildPacketJson(char* buf, size_t buf_size,
         "\"route\":\"F\",\"payload_len\":\"%u\",\"raw\":\"%s\",\"SNR\":\"%.1f\",\"RSSI\":\"%d\","
         "\"hash\":\"%s\"}",
         origin, device_id, ts, is_tx ? "tx" : "rx", time_only, date_only, raw_len,
-        packet.getPayloadType(), packet.payload_len, raw_hex, snr, rssi, hash_hex);
+        rec.payload_type, rec.payload_len, raw_hex, snr, rssi, hash_hex);
 }
 
 int buildRawJson(char* buf, size_t buf_size,
@@ -328,10 +356,17 @@ int buildRawJson(char* buf, size_t buf_size,
        // The host test harness in Task 5 provides a stub mesh::Packet definition;
        // the linker resolves these stubs OR the harness's own packet builders.
 
-int buildPacketJson(char* buf, size_t buf_size,
-                    const mesh::Packet& /*packet*/, bool /*is_tx*/,
-                    int /*rssi*/, float /*snr*/, int /*score*/, int /*duration*/,
-                    const MqttPayloadCtx& /*ctx*/) {
+void fillPacketRecord(PacketRecord& rec, const mesh::Packet& /*packet*/,
+                      int rssi, float snr, int score, int duration,
+                      uint32_t rx_time) {
+    memset(&rec, 0, sizeof(rec));
+    rec.rx_time = rx_time; rec.rssi = rssi; rec.snr = snr;
+    rec.score = score; rec.duration = duration;
+}
+
+int buildPacketJsonFromRecord(char* buf, size_t buf_size,
+                              const PacketRecord& /*rec*/, bool /*is_tx*/,
+                              const MqttPayloadCtx& /*ctx*/) {
     if (buf == nullptr || buf_size == 0) return -1;
     return snprintf(buf, buf_size, "{\"type\":\"PACKET-host-stub\"}");
 }

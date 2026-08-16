@@ -84,10 +84,58 @@ int buildStatusJson(char* buf, size_t buf_size,
 
 // Packet JSON. score == -1 means "omit score/duration fields" (matches
 // the vendored two-variant behavior).
-int buildPacketJson(char* buf, size_t buf_size,
-                    const mesh::Packet& packet, bool is_tx,
-                    int rssi, float snr, int score, int duration,
-                    const MqttPayloadCtx& ctx);
+// ---------------------------------------------------------------------------
+// PacketRecord (#727)
+// ---------------------------------------------------------------------------
+// What the publish ring stores, INSTEAD of a rendered JSON body.
+//
+// The ring used to hold the finished /packets JSON. That body embeds
+// "raw":"<whole packet in hex>", and hex DOUBLES the packet before ~316 B of
+// fields are layered on -- so a 255 B packet became an ~826 B body and every
+// ring slot had to be sized for that. This record is the same information
+// before rendering: ~296 B instead of ~826 B, so slots shrink ~3x.
+//
+// rx_time IS PART OF THE RECORD ON PURPOSE. Rendering moved to drain time, and
+// drain can happen a full rotation dwell after the packet arrived. Calling
+// time(nullptr) during the render would stamp a backlogged broker's messages
+// with the DRAIN time -- silently wrong timestamps in exactly the rotated-out
+// case the ring exists to serve. Capture at receive, carry it through.
+//
+// POD by design: it is memcpy'd into the ring as opaque bytes.
+// MeshCore's MAX_HASH_SIZE, restated rather than #included: this header only
+// forward-declares mesh::Packet on purpose, to stay light. A static_assert in
+// MqttPayload.cpp pins this to the real value, so the two cannot drift.
+static constexpr size_t kPacketHashSize = 8;
+
+struct PacketRecord {
+    uint32_t rx_time;                  // unix seconds, captured AT RECEIVE
+    int32_t  rssi;
+    float    snr;
+    int32_t  score;
+    int32_t  duration;
+    uint8_t  hash[kPacketHashSize];      // precomputed: the packet is not kept
+    uint8_t  payload_type;
+    uint8_t  payload_len;
+    uint8_t  route_direct;             // 1 = direct route, 0 = flood
+    uint8_t  path_hash_count;
+    uint8_t  path_hash_size;
+    uint8_t  path_byte_len;
+    uint16_t raw_len;
+    uint8_t  raw[256];
+};
+
+// Capture everything the /packets body needs from a live packet, so the packet
+// itself does not have to survive until publish time.
+void fillPacketRecord(PacketRecord& rec, const mesh::Packet& packet,
+                      int rssi, float snr, int score, int duration,
+                      uint32_t rx_time);
+
+// Render the /packets body from a stored record. Byte-identical output to
+// buildPacketJson() for the same packet -- consumers see no change (#727).
+int buildPacketJsonFromRecord(char* buf, size_t buf_size,
+                              const PacketRecord& rec, bool is_tx,
+                              const MqttPayloadCtx& ctx);
+
 
 // Raw packet JSON (hex-encoded bytes only, minimal envelope).
 int buildRawJson(char* buf, size_t buf_size,
