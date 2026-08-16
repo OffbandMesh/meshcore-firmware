@@ -247,17 +247,37 @@ void NV3001BDisplay::setAddrWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t 
   writeCommand(NV3001B_RAMWR);
 }
 
+// #745: bulk fill. This is the primitive behind startFrame(), clear() and
+// fillRect(), so it runs on every UI update -- and startFrame() blanks the whole
+// panel, which is 220 x 128 = 28,160 px.
+//
+// It used to push ONE BYTE PER spi.transfer() call:
+//
+//     while (count--) { spi.transfer(hi); spi.transfer(lo); }
+//
+// i.e. 56,320 separate transfer calls for a single full-screen fill, each with
+// its own per-call overhead on top of the 8 MHz clock. That cost is paid on
+// every render and is a large part of the visible flicker.
+//
+// SPIClass::writePattern() is the core primitive built for exactly this case: it
+// packs whole copies of the pattern into the 64-byte hardware FIFO and loops
+// (framework-arduinoespressif32/libraries/SPI/src/SPI.cpp:306). A 2-byte pattern
+// gives 32 pixels per FIFO load, so the same full-screen fill becomes ~880 FIFO
+// transactions instead of 56,320 byte transfers -- and it needs no intermediate
+// buffer, so there is no RAM cost.
+//
+// NOTE writePattern() refuses sizes > 64 bytes (max FIFO); 2 is well inside that.
+// A DMA path could go faster still, but that wants the back buffer from #743 to
+// be worth it -- this change is deliberately buffer-free and self-contained.
 void NV3001BDisplay::writeColor(uint16_t rgb, uint32_t count) {
-  uint8_t hi = rgb >> 8;
-  uint8_t lo = rgb & 0xff;
+  if (count == 0) return;
+
+  const uint8_t pattern[2] = { (uint8_t)(rgb >> 8), (uint8_t)(rgb & 0xff) };
 
   spi.beginTransaction(SPISettings(SPI_FREQUENCY, MSBFIRST, SPI_MODE0));
   digitalWrite(PIN_TFT_DC, HIGH);
   digitalWrite(PIN_TFT_CS, LOW);
-  while (count--) {
-    spi.transfer(hi);
-    spi.transfer(lo);
-  }
+  spi.writePattern(pattern, sizeof(pattern), count);
   digitalWrite(PIN_TFT_CS, HIGH);
   spi.endTransaction();
 }
