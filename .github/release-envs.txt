@@ -85,6 +85,11 @@ t1000e_companion_radio_usb
 t1000e_repeater
 t1000e_room_server
 
+# Heltec Vision Master E290 (ESP32-S3, 2.9" e-ink) -- companion only (#733);
+# repeater/room_server/espnow/kiss deferred by owner
+Heltec_E290_companion_ble
+Heltec_E290_companion_usb
+
 # Heltec T096 (nRF52)
 Heltec_t096_companion_radio_ble
 Heltec_t096_companion_radio_usb
