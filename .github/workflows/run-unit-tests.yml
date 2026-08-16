@@ -31,7 +31,7 @@ jobs:
           echo "PIO_SECRETS_FILE=$RUNNER_TEMP/ci-secrets.ini" >> "$GITHUB_ENV"
 
       - name: Run Unit Tests
-        run: pio test -e native -e native_kiss_modem -vv
+        run: pio test -e native -e native_kiss_modem -e native_wifi_clear -vv
 
       - name: Upload Test Results
         # Upload test results even if the test step failed.

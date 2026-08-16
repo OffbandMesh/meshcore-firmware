@@ -32,8 +32,37 @@ size_t ArduinoSerialInterface::writeFrame(const uint8_t src[], size_t len) {
   hdr[1] = (len & 0xFF);  // LSB
   hdr[2] = (len >> 8);    // MSB
 
-  _serial->write(hdr, 3);
-  return _serial->write(src, len);
+  // #718: ALL OR NOTHING. This transport is deliberately non-blocking on a companion
+  // USB build -- main.cpp sets Serial.setTxTimeoutMs(0) (#149) so a host that stops
+  // draining cannot stall the loop and starve BLE servicing. A non-blocking write
+  // therefore returns SHORT when the TX FIFO is full.
+  //
+  // Dropping bytes is correct for the debug mirror and CORRUPTING here: this is a
+  // length-prefixed protocol. Emitting the header and then a partial payload leaves
+  // the receiver counting toward bytes that never arrive, so it consumes the NEXT
+  // frame's header as filler and the stream desyncs. Observed over USB serial as a
+  // caplog download delivering 545 of an announced 1067 bytes with a complete
+  // '>' 0xB0 0x00 0xC4 0x02 header spliced inside a payload.
+  //
+  // So: refuse rather than truncate. Returning 0 without touching the wire keeps the
+  // stream parseable and lets the caller retry the SAME frame on a later pass, which
+  // is non-blocking in exactly the way #149 requires.
+  const size_t frame_len = 3 + len;
+  const int writable = _serial->availableForWrite();
+  if (writable >= 0 && (size_t)writable < frame_len) {
+    return 0;   // caller MUST NOT treat this as sent
+  }
+
+  // These two short-write branches should be RARE rather than impossible: capacity was
+  // just checked, but availableForWrite() is a snapshot and nothing here holds a lock,
+  // so a concurrent writer (the debug console shares this Stream on some roles) can
+  // consume room in between. Returning 0 is still right -- the caller retries, and the
+  // receiver's decoder resyncs on the next '>' rather than trusting a bad length.
+  if (_serial->write(hdr, 3) != 3) {
+    return 0;
+  }
+  const size_t n = _serial->write(src, len);
+  return n == len ? n : 0;
 }
 
 size_t ArduinoSerialInterface::checkRecvFrame(uint8_t dest[]) {

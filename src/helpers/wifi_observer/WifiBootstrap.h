@@ -39,6 +39,23 @@ public:
 
     WifiBootstrapState state() const { return state_; }
 
+    // #696: STA association diagnostics. Before this, a failed
+    // association surfaced only as StaConnecting forever, with no
+    // reason anywhere -- the field had no way to tell "SSID never
+    // matched" from "PSK rejected" (#692). The ESP32 already
+    // produces a reason code on every disconnect; these expose it.
+    //
+    // 0 means "no disconnect event seen yet" -- WIFI_REASON_* has no
+    // zero member, so it is unambiguous as a sentinel.
+    uint8_t  lastDisconnectReason() const;
+    uint32_t staRetryCount() const { return sta_retry_count_; }
+
+    // Short name for a WIFI_REASON_* code, e.g. 201 -> "NO_AP_FOUND".
+    // Returns nullptr for codes not in the table, so callers can fall
+    // back to printing the bare number rather than a misleading label.
+    // Pure + static: host-testable without WiFi (see test_wifi_reason).
+    static const char* disconnectReasonName(uint8_t reason);
+
 private:
     WifiBootstrapState state_ = WifiBootstrapState::Boot;
     uint32_t sta_retry_count_ = 0;

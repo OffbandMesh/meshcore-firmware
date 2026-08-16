@@ -349,6 +349,13 @@ private:
   bool    _caplog_streaming;
   size_t  _caplog_off;
   bool    _caplog_resume;   // capture-enabled state to restore when the download ends
+  // #718: millis() of the last CHUNK the transport actually accepted. A transport may
+  // now REFUSE a frame it cannot deliver whole, and the drain re-offers the same bytes
+  // rather than skipping them -- so a host that stops draining would otherwise leave
+  // _caplog_streaming true forever, which also blocks ENABLE/DISABLE/ERASE (the guard
+  // in handleCmdFrame). Timed on PROGRESS, not total duration, so a legitimately slow
+  // but advancing download is never cut off.
+  uint32_t _caplog_last_progress;
   uint8_t app_target_ver;
   uint8_t *sign_data;
   uint32_t sign_data_len;

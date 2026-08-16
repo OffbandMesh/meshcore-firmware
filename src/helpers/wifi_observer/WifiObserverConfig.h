@@ -35,9 +35,9 @@
 // ---------------------------------------------------------------------------
 // Hard ceiling on configurable broker slots. Plan 2 introduced the
 // configurable NVS-backed list; #95 raised the ceiling from 6 to 10 so the
-// pre-seeded public brokers (CoreScope + LetsMesh US/EU + Eastme.sh +
-// MeshMapper + Eastmesh.au = 6 slots, slots 0-5) leave four free slots (6-9)
-// for operator-custom brokers.
+// pre-seeded public brokers (under the #317/#677 layout: OKIMesh x2 +
+// MeshMapper + CoreComms.net + Eastmesh.au = 5 slots, slots 0-4) leave five
+// free slots (5-9) for operator-custom brokers.
 //
 // Static cost: MqttBrokerPool holds brokers_[OFFBAND_MAX_BROKERS], and
 // BrokerConfig is ~1.2 KB/slot (jwt_token[512] dominates), so 10 slots is

@@ -277,12 +277,25 @@ size_t SerialBLEInterface::maxFrameSize() const {
   // #453: a single BLE notification carries the negotiated ATT MTU - 3 (ATT header).
   // Cap to that, never above MAX_FRAME_SIZE. Fall back to the BLE minimum (23-3=20)
   // when not connected so a pre-negotiation frame is never clipped.
-  uint16_t mtu = 23;
+  //
+  // #711: this deliberately shares ble_frame::deliverableFrame() with the ESP32 path
+  // rather than keeping a second hand-written copy of the same arithmetic -- the
+  // divergent copy is what let the ESP32 side regress unnoticed. The shared function is
+  // unit-tested in test/test_frame_size.
+  //
+  // NOTE the asymmetry, which is intentional: ESP32 must clamp with
+  // ble_frame::effectiveMtu() because NimBLE reports the PEER's MTU and begin() pins our
+  // local side via NimBLEDevice::setMTU(). Here, Bluefruit's conn->getMtu() is the
+  // CONNECTION's negotiated MTU (already min(local, peer)), and this port sets no explicit
+  // local MTU, so there is no second value to clamp against. Do NOT invent one: passing a
+  // guessed local MTU into effectiveMtu() would silently shrink frames on healthy links.
+  // If conn->getMtu() is ever found to report a peer-preferred value instead, THAT is the
+  // bug to fix, and it should be fixed by clamping against a real configured local MTU.
+  uint16_t mtu = ble_frame::MIN_ATT_MTU;
   BLEConnection* conn = (_conn_handle != BLE_CONN_HANDLE_INVALID)
                           ? Bluefruit.Connection(_conn_handle) : nullptr;
   if (conn != nullptr && conn->connected()) mtu = conn->getMtu();
-  uint16_t payload = mtu > 3 ? (uint16_t)(mtu - 3) : 0;
-  return payload < MAX_FRAME_SIZE ? (size_t)payload : (size_t)MAX_FRAME_SIZE;
+  return ble_frame::deliverableFrame(mtu, MAX_FRAME_SIZE);
 }
 
 size_t SerialBLEInterface::writeFrame(const uint8_t src[], size_t len) {

@@ -43,7 +43,7 @@ public:
     MqttBrokerPool& operator=(const MqttBrokerPool&) = delete;
 
     // Initialize the pool. Calls populateDefaultBrokers() (idempotent;
-    // seeds slots 0-2 with EastMesh/LetsMesh defaults if empty), then
+    // seeds slots 0-4 with the public-broker defaults if empty), then
     // reads each slot's config and brings up brokers where enabled.
     //
     // device_id / node_name / version strings are stored for later
@@ -92,7 +92,7 @@ public:
     // PARSED mesh::Packet + rssi/snr/score/duration. Pool builds the
     // parsed-field JSON ONCE via buildPacketJson (route, payload_type,
     // dedupe hash, path, ...) then fans out per-broker via publishPacket.
-    // This is the CoreScope/EastMesh-ingested topic. Fed by MyMesh::logRx
+    // This is the CoreScope/CoreComms.net-ingested topic. Fed by MyMesh::logRx
     // (the post-parse hook) -- unlike publishRawFromBytes which is fed by
     // the pre-parse logRxRaw hook and can only emit /raw.
     uint8_t publishParsedPacket(const mesh::Packet& packet, int rssi,
@@ -116,6 +116,10 @@ public:
     // value means that broker is misbehaving -- see the issue's overflow note.
     uint32_t brokerLag(uint8_t slot) const { return ring_.lag(slot); }
     bool     brokerLapped(uint8_t slot) const { return ring_.lapped(slot); }
+    // #710: monotonic count of messages destroyed by writer overrun before this
+    // broker consumed them. Unlike brokerLapped(), does not reset when the broker
+    // catches up -- the boolean erases its own evidence on drain.
+    uint32_t brokerDropped(uint8_t slot) const { return ring_.droppedCount(slot); }
     // #173: the device's own pubkey as UPPERCASE hex (the connect-time default for a
     // broker's jwt_owner when none is set, #95) -- so the OCFG_BROKERS dump can show
     // the resolved owner as a placeholder. Writes "" if identity unset / host build.
@@ -155,6 +159,32 @@ private:
     // freed budget instead of the victim immediately reclaiming it. 0 = not
     // cooling. Compared wrap-safe via (int32_t)(deadline - now).
     uint32_t rotated_out_until_ms_[OFFBAND_MAX_BROKERS] = {0};
+    // #708: fair promotion state. service_epoch_ increments on each TLS
+    // bring-up; last_served_epoch_[s] records when slot s last got the budget
+    // (0 = never served, so a fresh slot outranks everyone). A counter, not a
+    // timestamp -- no millis() wraparound to reason about.
+    uint32_t service_epoch_ = 0;
+    uint32_t last_served_epoch_[OFFBAND_MAX_BROKERS] = {0};
+    // #708 (Gemini review): service is stamped on the transition INTO Up, not on
+    // Connecting. esp_mqtt_client_start() is async and the handshake runs 1-8 s
+    // (measured), so a broker that reaches Connecting and then fails TLS would
+    // have burned its turn without publishing. Worker-task-owned.
+    BrokerState last_known_state_[OFFBAND_MAX_BROKERS] = {};
+    // #710 (Gemini review): a broker attaching after traffic has started inherits
+    // the whole ring backlog -- it replays stale packets and its drop counter is
+    // polluted with boot-time loss. It must resync to the head.
+    //
+    // The worker sets this flag; loopTask performs the ring_.resync(). Gemini
+    // proposed calling resync() directly in reconcileSlot(), but reconcileSlot
+    // runs on the WORKER task and 'the worker task does NOT touch the ring' is
+    // the invariant that keeps the ring lock-free (1f9da010). This hand-off keeps
+    // every ring access on loopTask.
+    std::atomic<bool> pending_resync_[OFFBAND_MAX_BROKERS] = {};
+    // #723: true once a slot has attached a client at least once. Gates the
+    // resync above so it fires on FIRST attach only -- a rotation re-entry must
+    // KEEP its cursor so the backlog queued while it was away still drains.
+    // Worker-task-owned (only reconcileSlot touches it).
+    bool first_attach_done_[OFFBAND_MAX_BROKERS] = {};
     void rotateTlsIfDue(uint32_t now_ms);
 
     // Per-slot guard: true while the lifecycle worker is creating/destroying
