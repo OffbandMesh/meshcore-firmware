@@ -28,11 +28,20 @@ enum class BrokerState : uint8_t {
     HeldNoClock = 4,  // #87: wss/TLS deferred pending a sane wall clock (NTP/GPS).
                       // NOT a failure -- no retry burned; released automatically on
                       // the next drive tick once wallClockSane() becomes true.
-    HeldNoHeap  = 5,  // #171: wss/TLS bring-up deferred -- the pool's TLS budget is
-                      // full (>= OFFBAND_MAX_LIVE_TLS live) or free heap is below
-                      // the floor. NOT a failure -- no retry burned; released on a
-                      // later drive tick once a TLS slot frees or heap recovers
-                      // (mirrors HeldNoClock).
+    HeldNoHeap  = 5,  // #171: wss/TLS bring-up deferred because FREE HEAP is below
+                      // OFFBAND_TLS_HEAP_FLOOR_BYTES. Real resource pressure --
+                      // rare. NOT a failure: no retry burned; released on a later
+                      // drive tick once heap recovers (mirrors HeldNoClock).
+    HeldBudget  = 6,  // #715: wss/TLS bring-up deferred because the pool already
+                      // holds OFFBAND_MAX_LIVE_TLS live TLS contexts -- this broker
+                      // is simply WAITING ITS TURN in normal rotation. Heap is fine.
+                      //
+                      // Split out of HeldNoHeap, which covered both and was named
+                      // after the rarer one. With any multi-broker setup this is the
+                      // overwhelmingly common case, and reporting it as a memory
+                      // problem caused repeated real-world misdiagnosis -- including
+                      // the field report that sent us heap-trimming for a scheduling
+                      // defect. Do NOT re-merge these.
 };
 
 enum class BrokerErrorClass : uint8_t {

@@ -84,10 +84,55 @@ int buildStatusJson(char* buf, size_t buf_size,
 
 // Packet JSON. score == -1 means "omit score/duration fields" (matches
 // the vendored two-variant behavior).
-int buildPacketJson(char* buf, size_t buf_size,
-                    const mesh::Packet& packet, bool is_tx,
-                    int rssi, float snr, int score, int duration,
-                    const MqttPayloadCtx& ctx);
+// ---------------------------------------------------------------------------
+// PacketRecord (#727)
+// ---------------------------------------------------------------------------
+// What the publish ring stores, INSTEAD of a rendered JSON body.
+//
+// The ring used to hold the finished /packets JSON. That body embeds
+// "raw":"<whole packet in hex>", and hex DOUBLES the packet before ~316 B of
+// fields are layered on -- so a 255 B packet became an ~826 B body and every
+// ring slot had to be sized for that. This record is the same information
+// before rendering: ~296 B instead of ~826 B, so slots shrink ~3x.
+//
+// rx_time IS PART OF THE RECORD ON PURPOSE. Rendering moved to drain time, and
+// drain can happen a full rotation dwell after the packet arrived. Calling
+// time(nullptr) during the render would stamp a backlogged broker's messages
+// with the DRAIN time -- silently wrong timestamps in exactly the rotated-out
+// case the ring exists to serve. Capture at receive, carry it through.
+//
+// POD by design: it is memcpy'd into the ring as opaque bytes.
+//
+// #727 sec4: holds ONLY what a consumer reads off /packets. CoreScope (and every
+// fork of it -- CoreComms/EastMesh included, confirmed from public source)
+// decodes the raw hex itself and reads none of the parsed fields, so
+// packet_type / payload_len / route / path / hash / len / time / date /
+// duration / origin_id were computed on-device and thrown away. Dropping them
+// removes the on-device parse, shrinks the record, and kills a class of "we
+// compute it and no one reads it" bugs -- the packet hash being the poster child
+// (a SHA256 per packet, discarded).
+struct PacketRecord {
+    uint32_t rx_time;                  // unix seconds, captured AT RECEIVE
+    int32_t  rssi;
+    float    snr;
+    int32_t  score;                    // <0 => omit the score field
+    uint16_t raw_len;
+    uint8_t  raw[256];
+};
+
+// Capture everything the /packets body needs from a live packet, so the packet
+// itself does not have to survive until publish time. (`duration` is accepted
+// for call-site compatibility but no longer stored -- no consumer reads it.)
+void fillPacketRecord(PacketRecord& rec, const mesh::Packet& packet,
+                      int rssi, float snr, int score, int duration,
+                      uint32_t rx_time);
+
+// Render the /packets body from a stored record. Byte-identical output to
+// buildPacketJson() for the same packet -- consumers see no change (#727).
+int buildPacketJsonFromRecord(char* buf, size_t buf_size,
+                              const PacketRecord& rec, bool is_tx,
+                              const MqttPayloadCtx& ctx);
+
 
 // Raw packet JSON (hex-encoded bytes only, minimal envelope).
 int buildRawJson(char* buf, size_t buf_size,
