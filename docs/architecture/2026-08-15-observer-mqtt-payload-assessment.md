@@ -89,8 +89,11 @@ A whole-repo grep for `packet_type`, `payload_len`, `route`, `path`, `hash`, `le
 
 CoreScope subscribes `meshcore/#` (`main.go:150`) so it *receives* `/raw`, but the entire
 packet branch is gated on `rawHex, _ := msg["raw"]; if rawHex != ""` (`main.go:650-651`).
-Our `/raw` puts hex under `data`; `msg["data"]` is read nowhere. **`/raw` messages fall
-through unused.** We publish every packet twice and CoreScope consumes one.
+Our `/raw` puts hex under `data`; `msg["data"]` is read nowhere. **`/raw` messages fall through unused BY CORESCOPE.** Correction to an earlier draft:
+`/raw` is not dead weight ecosystem-wide -- agessaman's observer docs document it as
+"minimal raw packet data for map integration", and 167 `/raw` messages appeared in the
+live firehose (see §7b). It is CoreScope specifically that ignores it. Do not drop `/raw`
+on the assumption that no one reads it.
 
 ### 4.3 Our on-device hash is unused — CONFIRMED
 
@@ -239,9 +242,71 @@ time — silently wrong timestamps in exactly the rotated-out case the ring exis
 Dropping the unread fields (§6) remains worthwhile but is now a *separate, optional*
 follow-up rather than the main prize, and it stays blocked per §7.
 
+## 7b. Live firehose survey (mqtt1.okimesh.org, anonymous, ~2.5 min)
+
+Subscribed to `meshcore/#` on the OKI broker -- no credentials, read-only, the fleet's own
+traffic. 103 distinct publishers, 11 distinct key-sets.
+
+**The field set is already NON-UNIFORM in the wild:**
+
+| Publisher | duration | score | path |
+|---|---|---|---|
+| AA4KY Erlanger | yes | yes | no |
+| Anderson | **no** | yes | no |
+| NR8O Observer | **no** | **no** | no |
+| Sigsoldier Base | yes | yes | **yes** |
+
+A third of observed publishers omit `duration`/`score`/`path`, and every consumer ingests
+them fine -- so **no consumer can be REQUIRING those three.** Proven by the ecosystem, not
+by opinion.
+
+`packet_type`/`payload_len`/`route`/`hash`/`len`/`time`/`date`/`origin_id` were universal
+across all 103 publishers -- so the firehose alone says nothing about whether they are
+*required*, only that they are *sent*. That gap is closed by §7c.
+
+Also observed: every publisher double-publishes `/raw` (167 msgs) alongside `/packets`
+(304). That is inherited upstream behaviour, not an Offband quirk.
+
+## 7c. CoreComms/EastMesh runs CoreScope -- confirmed from public source
+
+The consumer question is settled without asking CoreComms and without minting any token.
+
+1. **CoreScope is open source:** github.com/Kpa-clawbot/CoreScope (1,463+ issues -- an
+   actively-tracked project, not a silent hard fork).
+2. **CoreComms/EastMesh self-identify as running it.** `map.eastme.sh` 301-redirects to
+   `us-east.corecomms.net` (same operator, #677 rebrand), and the public EastMesh firmware
+   repo (github.com/xJARiD/MeshCore-EastMesh) points telemetry at `core.eastmesh.au`,
+   described as "CoreScope".
+3. **The ingestor provably decodes `raw` itself.** Read directly from
+   `cmd/ingestor/main.go` on the public repo:
+   ```
+   rawHex, _ := msg["raw"].(string)
+   decoded, err := DecodePacket(rawHex, channelKeys, validateSigs)
+   ```
+   Keys actually read: `raw`, `timestamp`, `region`, `SNR`/`snr`, `RSSI`/`rssi`,
+   `score`/`Score`, `direction`/`Direction`, `origin`. Observer identity is the topic
+   segment `parts[2]`. `packet_type`/`payload_len`/`route`/`path`/`hash`/`len`/`time`/`date`/
+   `duration`/`origin_id` are ALL derived from the decode -- never read from JSON.
+
+**Why a fork does not reopen this:** a CoreScope fork adds frontend and features on top of
+the ingestor. Removing `DecodePacket` and rewriting the entire packet-semantics layer to
+parse our JSON instead would be tearing out the engine to do more work for a worse result.
+The MQTT ingest path is the one part a fork has every reason to leave intact.
+
+### Key-backup note (for the record)
+The owner offered device key backups (`C:\Dev\.keys\MeshCore-Exports`) to mint a JWT and
+read the CoreComms firehose directly. On inspection those MeshCore client exports carry the
+device PUBLIC key + contact pubkeys + channel AES secrets, but **no Ed25519 private key** --
+the signing key stays on the device and is not in the config backup. Moot anyway: the public
+source (§7c) answered the question without needing to subscribe.
+
 ## 8. Decision
 
-**BLOCKED.** No payload field is removed until CoreComms confirms.
+**UNBLOCKED (2026-08-16).** CoreComms/EastMesh run CoreScope, whose ingestor decodes
+`raw` itself and reads none of the parsed fields (§7c, confirmed from public source).
+The parsed fields may be dropped. A single-node live test (enable slot 3 on a slimmed
+build, confirm the node appears on map.corecomms.net) is the optional belt-and-suspenders
+check, not a precondition.
 
 The question for them is narrow:
 
