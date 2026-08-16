@@ -26,6 +26,43 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
   backlog the ring exists to hold. On an observer with rotating TLS brokers this silently
   dropped most of the feed, and the drop counter read zero throughout because a resync is
   a deliberate skip, not an overrun. Resync now happens on first attach only.
+- **Observer packets over ~98 bytes were silently discarded** (#726): the `/packets`
+  JSON builder renders up to 1024 bytes but the publish ring only accepted 512, and a
+  refused append counted nothing anywhere. Hex-encoding doubles the packet, so anything
+  over ~98 bytes of air time simply vanished — present since the ring was introduced
+  (#175), found in the field on beta1 by a tester whose observer published one small
+  message and silently dropped the two larger ones. The ring now accepts what the
+  builder produces, and a compile-time assert makes the size mismatch a build error
+  rather than a silent refusal.
+- **BLE transfers no longer lose 3 bytes per full frame** (#711): a regression of #450,
+  reintroduced by #454 — when the cached peer MTU was ≥ 179, every full BLE frame was
+  sized 3 bytes over what the link delivers and the stack clipped the tail. Caplog
+  downloads noticed (they announce a byte total); every other chunked path clipped
+  silently. Frame sizing is now pinned by a regression test that fails without the fix.
+  Not yet device-verified — that is what this beta is for.
+- **Framed serial writes are all-or-nothing** (#718): a short non-blocking write could
+  emit a frame header with no payload behind it, desyncing the stream — corruption, not
+  just loss. A refused frame is now retried whole; nothing partial reaches the wire.
+  Also awaiting device verification on this beta.
+- **Repeater OTA recovers from a stale session** (#676): starting OTA over WiFi tears
+  down a stale server instead of refusing, and the repeater holds off idle light-sleep
+  while a persistent-WiFi window is open so the OTA window stays reachable.
+
+### Changed (beta2)
+- **Observer publish ring reworked; `/packets` payload slimmed** (#727): the ring now
+  stores compact packet records rendered per-broker at publish time instead of
+  pre-rendered JSON — roughly 10 KB less RAM and a 40-deep ring, with receive
+  timestamps captured at receive so a backlogged broker's messages aren't mis-stamped.
+  The `/packets` body now carries the raw packet plus link metadata only: CoreScope and
+  its forks (CoreComms/EastMesh, confirmed from their public ingestor source) decode
+  the raw packet themselves and never read the on-device parsed fields. **If you run a
+  custom `/packets` consumer that read parsed fields, decode from `raw` now.**
+
+### Added (beta2)
+- **Heltec Vision Master E290 builds** (#733): companion BLE + USB for the first e-ink
+  board in the fleet, from the upstream 1.17 variant. The radio/mesh side is stock
+  upstream support; the e-ink display path under the Offband stack is exactly what beta
+  testing needs to prove. Repeater role deferred.
 
 ### Added
 - **`wifi clear` and a visible reason for WiFi disconnects** (#696): an observer on an
