@@ -33,6 +33,18 @@ class NV3001BDisplay : public DisplayDriver {
   int cursor_x = 0;
   int cursor_y = 0;
 
+  // #743: back buffer. Every panel write funnels through fillPhysicalRect(), so
+  // when this is non-null the draw path writes here instead of over SPI and
+  // endFrame() blits the whole thing in one transfer. Pixels are stored
+  // BYTE-SWAPPED (panel wants big-endian RGB565) so the blit is a plain
+  // writeBytes with no per-pixel conversion.
+  // Null is a supported state: allocation failure degrades to the original
+  // direct-to-panel behaviour rather than losing the display (SAFELANE 6).
+  uint16_t* frame_buf = nullptr;
+
+  void allocFrameBuffer();
+  void blitFrameBuffer();
+
   void writeCommand(uint8_t cmd);
   void writeBytes(const uint8_t* data, size_t len);
   void writeCommandData(uint8_t cmd, const uint8_t* data, size_t len);

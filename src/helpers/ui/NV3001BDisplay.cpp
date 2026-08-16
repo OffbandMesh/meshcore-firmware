@@ -397,6 +397,43 @@ void NV3001BDisplay::initPanel() {
 #undef CMD2
 }
 
+// #743: allocate the back buffer. PSRAM first -- the RC32 has 8 MB embedded and
+// SPI at 8 MHz (~1.1 MB/s) is the bottleneck for the blit, not PSRAM read speed,
+// so this costs nothing measurable and keeps 55 KB of internal DRAM free.
+// Falls back to internal, then to direct-to-panel if both fail.
+void NV3001BDisplay::allocFrameBuffer() {
+  const size_t px = (size_t)NV3001B_SCREEN_WIDTH * NV3001B_SCREEN_HEIGHT;
+  const size_t bytes = px * sizeof(uint16_t);
+
+#if defined(BOARD_HAS_PSRAM)
+  frame_buf = (uint16_t*)ps_malloc(bytes);
+#endif
+  if (!frame_buf) frame_buf = (uint16_t*)malloc(bytes);
+
+  if (!frame_buf) {
+    // Loud, not silent (SAFELANE 6). The display still works, just unbuffered
+    // and flickering, so this must not be diagnosed as "the fix didn't work".
+    Serial.printf("NV3001B: back buffer alloc FAILED (%u B) -- direct panel writes, expect flicker\n",
+                  (unsigned)bytes);
+  }
+}
+
+// One transfer for the whole frame. Pixels are already byte-swapped in the
+// buffer, so this is a straight byte blit with no per-pixel work.
+void NV3001BDisplay::blitFrameBuffer() {
+  if (!frame_buf || !is_on) return;
+
+  setAddrWindow(0, 0, NV3001B_SCREEN_WIDTH, NV3001B_SCREEN_HEIGHT);
+
+  spi.beginTransaction(SPISettings(SPI_FREQUENCY, MSBFIRST, SPI_MODE0));
+  digitalWrite(PIN_TFT_DC, HIGH);
+  digitalWrite(PIN_TFT_CS, LOW);
+  spi.writeBytes((const uint8_t*)frame_buf,
+                 (uint32_t)NV3001B_SCREEN_WIDTH * NV3001B_SCREEN_HEIGHT * sizeof(uint16_t));
+  digitalWrite(PIN_TFT_CS, HIGH);
+  spi.endTransaction();
+}
+
 void NV3001BDisplay::fillPhysicalRect(int x, int y, int w, int h) {
   if (!is_on || w <= 0 || h <= 0) return;
 
@@ -411,6 +448,19 @@ void NV3001BDisplay::fillPhysicalRect(int x, int y, int w, int h) {
   if (x + w > NV3001B_SCREEN_WIDTH) w = NV3001B_SCREEN_WIDTH - x;
   if (y + h > NV3001B_SCREEN_HEIGHT) h = NV3001B_SCREEN_HEIGHT - y;
   if (w <= 0 || h <= 0) return;
+
+  // #743: buffered path. This is the ONLY function that touches the panel, so
+  // intercepting it here buffers every draw -- including drawChar(), which calls
+  // this once per lit font pixel and previously cost up to 35 SPI transactions
+  // per character.
+  if (frame_buf) {
+    const uint16_t swapped = (uint16_t)((color >> 8) | (color << 8));
+    for (int row = 0; row < h; row++) {
+      uint16_t* p = frame_buf + (size_t)(y + row) * NV3001B_SCREEN_WIDTH + x;
+      for (int col = 0; col < w; col++) p[col] = swapped;
+    }
+    return;
+  }
 
   setAddrWindow(x, y, w, h);
   writeColor(color, (uint32_t)w * h);
@@ -458,8 +508,10 @@ bool NV3001BDisplay::begin() {
 
   initPanel();
   is_on = true;
+  allocFrameBuffer();   // #743: before the first fill, so it lands in the buffer
   color = 0x0000;
   fillPhysicalRect(0, 0, NV3001B_SCREEN_WIDTH, NV3001B_SCREEN_HEIGHT);
+  blitFrameBuffer();    // push the initial clear -- begin() has no endFrame()
   color = 0xffff;
   text_size = 1;
   cursor_x = 0;
@@ -486,6 +538,10 @@ void NV3001BDisplay::clear() {
   color = UIColor::window_bkg;
   fillPhysicalRect(0, 0, NV3001B_SCREEN_WIDTH, NV3001B_SCREEN_HEIGHT);
   color = saved;
+  // #743: clear() is a standalone operation, not part of a startFrame/endFrame
+  // pair, so it must push its own result -- otherwise with the back buffer
+  // active it would silently do nothing visible.
+  blitFrameBuffer();
 }
 
 void NV3001BDisplay::startFrame(ColorVal bkg) {
@@ -567,5 +623,10 @@ uint16_t NV3001BDisplay::getTextWidth(const char* str) {
   return (uint16_t)((len * 6 * textPixelScaleX(text_size)) / DISPLAY_SCALE_X);
 }
 
+// #743: the frame is drawn into RAM by fillPhysicalRect(); push it here in one
+// transfer. Previously empty -- which is why the panel was erased and redrawn in
+// front of the user on every update. Every sibling driver (SSD1306, SH1106,
+// ST7735, LGFX) already does this; NV3001B and ST7789LCD were the exceptions.
 void NV3001BDisplay::endFrame() {
+  blitFrameBuffer();
 }
