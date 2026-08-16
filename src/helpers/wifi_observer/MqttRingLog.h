@@ -32,35 +32,40 @@
 // This is still one extrapolation deep (hourly average x network burst ratio).
 // droppedCount() now measures it directly -- re-size from real drop counts on a
 // busy observer rather than from this arithmetic.
-// #726: 32 -> 20. MQTT_RING_MSG_MAX had to double (see below) so parsed packets
-// stop being rejected; slot count comes down to pay for it. 20 x 1024 = 20,480 B
-// (+4,096 over the old 32 x 512), which fits the headroom #701 freed.
+// Ring sizing. History matters here -- both numbers below were bugs.
 //
-// Depth trade: 20 messages covers ~3 rotating TLS brokers at the measured busiest
-// observer (3.08/min sustained, ~7.1/min burst); it is marginal at 4+. Dropping the
-// derived JSON fields CoreScope never reads (packet_type/payload_len/route/path/
-// hash/len/time/date, ~130 B) would buy the depth back -- tracked separately.
+// #175 shipped 512 B slots while publishParsedPacket() rendered its /packets JSON
+// into a 1024 B buffer. Every body over 512 B was REFUSED by append() and silently
+// discarded: nothing logged, no counter moved. Because the JSON embeds
+// "raw":"<packet in hex>" and hex doubles the packet, that put the publish ceiling
+// at ~98 BYTES -- a max 255 B MeshCore packet rendered to ~826 B and never reached
+// any broker. Found in the field on v1.5.0-beta1.
+//
+// #726 fixed it by raising the limit to 1024 (slots 32 -> 20 to pay for it), which
+// worked but cost 20,480 B -- most of the headroom #701 freed.
+//
+// #727 fixes the actual problem: the ring was storing the RENDERED BODY. It now
+// stores a PacketRecord (~296 B) and drainBroker() renders per broker, so slots
+// shrink to 320 B:
+//   #175  : 32 x  512 = 16,384 B   (and packets over ~98 B silently dropped)
+//   #726  : 20 x 1024 = 20,480 B
+//   #727  : 32 x  320 = 10,240 B   -- more depth than either, ~10 KB less memory
+// #727 sec4: 40 slots x 288 B = 11,520 B. The slim PacketRecord (276 B measured)
+// freed room to deepen the ring past #727's 32 while staying ~11 KB under the
+// pre-#701 baseline. Fleet data (map.okimesh.org) put the busiest real observer
+// at ~20 slots of sustained need; 40 is burst insurance. Owner-set depth.
 #ifndef MQTT_RING_SLOTS
-  #define MQTT_RING_SLOTS 20
+  #define MQTT_RING_SLOTS 40
 #endif
-// #726: 512 -> 1024. MUST be >= the buffer buildPacketJson() writes into.
-// publishParsedPacket() builds the /packets JSON into char json[1024] and hands it
-// to publishPacket() -> append(). At 512 every payload between 513 and 1023 bytes
-// was REJECTED and silently discarded: append returned 0, nothing logged, no
-// counter moved (droppedCount tracks cursor overrun at commit(), not a refused
-// append). The JSON embeds "raw":"<whole packet in hex>", so with 316 B of other
-// fields the ceiling was ~98 BYTES of packet -- a max 255 B MeshCore packet builds
-// an 826 B body and never reached any broker. Transport-independent: the drop is
-// upstream of broker fan-out, so a plaintext always-on slot was hit identically.
-//
-// Introduced by #175 (62ad4439 added the ring at 512 while the builder already used
-// 1024) and found in the field on v1.5.0-beta1: an observer published the first,
-// smaller message to CoreScope and silently dropped the two larger ones.
-//
-// KEEP THIS >= the json[] buffer in publishParsedPacket(). If that buffer grows,
-// this must grow with it, or the same silent hole reopens.
+// MUST stay >= sizeof(PacketRecord). A static_assert in MqttBrokerPool.cpp enforces
+// it -- #726 was exactly this invariant violated silently, so it is now a compile
+// error rather than a field report.
+// #727 sec4: slim PacketRecord (~276 B, was ~296). MSG_MAX drops to 288 -- the
+// static_assert in MqttBrokerPool.cpp verifies 288 >= sizeof(PacketRecord).
+// Slot COUNT held at 32 pending the owner's depth/memory call with measured
+// sizeof (per the #727 sequencing: shrink first, then size).
 #ifndef MQTT_RING_MSG_MAX
-  #define MQTT_RING_MSG_MAX 1024
+  #define MQTT_RING_MSG_MAX 288
 #endif
 #ifndef MQTT_RING_MAX_READERS
   #define MQTT_RING_MAX_READERS 10
