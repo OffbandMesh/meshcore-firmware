@@ -34,6 +34,15 @@
 // Enable with -D OFFBAND_BOOT_BEACON. Compiles to nothing otherwise, so it is
 // safe to leave the call sites in shipping code.
 
+#if defined(OFFBAND_BOOT_BEACON) && !defined(ESP32)
+// Gemini review (#740): a silent no-op is the wrong failure mode for a
+// diagnostic. Asking for the beacon on a platform that cannot provide it must
+// fail loudly at compile time, not leave someone debugging their instrument
+// while it quietly does nothing. nRF52/RP2040 need their own implementation --
+// see tools/diag/rc32-boot-740/README.md.
+#error "OFFBAND_BOOT_BEACON is ESP32-only (raw UART0 FIFO writes). Remove the flag or add a port for this platform."
+#endif
+
 #if defined(OFFBAND_BOOT_BEACON) && defined(ESP32)
 
 #include <stdint.h>
@@ -116,10 +125,15 @@ static void offband_beacon_ctor(void) {
 
 #else  // !OFFBAND_BOOT_BEACON
 
+// Gemini review (#740): these were empty `static inline` functions. Any
+// translation unit that includes this header without calling them emits
+// -Wunused-function, which breaks a -Werror build. Macros generate no symbol at
+// all, so there is nothing to be unused. This header reaches every companion env
+// in the fleet, so the safe form is the required one.
 #define OFFBAND_BEACON(msg) ((void)0)
 #define OFFBAND_BEACON_FLUSH() ((void)0)
-static inline void offband_beacon_puts(const char*) {}
-static inline void offband_beacon_line(const char*) {}
-static inline void offband_beacon_flush(void) {}
+#define offband_beacon_puts(s) ((void)0)
+#define offband_beacon_line(s) ((void)0)
+#define offband_beacon_flush() ((void)0)
 
 #endif
