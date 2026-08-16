@@ -4,6 +4,13 @@
 
 #include "MqttBrokerPool.h"
 #include "BrokerRotationSelect.h"   // #708: fair TLS promotion
+
+// #727: the ring must be able to hold what publishParsedPacket() writes.
+// #726 was this invariant broken silently -- the writer produced a body the
+// ring refused, append() returned 0, and nothing counted or logged it. Make it
+// a compile error instead of a field report.
+static_assert(sizeof(offband::PacketRecord) <= MQTT_RING_MSG_MAX,
+              "MQTT_RING_MSG_MAX must be >= sizeof(PacketRecord)");
 #include "MqttPayload.h"
 #include <helpers/diagnostics/CrashLog.h>   // #181: crashLogf() -- worker has no user ACK channel
 #include <cstring>
@@ -14,6 +21,10 @@
 #endif
 
 namespace offband {
+
+#ifndef MQTT_ROTATE_DWELL_MS
+  #define MQTT_ROTATE_DWELL_MS 60000U   // #175: how long a TLS slot holds the budget
+#endif
 
 // ---------------------------------------------------------------------------
 // begin
@@ -234,7 +245,42 @@ uint8_t MqttBrokerPool::drainBroker(uint8_t slot) {
     // Bound the burst: at most MQTT_RING_SLOTS messages per pass.
     for (uint8_t i = 0; i < MQTT_RING_SLOTS; ++i) {
         if (!ring_.peek(slot, buf, sizeof(buf), len, seq)) break;
-        if (!b.publish(topic, buf, len, /*retain=*/false)) break;  // retry next pass
+        // #727: the ring holds a PacketRecord; render the body here, per broker.
+        // A short read means a record written by a different build -- skip it
+        // rather than publish garbage.
+        if (len != sizeof(PacketRecord)) { ring_.commit(slot); continue; }
+        PacketRecord rec;
+        memcpy(&rec, buf, sizeof(rec));
+#if defined(ARDUINO)
+        // #727 sec4: rx_time observability. If this record was queued while the
+        // broker was rotated out, it is being published LATER than it arrived --
+        // and it must still carry its RECEIVE time, not "now". Emit the lag so a
+        // backlogged delivery is a VISIBLE event and the receive-time guarantee
+        // is provable on serial instead of silent. Rate-limited to one line per
+        // drain pass (the oldest record in the burst).
+        {
+            uint32_t nowsec = (uint32_t)time(nullptr);
+            uint32_t age = (nowsec > rec.rx_time) ? (nowsec - rec.rx_time) : 0;
+            static uint32_t s_last_backlog_ms = 0;
+            if (age >= (MQTT_ROTATE_DWELL_MS / 1000U) &&
+                (uint32_t)millis() - s_last_backlog_ms >= 10000U) {
+                s_last_backlog_ms = (uint32_t)millis();
+                Serial.printf("[ring] backlog s%u age=%us rx=%u (publishing receive-time)\n",
+                              (unsigned)slot, (unsigned)age, (unsigned)rec.rx_time);
+            }
+        }
+#endif
+        char json[1024];
+        int n = buildPacketJsonFromRecord(json, sizeof(json), rec,
+                                          /*is_tx=*/false, ctx);
+        if (n <= 0 || static_cast<size_t>(n) >= sizeof(json)) {
+            ring_.commit(slot);   // unrenderable: drop it, do not wedge the queue
+            continue;
+        }
+        if (!b.publish(topic, reinterpret_cast<const uint8_t*>(json),
+                       static_cast<size_t>(n), /*retain=*/false)) {
+            break;  // retry next pass
+        }
         ring_.commit(slot);
         sent++;
     }
@@ -324,13 +370,21 @@ uint8_t MqttBrokerPool::publishParsedPacket(const mesh::Packet& packet,
     ctx.firmware_version = firmware_version_;
     ctx.model            = model_;
 
-    char json[1024];
-    int n = buildPacketJson(json, sizeof(json), packet, /*is_tx=*/false,
-                            rssi, snr, score, duration, ctx);
-    if (n <= 0 || static_cast<size_t>(n) >= sizeof(json)) return 0;
+    // #727: store the PACKET RECORD, not the rendered body. The JSON embeds
+    // "raw":"<packet in hex>", and hex doubles the packet before ~316 B of
+    // fields are added -- a 255 B packet rendered to ~826 B, so every ring slot
+    // had to be sized for that. The record is ~296 B. Rendering moves to
+    // drainBroker(). Published bytes are unchanged.
+    //
+    // rx_time is captured HERE, at receive. Rendering at drain with
+    // time(nullptr) would stamp a backlogged broker's messages with the drain
+    // time -- wrong in exactly the rotated-out case the ring exists for.
+    PacketRecord rec;
+    fillPacketRecord(rec, packet, rssi, snr, score, duration,
+                     static_cast<uint32_t>(time(nullptr)));
+    if (rec.raw_len == 0) return 0;   // unserialisable packet
 
-    return publishPacket(reinterpret_cast<const uint8_t*>(json),
-                         static_cast<size_t>(n));
+    return publishPacket(reinterpret_cast<const uint8_t*>(&rec), sizeof(rec));
 }
 
 // ---------------------------------------------------------------------------
@@ -435,11 +489,26 @@ void MqttBrokerPool::reconcileSlot(uint8_t slot) {
     const bool may_alloc =
         (tlsClientsAllocated() - (brokers_[slot].hasClient() ? 1u : 0u))
             < OFFBAND_MAX_LIVE_TLS;
-    // #710: the slot is about to (re)attach a client. Ask loopTask to move this
-    // reader to the ring head so it does not replay stale backlog and does not
-    // book boot-time loss as rotation loss. Flag only -- the worker must not
-    // touch ring_.
-    pending_resync_[slot] = true;
+    // #723: resync on FIRST attach ONLY -- never on a rotation re-entry.
+    //
+    // #710 asked loopTask to move a (re)attaching reader to the ring head so it
+    // does not replay stale boot backlog. But reconcileSlot() runs on EVERY
+    // rotation re-entry too: a rotated-out broker had releaseClient() called, so
+    // hasClient() is false and it takes this path every single time it returns.
+    // Resyncing there threw away exactly the backlog the ring exists to hold --
+    // see publishPacket: "a broker that is down (rotated out, backoff,
+    // HeldNoHeap) resumes where it left off instead of losing the traffic".
+    //
+    // Shipped in v1.5.0-beta1 and caught in the field: an observer published the
+    // first message to CoreScope and silently discarded the next two, which had
+    // arrived while its broker was rotated out. The drop counter read zero the
+    // whole time, because resync() means "deliberately skipped", not "overrun".
+    //
+    // Flag only -- the worker must not touch ring_ (see loop()).
+    if (!first_attach_done_[slot]) {
+        first_attach_done_[slot] = true;
+        pending_resync_[slot]    = true;
+    }
     if (!brokers_[slot].begin(slot, cfg, *identity_, may_alloc) && cfg.enabled) {
         crashLogf("[pool] reconcileSlot %u begin FAILED state=%d err_class=%d",
                   (unsigned)slot,
@@ -471,10 +540,6 @@ inline bool isTlsTransport(const BrokerConfig& c) {
            c.transport == BrokerTransport::Wss;
 }
 }  // namespace
-
-#ifndef MQTT_ROTATE_DWELL_MS
-  #define MQTT_ROTATE_DWELL_MS 60000U   // #175: how long a TLS slot holds the budget
-#endif
 
 // #175: rotate the live TLS set on a dwell timer. Demotes the OLDEST live TLS
 // broker so a parked (HeldNoHeap) one can take the freed budget slot. WORKER-ONLY:

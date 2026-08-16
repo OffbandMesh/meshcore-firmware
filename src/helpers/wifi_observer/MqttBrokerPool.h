@@ -180,6 +180,11 @@ private:
     // the invariant that keeps the ring lock-free (1f9da010). This hand-off keeps
     // every ring access on loopTask.
     std::atomic<bool> pending_resync_[OFFBAND_MAX_BROKERS] = {};
+    // #723: true once a slot has attached a client at least once. Gates the
+    // resync above so it fires on FIRST attach only -- a rotation re-entry must
+    // KEEP its cursor so the backlog queued while it was away still drains.
+    // Worker-task-owned (only reconcileSlot touches it).
+    bool first_attach_done_[OFFBAND_MAX_BROKERS] = {};
     void rotateTlsIfDue(uint32_t now_ms);
 
     // Per-slot guard: true while the lifecycle worker is creating/destroying
