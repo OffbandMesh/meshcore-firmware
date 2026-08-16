@@ -1,0 +1,100 @@
+# #740 -- verbose second-stage bootloader for the #702 RC32 RST investigation.
+#
+# DERIVED, NOT INVENTED. Every value below is copied from the arduino-esp32
+# sdkconfig that produced the stock bootloader this replaces:
+#   framework-arduinoespressif32/tools/sdk/esp32s3/sdkconfig
+# Only the two marked CHANGED blocks differ. Anything not listed here is left at
+# the IDF default, matching the stock build.
+#
+# The stock bootloader binary is selected by flash mode + frequency alone
+# (bootloader_qio_80m.elf), NOT by PSRAM mode -- PSRAM init is app-side in this
+# arduino build. So matching QIO + 80MHz is what makes this a drop-in.
+#
+# ESP-IDF version MUST be 4.4.7 to match arduino-esp32 2.0.17
+# (framework-espidf@3.40407.240606). A 5.x bootloader under a 4.4.7 app is a
+# version mismatch and is explicitly not what this is.
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# ---------------------------------------------------------------------------
+# CHANGED #1 -- the entire point of this artifact.
+# Stock is CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y / _LEVEL=0, which is why the
+# bootloader stage has never been observed on this board (#702).
+# ---------------------------------------------------------------------------
+CONFIG_BOOTLOADER_LOG_LEVEL_DEBUG=y
+CONFIG_BOOTLOADER_LOG_LEVEL=4
+
+# ---------------------------------------------------------------------------
+# CHANGED #2 -- pin the console to UART0 and refuse the USB-Serial-JTAG
+# secondary. The ESP32-S3 console auto-selects, and with USB enumerated it will
+# route to USB-Serial-JTAG -- which on this board dies with the chip and cannot
+# witness a failed boot. UART0 is GPIO43, header pin 12, the external sniffer
+# wire. Stock has CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y; we drop it.
+# ---------------------------------------------------------------------------
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART=y
+CONFIG_ESP_CONSOLE_UART_NUM=0
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# ---------------------------------------------------------------------------
+# Everything below is COPIED FROM STOCK. Do not "improve" these -- a divergence
+# here produces a boot failure indistinguishable from the bug under
+# investigation, which would poison the diagnosis.
+# ---------------------------------------------------------------------------
+CONFIG_BOOTLOADER_OFFSET_IN_FLASH=0x0
+CONFIG_BOOTLOADER_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_BOOTLOADER_FLASH_XMC_SUPPORT=y
+CONFIG_BOOTLOADER_VDDSDIO_BOOST_1_9V=y
+CONFIG_BOOTLOADER_REGION_PROTECTION_ENABLE=y
+CONFIG_BOOTLOADER_WDT_ENABLE=y
+CONFIG_BOOTLOADER_WDT_TIME_MS=9000
+
+# ---------------------------------------------------------------------------
+# GEMINI REVIEW FINDING NOT TAKEN -- deliberate, with reasoning (#740).
+#
+# The review recommended CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=n, because app1
+# on rc32-bench-1 is 100% erased: if the bootloader ever decides app0 is
+# invalid it will mark app0 bad in otadata, try the erased app1, fail, and
+# thereafter refuse app0 BY DESIGN -- soft-bricking the board and poisoning
+# every subsequent RST press. That risk is real and correctly identified.
+#
+# Kept at the stock value anyway, for two reasons:
+#
+#   1. We are hunting a boot failure. Rollback is load-bearing boot behaviour.
+#      Diverging from stock here risks MASKING the very fault under
+#      investigation -- the instrument must not change what it measures.
+#   2. The trap is only dangerous while it is SILENT. That is precisely what
+#      this artifact fixes: with LOG_LEVEL_DEBUG the bootloader states which
+#      partition it selected and why, so a rollback announces itself in the
+#      capture instead of being mistaken for the original bug.
+#
+# Residual risk is accepted and bounded: recovery is a re-flash of the merged
+# image, whose otadata seed (boot_app0.bin) restores app0 as the boot target,
+# and the flash is --erase anyway. That is inside the owner's pre-authorised
+# run budget.
+#
+# If a capture shows the bootloader rolling back, STOP and re-flash before
+# drawing any conclusion about #702.
+# ---------------------------------------------------------------------------
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP=y
+CONFIG_BOOTLOADER_RESERVE_RTC_SIZE=0x10
+
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASH_SAMPLE_MODE_STR=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_ESPTOOLPY_FLASHSIZE_DETECT=y
+
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+CONFIG_PARTITION_TABLE_MD5=y
+
+CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_16KB=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_8WAYS=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_LINE_32B=y
+CONFIG_ESP32S3_DATA_CACHE_32KB=y
+CONFIG_ESP32S3_DATA_CACHE_8WAYS=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_32B=y

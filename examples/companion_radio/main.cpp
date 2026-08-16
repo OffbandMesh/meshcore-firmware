@@ -3,6 +3,11 @@
 #include <SafeBoot.h>
 #include "MyMesh.h"
 
+// #740: raw-UART0 boot beacon. This translation unit owns the single
+// constructor(101) instance; see helpers/BootBeacon.h for why it exists.
+#define OFFBAND_BEACON_DEFINE_CTOR
+#include "helpers/BootBeacon.h"
+
 #ifdef OFFBAND_OBSERVER
   #include "helpers/wifi_observer/WifiObserver.h"
   #include "helpers/diagnostics/CrashLog.h"
@@ -11,9 +16,15 @@
   // CW_PHASE: tracing macro for setup() crash localization. With
   // CrashLog v2's ESP_LOG hook + shutdown handler, the last phase
   // line surviving in the ring buffer pinpoints where setup() died.
-  #define CW_PHASE(name) offband::crashLogf("[setup] phase: %s", name)
+  // #740: mirrored to the raw-UART0 beacon as well -- the CrashLog ring rides
+  // USB-CDC, which on a native-USB S3 dies with the chip and therefore can
+  // never witness a failed boot.
+  #define CW_PHASE(name) do { OFFBAND_BEACON(name); offband::crashLogf("[setup] phase: %s", name); } while (0)
 #else
-  #define CW_PHASE(name) ((void)0)
+  // #740: non-observer companions have no CrashLog phase tracing. The beacon
+  // works everywhere, so the phase markers still reach UART0 when
+  // OFFBAND_BOOT_BEACON is set, and compile to nothing when it is not.
+  #define CW_PHASE(name) OFFBAND_BEACON(name)
 #endif
 
 // #472 (was #377, nRF52-only): uniform boot-survival CrashLog for ALL non-observer
@@ -155,6 +166,12 @@ void halt() {
 #endif
 
 void setup() {
+  // #740: first statement in setup(), ahead of Serial.begin() -- the beacon does
+  // not depend on the Arduino core, so this lands even if Serial.begin() stalls.
+  OFFBAND_BEACON("setup:ENTRY -- before Serial.begin");
+  // Serial.begin() software-resets the UART and flushes its FIFO, which would
+  // truncate the line above mid-transmission. Drain first. (Gemini review.)
+  OFFBAND_BEACON_FLUSH();
   Serial.begin(115200);
   // #149: never let serial logging block the main loop. On the S3's USB-Serial-JTAG
   // (HWCDC) a write stalls when the port is plugged in but not being drained fast
@@ -182,12 +199,20 @@ void setup() {
 #endif
 
   // SafeBoot: pre-init power guard. See src/SafeBoot.h.
+  // #740: bracketed -- SafeBoot can deep-sleep here, which looks identical to a
+  // hang from outside. A "before" with no "post" names it unambiguously.
+  OFFBAND_BEACON("setup:before SafeBoot::checkAndMaybeSleep");
   SafeBoot::checkAndMaybeSleep();
+  OFFBAND_BEACON("setup:post SafeBoot::checkAndMaybeSleep");
 #ifdef OFFBAND_OBSERVER
   offband::wifiObserverBegin();
 #endif
   CW_PHASE("post:wifiObserverBegin");
 
+  // #740: board.begin() is the established boundary -- nvs_count increments
+  // after it, and on a failed RST it never incremented (#702). Bracket it so we
+  // can tell "never reached" from "entered and did not return".
+  OFFBAND_BEACON("setup:before board.begin");
   board.begin();
   CW_PHASE("post:board.begin");
 

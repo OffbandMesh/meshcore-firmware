@@ -115,3 +115,7 @@ harness.exe
 # See docs/radiocore/README.md.
 docs/radiocore/vendor/*
 !docs/radiocore/vendor/README.md
+
+# #740: PlatformIO-generated from sdkconfig.defaults -- build output, not source
+tools/diag/rc32-boot-740/bootloader-verbose/sdkconfig.*
+!tools/diag/rc32-boot-740/bootloader-verbose/sdkconfig.defaults
