@@ -1,0 +1,31 @@
+ERROR: NOTE: unregistered port present: COM6 VID:PID=10C4:EA60 hash= desc='Silicon Labs CP210x USB to UART Bridge (COM6)'. If this is a new LoRa device, run 'pio-flash bootstrap'.
+ERROR: NOTE: unregistered port present: COM39 VID:PID=303A:0002 hash=8&26882A8A desc='USB Serial Device (COM39)'. If this is a new LoRa device, run 'pio-flash bootstrap'.
+
+Please build project in debug configuration to get more details about an exception.
+See https://docs.platformio.org/page/projectconf/build_configurations.html
+
+
+--- Terminal on COM43 | 115200 8-N-1
+--- Available filters and text transformations: debug, default, direct, esp32_exception_decoder, hexlify, log2file, nocontrol, printable, send_on_enter, time
+--- More details at https://bit.ly/pio-monitor-filters
+--- Quit: Ctrl+C | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H
+[3478582] [boot] nvs_count=89 rtc_count=89 prev_boot_lasted=0s reset_reason=1 (POWERON)
+[3478582] [boot] companion up; reset=Power-on reset
+[3478603][E][esp32-hal-spi.c:215] spiAttachMISO(): HSPI Does not have default pins on ESP32S3!
+[3479166] [setup] phase: post:display.begin(OK)
+[3479370] [setup] phase: post:radio_init
+[3479438] [setup] phase: post:fast_rng.begin
+[3479438] [setup] phase: ESP32:before SPIFFS.begin
+[3479767] [setup] phase: ESP32:post SPIFFS.begin
+[3479910] [setup] phase: ESP32:post store.begin
+[clock] set by contacts-bootstrap: 1715770352 -> 1786838401 (delta +71068049 s)
+[3480400] DEBUG: Set _preambleMillis=91
+[3480400] DEBUG: Set _maxPayloadMillis=1213
+[3480400] DEBUG: RX Boosted Gain Mode: Enabled
+[3480401] [setup] phase: ESP32:post the_mesh.begin
+[3480401] [setup] phase: ESP32:post the_mesh.startInterface
+[3480418] [setup] phase: post:sensors.begin
+E (3480258) ledc: ledc_get_duty(745): LEDC is not initialized
+[3480418] [setup] phase: post:ui_task.begin
+[3480419] [setup] phase: setup:DONE
+Opening monitor on COM43 for rc32-bench-1 at 115200 baud (env=heltec_rc32_companion_radio_usb)

@@ -8,12 +8,6 @@
   #include "helpers/diagnostics/CrashLog.h"
   #include "helpers/wifi_observer/ConfigSchema.h"   // #141: getDisplayAlwaysOn()
   #include "helpers/wifi_observer/ObserverCli.h"     // #141: setDisplayAlwaysOnApplier()
-  // CW_PHASE: tracing macro for setup() crash localization. With
-  // CrashLog v2's ESP_LOG hook + shutdown handler, the last phase
-  // line surviving in the ring buffer pinpoints where setup() died.
-  #define CW_PHASE(name) offband::crashLogf("[setup] phase: %s", name)
-#else
-  #define CW_PHASE(name) ((void)0)
 #endif
 
 // #472 (was #377, nRF52-only): uniform boot-survival CrashLog for ALL non-observer
@@ -22,6 +16,24 @@
 #if !defined(OFFBAND_OBSERVER)
   #include "helpers/diagnostics/CrashLogStandard.h"
 #endif
+
+// CW_PHASE: setup() progress breadcrumbs written into the RETAINED-RAM ring
+// (RTC_NOINIT, CrashLog.cpp:63-81), which survives a reset and is replayed by
+// crashLogBegin() on the following boot.
+//
+// #704: this was previously #ifdef OFFBAND_OBSERVER, compiling to ((void)0) on
+// every other companion -- so the ONE role with a reproducible boot failure had
+// its entire setup() trace switched off. Both branches already have crashLogf:
+// the observer via CrashLog.h above, everyone else via CrashLogStandard.h, which
+// exists precisely to give non-observer companions boot-survival logging (#472).
+// There was no reason for the markers to be observer-only.
+//
+// Not crash-specific despite the name -- a boot that simply STOPS advancing
+// leaves its last breadcrumb behind, which is the whole point here. Serial
+// cannot do this job: the host is not attached during the failure, and
+// attaching resets the chip (destroying the evidence). The caplog ring cannot
+// either -- it is empty until well after the phase under investigation.
+#define CW_PHASE(name) offband::crashLogf("[setup] phase: %s", name)
 
 // Believe it or not, this std C function is busted on some platforms!
 static uint32_t _atoi(const char* sp) {
@@ -179,6 +191,19 @@ void setup() {
   Serial.print(" sha "); Serial.print(OFFBAND_GIT_SHA);
   #endif
   Serial.println(" ===");
+#endif
+
+#ifdef OFFBAND_UART0_PROBE
+  // DIAGNOSTIC BUILD ONLY -- never committed, never shipped (#704).
+  // Transmits a known marker on UART0 TX (GPIO43, header pin 12) so the
+  // external Feather sniffer can prove the WIRE end-to-end before anyone
+  // presses RST. Without this, silence on the sniffer is ambiguous between
+  // "bad wire", "wrong pin", "dead sniffer" and "the S3 ROM routes its console
+  // to USB-Serial-JTAG instead of UART0". GPIO43/44 are free on this variant --
+  // they are declared as PIN_GPS_TX/RX and GPS is compiled out (ENV_INCLUDE_GPS=0).
+  Serial1.begin(115200, SERIAL_8N1, /*RX=*/44, /*TX=*/43);
+  Serial1.println();
+  Serial1.println("=== RC32 UART0 PROBE: app is alive and TX-ing on GPIO43 ===");
 #endif
 
   // SafeBoot: pre-init power guard. See src/SafeBoot.h.
@@ -459,6 +484,17 @@ void loop() {
   offband::crashLogStandardTick(millis());  // #472: deferred previous-boot re-dump (all non-observer companions)
 #endif
 #if defined(NRF52_PLATFORM)
+#ifdef OFFBAND_UART0_PROBE
+  // DIAGNOSTIC ONLY (#704): periodic marker on GPIO43 so the wire can be
+  // validated at any time, not only in the instant after boot.
+  {
+    static uint32_t probe_next = 0;
+    if (millis() >= probe_next) {
+      probe_next = millis() + 2000;
+      Serial1.printf("[rc32-probe] up=%lus\n", (unsigned long)(millis() / 1000));
+    }
+  }
+#endif
   board.feedWatchdog();  // #257: feed from the MAIN LOOP only -> a hung loop trips the WDT
   board.heartbeatTick(); // #275: loop-driven green-LED heartbeat (freezes if the loop hangs)
   #if !defined(OFFBAND_OBSERVER)

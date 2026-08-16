@@ -1,0 +1,208 @@
+===== PAGE 7 =====
+Documents
+Rev. 1.0.0
+P 7/11
+May 2026
+Heltec Automation © Limited standard files
+3.1.2 General Pins Description
+Table2.1.2: General Pins Description
+NO.
+Name
+Type
+Function
+1
+GND
+G
+Ground
+2
+VBAT
+P
+Lithium Battery Power Supply
+3
+GND
+G
+Ground
+4
+5V
+P
+5V Power Supply
+5
+0
+③
+I/O/T
+RTC
+IO_MUX
+GPIO0, USER Button
+6
+17
+I/O/T
+Analog
+RTC
+IO_MUX
+GPIO17, U1TXD, ADC2_CH6
+7
+16
+I/O/T
+Analog
+RTC
+IO_MUX
+GPIO16,
+U0CTS,
+ADC2_CH5,
+XTAL_32K_N
+8
+6
+I/O/T
+Analog
+RTC
+IO_MUX
+GPIO6, TOUCH6, ADC1_CH5
+9
+5
+I/O/T
+Analog
+RTC
+IO_MUX
+GPIO5, TOUCH5, ADC1_CH4
+10
+4
+I/O/T
+Analog
+RTC
+IO_MUX
+GPIO4, TOUCH4, ADC1_CH3
+11
+44
+I/O/T
+IO_MUX
+U0RXD, GPIO44, CLK_OUT2
+12
+43
+I/O/T
+IO_MUX
+U0TXD, GPIO43, CLK_OUT1
+13
+42
+I/O/T
+IO_MUX
+MTMS, GPIO42
+14
+41
+I/O/T
+IO_MUX
+MTDI, GPIO41, CLK_OUT1
+15
+40
+I/O/T
+IO_MUX
+MTDO, GPIO40, CLK_OUT2
+16
+39
+I/O/T
+IO_MUX
+MTCK, GPIO39, CLK_OUT3, SUBSPICS1
+17
+38
+I/O/T
+IO_MUX
+GPIO38, FSPIWP, SUBSPIWP
+18
+RST
+④
+I
+RST Button
+19
+3V3
+P
+3.3V Power Supply
+20
+GND
+G
+Ground
+③A 10K pull-up resistor is fitted.
+④A 10K pull-up resistor is fitted.
+
+===== PAGE 8 =====
+Documents
+Rev. 1.0.0
+P 8/11
+May 2026
+Heltec Automation © Limited standard files
+3.2
+RF Module Pin Descriptions
+This section specifies which RC32 pins are used for various RF module configurations.
+3.2.1 HT-RA62A (LoRa)
+RC32-L62 is equipped with the HT-RA62A LoRa module. Refer to the schematic for full details: RC32-L62
+SCHEMATIC.
+NO.
+Name
+LoRa Function
+1
+GPIO23
+SPI_CS
+2
+GPIO22
+SPI_MOSI
+3
+GPIO21
+SPI_CLK
+4
+GPIO20
+SPI_MISO
+5
+GPIO19
+DIO1
+6
+GPIO7
+SELECT
+7
+GPIO8
+RESET_N
+8
+GPIO10
+BUSY
+9
+GPIO11
+VEXT_LDO_Ctrl
+3.2.2 HT-HC01_V2 (Wi-Fi HaLow)
+RC32-68 is equipped with the HT-HC02_V2 Wi-Fi HaLow module. Refer to the schematic for full details: RC32-68
+SCHEMATIC.
+NO.
+Name
+LoRa Function
+1
+GPIO10
+SPI_CS
+2
+GPIO12
+SPI_MOSI
+3
+GPIO13
+SPI_CLK
+4
+GPIO14
+SPI_MISO
+5
+GPIO1
+SPI_INT
+6
+GPIO9
+MM_BUSY
+
+===== PAGE 9 =====
+Documents
+Rev. 1.0.0
+P 9/11
+May 2026
+Heltec Automation © Limited standard files
+7
+GPIO8
+MM_RST
+8
+GPIO3
+MM_WAKE
+9
+GPIO11
+HaLow_LDO_Ctrl
+3.3
+B2B Interface Pin Definition
