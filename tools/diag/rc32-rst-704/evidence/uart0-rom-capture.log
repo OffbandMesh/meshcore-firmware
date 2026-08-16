@@ -1,0 +1,103 @@
+ERROR: NOTE: unregistered port present: COM6 VID:PID=10C4:EA60 hash= desc='Silicon Labs CP210x USB to UART Bridge (COM6)'. If this is a new LoRa device, run 'pio-flash bootstrap'.
+ERROR: NOTE: unregistered port present: COM39 VID:PID=303A:0002 hash=8&26882A8A desc='USB Serial Device (COM39)'. If this is a new LoRa device, run 'pio-flash bootstrap'.
+WARNING: monitor invoked without --env. PlatformIO will use
+  default DTR/RTS handling. On CP2102-bridged ESP32 boards
+  (Heltec V3), this resets the chip on port open and can
+  crash-cycle the device under tight heap budgets. To inherit
+  env-scoped monitor_rts/monitor_dtr settings, pass
+    --env <env>
+  (e.g. --env heltec_v3_companion_observer_wifi). See #302.
+--- Terminal on COM16 | 115200 8-N-1
+--- Available filters and text transformations: debug, default, direct, hexlify, log2file, nocontrol, printable, send_on_enter, time
+--- More details at https://bit.ly/pio-monitor-filters
+--- Quit: Ctrl+C | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H
+[4309581][E][esp32-hal-spi.c:215] spiAttachMISO(): HSPI Does not have default pins on ESP32S3!
+[hb] SNIFFER-v2 alive  n=459  up=4340s  rx_bytes=786
+[hb] SNIFFER-v2 alive  n=460  up=4350s  rx_bytes=786
+[hb] SNIFFER-v2 alive  n=461  up=4360s  rx_bytes=786
+[hb] SNIFFER-v2 alive  n=462  up=4370s  rx_bytes=786
+[hb] SNIFFER-v2 alive  n=463  up=4380s  rx_bytes=786
+[hb] SNIFFER-v2 alive  n=464  up=4390s  rx_bytes=786
+[hb] SNIFFER-v2 alive  n=465  up=4400s  rx_bytes=786
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+[hb] SNIFFER-v2 alive  n=466  up=4410s  rx_bytes=1016
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+[hb] SNIFFER-v2 alive  n=467  up=4420s  rx_bytes=1476
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+[hb] SNIFFER-v2 alive  n=468  up=4430s  rx_bytes=2396
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+[hb] SNIFFER-v2 alive  n=469  up=4440s  rx_bytes=2626
+[hb] SNIFFER-v2 alive  n=470  up=4450s  rx_bytes=2626
+[hb] SNIFFER-v2 alive  n=471  up=4460s  rx_bytes=2626
+[hb] SNIFFER-v2 alive  n=472  up=4470s  rx_bytes=2626
+[hb] SNIFFER-v2 alive  n=473  up=4480s  rx_bytes=2626
+[hb] SNIFFER-v2 alive  n=474  up=4490s  rx_bytes=2626
+[hb] SNIFFER-v2 alive  n=475  up=4500s  rx_bytes=2626
