@@ -1,4 +1,43 @@
-# HANDOFF — RC32 companion does not boot after RST (#704 / #719)
+# HANDOFF — RC32 companion does not boot after RST (#702 / #704)
+
+> ## ⬆ STATUS 2026-08-16: FAILURE LOCATED. Read this box first.
+>
+> An external UART sniffer on header **pin 12 (U0TXD/GPIO43)** + **pin 20 (GND)** captured
+> **14 owner-confirmed blank-screen RST presses**, all byte-identical:
+>
+> ```
+> rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+> load:0x3fce3808  load:0x403c9700  load:0x403cc700
+> entry 0x403c98d0
+> ```
+>
+> **Tally: 14 ROM banners · 14 `entry` reached · 1 app start · 0 panics.**
+> (The one app start was a monitor attach, not a button press.)
+>
+> - **`boot:0x8 SPI_FAST_FLASH_BOOT` — strapping pins are CORRECT.** Every strapping theory
+>   is dead, refuted from the layer that decides boot mode. #719 closed as refuted.
+> - The chip resets cleanly, the bootloader loads all three segments, control reaches the
+>   application entry point — **and the app produces nothing.**
+> - **Zero panics.** It hangs, or faults before the panic handler exists. It does not crash.
+> - **FAILURE WINDOW:** `entry 0x403c98d0` → the app's first observable action, i.e. IDF
+>   startup → **C++ static constructors** → `initArduino()` → `setup()`.
+>
+> **NARROWED HYPOTHESIS (not confirmed): RTC-domain retained memory.** RST leaves the RTC
+> domain powered; real power removal drains it. Predicts every observation including the
+> fast-replug failure that no firmware theory could explain.
+> ⚠ Counter-argument to resolve: the repeater uses `crashLogStandardInit` too and survives RST.
+>
+> **NEXT TEST — one flash, one variable:** companion with the RTC_NOINIT retained-log path
+> disabled → press RST. If inconclusive, bisect with `__attribute__((constructor(101)))`
+> writing straight to UART0 ahead of other static constructors.
+>
+> Full detail: issue #702. Captures: `evidence/uart0-rom-capture.log`.
+
+---
+
+*Everything below is the state as of the session that produced the above. Kept because the
+refuted-theory list and the instrument notes remain accurate and useful.*
+
 
 **Session:** 2026-08-15 → 2026-08-16 · agent DustyBarn · branch `fix/704-rc32-no-gps`
 **Worktree:** `C:\Dev\.worktrees\meshcore-firmware-704`
