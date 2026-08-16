@@ -43,6 +43,29 @@ jobs:
       - name: Every ESP32 env compiling SerialBLEInterface.cpp declares NimBLE
         run: python scripts/check_esp32_ble_deps.py
 
+      # #649. Distinct question from the check above: that one asks whether an
+      # env is internally coherent (can it LINK); this one asks whether the
+      # config matches what the env NAME says it is. An env can pass the first
+      # and fail this one -- a *_ble env with no BLE_PIN_CODE links cleanly and
+      # ships with no BLE.
+      - name: Env capability-claim self-test
+        run: python scripts/test_env_capability_claims.py
+
+      # ADVISORY until #648 (the capability inventory) validates what this asserts.
+      # ci-green is a hard merge gate for every PR in the repo (#477), so a check
+      # built on unvalidated assumptions must not block other people's work. The
+      # JSON report is still uploaded; promote to blocking when #648 lands.
+      - name: Env names agree with their resolved config (advisory)
+        continue-on-error: true
+        run: python scripts/check_env_capability_claims.py --json-out "$RUNNER_TEMP/capability-claims.json"
+
+      - name: Upload capability-claim report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capability-claims
+          path: ${{ runner.temp }}/capability-claims.json
+          if-no-files-found: warn
   # #712: the googletest suites existed but NOTHING ran them in CI, so every invariant they
   # encode was unenforced on PRs. That is how #711 (a regression of #450) reached the field:
   # the frame-size ceiling had no mechanical guard, only a comment.
