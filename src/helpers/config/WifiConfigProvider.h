@@ -11,14 +11,14 @@
 // read-only `wifi.status`. Persistence is the `"wifi"` NVS namespace via
 // Preferences (role-neutral) -- NOT a NodePrefs/DataStore offset.
 //
-// KNOWN COUPLING (deliberate, deferred to #365): the `wifi.status` GET reads the
-// observer's `WifiBootstrap` state machine. That is the observer's STA/AP
-// bring-up; a non-observer companion's runtime-WiFi path (#325/#365) has its own
-// bring-up, so what `wifi.status` means off-observer is a #365 design decision,
-// not a mechanical move. This provider keeps the WifiBootstrap dependency for the
-// observer; #365 wires its own status source when it lands. (Owner call
-// 2026-07-29: #370 relocates + decouples DISPLAY, leaves WiFi's WifiBootstrap
-// coupling to #365.)
+// STATUS SOURCE (#684, resolved 2026-08-01): `wifi.status` reports ONE uniform
+// vocabulary for every WiFi-capable role. On an OBSERVER build it reads the
+// authoritative `WifiBootstrap` STA/AP state machine; on a non-observer build
+// (companion #365, repeater #301) it derives the SAME words from the raw WiFi
+// driver + stored creds. The `WifiBootstrap` header is included ONLY under
+// `OFFBAND_OBSERVER`, so this provider links with zero `wifi_observer/` sources
+// off-observer -- closing the gap #370 left and unblocking #462. (Owner D1/D3:
+// uniform WiFi across all WiFi-capable roles; one status vocabulary, not two.)
 //
 // The handlers are exposed here (not file-static) because the observer's `_sys`
 // string CLI (dispatchObserverCli, still in ObserverCli.cpp) calls them too --
