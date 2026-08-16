@@ -327,12 +327,12 @@ bool clearBrokerConfig(uint8_t slot) {
 // changing this layout does NOT re-shuffle slots on a device already seeded
 // under an older layout; it takes effect only on a fresh NVS.)
 //
-//   slot 0  OKIMesh mqtt1      wss://mqtt1.okimesh.org:9002/mqtt  wss / anon   disabled  (#592)
+//   slot 0  OKIMesh mqtt1      mqtt://mqtt1.okimesh.org:1883      tcp / anon   disabled  (#707)
 //   slot 1  OKIMesh mqtt2      wss://mqtt2.okimesh.org:9002/mqtt  wss / anon   disabled  (#592)
 //   slot 2  MeshMapper         wss://mqtt.meshmapper.net        wss / jwt    disabled
 //   slot 3  CoreComms.net      wss://mqtt.corecomms.net         wss / jwt    disabled  (#677)
 //   slot 4  Eastmesh.au        wss://mqtt2.eastmesh.au          wss / jwt    disabled
-//   slots 5-9  (MQTT Custom)   left empty for the operator to fill
+//   slot 5     (MQTT Custom)   left empty for the operator to fill
 //
 // #317 reseat: the OKI Mesh's own two brokers hold slots 0-1 (mqtt1 was
 // formerly labelled "CoreScope Dayton"; mqtt2 is new). LetsMesh-US and
@@ -341,7 +341,8 @@ bool clearBrokerConfig(uint8_t slot) {
 // lookupCaCertPem(), and the bare-host audience note below still applies).
 // MeshMapper and Eastme.sh swapped to 2/3; Eastmesh.au moved 5 -> 4.
 //
-// #592: slots 0-1 moved from plaintext mqtt://:1883 to wss://:9002/mqtt over
+// #592 moved slots 0-1 from plaintext to wss; #707 moved SLOT 0 BACK to
+// plaintext (see the block on the slot-0 row). Slot 1 remains wss://:9002/mqtt over
 // TLS with a "letsencrypt" CA. Auth stays anonymous (BrokerAuthType::None) --
 // TLS secures the transport; there is no MQTT-layer credential, so no JWT
 // audience/owner and no username. Unlike the plaintext form, a wss slot cannot
@@ -390,10 +391,21 @@ struct DefaultBrokerSpec {
     const char*      ca_cert_name;   // "" when no TLS cert (tcp)
 };
 
-// Slots 0-4. Slots 5-9 (MQTT Custom) are intentionally absent so they stay empty.
+// Slots 0-4. Slot 5 (MQTT Custom) is intentionally absent so it stays empty.
 // jwt_audience is the BARE host (#95); ca_cert names resolve in MqttBroker.cpp.
 constexpr DefaultBrokerSpec kDefaultBrokerSpecs[] = {
-    {false, "wss://mqtt1.okimesh.org:9002/mqtt",      BrokerTransport::Wss, 9002, BrokerAuthType::None, "",                        "letsencrypt"},
+    // SLOT 0 IS PLAINTEXT BY DESIGN -- DO NOT "UPGRADE" IT TO wss/TLS.
+    // A tcp broker holds no mbedTLS context, so the rotation scheduler exempts
+    // it entirely: rotateTlsIfDue() never selects it as a victim and its
+    // budget_ok is unconditionally true. That exemption is the ONLY thing
+    // making slot 0 an always-on primary. #592 moved this row to wss and
+    // silently demoted it into the rotating TLS pool, where it was evicted
+    // every dwell (measured on HV3: 178 evictions in a 6.9h soak) -- the
+    // always-on property was lost without a single scheduler line changing.
+    // The trade is explicit: this feed is unencrypted in exchange for being
+    // the one broker that never rotates out. Slots 1-5 carry TLS and share
+    // the OFFBAND_MAX_LIVE_TLS budget by rotation.
+    {false, "mqtt://mqtt1.okimesh.org:1883",          BrokerTransport::Tcp, 1883, BrokerAuthType::None, "",                        ""},
     {false, "wss://mqtt2.okimesh.org:9002/mqtt",      BrokerTransport::Wss, 9002, BrokerAuthType::None, "",                        "letsencrypt"},
     {false, "wss://mqtt.meshmapper.net:443/mqtt",     BrokerTransport::Wss, 443,  BrokerAuthType::Jwt,  "mqtt.meshmapper.net",     "isrg-x2"},
     // #677: Eastme.sh rebranded to CoreComms.net (re-implements external PR

@@ -211,37 +211,35 @@ int buildStatusJson(char* buf, size_t buf_size,
 // (MAX_HASH_SIZE). The host test harness in Task 5 skips packet tests; if
 // needed later, a stub Packet in the harness can re-enable host-side tests.
 
-int buildPacketJson(char* buf, size_t buf_size,
-                    const mesh::Packet& packet, bool is_tx,
-                    int rssi, float snr, int score, int duration,
-                    const MqttPayloadCtx& ctx) {
+// #727: capture what the body needs while the packet is still alive.
+void fillPacketRecord(PacketRecord& rec, const mesh::Packet& packet,
+                      int rssi, float snr, int score, int duration,
+                      uint32_t rx_time) {
+    (void)duration;              // #727 sec4: no consumer reads it -- not stored
+    memset(&rec, 0, sizeof(rec));
+    rec.rx_time  = rx_time;      // AT RECEIVE -- see the header comment
+    rec.rssi     = rssi;
+    rec.snr      = snr;
+    rec.score    = score;
+    int n = packet.writeTo(rec.raw);
+    rec.raw_len  = (n > 0 && (size_t)n <= sizeof(rec.raw)) ? (uint16_t)n : 0;
+    // #727 sec4: no hash / payload_type / route / path captured -- CoreScope and
+    // its forks decode raw themselves; these were computed and discarded.
+}
+
+int buildPacketJsonFromRecord(char* buf, size_t buf_size,
+                              const PacketRecord& rec, bool is_tx,
+                              const MqttPayloadCtx& ctx) {
     if (buf == nullptr || buf_size == 0) return -1;
 
-    uint8_t raw[256];
-    int raw_len = packet.writeTo(raw);
-    // Stack buffer instead of heap alloc (vendored used allocScratchBuffer(520);
-    // 520 bytes is well within ESP32 task stack budget).
     char raw_hex[520];
-    bytesToHexUpper(raw, raw_len, raw_hex, sizeof(raw_hex));
+    bytesToHexUpper(rec.raw, (size_t)rec.raw_len, raw_hex, sizeof(raw_hex));
 
-    uint8_t packet_hash[MAX_HASH_SIZE];
-    packet.calculatePacketHash(packet_hash);
-    char hash_hex[(MAX_HASH_SIZE * 2) + 1];
-    bytesToHexUpper(packet_hash, MAX_HASH_SIZE, hash_hex, sizeof(hash_hex));
-
-    time_t now = time(nullptr);
+    // #727: the RECEIVE time, not time(nullptr). Drain can be a dwell later, and
+    // stamping now would silently mis-timestamp a backlogged broker's messages.
+    time_t now = (time_t)rec.rx_time;
     char ts[32];
     formatIsoTimestamp(now, ts, sizeof(ts));
-    struct tm tm_utc;
-#ifdef _MSC_VER
-    gmtime_s(&tm_utc, &now);
-#else
-    gmtime_r(&now, &tm_utc);
-#endif
-    char time_only[16];
-    char date_only[16];
-    strftime(time_only, sizeof(time_only), "%H:%M:%S", &tm_utc);
-    strftime(date_only, sizeof(date_only), "%d/%m/%Y", &tm_utc);
 
     char origin[80];
     const char* node_name = (ctx.node_name != nullptr && ctx.node_name[0] != 0)
@@ -249,49 +247,24 @@ int buildPacketJson(char* buf, size_t buf_size,
                             : (ctx.device_id != nullptr ? ctx.device_id : "");
     escapeJsonString(node_name, origin, sizeof(origin));
 
-    const char* device_id = ctx.device_id != nullptr ? ctx.device_id : "";
-
-    if (packet.isRouteDirect() && packet.path_len > 0) {
-        char path_info[128];
-        snprintf(path_info, sizeof(path_info), "path_%dx%d_%db",
-                 (int)packet.getPathHashCount(),
-                 (int)packet.getPathHashSize(),
-                 (int)packet.getPathByteLen());
-        if (score >= 0) {
-            return snprintf(buf, buf_size,
-                "{\"origin\":\"%s\",\"origin_id\":\"%s\",\"timestamp\":\"%s\",\"type\":\"PACKET\","
-                "\"direction\":\"%s\",\"time\":\"%s\",\"date\":\"%s\",\"len\":\"%d\",\"packet_type\":\"%u\","
-                "\"route\":\"D\",\"payload_len\":\"%u\",\"raw\":\"%s\",\"SNR\":\"%.1f\",\"RSSI\":\"%d\","
-                "\"score\":\"%d\",\"duration\":\"%d\",\"hash\":\"%s\",\"path\":\"%s\"}",
-                origin, device_id, ts, is_tx ? "tx" : "rx", time_only, date_only, raw_len,
-                packet.getPayloadType(), packet.payload_len, raw_hex, snr, rssi, score, duration, hash_hex,
-                path_info);
-        }
+    // #727 sec4: slimmed body. Only the fields a consumer actually reads --
+    // origin (display name; observer identity is the topic segment), timestamp,
+    // type, direction, raw, SNR, RSSI, and score when present. Dropped:
+    // origin_id, time, date, len, packet_type, route, payload_len, duration,
+    // hash, path. route/path distinction is gone, so the four render branches
+    // collapse to score / no-score. KEEP THESE KEY NAMES EXACT -- CoreScope reads
+    // raw/timestamp/origin/SNR|snr/RSSI|rssi/score/direction verbatim.
+    if (rec.score >= 0) {
         return snprintf(buf, buf_size,
-            "{\"origin\":\"%s\",\"origin_id\":\"%s\",\"timestamp\":\"%s\",\"type\":\"PACKET\","
-            "\"direction\":\"%s\",\"time\":\"%s\",\"date\":\"%s\",\"len\":\"%d\",\"packet_type\":\"%u\","
-            "\"route\":\"D\",\"payload_len\":\"%u\",\"raw\":\"%s\",\"SNR\":\"%.1f\",\"RSSI\":\"%d\","
-            "\"hash\":\"%s\",\"path\":\"%s\"}",
-            origin, device_id, ts, is_tx ? "tx" : "rx", time_only, date_only, raw_len,
-            packet.getPayloadType(), packet.payload_len, raw_hex, snr, rssi, hash_hex, path_info);
-    }
-
-    if (score >= 0) {
-        return snprintf(buf, buf_size,
-            "{\"origin\":\"%s\",\"origin_id\":\"%s\",\"timestamp\":\"%s\",\"type\":\"PACKET\","
-            "\"direction\":\"%s\",\"time\":\"%s\",\"date\":\"%s\",\"len\":\"%d\",\"packet_type\":\"%u\","
-            "\"route\":\"F\",\"payload_len\":\"%u\",\"raw\":\"%s\",\"SNR\":\"%.1f\",\"RSSI\":\"%d\","
-            "\"score\":\"%d\",\"duration\":\"%d\",\"hash\":\"%s\"}",
-            origin, device_id, ts, is_tx ? "tx" : "rx", time_only, date_only, raw_len,
-            packet.getPayloadType(), packet.payload_len, raw_hex, snr, rssi, score, duration, hash_hex);
+            "{\"origin\":\"%s\",\"timestamp\":\"%s\",\"type\":\"PACKET\","
+            "\"direction\":\"%s\",\"raw\":\"%s\",\"SNR\":\"%.1f\",\"RSSI\":\"%d\","
+            "\"score\":\"%d\"}",
+            origin, ts, is_tx ? "tx" : "rx", raw_hex, rec.snr, (int)rec.rssi, (int)rec.score);
     }
     return snprintf(buf, buf_size,
-        "{\"origin\":\"%s\",\"origin_id\":\"%s\",\"timestamp\":\"%s\",\"type\":\"PACKET\","
-        "\"direction\":\"%s\",\"time\":\"%s\",\"date\":\"%s\",\"len\":\"%d\",\"packet_type\":\"%u\","
-        "\"route\":\"F\",\"payload_len\":\"%u\",\"raw\":\"%s\",\"SNR\":\"%.1f\",\"RSSI\":\"%d\","
-        "\"hash\":\"%s\"}",
-        origin, device_id, ts, is_tx ? "tx" : "rx", time_only, date_only, raw_len,
-        packet.getPayloadType(), packet.payload_len, raw_hex, snr, rssi, hash_hex);
+        "{\"origin\":\"%s\",\"timestamp\":\"%s\",\"type\":\"PACKET\","
+        "\"direction\":\"%s\",\"raw\":\"%s\",\"SNR\":\"%.1f\",\"RSSI\":\"%d\"}",
+        origin, ts, is_tx ? "tx" : "rx", raw_hex, rec.snr, (int)rec.rssi);
 }
 
 int buildRawJson(char* buf, size_t buf_size,
@@ -328,10 +301,18 @@ int buildRawJson(char* buf, size_t buf_size,
        // The host test harness in Task 5 provides a stub mesh::Packet definition;
        // the linker resolves these stubs OR the harness's own packet builders.
 
-int buildPacketJson(char* buf, size_t buf_size,
-                    const mesh::Packet& /*packet*/, bool /*is_tx*/,
-                    int /*rssi*/, float /*snr*/, int /*score*/, int /*duration*/,
-                    const MqttPayloadCtx& /*ctx*/) {
+void fillPacketRecord(PacketRecord& rec, const mesh::Packet& /*packet*/,
+                      int rssi, float snr, int score, int duration,
+                      uint32_t rx_time) {
+    (void)duration;
+    memset(&rec, 0, sizeof(rec));
+    rec.rx_time = rx_time; rec.rssi = rssi; rec.snr = snr;
+    rec.score = score;
+}
+
+int buildPacketJsonFromRecord(char* buf, size_t buf_size,
+                              const PacketRecord& /*rec*/, bool /*is_tx*/,
+                              const MqttPayloadCtx& /*ctx*/) {
     if (buf == nullptr || buf_size == 0) return -1;
     return snprintf(buf, buf_size, "{\"type\":\"PACKET-host-stub\"}");
 }

@@ -214,7 +214,7 @@ bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg,
         (cfg.transport == BrokerTransport::Tls ||
          cfg.transport == BrokerTransport::Wss)) {
         rt_ = BrokerRuntimeState{};
-        rt_.state = BrokerState::HeldNoHeap;
+        rt_.state = BrokerState::HeldBudget;   // #715: budget, not heap
         return true;
     }
     auth_ = makeAuth(cfg, identity);
@@ -310,7 +310,12 @@ bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
     if ((cfg_.transport == BrokerTransport::Tls ||
          cfg_.transport == BrokerTransport::Wss) &&
         (!tls_budget_ok || !tlsHeapBudgetOk())) {
-        rt_.state = BrokerState::HeldNoHeap;
+        // #715: report WHICH condition deferred us. Budget-full is normal rotation
+        // (this broker is queued); below-floor heap is real resource pressure.
+        // Budget is checked first: when both are true the operator-actionable fact
+        // is the heap floor, so heap wins only when the budget was actually free.
+        rt_.state = tls_budget_ok ? BrokerState::HeldNoHeap    // budget free -> heap
+                                  : BrokerState::HeldBudget;   // waiting its turn
         return false;
     }
 

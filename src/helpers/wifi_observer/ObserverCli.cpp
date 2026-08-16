@@ -103,7 +103,11 @@ static const char* stateStr(BrokerState s) {
         case BrokerState::Up:          return "up";
         case BrokerState::Backoff:     return "backoff";
         case BrokerState::HeldNoClock: return "held(no-clock)";
-        case BrokerState::HeldNoHeap:  return "held(no-heap)";
+        // #715: distinct human strings. "waiting-turn" is deliberately plain --
+        // it is the NORMAL state of a rotating pool, not an error, and the old
+        // "held(no-heap)" wording sent operators hunting for a memory problem.
+        case BrokerState::HeldNoHeap:  return "held(low-heap)";
+        case BrokerState::HeldBudget:  return "waiting-turn";
         default:                       return "?";
     }
 }
@@ -118,7 +122,15 @@ static const char* brokerStateWire(BrokerState s) {
         case BrokerState::Up:          return "up";
         case BrokerState::Backoff:     return "backoff";
         case BrokerState::HeldNoClock: return "held_no_clock";
+        // #715: WIRE VALUE DELIBERATELY UNCHANGED FOR BOTH.
+        // brokerStateWire() values are pinned to the client contract (#172 /
+        // OffbandConfigProtocol.h), so emitting a new "held_budget" token would be
+        // a breaking change for clients that switch on this string. The internal
+        // split lands first; the wire token is a separate, coordinated change.
+        // Until then both report held_no_heap and the client cannot distinguish --
+        // that is the remaining half of #715, not an oversight.
         case BrokerState::HeldNoHeap:  return "held_no_heap";
+        case BrokerState::HeldBudget:  return "held_no_heap";
         default:                       return "down";
     }
 }
@@ -290,7 +302,13 @@ static bool handleSetBrokerField(char* reply, size_t reply_size,
         strncpy(cfg.password, value, sizeof(cfg.password) - 1);
         cfg.password[sizeof(cfg.password) - 1] = '\0';
         sensitive = true;
-    } else if (eq(key, "jwt_audience")) {
+    // #709: the wire/CLI key is "jwt_audience", but the schema constant
+    // kKeyBrokerJwtAudience (ConfigSchema.h) -- and therefore SCHEMA.md and
+    // every published config profile -- says "jwt_aud". Accept BOTH so a
+    // profile written against the documented name applies instead of failing
+    // with "unknown broker field". Every JWT broker was unconfigurable via
+    // config profiles until this alias existed.
+    } else if (eq(key, "jwt_audience") || eq(key, kKeyBrokerJwtAudience)) {
         strncpy(cfg.jwt_audience, value, sizeof(cfg.jwt_audience) - 1);
         cfg.jwt_audience[sizeof(cfg.jwt_audience) - 1] = '\0';
     } else if (eq(key, "jwt_refresh")) {
@@ -451,7 +469,10 @@ static bool handleGetBrokerField(char* reply, size_t reply_size,
     else if (eq(key, "topic_prefix"))  snprintf(reply, reply_size, "mqtt.broker.%d.topic_prefix = %s\n", slot, cfg.topic_prefix);
     else if (eq(key, "iata_override")) snprintf(reply, reply_size, "mqtt.broker.%d.iata_override = %s\n", slot, cfg.iata_override);
     else if (eq(key, "ca_cert"))       snprintf(reply, reply_size, "mqtt.broker.%d.ca_cert = %s\n", slot, cfg.ca_cert_name);
-    else if (eq(key, "jwt_audience"))  snprintf(reply, reply_size, "mqtt.broker.%d.jwt_audience = %s\n", slot, cfg.jwt_audience);
+    // #709: accept either spelling and echo back the key the caller sent, so a
+    // diffing client matches its own key instead of seeing a phantom change.
+    else if (eq(key, "jwt_audience") || eq(key, kKeyBrokerJwtAudience))
+        snprintf(reply, reply_size, "mqtt.broker.%d.%s = %s\n", slot, key, cfg.jwt_audience);
     else if (eq(key, "jwt_refresh"))   snprintf(reply, reply_size, "mqtt.broker.%d.jwt_refresh = %u\n", slot, (unsigned)cfg.jwt_refresh_sec);
     else if (eq(key, "jwt_owner"))     snprintf(reply, reply_size, "mqtt.broker.%d.jwt_owner = %s\n", slot, cfg.jwt_owner);
     else if (eq(key, "jwt_email"))     snprintf(reply, reply_size, "mqtt.broker.%d.jwt_email = %s\n", slot, cfg.jwt_email);
@@ -872,7 +893,8 @@ size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size,
                               const BrokerRuntimeState* rt,
                               const char* owner_default_hex,
                               int32_t ring_lag,
-                              bool ring_lapped) {
+                              bool ring_lapped,
+                              uint32_t ring_dropped) {
     if (out == nullptr || out_size == 0) return 0;
     out[0] = '\0';
     BrokerConfig cfg;
@@ -915,6 +937,11 @@ size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size,
     if (ring_lag >= 0) {
         BKV("ring_lag=%ld\n",    (long)ring_lag);
         BKV("ring_lapped=%s\n",  ring_lapped ? "yes" : "no");
+        // #710: ring_lapped is derived from the CURRENT cursor, so it reads "no"
+        // again as soon as a rotated-out broker drains -- it erases its own
+        // evidence. ring_dropped is monotonic and is the field to trust when
+        // asking "has this broker ever lost published packets".
+        BKV("ring_dropped=%lu\n", (unsigned long)ring_dropped);
     }
     // #173: resolved-default placeholders (additive). Emitted ONLY when the raw
     // field is blank, carrying the value the firmware actually uses at connect, so

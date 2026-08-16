@@ -1711,7 +1711,9 @@ void MyMesh::offbandStreamDrain() {
       // #175: also surface the ring send-backlog + lap flag for this slot.
       int32_t _lag = (int32_t)offband::wifiObserverPool().brokerLag((uint8_t)s);
       bool _lapped = offband::wifiObserverPool().brokerLapped((uint8_t)s);
-      offband::configRenderBrokerSlot((uint8_t)s, _ob_buf, sizeof(_ob_buf), &_rt, _owner_hex, _lag, _lapped);
+      // #710: monotonic overrun-loss counter (ring_lapped self-erases on drain).
+      uint32_t _dropped = offband::wifiObserverPool().brokerDropped((uint8_t)s);
+      offband::configRenderBrokerSlot((uint8_t)s, _ob_buf, sizeof(_ob_buf), &_rt, _owner_hex, _lag, _lapped, _dropped);
       _ob_off = 0;
     }
     // Emit ONE "key=value" line as a BROKER_KV frame for the current slot.
