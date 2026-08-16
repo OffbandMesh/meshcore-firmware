@@ -234,7 +234,13 @@ void setup() {
   // companions (ESP32 + nRF52). Wires the board reset-reason into CrashLog, dumps a
   // ring that survived the previous reset, records a boot breadcrumb. The observer
   // path wires CrashLog via wifiObserverBegin() above.
+  // #740: bracketed. The first instrumented boot stopped between
+  // post:board.begin and display.begin()'s spiAttachMISO log, which leaves
+  // exactly this call and the early part of display.begin() as candidates.
+  // This split names which.
+  OFFBAND_BEACON("setup:before crashLogStandardInit");
   offband::crashLogStandardInit(board, "companion");
+  OFFBAND_BEACON("setup:post crashLogStandardInit");
 #endif
 
 #ifdef HAS_EXTERNAL_WATCHDOG
@@ -243,6 +249,7 @@ void setup() {
 
 #ifdef DISPLAY_CLASS
   DisplayDriver* disp = NULL;
+  OFFBAND_BEACON("setup:before display.begin");   // #740: split from crashLogStandardInit
   bool display_begin_ok = display.begin();
   CW_PHASE(display_begin_ok ? "post:display.begin(OK)" : "post:display.begin(FAILED)");
 #ifdef OFFBAND_OBSERVER

@@ -52,10 +52,24 @@
   #define OFFBAND_BEACON_FIFO_HIGHWATER 100
 #endif
 
+// BOUNDED spin. The first version of this looped unconditionally on the
+// assumption that an unclocked UART reads TXFIFO_CNT == 0. That assumption was
+// never verified, and it is the wrong way round to bet: a gated APB peripheral
+// commonly reads all-ones, in which case (0xFFFFFFFF >> 16) & 0x3FF = 1023,
+// the condition is permanently true, and the beacon HANGS THE BOARD it is
+// supposed to be observing.
+//
+// SAFELANE 11.8 -- isolate every dangerous action so it cannot wedge the
+// device. A diagnostic that can hang its own target is not a diagnostic. The
+// bound is generous (a full 128-byte FIFO drains in ~11 ms at 115200, and each
+// iteration is a few cycles at 240 MHz) so it never truncates real output, but
+// it is finite, so worst case we lose bytes instead of the board.
 static inline void offband_beacon_putc(char c) {
-  while (((READ_PERI_REG(UART_STATUS_REG(OFFBAND_BEACON_UART)) >> UART_TXFIFO_CNT_S)
-          & UART_TXFIFO_CNT_V) > OFFBAND_BEACON_FIFO_HIGHWATER) {
-    // spin -- see SAFETY note above: cannot hang if UART0 is unclocked
+  uint32_t guard = 2000000;
+  while (guard--) {
+    uint32_t cnt = (READ_PERI_REG(UART_STATUS_REG(OFFBAND_BEACON_UART))
+                    >> UART_TXFIFO_CNT_S) & UART_TXFIFO_CNT_V;
+    if (cnt <= OFFBAND_BEACON_FIFO_HIGHWATER) break;
   }
   WRITE_PERI_REG(UART_FIFO_REG(OFFBAND_BEACON_UART), (uint32_t)(uint8_t)c);
 }
@@ -79,9 +93,10 @@ static inline void offband_beacon_line(const char* s) {
 // immediately before it can be truncated mid-transmission. Call this before any
 // known UART reconfiguration. (Gemini review, #740.)
 static inline void offband_beacon_flush(void) {
-  while (((READ_PERI_REG(UART_STATUS_REG(OFFBAND_BEACON_UART)) >> UART_TXFIFO_CNT_S)
-          & UART_TXFIFO_CNT_V) != 0) {
-    // same no-hang property as offband_beacon_putc: an unclocked UART reads 0
+  uint32_t guard = 2000000;   // bounded for the same reason as offband_beacon_putc
+  while (guard--) {
+    if ((((READ_PERI_REG(UART_STATUS_REG(OFFBAND_BEACON_UART)) >> UART_TXFIFO_CNT_S)
+          & UART_TXFIFO_CNT_V)) == 0) break;
   }
 }
 

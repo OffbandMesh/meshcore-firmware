@@ -59,14 +59,31 @@ def do_list() -> int:
     return 0
 
 
-def open_port(port: str, baud: int) -> "serial.Serial":
-    """Open without asserting DTR/RTS, so attaching does not reset the Feather."""
+def open_port(port: str, baud: int, assert_dtr: bool = True) -> "serial.Serial":
+    """Open the Feather's port.
+
+    DTR IS ASSERTED BY DEFAULT, and that is deliberate.
+
+    The obvious-looking choice is dtr=False, to avoid resetting the sniffer on
+    attach. That was tried and it is wrong for this device: the Feather is a
+    native-USB ESP32-S3 whose CDC stack gates transmission on DTR, so opening
+    without it produced a port that connected cleanly and then emitted NOTHING
+    -- no heartbeat, no relayed data. The instrument looked dead.
+
+    Silence is only evidence if the instrument is provably alive, which is the
+    whole reason SNIFFER-v2 grew a heartbeat. Asserting DTR costs one Feather
+    reset, which costs nothing -- it holds no state. `pio device monitor`, which
+    demonstrably worked for the earlier captures, asserts DTR too.
+
+    Note this resets the FEATHER only. The RC32 is a separate device on a
+    separate port and is not touched.
+    """
     s = serial.Serial()
     s.port = port
     s.baudrate = baud
     s.timeout = 1
-    s.dtr = False
-    s.rts = False
+    s.dtr = assert_dtr
+    s.rts = False          # RTS stays low: on ESP boards it is the reset line
     s.open()
     return s
 
