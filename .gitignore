@@ -67,7 +67,8 @@ Thumbs.db
 hardware-devices.yaml
 
 # per-host hardware inventory / RF chain / device facts (LAN IPs, MACs, SSID, BLE PINs, GPS coords)
-# -- never commit. Symlink/mirror of canonical C:\Dev\LoRa\HARDWARE.md; read before any hardware work.
+# -- never commit. MUST be a REAL FILE in this repo -- never a symlink, never an
+# external path. See CLAUDE.md. Public hardware facts go in HARDWARE.md instead.
 HARDWARE.local.md
 
 # per-host flash audit log + full-flash backups (device MACs/DeviceIDs) -- never commit

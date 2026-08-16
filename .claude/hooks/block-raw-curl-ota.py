@@ -185,8 +185,7 @@ def main() -> int:
             "  - Cross-channel verify (serial/mqtt/telemetry per registry)\n"
             "  - Audit trail in flash-history.jsonl (sha256, md5, verify result)\n"
             "\n"
-            "See: C:\\Dev\\LoRa\\CLAUDE.md OTA Discipline section,\n"
-            "     Strycher/LoRa#88\n"
+            "See: CLAUDE.md 'OTA Discipline' section\n"
             "\n"
             "Original command was:\n"
             "  " + cmd,

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-scripts/pio-flash.py - LoRa flash-discipline wrapper (Python body)
+scripts/pio-flash.py - Offband flash-discipline wrapper (Python body)
 
-Reads C:\\Dev\\LoRa\\hardware-devices.yaml, enumerates present USB serial
-ports via Windows PowerShell, and gates all device-touching operations on:
+Reads this repo's hardware-devices.yaml (path derived from __file__ -- never an
+external path), enumerates present USB serial ports via Windows PowerShell, and
+gates all device-touching operations on:
 
   Tier 0  (free)         passive enumeration ('list' subcommand)
   Tier B  (identity-gate) port-opening read-only ('monitor', 'info')
@@ -11,9 +12,9 @@ ports via Windows PowerShell, and gates all device-touching operations on:
                           requires preview -> token -> confirm two-stage
 
 Tracks: Strycher/LoRa#47 (A2, sub-task of Epic A #44)
-Schema: C:\\Dev\\LoRa\\hardware-devices.yaml (A1 #46)
+Schema: <repo>/hardware-devices.yaml (per-host, gitignored)
 Hook:   .claude/hooks/block-raw-flash.sh (A3 #48, pending)
-Proposal: C:\\Dev\\LoRa\\proposal-flash-discipline.md
+Discipline: this repo's CLAUDE.md "Flash discipline" + HARDWARE.md.
 
 Usage:
     pio-flash list
@@ -1551,7 +1552,7 @@ def cmd_backup(args, registry):
     but single-stage (no token chaining): the user is the one who said
     'back up first.'
 
-    Default output: C:\\Dev\\LoRa\\flash-backups\\<device>-<YYYYmmdd-HHMMSS>.bin
+    Default output: <repo>/flash-backups/<device>-<YYYYmmdd-HHMMSS>.bin
     Default size:   0x1000000 (16 MB, full ESP32-S3 flash)
     """
     port, entry = resolve_device(args.device, registry)
