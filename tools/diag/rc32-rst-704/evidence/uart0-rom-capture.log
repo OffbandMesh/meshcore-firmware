@@ -101,3 +101,76 @@ entry 0x403c98d0
 [hb] SNIFFER-v2 alive  n=473  up=4480s  rx_bytes=2626
 [hb] SNIFFER-v2 alive  n=474  up=4490s  rx_bytes=2626
 [hb] SNIFFER-v2 alive  n=475  up=4500s  rx_bytes=2626
+[hb] SNIFFER-v2 alive  n=476  up=4510s  rx_bytes=2626
+[hb] SNIFFER-v2 alive  n=477  up=4520s  rx_bytes=2626
+[hb] SNIFFER-v2 alive  n=478  up=4530s  rx_bytes=2626
+[hb] SNIFFER-v2 alive  n=479  up=4540s  rx_bytes=2626
+[hb] SNIFFER-v2 alive  n=480  up=4550s  rx_bytes=2626
+[hb] SNIFFER-v2 alive  n=481  up=4560s  rx_bytes=2626
+[hb] SNIFFER-v2 alive  n=482  up=4570s  rx_bytes=2626
+[hb] SNIFFER-v2 alive  n=483  up=4580s  rx_bytes=2626
+[hb] SNIFFER-v2 alive  n=484  up=4590s  rx_bytes=2626
+[hb] SNIFFER-v2 alive  n=485  up=4600s  rx_bytes=2626
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+[hb] SNIFFER-v2 alive  n=486  up=4610s  rx_bytes=2856
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+[hb] SNIFFER-v2 alive  n=487  up=4620s  rx_bytes=3776
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+[hb] SNIFFER-v2 alive  n=488  up=4630s  rx_bytes=4006
+[hb] SNIFFER-v2 alive  n=489  up=4640s  rx_bytes=4006
+[hb] SNIFFER-v2 alive  n=490  up=4650s  rx_bytes=4006
+[hb] SNIFFER-v2 alive  n=491  up=4660s  rx_bytes=4006
+[hb] SNIFFER-v2 alive  n=492  up=4670s  rx_bytes=4006
+[hb] SNIFFER-v2 alive  n=493  up=4680s  rx_bytes=4006
+[hb] SNIFFER-v2 alive  n=494  up=4690s  rx_bytes=4006
