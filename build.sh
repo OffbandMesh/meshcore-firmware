@@ -135,7 +135,7 @@ build_firmware() {
     exit 1
   fi
 
-  # set firmware version string
+  # set firmware version string (Offband tag) -- names the OUTPUT FILES only
   # e.g: v1.0.0-abcdef
   FIRMWARE_VERSION_STRING="${FIRMWARE_VERSION}-${COMMIT_HASH}"
 
@@ -143,8 +143,20 @@ build_firmware() {
   # e.g: RAK_4631_Repeater-v1.0.0-SHA
   FIRMWARE_FILENAME="$1-${FIRMWARE_VERSION_STRING}"
 
+  # #691: the COMPILED FIRMWARE_VERSION define must be the MESHCORE BASE
+  # version, not the Offband tag -- offbandClientVersion() renders
+  # "<offband>-<meshcore>" from OFFBAND_VERSION (git describe) + this define,
+  # and injecting the tag here made release images report "1.3.0-1.3.0".
+  # Single-source the base from the role header's #ifndef fallback (all role
+  # headers carry the same value; the companion header is canonical).
+  MESHCORE_BASE_VERSION=$(sed -n 's/.*#define FIRMWARE_VERSION[[:space:]]*"\(v[^"]*\)".*/\1/p' examples/companion_radio/MyMesh.h | head -1)
+  if [ -z "$MESHCORE_BASE_VERSION" ]; then
+    echo "cannot resolve MeshCore base version from examples/companion_radio/MyMesh.h"
+    exit 1
+  fi
+
   # add firmware version info to end of existing platformio build flags in environment vars
-  export PLATFORMIO_BUILD_FLAGS="${PLATFORMIO_BUILD_FLAGS} -DFIRMWARE_BUILD_DATE='\"${FIRMWARE_BUILD_DATE}\"' -DFIRMWARE_VERSION='\"${FIRMWARE_VERSION_STRING}\"'"
+  export PLATFORMIO_BUILD_FLAGS="${PLATFORMIO_BUILD_FLAGS} -DFIRMWARE_BUILD_DATE='\"${FIRMWARE_BUILD_DATE}\"' -DFIRMWARE_VERSION='\"${MESHCORE_BASE_VERSION}-${COMMIT_HASH}\"'"
 
   # disable debug flags if requested
   disable_debug_flags
