@@ -2,7 +2,9 @@
 
 namespace mqtt_ca_certs {
 
-// EastMesh currently presents a Let's Encrypt E7-issued certificate.
+// Kept for the "letsencrypt"/"eastmesh"/"isrg-x1" aliases. The EastMesh-era
+// brokers presented Let's Encrypt leaves; since the CoreComms.net rebrand
+// they chain to GTS Root R4 instead (#677).
 static const char kEastmeshIsrgRootX1Pem[] =
 R"PEM(-----BEGIN CERTIFICATE-----
 MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
@@ -130,7 +132,8 @@ p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD
 )PEM";
 
 // ISRG Root X2 (Let's Encrypt ECDSA root) -- future-proofs LE/ECDSA brokers
-// (current EastMesh brokers chain to ISRG X1). #48 Item 2.
+// (the EastMesh-era brokers chained to ISRG X1; the rebranded CoreComms.net
+// brokers now chain to GTS Root R4 -- #677). #48 Item 2.
 static const char kIsrgRootX2Pem[] =
 R"PEM(-----BEGIN CERTIFICATE-----
 MIICGzCCAaGgAwIBAgIQQdKd0XLq7qeAwSxs6S+HUjAKBggqhkjOPQQDAzBPMQsw

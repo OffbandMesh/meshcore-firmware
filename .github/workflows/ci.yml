@@ -51,7 +51,12 @@ jobs:
       - name: Env capability-claim self-test
         run: python scripts/test_env_capability_claims.py
 
-      - name: Env names agree with their resolved config
+      # ADVISORY until #648 (the capability inventory) validates what this asserts.
+      # ci-green is a hard merge gate for every PR in the repo (#477), so a check
+      # built on unvalidated assumptions must not block other people's work. The
+      # JSON report is still uploaded; promote to blocking when #648 lands.
+      - name: Env names agree with their resolved config (advisory)
+        continue-on-error: true
         run: python scripts/check_env_capability_claims.py --json-out "$RUNNER_TEMP/capability-claims.json"
 
       - name: Upload capability-claim report
@@ -61,6 +66,67 @@ jobs:
           name: capability-claims
           path: ${{ runner.temp }}/capability-claims.json
           if-no-files-found: warn
+  # #712: the googletest suites existed but NOTHING ran them in CI, so every invariant they
+  # encode was unenforced on PRs. That is how #711 (a regression of #450) reached the field:
+  # the frame-size ceiling had no mechanical guard, only a comment.
+  #
+  # Envs are DISCOVERED, not listed. There are two native test envs today ([env:native] and
+  # [env:native_kiss_modem], the latter excluded from the former via test_ignore), and a
+  # hardcoded `pio test -e native` silently skipped the second one -- the same "looks
+  # covered, isn't" failure this job exists to end. Any future env with `platform = native`
+  # is picked up automatically.
+  native-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      # Required even though nothing here is flashed: PlatformIO parses the WHOLE
+      # platformio.ini (including the ${node_secrets...} interpolations used by the
+      # device envs) before it can resolve [env:native], so without this every native
+      # suite ERRORs with "No section: 'node_secrets'". Mirrors config-lint and build.
+      - name: Generate dummy secrets stub (test-only; never flashed)
+        run: |
+          printf '[node_secrets]\nadmin_password = ci-dummy\n[wifi_secrets]\nssid = ci-dummy\npassword = ci-dummy\n[mqtt_secrets]\nhost = mqtt.example.com\nport = 1883\nuser = ci-dummy\npassword = ci-dummy\n[ota_secrets]\ntrigger_secret = ci-dummy\n[cmdrelay]\nurl = http://cmdrelay.example.com/cmd\n' > "$RUNNER_TEMP/ci-secrets.ini"
+          echo "PIO_SECRETS_FILE=$RUNNER_TEMP/ci-secrets.ini" >> "$GITHUB_ENV"
+
+      - name: Discover native test environments
+        id: envs
+        run: |
+          set -euo pipefail
+          envs=$(python - <<'PY'
+          import configparser
+          cfg = configparser.ConfigParser(strict=False)
+          cfg.read('platformio.ini')
+          names = [s.split(':', 1)[1] for s in cfg.sections()
+                   if s.startswith('env:')
+                   and cfg.get(s, 'platform', fallback='').strip() == 'native']
+          print(' '.join(sorted(names)))
+          PY
+          )
+          echo "Discovered native test envs: ${envs:-<none>}"
+          # Fail loudly rather than passing green having run nothing. A test job that
+          # silently executes zero tests is worse than no job at all: it reports success.
+          if [ -z "$envs" ]; then
+            echo "::error::No native test environments found in platformio.ini" >&2
+            exit 1
+          fi
+          echo "envs=$envs" >> "$GITHUB_OUTPUT"
+
+      - name: Run native unit tests
+        run: |
+          set -euo pipefail
+          for e in ${{ steps.envs.outputs.envs }}; do
+            echo "::group::pio test -e $e"
+            pio test -e "$e"
+            echo "::endgroup::"
+          done
 
   build:
     runs-on: ubuntu-latest
@@ -184,12 +250,14 @@ jobs:
   # required check blocks the PR with no explanation instead of a red X.
   ci-green:
     runs-on: ubuntu-latest
-    needs: [config-lint, build]
+    needs: [config-lint, native-tests, build]
     if: always()
     steps:
       - name: All required CI jobs green
         run: |
           echo "config-lint: ${{ needs.config-lint.result }}"
+          echo "native-tests: ${{ needs.native-tests.result }}"
           echo "build (all matrix legs): ${{ needs.build.result }}"
           test "${{ needs.config-lint.result }}" = "success"
+          test "${{ needs.native-tests.result }}" = "success"
           test "${{ needs.build.result }}" = "success"

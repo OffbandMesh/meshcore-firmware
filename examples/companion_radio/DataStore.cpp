@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include "DataStore.h"
+#include <helpers/prefs/PrefsLayout.h>   // #627
 #include <helpers/ClockSanity.h>
+#include <MeshLog.h>                     // #631 diagnostics: OFFBAND_FORCE_CAPLOG
 
 #if defined(EXTRAFS) || defined(QSPIFLASH)
   #define MAX_BLOBRECS 100
@@ -198,17 +200,75 @@ bool DataStore::saveMainIdentity(const mesh::LocalIdentity &identity) {
   return identity_store.save("_main", identity);
 }
 
-void DataStore::loadPrefs(NodePrefs& prefs, double& node_lat, double& node_lon) {
-  if (_fs->exists("/new_prefs")) {
-    loadPrefsInt("/new_prefs", prefs, node_lat, node_lon); // new filename
-  } else if (_fs->exists("/node_prefs")) {
-    loadPrefsInt("/node_prefs", prefs, node_lat, node_lon);
-    savePrefs(prefs, node_lat, node_lon);                // save to new filename
-    _fs->remove("/node_prefs"); // remove old
+void DataStore::loadPrefs(NodePrefs& prefs) {
+#ifdef OFFBAND_FORCE_CAPLOG
+  // DIAGNOSTIC BUILD ONLY -- never shipped. The companion does NOT call
+  // CommonCLI::loadPrefs, so the force in that function never runs on this
+  // role; the migration below logged into a disabled sink and a real
+  // MIGRATION REFUSED went unrecorded on the owner's paired device (#631).
+  meshLogSetLevel(MLOG_DEBUG);
+  meshLogSetEnabled(true);
+#endif
+  if (_fs->exists("/prefs.json")) {
+    File file = openRead(_fs, "/prefs.json");
+    if (file) {
+      prefs.loadSerial(file);   // new Serial prefs
+      file.close();
+    }
+  } else {
+    // #627: same discipline as CommonCLI -- decide which writer produced the
+    // legacy record before reading it. Path B is append-only (Offband appends
+    // after upstream's end at 140), so a wrong read drops our appended fields
+    // rather than mis-assigning them -- still a wrong read, and it still fails
+    // closed rather than guessing.
+    const char* legacy = _fs->exists("/new_prefs") ? "/new_prefs"
+                       : (_fs->exists("/node_prefs") ? "/node_prefs" : NULL);
+    if (legacy) {
+      offband::PrefsLayoutEvidence ev;
+      {
+        File f = openRead(_fs, legacy);
+        if (f) { ev.length = (size_t)f.size(); f.close(); }
+        else {
+          // #631: exists() said yes but the open failed. ev.length stays 0,
+          // which matches no table entry, so the migration is REFUSED for a
+          // reason that has nothing to do with the record's layout. Silence
+          // here is indistinguishable from "unrecognised format".
+          MESH_DEBUG_PRINTLN("[prefs] ERROR: %s exists but openRead FAILED "
+                             "-- length unknown, migration will refuse.", legacy);
+        }
+      }
+      offband::PrefsIdentity id = offband::identifyLegacyPrefs(ev);
+      MESH_DEBUG_PRINTLN("[prefs] legacy %s len=%u -> layout=%s (%s)",
+                         legacy, (unsigned)ev.length,
+                         offband::toString(id.layout), offband::toString(id.reason));
+      // #668-review: the FAMILY must match, not just the layout. A Path A record
+      // left at /node_prefs -- the documented role-swap case, a node that ran as a
+      // repeater and was re-flashed as a companion -- identifies as
+      // family=Common layout=Offband. A layout-only check passed that and read a
+      // 294-byte CommonCLI record with the COMPANION offset table. The existing
+      // regression test guards detectCompanionPrefsLayout(), which is NOT the
+      // function this caller uses, so it never caught it.
+      if (id.family == offband::PrefsFamily::Companion &&
+          id.layout != offband::PrefsLayout::Unknown) {
+        // Both layouts are byte-identical up to upstream's end and Offband only
+        // appends, so one reader serves both: on an upstream-written record it
+        // short-reads to EOF and the appended fields keep their defaults.
+        loadPrefsInt(legacy, prefs);
+        if (!savePrefs(prefs)) {
+          MESH_DEBUG_PRINTLN("[prefs] ERROR: migrated %s but FAILED to write "
+                             "/prefs.json -- will be retried next boot.", legacy);
+        }
+        // legacy file deliberately retained -- recovery path
+      } else {
+        MESH_DEBUG_PRINTLN("[prefs] ERROR: cannot determine legacy layout of %s "
+                           "(len=%u) -- MIGRATION REFUSED, booting on defaults.",
+                           legacy, (unsigned)ev.length);
+      }
+    }
   }
 }
 
-void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& node_lat, double& node_lon) {
+void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs) {
   File file = openRead(_fs, filename);
   if (file) {
     uint8_t pad[8];
@@ -216,12 +276,12 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
     file.read((uint8_t *)&_prefs.airtime_factor, sizeof(float));                           // 0
     file.read((uint8_t *)_prefs.node_name, sizeof(_prefs.node_name));                      // 4
     file.read(pad, 4);                                                                     // 36
-    file.read((uint8_t *)&node_lat, sizeof(node_lat));                                     // 40
-    file.read((uint8_t *)&node_lon, sizeof(node_lon));                                     // 48
+    file.read((uint8_t *)&_prefs.node_lat, sizeof(_prefs.node_lat));                       // 40
+    file.read((uint8_t *)&_prefs.node_lon, sizeof(_prefs.node_lon));                       // 48
     file.read((uint8_t *)&_prefs.freq, sizeof(_prefs.freq));                               // 56
     file.read((uint8_t *)&_prefs.sf, sizeof(_prefs.sf));                                   // 60
     file.read((uint8_t *)&_prefs.cr, sizeof(_prefs.cr));                                   // 61
-    file.read((uint8_t *)&_prefs.client_repeat, sizeof(_prefs.client_repeat));             // 62
+    file.read((uint8_t *)&_prefs._client_repeat, sizeof(_prefs._client_repeat));             // 62
     file.read((uint8_t *)&_prefs.manual_add_contacts, sizeof(_prefs.manual_add_contacts)); // 63
     file.read((uint8_t *)&_prefs.bw, sizeof(_prefs.bw));                                   // 64
     file.read((uint8_t *)&_prefs.tx_power_dbm, sizeof(_prefs.tx_power_dbm));               // 68
@@ -237,91 +297,51 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs, double& no
     file.read((uint8_t *)&_prefs.buzzer_quiet, sizeof(_prefs.buzzer_quiet));               // 84
     file.read((uint8_t *)&_prefs.gps_enabled, sizeof(_prefs.gps_enabled));                 // 85
     file.read((uint8_t *)&_prefs.gps_interval, sizeof(_prefs.gps_interval));               // 86
-    file.read((uint8_t *)&_prefs.autoadd_config, sizeof(_prefs.autoadd_config));           // 87
-    file.read((uint8_t *)&_prefs.autoadd_max_hops, sizeof(_prefs.autoadd_max_hops));       // 88
-    file.read((uint8_t *)&_prefs.rx_boosted_gain, sizeof(_prefs.rx_boosted_gain));         // 89
-    file.read((uint8_t *)_prefs.default_scope_name, sizeof(_prefs.default_scope_name));    // 90
-    file.read((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));     // 121
+    file.read((uint8_t *)&_prefs.autoadd_config, sizeof(_prefs.autoadd_config));           // 90
+    file.read((uint8_t *)&_prefs.autoadd_max_hops, sizeof(_prefs.autoadd_max_hops));       // 91
+    file.read((uint8_t *)&_prefs.rx_boosted_gain, sizeof(_prefs.rx_boosted_gain));         // 92
+    file.read((uint8_t *)_prefs.default_scope_name, sizeof(_prefs.default_scope_name));    // 93
+    file.read((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));     // 124
     // #298: APPEND-ONLY, must stay last. Prefs files written before this field ended at
-    // 137, so on those this read short-reads to EOF and leaves the caller-set default
+    // 140, so on those this read short-reads to EOF and leaves the caller-set default
     // (LNA ON) intact. A uint8 append is all-or-nothing, so there is no partial-read
     // hazard. Never insert a new field mid-sequence.
-    file.read((uint8_t *)&_prefs.radio_fem_rxgain, sizeof(_prefs.radio_fem_rxgain));      // 137
+    file.read((uint8_t *)&_prefs.radio_fem_rxgain, sizeof(_prefs.radio_fem_rxgain));      // 140
     // #428: caplog persistence, APPEND-ONLY after radio_fem_rxgain. Files written before
-    // #428 end at 138, so these short-read to EOF and leave the caller-set defaults
+    // #435 end at 141, so these short-read to EOF and leave the caller-set defaults
     // (caplog OFF, DEBUG). Each is a uint8 all-or-nothing read. Keep these LAST; any new
-    // field goes after caplog_level. (NodePrefs offset map: ...137 fem, 138 enabled, 139 level.)
-    file.read((uint8_t *)&_prefs.caplog_enabled, sizeof(_prefs.caplog_enabled));          // 138
-    file.read((uint8_t *)&_prefs.caplog_level, sizeof(_prefs.caplog_level));              // 139
+    // field goes after caplog_level. (Offset map: ...140 fem, 141 enabled, 142 level.)
+    file.read((uint8_t *)&_prefs.caplog_enabled, sizeof(_prefs.caplog_enabled));          // 141
+    file.read((uint8_t *)&_prefs.caplog_level, sizeof(_prefs.caplog_level));              // 142
     // #510: notification scope, APPEND-ONLY after caplog_level. Files written before
-    // #510 end at 140, so this short-reads to EOF and leaves the caller-set default
+    // #510 end at 143, so this short-reads to EOF and leaves the caller-set default
     // (NOTIFY_SCOPE_ALL = today's behaviour) intact -- an existing device is never
     // silently muted by upgrading. uint8 is all-or-nothing, so no partial-read hazard.
     // Keep this LAST; any new field goes after it.
-    file.read((uint8_t *)&_prefs.notify_scope, sizeof(_prefs.notify_scope));             // 140
-    // #509: button-action matrix, APPEND-ONLY after notify_scope (offsets 141..144).
+    file.read((uint8_t *)&_prefs.notify_scope, sizeof(_prefs.notify_scope));             // 143
+    // #509: button-action matrix, APPEND-ONLY after notify_scope (offsets 144..147).
     // Short-reads to EOF on pre-#509 files, leaving the caller-set defaults.
-    file.read((uint8_t *)_prefs.button_actions, sizeof(_prefs.button_actions));           // 141
+    file.read((uint8_t *)_prefs.button_actions, sizeof(_prefs.button_actions));           // 144
     // #542 B1: indicator prefs, APPEND-ONLY after button_actions. Short-read to EOF on
     // older files leaves the caller-set defaults (led on / display auto).
-    file.read((uint8_t *)&_prefs.ui_led_enabled, sizeof(_prefs.ui_led_enabled));          // 145
-    file.read((uint8_t *)&_prefs.ui_display_mode, sizeof(_prefs.ui_display_mode));         // 146
+    file.read((uint8_t *)&_prefs.ui_led_enabled, sizeof(_prefs.ui_led_enabled));          // 148
+    file.read((uint8_t *)&_prefs.ui_display_mode, sizeof(_prefs.ui_display_mode));         // 149
+
+    // migrate old fields
+    _prefs.setRepeatEn(_prefs._client_repeat != 0);
 
     file.close();
   }
 }
 
-void DataStore::savePrefs(const NodePrefs& _prefs, double node_lat, double node_lon) {
-  File file = openWrite(_fs, "/new_prefs");
+bool DataStore::savePrefs(NodePrefs& _prefs) {
+  File file = openWrite(_fs, "/prefs.json");
   if (file) {
-    uint8_t pad[8];
-    memset(pad, 0, sizeof(pad));
-
-    file.write((uint8_t *)&_prefs.airtime_factor, sizeof(float));                           // 0
-    file.write((uint8_t *)_prefs.node_name, sizeof(_prefs.node_name));                      // 4
-    file.write(pad, 4);                                                                     // 36
-    file.write((uint8_t *)&node_lat, sizeof(node_lat));                                     // 40
-    file.write((uint8_t *)&node_lon, sizeof(node_lon));                                     // 48
-    file.write((uint8_t *)&_prefs.freq, sizeof(_prefs.freq));                               // 56
-    file.write((uint8_t *)&_prefs.sf, sizeof(_prefs.sf));                                   // 60
-    file.write((uint8_t *)&_prefs.cr, sizeof(_prefs.cr));                                   // 61
-    file.write((uint8_t *)&_prefs.client_repeat, sizeof(_prefs.client_repeat));             // 62
-    file.write((uint8_t *)&_prefs.manual_add_contacts, sizeof(_prefs.manual_add_contacts)); // 63
-    file.write((uint8_t *)&_prefs.bw, sizeof(_prefs.bw));                                   // 64
-    file.write((uint8_t *)&_prefs.tx_power_dbm, sizeof(_prefs.tx_power_dbm));               // 68
-    file.write((uint8_t *)&_prefs.telemetry_mode_base, sizeof(_prefs.telemetry_mode_base)); // 69
-    file.write((uint8_t *)&_prefs.telemetry_mode_loc, sizeof(_prefs.telemetry_mode_loc));   // 70
-    file.write((uint8_t *)&_prefs.telemetry_mode_env, sizeof(_prefs.telemetry_mode_env));   // 71
-    file.write((uint8_t *)&_prefs.rx_delay_base, sizeof(_prefs.rx_delay_base));             // 72
-    file.write((uint8_t *)&_prefs.advert_loc_policy, sizeof(_prefs.advert_loc_policy));     // 76
-    file.write((uint8_t *)&_prefs.multi_acks, sizeof(_prefs.multi_acks));                   // 77
-    file.write((uint8_t *)&_prefs.path_hash_mode, sizeof(_prefs.path_hash_mode));           // 78
-    file.write(pad, 1);                                                                     // 79
-    file.write((uint8_t *)&_prefs.ble_pin, sizeof(_prefs.ble_pin));                         // 80
-    file.write((uint8_t *)&_prefs.buzzer_quiet, sizeof(_prefs.buzzer_quiet));               // 84
-    file.write((uint8_t *)&_prefs.gps_enabled, sizeof(_prefs.gps_enabled));                 // 85
-    file.write((uint8_t *)&_prefs.gps_interval, sizeof(_prefs.gps_interval));               // 86
-    file.write((uint8_t *)&_prefs.autoadd_config, sizeof(_prefs.autoadd_config));           // 87
-    file.write((uint8_t *)&_prefs.autoadd_max_hops, sizeof(_prefs.autoadd_max_hops));       // 88
-    file.write((uint8_t *)&_prefs.rx_boosted_gain, sizeof(_prefs.rx_boosted_gain));         // 89
-    file.write((uint8_t *)_prefs.default_scope_name, sizeof(_prefs.default_scope_name));    // 90
-    file.write((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));     // 121
-    // #298: APPEND-ONLY, must stay last -- see the matching note in loadPrefsInt().
-    file.write((uint8_t *)&_prefs.radio_fem_rxgain, sizeof(_prefs.radio_fem_rxgain));      // 137
-    // #428: caplog persistence, APPEND-ONLY after radio_fem_rxgain -- must mirror the
-    // read order in loadPrefsInt() exactly. (offsets: 138 enabled, 139 level.)
-    file.write((uint8_t *)&_prefs.caplog_enabled, sizeof(_prefs.caplog_enabled));          // 138
-    file.write((uint8_t *)&_prefs.caplog_level, sizeof(_prefs.caplog_level));              // 139
-    // #510: notification scope, APPEND-ONLY after caplog_level -- must mirror the read
-    // order in loadPrefsInt() exactly. (offset 140.)
-    file.write((uint8_t *)&_prefs.notify_scope, sizeof(_prefs.notify_scope));             // 140
-    // #509: button-action matrix, APPEND-ONLY -- mirror of the read order. (141..144)
-    file.write((uint8_t *)_prefs.button_actions, sizeof(_prefs.button_actions));           // 141
-    file.write((uint8_t *)&_prefs.ui_led_enabled, sizeof(_prefs.ui_led_enabled));          // 145 (#542 B1)
-    file.write((uint8_t *)&_prefs.ui_display_mode, sizeof(_prefs.ui_display_mode));         // 146 (#542 B1)
-
+    bool success = _prefs.saveSerial(file);
     file.close();
+    return success;
   }
+  return false;
 }
 
 void DataStore::loadContacts(DataStoreHost* host) {
@@ -597,7 +617,7 @@ bool DataStore::putBlobByKey(const uint8_t key[], int key_len, const uint8_t src
     uint32_t pos = 0, found_pos = 0;
     uint32_t min_timestamp = 0xFFFFFFFF;
 
-    // search for matching key OR evict by oldest timestmap
+    // search for matching key OR evict by oldest timestamp
     BlobRec tmp;
     file.seek(0);
     while (file.read((uint8_t *) &tmp, sizeof(tmp)) == sizeof(tmp)) {

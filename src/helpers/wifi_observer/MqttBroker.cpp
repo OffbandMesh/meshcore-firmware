@@ -65,14 +65,15 @@ static bool tlsHeapBudgetOk() {
 // CA cert lookup table.
 // ---------------------------------------------------------------------------
 // MqttCaCerts.h embeds the ISRG Root X1 cert under the name
-// kEastmeshIsrgRootX1Pem. EastMesh + LetsMesh both use Let's Encrypt
-// (ISRG Root X1) so one cert covers all three vendored brokers.
+// kEastmeshIsrgRootX1Pem (the symbol keeps its EastMesh-era name).
 //
 // Naming convention exposed to operators: "letsencrypt", "eastmesh"
-// (alias), or "isrg-x1" (alias) all map to ISRG Root X1 (Let's Encrypt RSA;
-// covers EastMesh). "isrg-x2" = Let's Encrypt ECDSA root; "gts-r4" = Google
-// Trust Services Root R4 (covers LetsMesh). New brokers add a name here +
-// a PEM in MqttCaCerts.h. #48 Item 2.
+// (legacy alias), or "isrg-x1" (alias) all map to ISRG Root X1 (Let's
+// Encrypt RSA). "isrg-x2" = Let's Encrypt ECDSA root (MeshMapper);
+// "gts-r4" = Google Trust Services Root R4, which as of #677 covers the
+// vendored wss/jwt brokers -- CoreComms.net (nee EastMesh), Eastmesh.au,
+// and LetsMesh all chain to GTS Root R4 (verified live 2026-08-13). New
+// brokers add a name here + a PEM in MqttCaCerts.h. #48 Item 2.
 const char* lookupCaCertPem(const char* name) {
     if (name == nullptr || name[0] == '\0') return nullptr;
 #ifdef ARDUINO
@@ -213,7 +214,7 @@ bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg,
         (cfg.transport == BrokerTransport::Tls ||
          cfg.transport == BrokerTransport::Wss)) {
         rt_ = BrokerRuntimeState{};
-        rt_.state = BrokerState::HeldNoHeap;
+        rt_.state = BrokerState::HeldBudget;   // #715: budget, not heap
         return true;
     }
     auth_ = makeAuth(cfg, identity);
@@ -309,7 +310,12 @@ bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
     if ((cfg_.transport == BrokerTransport::Tls ||
          cfg_.transport == BrokerTransport::Wss) &&
         (!tls_budget_ok || !tlsHeapBudgetOk())) {
-        rt_.state = BrokerState::HeldNoHeap;
+        // #715: report WHICH condition deferred us. Budget-full is normal rotation
+        // (this broker is queued); below-floor heap is real resource pressure.
+        // Budget is checked first: when both are true the operator-actionable fact
+        // is the heap floor, so heap wins only when the budget was actually free.
+        rt_.state = tls_budget_ok ? BrokerState::HeldNoHeap    // budget free -> heap
+                                  : BrokerState::HeldBudget;   // waiting its turn
         return false;
     }
 

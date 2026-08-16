@@ -11,14 +11,14 @@
 // read-only `wifi.status`. Persistence is the `"wifi"` NVS namespace via
 // Preferences (role-neutral) -- NOT a NodePrefs/DataStore offset.
 //
-// KNOWN COUPLING (deliberate, deferred to #365): the `wifi.status` GET reads the
-// observer's `WifiBootstrap` state machine. That is the observer's STA/AP
-// bring-up; a non-observer companion's runtime-WiFi path (#325/#365) has its own
-// bring-up, so what `wifi.status` means off-observer is a #365 design decision,
-// not a mechanical move. This provider keeps the WifiBootstrap dependency for the
-// observer; #365 wires its own status source when it lands. (Owner call
-// 2026-07-29: #370 relocates + decouples DISPLAY, leaves WiFi's WifiBootstrap
-// coupling to #365.)
+// STATUS SOURCE (#684, resolved 2026-08-01): `wifi.status` reports ONE uniform
+// vocabulary for every WiFi-capable role. On an OBSERVER build it reads the
+// authoritative `WifiBootstrap` STA/AP state machine; on a non-observer build
+// (companion #365, repeater #301) it derives the SAME words from the raw WiFi
+// driver + stored creds. The `WifiBootstrap` header is included ONLY under
+// `OFFBAND_OBSERVER`, so this provider links with zero `wifi_observer/` sources
+// off-observer -- closing the gap #370 left and unblocking #462. (Owner D1/D3:
+// uniform WiFi across all WiFi-capable roles; one status vocabulary, not two.)
 //
 // The handlers are exposed here (not file-static) because the observer's `_sys`
 // string CLI (dispatchObserverCli, still in ObserverCli.cpp) calls them too --
@@ -42,5 +42,12 @@ bool handleGetWifi(char* reply, size_t reply_size, const char* field);
 
 // wifi.enabled policy flag (NVS "wifi"/"enabled", default true; reboot-to-apply).
 bool handleSetWifiEnabled(char* reply, size_t reply_size, bool enabled);
+
+// #689/#696: credential clear. `what` is nullptr/""/"pwd" (clear the PSK only,
+// the default) or "all" (also clear the SSID). Uses Preferences::remove(), NOT
+// putString(""), which does not reliably clear an ESP32 NVS key (#98). This is
+// the only escape from a stored PSK, which otherwise raises the STA scan-auth
+// threshold and permanently blocks OPEN-network association (#692).
+bool handleClearWifi(char* reply, size_t reply_size, const char* what);
 
 }  // namespace offband

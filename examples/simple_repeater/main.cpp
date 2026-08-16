@@ -15,7 +15,12 @@
 
 #ifdef DISPLAY_CLASS
   #include "UITask.h"
-  static UITask ui_task(display);
+  static UITask ui_task(board, display);
+#endif
+
+#ifdef ETHERNET_ENABLED
+  #define ETHERNET_CLI_BANNER "MeshCore Repeater CLI"
+  #include <helpers/nrf52/EthernetCLI.h>
 #endif
 
 // ----------------------------------------------------------------------------
@@ -974,6 +979,9 @@ void halt() {
 }
 
 static char command[160];
+#ifdef ETHERNET_ENABLED
+static char ethernet_command[160];
+#endif
 
 // For power saving
 unsigned long POWERSAVING_FIRSTSLEEP_SECS = 120; // The first sleep (if enabled) from boot
@@ -1007,6 +1015,10 @@ void setup() {
   // the NVS boot counter has tripped, this call reboots into the other partition
   // and never returns. Otherwise it caches PENDING_VERIFY state for loop().
   board.beginBootSafety();
+
+#ifdef HAS_EXTERNAL_WATCHDOG
+  external_watchdog.begin();
+#endif
 
 #if defined(MESH_DEBUG) && defined(NRF52_PLATFORM)
   // give some extra time for serial to settle so
@@ -1061,6 +1073,9 @@ void setup() {
   mesh::Utils::printHex(Serial, the_mesh.self_id.pub_key, PUB_KEY_SIZE); Serial.println();
 
   command[0] = 0;
+#ifdef ETHERNET_ENABLED
+  ethernet_command[0] = 0;
+#endif
 
   sensors.begin();
 
@@ -1068,6 +1083,10 @@ void setup() {
 
 #ifdef DISPLAY_CLASS
   ui_task.begin(the_mesh.getNodePrefs(), FIRMWARE_BUILD_DATE, FIRMWARE_VERSION);
+#endif
+
+#ifdef ETHERNET_ENABLED
+  ethernet_start_task();
 #endif
 
   // send out initial zero hop Advertisement to the mesh
@@ -1117,6 +1136,7 @@ void loop() {
     }
   }
 #endif
+  // Handle Serial CLI
   int len = strlen(command);
   while (Serial.available() && len < sizeof(command)-1) {
     char c = Serial.read();
@@ -1135,7 +1155,14 @@ void loop() {
     Serial.print('\n');
     command[len - 1] = 0;  // replace newline with C string null terminator
     char reply[160];
+    reply[0] = 0;
+#ifdef ETHERNET_ENABLED
+    if (!ethernet_handle_command(command, reply)) {
+      the_mesh.handleCommand(0, command, reply);
+    }
+#else
     the_mesh.handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
+#endif
     if (reply[0]) {
       Serial.print("  -> "); Serial.println(reply);
     }
@@ -1143,7 +1170,20 @@ void loop() {
     command[0] = 0;  // reset command buffer
   }
 
-#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_)
+#ifdef ETHERNET_ENABLED
+  ethernet_loop_maintain();
+  if (ethernet_read_line(ethernet_command, sizeof(ethernet_command))) {
+    char reply[160];
+    reply[0] = 0;
+    if (!ethernet_handle_command(ethernet_command, reply)) {
+      the_mesh.handleCommand(0, ethernet_command, reply);
+    }
+    ethernet_send_reply(reply);
+    ethernet_command[0] = 0;
+  }
+#endif
+
+#if defined(PIN_USER_BTN) && defined(_SEEED_SENSECAP_SOLAR_H_) && !defined(DISPLAY_CLASS)
   // Hold the user button to power off the SenseCAP Solar repeater.
   int btnState = digitalRead(PIN_USER_BTN);
   if (btnState == LOW) {
@@ -1183,7 +1223,22 @@ void loop() {
     s_boot_validated = true;
   }
 
-  if (the_mesh.getNodePrefs()->powersaving_enabled && !the_mesh.hasPendingWork()) {
+#ifdef HAS_EXTERNAL_WATCHDOG
+  external_watchdog.loop();
+#endif
+  // #597: skip the idle light-sleep while a persistent-WiFi window is armed
+  // (OTA, `wifi on N`, or a caplog-forward stream). OTA already sets
+  // Board::inhibit_sleep so board.sleep() no-ops during a firmware upload, but
+  // the caplog-forward path does not — without this, a forward window still
+  // light-sleeps between LoRa events and throttles the live syslog stream.
+  // wifi_telemetry_is_persistent() tracks g_tel_persistent_until_ms, which every
+  // persistent-WiFi op (OTA, wifi-on, forward) sets — the common signal.
+  bool wifi_window_armed = false;
+#ifdef ENABLE_WIFI_TELEMETRY
+  wifi_window_armed = (wifi_telemetry_is_persistent() != 0);
+#endif
+  if (the_mesh.getNodePrefs()->powersaving_enabled && !the_mesh.hasPendingWork()
+      && !wifi_window_armed) {
 #if defined(NRF52_PLATFORM)
     board.sleep(0); // nrf ignores seconds param, sleeps whenever possible
 #else

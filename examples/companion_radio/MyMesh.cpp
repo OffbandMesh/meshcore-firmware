@@ -127,6 +127,12 @@ namespace offband { MqttBrokerPool& wifiObserverPool(); }
 #define CAPLOG_RESP_ACK               0x10  // control:  [0xC4,0x10, req_op, ok(0|1)]
 #define CAPLOG_RESP_STATUS            0x11  // status:   [0xC4,0x11, enabled, level, used(4B LE), cap(4B LE)]
 
+// #718: abort an in-flight download after this long with the transport refusing every
+// frame. Measured from the last ACCEPTED chunk, so a slow but advancing drain never
+// trips it. Shorter than the client's 30 s downloadCaplog timeout so the device frees
+// its own state first and the client sees a clean stop rather than a wedged radio.
+#define CAPLOG_STALL_ABORT_MS         15000UL
+
 // Stats sub-types for CMD_GET_STATS
 #define STATS_TYPE_CORE               0
 #define STATS_TYPE_RADIO              1
@@ -360,6 +366,9 @@ float MyMesh::getAirtimeBudgetFactor() const {
 
 int MyMesh::getInterferenceThreshold() const {
   return 0; // disabled for now, until currentRSSI() problem is resolved
+}
+bool MyMesh::getCADEnabled() const {
+  return false; // hardware CAD before TX (disabled by default, until configurable)
 }
 
 int MyMesh::calcRxDelay(float score, uint32_t air_time) const {
@@ -804,7 +813,7 @@ bool MyMesh::filterRecvFloodPacket(mesh::Packet* packet) {
 }
 
 bool MyMesh::allowPacketForward(const mesh::Packet* packet) {
-  return _prefs.client_repeat != 0;
+  return _prefs.isRepeatEn();
 }
 
 void MyMesh::sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis) {
@@ -1045,6 +1054,11 @@ uint8_t MyMesh::onContactRequest(const ContactInfo &contact, uint32_t sender_tim
       // query other sensors -- target specific
       sensors.querySensors(permissions, telemetry);
 
+      float temperature = board.getMCUTemperature();
+      if(!isnan(temperature)) { // Supported boards with built-in temperature sensor. ESP32-C3 may return NAN
+        telemetry.addTemperature(TELEM_CHANNEL_SELF, temperature); // Built-in MCU Temperature
+      }
+
       memcpy(reply, &sender_timestamp,
              4); // reflect sender_timestamp back in response packet (kind of like a 'tag')
 
@@ -1245,7 +1259,7 @@ void MyMesh::onSendTimeout() {}
 
 MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui)
     : BaseChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(16), tables),
-      _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store), _ui(ui) {
+      _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store), _ui(ui), _iter(0) {
   _iter_started = false;
   _cli_rescue = false;
   // #611: clear the packet-hash ring here rather than relying on the_mesh having
@@ -1271,6 +1285,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _caplog_streaming = false;  // #396: no caplog download in flight
   _caplog_off = 0;
   _caplog_resume = false;
+  _caplog_last_progress = 0;  // #718: stall clock
   offline_queue_len = 0;
   app_target_ver = 0;
   clearPendingReqs();
@@ -1282,7 +1297,6 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   send_unscoped = false;
 
   // defaults
-  memset(&_prefs, 0, sizeof(_prefs));
   _prefs.airtime_factor = 1.0;
   strcpy(_prefs.node_name, "NONAME");
   _prefs.freq = LORA_FREQ;
@@ -1293,6 +1307,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _prefs.gps_enabled = 0;       // GPS disabled by default
   _prefs.gps_interval = 0;      // No automatic GPS updates by default
   //_prefs.rx_delay_base = 10.0f;  enable once new algo fixed
+  _prefs.setRepeatEn(false);
 #if defined(USE_SX1262) || defined(USE_SX1268)
 #ifdef SX126X_RX_BOOSTED_GAIN
   _prefs.rx_boosted_gain = SX126X_RX_BOOSTED_GAIN;
@@ -1369,7 +1384,9 @@ void MyMesh::begin(bool has_display) {
 #endif
 
   // load persisted prefs
-  _store->loadPrefs(_prefs, sensors.node_lat, sensors.node_lon);
+  _store->loadPrefs(_prefs);
+  sensors.node_lat = _prefs.node_lat;
+  sensors.node_lon = _prefs.node_lon;
 
   // sanitise bad pref values
   _prefs.rx_delay_base = constrain(_prefs.rx_delay_base, 0, 20.0f);
@@ -1694,7 +1711,9 @@ void MyMesh::offbandStreamDrain() {
       // #175: also surface the ring send-backlog + lap flag for this slot.
       int32_t _lag = (int32_t)offband::wifiObserverPool().brokerLag((uint8_t)s);
       bool _lapped = offband::wifiObserverPool().brokerLapped((uint8_t)s);
-      offband::configRenderBrokerSlot((uint8_t)s, _ob_buf, sizeof(_ob_buf), &_rt, _owner_hex, _lag, _lapped);
+      // #710: monotonic overrun-loss counter (ring_lapped self-erases on drain).
+      uint32_t _dropped = offband::wifiObserverPool().brokerDropped((uint8_t)s);
+      offband::configRenderBrokerSlot((uint8_t)s, _ob_buf, sizeof(_ob_buf), &_rt, _owner_hex, _lag, _lapped, _dropped);
       _ob_off = 0;
     }
     // Emit ONE "key=value" line as a BROKER_KV frame for the current slot.
@@ -1823,6 +1842,7 @@ void MyMesh::handleCmdFrame(size_t len) {
       _serial->writeFrame(out_frame, 6);
       _caplog_off = 0;
       _caplog_streaming = true;
+      _caplog_last_progress = millis();   // #718: stall clock starts now
       return;
     }
     // unknown sub-code -> explicit error (never silently fall through to download)
@@ -2197,7 +2217,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     i += 40;
     StrHelper::strzcpy((char *)&out_frame[i], offbandClientVersion(), 20);  // #154
     i += 20;
-    out_frame[i++] = _prefs.client_repeat;   // v9+
+    out_frame[i++] = _prefs.isRepeatEn() ? 1 : 0;   // v9+
     out_frame[i++] = _prefs.path_hash_mode;  // v10+
     // F4 (#163): Offband capability byte. bit0 = WIFI_OBSERVER_SUPPORT -- the
     // config command's backend (wifi_observer) is compiled in. Additive: pre-v14
@@ -2690,7 +2710,7 @@ void MyMesh::handleCmdFrame(size_t len) {
       _prefs.cr = cr;
       _prefs.freq = (float)freq / 1000.0;
       _prefs.bw = (float)bw / 1000.0;
-      _prefs.client_repeat = repeat;
+      _prefs.setRepeatEn(repeat != 0);
       savePrefs();
 
       radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
@@ -2847,6 +2867,7 @@ void MyMesh::handleCmdFrame(size_t len) {
       memcpy(anon.id.pub_key, pub_key, PUB_KEY_SIZE);
       anon.out_path_len = 0;   // default to zero-hop direct
       anon.type = ADV_TYPE_NONE;  // unknown
+      anon.lastmod = getRTCClock()->getCurrentTime();
 
       if (addContact(anon)) recipient = &anon;
     }
@@ -2941,6 +2962,11 @@ void MyMesh::handleCmdFrame(size_t len) {
   } else if (cmd_frame[0] == CMD_SEND_TELEMETRY_REQ && len == 4) {  // 'self' telemetry request
     telemetry.reset();
     telemetry.addVoltage(TELEM_CHANNEL_SELF, (float)board.getBattMilliVolts() / 1000.0f);
+    float temperature = board.getMCUTemperature();
+    if(!isnan(temperature)) { // Supported boards with built-in temperature sensor. ESP32-C3 may return NAN
+      telemetry.addTemperature(TELEM_CHANNEL_SELF, temperature); // Built-in MCU Temperature
+    }
+
     // query other sensors -- target specific
     sensors.querySensors(0xFF, telemetry);
 
@@ -3305,6 +3331,7 @@ void MyMesh::handleCmdFrame(size_t len) {
         sendPacket(pkt, priority, 0);
         writeOKFrame();
       } else {
+        releasePacket(pkt);
         writeErrFrame(ERR_CODE_ILLEGAL_ARG);
       }
     } else {
@@ -3389,14 +3416,35 @@ void MyMesh::caplogDrain() {
   size_t n = meshLogSnapshot(&out_frame[2], cap, _caplog_off);
   if (n == 0) {                                    // buffer exhausted -> END
     out_frame[1] = CAPLOG_SUB_END;
-    _serial->writeFrame(out_frame, 2);
+    // #718: if the terminator cannot be sent, stay streaming and retry next pass.
+    // Tearing the stream down on a refused END would leave the client waiting for a
+    // terminator that is never re-sent, i.e. a hang instead of a clean finish.
+    if (_serial->writeFrame(out_frame, 2) == 0) return;
     _caplog_streaming = false;
     meshLogSetEnabled(_caplog_resume);             // resume capture if it was on
     return;
   }
   out_frame[1] = CAPLOG_SUB_CHUNK;
-  _serial->writeFrame(out_frame, 2 + n);
+  // #718: a transport may REFUSE a frame it cannot deliver whole -- BLE when the send
+  // queue is full, serial when the non-blocking TX FIFO lacks room. Advancing the read
+  // offset on a refusal silently skips those bytes forever, which is how a download
+  // ends short of the total announced at START. The ring is frozen for the duration of
+  // the download, so simply not advancing re-offers the SAME bytes on the next pass.
+  if (_serial->writeFrame(out_frame, 2 + n) == 0) {
+    // ...but a host that never drains would then refuse forever, leaving the stream
+    // open and the caplog subsystem wedged (the handleCmdFrame guard rejects
+    // ENABLE/DISABLE/ERASE/DOWNLOAD while _caplog_streaming). Abort on a STALL --
+    // elapsed since the last ACCEPTED chunk, so a slow-but-advancing drain is safe.
+    if (millis() - _caplog_last_progress > CAPLOG_STALL_ABORT_MS) {
+      _caplog_streaming = false;
+      meshLogSetEnabled(_caplog_resume);
+      MESH_DEBUG_PRINTLN("caplog: transport stalled %lums, download aborted (#718)",
+                         (unsigned long)CAPLOG_STALL_ABORT_MS);
+    }
+    return;
+  }
   _caplog_off += n;
+  _caplog_last_progress = millis();
 }
 
 void MyMesh::enterCLIRescue() {
@@ -3596,15 +3644,7 @@ void MyMesh::checkSerialInterface() {
              && !_serial->isWriteBusy() // don't spam the Serial Interface too quickly!
   ) {
     ContactInfo contact;
-    bool found = false;
-    while (_iter.hasNext(this, contact)) {
-      if (contact.type != ADV_TYPE_NONE) {
-        found = true;
-        break;
-      }
-    }
-
-    if (found) {
+    if (_iter.hasNext(this, contact)) {
       if (contact.lastmod > _iter_filter_since) { // apply the 'since' filter
         writeContactRespFrame(RESP_CODE_CONTACT, contact);
         if (contact.lastmod > _most_recent_lastmod) {

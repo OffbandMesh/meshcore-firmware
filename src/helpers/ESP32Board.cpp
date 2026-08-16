@@ -4,6 +4,7 @@
 #include <esp_ota_ops.h>
 #include <nvs.h>
 #include <nvs_flash.h>
+#include <target.h>
 
 #if defined(ADMIN_PASSWORD) && !defined(DISABLE_WIFI_OTA)   // Repeater or Room Server only
 #include <WiFi.h>
@@ -69,11 +70,15 @@ bool ESP32Board::startOTAUpdateOverSTA(const char* id, const char* password, cha
     return false;
   }
 
-  // If an OTA server is already running, refuse — caller should stopOTAUpdate first.
+  // #598: a prior OTA server may still be up — most often a stale AP-mode server
+  // from an earlier attempt, or a previous STA session that was never stopped.
+  // Rather than refusing (which forced an out-of-band `ota end` before a retry
+  // could work), tear the old server down and continue. stopOTAUpdate() ends and
+  // frees the server, clears g_ota_url, drops any AP interface, and clears
+  // inhibit_sleep — which we re-arm just below. STA WiFi was already confirmed up
+  // by the WL_CONNECTED check above and is left untouched.
   if (g_ota_server != nullptr) {
-    snprintf(reply, 80, "ERR: OTA already running at %s",
-             g_ota_url[0] ? g_ota_url : "(unknown)");
-    return false;
+    stopOTAUpdate();
   }
 
   inhibit_sleep = true;   // prevent sleep during OTA
@@ -190,8 +195,7 @@ static const char* k_nvs_safety_ns = "ota_safety";
 static const char* k_nvs_boot_count = "boot_count";
 static bool s_validation_pending = false;
 
-// =============================================================================
-// Epic E (#64) / E1 #65: Persistent safety/diagnostic event ring buffer.
+// ======================================================================// Epic E (#64) / E1 #65: Persistent safety/diagnostic event ring buffer.
 //
 // SAFELANE Error Visibility violation fix discovered during D7 (#61) testing:
 // D9 SAFETY logs and OTA events were emitted only via Serial.println, lost if
@@ -230,6 +234,9 @@ using mesh::EVT_OTA_START;
 using mesh::EVT_OTA_PROGRESS;
 using mesh::EVT_OTA_RESTART;
 using mesh::EVT_NVS_FAIL;
+using mesh::EVT_PREFS_MIGRATED;
+using mesh::EVT_PREFS_REFUSED;
+using mesh::EVT_PREFS_SAVE_FAIL;
 
 struct __attribute__((packed)) SafetyEvent {
   uint32_t seq;       // monotonic across boots (from evt_seq NVS counter)
@@ -290,6 +297,9 @@ static const char* safety_event_type_str(uint8_t t) {
     case EVT_BOOT_INC:        return "boot_inc";
     case EVT_BOOT_THRESHOLD:  return "threshold";
     case EVT_BOOT_ROLLBACK:   return "rollback";
+    case EVT_PREFS_MIGRATED:  return "prefs_migrated";
+    case EVT_PREFS_REFUSED:   return "prefs_REFUSED";
+    case EVT_PREFS_SAVE_FAIL: return "prefs_save_FAIL";
     case EVT_BOOT_PENDING:    return "pending";
     case EVT_BOOT_VALID:      return "valid";
     case EVT_BOOT_VALID_FAIL: return "valid_fail";
@@ -673,4 +683,45 @@ void ESP32Board::getPartitionsInfo(char* buf, size_t buflen) {
   }
 }
 
+void ESP32Board::powerOff() {
+  enterDeepSleep(0); // Do not wakeup
+}
+
+void ESP32Board::enterDeepSleep(uint32_t secs) {
+  // Power off the display if any
+#ifdef DISPLAY_CLASS
+  display.turnOff();
+#endif
+
+  // Power off LoRa
+  radio_driver.powerOff();
+
+  // Keep LoRa inactive during deepsleep
+  digitalWrite(P_LORA_NSS, HIGH);
+#if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32C6)
+  gpio_hold_en((gpio_num_t)P_LORA_NSS);
+#else
+  rtc_gpio_hold_en((gpio_num_t)P_LORA_NSS);
+#endif
+
+  // Power off GPS if any
+  if (sensors.getLocationProvider() != NULL) {
+    sensors.getLocationProvider()->stop();
+  }
+
+  // Flush serial buffers
+  Serial.flush();
+  delay(100);
+
+  // Clear stale wakeup sources to avoid ghost wakeup
+  // This is required when Power Management and automatic lightsleep are enabled
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+
+  if (secs > 0) {
+    esp_sleep_enable_timer_wakeup(secs * 1000000ULL);
+  }
+
+  // Finally set ESP32 into deepsleep
+  esp_deep_sleep_start(); // CPU halts here and never returns!
+}
 #endif

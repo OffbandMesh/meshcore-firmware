@@ -33,19 +33,72 @@ static uint32_t _atoi(const char* sp) {
   return n;
 }
 
+// interface manager
+#include <helpers/MultiSerialInterface.h>
+MultiSerialInterface interface_manager;
+
+// include bluetooth interface
+#if defined(BLE_PIN_CODE)
+  #ifdef ESP32
+    // include esp32 bluetooth interface
+    #include <helpers/esp32/SerialBLEInterface.h>
+    SerialBLEInterface bluetooth_interface;
+  #elif defined(NRF52_PLATFORM)
+    // include nrf52 bluetooth interface
+    #include <helpers/nrf52/SerialBLEInterface.h>
+    SerialBLEInterface bluetooth_interface;
+  #else
+    #error "SerialBLEInterface is not defined for this platform"
+  #endif
+#endif
+
+// include wifi interface
+#ifdef WIFI_SSID
+  #ifndef TCP_PORT
+    #define TCP_PORT 5000
+  #endif
+  #ifdef ESP32
+    // include esp32 wifi interface
+    #include <helpers/esp32/SerialWifiInterface.h>
+    SerialWifiInterface wifi_interface;
+  #else
+    #error "SerialWifiInterface is not defined for this platform"
+  #endif
+#endif
+
+// include usb interface
+#if defined(ENABLE_USB_INTERFACE)
+  #include <helpers/ArduinoSerialInterface.h>
+  ArduinoSerialInterface usb_serial_interface;
+#endif
+
+// include ethernet interface
+#if defined(ETHERNET_ENABLED)
+  #include <helpers/ethernet/EthernetInterface.h>
+  ETHERNET_CLASS ethernet_interface;
+#endif
+
+// include hardware serial interface
+#if defined(SERIAL_RX)
+  #include <helpers/ArduinoSerialInterface.h>
+  ArduinoSerialInterface hardware_serial_interface;
+  HardwareSerial companion_serial(1);
+#endif
+
+// platform file system
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   #include <InternalFileSystem.h>
   #if defined(QSPIFLASH)
     #include <CustomLFS_QSPIFlash.h>
     DataStore store(InternalFS, QSPIFlash, rtc_clock);
   #else
-  #if defined(EXTRAFS)
-    #include <CustomLFS.h>
-    CustomLFS ExtraFS(0xD4000, 0x19000, 128);
-    DataStore store(InternalFS, ExtraFS, rtc_clock);
-  #else
-    DataStore store(InternalFS, rtc_clock);
-  #endif
+    #if defined(EXTRAFS)
+      #include <CustomLFS.h>
+      CustomLFS ExtraFS(0xD4000, 0x19000, 128);
+      DataStore store(InternalFS, ExtraFS, rtc_clock);
+    #else
+      DataStore store(InternalFS, rtc_clock);
+    #endif
   #endif
 #elif defined(RP2040_PLATFORM)
   #include <LittleFS.h>
@@ -55,67 +108,19 @@ static uint32_t _atoi(const char* sp) {
   DataStore store(SPIFFS, rtc_clock);
 #endif
 
-#ifdef ESP32
-  #ifdef WIFI_SSID
-    // SECURITY (Offband #167/#168): SerialWifiInterface is a TCP server on
-    // TCP_PORT (5000) with NO connection auth -- any host on the LAN that reaches
-    // it becomes the companion peer (full companion-API control). Do NOT pair
-    // WIFI_SSID with OFFBAND_OBSERVER: the config command would land on this
-    // unauthenticated socket (a compile-time #error in OffbandConfigProtocol.h
-    // enforces that). Authenticating this transport is tracked in #167 (P1).
-    #include <helpers/esp32/SerialWifiInterface.h>
-    SerialWifiInterface serial_interface;
-    #ifndef TCP_PORT
-      #define TCP_PORT 5000
-    #endif
-  #elif defined(BLE_PIN_CODE)
-    #include <helpers/esp32/SerialBLEInterface.h>
-    SerialBLEInterface serial_interface;
-  #elif defined(SERIAL_RX)
-    #include <helpers/ArduinoSerialInterface.h>
-    ArduinoSerialInterface serial_interface;
-    HardwareSerial companion_serial(1);
-  #else
-    #include <helpers/ArduinoSerialInterface.h>
-    ArduinoSerialInterface serial_interface;
-  #endif
-#elif defined(RP2040_PLATFORM)
-  //#ifdef WIFI_SSID
-  //  #include <helpers/rp2040/SerialWifiInterface.h>
-  //  SerialWifiInterface serial_interface;
-  //  #ifndef TCP_PORT
-  //    #define TCP_PORT 5000
-  //  #endif
-  // #elif defined(BLE_PIN_CODE)
-  //   #include <helpers/rp2040/SerialBLEInterface.h>
-  //   SerialBLEInterface serial_interface;
-  #if defined(SERIAL_RX)
-    #include <helpers/ArduinoSerialInterface.h>
-    ArduinoSerialInterface serial_interface;
-    HardwareSerial companion_serial(1);
-  #else
-    #include <helpers/ArduinoSerialInterface.h>
-    ArduinoSerialInterface serial_interface;
-  #endif
-#elif defined(NRF52_PLATFORM)
-  #ifdef BLE_PIN_CODE
-    #include <helpers/nrf52/SerialBLEInterface.h>
-    SerialBLEInterface serial_interface;
-  #else
-    #include <helpers/ArduinoSerialInterface.h>
-    ArduinoSerialInterface serial_interface;
-  #endif
-#elif defined(STM32_PLATFORM)
-  #include <helpers/ArduinoSerialInterface.h>
-  ArduinoSerialInterface serial_interface;
-#else
-  #error "need to define a serial interface"
-#endif
+// #668: the legacy per-platform `serial_interface` declarations lived here.
+// 1.17.0 replaced them with the interface objects declared above
+// (bluetooth_interface / wifi_interface / usb_serial_interface /
+// ethernet_interface / hardware_serial_interface) registered into
+// interface_manager. The merge added those WITHOUT removing these, so every
+// companion build carried a second, fully-allocated interface object -- 4,624
+// bytes of dead .bss on ESP32, and on nRF52 a second SerialBLEInterface whose
+// begin() was still being called, double-initialising the BLE stack (#668).
 
 /* GLOBAL OBJECTS */
 #ifdef DISPLAY_CLASS
   #include "UITask.h"
-  UITask ui_task(&board, &serial_interface);
+  UITask ui_task(&board, &interface_manager);
 #endif
 
 #if defined(OFFBAND_OBSERVER) && defined(DISPLAY_CLASS)
@@ -207,6 +212,10 @@ void setup() {
   offband::crashLogStandardInit(board, "companion");
 #endif
 
+#ifdef HAS_EXTERNAL_WATCHDOG
+  external_watchdog.begin();
+#endif
+
 #ifdef DISPLAY_CLASS
   DisplayDriver* disp = NULL;
   bool display_begin_ok = display.begin();
@@ -268,16 +277,13 @@ void setup() {
     #endif
   );
 
-#ifdef BLE_PIN_CODE
-  serial_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
-#else
-  serial_interface.begin(Serial);
-#endif
-  the_mesh.startInterface(serial_interface);
-  // #411: mirror captured serial-log lines to the live console EXCEPT where the
-  // framed protocol runs on Serial itself (USB-serial companion) -- there it stays
-  // capture-only so nothing raw corrupts the protocol line.
-  meshLogSetMirror(!serial_interface.isConsoleSharedWithProtocol());
+  // #668: interface bring-up for EVERY platform now happens once, below, via
+  // interface_manager. The legacy single-serial_interface block that used to sit
+  // here was NOT removed when 1.17.0's MultiSerialInterface was ported -- only the
+  // ESP32 branch got ported -- so on nRF52 SerialBLEInterface::begin() ran TWICE
+  // (once here, once at the common block) and the second full BLE bring-up
+  // crash-looped the board. USB companions survived it only because a duplicated
+  // ArduinoSerialInterface::begin(Serial) just re-binds a stream.
 #elif defined(RP2040_PLATFORM)
   LittleFS.begin();
   store.begin();
@@ -296,18 +302,10 @@ void setup() {
   //   char dev_name[32+16];
   //   sprintf(dev_name, "%s%s", BLE_NAME_PREFIX, the_mesh.getNodeName());
   //   serial_interface.begin(dev_name, the_mesh.getBLEPin());
-  #if defined(SERIAL_RX)
-    companion_serial.setPins(SERIAL_RX, SERIAL_TX);
-    companion_serial.begin(115200);
-    serial_interface.begin(companion_serial);
-  #else
-    serial_interface.begin(Serial);
-  #endif
-    the_mesh.startInterface(serial_interface);
-  // #411: mirror captured serial-log lines to the live console EXCEPT where the
-  // framed protocol runs on Serial itself (USB-serial companion) -- there it stays
-  // capture-only so nothing raw corrupts the protocol line.
-  meshLogSetMirror(!serial_interface.isConsoleSharedWithProtocol());
+  // #668: same as the nRF52 branch above -- interface bring-up is owned by
+  // interface_manager below. RP2040's duplication was never fatal because its BLE
+  // path is commented out, so it only ever double-bound an ArduinoSerialInterface,
+  // but it is the same defect and is removed with it.
 #elif defined(ESP32)
   CW_PHASE("ESP32:before SPIFFS.begin");
   SPIFFS.begin(true);
@@ -322,7 +320,17 @@ void setup() {
     #endif
   );
   CW_PHASE("ESP32:post the_mesh.begin");
+#else
+  #error "need to define filesystem"
+#endif
 
+// add bluetooth interface
+#if defined(BLE_PIN_CODE)
+  bluetooth_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
+  interface_manager.addInterface(InterfaceType::Bluetooth, &bluetooth_interface);
+#endif
+
+// add wifi interface
 #ifdef WIFI_SSID
   board.setInhibitSleep(true);   // prevent sleep when WiFi is active
   WiFi.setAutoReconnect(true);
@@ -338,28 +346,52 @@ void setup() {
   });
 
   WiFi.begin(WIFI_SSID, WIFI_PWD);
-  serial_interface.begin(TCP_PORT);
-  CW_PHASE("ESP32:post WIFI_SSID serial_interface.begin");
-#elif defined(BLE_PIN_CODE)
-  CW_PHASE("ESP32:before BLE serial_interface.begin (BLE_PIN_CODE)");
-  serial_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
-  CW_PHASE("ESP32:post BLE serial_interface.begin");
-#elif defined(SERIAL_RX)
+  // PORTED to upstream's MultiSerialInterface (1.17.0): the ESP32 branch used to
+  // select ONE serial_interface here and call the_mesh.startInterface() on it.
+  // interface_manager now owns registration (BLE/WiFi/USB/Ethernet/HardwareSerial
+  // are registered around this block) and is started once below, so keeping the
+  // old selection would start the mesh interface twice. Offband observer wiring
+  // moved to just after startInterface(interface_manager) -- it needs self_id.
+  CW_PHASE("ESP32:before wifi_interface.begin");
+  wifi_interface.begin(TCP_PORT);
+  interface_manager.addInterface(InterfaceType::WiFi, &wifi_interface);
+  CW_PHASE("ESP32:post wifi_interface.begin");
+#endif
+
+// add usb interface
+#if defined(ENABLE_USB_INTERFACE)
+  usb_serial_interface.begin(Serial);
+  interface_manager.addInterface(InterfaceType::USB, &usb_serial_interface);
+#endif
+
+// add ethernet interface
+#if defined(ETHERNET_ENABLED)
+  ethernet_interface.begin();
+  interface_manager.addInterface(InterfaceType::Ethernet, &ethernet_interface);
+#endif
+
+// add hardware serial interface
+#if defined(SERIAL_RX)
   companion_serial.setPins(SERIAL_RX, SERIAL_TX);
   companion_serial.begin(115200);
-  serial_interface.begin(companion_serial);
-  CW_PHASE("ESP32:post SERIAL_RX serial_interface.begin");
-#else
-  serial_interface.begin(Serial);
-  CW_PHASE("ESP32:post fallback serial_interface.begin");
+  hardware_serial_interface.begin(companion_serial);
+  interface_manager.addInterface(InterfaceType::HardwareSerial, &hardware_serial_interface);
 #endif
-  the_mesh.startInterface(serial_interface);
+
+  the_mesh.startInterface(interface_manager);
+  CW_PHASE("ESP32:post the_mesh.startInterface");
   // #411: mirror captured serial-log lines to the live console EXCEPT where the
   // framed protocol runs on Serial itself (USB-serial companion) -- there it stays
   // capture-only so nothing raw corrupts the protocol line.
-  meshLogSetMirror(!serial_interface.isConsoleSharedWithProtocol());
-  CW_PHASE("ESP32:post the_mesh.startInterface");
-
+  // PORTED: isConsoleSharedWithProtocol() is a BaseSerialInterface virtual that
+  // only ArduinoSerialInterface overrides true; MultiSerialInterface does NOT
+  // override it, so asking the manager would always answer false and wrongly
+  // enable mirroring on a USB companion. Ask the interface that owns Serial.
+#if defined(ENABLE_USB_INTERFACE)
+  meshLogSetMirror(!usb_serial_interface.isConsoleSharedWithProtocol());
+#else
+  meshLogSetMirror(true);
+#endif
 #ifdef OFFBAND_OBSERVER
   // Plan 2 v2 Task 12: wire observer mesh context AFTER the_mesh.begin()
   // populates self_id. Strings cached as borrowed pointers in WifiObserver;
@@ -382,10 +414,6 @@ void setup() {
       board.getManufacturerName());
   CW_PHASE("ESP32:post wifiObserverSetMeshContext");
 #endif
-#else
-  #error "need to define filesystem"
-#endif
-
   sensors.begin();
   CW_PHASE("post:sensors.begin");
 
@@ -462,6 +490,7 @@ void loop() {
 #ifdef OFFBAND_OBSERVER
   offband::subloopMark(offband::SUBLOOP_SENSORS);
 #endif
+  interface_manager.loop();
   sensors.loop();
 
 #if defined(OFFBAND_OBSERVER) && ENV_INCLUDE_GPS == 1
@@ -496,7 +525,8 @@ void loop() {
   //   rx_air_secs    -- the_mesh.getReceiveAirTime() / 1000
   //   recv_errors    -- radio_driver.getPacketsRecvErrors()
   //   radio_freq/bw/sf/cr -- runtime NodePrefs freq/bw/sf/cr (#88)
-  //   repeat_enabled -- getNodePrefs()->client_repeat != 0
+  //   repeat_enabled -- getNodePrefs()->isRepeatEn()  (1.17.0 moved the flag
+  //                     into the repeat sub-object; client_repeat is deprecated)
   {
     static uint32_t s_status_snap_ms = 0;
     uint32_t _now = millis();
@@ -519,7 +549,10 @@ void loop() {
       snap.radio_bw       = the_mesh.getNodePrefs()->bw;
       snap.radio_sf       = the_mesh.getNodePrefs()->sf;
       snap.radio_cr       = the_mesh.getNodePrefs()->cr;
-      snap.repeat_enabled = (the_mesh.getNodePrefs()->client_repeat != 0);
+      // 1.17.0 moved this into NodePrefs::repeat.disable_fwd behind isRepeatEn();
+      // the old client_repeat member is retained upstream but marked DEPRECATED
+      // and is no longer the source of truth.
+      snap.repeat_enabled = the_mesh.getNodePrefs()->isRepeatEn();
       // #31 Task D: publish position in /status, selected EXACTLY as the
       // companion advert path selects its location, so the MQTT position always
       // agrees with the advert (design D4: reuse the existing advert_loc_policy,
@@ -561,6 +594,9 @@ void loop() {
   offband::heartbeatTick(millis());
 #endif
   rtc_clock.tick();
+#ifdef HAS_EXTERNAL_WATCHDOG
+  external_watchdog.loop();
+#endif
 
   if (!the_mesh.hasPendingWork()) {
 #if defined(NRF52_PLATFORM)

@@ -110,7 +110,7 @@ stored **config**.
 
 ## Broker auth — wss/jwt (the real recipe)
 
-The public MeshCore brokers (LetsMesh, eastme.sh) use `wss` + JWT. The credential
+The public MeshCore brokers (LetsMesh, CoreComms.net) use `wss` + JWT. The credential
 is your node's **own Ed25519 public key** — the firmware mints the token; there's
 no separate registration. Configure a wss/jwt slot like this:
 
@@ -131,7 +131,7 @@ mqtt status
   (the password — you do **not** set it) and normalizes `jwt_owner` case
   internally, so the input case doesn't matter.
 - **The exact `username` form is broker-dependent.** A **bare pubkey** works on
-  eastme.sh; some brokers expect a `v1_<pubkey>` prefix. If a wss slot won't
+  CoreComms.net; some brokers expect a `v1_<pubkey>` prefix. If a wss slot won't
   authenticate, try the other form. (Defaulting this per broker is #95.)
 
 ### Seeded broker slots (#317, #592)
@@ -141,8 +141,8 @@ mqtt status
 | 0 | OKIMesh mqtt1 | `wss://mqtt1.okimesh.org:9002/mqtt` | `letsencrypt` | — (anon) |
 | 1 | OKIMesh mqtt2 | `wss://mqtt2.okimesh.org:9002/mqtt` | `letsencrypt` | — (anon) |
 | 2 | MeshMapper | `wss://mqtt.meshmapper.net:443/mqtt` | `isrg-x2` | `mqtt.meshmapper.net` |
-| 3 | eastme.sh | `wss://mqtt.eastme.sh:443/mqtt` | `letsencrypt` | `mqtt.eastme.sh` |
-| 4 | Eastmesh.au | `wss://mqtt2.eastmesh.au:443/mqtt` | `letsencrypt` | `mqtt2.eastmesh.au` |
+| 3 | CoreComms.net | `wss://mqtt.corecomms.net:443/mqtt` | `gts-r4` | `mqtt.corecomms.net` |
+| 4 | Eastmesh.au | `wss://mqtt2.eastmesh.au:443/mqtt` | `gts-r4` | `mqtt2.eastmesh.au` |
 | 5–9 | *(empty)* | — | — | — |
 
 **Every seeded slot ships disabled** (#262) — `mqtt enable <N>` to opt in.

@@ -16,6 +16,86 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-15
+
+### Fixed (beta2)
+- **Rotated-out brokers no longer lose the traffic they missed** (#723): a regression in
+  `beta1`. Re-attaching a broker resynced its ring cursor to the head, which was meant to
+  stop a *newly enabled* broker replaying stale boot backlog — but the same path runs on
+  every rotation re-entry, so a broker returning from its dwell discarded exactly the
+  backlog the ring exists to hold. On an observer with rotating TLS brokers this silently
+  dropped most of the feed, and the drop counter read zero throughout because a resync is
+  a deliberate skip, not an overrun. Resync now happens on first attach only.
+
+### Added
+- **`wifi clear` and a visible reason for WiFi disconnects** (#696): an observer on an
+  open, passwordless network could sit at `StaConnecting` indefinitely with no reason
+  available anywhere, and a stored PSK could not be cleared without an NVS wipe that
+  destroys the device identity. `wifi clear [pwd|all]` now removes stored credentials
+  properly, and STA disconnect reasons appear in the `wifi status` reply as well as the
+  retry log — the status reply being the load-bearing half, since a remote reporter
+  cannot read a serial console. Association behaviour is unchanged.
+
+### Fixed
+- **Observer multi-broker rotation actually rotates** (#708): with more than two TLS
+  brokers enabled, promotion was a first-eligible-by-slot-index scan whose only
+  fairness mechanism only works at exactly two candidates. Every broker above the two
+  lowest slots was starved permanently — measured on a Heltec V3 as 36/35/**0**
+  promotions over 80 minutes, with the third broker never publishing once. Promotion is
+  now oldest-served-first, verified on hardware as an even three-way cycle. The
+  selection logic moved into a dependency-free header with unit tests, because the
+  defect is invisible at two brokers and two brokers is what it was validated at.
+- **Broker slot 0 is an always-on primary again** (#707): a tcp broker holds no mbedTLS
+  context and is therefore exempt from TLS rotation — that exemption is the only thing
+  that ever made slot 0 always-on. Moving slots 0–1 to `wss` in 1.4.0 silently demoted
+  slot 0 into the rotating pool, where it was torn down and rebuilt every ~2 minutes
+  (178 evictions in one 6.9 h soak). The seed puts slot 0 back on
+  `mqtt://mqtt1.okimesh.org:1883`, with the trade recorded at the seed row so it is not
+  "upgraded" again by accident. Existing devices need the matching config profile —
+  firmware seeds only apply to fresh NVS.
+- **JWT brokers could not be configured from a config profile** (#709): the config wire
+  key was `jwt_audience` while the schema, `SCHEMA.md`, and every published profile used
+  `jwt_aud`, so setting the audience by its documented name failed with "unknown broker
+  field". Every JWT broker slot was unconfigurable. Both spellings are now accepted, on
+  the setter and the getter, keyed off the schema constant so they cannot drift apart
+  again.
+- **Publish-ring overrun is counted instead of discarded silently** (#710): when a
+  rotated-out broker fell behind, the ring clamped its cursor, counted nothing, logged
+  nothing, and the only indicator reset itself as soon as the broker caught up — a fleet
+  could discard most of its feed with every diagnostic reading clean. There is now a
+  monotonic per-broker drop counter, reported in `mqtt status` as `ring_dropped` and on a
+  60-second `[ring]` line so a passive serial capture measures it. A newly-attached
+  broker resyncs to the ring head instead of replaying stale backlog.
+
+### Changed
+- **"Held, low heap" no longer reports normal rotation as a memory error** (#715): one
+  broker state covered three different conditions and was named after the rarest. With
+  multiple TLS brokers the common case is "waiting its turn", which displayed as a
+  memory fault — on a 3-broker pool, 2 of 3 permanently showed a problem that did not
+  exist. Serial and CLI now distinguish `waiting-turn` from `held(low-heap)`. **The app
+  still shows the old wording**: the wire value is deliberately unchanged until the
+  client can accept the new one.
+- **Observer builds trimmed and the publish ring deepened** (#701/#710): observer envs
+  drop to 5 contacts, 4 user channels and 6 broker slots, freeing 14,660 B of static
+  RAM; 8,192 B of that funds a 32-slot publish ring (was 16), sized from measured
+  fleet traffic rather than estimated. **On these builds the BLE-companion half is
+  capped at 5 contacts and 4 channels** — devices holding more truncate on load
+  (favourites and most-recent survive). Non-observer builds are byte-for-byte unchanged.
+
+
+## [1.4.0] - 2026-08-13
+
+### Added
+- **Settings survive the 1.16 → 1.17 upgrade** (#627/#659/#665): a legacy-prefs layout
+  detector with Offband-aware offsets migrates existing device preferences across the
+  upstream prefs-layout change; cross-family records are refused rather than mis-read;
+  caplog settings now apply on the 1.17 `/prefs.json` path; and every migration outcome
+  leaves a persistent event record that survives reboot. Hardware-verified across 7
+  device/architecture cells.
+- **On-air packet hash returned on channel-send confirmation** (#611, capability-gated):
+  lets the client correlate an outgoing channel message with CoreScope observer counts
+  by packet hash.
+
 ### Fixed
 - **Future-poisoned clocks are now recoverable** (#607, PRs #612): owner-authenticated
   time sets (client sync, CLI `time`/`clock sync`) are accepted in **both directions** —
@@ -27,8 +107,27 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
   `[clock]` audit line on serial/caplog. **Note for recovered nodes:** peers that heard a
   node's poisoned (future) timestamps may ignore its messages until their per-contact
   recency view catches up; re-adding the contact on the peer resolves it immediately.
+- **nRF52 BLE companions crash-boot loop on the 1.17.0 base** (#668): RAK4631 and
+  T1000-E BLE companions double-initialized BLE and crash-looped ~4 s after boot;
+  never in a tagged release, listed for bench-build testers.
+- **Caplog retrieval uses one shared redaction pass on both paths** (#667): closes a
+  gap where one retrieval path could return lines the other would have redacted.
+- **Wio Tracker L1: stale SafeBoot battery-divider gate removed** (#620).
 
 ### Changed
+- **MeshCore base updated 1.16.0 → 1.17.0** (#628/#643): full upstream refresh of the
+  fork base, bringing upstream 1.17.0 fixes and board support forward under the
+  Offband feature set.
+- **Eastme.sh broker seed renamed to CoreComms.net** (#677) — the seeded slot-3 broker
+  follows the service's rebrand: `wss://mqtt.corecomms.net:443/mqtt`, JWT audience
+  `mqtt.corecomms.net`, CA anchor `gts-r4` (endpoint + full TLS chain verified live
+  2026-08-13). Slot 4 (Eastmesh.au) also repinned `letsencrypt` → `gts-r4`: its live
+  chain moved to GTS Root R4, so the old anchor no longer validates at all. Fresh-NVS
+  only (#262 semantics); existing devices keep their stored config — operators with an
+  old seeded slot can `mqtt clear <N>` + reboot to reseed. Re-implements external
+  PR #282; thanks to **EldoonNemar** for the original contribution and the rebrand
+  heads-up.
+
 - **OKIMesh broker slots 0-1 moved to wss/TLS** — the two seeded OKIMesh brokers now use
   `wss://mqtt{1,2}.okimesh.org:9002/mqtt` over TLS (`letsencrypt` CA) instead of plaintext
   `mqtt://…:1883`. Auth stays anonymous (TLS secures the transport; no MQTT credential).

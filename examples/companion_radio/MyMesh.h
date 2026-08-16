@@ -22,11 +22,11 @@
 #define FIRMWARE_VER_CODE 22   // #611: + caps2 bit 0x08 PKT_HASH + 0xC6 packet-hash query. Prior 21 (#542): caps2 0x04 INDICATORS + 0xC5 led/display sub-codes + led/display state in device-info. Prior 20 (#509): caps2 0x02 BUTTON_MATRIX. Prior 19 (#510): caps2 0x01 NOTIFY_SCOPE + 0xC5. Prior 18 (#508): second caps byte at offset 84
 
 #ifndef FIRMWARE_BUILD_DATE
-#define FIRMWARE_BUILD_DATE "6 Jun 2026"
+#define FIRMWARE_BUILD_DATE "9 Aug 2026"
 #endif
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "v1.16.0"
+#define FIRMWARE_VERSION "v1.17.0"
 #endif
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -173,6 +173,7 @@ public:
 protected:
   float getAirtimeBudgetFactor() const override;
   int getInterferenceThreshold() const override;
+  bool getCADEnabled() const override;
   int calcRxDelay(float score, uint32_t air_time) const override;
   uint32_t getRetransmitDelay(const mesh::Packet *packet) override;
   uint32_t getDirectRetransmitDelay(const mesh::Packet *packet) override;
@@ -241,7 +242,11 @@ protected:
   }
 
 public:
-  void savePrefs() { _store->savePrefs(_prefs, sensors.node_lat, sensors.node_lon); }
+  void savePrefs() {
+    _prefs.node_lat = sensors.node_lat;
+    _prefs.node_lon = sensors.node_lon;
+    _store->savePrefs(_prefs);
+  }
 
 #if ENV_INCLUDE_GPS == 1
   void applyGpsPrefs() {
@@ -344,6 +349,13 @@ private:
   bool    _caplog_streaming;
   size_t  _caplog_off;
   bool    _caplog_resume;   // capture-enabled state to restore when the download ends
+  // #718: millis() of the last CHUNK the transport actually accepted. A transport may
+  // now REFUSE a frame it cannot deliver whole, and the drain re-offers the same bytes
+  // rather than skipping them -- so a host that stops draining would otherwise leave
+  // _caplog_streaming true forever, which also blocks ENABLE/DISABLE/ERASE (the guard
+  // in handleCmdFrame). Timed on PROGRESS, not total duration, so a legitimately slow
+  // but advancing download is never cut off.
+  uint32_t _caplog_last_progress;
   uint8_t app_target_ver;
   uint8_t *sign_data;
   uint32_t sign_data_len;

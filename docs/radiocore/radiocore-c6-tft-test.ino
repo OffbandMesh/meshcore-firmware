@@ -1,0 +1,460 @@
+// Heltec RadioCore C6 (RCC6) - NV3001B TFT (T108) display test
+//
+// Pin mapping verified from Meshtastic PR #11041 "Add heltec_rcc6 board"
+// (variants/esp32c6/heltec_rcc6/variant.h) and cross-checked against the
+// RCC6 header pinout.
+//
+//   TFT_SCL  GPIO4   SPI SCK
+//   TFT_SDA  GPIO15  SPI MOSI (no MISO)
+//   TFT_CS   GPIO18
+//   TFT_DC   GPIO3
+//   TFT_RST  GPIO0
+//   TFT_EN   GPIO2   panel power, active LOW
+//   TFT_BL   GPIO1   backlight, active HIGH
+//
+// Panel: NV3001B, 128x220 (verified via coverage sweep - a 128x220 window is
+// the first that fills the panel cleanly; larger windows wrap and glitch).
+// Init sequence matches the Arduino_NV3001B class from Quency-D/Arduino_GFX
+// @ 4d5afb0 (the library used by Meshtastic PR #11041, tested on RCC6).
+//
+// ---------------------------------------------------------------------------
+// Derivation and licensing
+// ---------------------------------------------------------------------------
+// The NV3001B initialisation register block below is derived from the
+// Arduino_NV3001B driver in Quency-D/Arduino_GFX, itself a fork of
+// moononournation/Arduino_GFX, which is distributed under the BSD 2-Clause
+// licence:
+//
+//     Copyright (c) 2012 Adafruit Industries.  All rights reserved.
+//
+// BSD 2-Clause requires that redistributions of source code retain the above
+// copyright notice, the list of conditions, and the disclaimer.  Full licence
+// text: https://github.com/Quency-D/Arduino_GFX/blob/master/license.txt
+//
+// The surrounding sketch (SPI setup, probe, fill/draw primitives, 5x7 font) is
+// original work in this repository under the repo's MIT licence.
+//
+// NOTE: if any of this file is a verbatim copy rather than a re-expression of
+// the register values, the full BSD licence text must be reproduced here, not
+// merely referenced.  Confirm before redistributing.
+// ---------------------------------------------------------------------------
+
+#include <SPI.h>
+
+#define TFT_SCL 4
+#define TFT_SDA 15
+#define TFT_CS  18
+#define TFT_DC  3
+#define TFT_RST 0
+#define TFT_EN  2
+#define TFT_BL  1
+
+#define TFT_EN_ON  LOW
+#define TFT_BL_ON  HIGH
+
+#define TFT_WIDTH  128
+#define TFT_HEIGHT 220
+
+#define NV3001B_RDDID 0x04
+#define NV3001B_RDID1 0xDA
+#define NV3001B_RDID2 0xDB
+#define NV3001B_RDID3 0xDC
+
+#define NV3001B_SWRESET 0x01
+#define NV3001B_SLPIN   0x10
+#define NV3001B_SLPOUT  0x11
+#define NV3001B_INVOFF  0x20
+#define NV3001B_INVON   0x21
+#define NV3001B_DISPON  0x29
+#define NV3001B_CASET   0x2A
+#define NV3001B_RASET   0x2B
+#define NV3001B_RAMWR   0x2C
+#define NV3001B_MADCTL  0x36
+#define NV3001B_COLMOD  0x3A
+
+// Rotation mapping from Arduino_NV3001B.cpp.
+// This panel is physically 128 wide x 220 tall (portrait). It must be driven
+// with rotation 0 (MADCTL 0x00). Rotation 3 (0xA0) would render the image as
+// 220x128 landscape, which does NOT fit this portrait panel - only a 128x128
+// square of it shows correctly and the rest jumbles.
+#define NV3001B_MADCTL_ROT0 0x00
+#define NV3001B_MADCTL_ROT3 0xA0
+
+SPISettings tftSPI(4000000, MSBFIRST, SPI_MODE0);
+
+static void writeCommand(uint8_t c)
+{
+  SPI.beginTransaction(tftSPI);
+  digitalWrite(TFT_DC, LOW);
+  digitalWrite(TFT_CS, LOW);
+  SPI.transfer(c);
+  digitalWrite(TFT_CS, HIGH);
+  digitalWrite(TFT_DC, HIGH);
+  SPI.endTransaction();
+}
+
+static void writeCommandData(uint8_t c, const uint8_t *d, size_t n)
+{
+  writeCommand(c);
+  SPI.beginTransaction(tftSPI);
+  digitalWrite(TFT_DC, HIGH);
+  digitalWrite(TFT_CS, LOW);
+  for (size_t i = 0; i < n; i++)
+    SPI.transfer(d[i]);
+  digitalWrite(TFT_CS, HIGH);
+  SPI.endTransaction();
+}
+
+static void setAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
+{
+  uint8_t d[4];
+  d[0] = x0 >> 8; d[1] = x0 & 0xFF; d[2] = x1 >> 8; d[3] = x1 & 0xFF;
+  writeCommandData(NV3001B_CASET, d, sizeof(d));
+  d[0] = y0 >> 8; d[1] = y0 & 0xFF; d[2] = y1 >> 8; d[3] = y1 & 0xFF;
+  writeCommandData(NV3001B_RASET, d, sizeof(d));
+  writeCommand(NV3001B_RAMWR);
+}
+
+static void fillRect(uint16_t x0, uint16_t y0, uint16_t w, uint16_t h, uint16_t rgb)
+{
+  if (w == 0 || h == 0)
+    return;
+  setAddrWindow(x0, y0, x0 + w - 1, y0 + h - 1);
+  uint8_t hi = rgb >> 8;
+  uint8_t lo = rgb & 0xFF;
+  SPI.beginTransaction(tftSPI);
+  digitalWrite(TFT_DC, HIGH);
+  digitalWrite(TFT_CS, LOW);
+  uint32_t count = (uint32_t)w * h;
+  while (count--) {
+    SPI.transfer(hi);
+    SPI.transfer(lo);
+  }
+  digitalWrite(TFT_CS, HIGH);
+  SPI.endTransaction();
+}
+
+static void initPanel()
+{
+  writeCommand(NV3001B_SWRESET);
+  delay(120);
+
+#define CMD1(C, A) do { const uint8_t d[] = { A }; writeCommandData(C, d, sizeof(d)); } while (0)
+#define CMD2(C, A, B) do { const uint8_t d[] = { A, B }; writeCommandData(C, d, sizeof(d)); } while (0)
+
+  // Register block identical to Arduino_NV3001B_init_operations (Quency-D fork).
+  CMD1(0xFF, 0xA5);
+  CMD1(0x41, 0x00);
+  CMD1(0x50, 0x02);
+  CMD1(0x52, 0x6E);
+  CMD1(0x57, 0x02);
+  CMD1(0x46, 0x11);
+  CMD2(0x47, 0x00, 0x01);
+  CMD2(0x8F, 0x22, 0x03);
+  CMD1(0x9A, 0x78);
+  CMD1(0x9B, 0x78);
+  CMD1(0x9C, 0xA0);
+  CMD1(0x9D, 0x17);
+  CMD1(0x9E, 0xC1);
+  CMD1(0x83, 0x5A);
+  CMD1(0x84, 0xB6);
+  CMD1(0xFF, 0xA5);
+  CMD1(0x85, 0x5F);
+  CMD1(0x6E, 0x0F);
+  CMD1(0x7E, 0x0F);
+  CMD1(0x60, 0x00);
+  CMD1(0x70, 0x00);
+  CMD1(0x6D, 0x33);
+  CMD1(0x7D, 0x37);
+  CMD1(0x61, 0x09);
+  CMD1(0x71, 0x0A);
+  CMD1(0x6C, 0x2A);
+  CMD1(0x7C, 0x36);
+  CMD1(0x62, 0x11);
+  CMD1(0x72, 0x10);
+  CMD1(0x68, 0x4E);
+  CMD1(0x78, 0x4E);
+  CMD1(0x66, 0x36);
+  CMD1(0x76, 0x3C);
+  CMD1(0x1A, 0x1C);
+  CMD1(0x7B, 0x14);
+  CMD1(0x63, 0x0D);
+  CMD1(0x73, 0x0A);
+  CMD1(0x6A, 0x16);
+  CMD1(0x7A, 0x12);
+  CMD1(0x64, 0x0B);
+  CMD1(0x74, 0x0A);
+  CMD1(0x69, 0x08);
+  CMD1(0x79, 0x0A);
+  CMD1(0x65, 0x06);
+  CMD1(0x75, 0x07);
+  CMD1(0x67, 0x23);
+  CMD1(0x77, 0x44);
+  CMD1(0xE0, 0x00);
+  CMD1(0xE9, 0x30);
+  CMD1(0xEB, 0xB7);
+  CMD1(0xEC, 0x00);
+  CMD1(0xED, 0x11);
+  CMD1(0xF0, 0xB7);
+  CMD1(0x53, 0x04);
+  CMD1(0x54, 0x04);
+  CMD1(0x55, 0x40);
+  CMD1(0x56, 0x40);
+  CMD2(0xA0, 0x60, 0x01);
+  CMD1(0xA1, 0x84);
+  CMD1(0xA2, 0x85);
+  CMD2(0xAB, 0x00, 0x02);
+  CMD2(0xAC, 0x00, 0x06);
+  CMD2(0xAD, 0x00, 0x03);
+  CMD2(0xAE, 0x00, 0x07);
+  CMD1(0xC7, 0x01);
+  CMD1(0xB9, 0x82);
+  CMD1(0xBA, 0x83);
+  CMD1(0xBB, 0x00);
+  CMD1(0xBC, 0x81);
+  CMD1(0xBD, 0x02);
+  CMD1(0xBE, 0x01);
+  CMD1(0xBF, 0x04);
+  CMD1(0xC0, 0x03);
+  CMD1(0xC8, 0x55);
+  CMD1(0xC9, 0xC9);
+  CMD1(0xCA, 0xC8);
+  CMD1(0xCB, 0xCB);
+  CMD1(0xCC, 0xCA);
+  CMD1(0xCD, 0x55);
+  CMD1(0xCE, 0xCE);
+  CMD1(0xCF, 0xCD);
+  CMD1(0xD0, 0xD0);
+  CMD1(0xD1, 0xCF);
+  CMD1(0xF2, 0x46);
+  CMD1(0xA8, 0x04);
+  CMD1(0xA9, 0xB0);
+  CMD1(0xAA, 0xA3);
+  CMD1(0xB6, 0x00);
+  CMD1(0xB7, 0xB0);
+  CMD1(0xB8, 0xA3);
+  CMD1(0xC4, 0x03);
+  CMD1(0xC5, 0xB0);
+  CMD1(0xC6, 0xA3);
+  CMD1(0x80, 0x10);
+  CMD1(0xFF, 0x00);
+  CMD1(0x35, 0x00);
+
+#undef CMD1
+#undef CMD2
+
+  writeCommand(NV3001B_SLPOUT);
+  delay(120);
+
+  const uint8_t colmod = 0x05;                    // 16-bit RGB
+  const uint8_t madctl = 0x00;                    // init default (rotation 0)
+  writeCommandData(NV3001B_COLMOD, &colmod, 1);
+  writeCommandData(NV3001B_MADCTL, &madctl, 1);
+
+  writeCommand(NV3001B_DISPON);
+  delay(10);
+
+  // invertDisplay(true) with ips=true -> INVOFF, matching Arduino_NV3001B.
+  writeCommand(NV3001B_INVOFF);
+
+  // Rotation 0 (portrait) - matches the physical 128x220 portrait panel.
+  const uint8_t rot = NV3001B_MADCTL_ROT0;
+  writeCommandData(NV3001B_MADCTL, &rot, 1);
+}
+
+// ---- controller ID probe (bit-banged read) ----
+static void nvSpiDelay()
+{
+  delayMicroseconds(1);
+}
+
+static void nvWriteCmdForRead(uint8_t command)
+{
+  pinMode(TFT_SDA, OUTPUT);
+  digitalWrite(TFT_DC, LOW);
+  for (uint8_t mask = 0x80; mask; mask >>= 1) {
+    digitalWrite(TFT_SCL, LOW);
+    digitalWrite(TFT_SDA, (command & mask) ? HIGH : LOW);
+    nvSpiDelay();
+    digitalWrite(TFT_SCL, HIGH);
+    nvSpiDelay();
+    if (mask == 0x01) {
+      digitalWrite(TFT_DC, HIGH);
+      pinMode(TFT_SDA, INPUT);
+      nvSpiDelay();
+    }
+  }
+  digitalWrite(TFT_SCL, LOW);
+  nvSpiDelay();
+}
+
+static uint8_t nvReadBit()
+{
+  digitalWrite(TFT_SCL, HIGH);
+  nvSpiDelay();
+  uint8_t b = digitalRead(TFT_SDA) ? 1 : 0;
+  digitalWrite(TFT_SCL, LOW);
+  nvSpiDelay();
+  return b;
+}
+
+static uint8_t nvReadByte()
+{
+  uint8_t d = 0;
+  for (uint8_t i = 0; i < 8; i++)
+    d = (d << 1) | nvReadBit();
+  return d;
+}
+
+static void nvReadRegister(uint8_t command, uint8_t *out, uint8_t len, bool skipBit)
+{
+  digitalWrite(TFT_CS, LOW);
+  nvWriteCmdForRead(command);
+  if (skipBit)
+    (void)nvReadBit();
+  for (uint8_t i = 0; i < len; i++)
+    out[i] = nvReadByte();
+  pinMode(TFT_SDA, OUTPUT);
+  digitalWrite(TFT_SDA, HIGH);
+  digitalWrite(TFT_CS, HIGH);
+  digitalWrite(TFT_DC, HIGH);
+  digitalWrite(TFT_SCL, LOW);
+}
+
+static void probeDisplayId()
+{
+  pinMode(TFT_CS, OUTPUT);
+  pinMode(TFT_SCL, OUTPUT);
+  pinMode(TFT_SDA, OUTPUT);
+  pinMode(TFT_DC, OUTPUT);
+  pinMode(TFT_RST, OUTPUT);
+  digitalWrite(TFT_CS, HIGH);
+  digitalWrite(TFT_DC, HIGH);
+  digitalWrite(TFT_SCL, LOW);
+  digitalWrite(TFT_SDA, HIGH);
+  digitalWrite(TFT_RST, HIGH);
+  delay(100);
+  digitalWrite(TFT_RST, LOW);
+  delay(120);
+  digitalWrite(TFT_RST, HIGH);
+  delay(120);
+
+  uint8_t rddid[3] = {};
+  uint8_t rdid[3] = {};
+  nvReadRegister(NV3001B_RDDID, rddid, 3, true);
+  nvReadRegister(NV3001B_RDID1, &rdid[0], 1, false);
+  nvReadRegister(NV3001B_RDID2, &rdid[1], 1, false);
+  nvReadRegister(NV3001B_RDID3, &rdid[2], 1, false);
+
+  uint32_t a = ((uint32_t)rddid[0] << 16) | ((uint32_t)rddid[1] << 8) | rddid[2];
+  uint32_t b = ((uint32_t)rdid[0] << 16) | ((uint32_t)rdid[1] << 8) | rdid[2];
+  Serial.print("RDDID=0x");
+  Serial.println(a, HEX);
+  Serial.print("RDID=0x");
+  Serial.println(b, HEX);
+  Serial.println(a == 0x300101 || b == 0x300101 ? "NV3001B confirmed" : "NOT NV3001B (other controller)");
+}
+
+static const uint8_t font5x7[] PROGMEM = {
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5f, 0x00, 0x00, 0x00, 0x07, 0x00, 0x07, 0x00, 0x14,
+  0x7f, 0x14, 0x7f, 0x14, 0x24, 0x2a, 0x7f, 0x2a, 0x12, 0x23, 0x13, 0x08, 0x64, 0x62, 0x36, 0x49,
+  0x55, 0x22, 0x50, 0x00, 0x05, 0x03, 0x00, 0x00, 0x00, 0x1c, 0x22, 0x41, 0x00, 0x00, 0x41, 0x22,
+  0x1c, 0x00, 0x14, 0x08, 0x3e, 0x08, 0x14, 0x08, 0x08, 0x3e, 0x08, 0x08, 0x00, 0x50, 0x30, 0x00,
+  0x00, 0x08, 0x08, 0x08, 0x08, 0x08, 0x00, 0x60, 0x60, 0x00, 0x00, 0x20, 0x10, 0x08, 0x04, 0x02,
+  0x3e, 0x51, 0x49, 0x45, 0x3e, 0x00, 0x42, 0x7f, 0x40, 0x00, 0x42, 0x61, 0x51, 0x49, 0x46, 0x21,
+  0x41, 0x45, 0x4b, 0x31, 0x18, 0x14, 0x12, 0x7f, 0x10, 0x27, 0x45, 0x45, 0x45, 0x39, 0x3c, 0x4a,
+  0x49, 0x49, 0x30, 0x01, 0x71, 0x09, 0x05, 0x03, 0x36, 0x49, 0x49, 0x49, 0x36, 0x06, 0x49, 0x49,
+  0x29, 0x1e, 0x00, 0x36, 0x36, 0x00, 0x00, 0x00, 0x56, 0x36, 0x00, 0x00, 0x08, 0x14, 0x22, 0x41,
+  0x00, 0x14, 0x14, 0x14, 0x14, 0x14, 0x00, 0x41, 0x22, 0x14, 0x08, 0x02, 0x01, 0x51, 0x09, 0x06,
+  0x32, 0x49, 0x79, 0x41, 0x3e, 0x7e, 0x11, 0x11, 0x11, 0x7e, 0x7f, 0x49, 0x49, 0x49, 0x36, 0x3e,
+  0x41, 0x41, 0x41, 0x22, 0x7f, 0x41, 0x41, 0x22, 0x1c, 0x7f, 0x49, 0x49, 0x49, 0x41, 0x7f, 0x09,
+  0x09, 0x09, 0x01, 0x3e, 0x41, 0x49, 0x49, 0x7a, 0x7f, 0x08, 0x08, 0x08, 0x7f, 0x00, 0x41, 0x7f,
+  0x41, 0x00, 0x20, 0x40, 0x41, 0x3f, 0x01, 0x7f, 0x08, 0x14, 0x22, 0x41, 0x7f, 0x40, 0x40, 0x40,
+  0x40, 0x7f, 0x02, 0x0c, 0x02, 0x7f, 0x7f, 0x04, 0x08, 0x10, 0x7f, 0x3e, 0x41, 0x41, 0x41, 0x3e,
+  0x7f, 0x09, 0x09, 0x09, 0x06, 0x3e, 0x41, 0x51, 0x21, 0x5e, 0x7f, 0x09, 0x19, 0x29, 0x46, 0x46,
+  0x49, 0x49, 0x49, 0x31, 0x01, 0x01, 0x7f, 0x01, 0x01, 0x3f, 0x40, 0x40, 0x40, 0x3f, 0x1f, 0x20,
+  0x40, 0x20, 0x1f, 0x3f, 0x40, 0x38, 0x40, 0x3f, 0x63, 0x14, 0x08, 0x14, 0x63, 0x07, 0x08, 0x70,
+  0x08, 0x07, 0x61, 0x51, 0x49, 0x45, 0x43, 0x00, 0x7f, 0x41, 0x41, 0x00, 0x02, 0x04, 0x08, 0x10,
+  0x20, 0x00, 0x41, 0x41, 0x7f, 0x00, 0x04, 0x02, 0x01, 0x02, 0x04, 0x40, 0x40, 0x40, 0x40, 0x40,
+  0x00, 0x01, 0x02, 0x04, 0x00, 0x20, 0x54, 0x54, 0x54, 0x78, 0x7f, 0x48, 0x44, 0x44, 0x38, 0x38,
+  0x44, 0x44, 0x44, 0x20, 0x38, 0x44, 0x44, 0x48, 0x7f, 0x38, 0x54, 0x54, 0x54, 0x18, 0x08, 0x7e,
+  0x09, 0x01, 0x02, 0x0c, 0x52, 0x52, 0x52, 0x3e, 0x7f, 0x08, 0x04, 0x04, 0x78, 0x00, 0x44, 0x7d,
+  0x40, 0x00, 0x20, 0x40, 0x44, 0x3d, 0x00, 0x7f, 0x10, 0x28, 0x44, 0x00, 0x00, 0x41, 0x7f, 0x40,
+  0x00, 0x7c, 0x04, 0x18, 0x04, 0x78, 0x7c, 0x08, 0x04, 0x04, 0x78, 0x38, 0x44, 0x44, 0x44, 0x38,
+  0x7c, 0x14, 0x14, 0x14, 0x08, 0x08, 0x14, 0x14, 0x18, 0x7c, 0x7c, 0x08, 0x04, 0x04, 0x08, 0x48,
+  0x54, 0x54, 0x54, 0x20, 0x04, 0x3f, 0x44, 0x40, 0x20, 0x3c, 0x40, 0x40, 0x20, 0x7c, 0x1c, 0x20,
+  0x40, 0x20, 0x1c, 0x3c, 0x40, 0x30, 0x40, 0x3c, 0x44, 0x28, 0x10, 0x28, 0x44, 0x0c, 0x50, 0x50,
+  0x50, 0x3c, 0x44, 0x64, 0x54, 0x4c, 0x44, 0x00, 0x08, 0x36, 0x41, 0x00, 0x00, 0x00, 0x7f, 0x00,
+  0x00, 0x00, 0x41, 0x36, 0x08, 0x00, 0x08, 0x08, 0x2a, 0x1c, 0x08, 0x00, 0x06, 0x09, 0x09, 0x06
+};
+
+static void drawText(const char *str, uint16_t x, uint16_t y, uint16_t color, uint8_t scale)
+{
+  while (*str) {
+    char ch = *str;
+    if (ch < 32 || ch > 127)
+      ch = '?';
+    const uint8_t *glyph = font5x7 + (uint16_t)(ch - 32) * 5;
+    for (int col = 0; col < 5; col++) {
+      uint8_t line = pgm_read_byte(glyph + col);
+      for (int row = 0; row < 7; row++) {
+        if (line & (1 << row))
+          fillRect(x + col * scale, y + row * scale, scale, scale, color);
+      }
+    }
+    x += 6 * scale;
+    str++;
+  }
+}
+
+void setup()
+{
+  Serial.begin(115200);
+  delay(300);
+  Serial.println("\n=== RCC6 NV3001B TFT test ===");
+
+  pinMode(TFT_EN, OUTPUT);
+  digitalWrite(TFT_EN, TFT_EN_ON); // panel power on (active low)
+  delay(20);
+  pinMode(TFT_BL, OUTPUT);
+  digitalWrite(TFT_BL, TFT_BL_ON); // backlight on (active high)
+
+  probeDisplayId(); // identifies the controller via RDDID/RDID
+
+  pinMode(TFT_CS, OUTPUT);
+  pinMode(TFT_DC, OUTPUT);
+  pinMode(TFT_RST, OUTPUT);
+  digitalWrite(TFT_CS, HIGH);
+  digitalWrite(TFT_DC, HIGH);
+
+  digitalWrite(TFT_RST, HIGH);
+  delay(10);
+  digitalWrite(TFT_RST, LOW);
+  delay(20);
+  digitalWrite(TFT_RST, HIGH);
+  delay(120);
+
+  SPI.begin(TFT_SCL, -1, TFT_SDA, TFT_CS);
+  initPanel();
+
+  Serial.println("TFT initialized");
+}
+
+void loop()
+{
+  // Color cycle: RED, GREEN, BLUE, WHITE, BLACK (1 s each)
+  static const uint16_t colors[] = {0xF800, 0x07E0, 0x001F, 0xFFFF, 0x0000};
+  static const char *colorNames[] = {"RED", "GREEN", "BLUE", "WHITE", "BLACK"};
+  for (int i = 0; i < 5; i++) {
+    fillRect(0, 0, TFT_WIDTH, TFT_HEIGHT, colors[i]);
+    Serial.print("fill: ");
+    Serial.println(colorNames[i]);
+    delay(1000);
+  }
+
+  // "TFT OK" on black
+  fillRect(0, 0, TFT_WIDTH, TFT_HEIGHT, 0x0000);
+  drawText("TFT OK", 28, 103, 0xFFFF, 2);
+  Serial.println("TFT OK");
+  delay(3000);
+}

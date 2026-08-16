@@ -3,7 +3,6 @@
 #include <Arduino.h>
 #include <helpers/RefCountedDigitalPin.h>
 #include <helpers/ESP32Board.h>
-#include <driver/rtc_io.h>
 #include "LoRaFEMControl.h"
 
 #ifndef ADC_MULTIPLIER
@@ -24,15 +23,14 @@ public:
   void begin();
   void onBeforeTransmit(void) override;
   void onAfterTransmit(void) override;
-  void enterDeepSleep(uint32_t secs, int pin_wake_btn = -1);
   void powerOff() override;
+  bool setLoRaFemLnaEnabled(bool enable) override;
+  bool canControlLoRaFemLna() const override;
+  bool isLoRaFemLnaEnabled() const override;
   uint16_t getBattMilliVolts() override;
   const char* getManufacturerName() const override;
 
   // External FEM LNA runtime control (used by `fem on/off` CLI + telemetry).
-  bool setLoRaFemLnaEnabled(bool enable) override;
-  bool canControlLoRaFemLna() const override;
-  bool isLoRaFemLnaEnabled() const override;
 
   // Status/traffic (TX) LED runtime control (`led on/off` CLI). #542.
   bool setLedEnabled(bool on) override;

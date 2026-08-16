@@ -3,6 +3,14 @@
 // Plan 2 v2 Task 8.
 
 #include "MqttBrokerPool.h"
+#include "BrokerRotationSelect.h"   // #708: fair TLS promotion
+
+// #727: the ring must be able to hold what publishParsedPacket() writes.
+// #726 was this invariant broken silently -- the writer produced a body the
+// ring refused, append() returned 0, and nothing counted or logged it. Make it
+// a compile error instead of a field report.
+static_assert(sizeof(offband::PacketRecord) <= MQTT_RING_MSG_MAX,
+              "MQTT_RING_MSG_MAX must be >= sizeof(PacketRecord)");
 #include "MqttPayload.h"
 #include <helpers/diagnostics/CrashLog.h>   // #181: crashLogf() -- worker has no user ACK channel
 #include <cstring>
@@ -13,6 +21,10 @@
 #endif
 
 namespace offband {
+
+#ifndef MQTT_ROTATE_DWELL_MS
+  #define MQTT_ROTATE_DWELL_MS 60000U   // #175: how long a TLS slot holds the budget
+#endif
 
 // ---------------------------------------------------------------------------
 // begin
@@ -140,8 +152,48 @@ void MqttBrokerPool::loop(uint32_t now_ms) {
     // pass) also flushes a rotated-back-in broker even when no new packet arrives
     // to trigger publishPacket. The worker task does NOT touch the ring.
     for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
+        // #710: a freshly-attached broker starts at the ring head instead of
+        // replaying an arbitrarily old backlog. Done HERE on loopTask, not in
+        // reconcileSlot() where the client is created, because that runs on the
+        // worker and the worker must never touch ring_.
+        if (pending_resync_[s].exchange(false)) ring_.resync(s);
         if (brokers_[s].runtime().state == BrokerState::Up) (void)drainBroker(s);
     }
+#if defined(ARDUINO)
+    // #710: publish-ring overrun report (one line / 60s -- rule-10 safe).
+    //
+    // Emitted HERE on loopTask and deliberately NOT beside the [rot] line in
+    // workerLoop(): "The worker task does NOT touch the ring" (above) is the
+    // invariant that lets the ring run lock-free, and reading dropped_ from the
+    // worker would break exactly what the #175 concurrency review established.
+    //
+    // Covers EVERY configured slot, not just TLS ones -- [rot] filters to
+    // isTlsTransport() because it is the rotation diagnostic, which makes it
+    // structurally blind to the plaintext always-on primary (#707). That broker is
+    // the one that must never drop, so it is the one this line most needs to show.
+    //
+    // Unconditional: prints zeros when healthy. An edge-triggered line would make
+    // silence ambiguous ("no drops" vs "reporting broken"), which is the same class
+    // of silent failure this counter exists to remove.
+    {
+        static uint32_t s_ring_log_ms = 0;
+        if (now_ms - s_ring_log_ms >= 60000U) {
+            s_ring_log_ms = now_ms;
+            char L[160];
+            // #726: rej= counts payloads REFUSED by append (too large for the ring),
+            // which is a different failure from drops= (reader fell behind). Confusing
+            // the two is what let an ~98-byte publish ceiling hide for months.
+            int o = snprintf(L, sizeof(L), "[ring] head=%u rej=%u drops",
+                             (unsigned)ring_.head(), (unsigned)ring_.rejectedCount());
+            for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS && o < (int)sizeof(L) - 16; ++s) {
+                if (!brokers_[s].isConfigured()) continue;
+                o += snprintf(L + o, (size_t)(sizeof(L) - o), " s%u=%u",
+                              (unsigned)s, (unsigned)ring_.droppedCount(s));
+            }
+            Serial.println(L);
+        }
+    }
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +245,42 @@ uint8_t MqttBrokerPool::drainBroker(uint8_t slot) {
     // Bound the burst: at most MQTT_RING_SLOTS messages per pass.
     for (uint8_t i = 0; i < MQTT_RING_SLOTS; ++i) {
         if (!ring_.peek(slot, buf, sizeof(buf), len, seq)) break;
-        if (!b.publish(topic, buf, len, /*retain=*/false)) break;  // retry next pass
+        // #727: the ring holds a PacketRecord; render the body here, per broker.
+        // A short read means a record written by a different build -- skip it
+        // rather than publish garbage.
+        if (len != sizeof(PacketRecord)) { ring_.commit(slot); continue; }
+        PacketRecord rec;
+        memcpy(&rec, buf, sizeof(rec));
+#if defined(ARDUINO)
+        // #727 sec4: rx_time observability. If this record was queued while the
+        // broker was rotated out, it is being published LATER than it arrived --
+        // and it must still carry its RECEIVE time, not "now". Emit the lag so a
+        // backlogged delivery is a VISIBLE event and the receive-time guarantee
+        // is provable on serial instead of silent. Rate-limited to one line per
+        // drain pass (the oldest record in the burst).
+        {
+            uint32_t nowsec = (uint32_t)time(nullptr);
+            uint32_t age = (nowsec > rec.rx_time) ? (nowsec - rec.rx_time) : 0;
+            static uint32_t s_last_backlog_ms = 0;
+            if (age >= (MQTT_ROTATE_DWELL_MS / 1000U) &&
+                (uint32_t)millis() - s_last_backlog_ms >= 10000U) {
+                s_last_backlog_ms = (uint32_t)millis();
+                Serial.printf("[ring] backlog s%u age=%us rx=%u (publishing receive-time)\n",
+                              (unsigned)slot, (unsigned)age, (unsigned)rec.rx_time);
+            }
+        }
+#endif
+        char json[1024];
+        int n = buildPacketJsonFromRecord(json, sizeof(json), rec,
+                                          /*is_tx=*/false, ctx);
+        if (n <= 0 || static_cast<size_t>(n) >= sizeof(json)) {
+            ring_.commit(slot);   // unrenderable: drop it, do not wedge the queue
+            continue;
+        }
+        if (!b.publish(topic, reinterpret_cast<const uint8_t*>(json),
+                       static_cast<size_t>(n), /*retain=*/false)) {
+            break;  // retry next pass
+        }
         ring_.commit(slot);
         sent++;
     }
@@ -283,13 +370,21 @@ uint8_t MqttBrokerPool::publishParsedPacket(const mesh::Packet& packet,
     ctx.firmware_version = firmware_version_;
     ctx.model            = model_;
 
-    char json[1024];
-    int n = buildPacketJson(json, sizeof(json), packet, /*is_tx=*/false,
-                            rssi, snr, score, duration, ctx);
-    if (n <= 0 || static_cast<size_t>(n) >= sizeof(json)) return 0;
+    // #727: store the PACKET RECORD, not the rendered body. The JSON embeds
+    // "raw":"<packet in hex>", and hex doubles the packet before ~316 B of
+    // fields are added -- a 255 B packet rendered to ~826 B, so every ring slot
+    // had to be sized for that. The record is ~296 B. Rendering moves to
+    // drainBroker(). Published bytes are unchanged.
+    //
+    // rx_time is captured HERE, at receive. Rendering at drain with
+    // time(nullptr) would stamp a backlogged broker's messages with the drain
+    // time -- wrong in exactly the rotated-out case the ring exists for.
+    PacketRecord rec;
+    fillPacketRecord(rec, packet, rssi, snr, score, duration,
+                     static_cast<uint32_t>(time(nullptr)));
+    if (rec.raw_len == 0) return 0;   // unserialisable packet
 
-    return publishPacket(reinterpret_cast<const uint8_t*>(json),
-                         static_cast<size_t>(n));
+    return publishPacket(reinterpret_cast<const uint8_t*>(&rec), sizeof(rec));
 }
 
 // ---------------------------------------------------------------------------
@@ -394,6 +489,26 @@ void MqttBrokerPool::reconcileSlot(uint8_t slot) {
     const bool may_alloc =
         (tlsClientsAllocated() - (brokers_[slot].hasClient() ? 1u : 0u))
             < OFFBAND_MAX_LIVE_TLS;
+    // #723: resync on FIRST attach ONLY -- never on a rotation re-entry.
+    //
+    // #710 asked loopTask to move a (re)attaching reader to the ring head so it
+    // does not replay stale boot backlog. But reconcileSlot() runs on EVERY
+    // rotation re-entry too: a rotated-out broker had releaseClient() called, so
+    // hasClient() is false and it takes this path every single time it returns.
+    // Resyncing there threw away exactly the backlog the ring exists to hold --
+    // see publishPacket: "a broker that is down (rotated out, backoff,
+    // HeldNoHeap) resumes where it left off instead of losing the traffic".
+    //
+    // Shipped in v1.5.0-beta1 and caught in the field: an observer published the
+    // first message to CoreScope and silently discarded the next two, which had
+    // arrived while its broker was rotated out. The drop counter read zero the
+    // whole time, because resync() means "deliberately skipped", not "overrun".
+    //
+    // Flag only -- the worker must not touch ring_ (see loop()).
+    if (!first_attach_done_[slot]) {
+        first_attach_done_[slot] = true;
+        pending_resync_[slot]    = true;
+    }
     if (!brokers_[slot].begin(slot, cfg, *identity_, may_alloc) && cfg.enabled) {
         crashLogf("[pool] reconcileSlot %u begin FAILED state=%d err_class=%d",
                   (unsigned)slot,
@@ -426,10 +541,6 @@ inline bool isTlsTransport(const BrokerConfig& c) {
 }
 }  // namespace
 
-#ifndef MQTT_ROTATE_DWELL_MS
-  #define MQTT_ROTATE_DWELL_MS 60000U   // #175: how long a TLS slot holds the budget
-#endif
-
 // #175: rotate the live TLS set on a dwell timer. Demotes the OLDEST live TLS
 // broker so a parked (HeldNoHeap) one can take the freed budget slot. WORKER-ONLY:
 // called from workerLoop, the sole thread permitted to block on esp_mqtt teardown
@@ -452,7 +563,9 @@ void MqttBrokerPool::rotateTlsIfDue(uint32_t now_ms) {
         const MqttBroker& b = brokers_[s];
         if (!b.isConfigured() || !isTlsTransport(b.config())) continue;
         tls_enabled++;
-        if (b.runtime().state == BrokerState::HeldNoHeap) waiting = true;
+        // #715: HeldBudget and HeldNoHeap are both 'deferred, wants the budget'.
+        if (b.runtime().state == BrokerState::HeldNoHeap ||
+            b.runtime().state == BrokerState::HeldBudget) waiting = true;
     }
     // Nothing to share (budget covers all enabled TLS -- PSRAM/large-heap case),
     // or nobody is actually waiting for the budget: no rotation.
@@ -566,13 +679,13 @@ void MqttBrokerPool::workerLoop() {
                               "[rot] heap=%u tls=%u live=%u/%u dwleft=%us |",
                               (unsigned)ESP.getFreeHeap(), (unsigned)tls_cfg, (unsigned)tls_live,
                               (unsigned)OFFBAND_MAX_LIVE_TLS, (unsigned)dwleft);
-                static const char* AB[] = {"DN","CO","UP","BK","HC","HH"};
+                static const char* AB[] = {"DN","CO","UP","BK","HC","HH","HB"};  // #715: HB=held(budget)
                 for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS && o < (int)sizeof(L) - 24; ++s) {
                     const MqttBroker& b = brokers_[s];
                     if (!b.isConfigured() || !isTlsTransport(b.config())) continue;
                     uint8_t stv = (uint8_t)b.runtime().state;
                     o += snprintf(L + o, (size_t)(sizeof(L) - o), " s%u:%s", (unsigned)s,
-                                  stv < 6 ? AB[stv] : "?");
+                                  stv < 7 ? AB[stv] : "?");
                     if (b.runtime().state == BrokerState::Up)
                         o += snprintf(L + o, (size_t)(sizeof(L) - o), "/%us",
                                       (unsigned)((now - b.runtime().went_up_ms) / 1000U));
@@ -585,6 +698,32 @@ void MqttBrokerPool::workerLoop() {
             }
         }
 #endif
+        // #708: build the TLS candidate set while driving per-broker lifecycle.
+        // Promotion order used to be "first eligible by slot index", whose only
+        // fairness mechanism was #175's per-victim cooldown -- which uniquely
+        // determines a winner at exactly TWO candidates and does nothing at three
+        // or more. Measured on hv3-bench with three enabled TLS brokers: 36/35/0
+        // promotions over 481 samples; slot 3 never ran. Selection now lives in
+        // selectTlsPromotion() (BrokerRotationSelect.h) so it is unit-testable --
+        // the defect was invisible at N=2, which is the arity it was validated at.
+        // = {} is redundant -- TlsCandidate carries default member initializers,
+        // so plain declaration already zeroes every element. Kept explicit so a
+        // future edit that drops the NSDMIs cannot silently introduce garbage.
+        // #708 (Gemini review): stamp service on the transition INTO Up -- the
+        // definitive 'this broker actually got its turn' signal. Stamping at
+        // Connecting counted a bring-up that may fail 1-8 s later in the async
+        // handshake, letting a flaky broker consume turns while publishing
+        // nothing. A broker that never reaches Up keeps its old epoch and is
+        // retried; its own Backoff schedule prevents it monopolising selection.
+        for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
+            const BrokerState now_st = brokers_[s].runtime().state;
+            if (now_st == BrokerState::Up && last_known_state_[s] != BrokerState::Up) {
+                last_served_epoch_[s] = ++service_epoch_;
+            }
+            last_known_state_[s] = now_st;
+        }
+
+        TlsCandidate cand[OFFBAND_MAX_BROKERS] = {};
         for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
             if (reconciling_[s]) continue;
             MqttBroker& b = brokers_[s];
@@ -594,7 +733,8 @@ void MqttBrokerPool::workerLoop() {
             // Re-drive idle/held slots. HeldNoClock releases when the clock is
             // sane (#87); HeldNoHeap releases when a TLS slot frees (#171).
             if (st == BrokerState::Down || st == BrokerState::Backoff ||
-                st == BrokerState::HeldNoClock || st == BrokerState::HeldNoHeap) {
+                st == BrokerState::HeldNoClock || st == BrokerState::HeldNoHeap ||
+                st == BrokerState::HeldBudget) {   // #715
                 // #175: skip a slot still in its rotation cooldown, so the parked
                 // broker claims the freed budget instead of the just-evicted victim
                 // reclaiming it. Wrap-safe; 0 means "not cooling".
@@ -602,10 +742,17 @@ void MqttBrokerPool::workerLoop() {
                     (int32_t)(rotated_out_until_ms_[s] - now) > 0) {
                     continue;
                 }
+                // #708: TLS slots compete for the budget and are decided below by
+                // waiting time. Non-TLS hold no mbedTLS context, never contend, and
+                // are driven immediately exactly as before.
+                if (isTlsTransport(b.config())) {
+                    cand[s].eligible          = true;
+                    cand[s].cooling           = false;   // cooldown handled above
+                    cand[s].last_served_epoch = last_served_epoch_[s];
+                    continue;
+                }
                 uint32_t biased = now + static_cast<uint32_t>(s) * 1000U;
-                // TLS budget: non-TLS always OK; TLS only if a live slot is free.
-                bool budget_ok = !isTlsTransport(b.config()) ||
-                                 (tls_live < OFFBAND_MAX_LIVE_TLS);
+                const bool budget_ok = true;   // non-TLS: never budget-limited
                 // #175 fix: rotation demotes a TLS broker via shutdown(), which
                 // DESTROYS its esp_mqtt client (client_ = nullptr) to free the
                 // ~60KB context without leaking (#327). tryConnect can only START
@@ -619,16 +766,63 @@ void MqttBrokerPool::workerLoop() {
                 // connect goes to Backoff and KEEPS its client, so this is not a
                 // reconnect storm. We are on the worker task -- the only caller
                 // allowed to run reconcileSlot's blocking begin().
-                if (isTlsTransport(b.config()) && budget_ok && !b.hasClient()) {
-                    reconcileSlot(s);
-                }
                 (void)b.tryConnect(biased, budget_ok);
-                // Consume a budget slot if this TLS broker just began bringing up.
-                if (isTlsTransport(b.config()) &&
-                    b.runtime().state == BrokerState::Connecting) {
-                    tls_live++;
-                }
             }
+        }
+
+        // #708: award the free TLS budget to whoever has waited longest, one slot
+        // at a time until the budget is full. Loops rather than promoting once so
+        // it stays correct if OFFBAND_MAX_LIVE_TLS is ever raised above 1.
+        for (;;) {
+            uint8_t pick = selectTlsPromotion(cand, OFFBAND_MAX_BROKERS,
+                                              tls_live, OFFBAND_MAX_LIVE_TLS);
+            if (pick == kNoSlot) break;
+            cand[pick].eligible = false;          // decided this pass either way
+            MqttBroker& b = brokers_[pick];
+            // #175 fix: rotation demotes a TLS broker via releaseClient(), which
+            // DESTROYS its esp_mqtt client to free the ~60KB context without
+            // leaking (#327). tryConnect can only START an existing client -- it
+            // cannot recreate one -- so a rotated-out broker would sit Down forever
+            // and the freed budget would never refill (verified on HV3). Recreate
+            // the client first via reconcileSlot (-> begin). Only fires for a
+            // genuinely client-less broker: a failed connect goes to Backoff and
+            // KEEPS its client, so this is not a reconnect storm. We are on the
+            // worker task -- the only caller allowed to run the blocking begin().
+            if (!b.hasClient()) reconcileSlot(pick);
+            uint32_t biased = now + static_cast<uint32_t>(pick) * 1000U;
+            (void)b.tryConnect(biased, /*budget_ok=*/true);
+            // Budget is consumed the moment a bring-up STARTS -- the mbedTLS
+            // context is allocated at Connecting, not at Up.
+            //
+            // The service epoch is NOT stamped here (#708, Gemini review):
+            // esp_mqtt_client_start() is async and the handshake takes 1-8 s
+            // (measured). A broker that reaches Connecting and then fails TLS
+            // would have consumed its turn without publishing anything. Service
+            // is stamped on the actual transition to Up, at the top of the pass.
+            if (b.runtime().state == BrokerState::Connecting) {
+                tls_live++;
+            }
+        }
+
+        // #708: every candidate that did NOT win must STILL be driven with
+        // budget_ok=false so it self-defers into HeldBudget.
+        //
+        // This is not cosmetic. rotateTlsIfDue() only runs when some broker reads
+        // as "waiting" (HeldBudget/HeldNoHeap), and a broker reaches that state
+        // ONLY through tryConnect's deferral path. Leaving non-winners untouched
+        // leaves them Down, nothing ever reads as waiting, rotation never fires,
+        // and the first broker to take the budget holds it forever.
+        //
+        // Caught on hardware, not in tests: slot 3 held the budget for 8.2 h while
+        // slots 1/2/4 sat Down with all five brokers enabled. The unit tests take
+        // `eligible` as an INPUT and only exercise the choice -- they cannot see
+        // that the caller also owns the state transition which makes a broker
+        // eligible in the first place. Extracting the decision without the
+        // transition is what broke it.
+        for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
+            if (!cand[s].eligible) continue;   // winners already cleared above
+            uint32_t biased = now + static_cast<uint32_t>(s) * 1000U;
+            (void)brokers_[s].tryConnect(biased, /*budget_ok=*/false);
         }
     }
     worker_task_ = nullptr;

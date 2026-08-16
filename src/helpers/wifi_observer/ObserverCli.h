@@ -35,7 +35,7 @@ namespace offband {
 //   set mqtt.broker.<N>.jwt_email <s>            -- #63 JWT "email" claim; "" clears
 //   set mqtt.broker.<N>.iata_override <code>
 //   set mqtt.broker.<N>.topic_prefix <s>
-//   set mqtt.broker.<N>.ca_cert <name>           -- letsencrypt, eastmesh, ""
+//   set mqtt.broker.<N>.ca_cert <name>           -- letsencrypt, gts-r4, isrg-x2, ""
 //   display always on | display normal           -- #141: keep the screen lit / restore the 15 s blank
 //                                                    ("display always off" is accepted as an alias for "display normal")
 //   display rotate <0|180> | display flip         -- #148: rotate the display 0/180 ("flip" toggles)
@@ -88,7 +88,12 @@ size_t configRenderBrokerSlot(uint8_t slot, char* out, size_t out_size,
                               const BrokerRuntimeState* rt = nullptr,
                               const char* owner_default_hex = nullptr,
                               int32_t ring_lag = -1,
-                              bool ring_lapped = false);
+                              bool ring_lapped = false,
+                              // #710: monotonic count of messages destroyed by
+                              // writer overrun. ring_lapped is transient and reads
+                              // false again once the broker drains, so it cannot
+                              // evidence past loss; this can.
+                              uint32_t ring_dropped = 0);
 
 // #370: the display appliers (setDisplayAlwaysOnApplier / setDisplayRotationApplier
 // / setDisplayRotationSupportedQuery) and the display.* NVS accessors moved to

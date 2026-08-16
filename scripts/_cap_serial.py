@@ -31,63 +31,24 @@ device side of an observer that stopped publishing to MQTT and did not reconnect
 """
 
 import argparse
-import re
+import os
 import sys
 import time
 
 # ---------------------------------------------------------------------------
-# Redaction — patterns ordered specific → generic. Each entry is (compiled
-# regex, replacement). Group 1 (kept prefix) is preserved; the secret is
-# swapped for a labelled placeholder so the reader knows what was removed.
+# Redaction
+#
+# #667: the patterns live in scripts/log_redact.py and are SHARED with
+# companion_harness.py's caplog download. They used to live here only, so the
+# two retrieval paths for the same device log disagreed -- the serial path
+# scrubbed credentials while the caplog download returned the ring verbatim,
+# and a caplog carried real GPS coordinates into a file in plaintext.
+# One list, both tools: a second copy is a copy that drifts, and the copy that
+# drifts is the one that leaks.
 # ---------------------------------------------------------------------------
 
-_REDACTIONS = [
-    # -- WiFi SSID (network identifier; Ben's explicit target) --------------
-    # Boot: "[WifiBootstrap] Saved WiFi SSID=MyNet; attempting STA."  value → ';'
-    (re.compile(r"(SSID\s*=\s*)([^;\r\n]+)", re.IGNORECASE), r"\1<redacted:ssid>"),
-    # CLI: "wifi.ssid = MyNet"  value → end-of-line (SSIDs may contain spaces)
-    (re.compile(r"(wifi\.ssid\s*[:=]\s*)([^\r\n]+)", re.IGNORECASE), r"\1<redacted:ssid>"),
-
-    # -- JWT bearer tokens (three base64url segments) ----------------------
-    # Distinctive enough to redact anywhere; version strings like 1.16.0 don't
-    # match (segments require >=8 base64url chars each).
-    (re.compile(r"\b[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
-     "<redacted:jwt>"),
-
-    # -- Email / jwt_email (PII) -------------------------------------------
-    (re.compile(r"(jwt_email\s*[:=]\s*)([^\r\n]+)", re.IGNORECASE), r"\1<redacted:email>"),
-    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "<redacted:email>"),
-
-    # -- Generic secret key=value (gessaman + defensive Offband) -----------
-    # Word-boundaried keys so "password"/"passed" don't trip the bare "pass"
-    # rule and vice-versa. Bare "auth" is deliberately EXCLUDED (auth_type /
-    # auth_fail / jwt_audience are diagnostics, not secrets). Value is the run
-    # of non-space chars after the separator.
-    # A `[\w.-]*` prefix lets underscore/dot/dash-joined keys match too
-    # (mqtt_password, wifi.pass, reconnect-token). Longer alternatives precede
-    # "pass" so "password" isn't shadowed. Group 1 keeps the key+separator; the
-    # value is captured to end-of-line ([^\r\n]+) so a secret containing spaces
-    # (WiFi PSKs commonly do) or quotes can never partially survive.
-    (re.compile(r"(\b[\w.-]*(?:password|passwd|pwd|psk|secret|token|apikey|api_key|bearer|pass)\b\s*[:=]\s*)([^\r\n]+)",
-                re.IGNORECASE), r"\1<redacted:secret>"),
-
-    # Last-resort net for label-less interactive CLI replies. The serial console
-    # prints `get wifi.ssid` / `get guest_password` / `get bridge_secret` replies
-    # as "> <value>" with NO field label (CommonCLI `> %s`), so nothing above can
-    # catch them -- the grounded `wifi.ssid =` rule only matches the _sys-channel
-    # format. #382: the live reply is INDENTED ("  > tsunami"), so the anchor must
-    # allow leading whitespace (`^\s*>`); the original `^>` missed it and leaked a
-    # real SSID on the bench. Normal runtime logs use "[Tag]" prefixes, not a
-    # leading ">", so over-redaction risk stays low.
-    (re.compile(r"(^\s*>\s*)([^\r\n]+)"), r"\1<redacted:cli-reply>"),
-]
-
-
-def redact_line(line: str) -> str:
-    """Return the line with any recognised secret value replaced in-line."""
-    for pattern, repl in _REDACTIONS:
-        line = pattern.sub(repl, line)
-    return line
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from log_redact import redact_line  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +126,18 @@ def main(argv=None):
                     help="Force DTR/RTS asserted from the start (ESP32-S3 JTAG-CDC / some nRF52 CDCs gate TX on it).")
     ap.add_argument("--no-auto-dtr", action="store_true",
                     help="Disable the auto-assert-DTR-if-silent fallback (fallback is on by default).")
+    ap.add_argument("--send", action="append", metavar="CMD", default=None,
+                    help="Send a CLI command over the SAME held connection, then keep capturing. "
+                         "Repeatable -- commands are issued in order. This exists so a series of "
+                         "commands can be run WITHOUT reconnecting: on a board using the ESP32-S3 "
+                         "hardware USB Serial/JTAG (ARDUINO_USB_MODE=1) every fresh port open "
+                         "reboots the target, so one-command-per-connect tooling measures a device "
+                         "it keeps restarting (#661).")
+    ap.add_argument("--send-delay", type=float, default=3.0, metavar="SECS",
+                    help="Seconds between queued --send commands (default 3).")
+    ap.add_argument("--send-wait", type=float, default=3.0, metavar="SECS",
+                    help="Seconds to wait after opening before the first --send, so boot output "
+                         "and the auto-DTR fallback settle first (default 3).")
     # Back-compat: allow the old positional form `_cap_serial.py PORT SECS DTR`.
     ap.add_argument("pos", nargs="*", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
@@ -235,10 +208,25 @@ def main(argv=None):
             out_fh.write(line + "\n")
             out_fh.flush()
 
+    # Queued commands, issued on the SAME open connection (see --send). Kept in
+    # this single read loop rather than a writer thread: the loop already owns the
+    # port, and a second thread would need locking for no benefit at these rates.
+    pending = list(args.send or [])
+    next_send = time.time() + args.send_wait if pending else None
+    if pending:
+        print("[[%d command(s) queued; first at +%.0fs, then every %.0fs]]"
+              % (len(pending), args.send_wait, args.send_delay))
+
     t0 = time.time()
     buf = b""
     try:
         while args.secs is None or (time.time() - t0) < args.secs:
+            if pending and next_send is not None and time.time() >= next_send:
+                cmd = pending.pop(0)
+                emit("[[>> %s]]" % cmd)      # echo into the log so the capture is self-describing
+                s.write((cmd + "\r").encode("utf-8"))
+                s.flush()
+                next_send = time.time() + args.send_delay if pending else None
             chunk = s.read(4096)
             if chunk:
                 got_any = True

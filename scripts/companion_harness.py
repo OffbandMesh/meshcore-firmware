@@ -13,7 +13,13 @@ import os
 import re
 import struct
 import subprocess
+import sys
 import time
+
+# #667: shared with _cap_serial.py so the two retrieval paths for the same log
+# cannot disagree about what counts as sensitive.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from log_redact import redact_bytes  # noqa: E402
 
 # --- companion protocol constants (examples/companion_radio/MyMesh.cpp) ---
 CMD_APP_START = 1
@@ -247,12 +253,26 @@ class CompanionSession:
             raise TimeoutError("no caplog STATUS reply")
         return parse_caplog_status(body)
 
-    def caplog_download(self) -> bytes:
+    def caplog_download(self, raw: bool = False) -> bytes:
         """Request a download, reassemble START -> CHUNK* -> END into the log bytes.
 
         The busy rejection is a bare [RESP_CODE_ERR] frame (byte[0]=1, not 0xC4),
         so read ANY frame first and dispatch on byte[0] -- do NOT match on 0xC4
-        (and never test byte[1]==1 for 'error', since START's sub-code is also 1)."""
+        (and never test byte[1]==1 for 'error', since START's sub-code is also 1).
+
+        #667: the returned bytes are REDACTED by default -- credentials scrubbed
+        and GPS position classified (see scripts/log_redact.py). This path used to
+        return the ring verbatim while the serial-capture path scrubbed, and a
+        caplog pulled off a device carried real coordinates into a file. Safe is
+        the default precisely because the leak happened by omission, not by an
+        explicit choice to keep the raw bytes.
+
+        Pass raw=True only when the caller genuinely needs the unmodified ring
+        (byte-exact ring diagnostics) and is not going to ship the result.
+
+        The returned `total` is the ON-DEVICE size from the START frame, which is
+        what the integrity check is made against; after redaction len(data) will
+        differ from it, and that is expected."""
         self.send_frame(bytes([CMD_OFFBAND_CAPLOG, CAPLOG_REQ_DOWNLOAD]))
         start = self.read_frame()
         if start is None:
@@ -271,9 +291,12 @@ class CompanionSession:
                 out += frame[2:]
             elif frame[1] == CAPLOG_SUB_END:
                 break
+        # Integrity check against the on-device size FIRST -- redaction changes
+        # the length, so checking afterwards would compare the wrong things.
         if len(out) != total:
             raise RuntimeError(f"caplog download size mismatch: got {len(out)}, START said {total}")
-        return bytes(out), total
+        data = bytes(out)
+        return (data if raw else redact_bytes(data)), total
 
     def fem_lna_get(self):
         """Send CMD_OFFBAND_FEM_LNA (0xC3) GET. Returns the reply body (byte[0]

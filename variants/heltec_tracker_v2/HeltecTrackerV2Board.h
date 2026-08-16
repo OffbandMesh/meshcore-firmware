@@ -3,7 +3,6 @@
 #include <Arduino.h>
 #include <helpers/RefCountedDigitalPin.h>
 #include <helpers/ESP32Board.h>
-#include <driver/rtc_io.h>
 #include "LoRaFEMControl.h"
 
 class HeltecTrackerV2Board : public ESP32Board {
@@ -17,16 +16,15 @@ public:
   void begin();
   void onBeforeTransmit(void) override;
   void onAfterTransmit(void) override;
-  void enterDeepSleep(uint32_t secs, int pin_wake_btn = -1);
   void powerOff() override;
   uint16_t getBattMilliVolts() override;
   const char* getManufacturerName() const override ;
+  bool setLoRaFemLnaEnabled(bool enable) override;
+  bool canControlLoRaFemLna() const override;
+  bool isLoRaFemLnaEnabled() const override;
 
   // #298: external FEM LNA runtime control. Capability-gated -- the base MainBoard
   // reports "not supported", and this board overrides it because its KCT8103L FEM
   // exposes an independent LNA path (same as heltec_v4).
-  bool setLoRaFemLnaEnabled(bool enable) override;
-  bool canControlLoRaFemLna() const override;
-  bool isLoRaFemLnaEnabled() const override;
 
 };
