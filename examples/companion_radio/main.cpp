@@ -184,8 +184,27 @@ void setup() {
   // Serial is a UART HardwareSerial (e.g. Heltec V3 = esp32-s3-devkitc-1) it doesn't
   // exist -- and isn't needed there (no HWCDC head-of-line blocking). Guarding on plain
   // ESP32 broke the V3 observer build.
+  // ⚠ #741/#756: THIS MUST NOT BE ZERO. Zero is what caused the bug it was
+  // meant to prevent.
+  //
+  // HWCDC::write (framework-arduinoespressif32/cores/esp32/HWCDC.cpp:440-470):
+  //
+  //     uint32_t tries = tx_timeout_ms;
+  //     while (connected && to_send) {
+  //         if (last_toSend == to_send) { tries--; delay(1); }
+  //         if (tries == 0) { connected = false; }   // the escape hatch
+  //     }
+  //
+  // With tx_timeout_ms == 0, `tries--` UNDERFLOWS 0 -> 4,294,967,295 and the
+  // escape can never fire: ~50 days of 1 ms iterations. Observed on
+  // rc32-bench-1 blocking 49.9 minutes inside crashLogBegin(), resuming only
+  // when a host opened the port (#702).
+  //
+  // 1 ms preserves the original #149/#216 intent -- do not stall the main loop
+  // on serial -- while leaving `tries` able to reach zero and bail out.
+  // DO NOT "optimise" this back to 0.
 #if defined(ESP32) && defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
-  Serial.setTxTimeoutMs(0);
+  Serial.setTxTimeoutMs(1);
 #endif
 
   // #149: stamp the running build on the serial console at boot. Every test build

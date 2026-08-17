@@ -160,22 +160,89 @@ static char   s_prev_snapshot[kCrashLogDataSize];
 static size_t s_prev_len     = 0;
 static bool   s_prev_pending = false;   // a deferred re-dump is still owed
 
+// ---------------------------------------------------------------------------
+// #741/#756: CrashLog must NEVER block the boot it exists to diagnose.
+//
+// THE BUG THIS PREVENTS. On a native-USB-CDC board (15 of them -- RC32, HV4,
+// HV4-R8, tracker_v2, E213, E290, T190, EoRa-S3, S3-zero, meshnology_w12,
+// station-g2/g3, t3_s3, t_beam_1w, t_beams3) `Serial` is HWCDC. Its write loop
+// (framework-arduinoespressif32/cores/esp32/HWCDC.cpp:440-470) is:
+//
+//     uint32_t tries = tx_timeout_ms;      // we had set this to 0
+//     while (connected && to_send) {
+//         if (last_toSend == to_send) { tries--; delay(1); }   // 0-1 = 4294967295
+//         if (tries == 0) { connected = false; }               // now unreachable
+//     }
+//
+// With tx_timeout_ms == 0 the counter UNDERFLOWS and the escape hatch can never
+// fire -- roughly 50 days of 1 ms iterations. The trigger is CDC reporting
+// "connected" (plugged in and enumerated) while nothing DRAINS: a wall charger,
+// a power bank, a car USB socket. Observed on rc32-bench-1 blocking for 49.9
+// minutes inside crashLogBegin, resuming the instant a host opened the port.
+//
+// Cruelly, attaching a console to investigate DRAINS the buffer and unblocks the
+// board, so it always "worked when you looked at it" (#702, days lost).
+//
+// THE RULE: a truncated crash log is strictly better than a device that never
+// boots. Write what fits, drop the rest, never wait.
+// ---------------------------------------------------------------------------
+
+// Bounded, non-blocking. Returns bytes actually written; callers must not care.
+//   no host attached -> drop everything
+//   host attached    -> write at most availableForWrite(), drop the remainder
+//
+// `if (Serial)` is the right test on all three transports we ship:
+//   ESP32 HWCDC              -> isCDC_Connected()
+//   nRF52 Adafruit_USBD_CDC  -> tud_cdc_n_connected()
+//   HardwareSerial (UART)    -> true once begun (writing to a pin is free anyway)
+static size_t crashLogSerialWrite(const char* data, size_t len) {
+    if (len == 0) return 0;
+    if (!Serial) return 0;                       // no host -> drop, never wait
+    int room = Serial.availableForWrite();
+    if (room <= 0) return 0;                     // no space -> drop, never wait
+    if (len > (size_t)room) len = (size_t)room;  // bound to what fits
+    return Serial.write((const uint8_t*)data, len);
+}
+
+static void crashLogSerialLine(const char* s) {
+    crashLogSerialWrite(s, strlen(s));
+    crashLogSerialWrite("\r\n", 2);
+}
+
 static void emitPreviousBootDump(const char* why) {
     if (s_prev_len == 0) { return; }
-    Serial.println();
-    Serial.println("=========================================================");
-    Serial.printf ("=== CRASH LOG FROM PREVIOUS BOOT (%s) ===\n", why);
-    Serial.printf ("=== reset_reason=%d (%s) ===\n",
-                   currentResetReasonCode(),
-                   resetReasonString(currentResetReasonCode()));
-    Serial.println("=========================================================");
-    for (size_t i = 0; i < s_prev_len; ++i) {
-        char c = s_prev_snapshot[i];
-        if (c != '\0') Serial.write(c);
+    // Cheap early-out: if nobody is listening there is nothing to emit TO, and
+    // the whole point is not to spend boot time on it.
+    if (!Serial) return;
+
+    char hdr[160];
+    crashLogSerialLine("");
+    crashLogSerialLine("=========================================================");
+    snprintf(hdr, sizeof(hdr), "=== CRASH LOG FROM PREVIOUS BOOT (%s) ===", why);
+    crashLogSerialLine(hdr);
+    snprintf(hdr, sizeof(hdr), "=== reset_reason=%d (%s) ===",
+             currentResetReasonCode(), resetReasonString(currentResetReasonCode()));
+    crashLogSerialLine(hdr);
+    crashLogSerialLine("=========================================================");
+
+    // Was a per-byte Serial.write() over up to 4080 bytes -- the call site that
+    // blocked. Now chunked and bounded: each chunk writes only what fits and the
+    // rest is dropped. A partial dump is the acceptable outcome; a wedged boot
+    // is not. The deferred re-dump (#378/#463) still gets a second chance later
+    // once a monitor has attached.
+    size_t i = 0;
+    while (i < s_prev_len) {
+        int room = Serial.availableForWrite();
+        if (room <= 0) break;                    // buffer full -> stop, do not wait
+        size_t chunk = s_prev_len - i;
+        if (chunk > (size_t)room) chunk = (size_t)room;
+        size_t wrote = crashLogSerialWrite(&s_prev_snapshot[i], chunk);
+        if (wrote == 0) break;                   // no progress -> stop, do not spin
+        i += wrote;
     }
-    Serial.println();
-    Serial.println("=== END CRASH LOG ======================================");
-    Serial.println();
+
+    crashLogSerialLine("");
+    crashLogSerialLine("=== END CRASH LOG ======================================");
 }
 #endif
 
@@ -204,7 +271,7 @@ void crashLogBegin() {
         // Fresh power-on (or brown-out / corrupted retained memory).
         s_prev_len     = 0;
         s_prev_pending = false;
-        Serial.println("[CrashLog] fresh boot; no previous-boot log to recover.");
+        crashLogSerialLine("[CrashLog] fresh boot; no previous-boot log to recover.");
     }
 
     // Re-initialize header for THIS boot's writes. The data[] is
@@ -268,7 +335,7 @@ void crashLogf(const char* fmt, ...) {
 #ifndef OFFBAND_CRASHLOG_HOST
     // Live monitoring path -- ALWAYS, even before begin() (the ring isn't ready
     // yet, but the line must not vanish).
-    Serial.write((const uint8_t*)line, total);
+    crashLogSerialWrite(line, total);
 
     // Crash-survival ring -- only once begin() has initialized the header.
     if (s_begin_called) {
@@ -285,15 +352,29 @@ void crashLogf(const char* fmt, ...) {
 
 void crashLogDump() {
 #ifndef OFFBAND_CRASHLOG_HOST
-    Serial.println("--- crashLogDump (current buffer) ---");
+    crashLogSerialLine("--- crashLogDump (current buffer) ---");
     size_t start = s_header.wrapped ? s_header.write_index : 0;
     size_t count = s_header.wrapped ? kCrashLogDataSize : s_header.write_index;
-    for (size_t i = 0; i < count; ++i) {
-        char c = s_data[(start + i) % kCrashLogDataSize];
-        if (c == '\0') continue;
-        Serial.write(c);
+    // #756: was a per-byte Serial.write() over the whole ring -- same unbounded
+    // blocking shape as emitPreviousBootDump(). Chunked and bounded; stops
+    // rather than waits. crashLogDump() is also called from the shutdown
+    // handler, where blocking would stall the reset itself.
+    size_t i = 0;
+    while (i < count) {
+        int room = Serial.availableForWrite();
+        if (room <= 0) break;                    // full -> stop, never wait
+        char chunk[64];
+        size_t n = 0;
+        while (n < sizeof(chunk) && n < (size_t)room && i < count) {
+            char c = s_data[(start + i) % kCrashLogDataSize];
+            ++i;
+            if (c == '\0') continue;
+            chunk[n++] = c;
+        }
+        if (n == 0) continue;
+        if (crashLogSerialWrite(chunk, n) == 0) break;   // no progress -> stop
     }
-    Serial.println("--- end ---");
+    crashLogSerialLine("--- end ---");
 #endif
 }
 
@@ -351,7 +432,7 @@ static int crashlog_vprintf(const char* fmt, va_list ap) {
     if (len >= sizeof(line)) len = sizeof(line) - 1;  // truncation
 
     // Write to serial (live monitoring path).
-    Serial.write((const uint8_t*)line, len);
+    crashLogSerialWrite(line, len);
 
     // Write to ring buffer (crash-survival path). Only if begin() ran;
     // pre-begin ESP-IDF logs (during framework init) don't have a buffer
@@ -397,11 +478,16 @@ void crashLogInstallEspLogHook() {
 static void crashlog_shutdown_handler(void) {
     // Last-gasp dump before reset finalizes. Fires on panic, watchdog,
     // ESP.restart(), and similar soft-reset paths.
-    Serial.println();
-    Serial.println("=== CRASHLOG SHUTDOWN HANDLER FIRED ===");
+    //
+    // #756: same defect class as the boot path, and arguably worse here -- a
+    // blocking write in a shutdown handler stalls the RESET itself, turning a
+    // clean reboot into a wedge. Bounded writes throughout, and NO Serial.flush():
+    // flush waits for the host to drain, which is exactly the wait we must never
+    // perform. If nobody is listening there is nothing to flush to.
+    crashLogSerialLine("");
+    crashLogSerialLine("=== CRASHLOG SHUTDOWN HANDLER FIRED ===");
     crashLogDump();
-    Serial.println("=== END SHUTDOWN DUMP ===");
-    Serial.flush();
+    crashLogSerialLine("=== END SHUTDOWN DUMP ===");
 }
 
 void crashLogInstallShutdownHandler() {
@@ -590,7 +676,7 @@ void heartbeatTick(uint32_t now_ms) {
               (unsigned)heap);
     if (n > 0) {
         size_t total = ((size_t)n < sizeof(line)) ? (size_t)n : sizeof(line) - 1;
-        Serial.write((const uint8_t*)line, total);   // live monitoring, every second
+        crashLogSerialWrite(line, total);   // live monitoring, every second
 
         // Ring-write only when the beat carries new signal: every 30 s, or the moment
         // free heap drops sharply (>8 KB since the last beat) -- a memory-pressure
