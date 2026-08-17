@@ -1,5 +1,6 @@
 #include "NV3001BDisplay.h"
 #include "Rgb565Blit.h"   // #749: shared clip + native-resolution blit
+#include "Rc32Palette.h"  // #757: dark theme colour roles
 #include <Arduino.h>
 #include <string.h>
 
@@ -97,16 +98,21 @@
   #define NV3001B_TEXT_SIZE2_SCALE_Y 3
 #endif
 
-// Color scheme
-ColorVal UIColor::window_bkg = 0xFFFF;
-ColorVal UIColor::title_bkg = 0x001F;
-ColorVal UIColor::title_txt = 0xFFFF;
-ColorVal UIColor::primary_txt = 0x0000;
-ColorVal UIColor::secondary_txt = (18 << 11) | (36 << 5) | 18;  // mid-gray
-ColorVal UIColor::warning_txt = 0xFD20;
-ColorVal UIColor::popup_bkg =  0x07FF;  // CYAN
-ColorVal UIColor::popup_txt = 0x0000;
-ColorVal UIColor::corp_blue = 0x001A;
+// Color scheme — #757: dark theme, Offband brand colours, no blue anywhere.
+// Values and their rationale live in Rc32Palette.h so they can be unit-tested;
+// this file cannot be compiled natively. See test/test_rc32_palette.
+ColorVal UIColor::window_bkg    = rc32_palette::WINDOW_BKG;
+ColorVal UIColor::title_bkg     = rc32_palette::TITLE_BKG;
+ColorVal UIColor::title_txt     = rc32_palette::TITLE_TXT;
+ColorVal UIColor::primary_txt   = rc32_palette::PRIMARY_TXT;
+ColorVal UIColor::secondary_txt = rc32_palette::SECONDARY_TXT;
+ColorVal UIColor::warning_txt   = rc32_palette::WARNING_TXT;
+ColorVal UIColor::popup_bkg     = rc32_palette::POPUP_BKG;
+ColorVal UIColor::popup_txt     = rc32_palette::POPUP_TXT;
+// Not a blue any more. The symbol is declared in DisplayDriver.h and defined by all
+// 12 drivers, so it cannot be removed without a tree-wide change; what changes here
+// is its value on THIS panel.
+ColorVal UIColor::corp_blue     = rc32_palette::CORP_ACCENT;
 
 static int scaleX(int x) {
   return (int)(x * DISPLAY_SCALE_X);
