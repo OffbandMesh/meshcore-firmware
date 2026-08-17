@@ -42,6 +42,20 @@ public:
   virtual void fillRect(int x, int y, int w, int h) = 0;
   virtual void drawRect(int x, int y, int w, int h) = 0;
   virtual void drawXbm(int x, int y, const uint8_t* bits, int w, int h) = 0;
+  // #749: full-colour RGB565 image, in PHYSICAL panel pixels -- not the logical
+  // width()/height() canvas the rest of this interface uses. Colour panels here
+  // stretch the 128x64 logical canvas non-uniformly (the RC32's NV3001B by 1.72x
+  // horizontally and 2.0x vertically), so art routed through logical coordinates
+  // comes out distorted -- circles become ellipses. This is the escape hatch for
+  // artwork that must land at native resolution.
+  //
+  // DEFAULTED, NOT PURE, and deliberately so: there are 12 drivers in the tree and
+  // ~115 mono-OLED envs, none of which have anything to do with colour art. The
+  // default draws NOTHING, so a mono/e-ink panel simply keeps its 1-bit XBM splash.
+  // Dithering colour art down to 1-bit was considered and rejected -- at 128x64 it
+  // reads worse than the purpose-made XBM. Contract tests:
+  // test/test_display_rgb565_default.
+  virtual void drawRGB565(int x, int y, const uint16_t* px, int w, int h) {}
   virtual uint16_t getTextWidth(const char* str) = 0;
   virtual void drawTextCentered(int mid_x, int y, const char* str) {   // helper method (override to optimise)
     int w = getTextWidth(str);
