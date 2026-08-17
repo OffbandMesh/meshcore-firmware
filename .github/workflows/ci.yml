@@ -51,12 +51,27 @@ jobs:
       - name: Env capability-claim self-test
         run: python scripts/test_env_capability_claims.py
 
-      # #749: the RGB565 splash-asset generator. The native-tests job discovers and
-      # runs the C++ suites on its own, but nothing discovers scripts/test_*.py --
-      # they only run if named here. A generator bug is silent (the splash just
-      # renders in the wrong colours on one board), so this is cheap insurance.
+      # #749/#758: the asset generators. The native-tests job discovers and runs the
+      # C++ suites on its own, but nothing discovers scripts/test_*.py -- they only
+      # run if named here. A generator bug is silent (the splash renders in the wrong
+      # colours, or the text in the wrong shape, on one board), so this is cheap
+      # insurance.
+      #
+      # Pillow is needed to rasterise. Both generators import it defensively and the
+      # pure-arithmetic tests pass without it, but installing it here means the image
+      # paths are actually exercised rather than skipped -- which is the point.
+      - name: Install asset-generator deps
+        run: python -m pip install --quiet pillow
+
       - name: Splash asset generator self-test
         run: python scripts/test_gen_offband_logo.py
+
+      # The real-font cases skip unless JBM_TTF points at the TTF, which is NOT
+      # committed (only the generated table is). The packing, quantisation and
+      # coverage-range assertions run regardless, and those are the ones that catch a
+      # silently wrong glyph table.
+      - name: Font generator self-test
+        run: python scripts/test_gen_jbm_font.py
 
       # ADVISORY until #648 (the capability inventory) validates what this asserts.
       # ci-green is a hard merge gate for every PR in the repo (#477), so a check

@@ -83,6 +83,9 @@ def test_half_alpha_lands_midway():
 # ------------------------------------------------------------------ image ---
 
 def test_image_to_rgb565_is_row_major_and_complete():
+    if not gen.HAVE_PIL:
+        print("  (skipped: Pillow not installed)")
+        return
     from PIL import Image
     im = Image.new("RGBA", (3, 2), (0, 0, 0, 0))
     im.putpixel((0, 0), (255, 0, 0, 255))
@@ -131,11 +134,26 @@ def test_text_band_is_derived_from_the_real_scale_not_hardcoded():
 
 
 def test_splash_still_draws_its_first_version_line_where_we_think():
-    # Guards the other half: SPLASH_TEXT_TOP_LOGICAL mirrors a literal in UITask.cpp.
+    # The other half of the mirror: SPLASH_TEXT_TOP_LOGICAL must equal SPLASH_LINE_1
+    # in the COLOUR branch of UITask.cpp.
+    #
+    # This originally matched a bare literal at the call site. #758 replaced those
+    # literals with named constants for the 13px layout, and this test caught the
+    # resulting staleness -- the generator still believed the text began at logical
+    # 35 while the colour splash had moved it to 29, so the artwork was being centred
+    # in a band 12 physical pixels taller than actually existed. That is precisely
+    # the drift this guard was written for, and it fired two commits after it was
+    # written rather than on hardware.
     ui = (Path(_HERE).parent / "examples/companion_radio/ui-new/UITask.cpp").read_text(
         encoding="utf-8", errors="replace")
-    assert f"drawTextCentered(display.width()/2, {gen.SPLASH_TEXT_TOP_LOGICAL}," in ui, \
-        "the splash's first version line moved; SPLASH_TEXT_TOP_LOGICAL is now stale"
+    # Match the colour branch that DEFINES the constants, not the first
+    # OFFBAND_COLOUR_SPLASH block in the file -- that one is the header include, and
+    # splitting on it is how this assertion first went looking in the wrong place.
+    m = re.search(r"#ifdef\s+OFFBAND_COLOUR_SPLASH\s*\n\s*static const int SPLASH_LINE_1\s*=\s*(\d+)", ui)
+    assert m, "the OFFBAND_COLOUR_SPLASH branch defining SPLASH_LINE_1 was not found"
+    assert int(m.group(1)) == gen.SPLASH_TEXT_TOP_LOGICAL, (
+        f"colour splash line 1 is {m.group(1)} but the generator assumes "
+        f"{gen.SPLASH_TEXT_TOP_LOGICAL}; regenerate the asset")
 
 
 # --------------------------------------------------------------- placement ---
