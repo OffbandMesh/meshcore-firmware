@@ -209,6 +209,37 @@ static void crashLogSerialLine(const char* s) {
     crashLogSerialWrite("\r\n", 2);
 }
 
+// Emit `count` bytes of ring content, bounded and non-blocking, skipping the
+// embedded NULs that pad an unwrapped ring. `at(i)` supplies byte i so the two
+// callers can differ in indexing (linear snapshot vs wrapping ring) without
+// duplicating the transmit logic.
+//
+// #756 review (Gemini): the NUL skip is NOT new -- both dumps have always
+// stripped them (`if (c != '\0')`). My first pass at chunking
+// emitPreviousBootDump dropped that filter, which would have started emitting
+// raw NULs into terminals that previously never saw them, AND left the two
+// dumps behaving differently. One helper, original semantics, both callers.
+template <typename AtFn>
+static void crashLogEmitRing(size_t count, AtFn at) {
+    size_t i = 0;
+    while (i < count) {
+        int room = Serial.availableForWrite();
+        if (room <= 0) break;                       // full -> stop, never wait
+
+        char chunk[64];
+        size_t n = 0;
+        const size_t cap = (sizeof(chunk) < (size_t)room) ? sizeof(chunk) : (size_t)room;
+        while (n < cap && i < count) {
+            char c = at(i);
+            ++i;
+            if (c == '\0') continue;                // padding, not content
+            chunk[n++] = c;
+        }
+        if (n == 0) continue;                       // whole chunk was padding
+        if (crashLogSerialWrite(chunk, n) == 0) break;   // no progress -> stop
+    }
+}
+
 static void emitPreviousBootDump(const char* why) {
     if (s_prev_len == 0) { return; }
     // Cheap early-out: if nobody is listening there is nothing to emit TO, and
@@ -230,16 +261,7 @@ static void emitPreviousBootDump(const char* why) {
     // rest is dropped. A partial dump is the acceptable outcome; a wedged boot
     // is not. The deferred re-dump (#378/#463) still gets a second chance later
     // once a monitor has attached.
-    size_t i = 0;
-    while (i < s_prev_len) {
-        int room = Serial.availableForWrite();
-        if (room <= 0) break;                    // buffer full -> stop, do not wait
-        size_t chunk = s_prev_len - i;
-        if (chunk > (size_t)room) chunk = (size_t)room;
-        size_t wrote = crashLogSerialWrite(&s_prev_snapshot[i], chunk);
-        if (wrote == 0) break;                   // no progress -> stop, do not spin
-        i += wrote;
-    }
+    crashLogEmitRing(s_prev_len, [](size_t i) { return s_prev_snapshot[i]; });
 
     crashLogSerialLine("");
     crashLogSerialLine("=== END CRASH LOG ======================================");
@@ -359,21 +381,9 @@ void crashLogDump() {
     // blocking shape as emitPreviousBootDump(). Chunked and bounded; stops
     // rather than waits. crashLogDump() is also called from the shutdown
     // handler, where blocking would stall the reset itself.
-    size_t i = 0;
-    while (i < count) {
-        int room = Serial.availableForWrite();
-        if (room <= 0) break;                    // full -> stop, never wait
-        char chunk[64];
-        size_t n = 0;
-        while (n < sizeof(chunk) && n < (size_t)room && i < count) {
-            char c = s_data[(start + i) % kCrashLogDataSize];
-            ++i;
-            if (c == '\0') continue;
-            chunk[n++] = c;
-        }
-        if (n == 0) continue;
-        if (crashLogSerialWrite(chunk, n) == 0) break;   // no progress -> stop
-    }
+    crashLogEmitRing(count, [start](size_t i) {
+        return s_data[(start + i) % kCrashLogDataSize];
+    });
     crashLogSerialLine("--- end ---");
 #endif
 }
