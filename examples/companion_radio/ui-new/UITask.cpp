@@ -38,18 +38,10 @@
 #include "offband_logo_rgb565.h"   // #749: colour lockup, colour panels only
 #endif
 
-// #153: a dev/test build = OFFBAND_VERSION (git describe) carries a
-// commits-since-tag suffix ("-N-g<sha>") or is dirty; a clean tagged release
-// (incl. -rc) has neither. Used to show debug-only UI (the heap readout) on dev
-// builds and hide it on the shipped release.
-static inline bool offbandIsDevBuild() {
-#ifdef OFFBAND_VERSION
-  return strstr(OFFBAND_VERSION, "-g") != nullptr ||
-         strstr(OFFBAND_VERSION, "-dirty") != nullptr;
-#else
-  return true;   // no Offband version injected = a local/dev build
-#endif
-}
+// #153 added offbandIsDevBuild() to gate debug-only UI (the heap readout) to dev
+// builds. #761 replaced that with an explicit -D OFFBAND_SHOW_HEAP opt-in, and it
+// had no other callers, so it is removed rather than left to rot as dead code
+// whose comment describes a policy the tree no longer follows.
 
 class SplashScreen : public UIScreen {
   UITask* _task;
@@ -557,19 +549,27 @@ public:
     // when heap is already tight). Same value as the [hb] heartbeat log
     // line in CrashLog.cpp (ESP.getFreeHeap()), refreshed at the screen's
     // native 5-second cadence (return 5000 below).
-#if defined(ESP32) || defined(ESP_PLATFORM)
+#if (defined(ESP32) || defined(ESP_PLATFORM)) && defined(OFFBAND_SHOW_HEAP)
     // Heap readout was added for the ESP32 V3/V4 heap crisis; ESP.* is
     // ESP32-only, so guard it -- nRF52 companions otherwise fail to compile
     // ('ESP' not declared). #8.
-    // #153: heap readout is a debug aid -- show on dev/test builds, hide on the
-    // shipped tagged release.
-    if (offbandIsDevBuild()) {
-      char heap_tmp[24];
-      snprintf(heap_tmp, sizeof(heap_tmp), "Heap:%u", (unsigned)ESP.getFreeHeap());
-      display.setTextSize(1);
-      display.setColor(UIColor::primary_txt);
-      display.drawTextCentered(display.width() / 2, 56, heap_tmp);
-    }
+    //
+    // #761: now OPT-IN via -D OFFBAND_SHOW_HEAP, and off by default everywhere.
+    // It was previously gated on offbandIsDevBuild(), which meant it was absent
+    // from tagged releases but unavoidable on every bench build -- i.e. present
+    // exactly when someone is doing UI work and does not want a debug readout
+    // occupying the bottom line, with no way to switch it off.
+    //
+    // Deliberately kept rather than deleted: #624 (RCC6/C6) and #625 (RC52/nRF52)
+    // are boards where heap is the open question, and on this board class
+    // attaching a serial console perturbs what is being measured (#756), so an
+    // on-screen readout with no host attached is the right instrument. One build
+    // flag away when a heap investigation needs it.
+    char heap_tmp[24];
+    snprintf(heap_tmp, sizeof(heap_tmp), "Heap:%u", (unsigned)ESP.getFreeHeap());
+    display.setTextSize(1);
+    display.setColor(UIColor::primary_txt);
+    display.drawTextCentered(display.width() / 2, 56, heap_tmp);
 #endif
 
     return 5000;   // next render after 5000 ms
