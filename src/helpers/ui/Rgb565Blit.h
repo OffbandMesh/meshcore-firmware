@@ -53,6 +53,13 @@ inline Clip clip(int dst_w, int dst_h, int x, int y, int src_w, int src_h) {
   Clip c{x, y, 0, 0, src_w, src_h, false};
   if (dst_w <= 0 || dst_h <= 0 || src_w <= 0 || src_h <= 0) return c;
 
+  // Reject placements that cannot intersect the destination at all, BEFORE any
+  // arithmetic on x/y. This is the readable statement of intent, and it also
+  // removes an undefined-behaviour edge: the negation below (-c.dx) is UB for
+  // INT_MIN, and these comparisons are not. Past this point x > -src_w and
+  // y > -src_h, so both negations are in range.
+  if (x <= -src_w || y <= -src_h || x >= dst_w || y >= dst_h) return c;
+
   if (c.dx < 0) { c.sx = -c.dx; c.w += c.dx; c.dx = 0; }
   if (c.dy < 0) { c.sy = -c.dy; c.h += c.dy; c.dy = 0; }
   if (c.dx + c.w > dst_w) c.w = dst_w - c.dx;

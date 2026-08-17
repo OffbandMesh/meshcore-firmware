@@ -493,22 +493,34 @@ void NV3001BDisplay::drawRGB565(int x, int y, const uint16_t* px, int w, int h) 
   const rgb565::Clip c = rgb565::clip(NV3001B_SCREEN_WIDTH, NV3001B_SCREEN_HEIGHT, x, y, w, h);
   if (!c.visible) return;
 
-  // One panel row at a time: bounded stack use (at most NV3001B_SCREEN_WIDTH
-  // pixels) and no allocation, which matters precisely because we are here due to
-  // an allocation having already failed.
-  uint16_t row[NV3001B_SCREEN_WIDTH];
+  // Scratch buffer, deliberately SMALL and FIXED. A full-width 220-pixel row would
+  // be 440 B of stack on a path reached only after a heap allocation has already
+  // failed -- the moment to be frugal, not to take the largest frame in the driver.
+  // 64 B is a rounding error on any task stack here.
+  //
+  // (The #749 review proposed a VLA sized by c.w. Rejected: a VLA is still stack,
+  // sized by a runtime value, so it bounds nothing a reviewer can check -- and VLAs
+  // are a GCC extension in C++, not standard. Chunking costs a few more SPI
+  // transactions on a path that runs once at boot in a degraded mode.)
+  static const int CHUNK_PX = 32;
+  uint16_t chunk[CHUNK_PX];
+
   for (int r = 0; r < c.h; r++) {
     const uint16_t* s = px + (size_t)(c.sy + r) * w + c.sx;
-    for (int col = 0; col < c.w; col++) {
-      row[col] = (uint16_t)((s[col] >> 8) | (s[col] << 8));
+    for (int done = 0; done < c.w; done += CHUNK_PX) {
+      const int n = (c.w - done) < CHUNK_PX ? (c.w - done) : CHUNK_PX;
+      for (int i = 0; i < n; i++) {
+        const uint16_t v = s[done + i];
+        chunk[i] = (uint16_t)((v >> 8) | (v << 8));
+      }
+      setAddrWindow(c.dx + done, c.dy + r, n, 1);
+      spi.beginTransaction(SPISettings(SPI_FREQUENCY, MSBFIRST, SPI_MODE0));
+      digitalWrite(PIN_TFT_DC, HIGH);
+      digitalWrite(PIN_TFT_CS, LOW);
+      spi.writeBytes((const uint8_t*)chunk, (uint32_t)n * sizeof(uint16_t));
+      digitalWrite(PIN_TFT_CS, HIGH);
+      spi.endTransaction();
     }
-    setAddrWindow(c.dx, c.dy + r, c.w, 1);
-    spi.beginTransaction(SPISettings(SPI_FREQUENCY, MSBFIRST, SPI_MODE0));
-    digitalWrite(PIN_TFT_DC, HIGH);
-    digitalWrite(PIN_TFT_CS, LOW);
-    spi.writeBytes((const uint8_t*)row, (uint32_t)c.w * sizeof(uint16_t));
-    digitalWrite(PIN_TFT_CS, HIGH);
-    spi.endTransaction();
   }
 }
 
