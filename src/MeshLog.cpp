@@ -116,9 +116,32 @@ void meshLogDumpSerial() {
   }
 }
 
+// #763: the UART0 mirror is a BUILD-TIME channel, not a runtime-captured one.
+// Compile-time constant so the early-out below folds away entirely in stock
+// builds -- they keep paying exactly one branch, as before.
+#if defined(OFFBAND_MESHLOG_UART0) && defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+static constexpr bool kMeshLogUart0 = true;
+#else
+static constexpr bool kMeshLogUart0 = false;
+#endif
+
 void mesh_log_line(uint8_t level, const char* fmt, ...) {
-  // Cheap early-out: disabled by default, so stock builds pay one branch.
-  if (!g_meshLogEnabled || level > g_max_level) return;
+  // Cheap early-out: capture is disabled by default, so stock builds pay one
+  // branch.
+  //
+  // #763: RECORDING and EMITTING are separate concerns. `g_meshLogEnabled`
+  // controls whether lines are RECORDED (ring + the Serial mirror that shadows
+  // it). It must NOT also silence the raw UART0 wire: that channel exists to
+  // observe a board with no host and no operator -- on battery, mid-boot, or
+  // after a failure -- precisely the situations where nobody was around to turn
+  // capture on first. Gating the wire on a runtime flag someone had to set
+  // beforehand defeats the instrument.
+  //
+  // The LEVEL filter still applies to both: it is a statement about which lines
+  // matter, not about which sink is live.
+  if (level > g_max_level) return;
+  const bool capture = g_meshLogEnabled;
+  if (!capture && !kMeshLogUart0) return;
 
   // Format OUTSIDE the critical section (stack-frugal: one bounded buffer, no
   // heap). Timestamp prefix gives every captured line timing context.
@@ -139,9 +162,13 @@ void mesh_log_line(uint8_t level, const char* fmt, ...) {
   // NUL byte itself.
   size_t total = strlen(line);
 
-  MLOG_ENTER();
-  g_ring.append(reinterpret_cast<const uint8_t*>(line), total);
-  MLOG_EXIT();
+  // Ring + Serial mirror are the RECORDING path -- skipped entirely when capture
+  // is off, so an emit-only build never evicts anything or touches the lock.
+  if (capture) {
+    MLOG_ENTER();
+    g_ring.append(reinterpret_cast<const uint8_t*>(line), total);
+    MLOG_EXIT();
+  }
 
   // Live serial mirror (#411) -- outside the lock. Only where the console is free
   // of the framed protocol (g_meshLogMirror); a USB-serial companion keeps this
@@ -154,7 +181,7 @@ void mesh_log_line(uint8_t level, const char* fmt, ...) {
   // boot. So drop the mirror line when the TX buffer can't take it in full: the
   // capture ring already holds it (append above), so the downloadable capture is
   // unaffected -- only the best-effort live echo is skipped under back-pressure.
-  if (g_meshLogMirror && Serial.availableForWrite() >= (int)total) {
+  if (capture && g_meshLogMirror && Serial.availableForWrite() >= (int)total) {
     Serial.write(reinterpret_cast<const uint8_t*>(line), total);
   }
 
