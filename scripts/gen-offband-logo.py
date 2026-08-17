@@ -29,6 +29,22 @@ from PIL import Image, ImageDraw
 # Sizes tuned for the 128x64 OLED lockup (mark + 4px gap + wordmark = 119px).
 MARK_TARGET_H = 30
 WORD_TARGET_W = 86
+
+# #749: colour splash width in PHYSICAL panel pixels. 200 of the RC32's 220 leaves
+# a 10px margin each side; the lockup's ~3.9:1 aspect then lands ~51px tall, which
+# clears the version text the splash already draws from physical y=70 down.
+SPLASH_TARGET_W = 200
+
+# Physical panel geometry for the colour splash. Mirrors NV3001B_SCREEN_WIDTH /
+# NV3001B_SCREEN_HEIGHT in src/helpers/ui/NV3001BDisplay.cpp -- note those are the
+# POST-ROTATION dimensions the driver actually draws in, not NV3001B_PANEL_*, which
+# describe the panel's memory orientation (128x220) and are not what you want here.
+SPLASH_PANEL_W = 220
+SPLASH_PANEL_H = 128
+
+# Physical y at which the splash starts drawing its version text: logical y=35
+# scaled by DISPLAY_SCALE_Y (128/64 = 2.0). The artwork is centred above this.
+SPLASH_TEXT_TOP_PHYS = 70
 WORD_THRESHOLD = 120
 MARK_THRESHOLD = 110
 
@@ -102,6 +118,73 @@ def carray(name: str, data: bytearray, row_bytes: int) -> str:
     return "\n".join(out)
 
 
+# --------------------------------------------------------------- RGB565 (#749) ---
+# The 1-bit path above serves the mono OLEDs. Colour panels (today: the RadioCore
+# RC32's 220x128 NV3001B) get this instead -- a full-colour asset blitted at native
+# panel resolution by rgb565::blitSwapped, bypassing the 128x64 logical canvas that
+# would otherwise stretch it 1.72x horizontally and 2.0x vertically.
+
+def rgb565(r: int, g: int, b: int) -> int:
+    """Pack 8-8-8 into 5-6-5. Truncating, not rounding -- the panel's own encoding."""
+    return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
+
+
+def composite_over(src_rgba, bg_rgb):
+    """Flatten one RGBA pixel onto an opaque background.
+
+    The blit has no alpha path, so transparency must be resolved here. This BAKES
+    THE BACKGROUND INTO THE ASSET: if the splash background changes, regenerate.
+    """
+    r, g, b, a = src_rgba
+    return tuple(round((c * a + bg * (255 - a)) / 255) for c, bg in zip((r, g, b), bg_rgb))
+
+
+def image_to_rgb565(im, bg_rgb):
+    """Flatten and pack an RGBA image. Returns (values, w, h), row-major."""
+    im = im.convert("RGBA")
+    w, h = im.size
+    px = im.load()
+    return [rgb565(*composite_over(px[x, y], bg_rgb))
+            for y in range(h) for x in range(w)], w, h
+
+
+def carray16(name: str, values, per_row: int = 12) -> str:
+    out = [f"static const uint16_t {name}[] = {{"]
+    for i in range(0, len(values), per_row):
+        out.append("  " + ", ".join(f"0x{v:04x}" for v in values[i:i + per_row]) + ",")
+    out.append("};")
+    return "\n".join(out)
+
+
+def splash_origin(panel_w: int, panel_h: int, art_w: int, art_h: int):
+    """Where the colour lockup sits, in PHYSICAL panel pixels.
+
+    Computed here rather than on-device: DisplayDriver exposes only the 128x64
+    LOGICAL canvas, and widening that interface with a physical-size accessor for
+    one board's splash buys less than emitting two constants does.
+
+    Centred horizontally; vertically centred in the band ABOVE the version text,
+    which the splash draws from logical y=35 (= physical y=70 on this panel).
+    Clamped at 0 so an oversized asset is clipped on its far edges by the blit
+    rather than having its near edges pushed off-panel by a negative origin.
+    """
+    x = max(0, (panel_w - art_w) // 2)
+    y = max(0, (SPLASH_TEXT_TOP_PHYS - art_h) // 2)
+    return x, y
+
+
+def lockup_rgb565(png_path: str, target_w: int, bg_rgb):
+    """Trim the brand lockup to its ink and scale it to target_w, preserving aspect."""
+    im = Image.open(png_path).convert("RGBA")
+    bbox = im.split()[3].getbbox()
+    if bbox:
+        im = im.crop(bbox)
+    w0, h0 = im.size
+    th = max(1, round(target_w * h0 / w0))
+    im = im.resize((target_w, th), Image.LANCZOS)
+    return image_to_rgb565(im, bg_rgb)
+
+
 def main():
     ap = argparse.ArgumentParser()
     # Default: the offband-site repo checked out as a sibling of this one
@@ -112,6 +195,15 @@ def main():
     ap.add_argument("--out", default=str(
         Path(__file__).resolve().parent.parent /
         "examples/companion_radio/ui-new/offband_logo.h"))
+    # #749: colour output. Separate file and separate flag so a regeneration of the
+    # 1-bit header can never disturb the colour asset or vice versa.
+    ap.add_argument("--rgb565-out", default=str(
+        Path(__file__).resolve().parent.parent /
+        "examples/companion_radio/ui-new/offband_logo_rgb565.h"))
+    ap.add_argument("--rgb565-width", type=int, default=SPLASH_TARGET_W)
+    ap.add_argument("--rgb565-bg", default="ffffff",
+                    help="splash background as RRGGBB; baked in, since the blit is opaque")
+    ap.add_argument("--skip-rgb565", action="store_true")
     a = ap.parse_args()
 
     md, mrb, mw, mh = mark(MARK_TARGET_H)
@@ -138,6 +230,42 @@ def main():
 """
     Path(a.out).write_text(header)
     print(f"wrote {a.out}\n  mark {mw}x{mh} ({len(md)}B), word {ww}x{wh} ({len(wd)}B)")
+
+    if a.skip_rgb565:
+        return
+
+    bg = tuple(int(a.rgb565_bg[i:i + 2], 16) for i in (0, 2, 4))
+    px, cw, ch = lockup_rgb565(a.src, a.rgb565_width, bg)
+    sx, sy = splash_origin(SPLASH_PANEL_W, SPLASH_PANEL_H, cw, ch)
+    colour = f"""// offband_logo_rgb565.h -- Offband colour splash asset (#749).
+// GENERATED by scripts/gen-offband-logo.py from {Path(a.src).name}. Do not
+// hand-edit; regenerate.
+//
+// Full-colour RGB565, drawn at NATIVE PANEL RESOLUTION via
+// DisplayDriver::drawRGB565 -> rgb565::blitSwapped. It deliberately does NOT go
+// through the 128x64 logical canvas, which scales 1.72x horizontally and 2.0x
+// vertically and would render the mark's circular arcs as ellipses.
+//
+// Values are host-order RGB565 (same encoding as ColorVal); the driver applies its
+// own storage byte-swap. Alpha is already flattened onto the splash background
+// #{a.rgb565_bg} -- CHANGE THAT BACKGROUND AND THIS MUST BE REGENERATED.
+//
+// Cost: {cw}x{ch} = {len(px) * 2:,} B of flash.
+#pragma once
+#ifdef OFFBAND_VERSION
+
+#define OFFBAND_SPLASH_RGB565_W {cw}
+#define OFFBAND_SPLASH_RGB565_H {ch}
+// Physical-pixel origin, centred on the {SPLASH_PANEL_W}x{SPLASH_PANEL_H} panel and
+// above the version text at physical y={SPLASH_TEXT_TOP_PHYS}.
+#define OFFBAND_SPLASH_RGB565_X {sx}
+#define OFFBAND_SPLASH_RGB565_Y {sy}
+{carray16('offband_splash_rgb565', px)}
+
+#endif // OFFBAND_VERSION
+"""
+    Path(a.rgb565_out).write_text(colour)
+    print(f"wrote {a.rgb565_out}\n  splash {cw}x{ch} ({len(px) * 2:,}B flash)")
 
 
 if __name__ == "__main__":

@@ -51,6 +51,13 @@ jobs:
       - name: Env capability-claim self-test
         run: python scripts/test_env_capability_claims.py
 
+      # #749: the RGB565 splash-asset generator. The native-tests job discovers and
+      # runs the C++ suites on its own, but nothing discovers scripts/test_*.py --
+      # they only run if named here. A generator bug is silent (the splash just
+      # renders in the wrong colours on one board), so this is cheap insurance.
+      - name: Splash asset generator self-test
+        run: python scripts/test_gen_offband_logo.py
+
       # ADVISORY until #648 (the capability inventory) validates what this asserts.
       # ci-green is a hard merge gate for every PR in the repo (#477), so a check
       # built on unvalidated assumptions must not block other people's work. The

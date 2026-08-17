@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""Tests for the RGB565 emitter in gen-offband-logo.py (#749).
+
+Pure, no hardware, no device. Run: python scripts/test_gen_offband_logo.py
+  or python -m pytest scripts/test_gen_offband_logo.py
+
+WHAT THESE PROTECT
+  The generator turns a brand PNG into a C array the firmware blits verbatim. If
+  the packing is wrong there is no runtime error -- the splash just renders in the
+  wrong colours, on a board most people do not have, and the failure looks like a
+  display driver bug. The channel arithmetic is worth pinning down here, on the
+  host, where it is cheap to check.
+
+  The compositing tests exist because the brand asset is RGBA and the blit is
+  OPAQUE (rgb565::blitSwapped has no alpha path). Transparency has to be resolved
+  at generation time against the splash background, so the background colour is
+  baked into the asset -- change the splash background and the asset must be
+  regenerated. That coupling is deliberate and these tests document it.
+"""
+import importlib.util
+import os
+import sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+# The generator's filename has a hyphen, so it is not directly importable.
+_spec = importlib.util.spec_from_file_location(
+    "gen_offband_logo", os.path.join(_HERE, "gen-offband-logo.py"))
+gen = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(gen)
+
+WHITE = (255, 255, 255)
+
+# Straight from the brand SVG (offband-site/static/img/logo-lockup-light.svg), not
+# eyeballed: the mark stroke and the wordmark fill.
+BRAND_GREEN = (0x1A, 0x7A, 0x44)
+BRAND_INK = (0x0F, 0x14, 0x12)
+
+
+# ---------------------------------------------------------------- packing ---
+
+def test_packs_primaries_into_5_6_5():
+    assert gen.rgb565(255, 255, 255) == 0xFFFF
+    assert gen.rgb565(0, 0, 0) == 0x0000
+    assert gen.rgb565(255, 0, 0) == 0xF800, "red must occupy the top 5 bits"
+    assert gen.rgb565(0, 255, 0) == 0x07E0, "green must occupy the middle 6 bits"
+    assert gen.rgb565(0, 0, 255) == 0x001F, "blue must occupy the bottom 5 bits"
+
+
+def test_truncates_low_bits_rather_than_rounding():
+    # One unit in each destination channel. Rounding instead of truncating would
+    # shift these and quietly change every colour in the asset.
+    assert gen.rgb565(8, 4, 8) == 0x0821
+
+
+def test_brand_colours_survive_the_round_trip():
+    # Guards against a mono/threshold path being wired in by mistake: these must
+    # be real colours, not collapsed to black or white.
+    assert gen.rgb565(*BRAND_GREEN) == 0x1BC8
+    assert gen.rgb565(*BRAND_INK) == 0x08A2
+    for packed in (gen.rgb565(*BRAND_GREEN), gen.rgb565(*BRAND_INK)):
+        assert packed not in (0x0000, 0xFFFF)
+
+
+# ------------------------------------------------------------ compositing ---
+
+def test_transparent_pixel_becomes_the_background():
+    assert gen.composite_over((0, 0, 0, 0), WHITE) == WHITE
+
+
+def test_opaque_pixel_is_unchanged():
+    assert gen.composite_over((*BRAND_GREEN, 255), WHITE) == BRAND_GREEN
+
+
+def test_half_alpha_lands_midway():
+    # Antialiased glyph edges are these pixels; getting them wrong is what makes a
+    # rendered wordmark look either bolded or eaten away.
+    assert gen.composite_over((0, 0, 0, 128), WHITE) == (127, 127, 127)
+
+
+# ------------------------------------------------------------------ image ---
+
+def test_image_to_rgb565_is_row_major_and_complete():
+    from PIL import Image
+    im = Image.new("RGBA", (3, 2), (0, 0, 0, 0))
+    im.putpixel((0, 0), (255, 0, 0, 255))
+    im.putpixel((2, 1), (0, 0, 255, 255))
+
+    px, w, h = gen.image_to_rgb565(im, WHITE)
+
+    assert (w, h) == (3, 2)
+    assert len(px) == 6, "one entry per pixel, row-major"
+    assert px[0] == 0xF800, "first entry is the top-left pixel"
+    assert px[5] == 0x001F, "last entry is the bottom-right pixel"
+    assert px[1] == 0xFFFF, "transparent pixels composite to the background"
+
+
+# --------------------------------------------------------------- placement ---
+# The asset is positioned at generation time rather than by the firmware, so the
+# splash does not need to learn the panel's physical size. DisplayDriver exposes
+# only the 128x64 LOGICAL canvas, and adding a physical-size accessor to the base
+# interface for one board's splash is a worse trade than emitting two constants.
+
+def test_centres_the_asset_horizontally_on_the_panel():
+    x, y = gen.splash_origin(panel_w=220, panel_h=128, art_w=200, art_h=42)
+    assert x == 10, "200 wide on a 220 panel leaves 10px each side"
+
+
+def test_places_the_asset_in_the_band_above_the_version_text():
+    # The splash draws its version lines from logical y=35, i.e. physical y=70.
+    x, y = gen.splash_origin(panel_w=220, panel_h=128, art_w=200, art_h=42)
+    assert y >= 0
+    assert y + 42 <= 70, "the asset must not collide with the version text band"
+
+
+def test_clamps_rather_than_going_negative_for_an_oversized_asset():
+    # An asset wider or taller than its band must still land on-panel; the blit
+    # would clip it, but a negative origin would clip the WRONG edge.
+    x, y = gen.splash_origin(panel_w=220, panel_h=128, art_w=300, art_h=90)
+    assert x == 0
+    assert y == 0
+
+
+def test_emitted_array_is_valid_c_and_declares_its_size():
+    src = gen.carray16("offband_splash", [0xF800, 0x07E0, 0x001F, 0x0000], per_row=2)
+
+    assert "offband_splash" in src
+    assert src.count("0x") == 4, "one literal per pixel"
+    assert "0xf800" in src.lower()
+    assert src.rstrip().endswith("};")
+    assert src.count("\n") >= 3, "wrapped, not one unreadable line"
+
+
+if __name__ == "__main__":
+    failures = 0
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            try:
+                fn()
+                print(f"PASS {name}")
+            except AssertionError as e:
+                failures += 1
+                print(f"FAIL {name}: {e}")
+    print(f"\n{failures} failure(s)")
+    sys.exit(1 if failures else 0)

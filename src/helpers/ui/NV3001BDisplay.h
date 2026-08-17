@@ -75,6 +75,9 @@ public:
   void fillRect(int x, int y, int w, int h) override;
   void drawRect(int x, int y, int w, int h) override;
   void drawXbm(int x, int y, const uint8_t* bits, int w, int h) override;
+  // #749: colour art at NATIVE panel resolution. Coordinates are physical pixels,
+  // deliberately bypassing scaleX()/scaleY() -- see the note in Rgb565Blit.h.
+  void drawRGB565(int x, int y, const uint16_t* px, int w, int h) override;
   uint16_t getTextWidth(const char* str) override;
   void endFrame() override;
 };

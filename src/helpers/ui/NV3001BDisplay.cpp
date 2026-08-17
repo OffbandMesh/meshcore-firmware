@@ -1,4 +1,5 @@
 #include "NV3001BDisplay.h"
+#include "Rgb565Blit.h"   // #749: shared clip + native-resolution blit
 #include <Arduino.h>
 #include <string.h>
 
@@ -464,6 +465,51 @@ void NV3001BDisplay::fillPhysicalRect(int x, int y, int w, int h) {
 
   setAddrWindow(x, y, w, h);
   writeColor(color, (uint32_t)w * h);
+}
+
+// #749: colour art at native panel resolution.
+//
+// Coordinates are PHYSICAL pixels and deliberately do not pass through
+// scaleX()/scaleY(). The logical canvas is 128x64 against a 220x128 panel -- 1.72x
+// horizontally, 2.0x vertically -- so art drawn logically is stretched
+// non-uniformly and the brand mark's circular arcs would come out as ellipses.
+//
+// With #747's back buffer present (the normal case) this is a pure memory write
+// and costs no SPI at all; the frame is pushed once by endFrame() like everything
+// else. The buffer is indexed in physical pixels already, so it IS the
+// native-resolution surface -- no second address-window path is needed.
+void NV3001BDisplay::drawRGB565(int x, int y, const uint16_t* px, int w, int h) {
+  if (!is_on || !px) return;
+
+  if (frame_buf) {
+    rgb565::blitSwapped(frame_buf, NV3001B_SCREEN_WIDTH, NV3001B_SCREEN_HEIGHT, x, y, px, w, h);
+    return;
+  }
+
+  // Unbuffered fallback. #747 treats a failed back-buffer allocation as a
+  // supported degraded state rather than losing the display, so this path is real
+  // and must draw rather than silently skip (SAFELANE 6). It shares clip() with the
+  // buffered path above so the two cannot disagree about geometry.
+  const rgb565::Clip c = rgb565::clip(NV3001B_SCREEN_WIDTH, NV3001B_SCREEN_HEIGHT, x, y, w, h);
+  if (!c.visible) return;
+
+  // One panel row at a time: bounded stack use (at most NV3001B_SCREEN_WIDTH
+  // pixels) and no allocation, which matters precisely because we are here due to
+  // an allocation having already failed.
+  uint16_t row[NV3001B_SCREEN_WIDTH];
+  for (int r = 0; r < c.h; r++) {
+    const uint16_t* s = px + (size_t)(c.sy + r) * w + c.sx;
+    for (int col = 0; col < c.w; col++) {
+      row[col] = (uint16_t)((s[col] >> 8) | (s[col] << 8));
+    }
+    setAddrWindow(c.dx, c.dy + r, c.w, 1);
+    spi.beginTransaction(SPISettings(SPI_FREQUENCY, MSBFIRST, SPI_MODE0));
+    digitalWrite(PIN_TFT_DC, HIGH);
+    digitalWrite(PIN_TFT_CS, LOW);
+    spi.writeBytes((const uint8_t*)row, (uint32_t)c.w * sizeof(uint16_t));
+    digitalWrite(PIN_TFT_CS, HIGH);
+    spi.endTransaction();
+  }
 }
 
 void NV3001BDisplay::drawChar(int x, int y, char ch) {
