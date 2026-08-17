@@ -22,6 +22,7 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <vector>
 
 #include "helpers/ui/Rgb565Blit.h"
@@ -212,6 +213,33 @@ TEST(Rgb565Clip, ShrinksTheExtentAtTheFarEdges) {
   EXPECT_EQ(c.h, 1) << "only one row remains before the bottom edge";
   EXPECT_EQ(c.sx, 0) << "the far-edge clip must not move the source origin";
   EXPECT_EQ(c.sy, 0);
+}
+
+TEST(Rgb565Clip, SurvivesExtremeCoordinatesWithoutOverflowing) {
+  // Hardening for the Gemini review's INT_MIN finding. clip() negates x and y for a
+  // negative placement, and -INT_MIN is undefined behaviour, so the "cannot possibly
+  // intersect" bail has to happen BEFORE that negation. No caller can reach this
+  // today -- the splash passes generated constants -- but this is a shared
+  // interface, and the guard doubles as the readable statement of intent.
+  const int lo = std::numeric_limits<int>::min();
+  const int hi = std::numeric_limits<int>::max();
+
+  EXPECT_FALSE(rgb565::clip(kDstW, kDstH, lo, 0, 3, 2).visible);
+  EXPECT_FALSE(rgb565::clip(kDstW, kDstH, 0, lo, 3, 2).visible);
+  EXPECT_FALSE(rgb565::clip(kDstW, kDstH, lo, lo, 3, 2).visible);
+  EXPECT_FALSE(rgb565::clip(kDstW, kDstH, hi, 0, 3, 2).visible);
+  EXPECT_FALSE(rgb565::clip(kDstW, kDstH, 0, hi, 3, 2).visible);
+  EXPECT_FALSE(rgb565::clip(kDstW, kDstH, hi, hi, 3, 2).visible);
+}
+
+TEST(Rgb565Blit, WritesNothingForExtremeCoordinates) {
+  auto dst = freshDest();
+  auto img = rampImage(3, 2);
+  const int lo = std::numeric_limits<int>::min();
+
+  rgb565::blitSwapped(dst.data(), kDstW, kDstH, lo, lo, img.data(), 3, 2);
+
+  for (size_t i = 0; i < dst.size(); i++) ASSERT_EQ(dst[i], kUntouched);
 }
 
 TEST(Rgb565Clip, ReportsNotVisibleWhenWhollyOffscreen) {
