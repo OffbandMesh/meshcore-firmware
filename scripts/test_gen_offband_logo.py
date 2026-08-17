@@ -18,6 +18,8 @@ WHAT THESE PROTECT
   regenerated. That coupling is deliberate and these tests document it.
 """
 import importlib.util
+import re
+from pathlib import Path
 import os
 import sys
 
@@ -93,6 +95,47 @@ def test_image_to_rgb565_is_row_major_and_complete():
     assert px[0] == 0xF800, "first entry is the top-left pixel"
     assert px[5] == 0x001F, "last entry is the bottom-right pixel"
     assert px[1] == 0xFFFF, "transparent pixels composite to the background"
+
+
+# ------------------------------------------------------ C++ agreement guard ---
+# From the #749 pre-merge review: the generator mirrors panel geometry that the C++
+# driver OWNS, and a comment saying "keep these in sync" is not enforcement. If the
+# driver's geometry changes and these constants do not, the generator silently emits
+# an asset positioned against a stale layout -- it overlaps the version text, nothing
+# throws, and CI stays green. So parse the real macros and assert agreement; drift
+# then breaks the build instead of the splash.
+
+def _cpp_macro(relpath, name):
+    """Read a #define <name> <int> out of a firmware source file."""
+    src = (Path(_HERE).parent / relpath).read_text(encoding="utf-8", errors="replace")
+    m = re.search(rf"^\s*#define\s+{re.escape(name)}\s+(\d+)\s*$", src, re.MULTILINE)
+    assert m, f"{name} not found in {relpath} -- the driver's geometry macros moved"
+    return int(m.group(1))
+
+
+def test_panel_geometry_matches_the_driver():
+    assert gen.SPLASH_PANEL_W == _cpp_macro("src/helpers/ui/NV3001BDisplay.cpp", "NV3001B_SCREEN_WIDTH")
+    assert gen.SPLASH_PANEL_H == _cpp_macro("src/helpers/ui/NV3001BDisplay.cpp", "NV3001B_SCREEN_HEIGHT")
+
+
+def test_logical_canvas_matches_the_driver():
+    assert gen.SPLASH_LOGICAL_W == _cpp_macro("src/helpers/ui/NV3001BDisplay.h", "NV3001B_LOGICAL_WIDTH")
+    assert gen.SPLASH_LOGICAL_H == _cpp_macro("src/helpers/ui/NV3001BDisplay.h", "NV3001B_LOGICAL_HEIGHT")
+
+
+def test_text_band_is_derived_from_the_real_scale_not_hardcoded():
+    # The exact drift Gemini described: change the logical height and the scale
+    # factor changes, so the physical text top must move with it.
+    scale_y = gen.SPLASH_PANEL_H / gen.SPLASH_LOGICAL_H
+    assert gen.SPLASH_TEXT_TOP_PHYS == int(gen.SPLASH_TEXT_TOP_LOGICAL * scale_y)
+
+
+def test_splash_still_draws_its_first_version_line_where_we_think():
+    # Guards the other half: SPLASH_TEXT_TOP_LOGICAL mirrors a literal in UITask.cpp.
+    ui = (Path(_HERE).parent / "examples/companion_radio/ui-new/UITask.cpp").read_text(
+        encoding="utf-8", errors="replace")
+    assert f"drawTextCentered(display.width()/2, {gen.SPLASH_TEXT_TOP_LOGICAL}," in ui, \
+        "the splash's first version line moved; SPLASH_TEXT_TOP_LOGICAL is now stale"
 
 
 # --------------------------------------------------------------- placement ---
