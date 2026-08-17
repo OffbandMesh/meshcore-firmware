@@ -73,6 +73,21 @@ jobs:
       - name: Font generator self-test
         run: python scripts/test_gen_jbm_font.py
 
+      # #764. `get radio` returned an empty reply for ten months: #299's conversion
+      # hoisted three `isKey` guards without their bodies, leaving the real handlers
+      # on unreachable arms below. It compiles, it is not dead code to any compiler,
+      # and the serial console hides it -- that caller zeroes its buffer and skips
+      # empty replies. Only the radio transport showed it, as stack garbage (#765).
+      #
+      # BLOCKING, unlike the advisory check below: this guard carries its own unit
+      # tests (including every false positive an earlier version produced), and the
+      # tree is clean under it, so it cannot wrongly fail somebody else's PR.
+      - name: CLI dispatch guard self-test
+        run: python scripts/test_cli_dispatch.py
+
+      - name: No empty or shadowed arms in the CLI dispatch chains
+        run: python scripts/check_cli_dispatch.py
+
       # ADVISORY until #648 (the capability inventory) validates what this asserts.
       # ci-green is a hard merge gate for every PR in the repo (#477), so a check
       # built on unvalidated assumptions must not block other people's work. The

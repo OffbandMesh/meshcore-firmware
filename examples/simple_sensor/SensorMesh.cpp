@@ -586,6 +586,7 @@ void SensorMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_i
         uint8_t temp[166];
         char *command = (char *) &data[5];
         char *reply = (char *) &temp[5];
+        *reply = 0;   // #765: uninitialised stack otherwise; strlen() below would transmit it
         handleCommand(sender_timestamp, command, reply);
 
         int text_len = strlen(reply);
