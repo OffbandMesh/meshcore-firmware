@@ -27,13 +27,30 @@ USAGE
 -----
     python capture.py --port COM16 --out ../evidence/rst-session.log
     python capture.py --list
-    python capture.py --port COM16 --send RST        # SNIFFER-v3 only
+    python capture.py --port COM16 --send  RST   # standalone only, see below
+    python capture.py --port COM16 --out ../evidence/rst-session.log --queue RST
 
-The --send path writes one command line and returns; the long-running capture
-should already be attached in another process to record what it triggers.
+ISSUING COMMANDS WHILE CAPTURING
+--------------------------------
+SNIFFER-v3 accepts RST / BOOT / BOOTRST / PING / HELP on its USB serial. There
+are two ways to send one, and only one of them works during a capture.
+
+`--send` opens the port itself. It CANNOT be used while a capture is running:
+Windows holds a serial port exclusively, so the second open fails with access
+denied. This docstring previously claimed the opposite -- that --send could run
+alongside a capture in another process -- which was wrong, and made the command
+surface useless exactly when it mattered, since a reset is only worth issuing if
+something is recording what it triggers.
+
+`--queue` is the one to use during a capture. It writes the command to a small
+queue file (`<out>.cmd`) which the RUNNING capture picks up within ~1 s and
+forwards over the port it already owns. The injection is logged as
+`<<< INJECT <cmd>` immediately above whatever it causes, so a captured session
+documents its own stimulus.
 """
 
 import argparse
+import os
 import datetime
 import sys
 import time
@@ -97,18 +114,70 @@ def do_send(port: str, baud: int, cmd: str) -> int:
     return 0
 
 
-def do_capture(port: str, baud: int, out_path: str) -> int:
+def drain_cmd_file(cmd_path: str, s, f) -> None:
+    """Forward one queued command from cmd_path to the sniffer, then remove it.
+
+    WHY THIS EXISTS. The --send path opens the port itself, which cannot work
+    while a capture is running: on Windows a serial port is held EXCLUSIVELY, so
+    the second open fails with access denied. The module docstring used to claim
+    the two could run side by side ("the long-running capture should already be
+    attached in another process"). That was wrong, and it made the command
+    surface and the capture mutually exclusive at exactly the moment you want
+    both -- issuing a reset is only useful if something is recording what it
+    triggers.
+
+    So the process that already owns the port does the writing. A command is
+    queued by dropping a line into a file; this forwards it and deletes it.
+
+    The injection is recorded in the log itself, immediately above whatever it
+    causes. Combined with the sketch's own ">>>" stamps that makes a capture
+    self-documenting: the stimulus always appears directly above the resulting
+    ROM banner, which is the "what caused this boot?" ambiguity these markers
+    were added to kill (#740).
+
+    Failure is loud and the file is still removed -- a command that cannot be
+    delivered must not silently retry forever on every loop iteration.
+    """
+    try:
+        if not os.path.exists(cmd_path):
+            return
+        with open(cmd_path, "r", encoding="utf-8", errors="replace") as cf:
+            cmd = cf.readline().strip()
+        os.remove(cmd_path)
+        if not cmd:
+            return
+        f.write(f"[{ts()}] <<< INJECT {cmd}\n")
+        s.write((cmd + "\n").encode())
+        s.flush()
+    except Exception as e:
+        f.write(f"[{ts()}] <<< INJECT FAILED: {e!r}\n")
+        try:
+            if os.path.exists(cmd_path):
+                os.remove(cmd_path)
+        except Exception:
+            pass
+
+
+def do_capture(port: str, baud: int, out_path: str, cmd_path: str = None) -> int:
+    if cmd_path is None:
+        cmd_path = out_path + ".cmd"
     print(f"[{ts()}] capture -> {out_path}  (port {port} @ {baud})", flush=True)
+    print(f"[{ts()}] command queue: {cmd_path}", flush=True)
     # Line-buffered append. Append, never truncate: an accidental re-run must
     # not destroy an overnight capture.
     with open(out_path, "a", buffering=1, encoding="utf-8", errors="replace") as f:
         f.write(f"\n===== capture started {ts()} port={port} baud={baud} =====\n")
+        f.write(f"===== command queue: {cmd_path} =====\n")
         s = None
         while True:
             try:
                 if s is None:
                     s = open_port(port, baud)
                     f.write(f"[{ts()}] <port opened>\n")
+                # Checked every loop iteration. readline() returns on its 1 s
+                # timeout even when the wire is silent, so a queued command is
+                # picked up within ~1 s regardless of traffic.
+                drain_cmd_file(cmd_path, s, f)
                 raw = s.readline()
                 if not raw:
                     continue                  # 1 s timeout tick, not a disconnect
@@ -136,18 +205,34 @@ def main() -> int:
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--out", help="capture file (appended)")
     ap.add_argument("--list", action="store_true", help="list serial ports and exit")
-    ap.add_argument("--send", help="send one command line to SNIFFER-v3 and exit")
+    ap.add_argument("--send", help="send one command line to SNIFFER-v3 and exit "
+                                   "(standalone only -- fails if a capture holds the port; "
+                                   "use --queue instead while capturing)")
+    ap.add_argument("--queue", help="queue a command for a RUNNING capture to forward "
+                                    "(writes <out>.cmd; needs --out to locate the queue)")
+    ap.add_argument("--cmd-file", default=None,
+                    help="override the command-queue path (default: <out>.cmd)")
     a = ap.parse_args()
 
     if a.list:
         return do_list()
     if not a.port:
         ap.error("--port is required (use --list to find it)")
+    if a.queue:
+        if not a.out:
+            print("--queue needs --out so the queue file can be located", file=sys.stderr)
+            return 2
+        qp = a.cmd_file or (a.out + ".cmd")
+        with open(qp, "w", encoding="utf-8") as qf:
+            qf.write(a.queue.strip() + "\n")
+        print(f"queued: {a.queue.strip()} -> {qp}")
+        return 0
+
     if a.send:
         return do_send(a.port, a.baud, a.send)
     if not a.out:
         ap.error("--out is required for capture")
-    return do_capture(a.port, a.baud, a.out)
+    return do_capture(a.port, a.baud, a.out, a.cmd_file)
 
 
 if __name__ == "__main__":
