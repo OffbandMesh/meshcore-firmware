@@ -90,6 +90,19 @@ t1000e_room_server
 Heltec_E290_companion_ble
 Heltec_E290_companion_usb
 
+# Heltec RadioCore RC32-L62 (ESP32-S3 + HT-RA62A LoRa) -- #771
+# Applies to the L62 (LoRa) carrier only. RC32-68 carries the HT-HC01_V2 Wi-Fi
+# HaLow module on a DIFFERENT pinout and has no variant in this tree.
+# heltec_rc32_companion_radio_wifi -- NOT releasable: bakes a placeholder
+#   WIFI_SSID at compile time; unblocked by #325. Same gate class as the other
+#   companion_radio_wifi envs. (Unlike those, it is not CI-built either -- no
+#   rc32 env is in ci.yml yet; tracked separately.)
+# The _diag / _diag_nocrashlog envs are diagnostic instruments, not products.
+heltec_rc32_companion_radio_ble
+heltec_rc32_companion_radio_usb
+heltec_rc32_repeater
+heltec_rc32_room_server
+
 # Heltec T096 (nRF52)
 Heltec_t096_companion_radio_ble
 Heltec_t096_companion_radio_usb
