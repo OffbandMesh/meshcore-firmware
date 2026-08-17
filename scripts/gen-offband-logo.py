@@ -42,9 +42,25 @@ SPLASH_TARGET_W = 200
 SPLASH_PANEL_W = 220
 SPLASH_PANEL_H = 128
 
-# Physical y at which the splash starts drawing its version text: logical y=35
-# scaled by DISPLAY_SCALE_Y (128/64 = 2.0). The artwork is centred above this.
-SPLASH_TEXT_TOP_PHYS = 70
+# The logical canvas the rest of the UI draws on, for deriving the scale factor.
+SPLASH_LOGICAL_W = 128
+SPLASH_LOGICAL_H = 64
+
+# Logical y at which SplashScreen::render() draws its first version line
+# (examples/companion_radio/ui-new/UITask.cpp, drawTextCentered(..., 35, ...)).
+SPLASH_TEXT_TOP_LOGICAL = 35
+
+# The same point in PHYSICAL pixels: logical y scaled by DISPLAY_SCALE_Y
+# (NV3001B_SCREEN_HEIGHT / NV3001B_LOGICAL_HEIGHT = 128/64 = 2.0). Artwork is
+# centred above this.
+#
+# ⚠ These four constants MIRROR values owned by the C++ driver. A comment saying so
+# is not enforcement -- if the driver's geometry changes and these do not, the
+# generator silently emits an asset that overlaps the version text, and nothing
+# fails. scripts/test_gen_offband_logo.py therefore PARSES the real macros out of
+# NV3001BDisplay.{h,cpp} and asserts agreement, so drift breaks CI instead of the
+# splash.
+SPLASH_TEXT_TOP_PHYS = SPLASH_TEXT_TOP_LOGICAL * SPLASH_PANEL_H // SPLASH_LOGICAL_H
 WORD_THRESHOLD = 120
 MARK_THRESHOLD = 110
 
