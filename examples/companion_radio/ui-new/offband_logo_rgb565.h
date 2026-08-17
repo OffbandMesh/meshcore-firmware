@@ -18,9 +18,9 @@
 #define OFFBAND_SPLASH_RGB565_W 200
 #define OFFBAND_SPLASH_RGB565_H 42
 // Physical-pixel origin, centred on the 220x128 panel and
-// above the version text at physical y=70.
+// above the version text at physical y=58.
 #define OFFBAND_SPLASH_RGB565_X 10
-#define OFFBAND_SPLASH_RGB565_Y 14
+#define OFFBAND_SPLASH_RGB565_Y 8
 static const uint16_t offband_splash_rgb565[] = {
   0x08a2, 0x08a2, 0x08a2, 0x08a2, 0x08a2, 0x08a2, 0x08a2, 0x08a2, 0x08a2, 0x08a2, 0x08a2, 0x08a2,
   0x08a2, 0x08a2, 0x08a2, 0x08a2, 0x08a2, 0x08a2, 0x08a2, 0x08a2, 0x08a2, 0x08a2, 0x08a2, 0x08a2,

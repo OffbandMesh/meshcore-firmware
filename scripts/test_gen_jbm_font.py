@@ -76,6 +76,9 @@ def test_packed_length_is_half_the_pixel_count_rounded_up():
 # ---------------------------------------------------------------- glyphs ---
 
 def _skip_without_font():
+    if not gen.HAVE_PIL:
+        print("  (skipped: Pillow not installed)")
+        return True
     if not HAVE_FONT:
         print("  (skipped: set JBM_TTF to the extracted TTF)")
         return True

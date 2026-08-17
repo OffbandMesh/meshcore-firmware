@@ -41,7 +41,15 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+# Pillow is needed only to RASTERISE. The pure arithmetic below (packing,
+# quantisation, compositing, placement) has no image dependency, and the
+# self-tests exercise it without Pillow present -- so import defensively
+# rather than making the whole module unimportable on a host without it.
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    HAVE_PIL = True
+except ImportError:  # pragma: no cover - exercised by CI hosts without Pillow
+    HAVE_PIL = False
 
 FIRST_CH, LAST_CH = 32, 126   # printable ASCII
 

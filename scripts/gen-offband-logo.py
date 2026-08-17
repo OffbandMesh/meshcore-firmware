@@ -24,7 +24,15 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+# Pillow is needed only to RASTERISE. The pure arithmetic below (packing,
+# quantisation, compositing, placement) has no image dependency, and the
+# self-tests exercise it without Pillow present -- so import defensively
+# rather than making the whole module unimportable on a host without it.
+try:
+    from PIL import Image, ImageDraw
+    HAVE_PIL = True
+except ImportError:  # pragma: no cover - exercised by CI hosts without Pillow
+    HAVE_PIL = False
 
 # Sizes tuned for the 128x64 OLED lockup (mark + 4px gap + wordmark = 119px).
 MARK_TARGET_H = 30
@@ -46,9 +54,12 @@ SPLASH_PANEL_H = 128
 SPLASH_LOGICAL_W = 128
 SPLASH_LOGICAL_H = 64
 
-# Logical y at which SplashScreen::render() draws its first version line
-# (examples/companion_radio/ui-new/UITask.cpp, drawTextCentered(..., 35, ...)).
-SPLASH_TEXT_TOP_LOGICAL = 35
+# Logical y at which the COLOUR splash draws its first version line -- i.e.
+# SPLASH_LINE_1 inside the OFFBAND_COLOUR_SPLASH branch of
+# examples/companion_radio/ui-new/UITask.cpp. It is 29 rather than the mono
+# arrangement's 35 because #758's 18px line box needs the room (see that branch).
+# The artwork is centred in the band ABOVE this line.
+SPLASH_TEXT_TOP_LOGICAL = 29
 
 # The same point in PHYSICAL pixels: logical y scaled by DISPLAY_SCALE_Y
 # (NV3001B_SCREEN_HEIGHT / NV3001B_LOGICAL_HEIGHT = 128/64 = 2.0). Artwork is
