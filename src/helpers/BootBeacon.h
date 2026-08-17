@@ -34,16 +34,24 @@
 // Enable with -D OFFBAND_BOOT_BEACON. Compiles to nothing otherwise, so it is
 // safe to leave the call sites in shipping code.
 
-#if defined(OFFBAND_BOOT_BEACON) && !defined(ESP32)
+// #763: the raw UART0 writer now has TWO consumers -- the boot beacon and the
+// MeshLog UART0 mirror. Either one alone should pull in the primitives, so the
+// platform guard and the register code key off this umbrella rather than the
+// beacon flag directly.
+#if defined(OFFBAND_BOOT_BEACON) || defined(OFFBAND_MESHLOG_UART0)
+  #define OFFBAND_UART0_RAW 1
+#endif
+
+#if defined(OFFBAND_UART0_RAW) && !defined(ESP32)
 // Gemini review (#740): a silent no-op is the wrong failure mode for a
 // diagnostic. Asking for the beacon on a platform that cannot provide it must
 // fail loudly at compile time, not leave someone debugging their instrument
 // while it quietly does nothing. nRF52/RP2040 need their own implementation --
 // see tools/diag/rc32-boot-740/README.md.
-#error "OFFBAND_BOOT_BEACON is ESP32-only (raw UART0 FIFO writes). Remove the flag or add a port for this platform."
+#error "OFFBAND_BOOT_BEACON / OFFBAND_MESHLOG_UART0 are ESP32-only (raw UART0 FIFO writes). Remove the flag or add a port for this platform."
 #endif
 
-#if defined(OFFBAND_BOOT_BEACON) && defined(ESP32)
+#if defined(OFFBAND_UART0_RAW) && defined(ESP32)
 
 #include <stdint.h>
 #include "soc/soc.h"        // READ_PERI_REG / WRITE_PERI_REG
@@ -109,8 +117,26 @@ static inline void offband_beacon_flush(void) {
   }
 }
 
+// #763: raw, unprefixed write for the MeshLog UART0 mirror. The mirror emits
+// lines MeshLog has already formatted (it applies its own "[millis] " prefix),
+// so it must NOT get the "[BEACON] " tag -- that prefix exists so the host-side
+// capture can tell instrument output from application output on one wire, and
+// mislabelling app logs as beacons would defeat it.
+static inline void offband_uart0_write(const char* s, size_t n) {
+  if (!s) return;
+  while (n--) offband_beacon_putc(*s++);
+}
+
+// The beacon MACROS stay keyed to OFFBAND_BOOT_BEACON specifically. A build that
+// enables only the MeshLog mirror gets the raw writer above and nothing else --
+// it should not start emitting boot beacons it never asked for.
+#if defined(OFFBAND_BOOT_BEACON)
 #define OFFBAND_BEACON(msg) offband_beacon_line(msg)
 #define OFFBAND_BEACON_FLUSH() offband_beacon_flush()
+#else
+#define OFFBAND_BEACON(msg) ((void)0)
+#define OFFBAND_BEACON_FLUSH() ((void)0)
+#endif
 
 // Emitted once, from exactly one translation unit -- the one that defines
 // OFFBAND_BEACON_DEFINE_CTOR before including this header (main.cpp). Priority
@@ -123,7 +149,7 @@ static void offband_beacon_ctor(void) {
 }
 #endif
 
-#else  // !OFFBAND_BOOT_BEACON
+#else  // neither OFFBAND_BOOT_BEACON nor OFFBAND_MESHLOG_UART0
 
 // Gemini review (#740): these were empty `static inline` functions. Any
 // translation unit that includes this header without calling them emits
@@ -135,5 +161,6 @@ static void offband_beacon_ctor(void) {
 #define offband_beacon_puts(s) ((void)0)
 #define offband_beacon_line(s) ((void)0)
 #define offband_beacon_flush() ((void)0)
+#define offband_uart0_write(s, n) ((void)0)
 
 #endif

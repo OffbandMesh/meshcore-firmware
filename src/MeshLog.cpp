@@ -1,4 +1,7 @@
 #include "MeshLog.h"
+// #763: raw UART0 writer for the parallel mirror below. Compiles to nothing
+// unless OFFBAND_MESHLOG_UART0 (or the boot beacon) is enabled.
+#include <helpers/BootBeacon.h>
 #include "CaptureRing.h"
 #include <Arduino.h>
 #include <stdarg.h>
@@ -154,4 +157,30 @@ void mesh_log_line(uint8_t level, const char* fmt, ...) {
   if (g_meshLogMirror && Serial.availableForWrite() >= (int)total) {
     Serial.write(reinterpret_cast<const uint8_t*>(line), total);
   }
+
+  // #763: SECOND, PARALLEL mirror to raw UART0 -- independent of the Serial
+  // mirror above and of g_meshLogMirror.
+  //
+  // WHY THIS EXISTS. On the 15 native-USB-CDC boards the live log is unreachable
+  // exactly when it is needed. A `_usb` companion has Serial AS the framed
+  // protocol, so g_meshLogMirror is deliberately false. A `_ble` companion has
+  // Serial as USB-CDC, which DIES WITH THE CHIP and POWER-CYCLES the board when
+  // you attach to it -- so every log ever captured that way came from a boot
+  // that succeeded (#702). And on battery there is no host at all.
+  //
+  // UART0 sits idle on those boards, survives the chip failing, and does not
+  // reset it on attach. This writes straight to the TX FIFO register: no driver,
+  // no FreeRTOS, no mutex, and bounded, so it cannot block the caller (#741 --
+  // a diagnostic must never block the thing it is diagnosing).
+  //
+  // Sent WITHOUT the "[BEACON] " tag: `line` already carries MeshLog's own
+  // "[millis] " prefix, and the tag is how the host capture distinguishes
+  // instrument output from application output on the shared wire.
+  //
+  // Gated at build time on ARDUINO_USB_CDC_ON_BOOT: on a UART-bridge board
+  // (Heltec V3 = esp32-s3-devkitc-1) Serial IS UART0, so mirroring here would
+  // double-print every line.
+#if defined(OFFBAND_MESHLOG_UART0) && defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+  offband_uart0_write(line, total);
+#endif
 }
