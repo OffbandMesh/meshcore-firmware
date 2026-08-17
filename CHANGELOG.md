@@ -16,6 +16,58 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+## [1.5.0-beta3] - 2026-08-17
+
+### Added
+- **Heltec RadioCore RC32 binaries are published for the first time** (#771): the release
+  matrix carried no RC32 env at all, so the pipeline produced nothing for the board and a
+  tester could only be handed an ad-hoc file. `heltec_rc32_companion_radio_ble`,
+  `heltec_rc32_companion_radio_usb`, `heltec_rc32_repeater` and `heltec_rc32_room_server`
+  now build as release assets. Applies to the **RC32-L62** (HT-RA62A LoRa) carrier; the
+  RC32-68 Wi-Fi HaLow variant has a different pinout and is not supported.
+- **RC32 display, brought up properly** (#749, #757, #758): a colour splash rendered at the
+  panel's native 220x128 rather than upscaled from the 128x64 logical surface, a dark theme
+  in Offband brand colours, and antialiased JetBrains Mono replacing the 1x2-stretched 5x7
+  font.
+- **`OFFBAND_MESHLOG_UART0`** (#769): mirrors the capture log to raw UART0 in parallel with
+  the ring. On the 15 native-USB-CDC boards the live log is unreachable exactly when it
+  matters -- USB-CDC dies with the chip and power-cycles the board on attach, so every log
+  captured that way comes from a boot that already succeeded. UART0 survives the chip
+  failing and does not reset it, so a board on battery with no host can still be observed.
+  Off by default; enabled per-env.
+- **`OFFBAND_SHOW_HEAP`** (#761): home-page heap readout, opt-in and off by default.
+
+### Fixed
+- **A reset could leave a USB companion dead until it was unplugged** (#702, #756):
+  `Serial.setTxTimeoutMs(0)` set the retry budget to zero in the USB-CDC write path, and the
+  decrement underflowed to 4,294,967,295 -- making the escape from a blocked write
+  unreachable for roughly 50 days. A board plugged into a computer with nothing draining the
+  port stalled in early boot with no display, no radio and no BLE. Attaching a serial
+  monitor drained the buffer and released it, which is why every previous investigation
+  found a healthy board. **Affects every native-USB-CDC board, not only the RC32.** Power
+  banks were never affected: with no host there is no enumeration and nothing to block on.
+- **CrashLog could block the boot it was diagnosing** (#756): its serial writes are now
+  non-blocking and bounded, and the flush in the shutdown handler is removed. Losing the
+  last bytes of a crash dump is preferable to a device that will not reset.
+- **RC32: GPS is disabled** (#704): `PIN_GPS_EN` is GPIO45, the ESP32-S3 **VDD_SPI strap**.
+  Driving a strapping pin as a peripheral enable is a boot hazard, and the stock env shipped
+  with GPS on.
+- **RC32: display orientation corrected to landscape**, peripherals the board does not have
+  removed, and the variant aligned to Heltec's own board definition (#704).
+- **RC32 display performance** (#745, #747): bulk SPI writes replace one-byte-per-call
+  transfers, and a back buffer means a frame blits once instead of the panel being visibly
+  erased and redrawn live.
+
+### Known issues
+- **RC32 battery indicator reads high** (#780): percentage is mapped linearly from voltage,
+  which overstates through the middle of a LiPo's discharge -- measured at 68% displayed
+  where the cell held roughly 40-45%. It also cannot reach 100%, since that requires exactly
+  4200 mV and a real pack never presents it. The device additionally powers off at
+  `AUTO_SHUTDOWN_MILLIVOLTS` while the indicator still shows 33%.
+- **A SafeBoot low-battery hold is silent** (#782): the board looks dead rather than
+  protected, and connecting power does not end the hold -- it wakes on its own timer, which
+  backs off to as much as 10 minutes.
+
 ## [1.5.0] - 2026-08-15
 
 ### Fixed (beta2)
