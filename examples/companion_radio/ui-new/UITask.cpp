@@ -155,21 +155,49 @@ public:
                     offband_word, OFFBAND_WORD_W, OFFBAND_WORD_H);
 #endif
 
+    // #758: the splash's three text lines, as a named LAYOUT rather than three
+    // magic numbers. They are a property of this arrangement -- how tall the text
+    // is relative to the artwork above it -- not of any particular panel, which is
+    // why they sit with the artwork branch and not behind a display-model test.
+    //
+    // Two arrangements exist and they have no slack in common:
+    //
+    //   mono (1-bit lockup): logo occupies y=1..30 (OFFBAND_MARK_H=30 drawn at
+    //     y=1) and a line of text is 8px, so line 3 at 56 ends at 64 -- exactly the
+    //     last row of a 128x64 panel. There is nothing to give at either end.
+    //
+    //   colour lockup: text is 18px per line here (JetBrains Mono at 13px), so the
+    //     old y=56 would end at physical 130 on a 128px panel and clip descenders.
+    //     The artwork ends at physical 56, which frees room ABOVE that the mono
+    //     arrangement does not have.
+    //
+    // Hence separate constants. Moving the mono values to match would overlap its
+    // logo by two rows on ~115 boards to fix a problem only the colour panel has.
+#ifdef OFFBAND_COLOUR_SPLASH
+    static const int SPLASH_LINE_1 = 29, SPLASH_LINE_2 = 41, SPLASH_LINE_3 = 53;
+#else
+    static const int SPLASH_LINE_1 = 35, SPLASH_LINE_2 = 46, SPLASH_LINE_3 = 56;
+#endif
+
     display.setTextSize(1);
-    display.drawTextCentered(display.width()/2, 35, _offband_short);
+    display.drawTextCentered(display.width()/2, SPLASH_LINE_1, _offband_short);
 
     char mc_line[28];
     const char *mcv = _mc_version;
     if (*mcv == 'v' || *mcv == 'V') mcv++;   // "on MeshCore 1.16.0" per the approved wording
     snprintf(mc_line, sizeof(mc_line), "on MeshCore %s", mcv);
-    // drawTextCentered does not clip; clamp to what fits at size-1 (~6px/char).
-    {
-      int mx = display.width() / 6;
-      if (mx > 0 && (int)strlen(mc_line) > mx) mc_line[mx] = '\0';
+    // drawTextCentered does not clip, so clamp to what actually fits. This used to
+    // assume ~6 logical px per character, which was an approximation of the 5x7
+    // font and is wrong for any other -- #758's glyphs are 4.65 logical px wide, so
+    // the old constant truncated ~6 characters early. Ask the driver instead: it is
+    // the only thing that knows its own metrics, and this now self-corrects if the
+    // font changes again.
+    while (strlen(mc_line) > 1 && display.getTextWidth(mc_line) > display.width()) {
+      mc_line[strlen(mc_line) - 1] = '\0';
     }
-    display.drawTextCentered(display.width()/2, 46, mc_line);
+    display.drawTextCentered(display.width()/2, SPLASH_LINE_2, mc_line);
 
-    display.drawTextCentered(display.width()/2, 56, FIRMWARE_BUILD_DATE);
+    display.drawTextCentered(display.width()/2, SPLASH_LINE_3, FIRMWARE_BUILD_DATE);
 #else
     // Upstream MeshCore build (no Offband identity injected): original logo layout.
     display.setColor(UIColor::corp_blue);
