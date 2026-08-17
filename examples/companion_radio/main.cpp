@@ -505,9 +505,45 @@ void setup() {
   CW_PHASE("setup:DONE");
 }
 
+// #763: sampling cadence for the battery discharge trace. 30 s -> 120 samples
+// per hour, which resolves a multi-hour LiPo curve without flooding the ring or
+// the wire. Override per-env if a run needs finer or coarser granularity.
+#if defined(OFFBAND_POWER_TELEMETRY) && !defined(OFFBAND_POWER_TELEMETRY_MS)
+  #define OFFBAND_POWER_TELEMETRY_MS 30000
+#endif
+
 void loop() {
 #if !defined(OFFBAND_OBSERVER)
   offband::crashLogStandardTick(millis());  // #472: deferred previous-boot re-dump (all non-observer companions)
+#endif
+
+#if defined(OFFBAND_POWER_TELEMETRY)
+  // #763: battery discharge telemetry, for the unattended power-characterisation
+  // run (Heltec beta Q01 -- runtime on a power bank / LiPo).
+  //
+  // Emitted through mesh_log_line() rather than Serial so it rides the SAME two
+  // channels as every other log producer: the caplog ring (downloadable after the
+  // run) and, on a native-USB board built with OFFBAND_MESHLOG_UART0, the raw
+  // UART0 mirror. The mirror is the one that matters here -- the entire point of
+  // this trace is a board running on battery with NO host attached, which is
+  // exactly the case where USB-CDC gives us nothing (#702).
+  //
+  // MLOG_BOOT (level 0) so the line survives whatever caplog level is configured.
+  //
+  // No need to force caplog on: since #763 the UART0 mirror emits independently
+  // of the capture flag, so this reports on a wire whether or not anyone thought
+  // to enable recording before walking away. If capture IS on, the same lines
+  // also land in the downloadable ring.
+  {
+    static uint32_t s_pwr_ms = 0;
+    uint32_t now_ms = millis();
+    if (s_pwr_ms == 0 || now_ms - s_pwr_ms >= (uint32_t)OFFBAND_POWER_TELEMETRY_MS) {
+      s_pwr_ms = now_ms;
+      mesh_log_line(MLOG_BOOT, "[pwr] mv=%u up=%us\n",
+                    (unsigned)board.getBattMilliVolts(),
+                    (unsigned)(now_ms / 1000UL));
+    }
+  }
 #endif
 #if defined(NRF52_PLATFORM)
   board.feedWatchdog();  // #257: feed from the MAIN LOOP only -> a hung loop trips the WDT
