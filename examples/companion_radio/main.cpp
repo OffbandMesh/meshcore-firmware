@@ -169,6 +169,55 @@ void setup() {
   // #740: first statement in setup(), ahead of Serial.begin() -- the beacon does
   // not depend on the Arduino core, so this lands even if Serial.begin() stalls.
   OFFBAND_BEACON("setup:ENTRY -- before Serial.begin");
+
+#if defined(OFFBAND_POWER_TELEMETRY_SWEEP)
+  // #766: BOOT-TIME ADC sweep -- runs HERE, as the second statement in setup(),
+  // and this placement is the whole point of it.
+  //
+  // The first sweep ran from loop(), which was useless: by then our own firmware
+  // has claimed most of these pins as outputs (PIN_TFT_EN=6, PIN_TFT_RST=4,
+  // PIN_TFT_BL=5, PIN_TFT_DC=16, PIN_TFT_SCL=17, SENSOR_RST_PIN=2). Reading an
+  // output we are actively driving tells you what WE put there, not what the
+  // board wired. GPIO6 read a saturated 3189 mV on both ADC_CTRL states for
+  // exactly that reason -- we hold it high as TFT_EN.
+  //
+  // That matters because the RC32 carrier schematic (RC32_V1.0-schematic.pdf)
+  // does carry `Battery_ADC`, `ADC_IN` and `ADC_Ctrl` nets -- so a sense path
+  // EXISTS, contrary to my earlier reading of the datasheet, which documents
+  // VBAT only as a power input. Row-pairing in the schematic places `ADC_IN`
+  // adjacent to GPIO6, the same pin we drive as TFT_EN.
+  //
+  // Here, nothing has been initialised: no board.begin(), no display, no radio.
+  // Every pin is still in its power-on state, so what we read is the HARDWARE,
+  // which is the only thing worth measuring. Sweeping the full ADC1+ADC2 range
+  // (GPIO1..20) rather than a curated subset -- the last sweep's blind spot was
+  // a subset chosen before I had checked our own pin assignments.
+  //
+  // Raw beacon output, not mesh_log_line(): MeshLog is not up this early.
+  {
+    char b[96];
+    analogReadResolution(12);
+    analogSetAttenuation(ADC_11db);
+    for (int pin = 1; pin <= 20; pin++) {
+      int mv = analogReadMilliVolts(pin);
+      snprintf(b, sizeof(b), "BOOTADC %2d = %4d mV", pin, mv);
+      offband_beacon_line(b);
+    }
+    // Then again with ADC_CTRL asserted, so a gated divider shows up as a change.
+#if defined(PIN_ADC_CTRL)
+    pinMode(PIN_ADC_CTRL, OUTPUT);
+    digitalWrite(PIN_ADC_CTRL, HIGH);
+    delay(20);
+    for (int pin = 1; pin <= 20; pin++) {
+      int mv = analogReadMilliVolts(pin);
+      snprintf(b, sizeof(b), "BOOTADC-CTRLHI %2d = %4d mV", pin, mv);
+      offband_beacon_line(b);
+    }
+    pinMode(PIN_ADC_CTRL, INPUT);   // release; do not fight whatever owns it
+#endif
+  }
+#endif
+
   // Serial.begin() software-resets the UART and flushes its FIFO, which would
   // truncate the line above mid-transmission. Drain first. (Gemini review.)
   OFFBAND_BEACON_FLUSH();
@@ -542,6 +591,115 @@ void loop() {
       mesh_log_line(MLOG_BOOT, "[pwr] mv=%u up=%us\n",
                     (unsigned)board.getBattMilliVolts(),
                     (unsigned)(now_ms / 1000UL));
+
+#if defined(OFFBAND_POWER_TELEMETRY_PROBE) && defined(PIN_VBAT_READ) && defined(PIN_ADC_CTRL)
+      // TEMPORARY diagnostic (#766). getBattMilliVolts() returns 0 on the RC32
+      // with a LiPo on VBAT. Since it returns `adc_mult * raw` and adc_mult is
+      // pinned at 4.9, a zero result means `raw` itself is zero -- the ADC read,
+      // not the scaling. This probe separates the three candidates in ONE flash
+      // rather than three:
+      //
+      //   both polarities read 0 counts  -> pin/ADC setup never happened, or the
+      //                                     divider is not populated (hardware)
+      //   LOW reads, HIGH does not       -> ADC_CTRL_ENABLED polarity is inverted
+      //   counts nonzero but mv == 0     -> ADC calibration, not the signal
+      //
+      // Raw counts AND calibrated mV are both reported because
+      // analogReadMilliVolts() applies eFuse calibration and can return 0 while
+      // analogRead() is perfectly healthy -- that is a different defect, and
+      // reporting only mV would hide it.
+      //
+      // Costs two 10 ms settling delays per sample (20 ms per 30 s). Acceptable
+      // in a diag build, and the reason this sits behind its own flag rather
+      // than riding OFFBAND_POWER_TELEMETRY: it must not survive into a real
+      // discharge run.
+      //
+      // Driving ADC_CTRL both ways adds no new risk -- HeltecRC32Board::begin()
+      // already drives this pin, so the probe only exercises states the stock
+      // firmware already produces.
+      {
+        pinMode(PIN_ADC_CTRL, OUTPUT);
+        analogReadResolution(12);
+        analogSetAttenuation(ADC_2_5db);
+
+        digitalWrite(PIN_ADC_CTRL, HIGH);
+        delay(10);
+        int cnt_hi = analogRead(PIN_VBAT_READ);
+        int mv_hi  = analogReadMilliVolts(PIN_VBAT_READ);
+
+        digitalWrite(PIN_ADC_CTRL, LOW);
+        delay(10);
+        int cnt_lo = analogRead(PIN_VBAT_READ);
+        int mv_lo  = analogReadMilliVolts(PIN_VBAT_READ);
+
+        digitalWrite(PIN_ADC_CTRL, !ADC_CTRL_ENABLED);   // restore resting state
+
+        mesh_log_line(MLOG_BOOT,
+                      "[pwr:probe] pin=%d ctrl=%d hi{cnt=%d mv=%d} lo{cnt=%d mv=%d}\n",
+                      (int)PIN_VBAT_READ, (int)PIN_ADC_CTRL,
+                      cnt_hi, mv_hi, cnt_lo, mv_lo);
+      }
+#endif
+
+#if defined(OFFBAND_POWER_TELEMETRY_SWEEP) && defined(PIN_ADC_CTRL)
+      // #766: ADC1 pin sweep. PIN_VBAT_READ=7 has no vendor basis for this board
+      // -- the RC32 datasheet documents VBAT only as a power INPUT and never
+      // specifies a sense divider, and its §3.2.1 module table lists GPIO7 as the
+      // radio's SELECT line. GPIO7 appears to have been inherited from sibling
+      // Heltec S3 boards (e213/e290 both use it), not derived from RC32 docs.
+      //
+      // Candidates are ADC1 (GPIO1..10) minus the three the radio owns -- GPIO1
+      // (BUSY), GPIO9 (RESET), GPIO10 (CS). Reconfiguring those would disturb the
+      // radio mid-operation. Ordered 4,5,6 first: those are the ADC1 pins Heltec
+      // actually breaks out on the header, so they carry the strongest prior.
+      //
+      // Each pin is read with ADC_CTRL both HIGH and LOW. The signature we want is
+      // not "nonzero" -- a floating or rail-tied pin is nonzero too -- it is
+      // RESPONDING TO ADC_CTRL, since switching the divider in is that pin's only
+      // job. Responders are flagged '*'.
+      //
+      // The '*' is a reading aid, NOT an identification. Raw values for every pin
+      // are always printed so nothing is hidden behind the flag, and the firmware
+      // never selects a pin. The real proof is the trend: across a discharge, the
+      // divider is the pin that TRACKS the cell downward. Nothing else does. That
+      // is an identification that can be defended; a single-sample auto-pick would
+      // just be a guess that later readings would inherit silently (cf. #754,
+      // where telemetry compared a value against itself and always passed).
+      //
+      // 11 dB attenuation for near-full-scale range -- a divider output can sit
+      // well above the 1.25 V ceiling that 2.5 dB gives, and clipping every
+      // candidate to the same saturated value would hide the very difference we
+      // are looking for.
+      {
+        static const uint8_t kSweepPins[] = { 4, 5, 6, 2, 3, 7, 8 };
+        const int kN = (int)(sizeof(kSweepPins) / sizeof(kSweepPins[0]));
+        int hi[sizeof(kSweepPins)], lo[sizeof(kSweepPins)];
+
+        pinMode(PIN_ADC_CTRL, OUTPUT);
+        analogReadResolution(12);
+        analogSetAttenuation(ADC_11db);
+
+        digitalWrite(PIN_ADC_CTRL, HIGH);
+        delay(10);
+        for (int i = 0; i < kN; i++) hi[i] = analogReadMilliVolts(kSweepPins[i]);
+
+        digitalWrite(PIN_ADC_CTRL, LOW);
+        delay(10);
+        for (int i = 0; i < kN; i++) lo[i] = analogReadMilliVolts(kSweepPins[i]);
+
+        digitalWrite(PIN_ADC_CTRL, !ADC_CTRL_ENABLED);   // restore resting state
+
+        char sline[200];
+        int n = 0;
+        for (int i = 0; i < kN && n < (int)sizeof(sline) - 24; i++) {
+          int d = hi[i] - lo[i];
+          if (d < 0) d = -d;
+          n += snprintf(sline + n, sizeof(sline) - n, "%u:%d/%d%s ",
+                        (unsigned)kSweepPins[i], hi[i], lo[i], (d > 100) ? "*" : "");
+        }
+        mesh_log_line(MLOG_BOOT, "[pwr:sweep] %s(mv hi/lo, *=responds)\n", sline);
+      }
+#endif
     }
   }
 #endif
