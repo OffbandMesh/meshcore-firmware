@@ -11,26 +11,35 @@ void HeltecRCC6Board::begin() {
   // `[verified: rendered schematic, U1/U3 comparison -- U1 (CE6260B33M -> VDD_3V3)
   //  has EN tied to IN and is unconditional; U3 does not]`
   //
-  // `[resolved: #805]` THIS RAIL DOES NOT POWER THE RADIO. Settled from the
-  // schematic's vector geometry (not a render): Vext_3V3's only destination is
-  // U5 pin 25, which the RA62A symbol labels NC. The net name appears exactly
-  // twice on the whole sheet -- the U3 output, and that pin. The module's actual
-  // supply is VDD_3V3 on U5 pin 10, off U1, which is unconditional.
+  // `[schematic-derived: #805 -- NOT measured]` THIS RAIL ALMOST CERTAINLY DOES
+  // NOT POWER THE RADIO. Vext_3V3's only destination is U5 pin 25, which the
+  // RA62A symbol labels NC; the net name appears exactly twice on the whole
+  // single-page sheet (the U3 output, and that pin). The module's supply is
+  // VDD_3V3 on U5 pin 10, off U1, which is unconditional.
   //
-  // Confirmed three ways: the sole vertical segment reaching the Vext node is at
-  // x=640.63; a stub-to-label offset calibrated on pins 21/22 (SPI_MOSI/SPI_CS,
-  // both exactly +1.530) predicts pin 25 at x=640.62 -- delta 0.01 against a 3.59
-  // pin pitch; and the PDF's own designator PIU5025 sits at x=641.00 beside the
-  // NC label. The 10uF+100nF decoupling that made this look like a supply rail IS
-  // one -- it just lands on a pin this population does not connect. Most likely
-  // provisioned for the HaLow module on the shared carrier `[hypothesis:]`.
+  // Evidence, computed from the PDF's vector geometry rather than read off a
+  // render: the sole vertical segment reaching the Vext node is at x=640.63. The
+  // PDF carries its own per-pin designators (PIU50nn); matching every bottom-edge
+  // pin against the drawn stubs gives agreement within +/-0.61 for every pin that
+  // HAS a stub, and x=640.63 lands on PIU5025 (641.00, delta -0.37) with its
+  // neighbours 3.59 away. Pins 23 and 30 deviate ~3.3 precisely because no stub
+  // is drawn for them -- they are NC with no wire, which is corroboration, not
+  // error.
   //
-  // SO WHY STILL ASSERT IT? Only because turning it off changes runtime behaviour
-  // on a board already verified working, and that is the owner's call, not a
-  // side-effect of a documentation fix. It costs the TLV75733's quiescent draw
-  // for zero function. Dropping the two lines below is the power-saving move and
-  // is safe on this evidence; PIN_VEXT_EN stays defined either way so the rail
-  // remains documented and one line brings it back.
+  // WHAT WOULD FALSIFY IT, and why this is not called `[verified:]`: no voltage
+  // was ever measured. A schematic read -- however carefully computed -- is not a
+  // measurement, and this part is explicitly dual-variant (RA62A_LF/RA62A_HF), so
+  // a pin that is NC on one population can be live on the other. The cheap
+  // settling test is a multimeter on U5 pin 10 and pin 25 with GPIO11 de-asserted
+  // and asserted. Until someone does that, this is a strong inference.
+  //
+  // SO WHY STILL ASSERT IT? Precisely BECAUSE it is inference and not measurement.
+  // If the inference is right, asserting costs the TLV75733's quiescent draw and
+  // nothing else. If it is wrong, NOT asserting is a silent dead SX1262 with no
+  // obvious pointer at a power rail. That asymmetry favours asserting until the
+  // measurement exists -- and removing it is the owner's call regardless, since it
+  // changes runtime behaviour on a board already verified working. PIN_VEXT_EN
+  // stays defined either way, so one line restores it.
   //
   // NOT resolved by this: SELECT (GPIO7) -- see the note at the end of begin().
   pinMode(PIN_VEXT_EN, OUTPUT);
