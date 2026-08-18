@@ -97,11 +97,37 @@ Heltec_E290_companion_usb
 #   WIFI_SSID at compile time; unblocked by #325. Same gate class as the other
 #   companion_radio_wifi envs. (Unlike those, it is not CI-built either -- no
 #   rc32 env is in ci.yml yet; tracked separately.)
-# The _diag / _diag_nocrashlog envs are diagnostic instruments, not products.
+# The older _diag / _diag_nocrashlog envs are bench instruments, not products,
+# and stay out. The _testdiag envs below are different -- see the note after.
 heltec_rc32_companion_radio_ble
 heltec_rc32_companion_radio_usb
 heltec_rc32_repeater
 heltec_rc32_room_server
+
+# RC32 TESTER DIAGNOSTIC BUILDS -- published on EVERY release while RadioCore is
+# unreleased hardware (owner decision, 2026-08-18).
+#
+# Each EXTENDS the shipped env above and adds ONLY OFFBAND_BOOT_BEACON and
+# OFFBAND_MESHLOG_UART0. Nothing else differs. That is deliberate: a diagnostic
+# build that diverges from the shipped build diagnoses the wrong firmware, which
+# is exactly how the GPS-on-a-strapping-pin defect (#704) survived every bench
+# session -- every result came from a build that had already worked around it.
+#
+# Why they ship rather than being built by hand: a beta tester whose board will
+# not boot cannot reach a CLI, and hand-packaged binaries go stale the moment
+# firmware-base moves. Publishing them per-release keeps them current for free.
+#
+# Reading their output needs an external UART sniffer on RC32 pin 12 (U0TXD) and
+# pin 20 (GND) -- see tools/diag/rc32-tester/.
+#
+# REVISIT when RadioCore ships as released hardware, and when #763 lands its
+# level gate: the UART0 mirror is a synchronous bounded busy-wait, and combining
+# it with debug-level logging hangs setup() (2 s -> 118 s -> never). These envs
+# do not enable debug logging, so they are safe as built -- but the hazard is why
+# this is scoped to unreleased hardware rather than made a general pattern.
+heltec_rc32_companion_radio_ble_testdiag
+heltec_rc32_companion_radio_usb_testdiag
+heltec_rc32_repeater_testdiag
 
 # Heltec T096 (nRF52)
 Heltec_t096_companion_radio_ble
