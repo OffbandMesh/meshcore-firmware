@@ -1,4 +1,5 @@
 #include "UITask.h"
+#include "helpers/ui/OffbandSplash.h"
 #include <helpers/TxtDataHelpers.h>
 #include "../MyMesh.h"
 #include "target.h"
@@ -34,7 +35,6 @@
 class SplashScreen : public UIScreen {
   UITask* _task;
   unsigned long dismiss_after;
-  unsigned long version_after;
   char _version_info[12];
 
 public:
@@ -49,34 +49,15 @@ public:
     memcpy(_version_info, ver, len);
     _version_info[len] = 0;
 
-    version_after = millis() + BOOT_SCREEN_MILLIS / 2;
     dismiss_after = millis() + BOOT_SCREEN_MILLIS;
   }
 
   int render(DisplayDriver& display) override {
-    if (millis() < version_after) {
-    // meshcore logo
-    display.setColor(UIColor::corp_blue);
-    int logoWidth = 72;
-    display.drawXbm(0, 0, meshcore_logo, 72, 36);
-    } else {
-
-    // meshcore website
-    const char* website = "meshcore.io";
-    display.setColor(UIColor::primary_txt);
-    display.setTextSize(1);
-    uint16_t websiteWidth = display.getTextWidth(website);
-    display.setCursor((display.width() - websiteWidth) / 2, 9);
-    display.print(website);
-
-    // version info
-    display.setTextSize(1);
-    display.drawTextCentered(display.width()/2, 18, _version_info);
-
-    display.setColor(UIColor::secondary_txt);
-    display.setTextSize(1);
-    display.drawTextCentered(display.width()/2, 27, FIRMWARE_BUILD_DATE);
-    }
+    // #822: one shared splash. This panel is 72x40, so the component picks its
+    // compact layout (mark + version) rather than the full lockup. The old
+    // two-phase logo-then-text alternation is gone: one frame, one identity.
+    offband::SplashInfo si( nullptr, _version_info, FIRMWARE_BUILD_DATE );
+    offband::drawSplash(display, si);
     return 1000;
   }
 

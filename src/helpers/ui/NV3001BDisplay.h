@@ -97,8 +97,16 @@ public:
 
   bool begin();
   static const char* driverName() { return "NV3001B"; }
-  static uint16_t physicalWidth() { return NV3001B_PANEL_WIDTH; }
-  static uint16_t physicalHeight() { return NV3001B_PANEL_HEIGHT; }
+  // #822: real overrides, not statics. These were dead static members with zero
+  // callers; left in place they would SHADOW DisplayDriver's new virtuals of the
+  // same name -- the identical trap as #812. Note they now report the POST-ROTATION
+  // drawing size (SCREEN), not NV3001B_PANEL_*, which is the memory orientation.
+  int physicalWidth() const override;
+  int physicalHeight() const override;
+
+  // #822: this driver's own colour splash art. Capability and asset in one place,
+  // so no per-variant flag can be forgotten.
+  const ColourArt* colourSplashArt() const override;
 
   bool isOn() override { return is_on; }
   void turnOn() override;

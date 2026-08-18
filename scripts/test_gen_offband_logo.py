@@ -144,13 +144,16 @@ def test_splash_still_draws_its_first_version_line_where_we_think():
     # in a band 12 physical pixels taller than actually existed. That is precisely
     # the drift this guard was written for, and it fired two commits after it was
     # written rather than on hardware.
-    ui = (Path(_HERE).parent / "examples/companion_radio/ui-new/UITask.cpp").read_text(
+    ui = (Path(_HERE).parent / "src/helpers/ui/OffbandSplash.cpp").read_text(
         encoding="utf-8", errors="replace")
-    # Match the colour branch that DEFINES the constants, not the first
-    # OFFBAND_COLOUR_SPLASH block in the file -- that one is the header include, and
-    # splitting on it is how this assertion first went looking in the wrong place.
-    m = re.search(r"#ifdef\s+OFFBAND_COLOUR_SPLASH\s*\n\s*static const int SPLASH_LINE_1\s*=\s*(\d+)", ui)
-    assert m, "the OFFBAND_COLOUR_SPLASH branch defining SPLASH_LINE_1 was not found"
+    # #822: the colour/mono choice is no longer a #ifdef -- the component asks the
+    # DRIVER whether it has colour art, so a board cannot be missed by forgetting a
+    # build flag. The layout constants are therefore plain named constants, and this
+    # guard matches COLOUR_L1 directly. The invariant it protects is unchanged: the
+    # generator centres the artwork in the band ABOVE the first version line, so if
+    # that line moves and the asset is not regenerated, the two overlap.
+    m = re.search(r"COLOUR_L1\s*=\s*(\d+)", ui)
+    assert m, "COLOUR_L1 was not found in OffbandSplash.cpp"
     assert int(m.group(1)) == gen.SPLASH_TEXT_TOP_LOGICAL, (
         f"colour splash line 1 is {m.group(1)} but the generator assumes "
         f"{gen.SPLASH_TEXT_TOP_LOGICAL}; regenerate the asset")

@@ -1,4 +1,5 @@
 #include "UITask.h"
+#include "helpers/ui/OffbandSplash.h"
 #include <helpers/TxtDataHelpers.h>
 #include "../MyMesh.h"
 #include "target.h"
@@ -33,10 +34,6 @@
 #endif
 
 #include "icons.h"
-#include "offband_logo.h"   // Offband brand splash bitmaps (#153)
-#ifdef OFFBAND_COLOUR_SPLASH
-#include "offband_logo_rgb565.h"   // #749: colour lockup, colour panels only
-#endif
 
 // #153 added offbandIsDevBuild() to gate debug-only UI (the heap readout) to dev
 // builds. #761 replaced that with an explicit -D OFFBAND_SHOW_HEAP opt-in, and it
@@ -46,86 +43,11 @@
 class SplashScreen : public UIScreen {
   UITask* _task;
   unsigned long dismiss_after;
-  char _mc_version[12];
-#ifdef OFFBAND_VERSION
-  // Offband fork version short form (OFFBAND_VERSION with the
-  // "offband-" prefix and any commits-since-tag suffix stripped).
-  // Per VERSIONING.md Pattern B the splash exposes BOTH the upstream
-  // MeshCore version AND the Offband fork version so a glance at
-  // the device unambiguously identifies what firmware is running.
-  char _offband_short[40];   // #222: holds the compact version + an optional build tag
-#endif
 
 public:
   SplashScreen(UITask* task) : _task(task) {
-    // MC baseline version: strip off dash and commit hash
-    // e.g: v1.2.3-abcdef -> v1.2.3
-    const char *ver = FIRMWARE_VERSION;
-    const char *dash = strchr(ver, '-');
-    int len = dash ? dash - ver : strlen(ver);
-    if (len >= sizeof(_mc_version)) len = sizeof(_mc_version) - 1;
-    memcpy(_mc_version, ver, len);
-    _mc_version[len] = 0;
-
-#ifdef OFFBAND_VERSION
-    // Offband version: strip leading "offband-" tag prefix, then render
-    // a COMPACT build-identity that distinguishes test builds from the
-    // tagged release (Strycher/LoRa#319). git describe form is
-    // "<tag>[-<N>-g<sha>][-dirty]", where <tag> may ITSELF contain dashes for
-    // a pre-release (e.g. v0.14.0-rc1). We render:
-    //   offband-v0.14.0                  -> v0.14.0        (clean release)
-    //   offband-v0.14.0-rc1              -> v0.14.0-rc1    (clean pre-release)
-    //   offband-v0.14.0-rc1-4-g369714e   -> v0.14.0-rc1+4  (4 past pre-release)
-    //   offband-v0.14.0-4-g369714e       -> v0.14.0+4      (4 past release)
-    //   ...-dirty                          -> ...*           (dirty work tree)
-    // Full identity (SHA included) stays in the `ver` CLI + the
-    // OFFBAND_IDENTITY_BLOB in .rodata; this is just the at-a-glance form.
-    // Spec + fixtures: scripts/test_offband_version_splash.py.
-    //
-    // The commits-since suffix is identified by git's "-g<sha>" marker, NOT the
-    // first dash. Splitting on the first dash (prior behavior) mis-read a
-    // pre-release tag's "-rcN" as the commits field -> it dropped "-rcN" and
-    // showed a spurious "+0" (#33).
-    const char *cw = OFFBAND_VERSION;
-    static const char *cw_prefix = "offband-";
-    if (strncmp(cw, cw_prefix, 8) == 0) cw += 8;
-    bool        cw_dirty = (strstr(cw, "-dirty") != nullptr);
-    const char *gmark    = strstr(cw, "-g");   // start of "-g<sha>" iff commits>0
-    int commits = 0;
-    int taglen;
-    if (gmark != nullptr) {
-      // commits = the integer immediately before "-g"; the tag ends at the
-      // dash that precedes that integer.
-      const char *nstart = gmark;
-      while (nstart > cw && nstart[-1] >= '0' && nstart[-1] <= '9') nstart--;
-      commits = atoi(nstart);
-      taglen  = (int)(((nstart > cw) && (nstart[-1] == '-')) ? (nstart - 1 - cw)
-                                                             : (nstart - cw));
-    } else {
-      // No commits suffix: exact tag (may be a pre-release). Trim a trailing
-      // "-dirty" so it is not counted as part of the tag.
-      const char *d = strstr(cw, "-dirty");
-      taglen = d ? (int)(d - cw) : (int)strlen(cw);
-    }
-    if (taglen >= (int)sizeof(_offband_short)) taglen = (int)sizeof(_offband_short) - 1;
-    if (commits > 0) {
-      snprintf(_offband_short, sizeof(_offband_short), "%.*s+%d%s",
-               taglen, cw, commits, cw_dirty ? "*" : "");
-    } else {
-      snprintf(_offband_short, sizeof(_offband_short), "%.*s%s",
-               taglen, cw, cw_dirty ? "*" : "");
-    }
-#ifdef OFFBAND_BUILD_TAG
-    // #222: append a settable build tag so flag-only variants (same commit,
-    // different compile flags) are distinguishable at a glance on the splash.
-    // Skip a defined-but-empty tag so we don't leave a dangling trailing space.
-    if (OFFBAND_BUILD_TAG[0] != '\0') {
-      size_t _l = strlen(_offband_short);
-      snprintf(_offband_short + _l, sizeof(_offband_short) - _l, " %s", OFFBAND_BUILD_TAG);
-    }
-#endif
-#endif
-
+    // #822: the version derivation and the commit-hash trim both moved into
+    // offband::drawSplash, so every role renders the same identity.
     dismiss_after = millis() + BOOT_SCREEN_MILLIS;
   }
 
@@ -133,83 +55,8 @@ public:
 #ifdef OFFBAND_OBSERVER
     offband::crashLogf("[ui] SplashScreen.render() at %lu", (unsigned long)millis());
 #endif
-#ifdef OFFBAND_VERSION
-    // #153: Offband brand lockup (radar mark + "offband" wordmark) + version
-    // lines. Bitmaps generated by scripts/gen-offband-logo.py (offband_logo.h).
-    display.setColor(UIColor::primary_txt);
-#ifdef OFFBAND_COLOUR_SPLASH
-    // #749: full-colour lockup at NATIVE panel resolution. The coordinates are
-    // physical pixels and are baked into the generated header, so this does not go
-    // through the 128x64 logical canvas -- which on this panel stretches 1.72x
-    // horizontally and 2.0x vertically and would render the mark's arcs as
-    // ellipses. The version text below stays on the logical canvas, unchanged.
-    display.drawRGB565(OFFBAND_SPLASH_RGB565_X, OFFBAND_SPLASH_RGB565_Y,
-                       offband_splash_rgb565,
-                       OFFBAND_SPLASH_RGB565_W, OFFBAND_SPLASH_RGB565_H);
-#else
-    const int strip_w = OFFBAND_MARK_W + 4 + OFFBAND_WORD_W;
-    const int logo_x  = (display.width() - strip_w) / 2;
-    display.drawXbm(logo_x, 1, offband_mark, OFFBAND_MARK_W, OFFBAND_MARK_H);
-    display.drawXbm(logo_x + OFFBAND_MARK_W + 4,
-                    1 + (OFFBAND_MARK_H - OFFBAND_WORD_H) / 2,
-                    offband_word, OFFBAND_WORD_W, OFFBAND_WORD_H);
-#endif
-
-    // #758: the splash's three text lines, as a named LAYOUT rather than three
-    // magic numbers. They are a property of this arrangement -- how tall the text
-    // is relative to the artwork above it -- not of any particular panel, which is
-    // why they sit with the artwork branch and not behind a display-model test.
-    //
-    // Two arrangements exist and they have no slack in common:
-    //
-    //   mono (1-bit lockup): logo occupies y=1..30 (OFFBAND_MARK_H=30 drawn at
-    //     y=1) and a line of text is 8px, so line 3 at 56 ends at 64 -- exactly the
-    //     last row of a 128x64 panel. There is nothing to give at either end.
-    //
-    //   colour lockup: text is 18px per line here (JetBrains Mono at 13px), so the
-    //     old y=56 would end at physical 130 on a 128px panel and clip descenders.
-    //     The artwork ends at physical 56, which frees room ABOVE that the mono
-    //     arrangement does not have.
-    //
-    // Hence separate constants. Moving the mono values to match would overlap its
-    // logo by two rows on ~115 boards to fix a problem only the colour panel has.
-#ifdef OFFBAND_COLOUR_SPLASH
-    static const int SPLASH_LINE_1 = 29, SPLASH_LINE_2 = 41, SPLASH_LINE_3 = 53;
-#else
-    static const int SPLASH_LINE_1 = 35, SPLASH_LINE_2 = 46, SPLASH_LINE_3 = 56;
-#endif
-
-    display.setTextSize(1);
-    display.drawTextCentered(display.width()/2, SPLASH_LINE_1, _offband_short);
-
-    char mc_line[28];
-    const char *mcv = _mc_version;
-    if (*mcv == 'v' || *mcv == 'V') mcv++;   // "on MeshCore 1.16.0" per the approved wording
-    snprintf(mc_line, sizeof(mc_line), "on MeshCore %s", mcv);
-    // drawTextCentered does not clip, so clamp to what actually fits. This used to
-    // assume ~6 logical px per character, which was an approximation of the 5x7
-    // font and is wrong for any other -- #758's glyphs are 4.65 logical px wide, so
-    // the old constant truncated ~6 characters early. Ask the driver instead: it is
-    // the only thing that knows its own metrics, and this now self-corrects if the
-    // font changes again.
-    while (strlen(mc_line) > 1 && display.getTextWidth(mc_line) > display.width()) {
-      mc_line[strlen(mc_line) - 1] = '\0';
-    }
-    display.drawTextCentered(display.width()/2, SPLASH_LINE_2, mc_line);
-
-    display.drawTextCentered(display.width()/2, SPLASH_LINE_3, FIRMWARE_BUILD_DATE);
-#else
-    // Upstream MeshCore build (no Offband identity injected): original logo layout.
-    display.setColor(UIColor::corp_blue);
-    display.drawXbm((display.width() - 128) / 2, 3, meshcore_logo, 128, 13);
-    display.setColor(UIColor::primary_txt);
-    display.setTextSize(2);
-    display.drawTextCentered(display.width()/2, 22, _mc_version);
-
-    display.setColor(UIColor::secondary_txt);
-    display.setTextSize(1);
-    display.drawTextCentered(display.width()/2, 42, FIRMWARE_BUILD_DATE);
-#endif
+    offband::SplashInfo si( nullptr, FIRMWARE_VERSION, FIRMWARE_BUILD_DATE );
+    offband::drawSplash(display, si);
 
     return 1000;
   }
