@@ -11,16 +11,28 @@ void HeltecRCC6Board::begin() {
   // `[verified: rendered schematic, U1/U3 comparison -- U1 (CE6260B33M -> VDD_3V3)
   //  has EN tied to IN and is unconditional; U3 does not]`
   //
-  // WHY WE ASSERT IT. Whether this rail gates the radio, the display, or both is
-  // NOT yet established (#805) -- the module pin it lands on was occluded in the
-  // render and has not been confirmed. Asserting it is the safe direction: if it
-  // feeds the radio, leaving it low is a silent dead SX1262 with no obvious
-  // pointer at a power rail; if it feeds only the display, asserting it costs a
-  // few mA. No reference implementation drives this pin -- n30nex's variant never
-  // touches GPIO11 -- so there is nothing to inherit here.
+  // `[resolved: #805]` THIS RAIL DOES NOT POWER THE RADIO. Settled from the
+  // schematic's vector geometry (not a render): Vext_3V3's only destination is
+  // U5 pin 25, which the RA62A symbol labels NC. The net name appears exactly
+  // twice on the whole sheet -- the U3 output, and that pin. The module's actual
+  // supply is VDD_3V3 on U5 pin 10, off U1, which is unconditional.
   //
-  // Revisit under #805, and if the rail turns out to be display-only, gate it
-  // with the display rather than holding it up unconditionally.
+  // Confirmed three ways: the sole vertical segment reaching the Vext node is at
+  // x=640.63; a stub-to-label offset calibrated on pins 21/22 (SPI_MOSI/SPI_CS,
+  // both exactly +1.530) predicts pin 25 at x=640.62 -- delta 0.01 against a 3.59
+  // pin pitch; and the PDF's own designator PIU5025 sits at x=641.00 beside the
+  // NC label. The 10uF+100nF decoupling that made this look like a supply rail IS
+  // one -- it just lands on a pin this population does not connect. Most likely
+  // provisioned for the HaLow module on the shared carrier `[hypothesis:]`.
+  //
+  // SO WHY STILL ASSERT IT? Only because turning it off changes runtime behaviour
+  // on a board already verified working, and that is the owner's call, not a
+  // side-effect of a documentation fix. It costs the TLV75733's quiescent draw
+  // for zero function. Dropping the two lines below is the power-saving move and
+  // is safe on this evidence; PIN_VEXT_EN stays defined either way so the rail
+  // remains documented and one line brings it back.
+  //
+  // NOT resolved by this: SELECT (GPIO7) -- see the note at the end of begin().
   pinMode(PIN_VEXT_EN, OUTPUT);
   digitalWrite(PIN_VEXT_EN, PIN_VEXT_EN_ACTIVE);
   delay(10);   // let the LDO settle before anything downstream is touched
@@ -45,7 +57,12 @@ void HeltecRCC6Board::begin() {
   // RA62A_LF/RA62A_HF -- a dual LF/HF part -- so SELECT plausibly chooses the RF
   // path, but that is `[hypothesis: untested]` and n30nex does not drive it
   // either. Driving a strap-capable pin whose function is unconfirmed is worse
-  // than leaving it at its board default. Tracked on #806.
+  // than leaving it at its board default.
+  //
+  // Tracked on #805 ("Related unknown -- do not lose this one"), NOT #806, which
+  // is closed. If SELECT does choose the RF path, the wrong default presents as
+  // mediocre range rather than a clean failure -- the failure mode nobody files
+  // a bug for. Settle it before this board ships to testers.
 }
 
 uint16_t HeltecRCC6Board::getBattMilliVolts() {
