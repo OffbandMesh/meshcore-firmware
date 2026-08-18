@@ -74,9 +74,19 @@ RCC6 (303A:1001) -> Intel xHCI root hub, PCIROOT(80)#PCI(1400)#USBROOT(0)#USB(9)
 
 Both products are commodity consumer parts, listed so the result can be reproduced exactly.
 **Neither is faulty:** every other USB device on both worked normally throughout, and the
-RCC6 enumerates through either after a VBUS power cycle. The variable is how the directly
-parenting hub handles an incorrect initial speed reading -- RTS5411 latches it, FE1.1s
-re-samples.
+RCC6 enumerates through either after a VBUS power cycle.
+
+> ⚠ **UNCONTROLLED VARIABLE — cable connector type.** The failing trials used **USB-A to
+> USB-C** cables; the passing Baseus trials used **USB-C to USB-C**, into that dock's front
+> USB-C port. Connector type is therefore perfectly confounded with the outcome in this data
+> set, and "the RTS5411 latches the speed reading" and "A-to-C connections fail" fit the
+> results equally well.
+>
+> There is no obvious electrical mechanism — D+/D- are routed identically in both cases, and
+> the RCC6's CC1/CC2 are passive 5.1K Rd to ground, unaffected by a chip reset. But it has
+> not been tested. **The discriminating test is an A-to-C cable into the same Baseus dock:**
+> same hub silicon, different connector type. Until that is run, the attribution to hub
+> silicon below should be read as the leading explanation rather than an established one.
 | Reset source | external open-drain pull-down on the carrier's RST line (P1 pin 18), 100 ms assert |
 | Boot observation | second board sniffing RCC6 `U0TXD` (P1 pin 12) at 115200 8N1 |
 
@@ -487,6 +497,9 @@ Stated plainly so nothing here is over-read:
 - **Two hub models tested**, both showing the transient — a Realtek RTS5411 (which fails)
   and a Terminus FE1.1s (which recovers). A third would strengthen the claim that the
   transient is universal to the board rather than an interaction with these two.
+- **Cable connector type is confounded with the result.** All failing trials used USB-A to
+  USB-C; the passing dock trials used USB-C to USB-C. Untested and unexplained — see the
+  warning in section 2.
 - **Only two hub silicons have been tested** — Realtek RTS5411 (latches, fails) and Terminus
   FE1.1s (re-samples, recovers). Whether other hubs group with one or the other is unknown,
   and we have no basis for predicting which behaviour is more common.
