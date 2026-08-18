@@ -73,6 +73,33 @@ jobs:
       - name: Font generator self-test
         run: python scripts/test_gen_jbm_font.py
 
+      # #775 (epic #774). Guards the defect class behind #764/#765: an `else if`
+      # that matches a CLI key and writes nothing, or a key claimed twice in one
+      # chain so the later arm is unreachable. `get radio` returned an empty reply
+      # for ten months that way -- it compiles, no compiler calls it dead, and the
+      # serial console hides it because that caller zeroes its buffer and skips
+      # empty replies. Only the radio transport showed it, as stack bytes.
+      #
+      # ADVISORY, deliberately. The fixes (#778/#779) have NOT landed yet, so this
+      # step is expected to REPORT FINDINGS here -- that log is the evidence the
+      # guard catches the real defect, and it cannot be produced once the tree is
+      # fixed. A blocking check cannot land red. Promotion to required is a
+      # separate owner decision, tracked as #776.
+      - name: CLI dispatch guard self-test (advisory)
+        continue-on-error: true
+        run: python scripts/test_cli_dispatch.py
+
+      - name: No empty or shadowed arms in the CLI dispatch chains (advisory)
+        continue-on-error: true
+        run: python scripts/check_cli_dispatch.py --json-out "$RUNNER_TEMP/cli-dispatch.json"
+
+      - name: Upload CLI dispatch report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-dispatch
+          path: ${{ runner.temp }}/cli-dispatch.json
+
       # ADVISORY until #648 (the capability inventory) validates what this asserts.
       # ci-green is a hard merge gate for every PR in the repo (#477), so a check
       # built on unvalidated assumptions must not block other people's work. The
