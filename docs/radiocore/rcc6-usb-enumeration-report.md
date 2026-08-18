@@ -220,6 +220,43 @@ Then the placeholder device is created **on the same port**:
 \??\USB#VID_0000&PID_0002#7&188f3bf2&0&1   port=1
 ```
 
+### Reproduced three times, including with NO firmware running
+
+| Trial | Reset type | Code executing | `PORT_LOW_SPEED` | Descriptor failures |
+|---|---|---|---|---|
+| A | CHIP_PU | application | **yes** | 4 / 4 / 4, 3 retries |
+| B | CHIP_PU | application | **yes** | 4 / 4 / 4, 3 retries |
+| C | BOOT+RST | **none — ROM download mode** | **yes** | 4 / 4 / 4, 3 retries |
+| Control | VBUS cycle | application | **no** | none |
+
+Trial C is the decisive one. With BOOT held across reset the chip stops in the ROM
+serial loader — UART0 shows `boot:0x5 DOWNLOAD(USB/UART0/SDIO_FEI_REO)` and
+`waiting for download`, and no application image is entered at all. The low-speed
+attach still occurs:
+
+```
+15:52:44.536  port=1  0x0301  [CONNECT|POWER|LOW_SPEED]
+15:52:44.656  port=1  0x0303  [CONNECT|ENABLE|POWER|LOW_SPEED]
+15:52:45.208  port=1  0x0303  [CONNECT|ENABLE|POWER|LOW_SPEED]   retry 1
+15:52:45.828  port=1  0x0303  [CONNECT|ENABLE|POWER|LOW_SPEED]   retry 2
+15:52:46.448  port=1  0x0303  [CONNECT|ENABLE|POWER|LOW_SPEED]   retry 3
+```
+
+**No firmware — ours or Heltec's — is running when this happens.** The behaviour is
+established by the ROM and the hardware alone, which removes application software from
+consideration entirely rather than by comparison.
+
+Timing on the application-mode trials points the same way independently:
+
+```
+15:28:14.544   host detects CONNECT|LOW_SPEED
+15:28:14.577   UART0: entry 0x4086c110      <-- bootloader hands off, 33 ms LATER
+   [3208] ms   first application output     <-- ~3.2 s after that
+```
+
+The bus condition is already set before the second-stage bootloader jumps to the
+application.
+
 ### Reading
 
 `PORT_LOW_SPEED` (wPortStatus bit 9) means the hub detected low-speed signalling at attach.
