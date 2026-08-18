@@ -1580,10 +1580,9 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
   } else if (isKey(config, "int.thresh")) {
     sprintf(reply, "> %d", (uint32_t) _prefs->interference_threshold);
   } else if (isKey(config, "agc.reset.interval")) {
-  } else if (memcmp(config, "cad", 3) == 0) {
-    sprintf(reply, "> %s", _prefs->cad_enabled ? "on" : "off");
-  } else if (memcmp(config, "agc.reset.interval", 18) == 0) {
     sprintf(reply, "> %d", ((uint32_t) _prefs->agc_reset_interval) * 4);
+  } else if (isKey(config, "cad")) {
+    sprintf(reply, "> %s", _prefs->cad_enabled ? "on" : "off");
   } else if (isKey(config, "multi.acks")) {
     sprintf(reply, "> %d", (uint32_t) _prefs->multi_acks);
   } else if (isKey(config, "allow.read.only")) {
@@ -1607,20 +1606,15 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     sprintf(reply, "> %s", StrHelper::ftoa(_prefs->node_lat));
   } else if (isKey(config, "lon")) {
     sprintf(reply, "> %s", StrHelper::ftoa(_prefs->node_lon));
-#if defined(USE_SX1262) || defined(USE_SX1268) || defined(USE_LR1110)
   } else if (isKey(config, "radio.rxgain")) {
     sprintf(reply, "> %s", _prefs->rx_boosted_gain ? "on" : "off");
-#endif
-  } else if (isKey(config, "radio")) {
-  } else if (memcmp(config, "radio.rxgain", 12) == 0) {
-    sprintf(reply, "> %s", _prefs->rx_boosted_gain ? "on" : "off");
-  } else if (memcmp(config, "radio.fem.rxgain", 16) == 0) {
+  } else if (isKey(config, "radio.fem.rxgain")) {
     if (!_board->canControlLoRaFemLna()) {
       strcpy(reply, "Error: unsupported");
     } else {
       sprintf(reply, "> %s", _board->isLoRaFemLnaEnabled() ? "on" : "off");
     }
-  } else if (memcmp(config, "radio", 5) == 0) {
+  } else if (isKey(config, "radio")) {
     char freq[16], bw[16];
     strcpy(freq, StrHelper::ftoa3(_prefs->freq));
     strcpy(bw, StrHelper::ftoa3(_prefs->bw));
@@ -1740,11 +1734,6 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     strcpy(reply, "ERROR: Power management not supported");
 #endif
   } else if (isKey(config, "pwrmgt.bootmv")) {
-  } else if (memcmp(config, "pwrmgt.bootreason", 17) == 0) {
-    sprintf(reply, "> Reset: %s; Shutdown: %s",
-      _board->getResetReasonString(_board->getResetReason()),
-      _board->getShutdownReasonString(_board->getShutdownReason()));
-  } else if (memcmp(config, "pwrmgt.bootmv", 13) == 0) {
 #ifdef NRF52_POWER_MANAGEMENT
     sprintf(reply, "> %u mV", _board->getBootVoltage());
 #else
@@ -1758,7 +1747,7 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
                                           offband::wifiObserverPool())) {
     // handled by the broker-config CLI
 #endif
-  } else if (memcmp(config, "extra.sf", 8) == 0) {
+  } else if (isKey(config, "extra.sf")) {
     char* tmp = reply;
     for (int i = 0; i < 3 && _prefs->extra_sf[i] != 0; i++) {
       tmp += sprintf(tmp, "%s%d", (i == 0) ? "" : ",", _prefs->extra_sf[i]);
