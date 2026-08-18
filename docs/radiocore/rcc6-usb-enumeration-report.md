@@ -76,18 +76,24 @@ Both products are commodity consumer parts, listed so the result can be reproduc
 **Neither is faulty:** every other USB device on both worked normally throughout, and the
 RCC6 enumerates through either after a VBUS power cycle.
 
-> ⚠ **UNCONTROLLED VARIABLE — cable connector type.** The failing trials used **USB-A to
-> USB-C** cables; the passing Baseus trials used **USB-C to USB-C**, into that dock's front
-> USB-C port. Connector type is therefore perfectly confounded with the outcome in this data
-> set, and "the RTS5411 latches the speed reading" and "A-to-C connections fail" fit the
-> results equally well.
+**Cable is a controlled constant.** The *same physical USB-C cable*, rated 240 W, was used
+for every trial in this report. Where a USB-A port was required, the manufacturer's own
+integrated USB-A adapter — permanently attached to that cable — was fitted. Cable quality,
+gauge and construction are therefore eliminated as variables.
+
+> ⚠ **One variable remains unisolated: whether that A adapter is in line.** The failing
+> trials were into USB-A ports (adapter fitted); the passing Baseus trials were into the
+> dock's front USB-C port (adapter removed). So adapter-presence still tracks the outcome,
+> even though the cable does not.
 >
-> There is no obvious electrical mechanism — D+/D- are routed identically in both cases, and
-> the RCC6's CC1/CC2 are passive 5.1K Rd to ground, unaffected by a chip reset. But it has
-> not been tested. **The discriminating test is an A-to-C cable into the same Baseus dock:**
-> same hub silicon, different connector type. Until that is run, the attribution to hub
-> silicon below should be read as the leading explanation rather than an established one.
+> There is no obvious electrical mechanism — D+/D- are routed identically either way, and
+> the RCC6's CC1/CC2 are passive 5.1 K Rd to ground, unaffected by a chip reset. **The
+> discriminating test is the same cable WITH the A adapter into a USB-A port on the same
+> Baseus dock:** same cable, same hub silicon, adapter the only difference. Until that is
+> run, the attribution to hub silicon below is the leading explanation rather than an
+> established one.
 | Reset source | external open-drain pull-down on the carrier's RST line (P1 pin 18), 100 ms assert |
+| Cable | one USB-C cable, 240 W rated, used for ALL trials; manufacturer's integrated USB-A adapter fitted when a USB-A port was used |
 | Boot observation | second board sniffing RCC6 `U0TXD` (P1 pin 12) at 115200 8N1 |
 
 The UART0 sniffer is important to the method: because USB is the thing failing, **all boot
@@ -176,7 +182,7 @@ initialises and paints. Only USB is affected.
 | Display / SPI activity | **Ruled out** | Reproduces with the display driver absent entirely |
 | Host OS state | **Ruled out** | Full Windows reboot; behaviour unchanged |
 | Host USB stack fault | **Ruled out** | Both xHCI controllers and both root hubs report `OK`; five other USB serial devices work normally throughout, including on the same hub |
-| USB cable | **Ruled out** | Reproduces on a second, different USB-C cable |
+| USB cable | **Ruled out** | One 240 W-rated USB-C cable used for every trial in this report — a controlled constant, not a variable |
 | Hub port | **Ruled out** | Reproduces on two different ports of the same hub |
 | Faulty hub | **Ruled out** | Other devices on both hubs are unaffected; the RCC6 works through either after a VBUS cycle; and the low-speed transient is present on BOTH hubs, so it does not originate in one of them |
 | Reset duration | **Unlikely** | Longer reset assertions do not change the outcome |
@@ -497,9 +503,9 @@ Stated plainly so nothing here is over-read:
 - **Two hub models tested**, both showing the transient — a Realtek RTS5411 (which fails)
   and a Terminus FE1.1s (which recovers). A third would strengthen the claim that the
   transient is universal to the board rather than an interaction with these two.
-- **Cable connector type is confounded with the result.** All failing trials used USB-A to
-  USB-C; the passing dock trials used USB-C to USB-C. Untested and unexplained — see the
-  warning in section 2.
+- **The cable itself is a controlled constant** (one 240 W-rated USB-C cable throughout),
+  but **whether the manufacturer's integrated A adapter is in line still tracks the result**.
+  Untested and unexplained — see the callout in section 2.
 - **Only two hub silicons have been tested** — Realtek RTS5411 (latches, fails) and Terminus
   FE1.1s (re-samples, recovers). Whether other hubs group with one or the other is unknown,
   and we have no basis for predicting which behaviour is more common.
