@@ -732,6 +732,20 @@ void MqttBrokerPool::workerLoop() {
             if (reconciling_[s]) continue;
             MqttBroker& b = brokers_[s];
             if (!b.isConfigured()) continue;
+            // #739/#746: a terminally-Failed broker must hold NO client -- otherwise
+            // esp-mqtt auto-reconnect (which stays ON for normal brokers, its
+            // reconnect being the pool's safety net) would fire onConnected and
+            // resurrect it. Destroy its client HERE on the worker task (releaseClient
+            // is a blocking esp_mqtt_client_destroy -- worker-only, #53). Idempotent:
+            // once client-less, hasClient() is false and this no-ops. It is never
+            // re-driven (Failed is absent from the condition below), so it stays down
+            // until the operator re-enables/reconfigures. This is the SURGICAL fix --
+            // the global disable_auto_reconnect broke normal reconnection (soak: 96%
+            // no-TLS-up, a healthy broker terminally failed).
+            if (b.runtime().state == BrokerState::Failed) {
+                if (b.hasClient()) b.releaseClient();
+                continue;
+            }
             b.loop(now);
             BrokerState st = b.runtime().state;
             // Re-drive idle/held slots. HeldNoClock releases when the clock is

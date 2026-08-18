@@ -535,6 +535,11 @@ bool MqttBroker::hasClient() const {
 }
 
 void MqttBroker::onConnected(uint32_t now_ms) {
+    // #739/#746: never let a connect event resurrect a terminally-Failed broker.
+    // Primary defense is the pool reaping a Failed broker's client (nothing to
+    // reconnect); this is belt-and-suspenders for a connect event in flight when
+    // the broker went Failed. Failed clears only by operator re-enable/reconfigure.
+    if (rt_.state == BrokerState::Failed) return;
     rt_.state = BrokerState::Up;
     rt_.went_up_ms = now_ms;   // #175: dwell clock for TLS rotation
     rt_.retry_count = 0;
