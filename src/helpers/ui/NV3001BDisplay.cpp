@@ -1,7 +1,8 @@
 #include "NV3001BDisplay.h"
 #include "Rgb565Blit.h"   // #749: shared clip + native-resolution blit
 #include "Rc32Palette.h"  // #757: dark theme colour roles
-#include "JbmFont.h"      // #758: antialiased JetBrains Mono glyph table
+#include "JbmFont.h"
+#include "OffbandLogoRGB565.h"   // #822: this panel's colour splash art      // #758: antialiased JetBrains Mono glyph table
 #include <Arduino.h>
 #include <string.h>
 
@@ -603,6 +604,23 @@ static inline uint16_t blend565(uint16_t fg, uint16_t bg, uint8_t cov) {
 // read-back per pixel would be absurd. When the buffer is absent (allocation
 // failed) there is nothing to read, so coverage is thresholded instead: visibly
 // worse, but the alternative is invisible or wrongly-blended text.
+int NV3001BDisplay::physicalWidth() const { return NV3001B_SCREEN_WIDTH; }
+int NV3001BDisplay::physicalHeight() const { return NV3001B_SCREEN_HEIGHT; }
+
+// #822: the RC32's colour splash. Placement constants are emitted by
+// scripts/gen-offband-logo.py alongside the pixels, so artwork and position cannot
+// drift apart.
+const DisplayDriver::ColourArt* NV3001BDisplay::colourSplashArt() const {
+#ifdef OFFBAND_SPLASH_RGB565_W
+  static const ColourArt art{ offband_splash_rgb565,
+                              OFFBAND_SPLASH_RGB565_W, OFFBAND_SPLASH_RGB565_H,
+                              OFFBAND_SPLASH_RGB565_X, OFFBAND_SPLASH_RGB565_Y };
+  return &art;
+#else
+  return nullptr;
+#endif
+}
+
 void NV3001BDisplay::drawChar(int x, int y, char ch) {
   if (ch < JBM_FIRST_CH || ch > JBM_LAST_CH) ch = '?';
 

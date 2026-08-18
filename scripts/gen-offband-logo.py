@@ -221,12 +221,12 @@ def main():
     ap.add_argument("--src", default=str(default_src))
     ap.add_argument("--out", default=str(
         Path(__file__).resolve().parent.parent /
-        "examples/companion_radio/ui-new/offband_logo.h"))
+        "src/helpers/ui/OffbandLogo.h"))
     # #749: colour output. Separate file and separate flag so a regeneration of the
     # 1-bit header can never disturb the colour asset or vice versa.
     ap.add_argument("--rgb565-out", default=str(
         Path(__file__).resolve().parent.parent /
-        "examples/companion_radio/ui-new/offband_logo_rgb565.h"))
+        "src/helpers/ui/OffbandLogoRGB565.h"))
     # The colour asset may come from a DIFFERENT lockup than the 1-bit one, and
     # normally does: mono panels want the light lockup, a dark colour panel wants
     # logo-lockup-dark.png. Sharing --src between them silently rewrites the 1-bit

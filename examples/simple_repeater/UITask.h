@@ -10,7 +10,8 @@ class UITask {
   int _prevBtnState;
   NodePrefs* _node_prefs;
   uint8_t _last_disp_mode = 0;   // #542 A2: detect live display-mode changes
-  char _version_info[32];
+  char _mc_version[16];     // #822: the component joins these itself
+  const char* _build_date;
   unsigned long _powering_off_at = 0;
   unsigned long _started_at = 0;
 

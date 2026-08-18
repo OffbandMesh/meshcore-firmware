@@ -56,6 +56,27 @@ public:
   // reads worse than the purpose-made XBM. Contract tests:
   // test/test_display_rgb565_default.
   virtual void drawRGB565(int x, int y, const uint16_t* px, int w, int h) {}
+
+  // #822: PHYSICAL panel size. width()/height() above are the 128x64 LOGICAL canvas
+  // every driver presents; on a stretched panel (the RC32 is 220x128) they are not
+  // the pixels you have. Deferred in #749 and again in #758 on the grounds that one
+  // board's splash did not justify widening the interface; the shared splash
+  // component is the third caller and cannot place artwork without it.
+  // Defaults to the logical size, which is correct wherever they are the same.
+  virtual int physicalWidth() const { return width(); }
+  virtual int physicalHeight() const { return height(); }
+
+  // #822: the driver's own colour splash artwork, or nullptr.
+  //
+  // Capability and asset are ONE declaration on purpose. The previous design gated
+  // colour art on a per-variant -D flag, which is silent when omitted -- boards were
+  // missed with it twice, and the failure looked like "this panel just has a mono
+  // splash" rather than like a bug. A driver cannot now claim colour capability
+  // without supplying the art, because they are the same override, and the artwork
+  // lives with the driver that knows its own panel size.
+  struct ColourArt { const uint16_t* px; int w, h, x, y; };
+  virtual const ColourArt* colourSplashArt() const { return nullptr; }
+  bool supportsColourArt() const { return colourSplashArt() != nullptr; }
   virtual uint16_t getTextWidth(const char* str) = 0;
   virtual void drawTextCentered(int mid_x, int y, const char* str) {   // helper method (override to optimise)
     int w = getTextWidth(str);

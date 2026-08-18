@@ -1,7 +1,9 @@
 # scripts/test_offband_version_splash.py
 #
 # Verifies the companion OLED splash compact-version derivation
-# (SplashScreen in examples/companion_radio/ui-new/UITask.cpp) by implementing
+# (offband::shortVersionInto in src/helpers/ui/OffbandSplash.cpp; that C++ is now
+# directly covered by test/test_splash, so this remains only as an independent
+# spec mirror) by implementing
 # the same pure parse in Python and testing against known-good fixtures.
 #
 # The C++ implementation is a direct translation of this algorithm; this test
