@@ -119,3 +119,9 @@ docs/radiocore/vendor/*
 # #740: PlatformIO-generated from sdkconfig.defaults -- build output, not source
 tools/diag/rc32-boot-740/bootloader-verbose/sdkconfig.*
 !tools/diag/rc32-boot-740/bootloader-verbose/sdkconfig.defaults
+
+# Build/packaging output. Binaries belong on GitHub Releases, not in the object
+# store -- git keeps every version forever and cannot delta-compress them, so
+# each rebuild would add another full copy to every clone.
+dist/
+tools/diag/rc32-tester/firmware/
