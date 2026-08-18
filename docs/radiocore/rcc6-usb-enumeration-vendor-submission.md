@@ -1,6 +1,6 @@
 # RadioCore RCC6 — USB enumeration fails after chip reset on certain hubs
 
-**Product:** Heltec RadioCore **RCC6** (ESP32-C6 + HT-RA62A / SX1262), beta programme
+**Product:** Heltec RadioCore **RCC6** (ESP32-C6 + HT-RA62A / SX1262), beta program
 **Carrier:** RCC6-L62 V1.0
 **Testing dates:** 2026-08-17 → 2026-08-18
 **Sample size:** one unit
@@ -14,7 +14,7 @@ RCC6 re-attaches to USB and **fails enumeration**, when connected through certai
 The host reports `Device Descriptor Request Failed` and the device is unusable until the
 USB cable is **physically unplugged and reconnected**. Further resets do not recover it.
 
-The board itself is completely unaffected: it boots normally, the SX1262 initialises and
+The board itself is completely unaffected: it boots normally, the SX1262 initializes and
 reports a live noise floor, and the display works. Only USB is lost. We confirmed this by
 watching the boot on a separate UART0 wire while USB was absent.
 
@@ -131,7 +131,7 @@ Retry Enumeration                             x3
 ```
 
 `PORT_LOW_SPEED` (wPortStatus bit 9) is set at connect and **persists through every retry**.
-Once the host has committed to low-speed signalling, the control transfers cannot succeed.
+Once the host has committed to low-speed signaling, the control transfers cannot succeed.
 
 ### Succeeding — Terminus FE1.1s, same board, same cable
 
@@ -207,7 +207,7 @@ condition **before the second-stage bootloader hands off to the application**:
 | Firmware role / build | eliminated | three images incl. your own test sketch |
 | Board hang or crash | eliminated | board runs normally throughout, observed on UART0 |
 | Display / SPI activity | eliminated | reproduces with the display driver absent entirely |
-| Host OS state | eliminated | full Windows reboot, behaviour unchanged |
+| Host OS state | eliminated | full Windows reboot, behavior unchanged |
 | Host USB stack | eliminated | controllers and root hubs healthy; five other USB serial devices work throughout, including on the same hub |
 | USB cable | eliminated | one cable used for every trial |
 | USB-A adapter | eliminated | same cable and adapter into a USB-A port on a passing hub — succeeds |
@@ -242,8 +242,8 @@ Stated plainly so nothing here is over-read:
 
 - **We have one RCC6.** A defect specific to our sample is not excluded, and we would like
   to know whether it reproduces on yours.
-- **We have no USB protocol analyser and have not scoped D+/D−.** All bus-level information
-  comes from the host's own hub driver tracing. The electrical behaviour is inferred.
+- **We have no USB protocol analyzer and have not scoped D+/D−.** All bus-level information
+  comes from the host's own hub driver tracing. The electrical behavior is inferred.
 - **The transient was observed on only two of four upstream ports.** The VIA hub and the
   Intel root port recorded no intermediate low-speed state. Port-status tracing cannot
   distinguish "no transient occurred" from "re-sampled too quickly to report one", so the
@@ -251,13 +251,13 @@ Stated plainly so nothing here is over-read:
 - **We have not tested watchdog, brownout, or software-reboot resets** — only external
   CHIP_PU reset and the RST button. Whether those produce the same transient is unverified.
 - Only **one failing hub silicon** has been identified. We cannot say how common that
-  behaviour is across hubs generally.
+  behavior is across hubs generally.
 
 ---
 
 ## 9. What we are asking
 
-1. **Why does the RCC6 present low-speed signalling for the first few milliseconds after a
+1. **Why does the RCC6 present low-speed signaling for the first few milliseconds after a
    chip reset**, given it is a full-speed device? Is the D+ pull-up assertion after CHIP_PU
    reset within USB specification for rise time and connect-debounce?
 2. **Does this reproduce on your units?** We have one sample and cannot distinguish a design
@@ -292,7 +292,7 @@ Unrelated to the fault, found while investigating.
 This is actively misleading: the §3.2.1 LoRa pin table appears under an RC32 heading in an
 RCC6 document, and cost us significant time establishing which board the numbers applied to.
 
-**The datasheet documents nothing about USB behaviour, strapping pins, or boot mode** — a
+**The datasheet documents nothing about USB behavior, strapping pins, or boot mode** — a
 single mention, `USB-C; B2B; 2 x 10 Pin Headers`.
 
 **A useful fact that deserves more prominence than a footnote.** Footnote ① on the

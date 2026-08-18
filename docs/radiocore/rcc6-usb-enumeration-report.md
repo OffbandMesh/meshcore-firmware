@@ -1,6 +1,6 @@
 # RCC6 — USB enumeration fails after chip reset
 
-**Unit:** Heltec RadioCore **RCC6** (ESP32-C6 + HT-RA62A / SX1262), beta programme
+**Unit:** Heltec RadioCore **RCC6** (ESP32-C6 + HT-RA62A / SX1262), beta program
 **Carrier schematic:** `RCC6-L62_V1.0`
 **Reported by:** Offband / OffbandMesh — `meshcore-firmware#818`
 **Date of testing:** 2026-08-17 → 2026-08-18
@@ -10,13 +10,13 @@
 ## 1. Summary
 
 **Following a chip-level reset (CHIP_PU / RST button / external reset line), the RCC6
-re-attaches to USB presenting LOW-SPEED signalling.** The device is full-speed, so this
+re-attaches to USB presenting LOW-SPEED signaling.** The device is full-speed, so this
 indication is incorrect. It is measured on **two different hubs from two different vendors**,
 so it originates at the board, not at any one host.
 
 What happens next depends entirely on how the upstream port handles that transient:
 
-| Upstream port | Behaviour on the transient | Outcome |
+| Upstream port | Behavior on the transient | Outcome |
 |---|---|---|
 | Terminus FE1.1s (`1A40:0101`) | re-samples ~4 ms later, reads full-speed | **enumerates normally** |
 | Realtek RTS5411 (`0BDA:5411`) | latches the first reading, never re-evaluates | **enumeration fails permanently** |
@@ -167,8 +167,8 @@ firmware, with logging mirrored to raw UART0, the application runs indefinitely:
    ... continues every 2 s
 ```
 
-The SX1262 initialises and reports a live, varying noise floor. The T108 display
-initialises and paints. Only USB is affected.
+The SX1262 initializes and reports a live, varying noise floor. The T108 display
+initializes and paints. Only USB is affected.
 
 ---
 
@@ -180,7 +180,7 @@ initialises and paints. Only USB is affected.
 | A specific firmware role | **Ruled out** | Reproduces on repeater, USB companion, and the vendor test sketch |
 | Application hang / crash | **Ruled out** | Board runs for minutes with radio and display live, observed on UART0 |
 | Display / SPI activity | **Ruled out** | Reproduces with the display driver absent entirely |
-| Host OS state | **Ruled out** | Full Windows reboot; behaviour unchanged |
+| Host OS state | **Ruled out** | Full Windows reboot; behavior unchanged |
 | Host USB stack fault | **Ruled out** | Both xHCI controllers and both root hubs report `OK`; five other USB serial devices work normally throughout, including on the same hub |
 | USB cable | **Ruled out** | One 240 W-rated USB-C cable used for every trial in this report — a controlled constant, not a variable |
 | Hub port | **Ruled out** | Reproduces on two different ports of the same hub |
@@ -229,7 +229,7 @@ limit of this instrument. So the claim that the board always emits the transient
 **one** hub having caught and corrected it, plus one having latched it.
 
 **The transient is present on both hubs.** That is the central finding, and it is what
-distinguishes a board behaviour from a host one.
+distinguishes a board behavior from a host one.
 
 Terminus FE1.1s — corrects itself:
 
@@ -360,7 +360,7 @@ attach still occurs:
 15:52:46.448  port=1  0x0303  [CONNECT|ENABLE|POWER|LOW_SPEED]   retry 3
 ```
 
-**No firmware — ours or Heltec's — is running when this happens.** The behaviour is
+**No firmware — ours or Heltec's — is running when this happens.** The behavior is
 established by the ROM and the hardware alone, which removes application software from
 consideration entirely rather than by comparison.
 
@@ -377,7 +377,7 @@ application.
 
 ### Reading
 
-`PORT_LOW_SPEED` (wPortStatus bit 9) means the hub detected low-speed signalling at attach.
+`PORT_LOW_SPEED` (wPortStatus bit 9) means the hub detected low-speed signaling at attach.
 A low-speed device pulls up **D−**; a full-speed device pulls up **D+**. The ESP32-C6
 USB-Serial/JTAG is a **full-speed** device.
 
@@ -399,7 +399,7 @@ does not reproduce. **We have not scoped D+/D-** and cannot confirm the electric
 
 ## 8. What we are asking
 
-**Why does the RCC6 present LOW-SPEED signalling on the USB bus for the first few
+**Why does the RCC6 present LOW-SPEED signaling on the USB bus for the first few
 milliseconds after a chip reset, when it is a full-speed device?**
 
 The indication is incorrect and it originates at the board — it is observed on two hubs from
@@ -413,7 +413,7 @@ ensure a clean re-attach?
 
 Specifically, we would like to know:
 
-1. Is this **expected behaviour** for ESP32-C6 native USB, or particular to this carrier?
+1. Is this **expected behavior** for ESP32-C6 native USB, or particular to this carrier?
 2. Is it **reproducible on other RCC6 units**? We have one unit. It is entirely possible
    this is a defect in our sample rather than a design issue, and we would rather establish
    that than assume either way.
@@ -453,7 +453,7 @@ This is actively misleading: the §3.2.1 LoRa pin table appears under an RC32 he
 RCC6 document, and cost us significant time establishing which board the numbers applied
 to.
 
-The datasheet also documents **nothing** about USB behaviour, strapping pins, or boot mode
+The datasheet also documents **nothing** about USB behavior, strapping pins, or boot mode
 — one mention, `USB-C; B2B; 2 x 10 Pin Headers`.
 
 **Useful documentation that is correct and was not found in the datasheet:** footnote ① on
@@ -521,15 +521,15 @@ Stated plainly so nothing here is over-read:
   hubs that reported one, not observed on all four.
 - **Only two hub silicons have been tested** — Realtek RTS5411 (latches, fails) and Terminus
   FE1.1s (re-samples, recovers). Whether other hubs group with one or the other is unknown,
-  and we have no basis for predicting which behaviour is more common.
+  and we have no basis for predicting which behavior is more common.
 - **This report has been corrected twice as testing widened.** It first claimed an
   unconditional enumeration failure (before any direct-root-port test), then claimed the
   fault required a hub (before a second hub was tried). Both were artefacts of an
   uncontrolled variable rather than of the board. The current reading — a board-side
   low-speed transient whose consequences depend on the upstream port's re-sampling
-  behaviour — is the first that accounts for every trial. Recorded here so the correction
+  behavior — is the first that accounts for every trial. Recorded here so the correction
   history is visible rather than hidden.
-- **We have no hardware USB analyser.** Port state and control-transfer results are taken
+- **We have no hardware USB analyzer.** Port state and control-transfer results are taken
   from the host's own hub driver tracing (`USBHUB3-Analytic`), not from a bus capture. That
   is host-side truth about what the hub observed; it is not an oscilloscope on D+/D-.
 - **We have not measured the D+/D- lines directly.** The low-speed detection is reported by
