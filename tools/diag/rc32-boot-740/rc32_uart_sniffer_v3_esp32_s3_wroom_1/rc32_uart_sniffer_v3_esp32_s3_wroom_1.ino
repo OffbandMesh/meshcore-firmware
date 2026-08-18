@@ -85,9 +85,9 @@
 #define SNIFFER_GENERIC_S3 1
 
 #if defined(SNIFFER_GENERIC_S3)
-  #define PIN_SNIFF_RX   18
-  #define PIN_RC32_RST   19
-  #define PIN_RC32_BOOT  21
+  #define PIN_SNIFF_RX   16
+  #define PIN_RC32_RST   17
+  #define PIN_RC32_BOOT  18
 #else
   #define PIN_SNIFF_RX   RX
   #define PIN_RC32_RST   A0
