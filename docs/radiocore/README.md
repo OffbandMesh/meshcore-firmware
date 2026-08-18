@@ -108,6 +108,34 @@ confirmed, so establish what our physical unit exposes before trusting those pin
 | LoRa | `SCLK=21  MISO=20  MOSI=22  NSS=23  DIO1=19  BUSY=10  RESET=8` |
 | Battery | `ADC_CTRL=5  VBAT_READ=6  multiplier 4.95` |
 | Button | `9` |
+| `Vext_3V3` LDO enable | `11` — **does NOT power the radio**, see below |
+| `SELECT` (RF path?) | `7` — **unresolved**, see below |
+
+#### The two RCC6 power/RF rails you will otherwise re-derive
+
+**`Vext_3V3` (GPIO11) does NOT gate the LoRa supply** — `[resolved: #805]`. The board has
+two 3V3 regulators and only one is unconditional:
+
+| Rail | Regulator | `EN` | Default |
+|---|---|---|---|
+| `VDD_3V3` | U1 `CE6260B33M` | tied to `IN` | **always on** — and this is what powers the RA62A (U5 pin 10) |
+| `Vext_3V3` | U3 `TLV75733PDBVR` | `VEXT_LDO_Ctrl` = **GPIO11**, 100 K pulldown | off until firmware asserts it |
+
+`Vext_3V3`'s **only** destination is **U5 pin 25, which the RA62A symbol labels `NC`**. The
+net name appears exactly twice on the whole schematic — the U3 output and that pin. Its
+10 µF + 100 nF decoupling makes it look like a module supply; it is one, it just lands on a
+pin this population does not connect. Most likely provisioned for the HaLow module on the
+shared carrier `[hypothesis:]`.
+
+Practical effect: **the radio comes up whether or not you touch GPIO11.** Asserting it is
+harmless and costs the LDO's quiescent draw for no function.
+
+**`SELECT` = GPIO7 is NOT resolved** — and it is the one that can bite quietly. The module
+is marked `RA62A_LF/RA62A_HF`, a dual LF/HF part, so `SELECT` plausibly chooses the RF path.
+Neither our variant nor n30nex drives it. If it *is* a band select, the wrong default
+presents as **mediocre range, not a clean failure** — the failure mode nobody files a bug
+for. Settle it with an RSSI/range comparison against a known peer, GPIO7 driven each way,
+before trusting RF numbers off this board. Tracked on #805.
 
 **Only three LoRa pins reach the header** — `SCLK=21`, `MOSI=22`, `NSS=23`, which is
 exactly the block the diagram rings with a dashed "LoRa Module" box (pins 13/14/15).
