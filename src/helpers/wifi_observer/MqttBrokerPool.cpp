@@ -607,6 +607,10 @@ void MqttBrokerPool::rotateTlsIfDue(uint32_t now_ms) {
     // the scheduler permanently (verified on hardware: en 5->4, victim absent
     // from [rot] for the rest of the run). releaseClient() keeps slot_/cfg_ so
     // the cooldown -> budget -> reconcileSlot -> tryConnect path can bring it back.
+    // #739: the victim held the budget a full dwell Up with no error (an errored
+    // broker would be Backoff/Failed, not the Up broker we selected) -- credit a
+    // clean dwell toward its rehabilitation before releasing it.
+    brokers_[victim].noteCleanDwell();
     brokers_[victim].releaseClient();
     reconciling_[victim] = false;
 #if defined(ARDUINO)
@@ -679,13 +683,13 @@ void MqttBrokerPool::workerLoop() {
                               "[rot] heap=%u tls=%u live=%u/%u dwleft=%us |",
                               (unsigned)ESP.getFreeHeap(), (unsigned)tls_cfg, (unsigned)tls_live,
                               (unsigned)OFFBAND_MAX_LIVE_TLS, (unsigned)dwleft);
-                static const char* AB[] = {"DN","CO","UP","BK","HC","HH","HB"};  // #715: HB=held(budget)
+                static const char* AB[] = {"DN","CO","UP","BK","HC","HH","HB","FL"};  // #715 HB=held(budget), #739 FL=failed
                 for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS && o < (int)sizeof(L) - 24; ++s) {
                     const MqttBroker& b = brokers_[s];
                     if (!b.isConfigured() || !isTlsTransport(b.config())) continue;
                     uint8_t stv = (uint8_t)b.runtime().state;
                     o += snprintf(L + o, (size_t)(sizeof(L) - o), " s%u:%s", (unsigned)s,
-                                  stv < 7 ? AB[stv] : "?");
+                                  stv < 8 ? AB[stv] : "?");
                     if (b.runtime().state == BrokerState::Up)
                         o += snprintf(L + o, (size_t)(sizeof(L) - o), "/%us",
                                       (unsigned)((now - b.runtime().went_up_ms) / 1000U));
@@ -728,6 +732,20 @@ void MqttBrokerPool::workerLoop() {
             if (reconciling_[s]) continue;
             MqttBroker& b = brokers_[s];
             if (!b.isConfigured()) continue;
+            // #739/#746: a terminally-Failed broker must hold NO client -- otherwise
+            // esp-mqtt auto-reconnect (which stays ON for normal brokers, its
+            // reconnect being the pool's safety net) would fire onConnected and
+            // resurrect it. Destroy its client HERE on the worker task (releaseClient
+            // is a blocking esp_mqtt_client_destroy -- worker-only, #53). Idempotent:
+            // once client-less, hasClient() is false and this no-ops. It is never
+            // re-driven (Failed is absent from the condition below), so it stays down
+            // until the operator re-enables/reconfigures. This is the SURGICAL fix --
+            // the global disable_auto_reconnect broke normal reconnection (soak: 96%
+            // no-TLS-up, a healthy broker terminally failed).
+            if (b.runtime().state == BrokerState::Failed) {
+                if (b.hasClient()) b.releaseClient();
+                continue;
+            }
             b.loop(now);
             BrokerState st = b.runtime().state;
             // Re-drive idle/held slots. HeldNoClock releases when the clock is

@@ -108,6 +108,7 @@ static const char* stateStr(BrokerState s) {
         // "held(no-heap)" wording sent operators hunting for a memory problem.
         case BrokerState::HeldNoHeap:  return "held(low-heap)";
         case BrokerState::HeldBudget:  return "waiting-turn";
+        case BrokerState::Failed:      return "failed(gave-up)";
         default:                       return "?";
     }
 }
@@ -131,6 +132,11 @@ static const char* brokerStateWire(BrokerState s) {
         // that is the remaining half of #715, not an oversight.
         case BrokerState::HeldNoHeap:  return "held_no_heap";
         case BrokerState::HeldBudget:  return "held_no_heap";
+        // #739: Failed is TERMINAL, but the wire token is a coordinated
+        // fast-follow with the client. Until then map to "backoff" (nearest
+        // existing token) so no client breaks on an unknown state. Serial/CLI
+        // show the true "failed(gave-up)" via stateStr.
+        case BrokerState::Failed:      return "backoff";
         default:                       return "down";
     }
 }

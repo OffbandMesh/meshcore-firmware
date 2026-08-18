@@ -278,9 +278,17 @@ bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
     if (rt_.state == BrokerState::Connecting || rt_.state == BrokerState::Up) {
         return true;
     }
+    // #739: Failed is terminal -- give up until the operator re-enables/reconfigures.
+    // Never burns a rotation turn or a connect attempt.
+    if (rt_.state == BrokerState::Failed) {
+        return false;
+    }
     if (rt_.state == BrokerState::Backoff) {
         uint32_t elapsed = now_ms - rt_.last_attempt_ms;
-        if (elapsed < brokerBackoffMs(rt_.retry_count)) {
+        // #739: backoff length tracks the STICKY penalty, not retry_count (which a
+        // single success zeroes). A flaky broker escalates instead of oscillating
+        // at the schedule floor.
+        if (elapsed < brokerBackoffMs(health_.fail_penalty)) {
             return false;
         }
     }
@@ -336,9 +344,9 @@ bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
         // to esp-mqtt's default 120 (-> CONNACK 0x02, #506).
         populateBaseConfig(mqcfg);
         if (!auth_->apply(mqcfg, now_ms)) {
-            rt_.state = BrokerState::Backoff;
             rt_.retry_count++;
             rt_.last_error_class = BrokerErrorClass::Auth;
+            noteFailure();   // #739
             return false;
         }
         esp_mqtt_set_config(client_, &mqcfg);
@@ -363,9 +371,9 @@ bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
     }
     esp_err_t err = esp_mqtt_client_start(client_);
     if (err != ESP_OK) {
-        rt_.state = BrokerState::Backoff;
         rt_.retry_count++;
         rt_.last_error_class = BrokerErrorClass::Other;
+        noteFailure();   // #739
         return false;
     }
     started_ = true;
@@ -527,6 +535,11 @@ bool MqttBroker::hasClient() const {
 }
 
 void MqttBroker::onConnected(uint32_t now_ms) {
+    // #739/#746: never let a connect event resurrect a terminally-Failed broker.
+    // Primary defense is the pool reaping a Failed broker's client (nothing to
+    // reconnect); this is belt-and-suspenders for a connect event in flight when
+    // the broker went Failed. Failed clears only by operator re-enable/reconfigure.
+    if (rt_.state == BrokerState::Failed) return;
     rt_.state = BrokerState::Up;
     rt_.went_up_ms = now_ms;   // #175: dwell clock for TLS rotation
     rt_.retry_count = 0;
@@ -536,10 +549,19 @@ void MqttBroker::onConnected(uint32_t now_ms) {
 void MqttBroker::onDisconnected(uint32_t now_ms, BrokerErrorClass err) {
     // Move to Backoff (esp_mqtt will not auto-retry; pool's tryConnect
     // honors backoff schedule and re-initiates).
-    rt_.state = BrokerState::Backoff;
     rt_.last_error_ms = now_ms;
     rt_.retry_count++;
     rt_.last_error_class = err;
+    noteFailure();   // #739: escalate penalty; may promote Backoff -> Failed
+}
+
+// #739: single choke point for a connection failure. Escalates the health
+// penalty (sticky -- a bare later success will not clear it) and picks the
+// resulting state: Failed once the penalty passes the terminal threshold,
+// otherwise Backoff. Callers have already set last_error_* / retry_count.
+void MqttBroker::noteFailure() {
+    health_.onFailure();
+    rt_.state = health_.isTerminal() ? BrokerState::Failed : BrokerState::Backoff;
 }
 
 void MqttBroker::onError(uint32_t now_ms, BrokerErrorClass err) {

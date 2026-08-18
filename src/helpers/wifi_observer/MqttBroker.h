@@ -7,6 +7,7 @@
 #pragma once
 #include "ConfigSchema.h"
 #include "MqttAuth.h"
+#include "BrokerHealth.h"   // #739: connection-health / penalty tracker
 #include "MqttPayload.h"
 
 #ifdef ARDUINO
@@ -42,6 +43,13 @@ enum class BrokerState : uint8_t {
                       // problem caused repeated real-world misdiagnosis -- including
                       // the field report that sent us heap-trimming for a scheduling
                       // defect. Do NOT re-merge these.
+    Failed      = 7,  // #739: given up on after OFFBAND_BROKER_TERMINAL_PENALTY
+                      // escalations. A distinct TERMINAL state -- the pool drops it
+                      // from the rotation candidate set and logs loudly, so a
+                      // persistently-unreachable configured broker stops consuming a
+                      // rotation turn every backoff cycle. NOT an operator disable
+                      // (that stays Down); the operator must re-enable/reconfigure
+                      // to clear it. Distinct so the client can render it later.
 };
 
 enum class BrokerErrorClass : uint8_t {
@@ -147,6 +155,11 @@ public:
     uint8_t                    slot()    const { return slot_; }
     const BrokerConfig&        config()  const { return cfg_; }
     const BrokerRuntimeState&  runtime() const { return rt_; }
+    // #739: read-only health for status/rotation; noteCleanDwell() is called by
+    // the pool when this broker is rotated out after holding a FULL dwell Up
+    // with no error -- the only event that earns rehabilitation.
+    const BrokerHealth&        health() const { return health_; }
+    void                       noteCleanDwell() { health_.onCleanDwell(); }
 
     // #175: true if the esp_mqtt client handle currently exists. shutdown()
     // destroys it (client_ = nullptr) to free the ~60KB TLS context without
@@ -168,11 +181,13 @@ private:
     // 0x02 diagnosed in #506. Centralizing it makes every build site identical.
     // Auth is applied by the caller AFTER this (auth_->apply()).
     void populateBaseConfig(esp_mqtt_client_config_t& mqcfg) const;
+    void noteFailure();   // #739: escalate penalty, set Backoff or Failed
 #endif
 
     uint8_t              slot_  = 0xFF;
     BrokerConfig         cfg_;
     BrokerRuntimeState   rt_;
+    BrokerHealth         health_;   // #739: sticky failure penalty + rehab
     MqttAuth*            auth_  = nullptr;  // owned
 
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
