@@ -378,7 +378,7 @@ def find_in_registry(
 # Resolve a device name to a present port. Used by every Tier A and Tier B mode.
 # Returns the (port_info, entry) tuple on success; refuses cleanly on failure.
 # ---------------------------------------------------------------------------
-def resolve_device(name: str, registry: dict) -> tuple[dict, dict]:
+def resolve_device(name: str, registry: dict, known_port: str = None) -> tuple[dict, dict]:
     if name not in (registry.get("devices") or {}):
         if name in (registry.get("foreign_devices") or {}):
             refuse(
@@ -446,6 +446,47 @@ def resolve_device(name: str, registry: dict) -> tuple[dict, dict]:
                     if p["vid_pid"] in entry_vid_pids
                     and not norm_serial(p.get("usb_serial"))
                 ]
+                # #468/human-authority: an explicit --known-port lets the operator
+                # ASSERT which present bridge candidate is this device when passive ID
+                # cannot (shared/default serials, registry class-overlap). It bypasses
+                # ONLY the passive-GUESS refusals (rivals / multi-candidate) below --
+                # the named port must still be PRESENT and a serial-less candidate of
+                # the entry's own bridge class, and Tier-A STILL MAC-verifies before
+                # any write (_verify_bridge_mac, via bridge_provisional). The operator
+                # names the port; the SoC MAC still decides. A port that carries a real
+                # serial has identity and can never be claimed this way.
+                if known_port:
+                    kp = known_port.strip().upper()
+                    named = [p for p in cands if p["com"].upper() == kp]
+                    if not named:
+                        present_summary = ", ".join(
+                            f"{p['com']}={p['vid_pid']} serial={p.get('usb_serial') or '(none)'}"
+                            for p in ports
+                        ) or "(no ports)"
+                        refuse(
+                            f"--known-port {known_port} is not a present serial-less "
+                            f"{sorted(entry_vid_pids)} bridge candidate for '{name}'. A "
+                            "named port must be attached and of the device's bridge class; "
+                            "the SoC MAC check still guards the flash. "
+                            f"Present: {present_summary}"
+                        )
+                    port = dict(named[0])
+                    port["bridge_provisional"] = True
+                    # #503: operator_asserted marks that a HUMAN named this exact port,
+                    # not that the tool guessed by VID:PID class. Read-only consumers that
+                    # cannot MAC-verify (monitor/info) treat this as satisfying the
+                    # owner-approval the #503 gate exists to force -- it is a MORE specific
+                    # authorization than --approve-class-match ("approve a class guess"),
+                    # so honoring it does not weaken the guard. Tier-A flash still
+                    # MAC-verifies regardless (bridge_provisional stays true).
+                    port["operator_asserted"] = True
+                    err(
+                        f"NOTE: '{name}' matched by operator-asserted --known-port "
+                        f"{port['com']} (bridge class {bridge_chip(port['vid_pid'])}). "
+                        "Passive guess-refusals bypassed by human authority; Tier-A will "
+                        "verify the SoC MAC before touching flash (#468)."
+                    )
+                    return (port, entry)
                 rivals = [
                     n for n, e in (registry.get("devices") or {}).items()
                     if n != name
@@ -1150,7 +1191,8 @@ def _confirm_artifact(args, token: dict, port: dict) -> int:
 
 def cmd_preview(args, registry):
     """Tier A stage 1: resolve target, validate firmware, write token, exit 2."""
-    port, entry = resolve_device(args.device, registry)
+    port, entry = resolve_device(args.device, registry,
+                                 known_port=getattr(args, "known_port", None))
     if getattr(args, "artifact", None):
         return _preview_artifact(args, port, entry)
     if getattr(args, "erase", False):
@@ -1231,8 +1273,11 @@ def cmd_confirm(args, registry):
             f"'{args.device}'. Cannot proceed."
         )
 
-    # Re-resolve and confirm nothing changed since preview.
-    port, entry = resolve_device(args.device, registry)
+    # Re-resolve and confirm nothing changed since preview. --known-port (if used)
+    # must resolve to the SAME port recorded in the token, or the port-changed
+    # refusal below fires -- so a confirm cannot assert a different port than preview.
+    port, entry = resolve_device(args.device, registry,
+                                 known_port=getattr(args, "known_port", None))
     if port["com"] != token["port"]:
         refuse(
             f"port changed since preview ({token['port']} -> {port['com']}). "
@@ -1412,24 +1457,37 @@ def cmd_monitor(args, registry):
     Tracking: Strycher/LoRa#302 (this fix). Prior art comment lives in the
     observer env's platformio.ini.
     """
-    port, _ = resolve_device(args.device, registry)
+    port, _ = resolve_device(args.device, registry,
+                             known_port=getattr(args, "known_port", None))
     if port.get("bridge_provisional"):
         # #503: a provisional match consumed by a command that never MAC-verifies
-        # is a class-decided identification -- owner approval required.
-        if not CLASS_MATCH_APPROVED:
+        # is a class-decided identification -- owner approval required. An explicit
+        # --known-port (operator_asserted) IS that owner authorization, in a more
+        # specific form, so it satisfies the gate without --approve-class-match.
+        if port.get("operator_asserted"):
+            err(
+                f"UNVERIFIED: '{args.device}' matched by operator-asserted --known-port "
+                f"{port['com']} (bridge-class; monitor cannot MAC-verify without "
+                "resetting the chip). Human named the port; if the wrong board were on "
+                f"{port['com']} the operator asserted it anyway -- treat output with the "
+                "usual bridge caution (#468/#503)."
+            )
+        elif not CLASS_MATCH_APPROVED:
             refuse(
                 f"'{args.device}' resolved only provisionally (bridge class). monitor "
                 "cannot MAC-verify (it must not reset the chip), so this would be a "
                 "VID:PID-decided match. Re-run with --approve-class-match after "
-                "explicit owner approval in chat (#503)."
+                "explicit owner approval in chat, or name the port with --known-port "
+                "(#503)."
             )
-        err(
-            f"UNVERIFIED: '{args.device}' matched provisionally (bridge-class -- "
-            "identity not MAC-verified; monitor cannot verify without resetting "
-            "the chip). Owner-approved class match in effect (#503). If another "
-            "bridge board could be attached, treat this console output with "
-            "suspicion (#468)."
-        )
+        else:
+            err(
+                f"UNVERIFIED: '{args.device}' matched provisionally (bridge-class -- "
+                "identity not MAC-verified; monitor cannot verify without resetting "
+                "the chip). Owner-approved class match in effect (#503). If another "
+                "bridge board could be attached, treat this console output with "
+                "suspicion (#468)."
+            )
     env_suffix = f" (env={args.env})" if args.env else ""
     out(f"Opening monitor on {port['com']} for {args.device} at {args.baud} baud" + env_suffix)
     if not args.env:
@@ -1473,19 +1531,30 @@ def cmd_monitor(args, registry):
 
 def cmd_info(args, registry):
     """Tier B: meshtastic --info. Reads device state, does not reset."""
-    port, _ = resolve_device(args.device, registry)
+    port, _ = resolve_device(args.device, registry,
+                             known_port=getattr(args, "known_port", None))
     if port.get("bridge_provisional"):
-        if not CLASS_MATCH_APPROVED:
+        # #503: --known-port (operator_asserted) is the owner authorization the gate
+        # forces, in a more specific form than --approve-class-match -- honor it.
+        if port.get("operator_asserted"):
+            err(
+                f"UNVERIFIED: '{args.device}' matched by operator-asserted --known-port "
+                f"{port['com']} (bridge-class, not MAC-verified). Read-only query; "
+                "verify output plausibility (#468/#503)."
+            )
+        elif not CLASS_MATCH_APPROVED:
             refuse(
                 f"'{args.device}' resolved only provisionally (bridge class) and info "
                 "does not MAC-verify -- a VID:PID-decided match. Re-run with "
-                "--approve-class-match after explicit owner approval in chat (#503)."
+                "--approve-class-match after explicit owner approval in chat, or name "
+                "the port with --known-port (#503)."
             )
-        err(
-            f"UNVERIFIED: '{args.device}' matched provisionally (bridge-class, "
-            "not MAC-verified). Owner-approved class match in effect (#503). "
-            "Read-only query; verify output plausibility (#468)."
-        )
+        else:
+            err(
+                f"UNVERIFIED: '{args.device}' matched provisionally (bridge-class, "
+                "not MAC-verified). Owner-approved class match in effect (#503). "
+                "Read-only query; verify output plausibility (#468)."
+            )
     out(f"Running meshtastic --info on {port['com']} for {args.device}")
     cmd = ["meshtastic", "--port", port["com"], "--info"]
     rc = subprocess.call(cmd)
@@ -2078,10 +2147,21 @@ def build_parser() -> argparse.ArgumentParser:
                    help="ESP32 artifact-flash only: write the full -merged.bin at 0x0 "
                         "including NVS (factory wipe). Without it, an app .bin is written "
                         "to app0 and otadata is reset, preserving NVS.")
+    s.add_argument("--known-port", default=None, metavar="COMx",
+                   help="operator asserts WHICH present port is this BRIDGE-CLASS device "
+                        "(CP2102/CH340) when passive ID cannot disambiguate it (shared/"
+                        "default serial, registry class-overlap). Bypasses only the "
+                        "passive-guess refusals; the named port must be present + of the "
+                        "device's bridge class, and confirm STILL MAC-verifies before any "
+                        "write. Human authority names the port; the SoC MAC decides (#468).")
 
     s = sub.add_parser("confirm", help="execute the staged Tier A flash")
     s.add_argument("device", help="must match the device in the token")
     s.add_argument("--token", required=True, help="path to token file from preview")
+    s.add_argument("--known-port", default=None, metavar="COMx",
+                   help="same operator port-assertion as preview --known-port; must match "
+                        "the port recorded in the token. confirm always MAC-verifies a "
+                        "provisional bridge match before flashing (#468).")
     s.add_argument("--in-bootloader", action="store_true",
                    help="device's ROM bootloader keeps the same USB identity "
                         "(e.g. Heltec V4 TFT bootloader stays PID 1001 on the same "
@@ -2092,6 +2172,11 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("monitor", help="open serial monitor (Tier B; no reset on properly-configured envs -- see --env)")
     s.add_argument("device")
     s.add_argument("--baud", type=int, default=115200)
+    s.add_argument("--known-port", default=None, metavar="COMx",
+                   help="operator asserts WHICH present port is this BRIDGE-CLASS device "
+                        "when passive ID cannot disambiguate it (same as preview/confirm "
+                        "--known-port). Read-only monitor: no MAC gate, so the named port "
+                        "must still be present and of the device's bridge class (#468).")
     s.add_argument("--env", default=None,
                    help="pio env (e.g. heltec_v3_companion_observer_wifi). "
                         "REQUIRED on V3 CP2102 SKUs to pick up env-set "
@@ -2108,6 +2193,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("info", help="meshtastic --info (Tier B)")
     s.add_argument("device")
+    s.add_argument("--known-port", default=None, metavar="COMx",
+                   help="operator asserts WHICH present port is this BRIDGE-CLASS device "
+                        "when passive ID cannot disambiguate it (same as monitor "
+                        "--known-port). Read-only query; the named port must still be "
+                        "present and of the device's bridge class (#468).")
 
     s = sub.add_parser("read-mac", help="esptool read_mac (Tier A, resets chip)")
     s.add_argument("device")

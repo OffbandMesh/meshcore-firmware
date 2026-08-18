@@ -235,6 +235,59 @@ try:
 except Refusal:
     check("503: bridge cannot claim serial-bearing port", True)
 
+# --- #808: --known-port operator port-assertion ---------------------------
+# When a bridge is passively unidentifiable (serial-less + a serial-less
+# registry rival, or >1 present candidate), the operator may name the exact
+# port. This bypasses ONLY the passive-guess refusals; the port must still be
+# present + a serial-less candidate of the entry's bridge class, and confirm
+# still MAC-verifies (bridge_provisional stays set). reg1 = no rival, reg2 =
+# rival "hv3-other" present (the case that refuses passively, above).
+
+# 1. --known-port bypasses the rival refusal and marks the match operator_asserted.
+with_ports([BRIDGE_PORT])
+port, entry = pf.resolve_device("hv3", reg2, known_port="COM6")
+check("808: known-port bypasses rival refusal",
+      port.get("bridge_provisional") is True and port["com"] == "COM6",
+      f"got {port}")
+check("808: known-port sets operator_asserted",
+      port.get("operator_asserted") is True, f"got {port}")
+
+# 2. --known-port disambiguates when >1 class candidate is present (the
+#    two-port case that otherwise refuses).
+with_ports([BRIDGE_PORT, dict(BRIDGE_PORT, com="COM9")])
+port, _ = pf.resolve_device("hv3", reg1, known_port="COM9")
+check("808: known-port picks the named port among candidates",
+      port["com"] == "COM9", f"got {port.get('com')}")
+
+# 3. Case-insensitive: lowercase "com6" resolves COM6.
+with_ports([BRIDGE_PORT])
+port, _ = pf.resolve_device("hv3", reg1, known_port="com6")
+check("808: known-port is case-insensitive", port["com"] == "COM6")
+
+# 4. --known-port naming an ABSENT port refuses (no blind trust).
+with_ports([BRIDGE_PORT])
+try:
+    pf.resolve_device("hv3", reg1, known_port="COM7")
+    check("808: known-port absent refuses", False, "no refusal")
+except Refusal as e:
+    check("808: known-port absent refuses",
+          "not a present" in str(e).lower() or "COM7" in str(e), f"got {e}")
+
+# 5. --known-port may NOT claim a serial-BEARING port (identity exists).
+with_ports([dict(BRIDGE_PORT, usb_serial="REPROGRAMMED123")])
+try:
+    pf.resolve_device("hv3", reg1, known_port="COM6")
+    check("808: known-port cannot claim serial-bearing port", False, "no refusal")
+except Refusal:
+    check("808: known-port cannot claim serial-bearing port", True)
+
+# 6. The MAC gate stays armed: known-port returns bridge_provisional, so
+#    _verify_bridge_mac (gated on it) still fires in confirm before any write.
+with_ports([BRIDGE_PORT])
+port, _ = pf.resolve_device("hv3", reg1, known_port="COM6")
+check("808: known-port stays MAC-gated (bridge_provisional set)",
+      port.get("bridge_provisional") is True)
+
 print()
 if FAILURES:
     print(f"{len(FAILURES)} FAILURE(S): {FAILURES}")
