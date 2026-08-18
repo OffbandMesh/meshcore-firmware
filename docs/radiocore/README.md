@@ -113,8 +113,9 @@ confirmed, so establish what our physical unit exposes before trusting those pin
 
 #### The two RCC6 power/RF rails you will otherwise re-derive
 
-**`Vext_3V3` (GPIO11) does NOT gate the LoRa supply** — `[resolved: #805]`. The board has
-two 3V3 regulators and only one is unconditional:
+**`Vext_3V3` (GPIO11) almost certainly does NOT gate the LoRa supply** —
+`[schematic-derived: #805 — NOT measured]`. The board has two 3V3 regulators and only one
+is unconditional:
 
 | Rail | Regulator | `EN` | Default |
 |---|---|---|---|
@@ -127,8 +128,15 @@ net name appears exactly twice on the whole schematic — the U3 output and that
 pin this population does not connect. Most likely provisioned for the HaLow module on the
 shared carrier `[hypothesis:]`.
 
-Practical effect: **the radio comes up whether or not you touch GPIO11.** Asserting it is
-harmless and costs the LDO's quiescent draw for no function.
+Practical effect: **the radio should come up whether or not you touch GPIO11.** The variant
+asserts it anyway, deliberately: this is a schematic inference, not a measurement, and the
+asymmetry favours asserting — if the inference is right it costs quiescent draw, if it is
+wrong not asserting is a silent dead SX1262.
+
+**To settle it, measure.** Multimeter on U5 pin 10 and pin 25 with GPIO11 de-asserted and
+asserted. That is cheap and definitive; everything above is inference from the PDF, and the
+part is dual-variant (`RA62A_LF/RA62A_HF`), so an `NC` pin on this population could be live
+on the other.
 
 **`SELECT` = GPIO7 is NOT resolved** — and it is the one that can bite quietly. The module
 is marked `RA62A_LF/RA62A_HF`, a dual LF/HF part, so `SELECT` plausibly chooses the RF path.

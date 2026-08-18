@@ -1,9 +1,10 @@
 # Curated release env set for release.yml (epic #14 / T3 / #17).
 # One PlatformIO env per line. Lines starting with # and blank lines are ignored.
-# 85 active envs; verified against variants/*/platformio.ini. GATED (CI-built,
-# not released): heltec_v4_repeater_telemetry (#20, runtime-config secrets) and
-# the three companion_radio_wifi envs (#325, runtime WiFi provisioning) -- all
-# bake placeholder creds at compile time; uncomment when their gate issue lands.
+# 97 active envs; verified against variants/*/platformio.ini. GATED (CI-built,
+# not released): heltec_v4_repeater_telemetry (#20, runtime-config secrets), the
+# three companion_radio_wifi envs (#325, runtime WiFi provisioning) -- all bake
+# placeholder creds at compile time -- and the two RCC6 observer envs (#624,
+# unmeasured heap on C6). Uncomment when the respective gate clears.
 
 # RAK4631 (nRF52)
 RAK_4631_companion_radio_ble
@@ -98,6 +99,8 @@ Heltec_E290_companion_usb
 #   companion_radio_wifi envs. (Unlike those, it is not CI-built either -- no
 #   rc32 env is in ci.yml yet; tracked separately.)
 # The _diag / _diag_nocrashlog envs are diagnostic instruments, not products.
+#   This is the RULE. The RCC6 section below carries an owner-approved EXCEPTION
+#   to it, scoped to that board while it is beta -- it does not change this.
 heltec_rc32_companion_radio_ble
 heltec_rc32_companion_radio_usb
 heltec_rc32_repeater
@@ -106,34 +109,59 @@ heltec_rc32_room_server
 # Heltec RadioCore RCC6-L62 (ESP32-C6 + HT-RA62A LoRa) -- #806 / #624
 # Board 2 of 4 of the RadioCore beta set. L62 (LoRa) carrier only.
 #
-# PROD builds -- Companion (BLE + USB), Observer, Repeater. All display-enabled:
-# the board ships with the T108 panel, so the display build IS the product, the
-# same way heltec_rc32_repeater is the display build for the RC32.
+# PROD builds -- Companion (BLE + USB) and Repeater; Observer is BUILT but GATED,
+# see below. All display-enabled: the board ships with the T108 panel, so the
+# display build IS the product, the same way heltec_rc32_repeater is for the RC32.
 heltec_rcc6_companion_radio_ble
 heltec_rcc6_companion_radio_usb
-heltec_rcc6_companion_observer_wifi
 heltec_rcc6_repeater_display
+#heltec_rcc6_companion_observer_wifi   # GATED: uncomment after RCC6 heap is
+#   MEASURED ON HARDWARE. It builds and is in the build matrix -- it is not
+#   released. docs/radiocore/README.md ("RCC6 -- ESP32-C6 heap headroom") makes
+#   this the FIRST gating task on #624, ahead of feature work, and the numbers say
+#   why: OFFBAND_TLS_HEAP_FLOOR_BYTES is 80 KB guarding a ~72 KB TLS transient,
+#   while a community RCC6 build reports 91 KB free / 17 KB minimum. That is ~11 KB
+#   of headroom with a low-water mark far beneath the floor. Shipping this before
+#   measuring risks the HV3 heap-floor deadlock shape (#521/#534) on tester
+#   hardware, presenting as intractable runtime faults rather than clean failures.
 #
 # DIAG builds -- SAME roles, plus OFFBAND_MESHLOG_UART0 + OFFBAND_FORCE_CAPLOG.
 #
-# ⚠ DELIBERATE DEPARTURE from the standing line above that "_diag envs are
-# diagnostic instruments, not products" (which still holds for the RC32 and
-# everything else). Owner-directed for the RCC6 BETA specifically: this board
-# drops off USB after a chip reset on some hubs (#818), and when it does, the
-# application log dies with it because Serial IS the USB CDC. The diag builds
-# mirror the log to raw UART0, so a beta tester with a serial adapter can still
-# produce evidence instead of "it stopped working". Revisit when RCC6 leaves beta.
+# ⚠ APPROVED EXCEPTION -- OWNER DECISION. NOT THE RULE.
+#
+# THE RULE STILL STANDS: diag envs are diagnostic instruments, not products, and
+# they are not released. That holds for the RC32 and for every other board here.
+# Do NOT cite these entries as precedent for releasing diag builds elsewhere.
+#
+# WHY THE EXCEPTION EXISTS: the project now potentially supports beta users on
+# beta equipment -- a class of user that did not exist when the rule was written.
+# A beta tester on unproven hardware needs to be able to produce evidence, and on
+# THIS board that is not theoretical: the RCC6 drops off USB after a chip reset on
+# some hubs (#818), and when it does the application log dies with it, because
+# Serial IS the USB CDC. The diag builds mirror the log to raw UART0, so a tester
+# with a serial adapter can send back a boot trace instead of "it stopped working".
+#
+# SCOPE: RCC6 only, while RCC6 is beta. Revisit when the board leaves beta.
+# Extending this to another board is a fresh owner decision, not an inheritance.
+# PRIVACY POSTURE, stated so nobody has to infer it: these builds do NOT log more
+# than a prod build. OFFBAND_MESHLOG_UART0 is a TRANSPORT MIRROR -- the same MeshLog
+# lines that already go to USB CDC are also written to raw UART0. Existing redaction
+# holds (WiFi PSK and broker password are redacted at their log sites). What DOES
+# change: OFFBAND_FORCE_CAPLOG pins logging ON, so a tester cannot turn it off, and
+# UART0 is exposed on carrier header pin 12 -- reachable without USB. Anyone who can
+# reach that header can already reach the USB port. Testers should be told these are
+# instrumented builds.
 heltec_rcc6_companion_radio_ble_diag
 heltec_rcc6_companion_radio_usb_diag
-heltec_rcc6_companion_observer_wifi_diag
 heltec_rcc6_repeater_display_diag
+#heltec_rcc6_companion_observer_wifi_diag   # GATED with its prod sibling above.
 #
 # heltec_rcc6_repeater -- the NO-display repeater. Bring-up instrument (smallest
 #   surface that proves boot + radio), not a product. Not released.
-# heltec_rcc6_companion_observer_wifi is the FIRST ESP32-C6 observer in this
-#   tree -- every other observer env is ESP32/S3. It builds; it wants hardware
-#   confirmation (MQTT uplink + heap headroom on this part) before testers rely
-#   on it. Tracked on #624.
+# heltec_rcc6_companion_observer_wifi is also the FIRST ESP32-C6 observer in
+#   this tree -- every other observer env is ESP32/S3. That is a second reason
+#   for the gate above, independent of the heap numbers: no C6 has carried this
+#   role before, so there is no prior art to lean on. Tracked on #624.
 
 # Heltec T096 (nRF52)
 Heltec_t096_companion_radio_ble
