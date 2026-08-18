@@ -19,7 +19,20 @@ extern AutoDiscoverRTCClock rtc_clock;
 extern SensorManager sensors;
 
 #ifdef DISPLAY_CLASS
+  #include <helpers/ui/MomentaryButton.h>
+  // The driver header must be included, not merely named by DISPLAY_CLASS --
+  // otherwise `extern DISPLAY_CLASS display;` declares an incomplete type and
+  // every consumer fails with "'display' was not declared in this scope".
+  #ifdef HELTEC_RCC6_WITH_DISPLAY
+    #include <helpers/ui/NV3001BDisplay.h>
+  #else
+    #include <helpers/ui/NullDisplayDriver.h>
+  #endif
   extern DISPLAY_CLASS display;
+  // examples/simple_repeater/UITask.cpp uses user_btn under
+  // `#if defined(PIN_USER_BTN) && defined(DISPLAY_CLASS)`, so a display build
+  // must provide it or it will not link.
+  extern MomentaryButton user_btn;
 #endif
 
 bool radio_init();
