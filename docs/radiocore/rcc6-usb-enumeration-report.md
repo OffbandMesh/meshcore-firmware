@@ -66,6 +66,13 @@ RCC6 (303A:1001) -> Realtek RTS5411 (0BDA:5411) -> Intel xHCI root hub
 RCC6 (303A:1001) -> Terminus FE1.1s (1A40:0101) -> VIA Labs (2109:2822) -> Intel xHCI root hub
 ```
 
+**SUCCEEDS** — same Baseus dock, USB-A port, same cable WITH the manufacturer's integrated
+A adapter (this is the test that eliminated the adapter as a variable):
+
+```
+RCC6 (303A:1001) -> VIA Labs (2109:2822) -> Intel xHCI root hub
+```
+
 **SUCCEEDS** — direct, no intermediate hub:
 
 ```
@@ -81,17 +88,10 @@ for every trial in this report. Where a USB-A port was required, the manufacture
 integrated USB-A adapter — permanently attached to that cable — was fitted. Cable quality,
 gauge and construction are therefore eliminated as variables.
 
-> ⚠ **One variable remains unisolated: whether that A adapter is in line.** The failing
-> trials were into USB-A ports (adapter fitted); the passing Baseus trials were into the
-> dock's front USB-C port (adapter removed). So adapter-presence still tracks the outcome,
-> even though the cable does not.
->
-> There is no obvious electrical mechanism — D+/D- are routed identically either way, and
-> the RCC6's CC1/CC2 are passive 5.1 K Rd to ground, unaffected by a chip reset. **The
-> discriminating test is the same cable WITH the A adapter into a USB-A port on the same
-> Baseus dock:** same cable, same hub silicon, adapter the only difference. Until that is
-> run, the attribution to hub silicon below is the leading explanation rather than an
-> established one.
+**The A adapter is not the variable.** Tested directly: the same cable with the same
+manufacturer-integrated A adapter, into a USB-A port on the Baseus dock, enumerates cleanly
+after a chip reset (no LOW_SPEED recorded, no failures). Connector type and adapter presence
+are therefore both eliminated.
 | Reset source | external open-drain pull-down on the carrier's RST line (P1 pin 18), 100 ms assert |
 | Cable | one USB-C cable, 240 W rated, used for ALL trials; manufacturer's integrated USB-A adapter fitted when a USB-A port was used |
 | Boot observation | second board sniffing RCC6 `U0TXD` (P1 pin 12) at 115200 8N1 |
@@ -213,10 +213,20 @@ In all three cases the board boots identically, as confirmed on UART0.
 
 | Upstream port | Trials | LOW_SPEED transient seen | Outcome |
 |---|---|---|---|
-| Realtek RTS5411 (Wenter `B08YNPXPRW`), port 1 | 3 | **yes — persists across all retries** | **fails** |
-| Realtek RTS5411, port 4, different cable | 1 | **yes — persists** | **fails** |
-| Terminus FE1.1s (Baseus `B0CYSKGWCL`), port 3 | 2 | **yes — self-corrects in 4 ms** | **succeeds** |
-| Intel xHCI root port 9 | 2 | not recorded | **succeeds** |
+| Realtek RTS5411 (Wenter `B08YNPXPRW`), port 1, A+adapter | 3 | **yes — persists across all retries** | **fails** |
+| Realtek RTS5411, port 4, A+adapter | 1 | **yes — persists** | **fails** |
+| Terminus FE1.1s (Baseus front USB-C), C-to-C | 2 | **yes — self-corrects in 4 ms** | **succeeds** |
+| VIA Labs `2109:2822` (Baseus USB-A port), A+adapter | 1 | **none recorded** | **succeeds** |
+| Intel xHCI root port 9, direct | 2 | none recorded | **succeeds** |
+
+Four distinct upstream silicons. **Only the Realtek RTS5411 fails.**
+
+⚠ **An honest complication.** The low-speed transient was *observed* on only two of the four
+(RTS5411 and FE1.1s). The VIA hub and the Intel root port recorded no intermediate low-speed
+state at all. Port-status tracing cannot distinguish "the transient did not occur" from "the
+port re-sampled quickly enough never to report an intermediate state" — that is a resolution
+limit of this instrument. So the claim that the board always emits the transient rests on
+**one** hub having caught and corrected it, plus one having latched it.
 
 **The transient is present on both hubs.** That is the central finding, and it is what
 distinguishes a board behaviour from a host one.
@@ -503,9 +513,12 @@ Stated plainly so nothing here is over-read:
 - **Two hub models tested**, both showing the transient — a Realtek RTS5411 (which fails)
   and a Terminus FE1.1s (which recovers). A third would strengthen the claim that the
   transient is universal to the board rather than an interaction with these two.
-- **The cable itself is a controlled constant** (one 240 W-rated USB-C cable throughout),
-  but **whether the manufacturer's integrated A adapter is in line still tracks the result**.
-  Untested and unexplained — see the callout in section 2.
+- **Cable and adapter are both eliminated** — one 240 W-rated USB-C cable throughout, and the
+  integrated A adapter tested on a passing configuration.
+- **The transient itself was observed on only two of four upstream ports.** Port-status
+  tracing cannot separate "no transient occurred" from "re-sampled too fast to report an
+  intermediate state", so the claim that the board always emits it is inferred from the two
+  hubs that reported one, not observed on all four.
 - **Only two hub silicons have been tested** — Realtek RTS5411 (latches, fails) and Terminus
   FE1.1s (re-samples, recovers). Whether other hubs group with one or the other is unknown,
   and we have no basis for predicting which behaviour is more common.
