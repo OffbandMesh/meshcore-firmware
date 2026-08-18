@@ -981,8 +981,12 @@ def _discover_bootloader_port(before: list, vendor: str, running_pid: str,
     running_serial = norm_serial(running_serial)
     deadline = time.time() + timeout
     last_seen: list = []
-    while time.time() < deadline:
-        now = enumerate_ports()
+
+    def _match_transitioned(now: list):
+        """Match a device that DID change ports. Returns the port, or None.
+
+        Refuses outright on ambiguity -- never returns a guess."""
+        nonlocal last_seen
         new = [p for p in now if p["com"] not in before_coms]
         if running_serial:
             by_serial = [
@@ -1014,7 +1018,82 @@ def _discover_bootloader_port(before: list, vendor: str, running_pid: str,
                 f"multiple new {vendor} bootloader ports appeared ({coms}); "
                 "refusing rather than guessing. Disconnect other devices and retry."
             )
+        return None
+
+    while time.time() < deadline:
+        hit = _match_transitioned(enumerate_ports())
+        if hit:
+            return hit
         time.sleep(0.5)
+
+    # Deadline expired. Take ONE more enumeration and check it for a transitioned
+    # port BEFORE considering the same-port fallback below.
+    #
+    # Without this there is a race: a slow device can complete its transition
+    # just as the loop expires, at which point the old app-mode port is still
+    # present and the fallback would claim it by serial. esptool would then fail
+    # to sync and the operation would abort -- safe, but a spurious failure for a
+    # device that was about to be ready. Checking transitioned-first here means
+    # the same-port fallback only ever runs when there is genuinely no new port.
+    # (Raised by adversarial review of #807.)
+    now = enumerate_ports()
+    hit = _match_transitioned(now)
+    if hit:
+        return hit
+
+    # ---------------------------------------------------------------------
+    # #807: SAME-PORT FALLBACK for native USB-Serial-JTAG parts.
+    #
+    # Everything above requires a port TRANSITION -- `new` is built by
+    # subtracting `before_coms`, so a device that keeps its COM port can never
+    # produce a candidate, no matter how healthy it is. That assumption holds
+    # for bridge-attached boards (the CP2102/CH340 keeps its own port while the
+    # SoC behind it reboots) and for nRF52 (app CDC -> separate DFU port).
+    #
+    # It does NOT hold when the USB device IS the SoC. On ESP32-C3/C6/S3 in
+    # USB-Serial/JTAG mode the download-mode peripheral lives in the same
+    # silicon: the port does not drop, the PID stays 303A:1001, and the serial
+    # is unchanged. Enumeration before and after the trigger is byte-identical,
+    # so the loop above spins for the full timeout and refuses a device that is
+    # sitting right there. Observed on rcc6-bench-1 (ESP32-C6) and reported on
+    # rc32-bench-1 (ESP32-S3) -- both native-USB.
+    #
+    # IDENTITY IS NOT RELAXED. We fall back ONLY on serial equality, which is
+    # the same guarantee the fast path uses: the SoC serial is constant across
+    # USB-mode changes, so a port carrying this device's serial IS this device
+    # (#503). We deliberately do NOT fall back on vendor+PID -- a class match
+    # must never be able to claim the flash target -- and we still refuse on
+    # ambiguity rather than pick.
+    #
+    # WHAT THIS DOES NOT PROVE. Because enumeration is identical either way, a
+    # same-port match cannot confirm the device actually entered download mode.
+    # It only says "this is the right device, on this port". esptool performs
+    # its own sync on the next step and fails loudly if the ROM loader is not
+    # answering, so a failed trigger surfaces there rather than being silently
+    # flashed over. Say so out loud instead of implying a verified transition.
+    if running_serial:
+        same = [
+            p for p in now
+            if norm_serial(p.get("usb_serial")) == running_serial
+        ]
+        if len(same) > 1:
+            coms = ", ".join(f"{p['com']}({p['vid_pid']})" for p in same)
+            refuse(
+                f"multiple present ports carry the device serial ({coms}) after "
+                "the trigger -- enumeration is inconsistent; refusing rather "
+                "than guessing."
+            )
+        if len(same) == 1:
+            err(
+                f"NOTE: no NEW port appeared within {timeout}s, but {same[0]['com']} "
+                f"({same[0]['vid_pid']}) is still present carrying this device's "
+                "serial. Native-USB part whose port survives download-mode entry "
+                "-- proceeding on serial identity (#807). This does NOT confirm "
+                "download mode was entered; esptool will sync next and will fail "
+                "loudly if the ROM loader is not answering."
+            )
+            return same[0]
+
     refuse(
         f"no bootloader port appeared within {timeout}s after the trigger "
         f"(matched neither the device serial {running_serial or '(none)'} nor a "
@@ -1026,8 +1105,14 @@ def _discover_bootloader_port(before: list, vendor: str, running_pid: str,
 
 def _enter_bootloader_and_discover(running_port: dict, platform: str) -> dict:
     """Trigger bootloader entry on the verified running port, then discover the
-    device on its new (bootloader) COM. Unified for both chip families - they
-    all change identity + COM entering bootloader (#34)."""
+    device on its bootloader COM.
+
+    #34 assumed every family changes identity + COM entering bootloader. That is
+    true for bridge-attached boards and nRF52, but NOT for native USB-Serial/JTAG
+    parts (ESP32-C3/C6/S3), where the USB device is the SoC itself and the port,
+    PID and serial all survive the transition. `_discover_bootloader_port` now
+    falls back to the still-present running port on serial equality for exactly
+    that case -- see #807."""
     vendor = NRF52_VENDOR if platform == "nrf52" else ESP32S3_VENDOR
     running_pid = running_port["vid_pid"].split(":")[1]
     out(f"Triggering bootloader entry on {running_port['com']} "
