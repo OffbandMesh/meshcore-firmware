@@ -8,15 +8,45 @@ Companion to **#624** (epic: RadioCore RCC6 firmware support).
 > hours twice to claims that were asserted from partial reads, so nothing here is stated more
 > strongly than it was established.
 
+> ## ⚠ Bring-up is COMPLETE. This document is now historical.
+>
+> `variants/heltec_rcc6` **shipped** (#806, PR #820). The board boots, the SX1262 initialises and
+> reports a live noise floor, the T108 panel paints, and `companion_radio_usb` enumerates —
+> verified on `rcc6-bench-1` (`58:8c:81:2f:91:f8`), not merely compiled.
+>
+> **The shipped `variants/heltec_rcc6/platformio.ini` is the source of truth for pin assignments,
+> not this file.** What follows is kept as the record of how the board was approached and which
+> traps cost time. Sections corrected against post-bring-up evidence are marked
+> **`[resolved:]`** (#804).
+>
+> One finding did not resolve: after a chip-level reset the RCC6 can fail USB enumeration on
+> certain hubs — see **#818** and `docs/radiocore/rcc6-usb-enumeration-report.md`. That is
+> vendor-side, not firmware.
+
 ---
 
 ## 1. What exists today
 
-- **No `variants/heltec_rcc6`**, no `boards/heltec-rcc6.json`. Nothing in tree.
-- **Upstream MeshCore has no RCC6 either** — we would be first. There is no reference variant to
-  copy from, unlike most boards in this repo.
+- ~~**No `variants/heltec_rcc6`**~~ — **`[resolved:]` it exists now** (#806). No
+  `boards/heltec-rcc6.json` was needed; see §9.4.
+- ~~**Upstream MeshCore has no RCC6 either — we would be first. There is no reference variant to
+  copy from.**~~
+  **`[resolved:]` (#804) — that was wrong, and only true of *upstream* MeshCore.** Community
+  prior art existed before this doc was written:
+  - **[n30nex/NeonPocketMC-RCC6](https://github.com/n30nex/NeonPocketMC-RCC6)** (MIT, not a fork,
+    pushed 2026-08-13) ships a complete `variants/heltec_rcc6/` — `heltec_rcc6.{cpp,h}`,
+    `pins_arduino.h`, `platformio.ini`, `target.{cpp,h}` **and `boards/heltec_rcc6.json`** —
+    extending `esp32c6_base`, the same base name this repo defines.
+  - **[HelTecAutomation/RadioCore_Library](https://github.com/HelTecAutomation/RadioCore_Library)**
+    `src/boards/heltec_rcc6.h` — the vendor's own board header. **This is the one that mattered:**
+    it sets `USE_SOFTWARE_SPI 1` / `USE_HARDWARE_SPI 0`, which is why the display is bit-banged.
+  - Meshtastic **PR #11041** carries an `heltec_rcc6` pin mapping.
+
+  `docs/radiocore/README.md` and #624 had already recorded the n30nex prior art; this handoff
+  simply failed to incorporate them. **Check `docs/radiocore/README.md` §Prior art first.**
 - `docs/radiocore/RCC6 TFT Guide.md` and `docs/radiocore/radiocore-c6-tft-test.ino` exist and
-  predate this session; they were **not** reviewed during it.
+  predate this session; they were **not** reviewed during it. (The `.ino` was later flashed as the
+  vendor-firmware control in the #818 USB investigation.)
 - Vendor docs (gitignored, per-host): `docs/radiocore/vendor/RCC6/RCC6-L62_V1.0-schematic.pdf`,
   `rcc6-schematic-text.txt`, `RCC6.jpg`.
 
@@ -47,22 +77,56 @@ the RadioCore carrier footprint is consistent across the family.
 There is also a second header, **P3** (`HC-PBB40C-40DS-0.4V-2.5-02`, 40-pin board-to-board), which
 carries the same nets plus USB_P/USB_N. Not transcribed here; render it if needed.
 
-## 3. `[hypothesis:]` — needs re-derivation, do NOT trust
+## 3. `[resolved:]` LoRa + ADC pin map — CONFIRMED, and shipped
+
+> This section originally read *"`[hypothesis:]` — needs re-derivation, do NOT trust"*. **That
+> warning was wrong** (#804). The map it distrusted was correct on every signal, and the doc sent
+> the next session off to re-derive an answer it already had. Corrected in place; the reasoning
+> that produced the false alarm is preserved below, because the underlying caution is still sound.
 
 An early extraction paired LoRa nets to GPIOs by spatial row-matching and produced
 `SPI_CS→23, MOSI→22, CLK→21, MISO→20, DIO1→19, RESET_N→8, BUSY→10, SELECT→7`.
 
-**That was then observed to match the Heltec datasheet §3.2.1 table — and §3.2.1 turned out to be
-MODULE-SIDE pin names, not carrier GPIOs.** See §5. So the apparent agreement proved nothing
-about which C6 GPIO each net lands on, and the row-pairing itself is heuristic (it produced
-`U0TXD` and `U0RXD` on the same pin in an early pass).
+**All eight were correct.** Two independent confirmations:
 
-**Re-derive the LoRa pin map from the MCU symbol**, the way it was eventually done for the RC32:
-render the ESP32-C6 symbol region and read the net labels against the pin rows visually. Do not
-ship a variant on the row-pairing output.
+1. **The schematic carries its own printed net-to-GPIO table** beside the RA62A symbol (U5) —
+   stated by the vendor on the sheet, not inferred by row-pairing:
 
-Likewise `ADC_IN`/`ADC_Ctrl`/`Battery_ADC` nets **exist** on the RCC6 schematic, but their GPIO
-assignments were never confirmed.
+   ```
+   SPI_CS  GPIO23   SPI_MOSI GPIO22   SPI_CLK GPIO21   SPI_MISO GPIO20
+   DIO1    GPIO19   SELECT   GPIO7    RESET_N GPIO8    BUSY     GPIO10
+   VEXT_LDO_Ctrl    GPIO11
+   ```
+
+2. **The radio works on hardware.** The shipped variant uses exactly these values and the SX1262
+   initialises and reports a live noise floor (−95 to −108 dBm) on `rcc6-bench-1`.
+
+`SELECT`/`GPIO7` is the one signal the variant does **not** reference — it needs no build flag.
+
+**`ADC_IN`/`ADC_Ctrl`/`USER_Key` are likewise confirmed**, read from the rendered ESP32-C6 symbol
+(U8) bottom edge and matching n30nex independently:
+
+| Net | Package pin | SoC function | GPIO | Shipped as |
+|---|---|---|---|---|
+| `ADC_Ctrl` | 11 | MTDI | **5** | `PIN_ADC_CTRL=5` |
+| `ADC_IN` | 12 | MTCK | **6** | `PIN_VBAT_READ=6` |
+| `USER_Key` | 15 | GPIO9 | **9** | `PIN_USER_BTN=9` |
+| `VEXT_LDO_Ctrl` | — | — | **11** | `PIN_VEXT_EN=11` |
+
+`GPIO12`/`GPIO13` carry `D_N`/`D_P` — native USB. That is the mechanism behind the §7 enumeration
+observation.
+
+### Why the false alarm happened — the caution is still right
+
+The row-paired map was observed to match the Heltec datasheet §3.2.1 table, and §3.2.1 turned out
+to be **module-side** pin names, not carrier GPIOs (§5). The agreement was therefore meaningless as
+corroboration, and row-pairing is genuinely heuristic — it had produced `U0TXD` and `U0RXD` on the
+same pin in an earlier pass.
+
+Concluding *"unverified"* from that was correct. Concluding *"do NOT trust, re-derive"* over-steered:
+the honest state was **unconfirmed, probably right, confirm by rendering** — which is what §4 says
+to do, and it takes minutes. **Two sources that share an origin are not corroboration; that does
+not make either of them wrong.**
 
 ## 4. Method that works on these PDFs
 
@@ -102,10 +166,16 @@ carrier-GPIO column.
 - **Blind I2C bus scan wedges the C6 peripheral.** It hangs at address `0x0d` and never returns,
   so `setup()` never reaches `loop()`. This is why `ENV_SKIP_I2C_SENSOR_SCAN` exists (#294).
   **Probe known addresses only.**
-- **The UART0 boot beacon is unverified on C6.** `src/helpers/BootBeacon.h` writes raw UART0 FIFO
-  registers and is guarded ESP32-only. The C6 is RISC-V with a different register layout; it
-  reads `UART_TXFIFO_CNT_S` from the target's own `soc/uart_reg.h` so it *should* adapt, but that
-  has never been tested. Verify before relying on it for boot diagnostics.
+- **The UART0 boot beacon is STILL unverified on C6** — bring-up did not settle this.
+  `src/helpers/BootBeacon.h` writes raw UART0 FIFO registers and is guarded ESP32-only. The C6 is
+  RISC-V with a different register layout; it reads `UART_TXFIFO_CNT_S` from the target's own
+  `soc/uart_reg.h` so it *should* adapt, but that has never been tested.
+
+  **Why it was not tested:** `OFFBAND_BOOT_BEACON` is deliberately **not** set in
+  `heltec_rcc6_repeater_display_diag`. It compiles, but `simple_repeater` never defines
+  `OFFBAND_BEACON_DEFINE_CTOR` nor includes `BootBeacon.h`, so there are no call sites — it would
+  emit nothing while looking like live instrumentation. Only `examples/companion_radio` wires the
+  beacon up. To actually verify it on RISC-V, enable it on a **companion** env.
 - **ADC2 is unusable with WiFi active** on ESP32 generally — check what that leaves on C6 before
   assigning analog pins. On the RC32 this left almost nothing (#780 / #755).
 
@@ -117,9 +187,11 @@ carrier-GPIO column.
   with `SNIFFER_GENERIC_S3` defined → sniff RX `GPIO18`, RST `GPIO17`, BOOT/USR `GPIO16`.
   **Owner wired to 16, 18 and the board's `RX` pin — the wire on `RX` (GPIO3 = U0RXD) conflicts
   with the USB bridge and must move.** Mapping of which wire is which was not established.
-- **RCC6 appears to enumerate on native USB** — a `303A:1001` device (COM45) distinct from
-  `rc32-bench-1`. `[hypothesis:]` not confirmed. If true, the C6 is reachable directly without
-  the sniffer.
+- **RCC6 enumerates on native USB** — `303A:1001`, distinct from `rc32-bench-1`.
+  **`[resolved:]` confirmed** (#804); direct USB flashing is available and was used throughout
+  bring-up. **But** after a chip-level reset it can fail to re-enumerate on certain hubs and needs
+  a physical replug — **#818**. Budget for that when benching: it looks like a dead board and is
+  not one.
 - **`feather-sniffer` (COM16) is busy** — running the RC32 discharge capture with a MAX17048.
   Do not repoint it; it would end a multi-hour run.
 
@@ -134,12 +206,33 @@ RCC6 inherits a working bench rather than building one:
 - `tools/diag/rc32-boot-740/scripts/battery_runtime.py` — runtime projection that reports a
   range when its two methods disagree.
 
-## 9. Suggested first steps
+## 9. Suggested first steps — `[resolved:]` all four are DONE
 
-1. **Prove the sniff path** before any firmware work. The C6 ROM prints a boot banner on UART0
-   at 115200 before any application runs, so powering the RCC6 should make `rx_bytes` climb even
-   with no variant flashed. That validates wiring independently of everything else.
-2. **Re-derive the LoRa pin map** from the MCU symbol (§3). Render, do not infer.
-3. **Confirm whether COM45 is the RCC6.** If so, direct USB flashing is available.
-4. Only then scaffold `variants/heltec_rcc6` — with `boards/heltec-rcc6.json` for an ESP32-C6
-   target, which no existing variant in this repo provides a template for.
+Kept for the record of how bring-up was sequenced. **Step 1 is the one worth reusing on RC52.**
+
+1. ~~**Prove the sniff path** before any firmware work.~~ **Done, and it earned its keep.** The C6
+   ROM prints a boot banner on UART0 at 115200 before any application runs, so `rx_bytes` climbs
+   with no variant flashed. This validated wiring independently — and later became the *only*
+   observability channel when USB enumeration died (#818), which is exactly the situation it was
+   meant for. **Do this first on RC52 too.**
+2. ~~**Re-derive the LoRa pin map.**~~ **Unnecessary — the original map was correct.** See §3.
+3. ~~**Confirm whether COM45 is the RCC6.**~~ **Confirmed.** See §7.
+4. ~~**Scaffold `variants/heltec_rcc6` — with `boards/heltec-rcc6.json` for an ESP32-C6 target,
+   which no existing variant in this repo provides a template for.**~~
+   **`[resolved:]` (#804) — no custom board JSON was needed, and the "no template" claim was
+   wrong.** This repo already had three C6 variants — `xiao_c6`, `lilygo_tlora_c6`,
+   `m5stack_unit_c6l` — and none uses a custom board JSON; all three take stock
+   `esp32-c6-devkitm-1`.
+
+   The real gap was never C6 support, it was **flash size**: RCC6 is 16 MB, the existing three are
+   4/8 MB parts (they use `min_spiffs.csv` to fit). `xiao_c6` already showed the way — override
+   flash geometry rather than mint a board file. The shipped variant does exactly that:
+
+   ```ini
+   board                     = esp32-c6-devkitm-1
+   board_build.partitions    = default_16MB.csv
+   board_upload.flash_size   = 16MB
+   board_upload.maximum_size = 16777216
+   ```
+
+   (n30nex does ship its own `boards/heltec_rcc6.json`. It works; it is simply not required.)
