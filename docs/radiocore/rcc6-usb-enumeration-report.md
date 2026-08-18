@@ -48,15 +48,35 @@ re-attach with no low-speed indication on any topology.
 
 ### Upstream ports tested — exact hardware
 
-| Result | Product | Enumerates as | Hub silicon |
-|---|---|---|---|
-| **FAILS** | **Wenter 11-Port Powered USB 3.0 Hub** (7 data + 4 charging, individual switches, mains-powered) — Amazon ASIN `B08YNPXPRW` | `0BDA:5411` | Realtek RTS5411 |
-| succeeds | **Baseus Spacemate 11-in-1 Docking Station** (triple display, 100 W PD) — Amazon ASIN `B0CYSKGWCL` | `1A40:0101` | Terminus FE1.1s |
-| succeeds | Motherboard xHCI root port, `PCIROOT(80)#PCI(1400)#USBROOT(0)#USB(9)` | — | Intel |
+What matters is the **hub silicon that directly parents the device** — the RCC6 is a
+full-speed device, so it attaches at whichever USB 2.0 tier is nearest. Full enumerated
+chains:
 
-Both hubs are commodity consumer parts and are listed so the result can be reproduced
-exactly. Neither is faulty: every other USB device on both worked normally throughout, and
-the RCC6 enumerates through either after a VBUS power cycle.
+**FAILS** — Wenter 11-Port Powered USB 3.0 Hub (7 data + 4 charging, individual switches,
+mains-powered), Amazon ASIN `B08YNPXPRW`:
+
+```
+RCC6 (303A:1001) -> Realtek RTS5411 (0BDA:5411) -> Intel xHCI root hub
+```
+
+**SUCCEEDS** — Baseus Spacemate 11-in-1 Thunderbolt Docking Station (triple display,
+100 W PD, also driving the host's additional monitors), Amazon ASIN `B0CYSKGWCL`:
+
+```
+RCC6 (303A:1001) -> Terminus FE1.1s (1A40:0101) -> VIA Labs (2109:2822) -> Intel xHCI root hub
+```
+
+**SUCCEEDS** — direct, no intermediate hub:
+
+```
+RCC6 (303A:1001) -> Intel xHCI root hub, PCIROOT(80)#PCI(1400)#USBROOT(0)#USB(9)
+```
+
+Both products are commodity consumer parts, listed so the result can be reproduced exactly.
+**Neither is faulty:** every other USB device on both worked normally throughout, and the
+RCC6 enumerates through either after a VBUS power cycle. The variable is how the directly
+parenting hub handles an incorrect initial speed reading -- RTS5411 latches it, FE1.1s
+re-samples.
 | Reset source | external open-drain pull-down on the carrier's RST line (P1 pin 18), 100 ms assert |
 | Boot observation | second board sniffing RCC6 `U0TXD` (P1 pin 12) at 115200 8N1 |
 
@@ -467,10 +487,9 @@ Stated plainly so nothing here is over-read:
 - **Two hub models tested**, both showing the transient — a Realtek RTS5411 (which fails)
   and a Terminus FE1.1s (which recovers). A third would strengthen the claim that the
   transient is universal to the board rather than an interaction with these two.
-- **The failing hub is USB 3.0 and the recovering one USB 2.0.** We have not established
-  whether that distinction matters, or whether it is simply a difference in each hub's
-  speed-sampling behaviour. Worth noting since the RCC6 is a full-speed USB 2.0 device in
-  both cases.
+- **Only two hub silicons have been tested** — Realtek RTS5411 (latches, fails) and Terminus
+  FE1.1s (re-samples, recovers). Whether other hubs group with one or the other is unknown,
+  and we have no basis for predicting which behaviour is more common.
 - **This report has been corrected twice as testing widened.** It first claimed an
   unconditional enumeration failure (before any direct-root-port test), then claimed the
   fault required a hub (before a second hub was tried). Both were artefacts of an
