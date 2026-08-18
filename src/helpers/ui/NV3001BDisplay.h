@@ -24,6 +24,33 @@
   #define NV3001B_SPI_HOST HSPI
 #endif
 
+// ---------------------------------------------------------------------------
+// SOFTWARE (bit-banged) SPI -- required on some carriers, notably the RCC6.
+//
+// WHY THIS EXISTS. Heltec's own board header for the RCC6
+// (HelTecAutomation/RadioCore_Library, src/boards/heltec_rcc6.h) sets:
+//
+//     RADIOCORE_NV3001B_USE_ESP32_SPI     0
+//     RADIOCORE_NV3001B_USE_HARDWARE_SPI  0
+//     RADIOCORE_NV3001B_USE_SOFTWARE_SPI  1
+//
+// i.e. the vendor drives this panel with bit-banged SPI on that board and
+// explicitly disables both hardware paths. The reason is visible in the RCC6
+// pinout: the panel's MOSI is GPIO15, which -- alone among the header pins --
+// carries NO FSPI function, and no TFT pin maps to FSPID. The hardware SPI
+// peripheral's native mapping simply does not fit this pin set.
+//
+// Symptom when you get this wrong: backlight lights (plain GPIO) and the panel
+// stays blank, with no error anywhere, because begin() always returns true and
+// the panel is write-only with no readback to fail on.
+//
+// DEFAULT IS OFF. heltec_rc32 keeps hardware SPI on HSPI exactly as before --
+// this compiles out entirely there, so that board's behaviour is unchanged.
+// ---------------------------------------------------------------------------
+#ifndef NV3001B_USE_SOFTWARE_SPI
+  #define NV3001B_USE_SOFTWARE_SPI 0
+#endif
+
 class NV3001BDisplay : public DisplayDriver {
   SPIClass spi;
   RefCountedDigitalPin* periph_power;
@@ -44,6 +71,16 @@ class NV3001BDisplay : public DisplayDriver {
 
   void allocFrameBuffer();
   void blitFrameBuffer();
+
+  // Bus abstraction. Every panel write goes through these four, so the
+  // hardware/software SPI choice lives in exactly one place instead of being
+  // smeared across five call sites.
+  void busBegin();
+  void busBeginTransaction();
+  void busEndTransaction();
+  void busWrite8(uint8_t b);
+  void busWriteBytes(const uint8_t* data, size_t len);
+  void busWritePattern(const uint8_t* pattern, size_t plen, uint32_t count);
 
   void writeCommand(uint8_t cmd);
   void writeBytes(const uint8_t* data, size_t len);

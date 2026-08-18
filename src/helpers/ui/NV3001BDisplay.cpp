@@ -171,26 +171,109 @@ static void writeOptionalPin(int pin, int level) {
   digitalWrite(pin, level);
 }
 
-void NV3001BDisplay::writeCommand(uint8_t cmd) {
+// ---------------------------------------------------------------------------
+// Bus layer -- hardware SPI, or bit-banged when NV3001B_USE_SOFTWARE_SPI.
+//
+// Mode 0, MSB first: data is presented on the falling edge of SCK and latched by
+// the panel on the rising edge, so SCK idles LOW and each bit is set-then-pulse.
+// The panel is write-only (no MISO), so there is nothing to sample.
+//
+// SPEED. digitalWrite() on ESP32 is ~1 us; a full 128x220 frame is 56,320 bytes,
+// which at that rate is minutes, not milliseconds. So the bit-bang uses the GPIO
+// set/clear registers directly -- roughly an order of magnitude faster and the
+// difference between a usable display and an unusable one. Every TFT pin on this
+// carrier is < 32, so the single-word W1TS/W1TC registers are sufficient and no
+// high-bank handling is needed. A non-ESP32 target falls back to digitalWrite,
+// which is correct if slow.
+// ---------------------------------------------------------------------------
+#if NV3001B_USE_SOFTWARE_SPI
+  #if defined(ESP32)
+    #include "soc/gpio_reg.h"
+    #define NV_PIN_HIGH(p) REG_WRITE(GPIO_OUT_W1TS_REG, (1UL << (p)))
+    #define NV_PIN_LOW(p)  REG_WRITE(GPIO_OUT_W1TC_REG, (1UL << (p)))
+  #else
+    #define NV_PIN_HIGH(p) digitalWrite((p), HIGH)
+    #define NV_PIN_LOW(p)  digitalWrite((p), LOW)
+  #endif
+#endif
+
+void NV3001BDisplay::busBegin() {
+#if NV3001B_USE_SOFTWARE_SPI
+  // No SPI peripheral is claimed at all in this mode -- that is the point. On
+  // the RCC6 the LoRa radio owns its own SPI host, and bit-banging the panel
+  // means the two can never contend for one.
+  pinMode(PIN_TFT_SCL, OUTPUT);
+  pinMode(PIN_TFT_SDA, OUTPUT);
+  NV_PIN_LOW(PIN_TFT_SCL);   // mode 0 idles clock low
+#else
+  spi.begin(PIN_TFT_SCL, PIN_TFT_MISO, PIN_TFT_SDA, PIN_TFT_CS);
+#endif
+}
+
+void NV3001BDisplay::busBeginTransaction() {
+#if !NV3001B_USE_SOFTWARE_SPI
   spi.beginTransaction(SPISettings(SPI_FREQUENCY, MSBFIRST, SPI_MODE0));
+#endif
+}
+
+void NV3001BDisplay::busEndTransaction() {
+#if !NV3001B_USE_SOFTWARE_SPI
+  spi.endTransaction();
+#endif
+}
+
+void NV3001BDisplay::busWrite8(uint8_t b) {
+#if NV3001B_USE_SOFTWARE_SPI
+  for (int i = 7; i >= 0; i--) {
+    if ((b >> i) & 1) NV_PIN_HIGH(PIN_TFT_SDA); else NV_PIN_LOW(PIN_TFT_SDA);
+    NV_PIN_HIGH(PIN_TFT_SCL);
+    NV_PIN_LOW(PIN_TFT_SCL);
+  }
+#else
+  spi.transfer(b);
+#endif
+}
+
+void NV3001BDisplay::busWriteBytes(const uint8_t* data, size_t len) {
+#if NV3001B_USE_SOFTWARE_SPI
+  for (size_t i = 0; i < len; i++) busWrite8(data[i]);
+#else
+  spi.writeBytes(data, (uint32_t)len);
+#endif
+}
+
+void NV3001BDisplay::busWritePattern(const uint8_t* pattern, size_t plen, uint32_t count) {
+#if NV3001B_USE_SOFTWARE_SPI
+  while (count--) {
+    for (size_t i = 0; i < plen; i++) busWrite8(pattern[i]);
+  }
+#else
+  // NOTE writePattern() refuses sizes > 64 bytes (max FIFO); callers stay well
+  // inside that.
+  spi.writePattern(pattern, plen, count);
+#endif
+}
+
+void NV3001BDisplay::writeCommand(uint8_t cmd) {
+  busBeginTransaction();
   digitalWrite(PIN_TFT_DC, LOW);
   digitalWrite(PIN_TFT_CS, LOW);
-  spi.transfer(cmd);
+  busWrite8(cmd);
   digitalWrite(PIN_TFT_CS, HIGH);
-  spi.endTransaction();
+  busEndTransaction();
 }
 
 void NV3001BDisplay::writeBytes(const uint8_t* data, size_t len) {
   if (!data || len == 0) return;
 
-  spi.beginTransaction(SPISettings(SPI_FREQUENCY, MSBFIRST, SPI_MODE0));
+  busBeginTransaction();
   digitalWrite(PIN_TFT_DC, HIGH);
   digitalWrite(PIN_TFT_CS, LOW);
   for (size_t i = 0; i < len; i++) {
-    spi.transfer(data[i]);
+    busWrite8(data[i]);
   }
   digitalWrite(PIN_TFT_CS, HIGH);
-  spi.endTransaction();
+  busEndTransaction();
 }
 
 void NV3001BDisplay::writeCommandData(uint8_t cmd, const uint8_t* data, size_t len) {
@@ -245,12 +328,12 @@ void NV3001BDisplay::writeColor(uint16_t rgb, uint32_t count) {
 
   const uint8_t pattern[2] = { (uint8_t)(rgb >> 8), (uint8_t)(rgb & 0xff) };
 
-  spi.beginTransaction(SPISettings(SPI_FREQUENCY, MSBFIRST, SPI_MODE0));
+  busBeginTransaction();
   digitalWrite(PIN_TFT_DC, HIGH);
   digitalWrite(PIN_TFT_CS, LOW);
-  spi.writePattern(pattern, sizeof(pattern), count);
+  busWritePattern(pattern, sizeof(pattern), count);
   digitalWrite(PIN_TFT_CS, HIGH);
-  spi.endTransaction();
+  busEndTransaction();
 }
 
 void NV3001BDisplay::initPanel() {
@@ -396,13 +479,13 @@ void NV3001BDisplay::blitFrameBuffer() {
 
   setAddrWindow(0, 0, NV3001B_SCREEN_WIDTH, NV3001B_SCREEN_HEIGHT);
 
-  spi.beginTransaction(SPISettings(SPI_FREQUENCY, MSBFIRST, SPI_MODE0));
+  busBeginTransaction();
   digitalWrite(PIN_TFT_DC, HIGH);
   digitalWrite(PIN_TFT_CS, LOW);
-  spi.writeBytes((const uint8_t*)frame_buf,
-                 (uint32_t)NV3001B_SCREEN_WIDTH * NV3001B_SCREEN_HEIGHT * sizeof(uint16_t));
+  busWriteBytes((const uint8_t*)frame_buf,
+                (size_t)NV3001B_SCREEN_WIDTH * NV3001B_SCREEN_HEIGHT * sizeof(uint16_t));
   digitalWrite(PIN_TFT_CS, HIGH);
-  spi.endTransaction();
+  busEndTransaction();
 }
 
 void NV3001BDisplay::fillPhysicalRect(int x, int y, int w, int h) {
@@ -484,12 +567,12 @@ void NV3001BDisplay::drawRGB565(int x, int y, const uint16_t* px, int w, int h) 
         chunk[i] = (uint16_t)((v >> 8) | (v << 8));
       }
       setAddrWindow(c.dx + done, c.dy + r, n, 1);
-      spi.beginTransaction(SPISettings(SPI_FREQUENCY, MSBFIRST, SPI_MODE0));
+      busBeginTransaction();
       digitalWrite(PIN_TFT_DC, HIGH);
       digitalWrite(PIN_TFT_CS, LOW);
-      spi.writeBytes((const uint8_t*)chunk, (uint32_t)n * sizeof(uint16_t));
+      busWriteBytes((const uint8_t*)chunk, (size_t)n * sizeof(uint16_t));
       digitalWrite(PIN_TFT_CS, HIGH);
-      spi.endTransaction();
+      busEndTransaction();
     }
   }
 }
@@ -570,7 +653,7 @@ bool NV3001BDisplay::begin() {
   digitalWrite(PIN_TFT_DC, HIGH);
   delay(20);
 
-  spi.begin(PIN_TFT_SCL, PIN_TFT_MISO, PIN_TFT_SDA, PIN_TFT_CS);
+  busBegin();
   if (PIN_TFT_RST >= 0) {
     pinMode(PIN_TFT_RST, OUTPUT);
     digitalWrite(PIN_TFT_RST, HIGH);

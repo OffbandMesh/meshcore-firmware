@@ -5,6 +5,9 @@ HeltecRCC6Board board;
 
 #ifdef DISPLAY_CLASS
   DISPLAY_CLASS display;
+  // GPIO9 is the USER button AND the C6 download-mode strapping pin. Active-low
+  // with the board's pull-up, matching heltec_rc32's use of the same pattern.
+  MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
 #endif
 
 // SPI host 0 (FSPI on C6). The LoRa bus is the only SPI peripheral configured on
