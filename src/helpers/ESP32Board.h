@@ -36,7 +36,23 @@ public:
   #ifdef PIN_VBAT_READ
     // battery read support
     pinMode(PIN_VBAT_READ, INPUT);
+   #if ESP_ARDUINO_VERSION_MAJOR < 3
+    // adcAttachPin() was REMOVED in Arduino-ESP32 3.x and does not exist in that
+    // core at all. It is still needed on the 2.x core that [esp32_base] pins
+    // (platformio/espressif32@6.11.0), but [esp32c6_base] OVERRIDES the platform
+    // to pioarduino 53.03.13-1, which ships core 3.1.3 -- there the symbol is
+    // absent and analogRead()/analogReadMilliVolts() bind the pin themselves, so
+    // the call is both unavailable and unnecessary.
+    //
+    // This stayed latent because no C6 variant defined PIN_VBAT_READ: xiao_c6,
+    // lilygo_tlora_c6, m5stack_unit_c6l and meshsmith_photon_esp32c6 all lack a
+    // battery divider. heltec_rcc6 is the first C6 board here that has one, and
+    // it failed to compile on this line (#806).
+    //
+    // Guard on the core version, not the chip -- the split is the core, and any
+    // future variant on the newer platform hits this regardless of which SoC.
     adcAttachPin(PIN_VBAT_READ);
+   #endif
   #endif
 
   #ifdef P_LORA_TX_LED

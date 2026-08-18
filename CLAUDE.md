@@ -47,6 +47,27 @@ Recorded per REPOCONFIG (board field IDs captured in project CLAUDE.md). Consume
 - `PROJECT_ID` = `PVT_kwDOEXsS3c4BaleW`
 - Status field `PVTSSF_lADOEXsS3c4BaleWzhVcBL8`: backlog `91d35710`, todo `7bf7b9ef`, ready `ec816a33`, in-progress `ee71a6e3`, testing `3dc70fe4`, deferred `fc4959bc`, done `4a67db65`
 - Priority field `PVTSSF_lADOEXsS3c4BaleWzhVcBMs`: P0 `43b5c396`, P1 `40c7b471`, P2 `3ed2b368`, P3 `2406bdd1`
+- Agent field `PVTF_lADOEXsS3c4BaleWzhfvB7E` — **REST id `401541041`**, TEXT. MANDATORY at claim; see "Agent board field" below (#826).
+
+### Agent board field — MANDATORY at claim (owner directive 2026-08-18, #826)
+
+**Every issue you pick up and work gets your agent identity written to the board's
+Agent field. No exceptions.** Set it at the same moment you claim the Citadel task
+and announce pickup on Agent Mail. Value format = the standards#230 identity stamp:
+`YourName (session <8-char-uuid>)`.
+
+```bash
+item=$(gh api "orgs/OffbandMesh/projectsV2/1/items?q=<issue number>" --jq '.[0].id')
+gh api -X PATCH "orgs/OffbandMesh/projectsV2/1/items/$item" \
+  --input - <<< '{"fields":[{"id":401541041,"value":"YourName (session xxxxxxxx)"}]}'
+```
+
+Gotchas (each one has already cost a 422 or a mis-stamp):
+- REST wants the **numeric** field id (`401541041`), NOT the `PVTF_…` node id.
+- `fields` must be an **array** of `{id, value}` objects, not a map.
+- The `q=` search is fuzzy — read back `.content.number`/`.content.title` and confirm it
+  is your issue **before** the PATCH, or you stamp someone else's item.
+- Works with plain session `gh` auth (verified live 2026-08-18); no PAT needed.
 
 **Required secret:** the sync workflow needs repo secret `PROJECT_PAT` — a **classic** PAT with `project` + `repo` scope (the default `GITHUB_TOKEN` cannot mutate an org-owned Projects v2 board). ⚠ **Must be classic, not fine-grained:** OffbandMesh rejects fine-grained PATs with >366-day lifetime for org-Projects access, so `GITHUB_PERSONAL_ACCESS_TOKEN` (fine-grained) does **not** work (DifferentWire/standards#148). **Set + verified** 2026-06-14 (board sync confirmed live).
 
@@ -101,4 +122,4 @@ Device inventory, RF chain (FEM / TX power), per-device MACs/roles, slot/pin map
 
 ---
 
-**Last updated:** 2026-08-11 (#640: corrected the session-state.py line — it is INSTALLED AND WIRED, not "deferred by owner"; added the agent usage contract and the #639 caveat that git-lifecycle hooks are inert in worktrees). Prior: 2026-06-24 (#197: recorded **no-upstream-merge policy** — Offband does not merge from upstream MeshCore, no intent to track it; `upstream` remote stays fetch-only for reference; keep MeshCore nomenclature/coding-standard consistency for clean rebasing). Prior: 2026-06-17 (offband-v1.0.0 shipped — MeshCore 1.16.0 base-update landed #126/#134, + RAK3401 GPS #104, display always-on #141, display rotation 0/180 #148; corrected the migration-status note: 1.16.0 is no longer "deferred" and `iotthinks` is no longer a remote — #130). Prior: 2026-06-13 (#107 OffbandMesh cutover: repo → `OffbandMesh/meshcore-firmware`, working dir → `C:\Dev\meshcore-firmware`, board → OffbandMesh org #1, preflight path fixed; Citadel project + Agent-Mail key intentionally remain `Crosswire` / `app-c-dev-crosswire` — citadel#81).
+**Last updated:** 2026-08-18 (#826: board **Agent field** added — `PVTF_lADOEXsS3c4BaleWzhfvB7E` / REST id `401541041`; MANDATORY at claim per owner directive, recipe + gotchas in "Agent board field" under Project board field IDs). Prior: 2026-08-11 (#640: corrected the session-state.py line — it is INSTALLED AND WIRED, not "deferred by owner"; added the agent usage contract and the #639 caveat that git-lifecycle hooks are inert in worktrees). Prior: 2026-06-24 (#197: recorded **no-upstream-merge policy** — Offband does not merge from upstream MeshCore, no intent to track it; `upstream` remote stays fetch-only for reference; keep MeshCore nomenclature/coding-standard consistency for clean rebasing). Prior: 2026-06-17 (offband-v1.0.0 shipped — MeshCore 1.16.0 base-update landed #126/#134, + RAK3401 GPS #104, display always-on #141, display rotation 0/180 #148; corrected the migration-status note: 1.16.0 is no longer "deferred" and `iotthinks` is no longer a remote — #130). Prior: 2026-06-13 (#107 OffbandMesh cutover: repo → `OffbandMesh/meshcore-firmware`, working dir → `C:\Dev\meshcore-firmware`, board → OffbandMesh org #1, preflight path fixed; Citadel project + Agent-Mail key intentionally remain `Crosswire` / `app-c-dev-crosswire` — citadel#81).
