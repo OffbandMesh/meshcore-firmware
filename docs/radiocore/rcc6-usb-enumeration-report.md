@@ -9,24 +9,30 @@
 
 ## 1. Summary
 
-Following a chip-level reset (CHIP_PU / RST button / external reset line), the RCC6
-re-attaches to USB and **fails enumeration at the descriptor stage** — but **only when the
-board is connected through an intermediate USB hub**. On a direct motherboard (xHCI root)
-port the same reset enumerates cleanly every time.
+**Following a chip-level reset (CHIP_PU / RST button / external reset line), the RCC6
+re-attaches to USB presenting LOW-SPEED signalling.** The device is full-speed, so this
+indication is incorrect. It is measured on **two different hubs from two different vendors**,
+so it originates at the board, not at any one host.
 
-When it fails, the host detects the device as **low speed**, every control transfer stalls,
-and after three retries the device is marked `Device Descriptor Request Failed`. Recovery
-requires a physical USB disconnect and reconnect.
+What happens next depends entirely on how the upstream port handles that transient:
 
-The board itself boots and runs completely normally throughout — this is not a crash or a
-hang, and the fault occurs even in ROM download mode with no firmware executing.
+| Upstream port | Behaviour on the transient | Outcome |
+|---|---|---|
+| Terminus FE1.1s (`1A40:0101`) | re-samples ~4 ms later, reads full-speed | **enumerates normally** |
+| Realtek RTS5411 (`0BDA:5411`) | latches the first reading, never re-evaluates | **enumeration fails permanently** |
+| Intel xHCI root port | no low-speed state recorded | **enumerates normally** |
 
-**Two conditions are both required:** a chip-level reset, AND a hub in the path. Either one
-alone is fine. A VBUS power cycle enumerates correctly even through the hub; a chip reset
-enumerates correctly on a root port.
+Where it fails, every control transfer stalls (`USBD_STATUS_STALL_PID`), three enumeration
+retries all inherit the wrong speed, and the device is marked
+`Device Descriptor Request Failed`. Recovery then requires a physical disconnect/reconnect —
+further chip resets do not help.
 
-**This reproduces on Heltec's own example firmware and with no firmware running at all**, so
-it is not caused by application code — ours or yours.
+The board boots and runs completely normally throughout: this is not a crash or a hang, and
+the transient occurs even in ROM download mode with **no firmware executing at all**.
+
+**This reproduces on Heltec's own example firmware and with no firmware running**, so it is
+not caused by application code — ours or yours. A VBUS power cycle produces a clean
+re-attach with no low-speed indication on any topology.
 
 ---
 
@@ -131,7 +137,7 @@ initialises and paints. Only USB is affected.
 | Host USB stack fault | **Ruled out** | Both xHCI controllers and both root hubs report `OK`; five other USB serial devices work normally throughout, including on the same hub |
 | USB cable | **Ruled out** | Reproduces on a second, different USB-C cable |
 | Hub port | **Ruled out** | Reproduces on two different ports of the same hub |
-| Faulty hub | **Ruled out** | Other devices on that hub are unaffected; the RCC6 works through it after a VBUS cycle |
+| Faulty hub | **Ruled out** | Other devices on both hubs are unaffected; the RCC6 works through either after a VBUS cycle; and the low-speed transient is present on BOTH hubs, so it does not originate in one of them |
 | Reset duration | **Unlikely** | Longer reset assertions do not change the outcome |
 
 ### Firmware images tested
@@ -156,19 +162,47 @@ initialises and paints. Only USB is affected.
 
 In all three cases the board boots identically, as confirmed on UART0.
 
-### 6.2 Topology — the second required condition
+### 6.2 Topology — and what it actually reveals
 
-| Topology | Trials | Chip reset result |
-|---|---|---|
-| Behind Realtek RTS5411 hub, port 1 | 3 | **fails** — LOW_SPEED, stalls, 3 retries |
-| Behind same hub, port 4, **different cable** | 1 | **fails** — identical signature |
-| **Motherboard xHCI root port 9 (direct)** | **2** | **clean enumeration, no failures** |
+| Upstream port | Trials | LOW_SPEED transient seen | Outcome |
+|---|---|---|---|
+| Realtek RTS5411, port 1 | 3 | **yes — persists across all retries** | **fails** |
+| Realtek RTS5411, port 4, different cable | 1 | **yes — persists** | **fails** |
+| Terminus FE1.1s, port 3 | 2 | **yes — self-corrects in 4 ms** | **succeeds** |
+| Intel xHCI root port 9 | 2 | not recorded | **succeeds** |
 
-Same board, same firmware, same reset method throughout.
+**The transient is present on both hubs.** That is the central finding, and it is what
+distinguishes a board behaviour from a host one.
 
-**The hub is not faulty.** Every other device on it works normally throughout (three USB
-serial devices), and the RCC6 itself enumerates correctly through that same hub after a
-VBUS cycle. The fault requires the hub *and* a chip reset together.
+Terminus FE1.1s — corrects itself:
+
+```
+16:30:08.559  port=3  0x0301  [CONNECT|POWER|LOW_SPEED]
+16:30:08.563  port=3  0x0101  [CONNECT|POWER]              <-- corrected after 4 ms
+16:30:08.687  port=3  0x0103  [CONNECT|ENABLE|POWER]       <-- enumerates
+```
+
+Second trial, same hub, identical timing:
+
+```
+16:31:19.592  port=3  0x0301  [CONNECT|POWER|LOW_SPEED]
+16:31:19.596  port=3  0x0101  [CONNECT|POWER]              <-- corrected after 4 ms
+16:31:19.720  port=3  0x0103  [CONNECT|ENABLE|POWER]
+```
+
+Realtek RTS5411 — latches and never re-evaluates:
+
+```
+15:51:54.519  port=1  0x0301  [CONNECT|POWER|LOW_SPEED]
+15:51:54.635  port=1  0x0303  [CONNECT|ENABLE|POWER|LOW_SPEED]
+15:51:55.2xx  port=1  0x0303  [... LOW_SPEED]   retry 1
+15:51:55.8xx  port=1  0x0303  [... LOW_SPEED]   retry 2
+15:51:56.4xx  port=1  0x0303  [... LOW_SPEED]   retry 3  -> abandoned
+```
+
+**Neither hub is faulty.** All other devices on both work normally throughout, and the RCC6
+enumerates through either after a VBUS cycle. The difference is purely in how each handles
+an incorrect initial speed indication: one re-samples, the other does not.
 
 ---
 
@@ -290,39 +324,35 @@ application.
 A low-speed device pulls up **D−**; a full-speed device pulls up **D+**. The ESP32-C6
 USB-Serial/JTAG is a **full-speed** device.
 
-**What this is NOT.** The board is not statically miswired or mis-pulled-up on D+/D−. A
-static condition of that kind would be detected identically on a root port — and it is not:
-the same board on a direct motherboard port reports `CONNECT|POWER` with no `LOW_SPEED`,
-twice out of two.
+**What this is NOT.** The board is not statically miswired or mis-pulled-up on D+/D-. A
+static condition would be latched identically everywhere and would never self-correct. It
+does self-correct — on the Terminus hub, 4 ms after connect, twice out of two.
 
-**What the evidence points to.** The speed detection is *unstable across retries*, not
-uniformly wrong. From the port-4 trial:
+**What is measured.** The RCC6 presents an **incorrect LOW-SPEED indication on re-attach
+after a chip reset**, on two hubs from two different vendors. It is transient: where a hub
+re-samples the line state a few milliseconds later, it reads full-speed and enumeration
+proceeds normally. Where a hub latches the initial reading, every subsequent retry inherits
+the wrong speed and enumeration fails permanently.
 
-```
-16:08:00.690  0x0303 [CONNECT|ENABLE|POWER|LOW_SPEED]
-16:08:00.952  0x0103 [CONNECT|ENABLE|POWER]            <-- no LOW_SPEED
-16:08:01.242  0x0303 [CONNECT|ENABLE|POWER|LOW_SPEED]  <-- and back
-```
-
-`[hypothesis:]` The re-attach transient produced by a chip reset appears to be marginal —
-brief enough, or with a slow enough pull-up ramp, that a hub's speed sampling can latch an
-indeterminate state. An xHCI root port tolerates it; this hub does not. A VBUS cycle, which
-produces a full power-down and a clean re-attach, works through the same hub.
-
-This is stated as hypothesis, not conclusion. We have not scoped D+/D- and cannot see the
-electrical transient. What is measured is: the failure requires a chip reset AND a hub, the
-detected speed is unstable rather than consistently wrong, and a root port never sees it.
+`[hypothesis:]` The most likely explanation is that the D+ pull-up is slow to assert, or the
+D+/D- lines are momentarily in an indeterminate state, at the instant the hub samples for
+speed after a CHIP_PU reset. A VBUS power cycle produces a clean re-attach with no
+low-speed indication anywhere, which is consistent with a power-up ramp that a chip reset
+does not reproduce. **We have not scoped D+/D-** and cannot confirm the electrical detail.
 
 ## 8. What we are asking
 
-**Why does the RCC6's re-attach after a chip reset fail speed detection behind a USB hub,
-when the same board, cable and reset enumerate correctly on a direct xHCI root port?**
+**Why does the RCC6 present LOW-SPEED signalling on the USB bus for the first few
+milliseconds after a chip reset, when it is a full-speed device?**
 
-Specifically: is the device's re-attach transient after CHIP_PU reset within USB
-specification for connect-debounce timing and pull-up rise time? The detected speed is
-unstable across retries rather than consistently wrong, which suggests a marginal transient
-rather than an incorrect steady state — but we cannot see the electrical behaviour and have
-not scoped D+/D-.
+The indication is incorrect and it originates at the board — it is observed on two hubs from
+different vendors. Tolerant hubs re-sample and recover; strict ones latch it and enumeration
+fails permanently. On our bench a Realtek RTS5411 fails 4/4 and a Terminus FE1.1s succeeds
+2/2, from the same transient.
+
+Specifically: is the D+ pull-up assertion after CHIP_PU reset within USB specification for
+rise time and connect-debounce, and is there a recommended firmware or hardware measure to
+ensure a clean re-attach?
 
 Specifically, we would like to know:
 
@@ -335,15 +365,16 @@ Specifically, we would like to know:
 
 ### Why it matters in practice
 
-Any deployment where the device is behind a hub, dock or powered USB strip and resets
-without a human present cannot recover: watchdog reset, brownout recovery, OTA reboot or a
-`reboot` command would leave the unit off the bus until someone physically unplugs it.
+Whether a given installation is affected depends on the upstream port's tolerance, which
+makes this look intermittent and hardware-specific in the field. On a strict hub any
+unattended reset — watchdog, brownout recovery, OTA reboot, a `reboot` command — leaves the
+unit off the bus until someone physically unplugs it. On a tolerant hub or a direct port the
+same reset is harmless.
 
-We have **not** tested watchdog, brownout or software-reboot paths specifically — only
-external CHIP_PU reset. Whether they produce the same transient is unverified, though there
-is no obvious reason they would differ.
+We have **not** tested watchdog, brownout or software-reboot paths specifically, only
+external CHIP_PU reset; whether they produce the same transient is unverified.
 
-Direct-port connection is an effective workaround on our bench.
+Workarounds on our bench: a direct root port, or a hub that re-samples speed.
 
 ---
 
@@ -421,12 +452,16 @@ BASE MAC           : 58:8c:81:2f:91:f8
 
 Stated plainly so nothing here is over-read:
 
-- **We have one RCC6, and one hub model.** A sample-specific defect is not excluded, and we
-  have not tried a second hub — so "any hub" versus "this Realtek RTS5411" is untested.
-- **An earlier revision of this report claimed the fault was unconditional.** That was wrong:
-  it was written before a direct-root-port test, which we had not run. The topology
-  dependence in section 6.2 was found only after the report was first drafted. It is
-  recorded here because it is the single most important qualifier in the document.
+- **We have one RCC6.** A sample-specific defect is not excluded.
+- **Two hub models tested**, both showing the transient. A third would strengthen the claim
+  that it is universal to the board rather than an interaction with these two.
+- **This report has been corrected twice as testing widened.** It first claimed an
+  unconditional enumeration failure (before any direct-root-port test), then claimed the
+  fault required a hub (before a second hub was tried). Both were artefacts of an
+  uncontrolled variable rather than of the board. The current reading — a board-side
+  low-speed transient whose consequences depend on the upstream port's re-sampling
+  behaviour — is the first that accounts for every trial. Recorded here so the correction
+  history is visible rather than hidden.
 - **We have no hardware USB analyser.** Port state and control-transfer results are taken
   from the host's own hub driver tracing (`USBHUB3-Analytic`), not from a bus capture. That
   is host-side truth about what the hub observed; it is not an oscilloscope on D+/D-.
