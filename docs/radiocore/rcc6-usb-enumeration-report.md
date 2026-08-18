@@ -9,18 +9,24 @@
 
 ## 1. Summary
 
-After **any chip-level reset** (CHIP_PU / RST button / external reset line), the RCC6
-re-attaches to USB and then **fails enumeration at the descriptor stage**. The host marks
-it `Device Descriptor Request Failed`. The board itself boots and runs completely normally
-throughout — this is not a crash or a hang.
+Following a chip-level reset (CHIP_PU / RST button / external reset line), the RCC6
+re-attaches to USB and **fails enumeration at the descriptor stage** — but **only when the
+board is connected through an intermediate USB hub**. On a direct motherboard (xHCI root)
+port the same reset enumerates cleanly every time.
 
-Recovery requires a **physical USB disconnect and reconnect** every time.
+When it fails, the host detects the device as **low speed**, every control transfer stalls,
+and after three retries the device is marked `Device Descriptor Request Failed`. Recovery
+requires a physical USB disconnect and reconnect.
 
-A reset issued by the flashing tool (DTR/RTS, through the USB-Serial/JTAG peripheral) does
-**not** trigger the fault. Only a chip-level reset does.
+The board itself boots and runs completely normally throughout — this is not a crash or a
+hang, and the fault occurs even in ROM download mode with no firmware executing.
 
-**This reproduces on Heltec's own example firmware**, so it is not caused by our
-application code.
+**Two conditions are both required:** a chip-level reset, AND a hub in the path. Either one
+alone is fine. A VBUS power cycle enumerates correctly even through the hub; a chip reset
+enumerates correctly on a root port.
+
+**This reproduces on Heltec's own example firmware and with no firmware running at all**, so
+it is not caused by application code — ours or yours.
 
 ---
 
@@ -32,6 +38,8 @@ application code.
 | Base MAC | `58:8c:81:2f:91:f8` |
 | USB mode | USB-Serial/JTAG (native), enumerates `303A:1001` |
 | Host | Windows 11 Pro 10.0.26220, Intel USB 3.20 xHCI |
+| Failing topology | RCC6 -> Realtek RTS5411 hub (`0BDA:5411`) -> host root port |
+| Passing topology | RCC6 -> motherboard xHCI root port (`PCIROOT(80)#PCI(1400)#USBROOT(0)#USB(9)`) |
 | Reset source | external open-drain pull-down on the carrier's RST line (P1 pin 18), 100 ms assert |
 | Boot observation | second board sniffing RCC6 `U0TXD` (P1 pin 12) at 115200 8N1 |
 
@@ -44,6 +52,8 @@ observation was done on a separate wire**, independent of USB.
 
 Minimal, and reproduced many times over two sessions:
 
+0. **Connect the RCC6 through a USB hub.** This is required — see section 6.2. On a direct
+   motherboard port the fault does not occur.
 1. Power the RCC6 over USB-C. It enumerates normally as `303A:1001`.
 2. Confirm the host has a working serial device (e.g. `COM45`).
 3. Issue a **chip reset** — press RST, or pull the carrier's RST line low for ~100 ms.
@@ -63,7 +73,8 @@ Minimal, and reproduced many times over two sessions:
 
 5. Observe the host: the USB device is **gone**, and a failed device appears instead.
 
-**Result — 100 % reproducible.**
+**Result — 100 % reproducible behind a hub (4 of 4 trials, two ports, two cables). Does not
+reproduce on a direct root port (0 of 2 trials).**
 
 ### Host-side state after the reset
 
@@ -117,7 +128,10 @@ initialises and paints. Only USB is affected.
 | Application hang / crash | **Ruled out** | Board runs for minutes with radio and display live, observed on UART0 |
 | Display / SPI activity | **Ruled out** | Reproduces with the display driver absent entirely |
 | Host OS state | **Ruled out** | Full Windows reboot; behaviour unchanged |
-| Host USB stack fault | **Unlikely** | Both xHCI controllers and both root hubs report `OK`; five other USB serial devices on the same host work normally throughout |
+| Host USB stack fault | **Ruled out** | Both xHCI controllers and both root hubs report `OK`; five other USB serial devices work normally throughout, including on the same hub |
+| USB cable | **Ruled out** | Reproduces on a second, different USB-C cable |
+| Hub port | **Ruled out** | Reproduces on two different ports of the same hub |
+| Faulty hub | **Ruled out** | Other devices on that hub are unaffected; the RCC6 works through it after a VBUS cycle |
 | Reset duration | **Unlikely** | Longer reset assertions do not change the outcome |
 
 ### Firmware images tested
@@ -130,18 +144,31 @@ initialises and paints. Only USB is affected.
 
 ---
 
-## 6. The discriminating observation
+## 6. The discriminating observations
 
-Two reset paths, different outcomes:
+### 6.1 Reset path
 
 | Reset path | USB after reset |
 |---|---|
 | Flashing tool reset (DTR/RTS via USB-Serial/JTAG) | **enumerates normally** |
-| Chip reset (CHIP_PU pulled low externally, or RST button) | **fails to enumerate** |
+| Chip reset (CHIP_PU pulled low externally, or RST button) | **fails** (behind a hub) |
 | VBUS cycle (physical replug) | **enumerates normally** |
 
-In all three cases the board boots identically, as confirmed on UART0. The difference is
-confined to USB enumeration.
+In all three cases the board boots identically, as confirmed on UART0.
+
+### 6.2 Topology — the second required condition
+
+| Topology | Trials | Chip reset result |
+|---|---|---|
+| Behind Realtek RTS5411 hub, port 1 | 3 | **fails** — LOW_SPEED, stalls, 3 retries |
+| Behind same hub, port 4, **different cable** | 1 | **fails** — identical signature |
+| **Motherboard xHCI root port 9 (direct)** | **2** | **clean enumeration, no failures** |
+
+Same board, same firmware, same reset method throughout.
+
+**The hub is not faulty.** Every other device on it works normally throughout (three USB
+serial devices), and the RCC6 itself enumerates correctly through that same hub after a
+VBUS cycle. The fault requires the hub *and* a chip reset together.
 
 ---
 
@@ -261,25 +288,41 @@ application.
 
 `PORT_LOW_SPEED` (wPortStatus bit 9) means the hub detected low-speed signalling at attach.
 A low-speed device pulls up **D−**; a full-speed device pulls up **D+**. The ESP32-C6
-USB-Serial/JTAG is a **full-speed** device and enumerates as such after a VBUS cycle — same
-port, same board, minutes apart.
+USB-Serial/JTAG is a **full-speed** device.
 
-So following a CHIP_PU reset the device appears on the bus with **low-speed signalling**.
-The host commits to low-speed, every subsequent control transfer stalls, and after three
-retries enumeration is abandoned. The `LOW_SPEED` bit clears ~50 s later, but the host has
-already given up and will not retry unattended.
+**What this is NOT.** The board is not statically miswired or mis-pulled-up on D+/D−. A
+static condition of that kind would be detected identically on a root port — and it is not:
+the same board on a direct motherboard port reports `CONNECT|POWER` with no `LOW_SPEED`,
+twice out of two.
 
-**The single controlled difference between working and failing is the detected bus speed at
-attach.** Everything else — port, board, host, cable, hub — is identical.
+**What the evidence points to.** The speed detection is *unstable across retries*, not
+uniformly wrong. From the port-4 trial:
+
+```
+16:08:00.690  0x0303 [CONNECT|ENABLE|POWER|LOW_SPEED]
+16:08:00.952  0x0103 [CONNECT|ENABLE|POWER]            <-- no LOW_SPEED
+16:08:01.242  0x0303 [CONNECT|ENABLE|POWER|LOW_SPEED]  <-- and back
+```
+
+`[hypothesis:]` The re-attach transient produced by a chip reset appears to be marginal —
+brief enough, or with a slow enough pull-up ramp, that a hub's speed sampling can latch an
+indeterminate state. An xHCI root port tolerates it; this hub does not. A VBUS cycle, which
+produces a full power-down and a clean re-attach, works through the same hub.
+
+This is stated as hypothesis, not conclusion. We have not scoped D+/D- and cannot see the
+electrical transient. What is measured is: the failure requires a chip reset AND a hub, the
+detected speed is unstable rather than consistently wrong, and a root port never sees it.
 
 ## 8. What we are asking
 
-**Why does the RCC6 present low-speed USB signalling after a CHIP_PU reset, when the same
-board on the same port presents full-speed correctly after a VBUS cycle?**
+**Why does the RCC6's re-attach after a chip reset fail speed detection behind a USB hub,
+when the same board, cable and reset enumerate correctly on a direct xHCI root port?**
 
-The host's speed detection is made from the D+/D- pull-up state at attach. That state is
-wrong following a chip reset and correct following a power cycle, which points at the USB
-PHY's pull-up configuration across CHIP_PU reset rather than at anything above it.
+Specifically: is the device's re-attach transient after CHIP_PU reset within USB
+specification for connect-debounce timing and pull-up rise time? The detected speed is
+unstable across retries rather than consistently wrong, which suggests a marginal transient
+rather than an incorrect steady state — but we cannot see the electrical behaviour and have
+not scoped D+/D-.
 
 Specifically, we would like to know:
 
@@ -292,10 +335,15 @@ Specifically, we would like to know:
 
 ### Why it matters in practice
 
-Any deployment where the device resets without a human present cannot recover: watchdog
-reset, brownout recovery, OTA reboot, or a `reboot` command all leave the unit off the bus
-until someone physically unplugs it. On a fixed or remote node that is not recoverable at
-all.
+Any deployment where the device is behind a hub, dock or powered USB strip and resets
+without a human present cannot recover: watchdog reset, brownout recovery, OTA reboot or a
+`reboot` command would leave the unit off the bus until someone physically unplugs it.
+
+We have **not** tested watchdog, brownout or software-reboot paths specifically — only
+external CHIP_PU reset. Whether they produce the same transient is unverified, though there
+is no obvious reason they would differ.
+
+Direct-port connection is an effective workaround on our bench.
 
 ---
 
@@ -373,7 +421,12 @@ BASE MAC           : 58:8c:81:2f:91:f8
 
 Stated plainly so nothing here is over-read:
 
-- **We have one RCC6.** A sample-specific defect is not excluded and is a live possibility.
+- **We have one RCC6, and one hub model.** A sample-specific defect is not excluded, and we
+  have not tried a second hub — so "any hub" versus "this Realtek RTS5411" is untested.
+- **An earlier revision of this report claimed the fault was unconditional.** That was wrong:
+  it was written before a direct-root-port test, which we had not run. The topology
+  dependence in section 6.2 was found only after the report was first drafted. It is
+  recorded here because it is the single most important qualifier in the document.
 - **We have no hardware USB analyser.** Port state and control-transfer results are taken
   from the host's own hub driver tracing (`USBHUB3-Analytic`), not from a bus capture. That
   is host-side truth about what the hub observed; it is not an oscilloscope on D+/D-.
