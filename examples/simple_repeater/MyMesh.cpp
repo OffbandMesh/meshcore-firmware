@@ -736,9 +736,12 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
       uint8_t temp[166];
       char *command = (char *)&data[5];
       char *reply = (char *)&temp[5];
-      if (is_retry) {
-        *reply = 0;
-      } else {
+      // #765: zero BEFORE dispatch, not only on the retry path. `temp` is
+      // uninitialised stack, so a handler that writes nothing would otherwise
+      // leave the strlen() below reading -- and transmitting -- whatever was
+      // already there.
+      *reply = 0;
+      if (!is_retry) {
         handleCommand(sender_timestamp, command, reply);
       }
       int text_len = strlen(reply);
