@@ -463,12 +463,14 @@ void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, 
                           PUB_KEY_SIZE);
 
       uint8_t temp[166];
+      // #765: `temp` is uninitialised stack. Every branch below except the admin
+      // dispatch already zeroed it, so the one path that calls handleCommand was
+      // the one path that could transmit stack bytes. Zero it up front instead.
+      temp[5] = 0; // no reply
       bool send_ack;
       if (flags == TXT_TYPE_CLI_DATA) {
         if (client->isAdmin()) {
-          if (is_retry) {
-            temp[5] = 0; // no reply
-          } else {
+          if (!is_retry) {
             handleCommand(sender_timestamp, (char *)&data[5], (char *)&temp[5]);
             temp[4] = (TXT_TYPE_CLI_DATA << 2); // attempt and flags,  (NOTE: legacy was: TXT_TYPE_PLAIN)
           }
