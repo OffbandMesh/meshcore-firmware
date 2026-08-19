@@ -115,6 +115,37 @@ not of the pin assignments.
   `analogReadMilliVolts` + attenuation pattern does not transfer.
 - **USER button is active-low with an external pull-up** (`PIN_BUTTON1 = P1.10`).
 
+### ⚠ Two hazards that follow from "there is a display" — check both early
+
+**1. The 56 KB back buffer may not allocate, and the fallback has never run (#856).**
+`#747` added a display back buffer: on a 128×220 RGB565 panel that is **~56 KB**, against
+the nRF52840's 256 KB total — and BLE stack reservations cut into that well before you get
+there. The failure mode is the trap: allocation failure **degrades silently** to the
+unbuffered `drawRGB565` path, and **that path has never executed on hardware on any
+board.** Every board carrying this display has always had the buffer. RC52 would be the
+first hardware to run that code, chosen by heap state at boot rather than by anyone's
+decision. **Log whether it allocated — do not infer it from the display looking right.**
+
+**2. CrashLog can hang the boot, and it is enabled fleet-wide (#472, #855).** On the RC32
+this presented as a **dead board after RST** — no screen, nothing on USB. It is not dead:
+bootloader, IDF startup and all static constructors complete (`APP:CTOR` fires ~177 ms
+after `entry`), `board.begin()` returns, and it dies in the **very next call**,
+`crashLogBegin()`, reading the crash ring retained from the previous reset.
+
+Two tells worth memorising, because both mislead:
+- `nvs_count` never increments — **because the hang is inside the function that increments
+  it.** That makes "the application never runs" look true when it runs fine and hangs one
+  call later.
+- The retained ring **survives an RST and a fast replug, and drains on a slow one** — so
+  the fault reproduces on RST and quick reconnects but clears if you leave it unplugged.
+  No firmware theory explains that until you know the mechanism.
+
+RC32's mechanism is ESP32 **RTC_NOINIT**-backed; nRF52 uses a `.noinit` section, and the
+repo-local nRF52 ldscripts may not even provide one (#361). **That is a reason to check,
+not a reason to assume it cannot happen** — a different retention path can fail
+differently rather than not at all. Cheap check: build with and without
+`-D OFFBAND_CRASHLOG_DISABLED` and compare across RST and fast-replug.
+
 ## 5. The schematic EXISTS — and the battery values are already derived
 
 **A published RC52 schematic exists.** `[verified: fetched 2026-08-19, HTTP 200,
@@ -242,7 +273,24 @@ Arduino library. Look here before deriving anything:
 
 ---
 
-**Status:** no `variants/heltec_rc52` in tree. #625 is the epic. Nothing claimed.
+## 10. Where to start — #625 is decomposed
+
+| Issue | | Do it when |
+|---|---|---|
+| **#853** | Bootstrap RC52 into the device registry — **unplug the T096 first** (§8) | **First.** Blocks every flash. |
+| **#855** | Check the CrashLog boot hang before it burns a session | **Early.** Cheap; recognising it later costs hours. |
+| **#854** | Scaffold `variants/heltec_rc52` | After the registry. Copy §9, do not re-derive. |
+| **#856** | Back buffer — 56 KB allocation and the never-run fallback | With first display bring-up. |
+| **#857** | Confirm the battery path on hardware — 4.9/HIGH are derived, not measured | Before SafeBoot trusts it (#602). |
+| **#858** | FEM bring-up — `FEM_EN`, `VFEM_CTRL`, `RXEN` | Before trusting any RF numbers. |
+
+**#853 and #855 first.** One unblocks everything; the other is the failure that looks like
+dead hardware and is cheap to rule out. Both before writing a line of variant code.
+
+---
+
+**Status:** no `variants/heltec_rc52` in tree. Epic **#625** (`board:todo`), decomposed into
+the six above. Nothing claimed.
 
 ---
 
