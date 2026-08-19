@@ -341,10 +341,10 @@ static void displayInit(const uint8_t *addr) {
   }
 }
 
-static void setRotation(uint8_t m) {
+void ST7735Display::applyPanelRotation(uint8_t index) {
   uint8_t madctl = 0;
 
-  rotation = m & 3; // can't be higher than 3
+  rotation = index & 3; // can't be higher than 3
 
   switch (rotation) {
   case 0:
@@ -505,7 +505,7 @@ void ST7735Display::_resetAndInit() {
     displayInit(Rcmd2invert);   // invert RGB
 #endif
     displayInit(Rcmd3);
-    setRotation(DISPLAY_ROTATION);
+    applyPanelRotation(DISPLAY_ROTATION);
     
     // clear the buffer before display on
     sprite->fillScreen(ST77XX_BLACK);

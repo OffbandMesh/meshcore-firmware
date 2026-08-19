@@ -11,6 +11,19 @@ class ST7735Display : public DisplayDriver {
   RefCountedDigitalPin* _peripher_power;
 
   bool i2c_probe(TwoWire& wire, uint8_t addr);
+
+  // #812: applies the panel's MADCTL + address offsets for a rotation INDEX (0-3).
+  //
+  // Deliberately NOT named setRotation. It was a file-static of that name, called
+  // from a member function -- so when #148 added `virtual void setRotation(uint8_t)`
+  // to DisplayDriver, name lookup (class scope before file scope) silently rebound
+  // the call to the empty base method and boot rotation was discarded for two
+  // months. As a member with a distinct name, any future collision becomes
+  // member-hides-virtual, which a compiler can actually diagnose.
+  //
+  // NOTE the base virtual's contract is DEGREES (0/180, #148); this takes an INDEX
+  // (0-3, four MADCTL cases). Conflating the two is what caused #812 -- keep apart.
+  void applyPanelRotation(uint8_t index);
 public:
 #ifdef USE_PIN_TFT
   ST7735Display(RefCountedDigitalPin* peripher_power=NULL) : DisplayDriver(128, 64), 
