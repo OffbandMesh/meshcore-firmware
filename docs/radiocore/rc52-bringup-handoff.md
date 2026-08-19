@@ -32,9 +32,12 @@ It gives, directly and unambiguously:
 
 `[verified: read directly from image.png, 2026-08-19]`
 
-**What it does NOT give**, and what you therefore cannot derive from it: component values.
-No resistor network, so **no battery divider ratio**. See §5 — that is a real gate, and the
-RCC6 session got burned precisely there.
+**Why it is authoritative rather than merely useful:** Heltec publishes a datasheet for RC32
+and RCC6 but **not** for RC52 (§5). This image is the stand-in.
+
+**What it does NOT give:** component values — no resistor network, so no divider ratio.
+That comes from the schematic, which **does** exist and is already derived in §5. You do
+not need to re-derive it, and you should not invent it.
 
 ## 2. `[verified:]` P1 carrier header — read from the image
 
@@ -101,8 +104,16 @@ not of the pin assignments.
   chainable.
 - **SWDIO is on the header (pin 6 / P0.30) but there is no SWD probe** and none is wanted.
   Debug is USB-CDC serial only. Do not propose a J-Link.
-- **No display block appears in the pinout.** Whether RC52 carries the T108/NV3001B panel
-  at all is **unconfirmed** — do not assume the RC32/RCC6 display work transfers.
+- **There IS a display, and the RCC6 software-SPI trap does NOT apply here.** The vendor
+  BSP defines `PIN_TFT_MOSI/SCK/VDD_CTL/LEDA_CTL` with `PIN_TFT_MISO -1` (write-only panel,
+  as on the siblings) — but puts it on **SPI1 backed by SPIM3**, the nRF52840's single
+  high-speed instance (`SPI_32MHZ_INTERFACE 1`), with LoRa on SPI0. So unlike the RCC6 —
+  where SPI0/SPI1 drive flash, SPI2 goes to LoRa, nothing is left, and the panel must be
+  bit-banged — **RC52 has a dedicated hardware SPI for the TFT.** Do not port
+  `NV3001B_USE_SOFTWARE_SPI=1` here reflexively.
+- **ADC is 14-bit** (`ADC_RESOLUTION 14`), not the ESP32's 12. The RCC6
+  `analogReadMilliVolts` + attenuation pattern does not transfer.
+- **USER button is active-low with an external pull-up** (`PIN_BUTTON1 = P1.10`).
 
 ## 5. The schematic EXISTS — and the battery values are already derived
 
@@ -148,6 +159,22 @@ R14 1K → gate of Q3, which is **P-channel**, so gate-low turns it **on**.
 ⇒ **`ADC_CTRL_ENABLED = HIGH`**, and the divider is **off at reset** (R16) — no idle drain.
 
 `[schematic-derived: RC52-L62_V1.02 — NOT measured]`
+
+**Independently corroborated by the vendor's own BSP.**
+`HelTecAutomation/Heltec_nRF52`, `variants/heltec_rc52/variant.h`:
+
+```c
+#define ADC_CTRL         (0 + 4)      // P0.04
+#define ADC_CTRL_ENABLED HIGH         // agrees with the derivation above
+#define BATTERY_PIN      (0 + 31)     // P0.31 / AIN7
+#define BAT_AMPLIFY      4.9F         // the vendor's own multiplier
+```
+
+Two independent sources — this board's schematic and Heltec's own board header — both give
+**4.9** and **HIGH**. That is as settled as it gets without a meter, and it is also the
+clearest evidence that RCC6's `4.95` was invented rather than measured (#835).
+
+Take `4.9` and `HIGH`. Do not re-derive, do not "improve" them.
 
 **This is the nominal ratio, not a calibration.** At 1% parts the true ratio spans
 ~4.83–4.97 — wider than the correction that mattered on RCC6. And per #602, SafeBoot
@@ -216,3 +243,42 @@ Arduino library. Look here before deriving anything:
 ---
 
 **Status:** no `variants/heltec_rc52` in tree. #625 is the epic. Nothing claimed.
+
+---
+
+## 9. Vendor BSP config — read this before writing a variant
+
+`HelTecAutomation/Heltec_nRF52` → `variants/heltec_rc52/variant.h`
+`[verified: read via GitHub API 2026-08-19; repo pushed 2026-08-03]`
+
+Vendor-authored, and it agrees with both the pinout image and the schematic everywhere the
+three overlap. Everything below is **theirs**, not inferred:
+
+```c
+// LoRa (SX1262 / HT-RA62A) -- SPI0
+#define USE_SX1262
+#define SX126X_CS    (0 + 13)   // P0.13
+#define SX126X_DIO1  (0 + 11)   // P0.11
+#define SX126X_BUSY  (0 + 24)   // P0.24
+#define SX126X_RESET (32 + 0)   // P1.00
+#define SX126X_RXEN  (32 + 7)   // P1.07 -- HT-RA62A LNA_Ctrl
+#define SX126X_DIO2_AS_RF_SWITCH
+#define SX126X_DIO3_TCXO_VOLTAGE 1.8
+#define PIN_SPI_MISO (0 + 14)   // P0.14
+#define PIN_SPI_MOSI (0 + 22)   // P0.22
+#define PIN_SPI_SCK  (0 + 25)   // P0.25
+
+// FEM
+#define RADIOCORE_FEM_EN    (0 + 26)   // P0.26
+#define RADIOCORE_VFEM_CTRL (0 + 16)   // P0.16 -- FEM regulator enable
+
+// TFT -- SPI1, on SPIM3 (the one 32 MHz instance)
+#define SPI_INTERFACES_COUNT 2
+#define SPI_32MHZ_INTERFACE  1
+#define PIN_TFT_MISO  -1               // write-only panel
+#define PIN_SPI1_MISO (0 + 12)         // unwired; SPIClass needs a valid pin
+```
+
+**`FEM_LNA_CTRL` (P1.07) is `SX126X_RXEN`** — that is what the FEM's LNA control line is
+for, and it is the RadioLib RXEN pin. Worth knowing before treating the FEM as an unknown.
+
