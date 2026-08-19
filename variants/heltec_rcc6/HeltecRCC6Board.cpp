@@ -11,16 +11,37 @@ void HeltecRCC6Board::begin() {
   // `[verified: rendered schematic, U1/U3 comparison -- U1 (CE6260B33M -> VDD_3V3)
   //  has EN tied to IN and is unconditional; U3 does not]`
   //
-  // WHY WE ASSERT IT. Whether this rail gates the radio, the display, or both is
-  // NOT yet established (#805) -- the module pin it lands on was occluded in the
-  // render and has not been confirmed. Asserting it is the safe direction: if it
-  // feeds the radio, leaving it low is a silent dead SX1262 with no obvious
-  // pointer at a power rail; if it feeds only the display, asserting it costs a
-  // few mA. No reference implementation drives this pin -- n30nex's variant never
-  // touches GPIO11 -- so there is nothing to inherit here.
+  // `[schematic-derived: #805 -- NOT measured]` THIS RAIL ALMOST CERTAINLY DOES
+  // NOT POWER THE RADIO. Vext_3V3's only destination is U5 pin 25, which the
+  // RA62A symbol labels NC; the net name appears exactly twice on the whole
+  // single-page sheet (the U3 output, and that pin). The module's supply is
+  // VDD_3V3 on U5 pin 10, off U1, which is unconditional.
   //
-  // Revisit under #805, and if the rail turns out to be display-only, gate it
-  // with the display rather than holding it up unconditionally.
+  // Evidence, computed from the PDF's vector geometry rather than read off a
+  // render: the sole vertical segment reaching the Vext node is at x=640.63. The
+  // PDF carries its own per-pin designators (PIU50nn); matching every bottom-edge
+  // pin against the drawn stubs gives agreement within +/-0.61 for every pin that
+  // HAS a stub, and x=640.63 lands on PIU5025 (641.00, delta -0.37) with its
+  // neighbours 3.59 away. Pins 23 and 30 deviate ~3.3 precisely because no stub
+  // is drawn for them -- they are NC with no wire, which is corroboration, not
+  // error.
+  //
+  // WHAT WOULD FALSIFY IT, and why this is not called `[verified:]`: no voltage
+  // was ever measured. A schematic read -- however carefully computed -- is not a
+  // measurement, and this part is explicitly dual-variant (RA62A_LF/RA62A_HF), so
+  // a pin that is NC on one population can be live on the other. The cheap
+  // settling test is a multimeter on U5 pin 10 and pin 25 with GPIO11 de-asserted
+  // and asserted. Until someone does that, this is a strong inference.
+  //
+  // SO WHY STILL ASSERT IT? Precisely BECAUSE it is inference and not measurement.
+  // If the inference is right, asserting costs the TLV75733's quiescent draw and
+  // nothing else. If it is wrong, NOT asserting is a silent dead SX1262 with no
+  // obvious pointer at a power rail. That asymmetry favours asserting until the
+  // measurement exists -- and removing it is the owner's call regardless, since it
+  // changes runtime behaviour on a board already verified working. PIN_VEXT_EN
+  // stays defined either way, so one line restores it.
+  //
+  // NOT resolved by this: SELECT (GPIO7) -- see the note at the end of begin().
   pinMode(PIN_VEXT_EN, OUTPUT);
   digitalWrite(PIN_VEXT_EN, PIN_VEXT_EN_ACTIVE);
   delay(10);   // let the LDO settle before anything downstream is touched
@@ -45,7 +66,12 @@ void HeltecRCC6Board::begin() {
   // RA62A_LF/RA62A_HF -- a dual LF/HF part -- so SELECT plausibly chooses the RF
   // path, but that is `[hypothesis: untested]` and n30nex does not drive it
   // either. Driving a strap-capable pin whose function is unconfirmed is worse
-  // than leaving it at its board default. Tracked on #806.
+  // than leaving it at its board default.
+  //
+  // Tracked on #805 ("Related unknown -- do not lose this one"), NOT #806, which
+  // is closed. If SELECT does choose the RF path, the wrong default presents as
+  // mediocre range rather than a clean failure -- the failure mode nobody files
+  // a bug for. Settle it before this board ships to testers.
 }
 
 uint16_t HeltecRCC6Board::getBattMilliVolts() {

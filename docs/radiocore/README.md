@@ -108,6 +108,42 @@ confirmed, so establish what our physical unit exposes before trusting those pin
 | LoRa | `SCLK=21  MISO=20  MOSI=22  NSS=23  DIO1=19  BUSY=10  RESET=8` |
 | Battery | `ADC_CTRL=5  VBAT_READ=6  multiplier 4.95` |
 | Button | `9` |
+| `Vext_3V3` LDO enable | `11` — **does NOT power the radio**, see below |
+| `SELECT` (RF path?) | `7` — **unresolved**, see below |
+
+#### The two RCC6 power/RF rails you will otherwise re-derive
+
+**`Vext_3V3` (GPIO11) almost certainly does NOT gate the LoRa supply** —
+`[schematic-derived: #805 — NOT measured]`. The board has two 3V3 regulators and only one
+is unconditional:
+
+| Rail | Regulator | `EN` | Default |
+|---|---|---|---|
+| `VDD_3V3` | U1 `CE6260B33M` | tied to `IN` | **always on** — and this is what powers the RA62A (U5 pin 10) |
+| `Vext_3V3` | U3 `TLV75733PDBVR` | `VEXT_LDO_Ctrl` = **GPIO11**, 100 K pulldown | off until firmware asserts it |
+
+`Vext_3V3`'s **only** destination is **U5 pin 25, which the RA62A symbol labels `NC`**. The
+net name appears exactly twice on the whole schematic — the U3 output and that pin. Its
+10 µF + 100 nF decoupling makes it look like a module supply; it is one, it just lands on a
+pin this population does not connect. Most likely provisioned for the HaLow module on the
+shared carrier `[hypothesis:]`.
+
+Practical effect: **the radio should come up whether or not you touch GPIO11.** The variant
+asserts it anyway, deliberately: this is a schematic inference, not a measurement, and the
+asymmetry favours asserting — if the inference is right it costs quiescent draw, if it is
+wrong not asserting is a silent dead SX1262.
+
+**To settle it, measure.** Multimeter on U5 pin 10 and pin 25 with GPIO11 de-asserted and
+asserted. That is cheap and definitive; everything above is inference from the PDF, and the
+part is dual-variant (`RA62A_LF/RA62A_HF`), so an `NC` pin on this population could be live
+on the other.
+
+**`SELECT` = GPIO7 is NOT resolved** — and it is the one that can bite quietly. The module
+is marked `RA62A_LF/RA62A_HF`, a dual LF/HF part, so `SELECT` plausibly chooses the RF path.
+Neither our variant nor n30nex drives it. If it *is* a band select, the wrong default
+presents as **mediocre range, not a clean failure** — the failure mode nobody files a bug
+for. Settle it with an RSSI/range comparison against a known peer, GPIO7 driven each way,
+before trusting RF numbers off this board. Tracked on #805.
 
 **Only three LoRa pins reach the header** — `SCLK=21`, `MOSI=22`, `NSS=23`, which is
 exactly the block the diagram rings with a dashed "LoRa Module" box (pins 13/14/15).
@@ -141,22 +177,44 @@ before USB init — at full charge, presenting as a completely dead board. See #
 board. Never copy it from a sibling variant.** `[verified: RC52 pinout diagram shows the
 gate; the #602 failure mode is documented in HARDWARE.local.md]`
 
-### RCC6 — ESP32-C6 heap headroom
+### RCC6 — ESP32-C6 heap, MEASURED
 
-The C6 has materially less usable SRAM than the S3, and Offband's WiFi/TLS observer path
-has a hard heap floor: `OFFBAND_TLS_HEAP_FLOOR_BYTES` = **80 KB**, guarding a ~72 KB TLS
-handshake transient. `[verified: src/helpers/wifi_observer/WifiObserverConfig.h:85]`
+**The observer runs on the RCC6.** `[verified: rcc6-bench-1, owner-configured with four
+brokers, 354 s continuous — WiFi + MQTT + radio up, brokers rotating normally]` This
+supersedes the earlier "measure before designing any WiFi/Observer work" gating note; the
+measurement is done and it did not block.
 
-A community RCC6 repeater dashboard reports **free heap 91 KB, minimum 17 KB** — i.e. a
-working C6 build sits only ~11 KB above that floor, with a low-water mark far beneath it.
-`[hypothesis: untested — that figure is from a third-party build, not ours]`
+**Read the two numbers correctly — this is where a prior analysis went wrong (#830):**
 
-If it holds on our hardware, an Offband TLS observer on RCC6 would land in the same shape
-as the HV3 heap-floor deadlock (#521, fixed by #534 lazy client allocation). **Measure
-real heap on the board before designing any WiFi/Observer work for it** — that is the
-first gating task on #624, ahead of feature work. A web UI, TLS broker, or high contact
-count on this module can exhaust memory in ways that present as intractable runtime
-faults rather than clean failures.
+- **`OFFBAND_MAX_LIVE_TLS` = 1 is the GLOBAL default**, not a C6 limit. Each live wss
+  broker holds a ~60 KB mbedTLS context, so *every* PSRAM-less board holds exactly one;
+  HV3 included. Seeing `live=1/1` on RCC6 is the designed cap, not a symptom. The #175
+  rotation scheduler exists precisely to cycle more brokers through that 1-wide budget.
+- **`OFFBAND_TLS_HEAP_FLOOR_BYTES` = 80 KB gates *starting* a handshake — it is not a
+  required running heap level.** *"We refuse to START a TLS handshake unless free heap
+  exceeds this floor, so the transient always fits."* With `MAX_LIVE_TLS=1` the source
+  calls it "a backstop." Sitting below it between handshakes is normal operation.
+  `[verified: src/helpers/wifi_observer/WifiObserverConfig.h]`
+
+| | RCC6 (measured) | HV3 (source-documented) |
+|---|---|---|
+| Live TLS contexts | 1 | 1 — same global cap |
+| Free heap, one broker live | ~28–38 KB | ~63 KB |
+| Free heap between brokers | ~86 KB — **above** the floor | ~124 KB with WiFi up |
+| `heap_min` watermark | **900 B** | ~52 KB one-broker; 456 B two-broker (#171 knife-edge) |
+
+Heap recovering above the floor between rotations is the mechanism working: the next
+handshake only starts once there is room for its ~72 KB transient.
+
+**Genuinely open — the `heap_min` gap.** 900 B against HV3's ~52 KB for the equivalent
+one-broker case is a wide difference and is not explained. `heap_min` is a **lifetime
+watermark**, so *when* it occurred is unestablished — boot, a transient, or a deferred
+handshake are all consistent with the log. Worth an instrumented look; it is **not** a
+reason to withhold the build, and it was wrong to treat it as one.
+
+Working headroom on this part is roughly half HV3's. Size WiFi/Observer work against
+~35 KB with a broker live, not against S3 numbers — a web UI or high contact count on top
+of an active TLS broker is where this would get tight.
 
 ### RC52 — opportunity, not hazard
 
