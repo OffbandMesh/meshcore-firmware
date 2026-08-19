@@ -43,6 +43,13 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+# #849: `send` streams the device's reply straight to stdout, and three CLI keys
+# return secrets. The patterns live in scripts/log_redact.py and are shared with
+# _cap_serial.py and companion_harness.py -- a second copy is a copy that drifts,
+# and the copy that drifts is the one that leaks (#667).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from log_redact import redact_line  # noqa: E402
 from typing import Any, Optional
 
 try:
@@ -1442,6 +1449,93 @@ def cmd_confirm(args, registry):
     return rc
 
 
+# ---------------------------------------------------------------------------
+# #849: secret-bearing CLI replies
+#
+# `get prv.key` returns the node's private key, and is serial-only by design
+# (CommonCLI gates it on sender_timestamp == 0) -- which is exactly the path
+# this tool uses. `get guest.password` and `get bridge.secret` are the same
+# problem. Anything reading this tool's stdout (an agent, a log, a session
+# transcript) receives the value, and scrubbing it afterwards is too late.
+#
+# A deny-list that refuses to SEND these was considered and rejected: it keeps
+# them out of logs by never testing them, leaving three keys permanently
+# unverified. That is precisely how #764's three keys went ten months returning
+# empty replies. So we send everything and redact the reply instead.
+# ---------------------------------------------------------------------------
+
+_SECRET_CLI_KEYS = frozenset({
+    "prv.key",         # node private key
+    "guest.password",
+    "bridge.secret",
+    "password",        # `set password <v>`; CommonCLI echoes it back
+})
+
+
+def _is_secret_command(cmd: str) -> bool:
+    """True when this command's reply may carry a secret.
+
+    Matches the KEY exactly after the verb -- never by prefix. Prefix matching
+    is the defect class this repo just removed from the firmware CLI (#764);
+    reintroducing it here would mean `get prv.keyfoo` silently classified as
+    secret, or worse, a real secret key missed by a near-match.
+    """
+    tokens = (cmd or "").split()
+    if len(tokens) < 2:
+        return False
+    verb = tokens[0].lower()
+    if verb not in ("get", "set"):
+        return False
+    return tokens[1].lower() in _SECRET_CLI_KEYS
+
+
+class _ReplyRedactor:
+    """Buffers serial bytes to line boundaries, then redacts before printing.
+
+    Serial arrives in arbitrary reads, so a secret can straddle two of them.
+    Redacting each chunk as it lands would miss `  > hun` + `ter2\r\n`
+    entirely, which is the whole failure this class exists to prevent.
+
+    `secret=False` still applies every other rule (SSID, password:, JWT, email,
+    GPS) but skips the label-less `> value` net, so an ordinary reply such as
+    `> 910.525,62.5,7,5` survives byte-for-byte. Without that, every existing
+    use of this tool regresses and the CLI sweep (#852) can assert nothing.
+    """
+
+    def __init__(self, secret: bool):
+        self._secret = bool(secret)
+        self._buf = ""
+
+    def _scrub(self, text: str) -> str:
+        if not text:
+            return text
+        # Keep the line ending exactly as it arrived; the rules operate on the
+        # content, and the caller's byte stream should not be reshaped.
+        stripped = text.rstrip("\r\n")
+        ending = text[len(stripped):]
+        return redact_line(stripped, cli_reply_net=self._secret) + ending
+
+    def feed(self, data: bytes) -> str:
+        """Absorb a raw chunk; return only whole redacted lines."""
+        self._buf += data.decode("utf-8", errors="replace")
+        out = []
+        while True:
+            nl = self._buf.find("\n")
+            if nl < 0:
+                break
+            line, self._buf = self._buf[:nl + 1], self._buf[nl + 1:]
+            out.append(self._scrub(line))
+        return "".join(out)
+
+    def flush(self) -> str:
+        """Redact and return whatever is left, including a line with no newline.
+
+        A reply that never terminates its line must not escape unredacted.
+        """
+        rest, self._buf = self._buf, ""
+        return self._scrub(rest)
+
+
 def cmd_send(args, registry):
     """
     Tier B: open serial, write command + CR, read response for N seconds.
@@ -1486,17 +1580,22 @@ def cmd_send(args, registry):
 
             deadline = time.time() + args.read_time
             captured = bytearray()
+            # #849: never write raw device bytes to stdout. Buffer to line
+            # boundaries and redact first -- a secret can straddle two reads.
+            redactor = _ReplyRedactor(secret=_is_secret_command(args.command))
             while time.time() < deadline:
                 data = s.read(1024)
                 if data:
                     captured.extend(data)
-                    try:
-                        sys.stdout.buffer.write(data)
-                        sys.stdout.buffer.flush()
-                    except Exception:
-                        # If stdout.buffer not available, fall back to text print
-                        sys.stdout.write(data.decode("utf-8", errors="replace"))
+                    text = redactor.feed(data)
+                    if text:
+                        sys.stdout.write(text)
                         sys.stdout.flush()
+
+            tail = redactor.flush()
+            if tail:
+                sys.stdout.write(tail)
+                sys.stdout.flush()
 
             if captured and not bytes(captured).endswith(b"\n"):
                 print()
