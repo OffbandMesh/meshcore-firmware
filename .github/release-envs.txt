@@ -162,7 +162,12 @@ heltec_rcc6_repeater_display
 # ⚠ APPROVED EXCEPTION -- OWNER DECISION. NOT THE RULE.
 #
 # THE RULE STILL STANDS: diag envs are diagnostic instruments, not products, and
-# they are not released. That holds for the RC32 and for every other board here.
+# they are not released anywhere it is not explicitly excepted. The shared rule
+# block near the top of this file is the authority on WHICH boards are excepted
+# and why -- read it there, not here (#846). This paragraph used to assert the
+# rule "holds for the RC32", which #824 made false when RC32 gained its own
+# exception; a second author updated the shared block but could not reach into
+# this one.
 # Do NOT cite these entries as precedent for releasing diag builds elsewhere.
 #
 # WHY THE EXCEPTION EXISTS: the project now potentially supports beta users on
