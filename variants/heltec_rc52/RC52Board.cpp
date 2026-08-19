@@ -9,12 +9,13 @@ void RC52Board::begin() {
   Wire.begin();
 
   // ---------------------------------------------------------------------------
-  // ORDER MATTERS HERE: settle FEM_EN BEFORE powering the FEM rail.
+  // ORDER: settle FEM_EN before raising the FEM rail.
   //
-  // If VFEM_Ctrl is raised first, there is a window in which the module is
-  // powered while its enable input is still floating -- which is the exact
-  // condition the pulldown below exists to avoid, just narrowed to a few
-  // microseconds. Define the control level first, then apply power.
+  // [hypothesis: untested] The reasoning is that raising VFEM_Ctrl first leaves a
+  // window in which the module is powered while its enable input is still
+  // floating. That is an argument, not a measurement -- see the FEM_EN block
+  // below for why the whole pulldown decision is unverified. The ordering costs
+  // nothing either way, so it is kept, but it is NOT evidence-backed.
   // ---------------------------------------------------------------------------
 
   // ---------------------------------------------------------------------------
@@ -26,12 +27,21 @@ void RC52Board::begin() {
   // and RC52/pinmap/ both 404). So its asserted sense is UNESTABLISHED and this
   // scaffold must not guess it.
   //
-  // But leaving it hi-Z is worse than picking a level: a floating CMOS input can
-  // sit at an intermediate voltage and hold the module's input buffer in a
-  // partially-conducting state, which wastes current and can stress the part.
-  // INPUT_PULLDOWN gives a defined, stable, low-current level without this code
-  // asserting that LOW means "enabled" -- it may well mean enabled, and that is
-  // exactly what #858 has to establish by measurement.
+  // [hypothesis: untested] The pulldown below rests on the general argument that
+  // a floating CMOS input can sit at an intermediate voltage and hold the
+  // receiving buffer partly conducting, wasting current. That is textbook
+  // reasoning, NOT a measurement of THIS module: there is no HT-RA62A datasheet,
+  // no current figure, and nothing has been scoped on this pin. It is also not
+  // known whether the module biases the pin internally, which would make the
+  // pulldown either redundant or a fight against an internal pull-up.
+  //
+  // What would settle it (#858): scope P0.26 at boot with the pulldown removed to
+  // see whether it actually floats, and measure module supply current in both
+  // states. If it does not float, this line should be deleted rather than kept.
+  //
+  // INPUT_PULLDOWN, if the reasoning holds, gives a defined level without this
+  // code asserting that LOW means "enabled" -- it may well mean enabled, and that
+  // is also #858's to establish.
   //
   // Consequence to expect: RF performance on this headless scaffold is NOT
   // characterised and should not be measured or trusted until #858 lands. The
