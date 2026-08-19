@@ -1,4 +1,5 @@
 #include "ST7735Display.h"
+#include "St7735Palette.h"   // #785: Offband dark theme colour roles
 
 //#include <Fonts/GFXFF/FreeSans9pt7b.h>
 
@@ -418,15 +419,21 @@ bool ST7735Display::i2c_probe(TwoWire& wire, uint8_t addr) {
 #endif
 
 // Color scheme
-ColorVal UIColor::window_bkg = ST77XX_WHITE;
-ColorVal UIColor::title_bkg = ST77XX_BLUE;
-ColorVal UIColor::title_txt = ST77XX_WHITE;
-ColorVal UIColor::primary_txt = ST77XX_BLACK;
-ColorVal UIColor::secondary_txt = (18 << 11) | (36 << 5) | 18;  // mid-gray
-ColorVal UIColor::warning_txt = ST77XX_ORANGE;
-ColorVal UIColor::popup_bkg = ST77XX_CYAN;
-ColorVal UIColor::popup_txt = ST77XX_BLACK;
-ColorVal UIColor::corp_blue = 0x001A;
+// #785: Offband dark theme. Values and their rationale live in St7735Palette.h so
+// they can be unit-tested -- this file cannot be compiled natively, so constants
+// held here are unreachable by any test. See test/test_palettes.
+ColorVal UIColor::window_bkg    = st7735_palette::WINDOW_BKG;
+ColorVal UIColor::title_bkg     = st7735_palette::TITLE_BKG;
+ColorVal UIColor::title_txt     = st7735_palette::TITLE_TXT;
+ColorVal UIColor::primary_txt   = st7735_palette::PRIMARY_TXT;
+ColorVal UIColor::secondary_txt = st7735_palette::SECONDARY_TXT;
+ColorVal UIColor::warning_txt   = st7735_palette::WARNING_TXT;
+ColorVal UIColor::popup_bkg     = st7735_palette::POPUP_BKG;
+ColorVal UIColor::popup_txt     = st7735_palette::POPUP_TXT;
+// Not a blue any more. The symbol is declared in DisplayDriver.h and defined by all
+// 12 drivers, so it cannot be removed without a tree-wide change; what changes here
+// is its value on THIS driver.
+ColorVal UIColor::corp_blue     = st7735_palette::CORP_ACCENT;
 
 bool ST7735Display::begin() {
   if (!sprite) {
