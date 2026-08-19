@@ -108,6 +108,13 @@ void UITask::loop() {
     _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
   } else if (ev == BUTTON_EVENT_LONG_PRESS) {
       _display->turnOn();
+      // #844: extend the auto-off timer, exactly as the CLICK branch does. Without
+      // this, a long-press made while the display has already blanked (>20s idle --
+      // the normal state) turns the panel on, renders ONE frame, and the auto-off
+      // check below blanks it again on the SAME loop pass, because _auto_off is
+      // already in the past. The power-off screen became a sub-250ms flash and the
+      // board then sat dark for the rest of POWEROFF_DELAY.
+      _auto_off = millis() + AUTO_OFF_MILLIS;
       Serial.println("Powering Off");
       _powering_off_at = millis() + POWEROFF_DELAY; 
   }
