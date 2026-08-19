@@ -76,6 +76,13 @@ def redact_positions(line: str) -> str:
 
 _SECRET_WORDS = (r"password|passwd|pwd|psk|secret|token|apikey|api_key|bearer|pass")
 
+# Named so a caller that already KNOWS which command it issued can opt out of
+# just this one rule (#849). `pio-flash send` has to keep printing
+# `> 910.525,62.5,7,5` verbatim for ordinary keys while still redacting
+# `get prv.key`; a blanket net cannot do both. The length is carried so a
+# sweep can assert that a secret key ANSWERED without recording what it said.
+_CLI_REPLY_RE = re.compile(r"(^\s*>\s*)([^\r\n]+)")
+
 _REDACTIONS = [
     # WiFi SSID, in the shapes the firmware actually prints.
     (re.compile(r"(SSID\s*=\s*)([^;\r\n]+)", re.IGNORECASE), r"\1<redacted:ssid>"),
@@ -108,14 +115,24 @@ _REDACTIONS = [
     # must allow leading whitespace; the original `^>` missed it and leaked a real
     # SSID on the bench. Runtime log lines are "[ms] LEVEL: ..." or "[Tag] ...",
     # never a leading ">", so this does not over-redact a caplog.
-    (re.compile(r"(^\s*>\s*)([^\r\n]+)"), r"\1<redacted:cli-reply>"),
+    (_CLI_REPLY_RE,
+     lambda m: m.group(1) + "<redacted:cli-reply:" + str(len(m.group(2))) + ">"),
 ]
 
 
-def redact_line(line: str) -> str:
+def redact_line(line: str, cli_reply_net: bool = True) -> str:
     """Apply every rule to one line. Position classification runs last so a
-    coordinate inside an otherwise-redacted line is still handled."""
+    coordinate inside an otherwise-redacted line is still handled.
+
+    `cli_reply_net` defaults True, so every existing caller is unchanged.
+    Pass False ONLY when you already know which command produced this line
+    and know it is not secret-bearing (see `pio-flash send`, #849). Turning
+    it off blindly reopens #382, where a real SSID reached chat as `  > ...`
+    with no label for any other rule to match on.
+    """
     for pattern, repl in _REDACTIONS:
+        if not cli_reply_net and pattern is _CLI_REPLY_RE:
+            continue
         line = pattern.sub(repl, line)
     return redact_positions(line)
 
