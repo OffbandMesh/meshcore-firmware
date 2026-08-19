@@ -57,16 +57,27 @@ and announce pickup on Agent Mail. Value format = the standards#230 identity sta
 `YourName (session <8-char-uuid>)`.
 
 ```bash
-item=$(gh api "orgs/OffbandMesh/projectsV2/1/items?q=<issue number>" --jq '.[0].id')
+# Resolve the board item BY CONTENT NUMBER -- never .[0] (see gotchas)
+item=$(gh api "orgs/OffbandMesh/projectsV2/1/items?q=<N>&per_page=20" \
+  --jq '.[] | select(.content.number==<N>) | .id')
+# Set the field (PATCH response echoes {raw, html} -- that echo IS your confirmation)
 gh api -X PATCH "orgs/OffbandMesh/projectsV2/1/items/$item" \
   --input - <<< '{"fields":[{"id":401541041,"value":"YourName (session xxxxxxxx)"}]}'
+# Later readback (REST works -- you must ASK for the field):
+gh api "orgs/OffbandMesh/projectsV2/1/items/$item?fields=401541041" --jq '.fields[].value.raw'
 ```
 
-Gotchas (each one has already cost a 422 or a mis-stamp):
+Gotchas (every one of these has already cost a real 422, mis-stamp, or false "broken" report — #874):
+- **Never `.[0].id`.** The `q=` search is fuzzy and mis-ranks: `q=832` returned issue #779
+  first and would have stamped the wrong item (FoggyCanyon, live case). Select on
+  `.content.number==N`; add `and .content_type=="PullRequest"` (or `"Issue"`) when an issue
+  and its PR share a number.
 - REST wants the **numeric** field id (`401541041`), NOT the `PVTF_…` node id.
 - `fields` must be an **array** of `{id, value}` objects, not a map.
-- The `q=` search is fuzzy — read back `.content.number`/`.content.title` and confirm it
-  is your issue **before** the PATCH, or you stamp someone else's item.
+- **A plain GET shows only `Title`** — three agents independently concluded their PATCH had
+  failed and one reached for GraphQL. The field is there; pass `?fields=401541041`. No
+  GraphQL is needed anywhere in this flow (and GraphQL quota is shared — one paginated
+  board query exhausted it for everyone once).
 - Works with plain session `gh` auth (verified live 2026-08-18); no PAT needed.
 
 **Required secret:** the sync workflow needs repo secret `PROJECT_PAT` — a **classic** PAT with `project` + `repo` scope (the default `GITHUB_TOKEN` cannot mutate an org-owned Projects v2 board). ⚠ **Must be classic, not fine-grained:** OffbandMesh rejects fine-grained PATs with >366-day lifetime for org-Projects access, so `GITHUB_PERSONAL_ACCESS_TOKEN` (fine-grained) does **not** work (DifferentWire/standards#148). **Set + verified** 2026-06-14 (board sync confirmed live).
