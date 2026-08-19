@@ -1536,6 +1536,141 @@ class _ReplyRedactor:
         return self._scrub(rest)
 
 
+# ---------------------------------------------------------------------------
+# #850: batch mode
+#
+# `send` is one command per run, and the flash discipline is one human approval
+# per RUN of this tool. Sweeping the CLI surface is 47 `get` keys (#852), so at
+# one approval each it costs 47 approvals and therefore never gets run. The
+# tool's granularity is what makes the work impossible, not the work itself.
+#
+# Batch is READ-ONLY BY CONSTRUCTION. The approval model exists because a
+# wrong-device flash happened (#500); a batch that could carry `set` would let
+# forty state changes ride in on one approval. Only `get` is accepted, and the
+# whole run is refused up front -- never halfway through, because a partially
+# executed batch is the worst outcome: some state changed and the operator
+# approved none of it.
+# ---------------------------------------------------------------------------
+
+
+_BATCH_ABORT_AFTER = 3  # consecutive transport failures before giving up
+
+
+class BatchRefused(Exception):
+    """A batch contained something that is not a read-only interrogation."""
+
+
+def _is_read_only_command(cmd: str) -> bool:
+    """Only `get <key>` interrogations. Deliberately narrow.
+
+    Not an allowlist of 'probably safe' verbs -- `advert` transmits, `reboot`
+    and `erase` change device state, `set` writes config. Any of those belongs
+    in a single `send` under its own approval, where a human sees it.
+
+    ASSUMPTION THIS GATE RESTS ON, stated because it is a property of the
+    firmware and not of this tool: `get` is side-effect-free. Verified against
+    CommonCLI::handleGetCmd -- its body contains no assignment to _prefs, no
+    save, no reboot/advert/erase, and every _board / _callbacks call it makes
+    is a getter. If a future `get` handler mutates state, this gate silently
+    stops being a gate. A firmware-side check belongs with the CLI dispatch
+    guard (#775), not here.
+    """
+    tokens = (cmd or "").split()
+    return len(tokens) >= 2 and tokens[0].lower() == "get"
+
+
+def _read_until_idle(read_fn, idle_s: float, max_s: float,
+                     now_fn=time.time, sleep_fn=time.sleep) -> bytes:
+    """Read until the device goes quiet, bounded by `max_s`.
+
+    A fixed read window is wrong in both directions: it truncates a reply that
+    arrives slowly (reporting it as absent, which is the exact signal #851 is
+    trying to measure) and it burns the whole window on a reply that arrived in
+    milliseconds -- 47 keys at 2s each is 94 seconds of deliberate waiting.
+
+    Waits for the FIRST byte for up to `max_s`, then returns once `idle_s`
+    passes with nothing new. `max_s` still bounds a device that chatters
+    forever, and whatever arrived is returned rather than discarded.
+    """
+    buf = bytearray()
+    start = now_fn()
+    last = start
+    while True:
+        if now_fn() - start >= max_s:
+            break
+        chunk = read_fn()
+        if chunk:
+            buf.extend(chunk)
+            last = now_fn()
+        elif buf and (now_fn() - last) >= idle_s:
+            break
+    return bytes(buf)
+
+
+def _run_batch(commands, send_fn, read_time: float = 5.0):
+    """Send each command through `send_fn`, redact per command, collect results.
+
+    `send_fn(cmd) -> bytes` is injected so the sequencing, classification and
+    fail-soft behaviour are testable without a serial port.
+
+    Returns one row per command, in order:
+        {command, reply, answered, [error]}
+
+    `answered` distinguishes the two failures that matter and must never be
+    conflated: a reply that is EMPTY is the #764 shape (the handler matched and
+    wrote nothing), while a command that never came back at all is the
+    latency/loss symptom #851 measures. Recording both as "no reply" would
+    destroy the diagnosis the sweep exists to make.
+    """
+    refused = [c for c in commands if not _is_read_only_command(c)]
+    if refused:
+        raise BatchRefused(
+            "batch accepts read-only `get` interrogations only; refusing the "
+            "whole run because of: " + ", ".join(repr(c) for c in refused) +
+            ". Issue state-changing commands one at a time with `send`, so each "
+            "gets its own approval."
+        )
+
+    rows = []
+    consecutive_failures = 0
+    aborted = False
+    for cmd in commands:
+        row = {"command": cmd, "reply": "", "answered": False, "empty_reply": False}
+
+        if aborted:
+            # The port is gone. Retrying 40 more times produces 40 identical
+            # exceptions after a long wait and tells nobody anything new.
+            row["skipped"] = True
+            rows.append(row)
+            continue
+
+        try:
+            raw = send_fn(cmd)
+        except Exception as e:
+            row["error"] = f"{type(e).__name__}: {e}"
+            consecutive_failures += 1
+            if consecutive_failures >= _BATCH_ABORT_AFTER:
+                aborted = True
+                row["aborted_here"] = True
+            rows.append(row)
+            continue
+
+        consecutive_failures = 0
+        raw = raw or b""
+        redactor = _ReplyRedactor(secret=_is_secret_command(cmd))
+        text = redactor.feed(raw) + redactor.flush()
+        row["reply"] = text
+        # `answered` is a TRANSPORT question: did the device respond at all?
+        # Whether the response had content is a separate, and different,
+        # finding -- a reply of "\r\n" is answered-but-empty, which is #764's
+        # shape. Collapsing the two turns a valid quiet reply into a phantom
+        # failure, and hides the defect the sweep exists to catch.
+        row["answered"] = len(raw) > 0
+        row["empty_reply"] = row["answered"] and not text.strip()
+        rows.append(row)
+    return rows
+
+
 def cmd_send(args, registry):
     """
     Tier B: open serial, write command + CR, read response for N seconds.
@@ -1614,6 +1749,76 @@ def cmd_send(args, registry):
         "exit_code": 0,
     })
     return 0
+
+
+def cmd_send_batch(args, registry):
+    """Tier B: one open port, N read-only commands, one approval."""
+    port, _ = resolve_device(args.device, registry)
+    if port.get("bridge_provisional"):
+        refuse(
+            f"'{args.device}' resolved only provisionally (bridge-class; identity "
+            "unverifiable without a chip reset). Refusing to send to a possibly-"
+            "wrong board (#468)."
+        )
+
+    try:
+        commands = [
+            l.strip() for l in Path(args.commands_file).read_text(encoding="utf-8").splitlines()
+            if l.strip() and not l.strip().startswith("#")
+        ]
+    except OSError as e:
+        refuse(f"cannot read --commands-file: {e}")
+    if not commands:
+        refuse(f"no commands in {args.commands_file}")
+
+    try:
+        import serial
+    except ImportError:
+        refuse("pyserial not available; pip install pyserial")
+
+    out(f"Batch to {args.device} on {port['com']}: {len(commands)} command(s), "
+        f"{args.read_time}s each")
+
+    try:
+        # timeout well under idle_time so an idle gap is noticed promptly
+        with serial.Serial(port["com"], baudrate=args.baud, timeout=0.05) as sp:
+            time.sleep(0.2)
+            try:
+                sp.reset_input_buffer()
+            except Exception:
+                pass
+
+            def send_one(cmd: str) -> bytes:
+                try:
+                    sp.reset_input_buffer()
+                except Exception:
+                    pass
+                sp.write((cmd + "\r").encode("utf-8"))
+                sp.flush()
+                return _read_until_idle(lambda: sp.read(1024),
+                                        idle_s=args.idle_time,
+                                        max_s=args.read_time)
+
+            rows = _run_batch(commands, send_one, read_time=args.read_time)
+    except BatchRefused as e:
+        refuse(str(e))
+    except Exception as e:
+        refuse(f"serial batch failed on {port['com']}: {e}")
+
+    answered = sum(1 for r in rows if r["answered"])
+    empty = sum(1 for r in rows if r.get("empty_reply"))
+    skipped = sum(1 for r in rows if r.get("skipped"))
+    for r in rows:
+        status = "ok " if r["answered"] else "MISS"
+        first = (r["reply"].strip().splitlines() or [""])[0]
+        out(f"  [{status}] {r['command']}: {first}")
+    out(f"{answered}/{len(rows)} answered"
+        + (f", {empty} answered-but-EMPTY" if empty else "")
+        + (f", {skipped} skipped after transport failure" if skipped else ""))
+
+    if args.json_out:
+        Path(args.json_out).write_text(json.dumps(rows, indent=2), encoding="utf-8")
+        out(f"wrote {args.json_out}")
 
 
 def cmd_monitor(args, registry):
@@ -2375,6 +2580,18 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--read-time", type=float, default=5.0,
                    help="seconds to read response after sending (default 5)")
 
+    s = sub.add_parser("send-batch",
+                       help="send N read-only `get` commands over one open port (Tier B)")
+    s.add_argument("device")
+    s.add_argument("--commands-file", required=True,
+                   help="one command per line; blank lines and # comments ignored")
+    s.add_argument("--baud", type=int, default=115200)
+    s.add_argument("--read-time", type=float, default=3.0,
+                   help="hard cap on the read for each command (default 3)")
+    s.add_argument("--idle-time", type=float, default=0.25,
+                   help="return once the device has been quiet this long (default 0.25)")
+    s.add_argument("--json-out", help="write structured per-command results here")
+
     s = sub.add_parser("info", help="meshtastic --info (Tier B)")
     s.add_argument("device")
     s.add_argument("--known-port", default=None, metavar="COMx",
@@ -2438,6 +2655,7 @@ def main() -> int:
         "confirm": cmd_confirm,
         "monitor": cmd_monitor,
         "send": cmd_send,
+        "send-batch": cmd_send_batch,
         "info": cmd_info,
         "read-mac": cmd_read_mac,
         "backup": cmd_backup,
