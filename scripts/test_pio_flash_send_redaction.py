@@ -117,6 +117,72 @@ def test_undecodable_bytes_do_not_crash_or_vanish():
     assert "junk" in out, out
 
 
+
+# =========================================================================
+# Adversarial-review findings (#892 Gemini gate)
+# =========================================================================
+
+def test_a_SHORT_secret_survives_nothing_even_with_the_marker_destroyed():
+    """CRITICAL, found by review. Every locating rule needs something to match
+    on -- a `>` marker, or a value long enough to look opaque. A log splice can
+    destroy the marker and leave a SHORT secret behind:
+
+        [D][main.cpp:123] Loop hunter2
+
+    No `>`, 7 characters, no keyword. Nothing matched and it was emitted
+    verbatim. On a command already classified secret we do not need to FIND the
+    value -- we refuse to emit the line."""
+    r = pio_flash._ReplyRedactor(secret=True)
+    out = _drain(r, [b"[D][main.cpp:123] Loop hunter2\r\n"])
+    assert "hunter2" not in out, out
+    assert "redacted" in out, out
+
+
+def test_the_unknown_key_fallback_stays_visible_on_a_secret_command():
+    """`??:` echoes the KEY, never a value. The sweep needs it to report a
+    broken key, so it must survive the fail-closed path."""
+    r = pio_flash._ReplyRedactor(secret=True)
+    out = _drain(r, [b"??: bridge.secret\r\n"])
+    assert "bridge.secret" in out, out
+
+
+def test_a_clean_secret_reply_still_reports_its_TRUE_length():
+    """Fail-closed must not clobber the good path: the sweep asserts a secret
+    key ANSWERED using the length in the marker."""
+    r = pio_flash._ReplyRedactor(secret=True)
+    out = _drain(r, [b"  > abcdefghij\r\n"])
+    assert "abcdefghij" not in out and "10" in out, out
+
+
+def test_a_non_secret_command_is_never_blanket_redacted():
+    """The fail-closed rule must be scoped to secret commands only, or every
+    ordinary reply becomes unreadable and the sweep can assert nothing."""
+    r = pio_flash._ReplyRedactor(secret=False)
+    out = _drain(r, [b"  > 910.525,62.5,7,5\r\n"])
+    assert "910.525" in out, out
+
+
+
+def test_device_emitted_redaction_marker_cannot_suppress_fail_closed():
+    """CRITICAL, second-pass review. The fail-closed branch used to skip when
+    the literal "<redacted:" appeared in the output -- but that string can come
+    FROM THE DEVICE. Whether we redacted is OUR fact; read it from our own
+    output, never from device text."""
+    r = pio_flash._ReplyRedactor(secret=True)
+    out = _drain(r, [b"hunter2 <redacted:benign>\r\n"])
+    assert "hunter2" not in out, out
+
+
+def test_a_fallback_must_BE_the_reply_not_merely_appear_in_it():
+    """HIGH, second-pass review. `??:` anywhere on the line used to bypass the
+    guard, so `... ??: prv.key > <key>` leaked."""
+    r = pio_flash._ReplyRedactor(secret=True)
+    out = _drain(r, [b"unknown ??: prv.key hunter2\r\n"])
+    assert "hunter2" not in out, out
+    clean = pio_flash._ReplyRedactor(secret=True)
+    assert "bridge.secret" in _drain(clean, [b"??: bridge.secret\r\n"])
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

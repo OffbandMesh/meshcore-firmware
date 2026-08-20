@@ -322,6 +322,27 @@ def test_settle_returns_the_banner_rather_than_discarding_it():
     assert got == b"rst:0x1 (POWERON)", got
 
 
+
+def test_settle_grace_covers_a_silent_boot_stage():
+    """Adversarial review, HIGH: silence is AMBIGUOUS -- an already-booted board
+    and a board in a silent boot stage look identical. At a 1.0s grace an ESP32
+    whose banner had not started yet was declared ready, and command 1 collided
+    with the banner, returning empty -- indistinguishable from #764."""
+    assert pio_flash.SETTLE_GRACE_S >= 3.0, pio_flash.SETTLE_GRACE_S
+    clk = _FakeClock()
+    chunks = [b""] * 25 + [b"ESP-ROM:esp32s3", b"", b"", b""]
+
+    def read():
+        clk.t += 0.1
+        return chunks.pop(0) if chunks else b""
+
+    got = pio_flash._await_device_ready(read, quiet_s=0.6,
+                                        grace_s=pio_flash.SETTLE_GRACE_S,
+                                        max_s=12.0, now_fn=clk.now,
+                                        sleep_fn=clk.sleep)
+    assert b"ESP-ROM" in got, "banner after 2.5s of silence was missed"
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

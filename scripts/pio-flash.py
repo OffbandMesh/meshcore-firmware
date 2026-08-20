@@ -1518,8 +1518,33 @@ class _ReplyRedactor:
         # writers break that -- which is how a node private key reached a capture
         # file in full. Both are passed: the anchored net for the clean case, the
         # unanchored sweep for the spliced one.
-        return redact_line(stripped, cli_reply_net=self._secret,
-                           secret=self._secret) + ending
+        red = redact_line(stripped, cli_reply_net=self._secret,
+                          secret=self._secret)
+        # `red == stripped` means NO rule fired, i.e. nothing was located. Do
+        # NOT test for the literal "<redacted:" here: that string can arrive
+        # FROM THE DEVICE, and a reply like `> hunter2 <redacted:x>` would then
+        # suppress the fail-closed branch and leak. Whether we redacted is our
+        # own fact -- read it from our own output, never from device text.
+        if self._secret and stripped.strip() and red == stripped:
+            # FAIL CLOSED. Every locating rule above needs SOMETHING to match
+            # on -- a `>` marker, or a value long enough to look opaque. A log
+            # splice can destroy the marker while leaving a SHORT secret behind:
+            #
+            #   [D][main.cpp:123] Loop hunter2
+            #
+            # No `>`, only 7 characters, no keyword. Nothing matches, and the
+            # secret is written out verbatim. Found by adversarial review.
+            #
+            # On a command already classified secret we do not need to find the
+            # value -- we can refuse to emit the line at all. `??:` is the one
+            # exception: the unknown-key fallback echoes the KEY, never a value,
+            # and the sweep needs it visible to report a broken key (#852).
+            # STARTSWITH, not "contains". A genuine fallback IS the whole reply
+            # (`??: some.key`). Accepting it anywhere on the line lets
+            # `... ??: prv.key > <the actual key>` bypass the guard.
+            if not stripped.strip().startswith("??:"):
+                red = "<redacted:cli-reply:%d>" % len(stripped.strip())
+        return red + ending
 
     def feed(self, data: bytes) -> str:
         """Absorb a raw chunk; return only whole redacted lines."""
@@ -1629,7 +1654,15 @@ class TransportReply(NamedTuple):
 # gates transmission on DTR, so a device opened with DTR deasserted may never
 # reply. Taking the reset and waiting it out works on every board.
 SETTLE_QUIET_S = 0.6      # boot chatter must stop for this long
-SETTLE_GRACE_S = 1.0      # silent board: assume already up after this
+SETTLE_GRACE_S = 3.0      # silent board: assume already up after this
+# 3.0s, not 1.0s. Silence is AMBIGUOUS: an already-booted board and a board
+# in a silent boot stage look identical. At 1.0s an ESP32 whose banner had
+# not started yet would be declared ready, and command 1 would collide with
+# the banner -- returning empty, which is indistinguishable from the #764
+# defect the sweep hunts. Found by adversarial review, not by a test.
+# RESIDUAL RISK: a boot stage silent for >3.0s still defeats this. The
+# complete fix is an ACTIVE probe (poke, require an answer) rather than a
+# timeout; tracked separately rather than bolted on here.
 SETTLE_MAX_S = 12.0       # hard bound on a slow or chattering boot
 
 
@@ -1722,7 +1755,15 @@ def _read_until_idle(read_fn, idle_s: float, max_s: float,
         base = start if origin is None else origin
         stats["first_byte_s"] = (None if first_byte_at is None
                                  else round(first_byte_at - base, 4))
-        # The TRUE round trip: origin to the last byte received. Wall time from
+        # Origin to the last byte received.
+        #
+        # NOT the true round trip when the device chatters asynchronously:
+        # last_byte_at advances on ANY input, so an unrelated log line
+        # arriving after the reply is charged to the command. Measured on
+        # ST-P at 29.3 log lines/sec (#899), this inflated readings across
+        # a 0.17-17.2s spread that had nothing to do with command latency.
+        # Trustworthy only on a QUIET device. Consumers must treat a noisy
+        # capture's timings as void -- see cli_sweep's chatter guard. Wall time from
         # here also contains the idle wait -- which is this tool's own timeout,
         # not the device's latency. Charging the device for it inflated every
         # measurement by idle_s, and by a DIFFERENT amount whenever --idle-time
@@ -1794,6 +1835,12 @@ def _timed_send(cmd: str, send_fn, now_fn=time.time) -> dict:
     row["answered"] = len(raw) > 0
     row["empty_reply"] = row["answered"] and not text.strip()
     return row
+
+
+# A commands file is hand-written or emitted by cli_sweep; the real surface is
+# ~79 commands. Anything past this is a mistake (wrong file, generated garbage)
+# and reading it whole would exhaust memory before a single command is sent.
+MAX_BATCH_COMMANDS = 5000
 
 
 def _run_batch(commands, send_fn, read_time: float = 5.0, now_fn=time.time):
@@ -1975,14 +2022,28 @@ def cmd_send_batch(args, registry):
         )
 
     try:
+        # Size-checked BEFORE the read: read_text() on a wrong path (a firmware
+        # image, a core dump) would exhaust memory before a single command runs.
+        cf = Path(args.commands_file)
+        # is_file() first: a FIFO or character device reports st_size == 0, so
+        # the size cap below would pass it and read_text() would then read
+        # unbounded. A command list is always a regular file.
+        if not cf.is_file():
+            refuse(f"--commands-file is not a regular file: {args.commands_file}")
+        size = cf.stat().st_size
+        if size > MAX_BATCH_COMMANDS * 256:
+            refuse(f"--commands-file is {size} bytes; a command list for a "
+                   f"~79-command surface is not this large. Wrong file?")
         commands = [
-            l.strip() for l in Path(args.commands_file).read_text(encoding="utf-8").splitlines()
+            l.strip() for l in cf.read_text(encoding="utf-8").splitlines()
             if l.strip() and not l.strip().startswith("#")
         ]
     except OSError as e:
         refuse(f"cannot read --commands-file: {e}")
     if not commands:
         refuse(f"no commands in {args.commands_file}")
+    if len(commands) > MAX_BATCH_COMMANDS:
+        refuse(f"{len(commands)} commands exceeds the {MAX_BATCH_COMMANDS} cap")
 
     try:
         import serial
