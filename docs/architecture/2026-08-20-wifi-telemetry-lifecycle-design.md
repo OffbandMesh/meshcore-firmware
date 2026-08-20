@@ -2,7 +2,7 @@
 
 **Issue:** #912 (design) under epic #911. Defect record: #910. Answers #893.
 **Date:** 2026-08-20
-**Status:** awaiting human AGREE. **No implementation until agreed.**
+**Status:** **AGREED 2026-08-20** — owner selected **Option 1** (lifecycle worker), with **Option 2 planned as a follow-up**.
 
 ---
 
@@ -154,6 +154,15 @@ Option 1 gets the radio listening again while changing **no contract and no call
 
 **This is a sequencing judgement, not a claim that Option 1 is the better end state.** If the concurrency audit in §7 turns up shared state that cannot be cleanly isolated, Option 2 becomes correct and this recommendation should be revisited rather than forced.
 
+### Decision — owner, 2026-08-20
+
+**Option 1 agreed for this epic. Option 2 planned as a follow-up**, tracked separately so it does not gate #911's completion.
+
+That makes Option 1 explicitly a **staging step**, not the end state. Two consequences bind the implementation:
+
+- The worker must not entrench assumptions that make Option 2 harder later. Concretely: keep the blocking confined to `WifiMqttTransport`, and do **not** spread `begin()`-is-synchronous assumptions into new code.
+- The shared-state audit (§7.1) is still blocking. It is now doubly load-bearing: it decides whether Option 1 is safe, and its findings are the main input to scoping Option 2.
+
 ---
 
 ## 7. Open risks to resolve during implementation
@@ -174,3 +183,69 @@ Option 1 gets the radio listening again while changing **no contract and no call
 - No new `packet pool empty`
 - Free heap not materially below the ~204 KB baseline
 - **Both** triggers exercised — publish and cmd-poll
+
+---
+
+## 9. Adversarial review response (gemini-2.5-pro, 2026-08-20)
+
+Two CRITICALs and four HIGH/MEDIUMs. Each verified rather than accepted or dismissed.
+
+### CRITICAL — "Option 1 may not fix the defect" (priority inversion / shared LwIP locks)
+
+**Reduced to LOW, with evidence.**
+
+`[verified: framework-arduinoespressif32/cores/esp32/esp32-hal-misc.c:176-178]`
+
+```c
+void delay(uint32_t ms) { vTaskDelay(ms / portTICK_PERIOD_MS); }
+```
+
+`delay()` **yields**. During the spin, the task is BLOCKED, not spinning, and holds no CPU. That is exactly why the defect presents as it does today: `loopTask` is not burning CPU for 20 s, it is *sleeping inside `connectWifi()`* and therefore not running `mesh::Mesh::loop()`. Move that call to a worker and `loopTask` is free to run — the worker sleeps instead.
+
+The residual concern — a mutex held *inside* the WiFi/LwIP stack that `loopTask` also needs — is real but narrow: `mesh::Mesh::loop()` services the LoRa radio over SPI and packet queues, and does not call into LwIP. **Open item:** confirm during implementation that nothing on the mesh loop path takes a WiFi/LwIP lock.
+
+### CRITICAL — missing operational requirements
+
+**Watchdog: reduced to LOW.** `[verified: sdkconfig:1197-1200]` `CONFIG_ESP_TASK_WDT_PANIC=y`, `TIMEOUT_S=5`, `CHECK_IDLE_TASK_CPU0=y`. A 20 s block does not panic **because `delay()` yields and the idle task keeps being fed** — consistent with the field behaviour (no reboots observed). A worker using the same yielding wait is equally safe. **Recorded because it was an undocumented assumption, not because it is a defect.**
+
+**Stack sizing: ACCEPTED.** 6 KB was cited from precedent, which is a guess. Implementation must **measure** `uxTaskGetStackHighWaterMark()` under a real connect+TLS cycle and size from the measurement.
+
+**Worker failure semantics: ACCEPTED.** Undefined today. Must specify behaviour on worker death and who releases WiFi if it dies mid-cycle.
+
+### HIGH — the shared-state audit should GATE the decision, not follow it
+
+**ACCEPTED, and this is the sharpest point in the review.** §7.1 defers the audit to implementation, but its outcome is a primary input to choosing Option 1 at all. Deferring it means discovering infeasibility under schedule pressure.
+
+**Change:** the audit runs **first**, as the opening step of #913, and its findings are recorded here. If it finds state that cannot be cleanly isolated, that is a stop-and-return-to-the-owner condition, not something to engineer around.
+
+### HIGH — persistent-mode TOCTOU (worker tears down WiFi mid-OTA)
+
+**ACCEPTED. Real and specific.** `loopTask` extends `g_tel_persistent_until_ms` on OTA activity (`main.cpp:419-428`); a worker reading that value can decide to tear down, be preempted while the deadline is extended, then resume and tear down **mid-OTA download**.
+
+**Change:** teardown must not be decided from an unprotected shared deadline. Use an explicit command to the worker, or a mutex held across check-and-act.
+
+### MEDIUM — counters are read-modify-write, not atomic
+
+**ACCEPTED.** `g_tel_wifi_fails++` is not atomic on a 32-bit MCU even though a `uint32_t` load/store is. Increments crossing the task boundary need `std::atomic` or a critical section. Where a variable is written only by the worker and read for display, stale reads are acceptable — but that must be stated, not assumed.
+
+### MEDIUM — two triggers on one worker: starvation and incoherent teardown
+
+**ACCEPTED, and the suggested shape is better than a plain queue.** A command queue lets a publish's `end()` tear down a connection the cmd-poll is still using. Model it as **reference-counted demand** — "N users want WiFi up" — with teardown only when the count reaches zero and no deadline holds it open.
+
+### Not accepted
+
+The framing that Option 1 is "shipping technical debt" and that the follow-up "will never be prioritised". That is a general organisational claim, not a property of this change; the owner has explicitly scheduled Option 2 as a follow-up. Recorded so the disagreement is visible rather than silently dropped.
+
+---
+
+## 10. Revised plan for #913
+
+The review changes the **order** of work, not the option:
+
+1. **Shared-state audit — first, and it is a gate.** Enumerate every reader/writer of `g_tel_*` and the transport across the task boundary. Stop and report if isolation is not clean.
+2. Reference-counted WiFi demand, replacing the implicit "each trigger owns the lifecycle" model.
+3. Explicit teardown command (or held mutex) so persistent/OTA cannot race.
+4. `std::atomic` for cross-task counters subject to increment.
+5. Measure stack high-water mark; size from measurement.
+6. Define worker failure behaviour.
+7. Confirm nothing on the mesh loop path takes a WiFi/LwIP lock.
