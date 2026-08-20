@@ -83,6 +83,27 @@ _SECRET_WORDS = (r"password|passwd|pwd|psk|secret|token|apikey|api_key|bearer|pa
 # sweep can assert that a secret key ANSWERED without recording what it said.
 _CLI_REPLY_RE = re.compile(r"(^\s*>\s*)([^\r\n]+)")
 
+# The rule above assumes a CLI reply BEGINS its line. That assumption was broken
+# by the firmware, not by this file. Unsynchronized UART writers splice log
+# output in front of a reply, and a real ST-P capture contained:
+#
+#   [247008][E][Preferences.cpp:483] getString(): nvs_get_str  -> > <private key>
+#
+# `^\s*>` never matched, and a node private key was written to a capture file in
+# full. The control was not wrong when written -- its PRECONDITION stopped
+# holding. Every fixture fed it clean, line-anchored input, so no test failed.
+#
+# For a reply already classified as secret, position must not decide whether the
+# secret is protected. These are unanchored and deliberately greedy: on a
+# known-secret reply, over-redacting costs a re-read; under-redacting leaks a key.
+_SECRET_ANYWHERE_RES = (
+    # `> value` anywhere on the line, however much junk precedes it.
+    re.compile(r"(>[ \t]*)([^\r\n]+)"),
+    # Belt and braces: a long opaque token with no `>` marker at all, because a
+    # splice can land mid-value and destroy the marker itself.
+    re.compile(r"([0-9A-Fa-f]{16,}|[A-Za-z0-9+/=_-]{24,})"),
+)
+
 _REDACTIONS = [
     # WiFi SSID, in the shapes the firmware actually prints.
     (re.compile(r"(SSID\s*=\s*)([^;\r\n]+)", re.IGNORECASE), r"\1<redacted:ssid>"),
@@ -120,7 +141,8 @@ _REDACTIONS = [
 ]
 
 
-def redact_line(line: str, cli_reply_net: bool = True) -> str:
+def redact_line(line: str, cli_reply_net: bool = True,
+                secret: bool = False) -> str:
     """Apply every rule to one line. Position classification runs last so a
     coordinate inside an otherwise-redacted line is still handled.
 
@@ -134,6 +156,22 @@ def redact_line(line: str, cli_reply_net: bool = True) -> str:
         if not cli_reply_net and pattern is _CLI_REPLY_RE:
             continue
         line = pattern.sub(repl, line)
+    if secret:
+        # Applied LAST and unanchored, so it also catches a value the positional
+        # rules skipped because a log splice moved it off column 0.
+        #
+        # MUST be idempotent: the anchored rule above may already have replaced
+        # the value with a marker, and re-redacting that marker would overwrite
+        # the real length with the marker's own length -- destroying the one
+        # property the sweep relies on to assert a secret key ANSWERED.
+        def _once(m):
+            val = m.group(m.lastindex)
+            if "<redacted:" in val:
+                return m.group(0)
+            return "<redacted:cli-reply:%d>" % len(val.strip())
+
+        for pat in _SECRET_ANYWHERE_RES:
+            line = pat.sub(_once, line)
     return redact_positions(line)
 
 

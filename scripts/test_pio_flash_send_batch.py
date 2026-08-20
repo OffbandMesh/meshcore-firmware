@@ -238,6 +238,90 @@ def test_empty_content_is_still_visible_as_a_finding():
     assert rows[0]["empty_reply"] is True, rows[0]
 
 
+
+# =========================================================================
+# Port-open settle (found on ST-P, an ESP32-S3)
+#
+# Opening a serial port asserts DTR/RTS and REBOOTS an ESP32. The batch path
+# allowed 0.2s, which was only ever adequate because the first board tested
+# was an nRF52 that does not reboot on open. On ESP32 the first commands land
+# mid-boot and answer empty or garbled -- the #764 signature -- so the sweep
+# would have reported false defects indistinguishable from real ones.
+# =========================================================================
+
+class _FakeClock:
+    """Controllable time. Real sleeps would make these tests take 12 seconds."""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def now(self):
+        return self.t
+
+    def sleep(self, d):
+        self.t += d
+
+
+def test_settle_waits_out_a_boot_banner_before_returning():
+    """A device that chatters on open is booting. Do not send into that."""
+    clk = _FakeClock()
+    chunks = [b"ESP-ROM:esp32s3", b"boot: loading app", b"MeshCore v1.16", b"", b"", b""]
+
+    def read():
+        clk.t += 0.1
+        return chunks.pop(0) if chunks else b""
+
+    got = pio_flash._await_device_ready(read, quiet_s=0.6, grace_s=1.0,
+                                        max_s=12.0, now_fn=clk.now,
+                                        sleep_fn=clk.sleep)
+    assert b"ESP-ROM" in got and b"MeshCore" in got, got
+    assert clk.t >= 0.6, "returned before the device went quiet"
+
+
+def test_settle_returns_fast_when_the_board_is_already_up():
+    """A silent board must not cost the full 12s window every run. This is why
+    it is not _read_until_idle, which waits for a first byte for the whole
+    window and would burn max_s on every quiet device."""
+    clk = _FakeClock()
+
+    def read():
+        clk.t += 0.01
+        return b""
+
+    got = pio_flash._await_device_ready(read, quiet_s=0.6, grace_s=1.0,
+                                        max_s=12.0, now_fn=clk.now,
+                                        sleep_fn=clk.sleep)
+    assert got == b"", got
+    assert clk.t < 2.0, f"silent board burned {clk.t}s; grace is 1.0s"
+
+
+def test_settle_is_bounded_when_the_device_never_stops_chattering():
+    """A board in a boot loop would otherwise hang the run forever."""
+    clk = _FakeClock()
+
+    def read():
+        clk.t += 0.1
+        return b"rst:0x3 PANIC "
+
+    pio_flash._await_device_ready(read, quiet_s=0.6, grace_s=1.0, max_s=5.0,
+                                  now_fn=clk.now, sleep_fn=clk.sleep)
+    assert clk.t <= 5.5, f"ran {clk.t}s past a 5.0s bound"
+
+
+def test_settle_returns_the_banner_rather_than_discarding_it():
+    """The drained bytes are evidence that a reset happened. Dropping them
+    silently would hide the very behaviour that broke the ESP32 run."""
+    clk = _FakeClock()
+    chunks = [b"rst:0x1 (POWERON)", b"", b"", b""]
+
+    def read():
+        clk.t += 0.2
+        return chunks.pop(0) if chunks else b""
+
+    got = pio_flash._await_device_ready(read, now_fn=clk.now, sleep_fn=clk.sleep)
+    assert got == b"rst:0x1 (POWERON)", got
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

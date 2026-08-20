@@ -1513,7 +1513,13 @@ class _ReplyRedactor:
         # content, and the caller's byte stream should not be reshaped.
         stripped = text.rstrip("\r\n")
         ending = text[len(stripped):]
-        return redact_line(stripped, cli_reply_net=self._secret) + ending
+        # `secret=` is what survives a log splice. `cli_reply_net` alone relies
+        # on the reply starting its line, and the firmware's unsynchronized UART
+        # writers break that -- which is how a node private key reached a capture
+        # file in full. Both are passed: the anchored net for the clean case, the
+        # unanchored sweep for the spliced one.
+        return redact_line(stripped, cli_reply_net=self._secret,
+                           secret=self._secret) + ending
 
     def feed(self, data: bytes) -> str:
         """Absorb a raw chunk; return only whole redacted lines."""
@@ -1608,6 +1614,62 @@ class TransportReply(NamedTuple):
     data: bytes
     first_byte_s: float = None
     last_byte_s: float = None
+
+
+# How long to let a freshly-opened port settle before the first command.
+#
+# Opening a serial port asserts DTR/RTS, which RESETS an ESP32. The old 0.2s
+# settle was tuned on an nRF52 (T096), whose USB-CDC does not reboot on open --
+# so it was never wrong until an ESP32 was on the wire. On ESP32 the first
+# commands land mid-boot and come back empty or garbled, which is exactly the
+# #764 signature the sweep exists to detect. False findings that look like the
+# real defect are worse than no findings at all.
+#
+# Suppressing DTR instead was considered and REJECTED: Arduino's ESP32 USB-CDC
+# gates transmission on DTR, so a device opened with DTR deasserted may never
+# reply. Taking the reset and waiting it out works on every board.
+SETTLE_QUIET_S = 0.6      # boot chatter must stop for this long
+SETTLE_GRACE_S = 1.0      # silent board: assume already up after this
+SETTLE_MAX_S = 12.0       # hard bound on a slow or chattering boot
+
+
+def _await_device_ready(read_fn, quiet_s: float = SETTLE_QUIET_S,
+                        grace_s: float = SETTLE_GRACE_S,
+                        max_s: float = SETTLE_MAX_S,
+                        now_fn=time.time, sleep_fn=time.sleep) -> bytes:
+    """Wait until a just-opened port is quiet, and return whatever it said.
+
+    Deliberately NOT _read_until_idle: that one waits for a first byte for the
+    whole window, so a board that never chatters would burn max_s every run.
+    Two exits instead --
+
+      * data arrived (a boot banner) -> wait for `quiet_s` of silence
+      * nothing at all by `grace_s`  -> the board was already up, proceed
+
+    The drained bytes are returned rather than dropped so a caller can log the
+    boot banner; discarding it would throw away the evidence that a reset
+    happened at all.
+    """
+    buf = bytearray()
+    start = now_fn()
+    last = start
+    while True:
+        now = now_fn()
+        if now - start >= max_s:
+            break
+        chunk = read_fn()
+        if chunk:
+            buf.extend(chunk)
+            last = now_fn()
+        elif buf:
+            if now - last >= quiet_s:
+                break
+            sleep_fn(0.01)
+        else:
+            if now - start >= grace_s:
+                break
+            sleep_fn(0.01)
+    return bytes(buf)
 
 
 def _read_until_idle(read_fn, idle_s: float, max_s: float,
@@ -1936,7 +1998,12 @@ def cmd_send_batch(args, registry):
         # FIRST_BYTE_GRANULARITY_NOTE) -- at 0.05 that error could exceed
         # the latency being measured
         with serial.Serial(port["com"], baudrate=args.baud, timeout=0.01) as sp:
-            time.sleep(0.2)
+            # Not a fixed sleep: an ESP32 reboots when this port opens, and a
+            # repeater's boot is seconds, not milliseconds. Wait for quiet.
+            banner = _await_device_ready(lambda: sp.read(1024))
+            if banner:
+                out(f"device chattered {len(banner)} byte(s) on open "
+                    f"(reset on port open); waited for quiet before command 1")
             try:
                 sp.reset_input_buffer()
             except Exception:
