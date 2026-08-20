@@ -1,6 +1,7 @@
 // src/helpers/wifi_observer/WifiBootstrap.cpp
 #include "WifiBootstrap.h"
 #include "WifiObserverConfig.h"
+#include "../prefs/PrefsRead.h"   // #899: prefStr() -- isKey-guarded optional read
 
 #ifdef OFFBAND_OBSERVER_BLE_COMPANION
 // Plan 3 Task 10 (Strycher/LoRa#272): system channel for first-
@@ -108,7 +109,7 @@ void WifiBootstrap::begin() {
     // TODO(future Task): wire rescue button sampling.
     Preferences prefs;
     prefs.begin("wifi", /*readOnly=*/true);
-    String ssid = prefs.getString("ssid", "");
+    String ssid = prefStr(prefs, "ssid");
     // #45: "wifi enable"/"wifi disable" policy flag (default enabled). Read
     // alongside the creds so a disabled node skips STA without losing creds.
     bool wifi_enabled = prefs.getBool("enabled", true);
@@ -147,7 +148,7 @@ void WifiBootstrap::begin() {
         {
             Preferences p2;
             p2.begin("wifi", /*readOnly=*/true);
-            pwd = p2.getString("pwd", "");
+            pwd = prefStr(p2, "pwd");
             p2.end();
         }
         // PSK redacted from logs per CLAUDE.md security note.

@@ -15,6 +15,7 @@
 
 #ifdef ARDUINO
   #include <Preferences.h>
+#include "../prefs/PrefsRead.h"   // #899: prefStr() -- type-checked optional read
   #include <WiFi.h>   // WiFi.status()/localIP() for wifi.status
 #endif
 
@@ -163,7 +164,7 @@ bool handleGetWifi(char* reply, size_t reply_size, const char* field) {
                      "ERROR: cannot open NVS namespace 'wifi'\n");
             return true;
         }
-        String s = p.getString("ssid", "");
+        String s = offband::prefStr(p, "ssid");
         p.end();
         snprintf(reply, reply_size, "wifi.ssid = %s\n",
                  s.isEmpty() ? "(unset)" : s.c_str());
@@ -222,7 +223,7 @@ bool handleGetWifi(char* reply, size_t reply_size, const char* field) {
         String ssid;
         {
             Preferences p;
-            if (p.begin("wifi", /*readOnly=*/true)) { ssid = p.getString("ssid", ""); p.end(); }
+            if (p.begin("wifi", /*readOnly=*/true)) { ssid = offband::prefStr(p, "ssid"); p.end(); }
         }
         if (ssid.isEmpty()) {
             snprintf(reply, reply_size, "wifi.status = AwaitingSetup\n");

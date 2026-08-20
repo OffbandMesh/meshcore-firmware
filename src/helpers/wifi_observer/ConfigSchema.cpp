@@ -4,6 +4,7 @@
 #ifdef ARDUINO
   #include <Arduino.h>
   #include <Preferences.h>
+  #include "../prefs/PrefsRead.h"   // #899: prefStr() -- isKey-guarded optional read
   #if defined(ESP_PLATFORM)
     #include <nvs.h>        // #181: nvs_get_stats() -- write-failure diagnostic (real device only)
     #include <helpers/diagnostics/CrashLog.h>   // #181: crashLogf() -- persistent + Serial failure log
@@ -67,7 +68,7 @@ static void logCfgWriteFailure(const char*, const char*) {}
 bool readGlobalIata(char* out, size_t out_len) {
     Preferences p;
     p.begin(kNvsMqtt, /*readOnly=*/true);
-    String v = p.getString(kKeyMqttIata, "");
+    String v = prefStr(p, kKeyMqttIata);
     p.end();
     if (v.isEmpty()) {
         if (out_len > 0) out[0] = '\0';
@@ -149,7 +150,7 @@ bool readBrokerConfig(uint8_t slot, BrokerConfig& out) {
     // storing blanks. Any #181 migration blob is ignored here and is cleaned up on
     // the next write.
     out.enabled   = p.getBool(kKeyBrokerEnabled, false);
-    String url    = p.getString(kKeyBrokerUrl, "");
+    String url    = prefStr(p, kKeyBrokerUrl);
     strncpy(out.url, url.c_str(), sizeof(out.url));
     out.url[sizeof(out.url) - 1] = '\0';
     out.transport = (BrokerTransport)p.getUChar(kKeyBrokerTransport, (uint8_t)BrokerTransport::Tcp);
@@ -161,25 +162,25 @@ bool readBrokerConfig(uint8_t slot, BrokerConfig& out) {
     }
     out.port      = p.getUShort(kKeyBrokerPort, default_port);
     out.auth_type = (BrokerAuthType)p.getUChar(kKeyBrokerAuthType, (uint8_t)BrokerAuthType::None);
-    String u  = p.getString(kKeyBrokerUsername, "");
-    String pw = p.getString(kKeyBrokerPassword, "");
-    String jw = p.getString(kKeyBrokerJwtToken, "");
-    String tp = p.getString(kKeyBrokerTopicPrefix, kDefaultTopicPrefix);
-    String io = p.getString(kKeyBrokerIataOverride, "");
+    String u  = prefStr(p, kKeyBrokerUsername);
+    String pw = prefStr(p, kKeyBrokerPassword);
+    String jw = prefStr(p, kKeyBrokerJwtToken);
+    String tp = prefStr(p, kKeyBrokerTopicPrefix, kDefaultTopicPrefix);
+    String io = prefStr(p, kKeyBrokerIataOverride);
     strncpy(out.username,      u.c_str(),  sizeof(out.username));      out.username[sizeof(out.username)-1] = '\0';
     strncpy(out.password,      pw.c_str(), sizeof(out.password));      out.password[sizeof(out.password)-1] = '\0';
     strncpy(out.jwt_token,     jw.c_str(), sizeof(out.jwt_token));     out.jwt_token[sizeof(out.jwt_token)-1] = '\0';
     strncpy(out.topic_prefix,  tp.c_str(), sizeof(out.topic_prefix));  out.topic_prefix[sizeof(out.topic_prefix)-1] = '\0';
     strncpy(out.iata_override, io.c_str(), sizeof(out.iata_override)); out.iata_override[sizeof(out.iata_override)-1] = '\0';
     // Plan 2 v2 additions
-    String ja = p.getString(kKeyBrokerJwtAudience, "");
+    String ja = prefStr(p, kKeyBrokerJwtAudience);
     out.jwt_refresh_sec = p.getULong(kKeyBrokerJwtRefresh, 3600);
-    String cc = p.getString(kKeyBrokerCaCertName, "");
+    String cc = prefStr(p, kKeyBrokerCaCertName);
     strncpy(out.jwt_audience,  ja.c_str(), sizeof(out.jwt_audience));  out.jwt_audience[sizeof(out.jwt_audience)-1]  = '\0';
     strncpy(out.ca_cert_name,  cc.c_str(), sizeof(out.ca_cert_name));  out.ca_cert_name[sizeof(out.ca_cert_name)-1]  = '\0';
     // #63 additions: JWT identity claims
-    String jo = p.getString(kKeyBrokerJwtOwner, "");
-    String je = p.getString(kKeyBrokerJwtEmail, "");
+    String jo = prefStr(p, kKeyBrokerJwtOwner);
+    String je = prefStr(p, kKeyBrokerJwtEmail);
     strncpy(out.jwt_owner,     jo.c_str(), sizeof(out.jwt_owner));     out.jwt_owner[sizeof(out.jwt_owner)-1]         = '\0';
     strncpy(out.jwt_email,     je.c_str(), sizeof(out.jwt_email));     out.jwt_email[sizeof(out.jwt_email)-1]         = '\0';
     p.end();
