@@ -299,3 +299,39 @@ Under Option 2 check-and-act stay on one task and the race cannot exist.
 §6 pre-registered this outcome: *"If the concurrency audit in §7 turns up shared state that cannot be cleanly isolated, Option 2 becomes correct and this recommendation should be revisited rather than forced."*
 
 **Recommendation: switch to Option 2.** Returned to the owner rather than engineered around.
+
+---
+
+## 12. Decision revised — Option 2 (owner, 2026-08-20)
+
+**Owner switched to Option 2** on the audit findings. Option 1 is abandoned, not deferred.
+
+The audit invalidated both halves of Option 1's original justification (smaller blast radius, no caller redesign), and Finding B is decisive: Option 1 puts a firmware-update-killing race between three tasks, while Option 2 keeps check-and-act on one task so the race cannot exist.
+
+### Consequences
+
+- **#916 (Option 2 follow-up) is superseded** — it becomes the work itself, not a follow-up.
+- **#913** implements the non-blocking transport.
+- **#914** grows: *both* triggers become multi-pass, not just the publish path.
+- No worker task, no atomics, no refcount, no cross-task teardown command. Those costs disappear with Option 1.
+
+### Contract change
+
+`begin()` currently means *"connected on return"*. It becomes *"start or advance the connection; return true iff ready now"*.
+
+That alone is ambiguous for callers, because `false` would conflate **"still connecting"** with **"failed"** — and `main.cpp:311` treats `false` as failure, increments `g_tel_wifi_fails` and tears down. A first call would therefore count a failure and abort every cycle.
+
+So the contract gains an explicit state query:
+
+```cpp
+enum class LinkState { Idle, Connecting, Ready, Failed };
+virtual LinkState linkState() = 0;
+```
+
+`isReady()` is retained and becomes `linkState() == Ready`, so the five existing `isReady()` guards are unaffected.
+
+### Testability
+
+The blocking spin is replaced by a **pure** state machine — inputs (wifi connected?, mqtt connected?, elapsed ms) to next state — with no Arduino dependency, in its own translation unit. That makes the lifecycle **host-testable**, which the current transport is not: `WifiMqttTransport` needs the real `Preferences`/`WiFi` classes and is absent from the native `build_src_filter`.
+
+This is deliberate. The defect being fixed was invisible to every existing test precisely because none of this logic could be exercised off-device.
