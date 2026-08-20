@@ -66,6 +66,10 @@ DEFAULT_SLOW_S = 1.0
 
 _PRINTABLE_OK = set("\r\n\t")
 
+# An ESP-IDF / Arduino log line: `[123456][E][File.cpp:483] ...`. Its presence
+# inside a CLI reply proves two writers shared the UART during that reply.
+_LOG_LINE = re.compile(r"\[\d+\]\[[EWIDV]\]\[[^\]]+\]")
+
 
 def _fn_body(src: str, name: str) -> str:
     """Brace-matched body of one CommonCLI method, or "" if absent."""
@@ -144,6 +148,18 @@ def analyse(rows, slow_s: float = DEFAULT_SLOW_S):
     def add(r, kind, detail):
         out.append({"command": r.get("command"), "kind": kind, "detail": detail})
 
+    # A reply carrying an ESP-IDF log line is a reply the device interleaved
+    # other output into. That makes every timing in the run unusable, so detect
+    # it ONCE up front rather than reporting 60-odd bogus "slow" findings.
+    # Threshold, not presence. ONE reply carrying a log line is a legitimate
+    # answer -- `get last_error` can return a stored log line verbatim, and
+    # voiding a whole run's timings on that would suppress real slow findings.
+    # Interleaving from a chattering device is SYSTEMIC and shows up across many
+    # replies (79/79 on ST-P), never in exactly one.
+    noisy = sum(1 for r in rows if _LOG_LINE.search(r.get("reply") or ""))
+    if noisy < 2:
+        noisy = 0
+
     for r in rows:
         cmd = r.get("command", "")
         reply = (r.get("reply") or "").strip()
@@ -187,10 +203,28 @@ def analyse(rows, slow_s: float = DEFAULT_SLOW_S):
                 add(r, "non-printable",
                     f"{len(bad)} non-printable byte(s) in the reply")
 
-        el = r.get("elapsed_s")
-        if el is not None and el > slow_s:
+        el = r.get("round_trip_s")
+        if el is not None and el > slow_s and not noisy:
             add(r, "slow", f"{el}s (threshold {slow_s}s)")
 
+    if noisy:
+        # Timing is meaningless when the device chatters: the read loop's
+        # last-byte marker advances on ANY input, so an unrelated log line is
+        # charged to whatever command was in flight. On ST-P this produced a
+        # 0.17-17.2s spread that had nothing to do with command latency, while
+        # the true serial round trip on a quiet board is ~0.2s.
+        #
+        # Reported as ONE finding rather than suppressed silently: a run whose
+        # timings are void must say so, or the next reader treats the numbers as
+        # measurements. Shape assertions above are unaffected -- they do not
+        # depend on timing.
+        out.append({
+            "command": "(run)", "kind": "timings-void",
+            "detail": f"{noisy} of {len(rows)} replies carry interleaved async "
+                      f"log output; every timing in this run is contaminated and "
+                      f"slow-detection is disabled. Fix the chatter (see #899) "
+                      f"and re-run before drawing any latency conclusion.",
+        })
     return out
 
 

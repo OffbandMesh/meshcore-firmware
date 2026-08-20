@@ -87,9 +87,12 @@ def test_commands_are_emitted_one_per_line_with_the_get_verb():
 # --------------------------------------------------------------- analysis ---
 
 def row(cmd, reply="> x", answered=True, empty=False, elapsed=0.05, **kw):
+    # round_trip_s mirrors elapsed_s here because a real row carries BOTH, and
+    # slow-detection reads round_trip_s -- elapsed_s includes the tool's own
+    # idle wait (#896) and would flag every command on a loose --idle-time.
     r = {"command": cmd, "reply": reply, "answered": answered,
-         "empty_reply": empty, "elapsed_s": elapsed, "first_byte_s": None,
-         "reply_bytes": len(reply)}
+         "empty_reply": empty, "elapsed_s": elapsed, "round_trip_s": elapsed,
+         "first_byte_s": None, "reply_bytes": len(reply)}
     r.update(kw)
     return r
 
@@ -214,6 +217,45 @@ def test_a_redacted_fallback_would_still_be_caught_if_it_ever_happened():
         "answered": True, "empty_reply": False, "elapsed_s": 0.05, "reply_bytes": 26,
     }])
     assert any(x["kind"] == "unknown-key" for x in f), f
+
+
+
+def test_a_noisy_capture_voids_its_own_timings_loudly():
+    """Adversarial review, HIGH: last-byte advances on ANY input, so an
+    unrelated log line is charged to whatever command was in flight. On ST-P
+    that produced a 0.17-17.2s spread unrelated to command latency. A run whose
+    timings are void must SAY so, not suppress silently."""
+    # TWO rows, not one: interleaving from a chattering device is systemic
+    # (79/79 on ST-P). A single log-carrying reply is a legitimate answer and
+    # must not void a run -- see the companion test below.
+    noisy = [row("get radio", reply="[472110][E][Pref.cpp:483] x  -> > 0.5",
+                 elapsed=9.0),
+             row("get tx", reply="[472118][E][Pref.cpp:483] y  -> > 22",
+                 elapsed=7.0)]
+    f = cli_sweep.analyse(noisy, slow_s=1.0)
+    kinds = {x["kind"] for x in f}
+    assert "timings-void" in kinds, f
+    assert "slow" not in kinds, "slow-detection must be disabled on a noisy run"
+
+
+def test_a_quiet_capture_still_reports_slow_commands():
+    """The guard must not disable slow-detection on a clean run."""
+    r = row("get radio", reply="> 910.525", elapsed=4.5)
+    r["round_trip_s"] = 4.5
+    f = cli_sweep.analyse([r], slow_s=1.0)
+    assert {x["kind"] for x in f} == {"slow"}, f
+
+
+
+def test_ONE_reply_containing_a_log_line_does_not_void_the_run():
+    """MEDIUM, second-pass review. `get last_error` can legitimately return a
+    stored log line. Voiding a whole run's timings on a single such reply would
+    suppress real slow findings. Interleaving is SYSTEMIC, never exactly one."""
+    r = row("get last_error", reply="> [12345][E][radio.cpp:55] TX failed", elapsed=4.5)
+    f = cli_sweep.analyse([r], slow_s=1.0)
+    kinds = {x["kind"] for x in f}
+    assert "timings-void" not in kinds, f
+    assert "slow" in kinds, "a real slow finding was suppressed"
 
 
 if __name__ == "__main__":
