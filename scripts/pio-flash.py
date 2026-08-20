@@ -50,7 +50,7 @@ from pathlib import Path
 # and the copy that drifts is the one that leaks (#667).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from log_redact import redact_line  # noqa: E402
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 try:
     import yaml
@@ -1579,8 +1579,29 @@ def _is_read_only_command(cmd: str) -> bool:
     return len(tokens) >= 2 and tokens[0].lower() == "get"
 
 
+FIRST_BYTE_GRANULARITY_NOTE = (
+    "first_byte_s granularity is bounded by the serial read timeout: the loop "
+    "can only notice data when a blocking read returns, so the value carries an "
+    "error of up to one timeout period. Treat it as a coarse signal for 'slow to "
+    "start answering', not as a precise latency."
+)
+
+
+class TransportReply(NamedTuple):
+    """What a batch transport returns when it can report timing.
+
+    An explicit type rather than a bare tuple: `isinstance(result, tuple)` would
+    silently unpack ANY 2-tuple as timing data, so a transport returning
+    (data, status) for some unrelated reason would have its status recorded as a
+    latency. A transport that cannot report timing still returns plain bytes.
+    """
+    data: bytes
+    first_byte_s: float = None
+
+
 def _read_until_idle(read_fn, idle_s: float, max_s: float,
-                     now_fn=time.time, sleep_fn=time.sleep) -> bytes:
+                     now_fn=time.time, sleep_fn=time.sleep,
+                     stats: dict = None, origin: float = None) -> bytes:
     """Read until the device goes quiet, bounded by `max_s`.
 
     A fixed read window is wrong in both directions: it truncates a reply that
@@ -1595,26 +1616,45 @@ def _read_until_idle(read_fn, idle_s: float, max_s: float,
     buf = bytearray()
     start = now_fn()
     last = start
+    first_byte_at = None
     while True:
         if now_fn() - start >= max_s:
             break
         chunk = read_fn()
         if chunk:
+            if first_byte_at is None:
+                # #851: time-to-first-byte separates "slow to START answering"
+                # from "answered at length". They have different causes and the
+                # total duration alone cannot tell them apart.
+                first_byte_at = now_fn()
             buf.extend(chunk)
             last = now_fn()
         elif buf and (now_fn() - last) >= idle_s:
             break
+    if stats is not None:
+        # Anchor to `origin` -- the moment the command was WRITTEN -- not to when
+        # this read loop happened to start. Measuring from here would exclude the
+        # write and flush, leaving first_byte_s and the caller's elapsed_s with
+        # different zero points and therefore uncorrelatable (#851 review).
+        base = start if origin is None else origin
+        stats["first_byte_s"] = (None if first_byte_at is None
+                                 else round(first_byte_at - base, 4))
     return bytes(buf)
 
 
-def _run_batch(commands, send_fn, read_time: float = 5.0):
+def _run_batch(commands, send_fn, read_time: float = 5.0, now_fn=time.time):
     """Send each command through `send_fn`, redact per command, collect results.
 
     `send_fn(cmd) -> bytes` is injected so the sequencing, classification and
     fail-soft behaviour are testable without a serial port.
 
     Returns one row per command, in order:
-        {command, reply, answered, [error]}
+        {command, reply, answered, empty_reply, elapsed_s, first_byte_s,
+         reply_bytes, [error], [skipped]}
+
+    `send_fn` may return plain bytes, or `(bytes, first_byte_s)` when the
+    transport can report time-to-first-byte. Both shapes are accepted so the
+    injected test transports stay trivial.
 
     `answered` distinguishes the two failures that matter and must never be
     conflated: a reply that is EMPTY is the #764 shape (the handler matched and
@@ -1635,18 +1675,23 @@ def _run_batch(commands, send_fn, read_time: float = 5.0):
     consecutive_failures = 0
     aborted = False
     for cmd in commands:
-        row = {"command": cmd, "reply": "", "answered": False, "empty_reply": False}
+        row = {"command": cmd, "reply": "", "answered": False, "empty_reply": False,
+               "elapsed_s": None, "first_byte_s": None, "reply_bytes": 0}
 
         if aborted:
             # The port is gone. Retrying 40 more times produces 40 identical
             # exceptions after a long wait and tells nobody anything new.
+            # elapsed_s stays None: this command was never attempted, and a
+            # zero would read as "answered instantly" in any summary.
             row["skipped"] = True
             rows.append(row)
             continue
 
+        started = now_fn()
         try:
-            raw = send_fn(cmd)
+            result = send_fn(cmd)
         except Exception as e:
+            row["elapsed_s"] = round(now_fn() - started, 4)
             row["error"] = f"{type(e).__name__}: {e}"
             consecutive_failures += 1
             if consecutive_failures >= _BATCH_ABORT_AFTER:
@@ -1656,7 +1701,18 @@ def _run_batch(commands, send_fn, read_time: float = 5.0):
             continue
 
         consecutive_failures = 0
+        row["elapsed_s"] = round(now_fn() - started, 4)
+        # A transport may report time-to-first-byte alongside the data, but ONLY
+        # via the explicit TransportReply type. Accepting any 2-tuple would
+        # silently record an unrelated second element as a latency.
+        if isinstance(result, TransportReply):
+            raw, row["first_byte_s"] = result.data, result.first_byte_s
+        elif isinstance(result, (bytes, bytearray)):
+            raw = result
+        else:
+            raw = result[0] if isinstance(result, tuple) and result else result
         raw = raw or b""
+        row["reply_bytes"] = len(raw)
         redactor = _ReplyRedactor(secret=_is_secret_command(cmd))
         text = redactor.feed(raw) + redactor.flush()
         row["reply"] = text
@@ -1780,24 +1836,31 @@ def cmd_send_batch(args, registry):
         f"{args.read_time}s each")
 
     try:
-        # timeout well under idle_time so an idle gap is noticed promptly
-        with serial.Serial(port["com"], baudrate=args.baud, timeout=0.05) as sp:
+        # timeout well under idle_time so an idle gap is noticed promptly, and
+        # small because it bounds the first_byte_s error (see
+        # FIRST_BYTE_GRANULARITY_NOTE) -- at 0.05 that error could exceed
+        # the latency being measured
+        with serial.Serial(port["com"], baudrate=args.baud, timeout=0.01) as sp:
             time.sleep(0.2)
             try:
                 sp.reset_input_buffer()
             except Exception:
                 pass
 
-            def send_one(cmd: str) -> bytes:
+            def send_one(cmd: str) -> TransportReply:
                 try:
                     sp.reset_input_buffer()
                 except Exception:
                     pass
+                origin = time.time()          # the command starts HERE
                 sp.write((cmd + "\r").encode("utf-8"))
                 sp.flush()
-                return _read_until_idle(lambda: sp.read(1024),
+                st = {}
+                data = _read_until_idle(lambda: sp.read(1024),
                                         idle_s=args.idle_time,
-                                        max_s=args.read_time)
+                                        max_s=args.read_time,
+                                        stats=st, origin=origin)
+                return TransportReply(data=data, first_byte_s=st.get("first_byte_s"))
 
             rows = _run_batch(commands, send_one, read_time=args.read_time)
     except BatchRefused as e:
@@ -1811,7 +1874,14 @@ def cmd_send_batch(args, registry):
     for r in rows:
         status = "ok " if r["answered"] else "MISS"
         first = (r["reply"].strip().splitlines() or [""])[0]
-        out(f"  [{status}] {r['command']}: {first}")
+        t = "" if r.get("elapsed_s") is None else f" {r['elapsed_s']:.2f}s"
+        fb = "" if r.get("first_byte_s") is None else f" (first byte {r['first_byte_s']:.2f}s)"
+        out(f"  [{status}]{t}{fb} {r['command']}: {first}")
+    timed = [r["elapsed_s"] for r in rows if r.get("elapsed_s") is not None]
+    if timed:
+        slowest = max(rows, key=lambda r: r.get("elapsed_s") or -1)
+        out(f"slowest: {slowest['command']} at {slowest['elapsed_s']:.2f}s; "
+            f"median {sorted(timed)[len(timed)//2]:.2f}s")
     out(f"{answered}/{len(rows)} answered"
         + (f", {empty} answered-but-EMPTY" if empty else "")
         + (f", {skipped} skipped after transport failure" if skipped else ""))
