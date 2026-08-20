@@ -1579,6 +1579,16 @@ def _is_read_only_command(cmd: str) -> bool:
     return len(tokens) >= 2 and tokens[0].lower() == "get"
 
 
+# Idle gap before a read is considered finished.
+#
+# Batch only issues `get` keys, which answer in one shot, so a tight gap is safe
+# and keeps a 47-key sweep quick. Single `send` reaches commands that may print
+# in STAGES with real pauses between them ("Formatting... done"), and an
+# aggressive gap would truncate those mid-reply -- so its default is looser.
+# Raise it with --idle-time when a command is known to pause.
+BATCH_IDLE_DEFAULT = 0.25
+SEND_IDLE_DEFAULT = 1.0
+
 FIRST_BYTE_GRANULARITY_NOTE = (
     "first_byte_s granularity is bounded by the serial read timeout: the loop "
     "can only notice data when a blocking read returns, so the value carries an "
@@ -1601,7 +1611,8 @@ class TransportReply(NamedTuple):
 
 def _read_until_idle(read_fn, idle_s: float, max_s: float,
                      now_fn=time.time, sleep_fn=time.sleep,
-                     stats: dict = None, origin: float = None) -> bytes:
+                     stats: dict = None, origin: float = None,
+                     on_chunk=None) -> bytes:
     """Read until the device goes quiet, bounded by `max_s`.
 
     A fixed read window is wrong in both directions: it truncates a reply that
@@ -1622,6 +1633,13 @@ def _read_until_idle(read_fn, idle_s: float, max_s: float,
             break
         chunk = read_fn()
         if chunk:
+            # #896: hand each chunk to the caller AS IT ARRIVES. Buffering the
+            # whole reply until idle means a slow multi-line response shows
+            # nothing for seconds and then dumps -- the user loses any sign the
+            # command is still working. `send` streamed before this refactor and
+            # must keep doing so.
+            if on_chunk is not None:
+                on_chunk(chunk)
             if first_byte_at is None:
                 # #851: time-to-first-byte separates "slow to START answering"
                 # from "answered at length". They have different causes and the
@@ -1640,6 +1658,64 @@ def _read_until_idle(read_fn, idle_s: float, max_s: float,
         stats["first_byte_s"] = (None if first_byte_at is None
                                  else round(first_byte_at - base, 4))
     return bytes(buf)
+
+
+def _timed_send(cmd: str, send_fn, now_fn=time.time) -> dict:
+    """Execute ONE command through `send_fn`, time it, redact it, classify it.
+
+    Shared by `send` (#896) and `send-batch` (#850/#851) so there is exactly one
+    timing implementation. Two copies drift, and the copy that drifts is the one
+    that lies about the number you are trying to measure.
+
+    `send_fn(cmd)` returns raw bytes, or a TransportReply when the transport can
+    also report time-to-first-byte.
+
+    Returns {command, reply, answered, empty_reply, elapsed_s, first_byte_s,
+             reply_bytes, [error]}.
+
+    `answered` is a TRANSPORT question -- did the device respond at all -- and
+    `empty_reply` carries the answered-but-blank case separately. Collapsing
+    them turns a valid quiet reply into a phantom failure and hides #764's
+    shape, which is a handler matching a key and writing nothing.
+    """
+    row = {"command": cmd, "reply": "", "answered": False, "empty_reply": False,
+           "elapsed_s": None, "first_byte_s": None, "reply_bytes": 0}
+
+    started = now_fn()
+    try:
+        result = send_fn(cmd)
+    except Exception as e:
+        row["elapsed_s"] = round(now_fn() - started, 4)
+        row["error"] = f"{type(e).__name__}: {e}"
+        return row
+
+    row["elapsed_s"] = round(now_fn() - started, 4)
+
+    # Timing arrives ONLY via the explicit TransportReply type. Accepting any
+    # 2-tuple would silently record an unrelated second element as a latency.
+    if isinstance(result, TransportReply):
+        raw, row["first_byte_s"] = result.data, result.first_byte_s
+    elif isinstance(result, (bytes, bytearray)):
+        raw = result
+    elif isinstance(result, tuple) and result and isinstance(result[0], (bytes, bytearray)):
+        raw = result[0]
+    else:
+        # This path is shared by `send` and `send-batch`, so a bad transport
+        # would crash both. A str used to reach the redactor and raise
+        # TypeError from inside the timing code, which is the worst place to
+        # discover it.
+        row["error"] = (f"transport returned {type(result).__name__}, expected "
+                        f"bytes or TransportReply")
+        return row
+
+    raw = raw or b""
+    row["reply_bytes"] = len(raw)
+    redactor = _ReplyRedactor(secret=_is_secret_command(cmd))
+    text = redactor.feed(raw) + redactor.flush()
+    row["reply"] = text
+    row["answered"] = len(raw) > 0
+    row["empty_reply"] = row["answered"] and not text.strip()
+    return row
 
 
 def _run_batch(commands, send_fn, read_time: float = 5.0, now_fn=time.time):
@@ -1675,10 +1751,10 @@ def _run_batch(commands, send_fn, read_time: float = 5.0, now_fn=time.time):
     consecutive_failures = 0
     aborted = False
     for cmd in commands:
-        row = {"command": cmd, "reply": "", "answered": False, "empty_reply": False,
-               "elapsed_s": None, "first_byte_s": None, "reply_bytes": 0}
-
         if aborted:
+            row = {"command": cmd, "reply": "", "answered": False,
+                   "empty_reply": False, "elapsed_s": None,
+                   "first_byte_s": None, "reply_bytes": 0}
             # The port is gone. Retrying 40 more times produces 40 identical
             # exceptions after a long wait and tells nobody anything new.
             # elapsed_s stays None: this command was never attempted, and a
@@ -1687,42 +1763,16 @@ def _run_batch(commands, send_fn, read_time: float = 5.0, now_fn=time.time):
             rows.append(row)
             continue
 
-        started = now_fn()
-        try:
-            result = send_fn(cmd)
-        except Exception as e:
-            row["elapsed_s"] = round(now_fn() - started, 4)
-            row["error"] = f"{type(e).__name__}: {e}"
+        row = _timed_send(cmd, send_fn, now_fn=now_fn)
+
+        if "error" in row:
             consecutive_failures += 1
             if consecutive_failures >= _BATCH_ABORT_AFTER:
                 aborted = True
                 row["aborted_here"] = True
-            rows.append(row)
-            continue
-
-        consecutive_failures = 0
-        row["elapsed_s"] = round(now_fn() - started, 4)
-        # A transport may report time-to-first-byte alongside the data, but ONLY
-        # via the explicit TransportReply type. Accepting any 2-tuple would
-        # silently record an unrelated second element as a latency.
-        if isinstance(result, TransportReply):
-            raw, row["first_byte_s"] = result.data, result.first_byte_s
-        elif isinstance(result, (bytes, bytearray)):
-            raw = result
         else:
-            raw = result[0] if isinstance(result, tuple) and result else result
-        raw = raw or b""
-        row["reply_bytes"] = len(raw)
-        redactor = _ReplyRedactor(secret=_is_secret_command(cmd))
-        text = redactor.feed(raw) + redactor.flush()
-        row["reply"] = text
-        # `answered` is a TRANSPORT question: did the device respond at all?
-        # Whether the response had content is a separate, and different,
-        # finding -- a reply of "\r\n" is answered-but-empty, which is #764's
-        # shape. Collapsing the two turns a valid quiet reply into a phantom
-        # failure, and hides the defect the sweep exists to catch.
-        row["answered"] = len(raw) > 0
-        row["empty_reply"] = row["answered"] and not text.strip()
+            consecutive_failures = 0
+
         rows.append(row)
     return rows
 
@@ -1766,30 +1816,52 @@ def cmd_send(args, registry):
             except Exception:
                 pass
 
-            s.write((args.command + "\r").encode("utf-8"))
-            s.flush()
+            # #896: one timing path, shared with send-batch. Reads until the
+            # device goes idle rather than burning a fixed window -- a fast
+            # command must report milliseconds, not the read timeout.
+            # Streams redacted output live, exactly as this subcommand did
+            # before timing was added. The redactor here works from the raw
+            # chunks; _timed_send redacts the same raw bytes independently for
+            # the recorded row, so nothing is redacted twice.
+            live = _ReplyRedactor(secret=_is_secret_command(args.command))
 
-            deadline = time.time() + args.read_time
-            captured = bytearray()
-            # #849: never write raw device bytes to stdout. Buffer to line
-            # boundaries and redact first -- a secret can straddle two reads.
-            redactor = _ReplyRedactor(secret=_is_secret_command(args.command))
-            while time.time() < deadline:
-                data = s.read(1024)
-                if data:
-                    captured.extend(data)
-                    text = redactor.feed(data)
-                    if text:
-                        sys.stdout.write(text)
-                        sys.stdout.flush()
+            def _emit(chunk: bytes) -> None:
+                text = live.feed(chunk)
+                if text:
+                    sys.stdout.write(text)
+                    sys.stdout.flush()
 
-            tail = redactor.flush()
+            def transport(cmd: str) -> TransportReply:
+                origin = time.time()          # the command starts HERE
+                s.write((cmd + "\r").encode("utf-8"))
+                s.flush()
+                st = {}
+                data = _read_until_idle(lambda: s.read(1024),
+                                        idle_s=args.idle_time,
+                                        max_s=args.read_time,
+                                        stats=st, origin=origin,
+                                        on_chunk=_emit)
+                return TransportReply(data=data, first_byte_s=st.get("first_byte_s"))
+
+            row = _timed_send(args.command, transport)
+
+            tail = live.flush()
             if tail:
                 sys.stdout.write(tail)
-                sys.stdout.flush()
-
-            if captured and not bytes(captured).endswith(b"\n"):
+            if row["reply"] and not row["reply"].endswith("\n"):
                 print()
+            sys.stdout.flush()
+
+            status = "no reply" if not row["answered"] else (
+                "answered but EMPTY" if row["empty_reply"] else "ok")
+            fb = "" if row["first_byte_s"] is None else \
+                 f", first byte {row['first_byte_s']:.3f}s"
+            out(f"[{status}] {row['elapsed_s']:.3f}s{fb}, {row['reply_bytes']} bytes")
+            if "error" in row:
+                out(f"  error: {row['error']}")
+            if args.json_out:
+                Path(args.json_out).write_text(json.dumps(row, indent=2), encoding="utf-8")
+                out(f"wrote {args.json_out}")
     except Exception as e:
         refuse(f"serial send failed on {port['com']}: {e}")
 
@@ -2648,7 +2720,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("command", help="text command to send (CR is auto-appended)")
     s.add_argument("--baud", type=int, default=115200)
     s.add_argument("--read-time", type=float, default=5.0,
-                   help="seconds to read response after sending (default 5)")
+                   help="hard cap on the read (default 5)")
+    s.add_argument("--idle-time", type=float, default=SEND_IDLE_DEFAULT,
+                   help=f"return once the device has been quiet this long "
+                        f"(default {SEND_IDLE_DEFAULT}; raise it for a command "
+                        f"that prints in stages)")
+    s.add_argument("--json-out", help="write the timed result here")
 
     s = sub.add_parser("send-batch",
                        help="send N read-only `get` commands over one open port (Tier B)")
@@ -2658,8 +2735,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--baud", type=int, default=115200)
     s.add_argument("--read-time", type=float, default=3.0,
                    help="hard cap on the read for each command (default 3)")
-    s.add_argument("--idle-time", type=float, default=0.25,
-                   help="return once the device has been quiet this long (default 0.25)")
+    s.add_argument("--idle-time", type=float, default=BATCH_IDLE_DEFAULT,
+                   help=f"return once the device has been quiet this long "
+                        f"(default {BATCH_IDLE_DEFAULT})")
     s.add_argument("--json-out", help="write structured per-command results here")
 
     s = sub.add_parser("info", help="meshtastic --info (Tier B)")
