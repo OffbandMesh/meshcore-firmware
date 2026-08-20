@@ -29,7 +29,7 @@ LinkInputs in(bool wifi, bool mqtt, uint32_t elapsed = 0, bool stop = false) {
 
 TEST(LinkState, IdleStartsWifiWhenNothingIsUp) {
     auto t = linkTick(LinkState::Idle, in(false, false));
-    EXPECT_EQ(LinkState::Connecting, t.state);
+    EXPECT_EQ(LinkState::AwaitingWifi, t.state);
     EXPECT_EQ(LinkAction::StartWifi, t.action);
     EXPECT_TRUE(t.phase_changed);
 }
@@ -48,14 +48,14 @@ TEST(LinkState, IdleAdoptsAWorkingLinkInsteadOfRebuildingIt) {
 }
 
 TEST(LinkState, ConnectingWaitsWithoutActingWhileInsideTheBudget) {
-    auto t = linkTick(LinkState::Connecting, in(false, false, 14999));
-    EXPECT_EQ(LinkState::Connecting, t.state);
+    auto t = linkTick(LinkState::AwaitingWifi, in(false, false, 14999));
+    EXPECT_EQ(LinkState::AwaitingWifi, t.state);
     EXPECT_EQ(LinkAction::None, t.action) << "must not block, retry or thrash";
     EXPECT_FALSE(t.phase_changed);
 }
 
 TEST(LinkState, ConnectingReachesReadyWhenBothLegsComeUp) {
-    auto t = linkTick(LinkState::Connecting, in(true, true, 3000));
+    auto t = linkTick(LinkState::AwaitingMqtt, in(true, true, 3000));
     EXPECT_EQ(LinkState::Ready, t.state);
     EXPECT_EQ(LinkAction::ReportReady, t.action);
 }
@@ -66,28 +66,94 @@ TEST(LinkState, ConnectingReachesReadyWhenBothLegsComeUp) {
 
 TEST(LinkState, WifiTimesOutAtTheOriginalFifteenSeconds) {
     EXPECT_EQ(15000u, kWifiConnectTimeoutMs);
-    auto ok = linkTick(LinkState::Connecting, in(false, false, 15000));
-    EXPECT_EQ(LinkState::Connecting, ok.state) << "must not fire early";
-    auto late = linkTick(LinkState::Connecting, in(false, false, 15001));
+    auto ok = linkTick(LinkState::AwaitingWifi, in(false, false, 15000));
+    EXPECT_EQ(LinkState::AwaitingWifi, ok.state) << "must not fire early";
+    auto late = linkTick(LinkState::AwaitingWifi, in(false, false, 15001));
     EXPECT_EQ(LinkState::Failed, late.state);
     EXPECT_EQ(LinkAction::Teardown, late.action);
 }
 
 TEST(LinkState, MqttTimesOutAtTheOriginalFiveSeconds) {
     EXPECT_EQ(5000u, kMqttConnectTimeoutMs);
-    auto ok = linkTick(LinkState::Connecting, in(true, false, 5000));
-    EXPECT_EQ(LinkState::Connecting, ok.state);
-    auto late = linkTick(LinkState::Connecting, in(true, false, 5001));
+    auto ok = linkTick(LinkState::AwaitingMqtt, in(true, false, 5000));
+    EXPECT_EQ(LinkState::AwaitingMqtt, ok.state);
+    auto late = linkTick(LinkState::AwaitingMqtt, in(true, false, 5001));
     EXPECT_EQ(LinkState::Failed, late.state);
     EXPECT_EQ(LinkAction::Teardown, late.action);
 }
 
-TEST(LinkState, TheMqttBudgetIsNotChargedAgainstTheWifiBudget) {
-    // WiFi up at 14s, MQTT still connecting 4s later: the WiFi budget is spent
-    // but MQTT's is not, and the phase timer restarted at the transition.
-    auto t = linkTick(LinkState::Connecting, in(true, false, 4000));
-    EXPECT_EQ(LinkState::Connecting, t.state);
-    EXPECT_EQ(LinkAction::None, t.action);
+// A SIMULATED CALLER. The previous version of this test hand-fed
+// `phase_elapsed_ms` the value a reset would have produced, and passed while
+// the reset did not exist -- a 6s WiFi connect silently consumed the 5s MQTT
+// budget. Driving a monotonic clock through the same loop the transport runs
+// is the only way the transition is actually exercised.
+struct Sim {
+    LinkState state = LinkState::Idle;
+    uint32_t now = 0, phase_start = 0, last_mqtt = 0;
+    bool wifi = false, mqtt = false;
+    int mqtt_attempts = 0;
+
+    LinkTick step(uint32_t advance_ms) {
+        now += advance_ms;
+        LinkInputs i;
+        i.wifi_connected = wifi;
+        i.mqtt_connected = mqtt;
+        i.phase_elapsed_ms = now - phase_start;
+        i.ms_since_last_mqtt_attempt = (last_mqtt == 0) ? kMqttRetryIntervalMs
+                                                        : (now - last_mqtt);
+        auto t = linkTick(state, i);
+        if (t.phase_changed) phase_start = now;
+        if (t.action == LinkAction::StartMqtt) { mqtt_attempts++; last_mqtt = now; }
+        state = t.state;
+        return t;
+    }
+};
+
+TEST(LinkState, SlowWifiDoesNotConsumeTheMqttBudget) {
+    // THE REGRESSION. WiFi takes 6s -- longer than the whole 5s MQTT budget.
+    // MQTT must still get its own full 5s once WiFi is up.
+    Sim s;
+    s.step(0);                                   // Idle -> AwaitingWifi
+    EXPECT_EQ(LinkState::AwaitingWifi, s.state);
+    for (int i = 0; i < 6; i++) s.step(1000);    // 6s of WiFi connecting
+    EXPECT_EQ(LinkState::AwaitingWifi, s.state) << "must not time out at 6s";
+
+    s.wifi = true;
+    s.step(100);                                 // WiFi up -> AwaitingMqtt
+    EXPECT_EQ(LinkState::AwaitingMqtt, s.state);
+
+    // 4s into the MQTT phase -- total elapsed is now >10s, which under the old
+    // shared timer was already a "timeout".
+    for (int i = 0; i < 4; i++) s.step(1000);
+    EXPECT_EQ(LinkState::AwaitingMqtt, s.state)
+        << "WiFi's elapsed time was charged against MQTT's budget";
+
+    s.mqtt = true;
+    s.step(100);
+    EXPECT_EQ(LinkState::Ready, s.state);
+}
+
+TEST(LinkState, MqttStillTimesOutOnItsOwnBudget) {
+    Sim s;
+    s.wifi = true;
+    s.step(0);                                   // Idle -> AwaitingMqtt
+    EXPECT_EQ(LinkState::AwaitingMqtt, s.state);
+    for (int i = 0; i < 6; i++) s.step(1000);    // 6s > 5s budget
+    EXPECT_EQ(LinkState::Failed, s.state);
+}
+
+TEST(LinkState, MqttRetriesOnACadenceNotEveryTick) {
+    // Un-throttled retry means a blocking TCP connect on every loop pass
+    // against a down broker. Over 2s at 10ms ticks the cadence allows ~4, not
+    // ~200.
+    Sim s;
+    s.wifi = true;
+    s.step(0);                                   // first attempt
+    const int first = s.mqtt_attempts;
+    for (int i = 0; i < 200; i++) s.step(10);    // 2s of fast ticks
+    const int extra = s.mqtt_attempts - first;
+    EXPECT_GE(extra, 2);
+    EXPECT_LE(extra, 6) << "retrying on every tick would be ~200 attempts";
 }
 
 TEST(LinkState, FailedDoesNotSelfRetry) {
@@ -101,7 +167,8 @@ TEST(LinkState, FailedDoesNotSelfRetry) {
 // -------------------------------------------------------------------- stop ---
 
 TEST(LinkState, StopWinsFromEveryState) {
-    for (auto s : {LinkState::Connecting, LinkState::Ready, LinkState::Failed}) {
+    for (auto s : {LinkState::AwaitingWifi, LinkState::AwaitingMqtt,
+                   LinkState::Ready, LinkState::Failed}) {
         auto t = linkTick(s, in(true, true, 100, /*stop=*/true));
         EXPECT_EQ(LinkState::Idle, t.state);
         EXPECT_EQ(LinkAction::Teardown, t.action);
@@ -113,7 +180,7 @@ TEST(LinkState, StopBeatsAConnectionCompletingInTheSameTick) {
     // the same tick as a stop request would be left UP after the caller asked
     // for it to go down — which in persistent/OTA terms means WiFi staying on
     // when it should not.
-    auto t = linkTick(LinkState::Connecting, in(true, true, 10, /*stop=*/true));
+    auto t = linkTick(LinkState::AwaitingMqtt, in(true, true, 10, /*stop=*/true));
     EXPECT_EQ(LinkState::Idle, t.state);
     EXPECT_EQ(LinkAction::Teardown, t.action);
 }
@@ -128,14 +195,14 @@ TEST(LinkState, StopOnAnAlreadyIdleLinkDoesNothing) {
 
 TEST(LinkState, ReadyDropsToConnectingIfWifiGoesAway) {
     auto t = linkTick(LinkState::Ready, in(false, false));
-    EXPECT_EQ(LinkState::Connecting, t.state);
+    EXPECT_EQ(LinkState::AwaitingWifi, t.state);
     EXPECT_EQ(LinkAction::StartWifi, t.action);
 }
 
 TEST(LinkState, ReadyDropsToConnectingIfOnlyMqttGoesAway) {
     // A caller guarded by isReady() must not publish into a dead socket.
     auto t = linkTick(LinkState::Ready, in(true, false));
-    EXPECT_EQ(LinkState::Connecting, t.state);
+    EXPECT_EQ(LinkState::AwaitingMqtt, t.state);
     EXPECT_EQ(LinkAction::StartMqtt, t.action);
 }
 
@@ -163,8 +230,8 @@ TEST(LinkState, TickIsPureAndRepeatable) {
     // answer. That property is what lets a 15-second timeout be tested
     // instantly, and it is why this logic lives outside the transport.
     const auto i = in(false, false, 15001);
-    auto a = linkTick(LinkState::Connecting, i);
-    auto b = linkTick(LinkState::Connecting, i);
+    auto a = linkTick(LinkState::AwaitingWifi, i);
+    auto b = linkTick(LinkState::AwaitingWifi, i);
     EXPECT_EQ(a.state, b.state);
     EXPECT_EQ(a.action, b.action);
     EXPECT_EQ(a.phase_changed, b.phase_changed);

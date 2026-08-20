@@ -67,6 +67,12 @@ bool WifiMqttTransport::begin() {
     in.wifi_connected = (WiFi.status() == WL_CONNECTED);
     in.mqtt_connected = _mqtt.connected();
     in.phase_elapsed_ms = millis() - _phase_started_ms;
+    // 0 means 'never attempted', which must read as due -- otherwise the
+    // very first MQTT retry would be gated behind a cadence that has no
+    // start point.
+    in.ms_since_last_mqtt_attempt =
+        (_last_mqtt_attempt_ms == 0) ? offband::kMqttRetryIntervalMs
+                                     : (millis() - _last_mqtt_attempt_ms);
     in.stop_requested = false;
 
     const offband::LinkTick t = offband::linkTick(_link, in);
@@ -93,12 +99,15 @@ bool WifiMqttTransport::begin() {
             end();
             break;
         case offband::LinkAction::None:
-            // Still connecting, inside budget. Do nothing -- and crucially, do
+            // Still connecting, inside budget. Do NOTHING -- and crucially, do
             // not wait. The caller returns to loop() and the mesh keeps running.
-            if (_link == offband::LinkState::Connecting && in.wifi_connected
-                && !in.mqtt_connected) {
-                tryMqttConnect();   // retry within the MQTT budget
-            }
+            //
+            // An earlier version retried tryMqttConnect() here whenever WiFi was
+            // up and MQTT was not. That ignored the machine's decision to wait
+            // and produced an un-throttled retry loop: once callers drive this
+            // from loop(), that is a blocking TCP connect on every pass against
+            // a broker that is down. The retry cadence now lives in the state
+            // machine (kMqttRetryIntervalMs) and arrives as StartMqtt.
             break;
     }
     return _link == offband::LinkState::Ready;
@@ -112,6 +121,17 @@ void WifiMqttTransport::end() {
     }
     WiFi.disconnect(true);  // also disable WiFi radio
     WiFi.mode(WIFI_OFF);
+
+    // #913: reset the state machine. WITHOUT THIS THE TRANSPORT HANGS FOREVER.
+    // The machine deliberately never leaves Failed on its own (self-retry would
+    // hammer a down access point), so the caller clears it by tearing down. If
+    // end() left _link == Failed, the radio would be off, every later begin()
+    // would do nothing, and telemetry would be dead until a power cycle.
+    // Found by adversarial review.
+    _link = offband::LinkState::Idle;
+    _phase_started_ms = millis();
+    _last_mqtt_attempt_ms = 0;
+
     WIFI_TEL_DBG("end: WiFi + MQTT torn down");
 }
 
@@ -213,6 +233,9 @@ bool WifiMqttTransport::tryMqttConnect() {
     // (seconds) and is exactly the kind of unstated assumption that produced
     // this defect. Bounded here so one attempt cannot dominate a loop pass.
     _mqtt.setSocketTimeout(kMqttSocketTimeoutSec);
+    _last_mqtt_attempt_ms = millis();   // stamp BEFORE the attempt: the
+                                        // cadence must count from when we
+                                        // started, not when we gave up.
 
     const bool ok = (_mqtt_user && _mqtt_user[0])
                         ? _mqtt.connect(_client_id, _mqtt_user, _mqtt_pass)
