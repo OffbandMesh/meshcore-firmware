@@ -2,7 +2,9 @@
 
 **Issue:** #912 (design) under epic #911. Defect record: #910. Answers #893.
 **Date:** 2026-08-20
-**Status:** **AGREED 2026-08-20** — owner selected **Option 1** (lifecycle worker), with **Option 2 planned as a follow-up**.
+**Status:** **SUPERSEDED THEN RE-AGREED 2026-08-20** — Option 1 was agreed first, then **abandoned on the shared-state audit findings (§11)**. The epic implements **Option 2**. See §12.
+
+> Reading order matters here: §5-6 argue *for* Option 1 and §11 is what overturned them. The earlier sections are kept unedited on purpose — the reasoning that lost is the record of why the audit was made a gate.
 
 ---
 
