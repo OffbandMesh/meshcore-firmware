@@ -68,6 +68,31 @@ static int      g_tel_last_mqtt_state = 99;    // PubSubClient state after last 
 // transport.end() so WiFi stays up between publish cycles, enabling features
 // like OTA (D5) that need persistent connectivity.
 static uint32_t g_tel_persistent_until_ms = 0;
+
+// #914: both telemetry triggers are now MULTI-PASS.
+//
+// begin() no longer blocks until connected (#913), so a trigger can no longer
+// do connect-publish-teardown in one call. Each keeps a phase and is re-entered
+// from loop() until its cycle completes.
+//
+// Why a phase and not just "call begin() until isReady()": the counters. A
+// naive re-entry would increment g_tel_wifi_attempts on EVERY loop pass while
+// connecting -- thousands per cycle instead of one. The phase exists so each
+// counter is touched exactly once per cycle, which is what the CLI status
+// readout has always meant.
+enum class TelPhase : uint8_t { Idle = 0, Connecting, Working };
+static TelPhase g_pub_phase  = TelPhase::Idle;   // telemetry publish cycle
+static TelPhase g_poll_phase = TelPhase::Idle;   // HTTP cmd-poll cycle
+
+// Deferred second sample, replacing a blocking delay(3000) on the first cycle.
+static uint32_t g_pub_second_sample_at = 0;
+
+// True while EITHER trigger still needs the link. Teardown is gated on this so
+// one trigger finishing cannot pull the transport out from under the other --
+// they run in the same loop pass and both want WiFi up.
+static bool tel_cycle_active() {
+    return g_pub_phase != TelPhase::Idle || g_poll_phase != TelPhase::Idle;
+}
 // Hard cap on persistent-mode duration to prevent forgotten-on battery drain.
 // Even if a CLI command tries to set a longer timeout, it gets clamped here.
 #define WIFI_PERSISTENT_MAX_MS (60UL * 60UL * 1000UL)   // 60 minutes
@@ -305,75 +330,99 @@ static void wifi_telemetry_fill_neighbors(TelemetryNeighbors& n) {
 #endif // MAX_NEIGHBOURS
 
 static void wifi_telemetry_collect_and_publish() {
-    g_tel_wifi_attempts++;
-    bool transport_up = g_tel_transport->begin();
-    g_tel_last_mqtt_state = g_tel_transport->getMqttState();
-    if (!transport_up) {
-        g_tel_wifi_fails++;
-        // Don't try to publish; ensure clean teardown for next cycle.
-        g_tel_transport->end();
-        return;
+    // PHASE 1 -- start a cycle. Counted once, here, and nowhere else.
+    if (g_pub_phase == TelPhase::Idle) {
+        g_tel_wifi_attempts++;
+        g_pub_phase = TelPhase::Connecting;
     }
 
-    TelemetryData d;
-    wifi_telemetry_fill_scalar(d);
-    g_tel_publish_attempts++;
-    bool published = g_telemetry.sample(d);
-    if (published) {
-        g_tel_last_publish_ms = millis();
-    } else {
-        g_tel_publish_fails++;
+    // PHASE 2 -- advance the link. Returns immediately; no waiting (#913).
+    if (g_pub_phase == TelPhase::Connecting) {
+        g_tel_transport->begin();
+        g_tel_last_mqtt_state = g_tel_transport->getMqttState();
+
+        const offband::LinkState ls = g_tel_transport->linkState();
+        if (ls == offband::LinkState::Failed) {
+            // A REAL failure, not "not yet". This distinction is why
+            // linkState() exists: begin() returning false during bring-up is
+            // the normal case now, and counting it would inflate
+            // g_tel_wifi_fails on every pass and abort every cycle.
+            g_tel_wifi_fails++;
+            g_tel_transport->end();          // also resets the link to Idle
+            g_pub_phase = TelPhase::Idle;
+            return;
+        }
+        if (ls != offband::LinkState::Ready) {
+            return;   // still connecting -- come back next loop pass
+        }
+        g_pub_phase = TelPhase::Working;
     }
 
-#if MAX_NEIGHBOURS
-    TelemetryNeighbors n;
-    wifi_telemetry_fill_neighbors(n);
-    g_telemetry.publishNeighbors(n);
-#endif
+    if (g_pub_phase != TelPhase::Working) return;
 
-    static bool first_cycle_completed = false;
-    if (!first_cycle_completed && g_tel_transport->isReady()) {
-        delay(3000);
-        wifi_telemetry_fill_scalar(d);
+    // PHASE 3 -- the deferred second sample, if one is pending.
+    //
+    // This replaces `delay(3000)` on the first cycle: a 3-second block of the
+    // loop task, which is 3 seconds of LoRa deafness on every boot -- the same
+    // defect class this epic exists to remove, hiding in the publish path.
+    if (g_pub_second_sample_at != 0) {
+        if ((int32_t)(millis() - g_pub_second_sample_at) < 0) return;  // not yet
+        g_pub_second_sample_at = 0;
+        TelemetryData d2;
+        wifi_telemetry_fill_scalar(d2);
         g_tel_publish_attempts++;
-        if (g_telemetry.sample(d)) {
+        if (g_telemetry.sample(d2)) {
             g_tel_last_publish_ms = millis();
         } else {
             g_tel_publish_fails++;
         }
 #if MAX_NEIGHBOURS
+        TelemetryNeighbors n2;
+        wifi_telemetry_fill_neighbors(n2);
+        g_telemetry.publishNeighbors(n2);
+#endif
+    } else {
+        TelemetryData d;
+        wifi_telemetry_fill_scalar(d);
+        g_tel_publish_attempts++;
+        bool published = g_telemetry.sample(d);
+        if (published) {
+            g_tel_last_publish_ms = millis();
+        } else {
+            g_tel_publish_fails++;
+        }
+
+#if MAX_NEIGHBOURS
+        TelemetryNeighbors n;
         wifi_telemetry_fill_neighbors(n);
         g_telemetry.publishNeighbors(n);
 #endif
-        first_cycle_completed = true;
-    }
 
-    // LoRa#216: HTTP cmd-poll was previously called HERE inside collect_and_publish
-    // (H3 #195). It has moved to its own standalone check in wifi_telemetry_loop()
-    // so cmd-poll cadence can be tuned independently of telemetry publish cadence.
-    // Dispatched cmds that promote to persistent mode (ota_enable, wifi_keepalive)
-    // still work the same way: dispatch sets g_tel_persistent_until_ms, then the
-    // teardown check below sees the non-zero value and skips end().
+        // Issue #86: MQTT cmd-topic subscribe (legacy path).
+        if (g_remote_cmd_handler && !g_remote_cmd_subscribed
+            && g_tel_transport->isReady()) {
+            char cmd_topic[64];
+            g_remote_cmd_handler->buildCmdTopic(cmd_topic, sizeof(cmd_topic));
+            if (g_tel_transport->subscribe(cmd_topic, /* qos */ 1)) {
+                g_remote_cmd_subscribed = true;
+            }
+        }
 
-    // Issue #86: MQTT cmd-topic subscribe (legacy path). Kept active during
-    // the H3-to-H7 transition for compatibility. The burst-mode drain bug
-    // (#187) means cmds delivered via this path during burst are lost; the
-    // HTTP path above is the working replacement. H7 will remove this.
-    if (g_remote_cmd_handler && !g_remote_cmd_subscribed && g_tel_transport->isReady()) {
-        char cmd_topic[64];
-        g_remote_cmd_handler->buildCmdTopic(cmd_topic, sizeof(cmd_topic));
-        if (g_tel_transport->subscribe(cmd_topic, /* qos */ 1)) {
-            g_remote_cmd_subscribed = true;
+        static bool first_cycle_completed = false;
+        if (!first_cycle_completed && g_tel_transport->isReady()) {
+            // Schedule the second sample instead of sleeping through it. The
+            // cycle stays in Working, so teardown waits for it.
+            g_pub_second_sample_at = millis() + 3000;
+            first_cycle_completed = true;
+            return;
         }
     }
 
-    // Persistent-mode hook (D2 / issue #56): when persistent timer is active,
-    // skip the teardown so WiFi stays up between publish cycles. The
-    // wifi_telemetry_loop()'s timeout check (below) handles auto-revert.
-    if (g_tel_persistent_until_ms == 0) {
+    // PHASE 4 -- finish. Teardown is skipped in persistent mode (D2 / #56), and
+    // gated on no OTHER trigger still needing the link.
+    g_pub_phase = TelPhase::Idle;
+    if (g_tel_persistent_until_ms == 0 && !tel_cycle_active()) {
         g_tel_transport->end();
-        // Issue #86: re-subscribe on next connect since the broker session ends
-        // with the transport teardown.
         g_remote_cmd_subscribed = false;
     }
 }
@@ -492,23 +541,44 @@ static void wifi_telemetry_loop() {
     //   poll, and tear down (unless a dispatched cmd just promoted us to
     //   persistent — re-check g_tel_persistent_until_ms before teardown).
     //   Interval = g_cmd_poll_burst_interval_ms (CLI-tunable, default = telemetry interval).
-    if ((int32_t)(millis() - g_cmd_poll_next_ms) >= 0 && g_tel_transport != nullptr) {
-        bool was_persistent_before = (g_tel_persistent_until_ms != 0);
-        bool was_ready_before      = g_tel_transport->isReady();
-        // Bring transport up if it isn't (burst-mode cmd-poll cycle).
-        if (!was_ready_before) {
-            g_tel_wifi_attempts++;
-            if (!g_tel_transport->begin()) {
-                g_tel_wifi_fails++;
-            }
+    if ((g_poll_phase != TelPhase::Idle
+         || (int32_t)(millis() - g_cmd_poll_next_ms) >= 0)
+        && g_tel_transport != nullptr) {
+        // #914: multi-pass, same shape as the publish trigger.
+        static bool poll_brought_up = false;
+        if (g_poll_phase == TelPhase::Idle) {
+            poll_brought_up = !g_tel_transport->isReady();
+            if (poll_brought_up) g_tel_wifi_attempts++;   // once per cycle
+            g_poll_phase = TelPhase::Connecting;
         }
+        if (g_poll_phase == TelPhase::Connecting) {
+            if (!g_tel_transport->isReady()) {
+                g_tel_transport->begin();
+                const offband::LinkState ls = g_tel_transport->linkState();
+                if (ls == offband::LinkState::Failed) {
+                    if (poll_brought_up) g_tel_wifi_fails++;
+                    g_tel_transport->end();
+                    g_poll_phase = TelPhase::Idle;
+                    g_cmd_poll_next_ms = millis()
+                        + ((g_tel_persistent_until_ms != 0)
+                               ? WIFI_CMD_POLL_PERSISTENT_INTERVAL_MS
+                               : g_cmd_poll_burst_interval_ms);
+                    return;
+                }
+                if (ls != offband::LinkState::Ready) return;   // still connecting
+            }
+            g_poll_phase = TelPhase::Working;
+        }
+        bool was_ready_before = !poll_brought_up;
         if (g_tel_transport->isReady()) {
             wifi_telemetry_http_cmd_poll();
         }
+        g_poll_phase = TelPhase::Idle;
         // Tear down only if (a) we brought it up, AND (b) we're STILL not in
         // persistent mode — a dispatched cmd may have just promoted us. Use
         // CURRENT value of g_tel_persistent_until_ms, not the pre-poll snapshot.
-        if (!was_ready_before && g_tel_persistent_until_ms == 0) {
+        if (!was_ready_before && g_tel_persistent_until_ms == 0
+            && !tel_cycle_active()) {
             g_tel_transport->end();
             // Issue #86: cmd-topic subscription is gone with the transport;
             // mark for re-subscribe on next connect.
@@ -520,7 +590,6 @@ static void wifi_telemetry_loop() {
             ? WIFI_CMD_POLL_PERSISTENT_INTERVAL_MS
             : g_cmd_poll_burst_interval_ms;
         g_cmd_poll_next_ms = millis() + interval;
-        (void)was_persistent_before;  // captured for potential debug logging
     }
 #endif
 
@@ -529,9 +598,15 @@ static void wifi_telemetry_loop() {
     wifi_telemetry_caplog_forward_service();
 #endif
 
-    if ((int32_t)(millis() - g_tel_next_publish_ms) >= 0) {
+    // #914: re-enter while a cycle is in flight, not only when the timer fires,
+    // and reschedule ONLY once the cycle completes -- otherwise the next publish
+    // would be scheduled from the moment bring-up started rather than finished.
+    if (g_pub_phase != TelPhase::Idle
+        || (int32_t)(millis() - g_tel_next_publish_ms) >= 0) {
         wifi_telemetry_collect_and_publish();
-        g_tel_next_publish_ms = millis() + WIFI_TELEMETRY_INTERVAL_MS;
+        if (g_pub_phase == TelPhase::Idle) {
+            g_tel_next_publish_ms = millis() + WIFI_TELEMETRY_INTERVAL_MS;
+        }
     }
 }
 
