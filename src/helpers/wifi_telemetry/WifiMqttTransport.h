@@ -24,6 +24,19 @@
 #include <WiFiClient.h>
 #include <PubSubClient.h>
 
+// #913: bound on a single MQTT connect attempt, in SECONDS (PubSubClient's unit).
+//
+// `[verified: PubSubClient.h:34-36]` the library default is MQTT_SOCKET_TIMEOUT
+// = 15, and this code never overrode it. So one `_mqtt.connect()` could block
+// for ~15 s -- the old outer loop's nominal 5 s budget could not bound it,
+// because the elapsed check ran only AFTER an attempt returned. Worst case was
+// therefore ~15 s WiFi + ~15 s MQTT, which matches the 28.2 s stall measured on
+// ST-P (#910) better than the 20 s originally estimated.
+//
+// 2 s is ample for a LAN broker and caps what a single attempt can cost the
+// loop; the state machine retries across ticks within its own budget.
+static constexpr uint16_t kMqttSocketTimeoutSec = 2;
+
 class WifiMqttTransport : public TelemetryTransport {
 public:
     // ssid/password/mqtt_* must outlive this object (typically build-flag literals).
@@ -35,9 +48,14 @@ public:
                       const char* mqtt_pass,
                       const char* client_id);
 
+    // #913: NON-BLOCKING. Starts or advances the bring-up by one step and
+    // returns true only when the link is Ready NOW. It no longer waits, so a
+    // caller must either loop until isReady() or consult linkState() to tell
+    // "still connecting" from "failed".
     bool begin() override;
     void end() override;
     bool isReady() override;
+    offband::LinkState linkState() override { return _link; }
     bool publish(const char* topic, const char* payload, bool retain) override;
     void loop() override;
 
@@ -88,8 +106,21 @@ private:
     PubSubClient _mqtt;
     int _last_mqtt_state = 99;  // last PubSubClient state code, 99 = never attempted
 
-    bool connectWifi(uint32_t timeout_ms = 15000);
-    bool connectMqtt(uint32_t timeout_ms = 5000);
+    // #913: link bring-up state, advanced one step per begin() call. The
+    // decision logic is in LinkStateMachine.h -- pure, Arduino-free and
+    // host-tested; this class keeps only the calls that need a radio.
+    offband::LinkState _link = offband::LinkState::Idle;
+    uint32_t _phase_started_ms = 0;   // when the CURRENT phase began
+
+    // Non-blocking: kicks WiFi off and returns immediately. WiFi.begin() is
+    // genuinely asynchronous -- progress is observed via WiFi.status().
+    void startWifi();
+
+    // ONE bounded MQTT connect attempt. PubSubClient::connect() performs a
+    // blocking TCP connect and cannot be made asynchronous, so it is BOUNDED
+    // via setSocketTimeout() and retried across ticks instead. This is the one
+    // place the loop can still stall, and only for that bound.
+    bool tryMqttConnect();
 };
 
 #endif // ENABLE_WIFI_TELEMETRY && ESP32
