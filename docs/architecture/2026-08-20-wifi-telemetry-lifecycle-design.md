@@ -249,3 +249,53 @@ The review changes the **order** of work, not the option:
 5. Measure stack high-water mark; size from measurement.
 6. Define worker failure behaviour.
 7. Confirm nothing on the mesh loop path takes a WiFi/LwIP lock.
+
+---
+
+## 11. Shared-state audit results (#913 gate) — 2026-08-20
+
+The audit was made a gate by §9. It has fired.
+
+### Finding A — the transport is used from `loopTask` on every iteration
+
+`[verified: main.cpp:386, and wifi_telemetry_loop() +6/+75/+94/+115-132]`
+
+```c
+if (g_tel_transport) g_tel_transport->loop();     // MQTT keepalive, socket I/O
+```
+
+`wifi_telemetry_loop()` also calls `end()`, `isReady()` and `begin()` — **the cmd-poll trigger is embedded inside it**, not a separate movable function.
+
+`->loop()` is PubSubClient keepalive over the shared `WiFiClient`. Neither is thread-safe. A worker calling `begin()`/`publish()`/`end()` concurrently is a data race on a live socket.
+
+**A mutex is disqualified**, not merely undesirable: `loopTask` would block on it while the worker holds it through a 15 s connect — **recreating the exact defect**, with extra steps.
+
+Therefore the only viable Option 1 shape is **worker owns the transport exclusively**, including keepalive. That is materially larger than "move the two trigger functions".
+
+### Finding B — OTA depends on WiFi staying up, across THREE tasks
+
+`[verified: main.cpp:418-447]` — OTA is served by AsyncElegantOTA, i.e. the **AsyncTCP task**. `loopTask` observes `Update.isRunning()` and extends `g_tel_persistent_until_ms` to hold WiFi up.
+
+Under Option 1 the teardown decision moves to a **third** task. A worker that reads an expired deadline, is preempted while `loopTask` extends it, then resumes and tears down, **kills a firmware update in flight** — the highest-consequence operation on the device.
+
+Under Option 2 check-and-act stay on one task and the race cannot exist.
+
+### Scope comparison
+
+| | **Option 1 (revised)** | **Option 2** |
+|---|---|---|
+| Code relocated / restructured | ~230 lines across 5 functions, **plus splitting a 156-line function by concern** | transport internals (186-line file) + 2 trigger sites |
+| Lifecycle call sites touched | 7 | 7 |
+| Interface contract change | none | `begin()`, **1 implementation** |
+| New cross-task state | transport object, 5 counters, persistent deadline, refcounted demand | **none** |
+| Synchronisation required | atomics + explicit teardown command + refcount | **none** |
+| OTA | teardown decision crosses to a third task | **untouched** |
+| Blocking | still exists, relocated | **eliminated** |
+
+### Conclusion
+
+**Option 1's original justification does not survive the audit.** It was chosen for smaller blast radius and no caller redesign. The audit shows it needs the transport moved wholesale, a 156-line function split, a cross-task OTA protocol, atomics and a refcount — while Option 2 needs none of those and leaves OTA alone.
+
+§6 pre-registered this outcome: *"If the concurrency audit in §7 turns up shared state that cannot be cleanly isolated, Option 2 becomes correct and this recommendation should be revisited rather than forced."*
+
+**Recommendation: switch to Option 2.** Returned to the owner rather than engineered around.
