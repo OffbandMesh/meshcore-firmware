@@ -9,6 +9,7 @@
 #include "MqttAuth.h"
 #include "BrokerHealth.h"   // #739: connection-health / penalty tracker
 #include "FailEscalateWindow.h"   // #838/#906: per-attempt escalation dedupe
+#include "BudgetHoldClock.h"      // #720: reconnect-proof TLS-budget hold clock
 #include "MqttPayload.h"
 
 #ifdef ARDUINO
@@ -159,6 +160,11 @@ public:
     uint8_t                    slot()    const { return slot_; }
     const BrokerConfig&        config()  const { return cfg_; }
     const BrokerRuntimeState&  runtime() const { return rt_; }
+    // #720: how long this broker has continuously held the TLS budget slot,
+    // reconnect-proof (unlike runtime().went_up_ms). The rotation scheduler ages
+    // an eviction victim by THIS, not went_up_ms, so a flapping broker still
+    // rotates out instead of holding the slot forever.
+    uint32_t budgetHeldMs(uint32_t now_ms) const { return budget_hold_.heldMs(now_ms); }
     // #739: read-only health for status/rotation; noteCleanDwell() is called by
     // the pool when this broker is rotated out after holding a FULL dwell Up
     // with no error -- the only event that earns rehabilitation.
@@ -224,6 +230,11 @@ private:
     // into a single penalty escalation, while separate attempts each escalate.
     // Host-tested in test/test_fail_escalate_window. reset() on a clean connect.
     FailEscalateWindow fail_window_;
+
+    // #720: reconnect-proof clock for TLS-budget hold duration. Stamped on the
+    // first Up of an occupancy, cleared on releaseClient(); a reconnect does NOT
+    // reset it. Separate from rt_ (which a reconnect/rt_ reset would disturb).
+    BudgetHoldClock budget_hold_;
 
     // C-style event dispatch -- esp_mqtt requires a static function.
     // The handler_args is the MqttBroker* registered via

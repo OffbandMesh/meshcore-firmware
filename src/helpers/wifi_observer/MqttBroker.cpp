@@ -175,6 +175,8 @@ void MqttBroker::releaseClient(bool keep_failed) {
     } else {
         rt_ = BrokerRuntimeState{};
     }
+    budget_hold_.onReleased();  // #720: the budget slot is freed on either path;
+                                // the next acquisition stamps a fresh hold clock.
     // slot_ and cfg_ deliberately RETAINED -- that is the whole difference from
     // shutdown(). A rotated-out broker must stay configured so the pool can see
     // it, honor its cooldown, and promote it back via reconcileSlot->tryConnect.
@@ -553,8 +555,17 @@ void MqttBroker::onConnected(uint32_t now_ms) {
     // reconnect); this is belt-and-suspenders for a connect event in flight when
     // the broker went Failed. Failed clears only by operator re-enable/reconfigure.
     if (rt_.state == BrokerState::Failed) return;
+    // #720: same belt-and-suspenders as the Failed guard above, for the rotation
+    // path. releaseClient() destroys client_ then resets state to Down; a stale
+    // MQTT_EVENT_CONNECTED already queued before the teardown can be dispatched
+    // afterwards. Without this guard it would set state=Up + stamp budget_hold_
+    // with no client behind it -- a "zombie" that occupies the TLS budget slot
+    // (rotation would evict it within a dwell, but the inconsistency is real).
+    if (!hasClient()) return;
     rt_.state = BrokerState::Up;
-    rt_.went_up_ms = now_ms;   // #175: dwell clock for TLS rotation
+    rt_.went_up_ms = now_ms;   // #175: dwell clock for TLS rotation (display/age)
+    budget_hold_.onConnected(now_ms);  // #720: eviction clock -- stamped once per
+                                       // occupancy, NOT reset by this reconnect
     rt_.retry_count = 0;
     rt_.last_error_class = BrokerErrorClass::None;
     fail_window_.reset();   // #906: a clean connect ends the escalation window,

@@ -1,10 +1,16 @@
 #include <gtest/gtest.h>
 #include <vector>
 #include "helpers/wifi_observer/BrokerRotationSelect.h"
+#include "helpers/wifi_observer/BudgetHoldClock.h"
 
 using offband::TlsCandidate;
 using offband::selectTlsPromotion;
 using offband::kNoSlot;
+using offband::BudgetHoldClock;
+
+// The firmware's rotation dwell -- eviction fires only once a broker has held the
+// budget this long (MqttBrokerPool.cpp MQTT_ROTATE_DWELL_MS).
+static constexpr uint32_t kDwellMs = 60000U;
 
 // ---------------------------------------------------------------------------
 // Rotation harness -- reproduces the pool's dwell cycle without hardware.
@@ -137,6 +143,72 @@ TEST(BrokerRotation, FullBudgetPromotesNothing) {
 TEST(BrokerRotation, NoEligibleCandidatesReturnsNoSlot) {
     TlsCandidate c[3];   // all default: eligible = false
     EXPECT_EQ(selectTlsPromotion(c, 3, 0, 1), kNoSlot);
+}
+
+// ===========================================================================
+// #720 -- the eviction clock. Eviction used went_up_ms, which resets on every
+// reconnect; a broker flapping faster than the dwell never aged out, so
+// rotation never fired and every other TLS broker starved. BudgetHoldClock is
+// the reconnect-proof replacement the eviction age is now taken from.
+// ===========================================================================
+
+// Baseline: a fresh hold ages from its acquisition instant.
+TEST(BudgetHoldClock, HeldTimeAdvancesFromAcquisition) {
+    BudgetHoldClock c;
+    EXPECT_FALSE(c.held());
+    EXPECT_EQ(c.heldMs(1000), 0u);       // not held -> zero
+    c.onConnected(1000);
+    EXPECT_TRUE(c.held());
+    EXPECT_EQ(c.heldMs(1000), 0u);
+    EXPECT_EQ(c.heldMs(61000), 60000u);  // aged one dwell
+}
+
+// THE #720 REGRESSION. A broker reconnecting every 30 s (faster than the 60 s
+// dwell) must still age past the dwell -- the reconnects do NOT reset the clock.
+// With went_up_ms this age would be a perpetual 5 s and eviction never fired.
+TEST(BudgetHoldClock, ReconnectDoesNotResetTheEvictionClock) {
+    BudgetHoldClock c;
+    c.onConnected(0);                    // first Up: hold starts at t=0
+    c.onConnected(30000);                // auto-reconnect -- must NOT reset
+    c.onConnected(60000);                // auto-reconnect -- must NOT reset
+    // A flapping broker's age keeps climbing; at t=65s it is evictable...
+    EXPECT_EQ(c.heldMs(65000), 65000u);
+    EXPECT_GE(c.heldMs(65000), kDwellMs);
+    // ...whereas went_up_ms (reset at the 60000 reconnect) would read 5000 and
+    // stay forever under the dwell -- the exact starvation this fixes.
+    EXPECT_LT(65000u - 60000u, kDwellMs);
+}
+
+// Anti-thrash survives: a freshly-acquired slot is NOT past the dwell yet, so
+// rotateTlsIfDue()'s `best_age < DWELL` guard still refuses to evict it early.
+TEST(BudgetHoldClock, FreshHoldIsNotYetEvictable) {
+    BudgetHoldClock c;
+    c.onConnected(100000);
+    EXPECT_LT(c.heldMs(130000), kDwellMs);   // 30 s held -> not evictable
+    EXPECT_GE(c.heldMs(160000), kDwellMs);   // 60 s held -> evictable
+}
+
+// Release clears the hold; the next acquisition starts a fresh clock (so a
+// broker rotated out and later promoted again does not inherit its old age).
+TEST(BudgetHoldClock, ReleaseResetsForNextOccupancy) {
+    BudgetHoldClock c;
+    c.onConnected(0);
+    EXPECT_GE(c.heldMs(70000), kDwellMs);
+    c.onReleased();                          // rotated out / reaped
+    EXPECT_FALSE(c.held());
+    EXPECT_EQ(c.heldMs(70000), 0u);
+    c.onConnected(200000);                   // promoted again later
+    EXPECT_EQ(c.heldMs(230000), 30000u);     // ages from the NEW acquisition
+}
+
+// millis()==0 is unambiguous: a real acquisition at t=0 is a genuine hold, not
+// mistaken for "never held" (the sentinel trap FailEscalateWindow also avoids).
+TEST(BudgetHoldClock, AcquisitionAtZeroIsAGenuineHold) {
+    BudgetHoldClock c;
+    c.onConnected(0);
+    EXPECT_TRUE(c.held());
+    c.onConnected(10);                       // reconnect a few ms later
+    EXPECT_EQ(c.heldMs(60000), 60000u);      // still anchored at t=0, not t=10
 }
 
 int main(int argc, char **argv) {

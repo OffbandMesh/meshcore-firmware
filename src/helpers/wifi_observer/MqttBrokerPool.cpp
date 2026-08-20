@@ -601,7 +601,12 @@ void MqttBrokerPool::rotateTlsIfDue(uint32_t now_ms) {
         const MqttBroker& b = brokers_[s];
         if (!b.isConfigured() || !isTlsTransport(b.config())) continue;
         if (b.runtime().state != BrokerState::Up) continue;
-        uint32_t age = now_ms - b.runtime().went_up_ms;
+        // #720: age by the reconnect-proof budget-hold clock, NOT went_up_ms.
+        // went_up_ms resets on every reconnect (incl. esp-mqtt auto-reconnect),
+        // so a broker flapping faster than the dwell never aged past the
+        // threshold below and rotation never fired -- starving every other TLS
+        // broker. budgetHeldMs() measures continuous slot occupancy instead.
+        uint32_t age = b.budgetHeldMs(now_ms);
         if (victim == 0xFF || age > best_age) { best_age = age; victim = s; }
     }
     if (victim == 0xFF) return;
@@ -713,8 +718,11 @@ void MqttBrokerPool::workerLoop() {
                     o += snprintf(L + o, (size_t)(sizeof(L) - o), " s%u:%s", (unsigned)s,
                                   stv < 8 ? AB[stv] : "?");
                     if (b.runtime().state == BrokerState::Up)
+                        // #720: show the budget-hold age -- the value eviction
+                        // actually keys off -- not went_up_ms (which resets on
+                        // reconnect), so the log matches the rotation decision.
                         o += snprintf(L + o, (size_t)(sizeof(L) - o), "/%us",
-                                      (unsigned)((now - b.runtime().went_up_ms) / 1000U));
+                                      (unsigned)(b.budgetHeldMs(now) / 1000U));
                     uint32_t cd = (rotated_out_until_ms_[s] != 0 &&
                                    (int32_t)(rotated_out_until_ms_[s] - now) > 0)
                                   ? (rotated_out_until_ms_[s] - now) / 1000U : 0U;
