@@ -1607,6 +1607,7 @@ class TransportReply(NamedTuple):
     """
     data: bytes
     first_byte_s: float = None
+    last_byte_s: float = None
 
 
 def _read_until_idle(read_fn, idle_s: float, max_s: float,
@@ -1628,6 +1629,7 @@ def _read_until_idle(read_fn, idle_s: float, max_s: float,
     start = now_fn()
     last = start
     first_byte_at = None
+    last_byte_at = None
     while True:
         if now_fn() - start >= max_s:
             break
@@ -1640,6 +1642,7 @@ def _read_until_idle(read_fn, idle_s: float, max_s: float,
             # must keep doing so.
             if on_chunk is not None:
                 on_chunk(chunk)
+            last_byte_at = now_fn()
             if first_byte_at is None:
                 # #851: time-to-first-byte separates "slow to START answering"
                 # from "answered at length". They have different causes and the
@@ -1657,6 +1660,14 @@ def _read_until_idle(read_fn, idle_s: float, max_s: float,
         base = start if origin is None else origin
         stats["first_byte_s"] = (None if first_byte_at is None
                                  else round(first_byte_at - base, 4))
+        # The TRUE round trip: origin to the last byte received. Wall time from
+        # here also contains the idle wait -- which is this tool's own timeout,
+        # not the device's latency. Charging the device for it inflated every
+        # measurement by idle_s, and by a DIFFERENT amount whenever --idle-time
+        # changed, making two runs incomparable. Found on hardware (T096):
+        # elapsed 1.2188 vs first byte 0.2136, a gap of exactly the 1.0s idle.
+        stats["last_byte_s"] = (None if last_byte_at is None
+                                else round(last_byte_at - base, 4))
     return bytes(buf)
 
 
@@ -1679,7 +1690,8 @@ def _timed_send(cmd: str, send_fn, now_fn=time.time) -> dict:
     shape, which is a handler matching a key and writing nothing.
     """
     row = {"command": cmd, "reply": "", "answered": False, "empty_reply": False,
-           "elapsed_s": None, "first_byte_s": None, "reply_bytes": 0}
+           "elapsed_s": None, "round_trip_s": None, "first_byte_s": None,
+           "reply_bytes": 0}
 
     started = now_fn()
     try:
@@ -1694,7 +1706,11 @@ def _timed_send(cmd: str, send_fn, now_fn=time.time) -> dict:
     # Timing arrives ONLY via the explicit TransportReply type. Accepting any
     # 2-tuple would silently record an unrelated second element as a latency.
     if isinstance(result, TransportReply):
-        raw, row["first_byte_s"] = result.data, result.first_byte_s
+        raw = result.data
+        row["first_byte_s"] = result.first_byte_s
+        # round_trip_s is what a consumer should compare across runs;
+        # elapsed_s is wall time and includes this tool's idle wait.
+        row["round_trip_s"] = result.last_byte_s
     elif isinstance(result, (bytes, bytearray)):
         raw = result
     elif isinstance(result, tuple) and result and isinstance(result[0], (bytes, bytearray)):
@@ -1841,7 +1857,9 @@ def cmd_send(args, registry):
                                         max_s=args.read_time,
                                         stats=st, origin=origin,
                                         on_chunk=_emit)
-                return TransportReply(data=data, first_byte_s=st.get("first_byte_s"))
+                return TransportReply(data=data,
+                                      first_byte_s=st.get("first_byte_s"),
+                                      last_byte_s=st.get("last_byte_s"))
 
             row = _timed_send(args.command, transport)
 
@@ -1856,7 +1874,12 @@ def cmd_send(args, registry):
                 "answered but EMPTY" if row["empty_reply"] else "ok")
             fb = "" if row["first_byte_s"] is None else \
                  f", first byte {row['first_byte_s']:.3f}s"
-            out(f"[{status}] {row['elapsed_s']:.3f}s{fb}, {row['reply_bytes']} bytes")
+            rt = ("?" if row["round_trip_s"] is None
+                  else f"{row['round_trip_s']:.3f}s")
+            # Lead with the round trip. elapsed_s is shown for completeness but
+            # carries this tool's idle wait and must not be compared across runs.
+            out(f"[{status}] round-trip {rt}{fb}, {row['reply_bytes']} bytes "
+                f"(wall {row['elapsed_s']:.3f}s incl. {args.idle_time}s idle)")
             if "error" in row:
                 out(f"  error: {row['error']}")
             if args.json_out:
@@ -1932,7 +1955,9 @@ def cmd_send_batch(args, registry):
                                         idle_s=args.idle_time,
                                         max_s=args.read_time,
                                         stats=st, origin=origin)
-                return TransportReply(data=data, first_byte_s=st.get("first_byte_s"))
+                return TransportReply(data=data,
+                                      first_byte_s=st.get("first_byte_s"),
+                                      last_byte_s=st.get("last_byte_s"))
 
             rows = _run_batch(commands, send_one, read_time=args.read_time)
     except BatchRefused as e:
@@ -1946,13 +1971,13 @@ def cmd_send_batch(args, registry):
     for r in rows:
         status = "ok " if r["answered"] else "MISS"
         first = (r["reply"].strip().splitlines() or [""])[0]
-        t = "" if r.get("elapsed_s") is None else f" {r['elapsed_s']:.2f}s"
+        t = "" if r.get("round_trip_s") is None else f" {r['round_trip_s']:.2f}s"
         fb = "" if r.get("first_byte_s") is None else f" (first byte {r['first_byte_s']:.2f}s)"
         out(f"  [{status}]{t}{fb} {r['command']}: {first}")
-    timed = [r["elapsed_s"] for r in rows if r.get("elapsed_s") is not None]
+    timed = [r["round_trip_s"] for r in rows if r.get("round_trip_s") is not None]
     if timed:
-        slowest = max(rows, key=lambda r: r.get("elapsed_s") or -1)
-        out(f"slowest: {slowest['command']} at {slowest['elapsed_s']:.2f}s; "
+        slowest = max(rows, key=lambda r: r.get("round_trip_s") or -1)
+        out(f"slowest: {slowest['command']} at {slowest['round_trip_s']:.2f}s; "
             f"median {sorted(timed)[len(timed)//2]:.2f}s")
     out(f"{answered}/{len(rows)} answered"
         + (f", {empty} answered-but-EMPTY" if empty else "")
