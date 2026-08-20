@@ -23,6 +23,9 @@
 
 #include <stdint.h>
 #include <stddef.h>
+// #913: LinkState. Arduino-free by design, so including it here keeps this
+// header host-includable.
+#include "LinkStateMachine.h"
 
 // ---------------------------------------------------------------------------
 // Compile-time tuning. Override via build_flags if you want different values.
@@ -150,6 +153,15 @@ public:
 
     // Is the transport currently ready to accept publish() calls?
     virtual bool isReady() = 0;
+
+    // #913: where the link is right now.
+    //
+    // `begin()` returning false cannot distinguish "still connecting" from
+    // "failed", and main.cpp treats false as failure -- it increments
+    // g_tel_wifi_fails and tears down. With a non-blocking bring-up, every
+    // cycle would abort on its first pass. Callers use this to tell the two
+    // apart; isReady() is unchanged and remains linkState() == Ready.
+    virtual offband::LinkState linkState() = 0;
 
     // Publish a message. Topic and payload are null-terminated strings.
     // retain=true for HA Discovery messages and slow telemetry (sticky last value).
