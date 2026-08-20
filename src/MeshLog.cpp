@@ -1,7 +1,7 @@
 #include "MeshLog.h"
-// #763: raw UART0 writer for the parallel mirror below. Compiles to nothing
-// unless OFFBAND_MESHLOG_UART0 (or the boot beacon) is enabled.
-#include <helpers/BootBeacon.h>
+// #888: portable raw-UART writer for the parallel mirror below. Compiles to
+// nothing unless OFFBAND_LOG_MIRROR_UART (or the boot beacon) is enabled.
+#include <helpers/LogMirrorUart.h>
 #include "CaptureRing.h"
 #include <Arduino.h>
 #include <stdarg.h>
@@ -116,10 +116,10 @@ void meshLogDumpSerial() {
   }
 }
 
-// #763: the UART0 mirror is a BUILD-TIME channel, not a runtime-captured one.
-// Compile-time constant so the early-out below folds away entirely in stock
-// builds -- they keep paying exactly one branch, as before.
-#if defined(OFFBAND_MESHLOG_UART0) && defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+// #763/#888: the UART mirror is a BUILD-TIME channel, not a runtime-captured
+// one. Compile-time constant so the early-out below folds away entirely in
+// stock builds -- they keep paying exactly one branch, as before.
+#if defined(OFFBAND_LOG_MIRROR_UART) && OFFBAND_LOG_MIRROR_UART
 static constexpr bool kMeshLogUart0 = true;
 #else
 static constexpr bool kMeshLogUart0 = false;
@@ -204,10 +204,18 @@ void mesh_log_line(uint8_t level, const char* fmt, ...) {
   // "[millis] " prefix, and the tag is how the host capture distinguishes
   // instrument output from application output on the shared wire.
   //
-  // Gated at build time on ARDUINO_USB_CDC_ON_BOOT: on a UART-bridge board
-  // (Heltec V3 = esp32-s3-devkitc-1) Serial IS UART0, so mirroring here would
-  // double-print every line.
-#if defined(OFFBAND_MESHLOG_UART0) && defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
-  offband_uart0_write(line, total);
+  // #888: gated ONLY on the feature flag. It used to also require
+  // ARDUINO_USB_CDC_ON_BOOT, as a proxy for "Serial is not the mirror UART" --
+  // but that macro is hand-set per variant (and commented out in several with
+  // notes like "this breaks Serial"), so it was a wish about Serial, not a fact
+  // about wires. Worse, it disabled the mirror on every non-ESP32 part, which is
+  // most of the fleet.
+  //
+  // The real constraint is a BOARD fact: on a board with no native USB, Serial
+  // IS a hardware UART, and mirroring to that same wire double-prints. Those
+  // boards therefore do not enable OFFBAND_LOG_MIRROR_UART, and say so in their
+  // variant config. The declaration lives where the knowledge is.
+#if defined(OFFBAND_LOG_MIRROR_UART) && OFFBAND_LOG_MIRROR_UART
+  offband_log_mirror_write(line, total);
 #endif
 }
