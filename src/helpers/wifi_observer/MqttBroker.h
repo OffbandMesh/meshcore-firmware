@@ -8,6 +8,7 @@
 #include "ConfigSchema.h"
 #include "MqttAuth.h"
 #include "BrokerHealth.h"   // #739: connection-health / penalty tracker
+#include "FailEscalateWindow.h"   // #838/#906: per-attempt escalation dedupe
 #include "MqttPayload.h"
 
 #ifdef ARDUINO
@@ -118,7 +119,10 @@ public:
     // are gated on isConfigured()), stranding it permanently -- one-way eviction
     // instead of round-robin. With the slot still configured, the pool's normal
     // cooldown -> budget -> reconcileSlot -> tryConnect path can promote it back.
-    void releaseClient();
+    // keep_failed (#848): when true AND the broker is terminally Failed, reap the
+    // client but PRESERVE the Failed state instead of resetting rt_ to Down. Only
+    // the pool's Failed-reaper passes true; rotation (default false) still resets.
+    void releaseClient(bool keep_failed = false);
 
     // Create the per-broker client mutex. Call ONCE from the pool on
     // loopTask, before the lifecycle worker task starts (#53),
@@ -161,6 +165,20 @@ public:
     const BrokerHealth&        health() const { return health_; }
     void                       noteCleanDwell() { health_.onCleanDwell(); }
 
+    // #823: clear a TERMINAL Failed state. Failed is otherwise terminal -- the
+    // pool's reconcileSlot() refuses to revive it via begin(), so the ONLY escape
+    // is an explicit operator reconfigure (mqtt enable/set/clear -> reloadSlot),
+    // which calls this before reconciling. Resets the penalty so the reconfigured
+    // broker gets a fresh start instead of re-failing on its first hiccup. No-op
+    // for a broker that is not terminally Failed, so tweaking a healthy/backoff
+    // broker's config preserves its accumulated penalty.
+    void clearTerminalFailure() {
+        if (rt_.state == BrokerState::Failed) {
+            rt_.state = BrokerState::Down;
+            health_.reset();
+        }
+    }
+
     // #175: true if the esp_mqtt client handle currently exists. shutdown()
     // destroys it (client_ = nullptr) to free the ~60KB TLS context without
     // leaking (#327); tryConnect can only START an existing client, never create
@@ -202,6 +220,11 @@ private:
     // (after a dropped/failed connection) leaks transport + mbedTLS allocations.
     bool started_ = false;
 
+    // #838/#906: collapses the up-to-three esp-mqtt events of one failed attempt
+    // into a single penalty escalation, while separate attempts each escalate.
+    // Host-tested in test/test_fail_escalate_window. reset() on a clean connect.
+    FailEscalateWindow fail_window_;
+
     // C-style event dispatch -- esp_mqtt requires a static function.
     // The handler_args is the MqttBroker* registered via
     // esp_mqtt_client_register_event.
@@ -212,6 +235,7 @@ private:
     void onConnected(uint32_t now_ms);
     void onDisconnected(uint32_t now_ms, BrokerErrorClass err);
     void onError(uint32_t now_ms, BrokerErrorClass err);
+    void escalateFailureOnce(uint32_t now_ms);  // #838: one escalation per attempt
 #endif
 };
 

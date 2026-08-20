@@ -147,7 +147,7 @@ void MqttBroker::initLock() {
 // #175: connection teardown ONLY -- no deconfigure. shutdown() is this plus the
 // #98 slot wipe; TLS rotation uses this directly so the victim stays configured
 // (and therefore visible to the pool loops, which all gate on isConfigured()).
-void MqttBroker::releaseClient() {
+void MqttBroker::releaseClient(bool keep_failed) {
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     ClientLockGuard _g(client_lock_);
     if (client_ != nullptr) {
@@ -161,7 +161,20 @@ void MqttBroker::releaseClient() {
         delete auth_;
         auth_ = nullptr;
     }
-    rt_ = BrokerRuntimeState{};
+    // #848 Facet A: the reaper reaps a TERMINALLY-FAILED broker's client but must
+    // PRESERVE the Failed state -- a plain rt_ = {} resets it to Down, which is the
+    // real cause of #823 (the broker looks Down, gets re-promoted, re-fails, is
+    // reaped again -> churn, and each heavy teardown risks the Facet-B overflow).
+    // With state kept Failed, the pool's Failed-guards (tryConnect/reconcileSlot)
+    // hold it out of rotation until an operator reconfigure clears it. Only an
+    // actual reap of a Failed broker preserves; every other caller (rotation) still
+    // gets the full reset to Down.
+    if (keep_failed && rt_.state == BrokerState::Failed) {
+        rt_ = BrokerRuntimeState{};
+        rt_.state = BrokerState::Failed;
+    } else {
+        rt_ = BrokerRuntimeState{};
+    }
     // slot_ and cfg_ deliberately RETAINED -- that is the whole difference from
     // shutdown(). A rotated-out broker must stay configured so the pool can see
     // it, honor its cooldown, and promote it back via reconcileSlot->tryConnect.
@@ -346,7 +359,7 @@ bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
         if (!auth_->apply(mqcfg, now_ms)) {
             rt_.retry_count++;
             rt_.last_error_class = BrokerErrorClass::Auth;
-            noteFailure();   // #739
+            escalateFailureOnce(now_ms);   // #739/#838
             return false;
         }
         esp_mqtt_set_config(client_, &mqcfg);
@@ -373,7 +386,7 @@ bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
     if (err != ESP_OK) {
         rt_.retry_count++;
         rt_.last_error_class = BrokerErrorClass::Other;
-        noteFailure();   // #739
+        escalateFailureOnce(now_ms);   // #739/#838
         return false;
     }
     started_ = true;
@@ -544,6 +557,9 @@ void MqttBroker::onConnected(uint32_t now_ms) {
     rt_.went_up_ms = now_ms;   // #175: dwell clock for TLS rotation
     rt_.retry_count = 0;
     rt_.last_error_class = BrokerErrorClass::None;
+    fail_window_.reset();   // #906: a clean connect ends the escalation window,
+                            // so a later failure escalates instead of being
+                            // masked by the pre-success failure's window.
 }
 
 void MqttBroker::onDisconnected(uint32_t now_ms, BrokerErrorClass err) {
@@ -552,7 +568,16 @@ void MqttBroker::onDisconnected(uint32_t now_ms, BrokerErrorClass err) {
     rt_.last_error_ms = now_ms;
     rt_.retry_count++;
     rt_.last_error_class = err;
-    noteFailure();   // #739: escalate penalty; may promote Backoff -> Failed
+    escalateFailureOnce(now_ms);   // #739/#838: escalate; may promote Backoff -> Failed
+}
+
+// #838/#906: escalate the health penalty once per failed attempt. The window /
+// millis()==0 / reset-on-success logic lives in FailEscalateWindow (header-only,
+// host-tested in test/test_fail_escalate_window); see that header for rationale
+// and the BEFORE_CONNECT-boolean design that failed on hardware.
+void MqttBroker::escalateFailureOnce(uint32_t now_ms) {
+    if (!fail_window_.shouldEscalate(now_ms)) return;
+    noteFailure();
 }
 
 // #739: single choke point for a connection failure. Escalates the health
@@ -565,10 +590,17 @@ void MqttBroker::noteFailure() {
 }
 
 void MqttBroker::onError(uint32_t now_ms, BrokerErrorClass err) {
-    // Errors typically precede a DISCONNECTED; record the class so the
-    // subsequent disconnect transition records a meaningful reason.
+    // Record the class so a subsequent DISCONNECTED transition (if one follows)
+    // reports a meaningful reason.
     rt_.last_error_ms = now_ms;
     rt_.last_error_class = err;
+    // #838: a connect-layer failure (refused/unreachable/connect-timeout) surfaces
+    // as MQTT_EVENT_ERROR with NO following DISCONNECTED, so escalation must happen
+    // here too -- otherwise a dead broker retries forever and never reaches Failed.
+    // escalateFailureOnce()'s window collapses the DISCONNECTED that DOES follow a
+    // mid-session TLS/auth failure into this same escalation, so it never
+    // double-counts one attempt.
+    escalateFailureOnce(now_ms);
 }
 
 #endif  // ARDUINO && ESP_PLATFORM

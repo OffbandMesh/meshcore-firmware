@@ -105,8 +105,14 @@ void MqttBrokerPool::begin(const mesh::LocalIdentity& identity,
     worker_run_  = true;
     reconcile_q_ = xQueueCreate(OFFBAND_MAX_BROKERS * 2, sizeof(uint8_t));
     if (reconcile_q_ != nullptr) {
+        // #848 Facet B: 10240 (was 6144). esp_mqtt_client_stop+destroy on a client
+        // that is MID-CONNECT-FAILURE takes a deeper esp-tls/transport teardown than
+        // a clean rotated-out client -- measured worker stack high-water fell to 340
+        // bytes free of 6144 during a terminal-Failed reap and intermittently
+        // overflowed (canary fired on the adjacent IDLE0 -> panic). +4 KB gives
+        // ~4.4 KB worst-case headroom for that teardown.
         xTaskCreatePinnedToCore(&MqttBrokerPool::workerTrampoline, "mqtt_worker",
-                                6144, this, 5, &worker_task_, tskNO_AFFINITY);
+                                10240, this, 5, &worker_task_, tskNO_AFFINITY);
     }
 #endif
 }
@@ -445,6 +451,12 @@ bool MqttBrokerPool::reloadSlot(uint8_t slot) {
     // here on) and hand it to the worker, which does the actual begin/shutdown
     // (potentially multi-second esp_mqtt teardown) OFF loopTask.
     if (identity_ == nullptr || reconcile_q_ == nullptr) return false;
+    // #823: an operator reconfigure (mqtt enable/set/clear) is the documented
+    // escape from terminal Failed. Clear it here -- BEFORE the worker runs
+    // reconcileSlot(), whose Failed-guard would otherwise refuse to bring the slot
+    // back up. reloadSlot() is operator-CLI-only (ObserverCli), so nothing
+    // automatic reaches this; a no-op for any slot that is not terminally Failed.
+    brokers_[slot].clearTerminalFailure();
     reconciling_[slot] = true;
     uint8_t s = slot;
     if (xQueueSend(reconcile_q_, &s, 0) != pdTRUE) {
@@ -471,6 +483,16 @@ void MqttBrokerPool::workerTrampoline(void* arg) {
 // worker task. begin() creates a client only if the slot is enabled.
 void MqttBrokerPool::reconcileSlot(uint8_t slot) {
     if (slot >= OFFBAND_MAX_BROKERS || identity_ == nullptr) return;
+    // #823: Failed is TERMINAL. begin() (called below) is the ONLY thing that
+    // resets rt_.state out of Failed, and reconcileSlot() is its only automatic
+    // caller -- so this is the single choke point that enforces the invariant,
+    // instead of relying on every candidate/promotion path to exclude Failed
+    // (one of them leaked, reviving the broker -- #823). The reaper leaves a
+    // Failed broker client-less; returning here keeps it that way. The ONLY escape
+    // is an operator reconfigure: reloadSlot() calls clearTerminalFailure() (state
+    // -> Down) BEFORE enqueueing, so an operator-cleared slot is no longer Failed
+    // by the time this runs and proceeds normally.
+    if (brokers_[slot].runtime().state == BrokerState::Failed) return;
     BrokerConfig cfg;
     if (!readBrokerConfig(slot, cfg) || cfg.url[0] == '\0') {
         brokers_[slot].shutdown();   // no/empty config -> ensure no client
@@ -743,7 +765,10 @@ void MqttBrokerPool::workerLoop() {
             // the global disable_auto_reconnect broke normal reconnection (soak: 96%
             // no-TLS-up, a healthy broker terminally failed).
             if (b.runtime().state == BrokerState::Failed) {
-                if (b.hasClient()) b.releaseClient();
+                // #848 Facet A: keep_failed=true so releaseClient reaps the client
+                // but PRESERVES the Failed state (a plain reap resets rt_ to Down,
+                // which let the broker be re-promoted -> the #823 churn).
+                if (b.hasClient()) b.releaseClient(/*keep_failed=*/true);
                 continue;
             }
             b.loop(now);

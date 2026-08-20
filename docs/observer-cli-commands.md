@@ -181,3 +181,43 @@ wifi status                       # confirm StaConnected + IP
 # ...configure a broker slot (see "Broker auth — wss/jwt" above)...
 mqtt status                       # wss reads held(no-clock) until the clock syncs, then up
 ```
+
+## Broker health & the `Failed` state
+
+`mqtt status` shows a state per broker slot. What each means for you:
+
+| State | What it means |
+|---|---|
+| `up` | connected and publishing |
+| `backoff` | last attempt failed; retrying, with the wait growing the longer it keeps failing (5s → 15s → 30s → 60s → 120s) |
+| `held(budget)` | fine — just waiting its turn; only one TLS broker is live at a time and another has the slot |
+| `held(no-clock)` | waiting for the clock to sync (NTP/GPS) before a TLS handshake — **not** a failure |
+| `held(no-heap)` | deferred because free memory is low — rare |
+| `failed(gave-up)` | **the observer has given up on this broker** — see below |
+
+### When a broker keeps failing
+
+If a broker is unreachable (server down, wrong host, blocked, bad cert), the
+observer retries with an **escalating backoff** so a flaky broker can't hog a
+connection slot from a healthy one. If it keeps failing through the full
+escalation, the observer marks it **`failed(gave-up)`**: it stops trying,
+**drops out of rotation entirely**, and frees its memory. This is deliberate —
+a permanently-dead broker should not burn a rotation turn every cycle or waste
+heap. Your other brokers are unaffected.
+
+### Clearing a `failed` broker
+
+`failed(gave-up)` is terminal — the observer will **not** retry it on its own.
+To bring it back after you've fixed the underlying problem (server back up, host
+corrected, etc.), **reconfigure the slot**, which clears the failure and starts
+it fresh:
+
+```
+mqtt set <N> url wss://your.broker:443/mqtt   # re-set any field, or
+mqtt enable <N>                               # toggle it, or
+mqtt disable <N> ; mqtt enable <N>
+mqtt status                                   # slot returns to backoff -> up
+```
+
+A reboot also clears it (state is not persisted), but reconfiguring the slot is
+the intended, no-reboot path.
