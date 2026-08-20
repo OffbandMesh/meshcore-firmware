@@ -110,7 +110,8 @@ private:
     // decision logic is in LinkStateMachine.h -- pure, Arduino-free and
     // host-tested; this class keeps only the calls that need a radio.
     offband::LinkState _link = offband::LinkState::Idle;
-    uint32_t _phase_started_ms = 0;   // when the CURRENT phase began
+    uint32_t _phase_started_ms = 0;      // when the CURRENT phase began
+    uint32_t _last_mqtt_attempt_ms = 0;  // rate-limits MQTT retries (#913)
 
     // Non-blocking: kicks WiFi off and returns immediately. WiFi.begin() is
     // genuinely asynchronous -- progress is observed via WiFi.status().
