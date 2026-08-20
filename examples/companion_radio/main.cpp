@@ -572,7 +572,7 @@ void loop() {
   //
   // Emitted through mesh_log_line() rather than Serial so it rides the SAME two
   // channels as every other log producer: the caplog ring (downloadable after the
-  // run) and, on a native-USB board built with OFFBAND_MESHLOG_UART0, the raw
+  // run) and, on a native-USB board built with OFFBAND_LOG_MIRROR_UART, the raw
   // UART0 mirror. The mirror is the one that matters here -- the entire point of
   // this trace is a board running on battery with NO host attached, which is
   // exactly the case where USB-CDC gives us nothing (#702).
