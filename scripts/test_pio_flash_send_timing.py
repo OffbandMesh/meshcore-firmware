@@ -190,6 +190,58 @@ def test_a_transport_returning_a_string_is_refused_not_crashed():
     assert "error" in row, row
 
 
+# ===========================================================================
+# Found on HARDWARE (T096, COM42), not by any fake clock.
+# ===========================================================================
+
+def test_round_trip_excludes_the_idle_wait():
+    """First real run: elapsed_s 1.2188, first_byte_s 0.2136 -- a difference of
+    1.005, which is exactly SEND_IDLE_DEFAULT. elapsed_s was round-trip PLUS the
+    idle timeout, so every measurement carried a constant inflation, and one
+    that changes with --idle-time. Two runs at different settings were not
+    comparable, and #893's 20-25s would have been compared against an offset
+    this tool invented.
+
+    No fake-clock test could catch this: the clock only advanced by what the
+    stub chose, so the idle tail never existed to be measured.
+    """
+    clock = Clock()
+    seq = [b"> ok" + b"\r\n"] + [b""] * 40
+
+    def read_fn():
+        clock.advance(0.01)
+        return seq.pop(0) if seq else b""
+
+    st = {}
+    pio_flash._read_until_idle(read_fn, idle_s=0.5, max_s=10.0,
+                               now_fn=clock, sleep_fn=lambda d: None,
+                               stats=st, origin=0.0)
+    assert st["first_byte_s"] == 0.01, st
+    assert "last_byte_s" in st, "the true round trip must be recorded"
+    assert st["last_byte_s"] == 0.01, st
+    assert clock() > 0.5, "the read did wait out the idle gap"
+
+
+def test_timed_send_reports_round_trip_separately_from_wall_time():
+    clock = Clock()
+
+    def transport(cmd):
+        clock.advance(2.0)      # includes an idle tail the caller must not be charged
+        return pio_flash.TransportReply(data=b"> ok" + b"\r\n",
+                                        first_byte_s=0.2, last_byte_s=0.3)
+
+    row = pio_flash._timed_send("get radio", transport, now_fn=clock)
+    assert row["elapsed_s"] == 2.0, row
+    assert row["round_trip_s"] == 0.3, row
+    assert row["round_trip_s"] < row["elapsed_s"], row
+
+
+def test_round_trip_is_none_when_nothing_answered():
+    row = pio_flash._timed_send("get gone", lambda c: b"")
+    assert row["answered"] is False
+    assert row["round_trip_s"] is None, row
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
