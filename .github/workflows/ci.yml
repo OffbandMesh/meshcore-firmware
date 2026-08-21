@@ -264,6 +264,7 @@ jobs:
           - heltec_rc52_without_display_repeater
           - heltec_rc52_without_display_companion_radio_ble
           - heltec_rc52_without_display_companion_radio_usb
+          - heltec_rc52_without_display_room_server
     steps:
       - uses: actions/checkout@v5
 
