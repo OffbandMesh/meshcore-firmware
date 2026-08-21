@@ -27,7 +27,22 @@ while (WiFi.status() != WL_CONNECTED) {
 | `connectMqtt()` | `while` + `delay(500)` | **5,000 ms** |
 | `end()` | `WiFi.disconnect(true)` + `WiFi.mode(WIFI_OFF)` | blocking |
 
-While these spin, `mesh::Mesh::loop()` never runs, so `Dispatcher::checkRecv()` never runs, and **the LoRa receiver is unserviced**. The radio is not congested — it is deaf.
+**RETRACTED 2026-08-20 — this paragraph was inference written as observation.**
+
+It originally read: *"While these spin, `mesh::Mesh::loop()` never runs, so `Dispatcher::checkRecv()` never runs, and the LoRa receiver is unserviced. The radio is not congested -- it is deaf."* That was never measured. It was inferred from reading the code and then presented in the present tense as a finding.
+
+`[verified: pre-fix capture re-analysed 2026-08-20]` **the loop was never blocked.** The `noise_floor` heartbeat (nominal 2000 ms) ran throughout:
+
+| | |
+|---|---|
+| heartbeats inside the supposed "deaf" window | **20** |
+| largest loop stall in the ENTIRE capture | **4.04 s** |
+| the WTEL cycle's actual cost | 2.71 s against 2.0 s nominal ≈ **0.7 s** |
+| an RX logged at `[314427]`, **inside** the window | the radio was receiving |
+
+A blocked receiver drops everything. One that takes a beacon but not the CLI request is not deaf.
+
+**What remains true:** the spin loops were real, and a *slow or failed* WiFi connect would genuinely block for up to ~30 s. On this network WiFi associates in about a second at RSSI -20, so they exited almost immediately. The code is worth fixing on its own terms. **It is not the cause of the observed 28.7 s timeouts**, and this document must not be read as claiming otherwise.
 
 ### Evidence
 
@@ -44,6 +59,8 @@ Every CLI exchange that completed took **exactly 0.6 s** (ten consecutive pairs,
 ```
 
 Owner independently observed a client-side failure at **28.7 s**. `packet pool empty`: **0 occurrences**.
+
+**CORRECTION:** the gap above is a gap in **type=2 (CLI) packets only**, and the two WTEL cycles inside it are a **correlation**. A later capture reproduced the same 28.7 s failure with **zero WTEL cycles**, loop alive and radio listening throughout. 28.7 s is the *client's timeout constant* -- it looks identical whatever the cause, which is what made the misattribution easy.
 
 **Ruled out with evidence:** the CLI handler (0.6 s, ten for ten), packet-pool starvation, RF marginality (replies that were sent arrived — the *requests* went missing), radio congestion.
 
