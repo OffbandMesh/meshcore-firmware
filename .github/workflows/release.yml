@@ -97,6 +97,43 @@ jobs:
           find dist -type f -exec cp {} out/ \;
           echo "Collected $(find out -type f | wc -l) firmware file(s)."
 
+      - name: Purge stale assets from a prior run of this tag (#706)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A failed run followed by a tag re-point leaves the release carrying
+          # assets from the OLD commit alongside the new set (#706: v1.4.0
+          # briefly shipped 168 stale d88ad9b binaries next to the real ones).
+          # Make publishing idempotent: any asset on the existing release whose
+          # filename is not in out/ is stale -- delete it. A clean first run has
+          # no release yet and this is a no-op; a re-run with rebuilt artifacts
+          # converges the release to exactly the current set.
+          # Guard: an all-failed build collects NOTHING into out/. Pure
+          # idempotency would then strip a previously-good release of every
+          # working asset -- worse than stale. Publish-partial-and-flag wins:
+          # keep the old set and let the run's red matrix tell the story.
+          if [ -z "$(find out -type f -print -quit 2>/dev/null)" ]; then
+            echo "out/ is empty (build produced nothing) -- refusing to purge a prior release."
+            exit 0
+          fi
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+               --json assets --jq '.assets[].name' > existing_assets.txt 2>/dev/null; then
+            echo "No existing release for $GITHUB_REF_NAME -- nothing to purge."
+            exit 0
+          fi
+          purged=0
+          while IFS= read -r a; do
+            [ -n "$a" ] || continue
+            if [ ! -f "out/$a" ]; then
+              if gh release delete-asset "$GITHUB_REF_NAME" "$a" --repo "$GITHUB_REPOSITORY" --yes; then
+                purged=$((purged+1))
+              else
+                echo "WARN: failed to delete stale asset: $a"
+              fi
+            fi
+          done < existing_assets.txt
+          echo "Purged $purged stale asset(s)."
+
       - name: Extract CHANGELOG section for release body
         run: |
           ver="${GITHUB_REF_NAME#offband-}"; ver="${ver#crosswire-}"   # e.g. v1.1.0-rc1
