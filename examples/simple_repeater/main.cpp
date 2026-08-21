@@ -87,6 +87,25 @@ static TelPhase g_poll_phase = TelPhase::Idle;   // HTTP cmd-poll cycle
 // Deferred second sample, replacing a blocking delay(3000) on the first cycle.
 static uint32_t g_pub_second_sample_at = 0;
 
+// #914 review: a hard ceiling on how long ONE cycle may stay non-Idle.
+//
+// The link state machine times each PHASE, not the cycle. A flapping access
+// point ping-pongs AwaitingWifi <-> AwaitingMqtt, and every transition restarts
+// the phase timer -- so neither the 15 s nor the 5 s budget ever expires, the
+// cycle never completes, and because the next-run timer is only rescheduled on
+// completion, that trigger is stalled until reboot. Telemetry silently stops.
+//
+// Generous by design: 45 s is well past 15 + 5 plus retries, so it fires only
+// when something is genuinely wrong rather than trimming a slow-but-working
+// connect.
+#define TEL_CYCLE_DEADLINE_MS 45000UL
+static uint32_t g_pub_cycle_started_ms = 0;
+static uint32_t g_poll_cycle_started_ms = 0;
+
+static bool tel_cycle_overdue(uint32_t started_ms) {
+    return (uint32_t)(millis() - started_ms) > TEL_CYCLE_DEADLINE_MS;
+}
+
 // True while EITHER trigger still needs the link. Teardown is gated on this so
 // one trigger finishing cannot pull the transport out from under the other --
 // they run in the same loop pass and both want WiFi up.
@@ -334,6 +353,15 @@ static void wifi_telemetry_collect_and_publish() {
     if (g_pub_phase == TelPhase::Idle) {
         g_tel_wifi_attempts++;
         g_pub_phase = TelPhase::Connecting;
+        g_pub_cycle_started_ms = millis();
+    } else if (tel_cycle_overdue(g_pub_cycle_started_ms)) {
+        // Abandon a cycle that has outlived its ceiling. Counted as a failure
+        // and torn down, so the schedule resumes instead of stalling forever.
+        g_tel_wifi_fails++;
+        g_tel_transport->end();
+        g_pub_phase = TelPhase::Idle;
+        g_pub_second_sample_at = 0;
+        return;
     }
 
     // PHASE 2 -- advance the link. Returns immediately; no waiting (#913).
@@ -550,6 +578,16 @@ static void wifi_telemetry_loop() {
             poll_brought_up = !g_tel_transport->isReady();
             if (poll_brought_up) g_tel_wifi_attempts++;   // once per cycle
             g_poll_phase = TelPhase::Connecting;
+            g_poll_cycle_started_ms = millis();
+        } else if (tel_cycle_overdue(g_poll_cycle_started_ms)) {
+            if (poll_brought_up) g_tel_wifi_fails++;
+            g_tel_transport->end();
+            g_poll_phase = TelPhase::Idle;
+            g_cmd_poll_next_ms = millis()
+                + ((g_tel_persistent_until_ms != 0)
+                       ? WIFI_CMD_POLL_PERSISTENT_INTERVAL_MS
+                       : g_cmd_poll_burst_interval_ms);
+            return;
         }
         if (g_poll_phase == TelPhase::Connecting) {
             if (!g_tel_transport->isReady()) {
@@ -596,6 +634,26 @@ static void wifi_telemetry_loop() {
 #ifdef ENABLE_WIFI_TELEMETRY
     // #561: ship any newly-captured lines while a forward window is open + WiFi up.
     wifi_telemetry_caplog_forward_service();
+#endif
+
+#ifdef ENABLE_WIFI_TELEMETRY
+    // #914 review: teardown SWEEP.
+    //
+    // Teardown is gated on tel_cycle_active() so one trigger cannot pull the
+    // link out from under the other. But the two triggers share a default
+    // 5-minute interval and can overlap, and when they do NEITHER tears down --
+    // the first is blocked by the gate, the second did not bring the link up.
+    // Burst mode then leaves WiFi on indefinitely, which is a power regression
+    // on exactly the solar/battery repeaters burst mode exists for.
+    //
+    // So teardown also happens here, once both cycles are genuinely idle and
+    // nothing is holding the link open. Idempotent: end() early-returns when
+    // there is nothing connected.
+    if (g_tel_transport != nullptr && !tel_cycle_active()
+        && g_tel_persistent_until_ms == 0 && g_tel_transport->isReady()) {
+        g_tel_transport->end();
+        g_remote_cmd_subscribed = false;
+    }
 #endif
 
     // #914: re-enter while a cycle is in flight, not only when the timer fires,
