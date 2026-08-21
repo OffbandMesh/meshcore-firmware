@@ -84,6 +84,28 @@ uint16_t RC52Board::getBattMilliVolts() {
 }
 
 void RC52Board::powerOff() {
+  // ORDER: de-assert the FEM control BEFORE dropping its rail.
+  //
+  // The first version dropped VFEM_Ctrl and left FEM_EN driven HIGH for the
+  // entire sleep -- a push-pull output holding 3.3 V into an unpowered input.
+  // That forward-biases the input's ESD structure and can back-power the
+  // module through a signal pin, for hours, on battery.
+  //
+  // This is the one sequencing question on this board with no counter-argument:
+  // whichever power-UP order is correct, nothing defends leaving a control line
+  // asserted into a dead rail. Found by the Gemini adversarial review, #879.
+  pinMode(RADIOCORE_FEM_EN, OUTPUT);
+  digitalWrite(RADIOCORE_FEM_EN, LOW);
+
+  // [hypothesis: untested] The power-UP order in begin() -- FEM_EN settled
+  // before the rail rises -- is deliberately NOT flipped to mirror this. The
+  // same review argued for VFEM_Ctrl first on a general CMOS back-powering
+  // argument. Two things stop that from being adopted: n30nex ships FEM_EN
+  // first (v1.1.0-rc.4, corroborated 2026-08-20), and no HT-RA62A datasheet
+  // exists to say whether the module's FEM_EN input is referenced to VDD_FEM
+  // or to the main supply -- the FEM is INSIDE the module. Reversing it would
+  // trade one untested hypothesis for another. Tracked under epic #929.
+
   // Drop the FEM rail before sleeping so the LDO is not left enabled into a
   // low-power state.
   pinMode(RADIOCORE_VFEM_CTRL, OUTPUT);
