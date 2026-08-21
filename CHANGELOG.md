@@ -16,6 +16,55 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+## [1.5.0-beta4] - 2026-08-20
+
+### Changed
+- **WiFi telemetry lifecycle reworked — fresh plumbing, watch it** ([#910](https://github.com/OffbandMesh/meshcore-firmware/issues/910)–[#915](https://github.com/OffbandMesh/meshcore-firmware/issues/915)): the
+  repeater's WiFi+MQTT connect/teardown moved from blocking spins in the loop task to a
+  host-testable state machine — multi-pass triggers, a cycle deadline for a flapping AP,
+  MQTT throttling, and an unstickable `Failed` state. Host-tested, **not yet soaked on
+  hardware** — this beta is its first field exposure. Repeater-telemetry testers: if your
+  node's publishing or OTA window behaves differently than beta3, that report is exactly
+  what we need.
+
+### Added
+- **Offband branding on every role** ([#842](https://github.com/OffbandMesh/meshcore-firmware/issues/842)/[#822](https://github.com/OffbandMesh/meshcore-firmware/issues/822)): six independent splash implementations
+  became one shared component — repeaters, room servers, and sensors no longer boot to
+  MeshCore's logo, and colour panels get native-resolution Offband art. Also: ST7735 boot
+  rotation un-shadowed after being silently discarded on 27 envs since June ([#840](https://github.com/OffbandMesh/meshcore-firmware/issues/840)/[#841](https://github.com/OffbandMesh/meshcore-firmware/pull/841)),
+  an Offband dark palette for ST7735 ([#840](https://github.com/OffbandMesh/meshcore-firmware/issues/840)), and the repeater power-off screen now stays
+  lit for its full countdown ([#845](https://github.com/OffbandMesh/meshcore-firmware/issues/845)).
+- **RadioCore tester fleet** ([#824](https://github.com/OffbandMesh/meshcore-firmware/issues/824)/[#834](https://github.com/OffbandMesh/meshcore-firmware/pull/834), [#804](https://github.com/OffbandMesh/meshcore-firmware/issues/804), [#830](https://github.com/OffbandMesh/meshcore-firmware/issues/830)): RC32 `testdiag` diagnostic builds
+  publish on every release, and the RCC6 (ESP32-C6) env family ships — companion
+  BLE/USB, repeater-display, and the **first ESP32-C6 observer** (plus diag variants).
+  RCC6 heap headroom is roughly half an S3's; single-broker-with-rotation is the
+  supported observer shape there.
+
+### Fixed
+- **Serial output is usable again** ([#899](https://github.com/OffbandMesh/meshcore-firmware/issues/899)): unconfigured broker slots were spamming NVS
+  ERROR lines at ~29/sec — 97% of all serial output — and splicing CLI replies mid-word.
+  Optional NVS reads now go through a type-checked guarded helper; the spam is gone.
+  (The underlying two-writers-one-UART splice is [#871](https://github.com/OffbandMesh/meshcore-firmware/issues/871), mitigated by this but not closed.)
+- **CLI `get` surface verified clean on hardware** ([#764](https://github.com/OffbandMesh/meshcore-firmware/issues/764)/[#765](https://github.com/OffbandMesh/meshcore-firmware/issues/765) via [#778](https://github.com/OffbandMesh/meshcore-firmware/issues/778)/[#779](https://github.com/OffbandMesh/meshcore-firmware/issues/779)): three `get`
+  keys returned empty replies for ten months, and four call sites transmitted
+  uninitialized stack when a handler wrote nothing — the original "mojibake in the app"
+  report. Fixed, then swept on-device: 47/47 keys answer, zero empties, zero
+  prefix-match leaks. An advisory CI guard ([#775](https://github.com/OffbandMesh/meshcore-firmware/issues/775)) now watches the dispatch chains.
+- **Observer brokers rotate honestly** ([#720](https://github.com/OffbandMesh/meshcore-firmware/issues/720)/[#848](https://github.com/OffbandMesh/meshcore-firmware/issues/848)): a broker flapping faster than the
+  60s dwell could monopolize its slot forever (eviction now ages on a reconnect-proof
+  clock), and a terminal-`Failed` broker is reaped once instead of panicking the pool.
+- **RC32/RCC6 board corrections** ([#700](https://github.com/OffbandMesh/meshcore-firmware/issues/700), [#835](https://github.com/OffbandMesh/meshcore-firmware/issues/835)): `monitor_rts/dtr=0` board-wide on RC32 so
+  serial tools stop resetting it, and the RCC6 battery ADC multiplier derived from the
+  actual divider.
+
+### Known issues shipping in this beta
+- **RC32 companion boots dark after RST** ([#702](https://github.com/OffbandMesh/meshcore-firmware/issues/702)) — power-cycle instead; repeater role
+  unaffected. Under active diagnosis.
+- **The beta2 BLE and serial-framing fixes ([#711](https://github.com/OffbandMesh/meshcore-firmware/issues/711)/[#718](https://github.com/OffbandMesh/meshcore-firmware/issues/718)) are STILL unverified on
+  hardware, three betas later.** If you had truncated caplog downloads on Android or
+  corrupted serial captures: flash this, retry, report either way — two minutes of your
+  time closes two P1s.
+
 ## [1.5.0-beta3] - 2026-08-17
 
 ### Added
