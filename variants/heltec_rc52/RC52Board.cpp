@@ -19,35 +19,29 @@ void RC52Board::begin() {
   // ---------------------------------------------------------------------------
 
   // ---------------------------------------------------------------------------
-  // FEM_EN: pulled to a DEFINED level, but not actively asserted.
+  // FEM_EN -- ACTIVE HIGH. Asserted here.
   //
-  // Unlike VFEM_Ctrl, FEM_EN is not an LDO enable whose polarity a part number
-  // settles -- the schematic routes it to pin 11 of the HT-RA62A module (U6), and
-  // Heltec publishes no datasheet for that module (schematic only; RC52/datasheet/
-  // and RC52/pinmap/ both 404). So its asserted sense is UNESTABLISHED and this
-  // scaffold must not guess it.
+  // Heltec publishes no HT-RA62A datasheet (schematic only; RC52/datasheet/ and
+  // RC52/pinmap/ both 404), and the schematic cannot settle this either: the FEM
+  // is INSIDE the module. U6 exposes FEM_EN on pin 11, VDD_FEM on 25 and
+  // LNA_Ctrl on 36, and stops there.
   //
-  // [hypothesis: untested] The pulldown below rests on the general argument that
-  // a floating CMOS input can sit at an intermediate voltage and hold the
-  // receiving buffer partly conducting, wasting current. That is textbook
-  // reasoning, NOT a measurement of THIS module: there is no HT-RA62A datasheet,
-  // no current figure, and nothing has been scoped on this pin. It is also not
-  // known whether the module biases the pin internally, which would make the
-  // pulldown either redundant or a fight against an internal pull-up.
+  // What settles it is a shipping implementation. n30nex/NeonPocketMC-RC52
+  // (v1.1.0-rc.4) drives it HIGH in its board begin(), alongside VFEM_Ctrl HIGH:
   //
-  // What would settle it (#858): scope P0.26 at boot with the pulldown removed to
-  // see whether it actually floats, and measure module supply current in both
-  // states. If it does not float, this line should be deleted rather than kept.
+  //     digitalWrite(RADIOCORE_FEM_EN, HIGH);
+  //     digitalWrite(RADIOCORE_VFEM_CTRL, HIGH);
   //
-  // INPUT_PULLDOWN, if the reasoning holds, gives a defined level without this
-  // code asserting that LOW means "enabled" -- it may well mean enabled, and that
-  // is also #858's to establish.
+  // Its VFEM_Ctrl polarity matches this board's schematic derivation
+  // independently, which is what makes the FEM_EN half credible rather than
+  // merely present. [verified: n30nex HeltecRC52Board.cpp, read 2026-08-20]
   //
-  // Consequence to expect: RF performance on this headless scaffold is NOT
-  // characterised and should not be measured or trusted until #858 lands. The
-  // scaffold exists to build and to boot (#855), not to be an RF reference.
-  // ---------------------------------------------------------------------------
-  pinMode(RADIOCORE_FEM_EN, INPUT_PULLDOWN);
+  // Corroboration by implementation, NOT by datasheet -- so if RF behaves oddly,
+  // this line is a legitimate suspect. An earlier revision left the pin on
+  // INPUT_PULLDOWN, asserting nothing; that was worse, because it left the FEM
+  // in a state nobody had chosen.
+  pinMode(RADIOCORE_FEM_EN, OUTPUT);
+  digitalWrite(RADIOCORE_FEM_EN, HIGH);
 
   // ---------------------------------------------------------------------------
   // FEM supply rail -- raised only now that FEM_EN is at a defined level.
