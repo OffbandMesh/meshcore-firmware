@@ -45,6 +45,12 @@ Between version tags, commits accumulate as `+N` dev builds (e.g.
 `offband-v0.16.0-4-gABCDEF` = 4 commits past the tag); each epic landing cuts a
 new tag. **Every landing updates `CHANGELOG.md`.**
 
+**Issue refs in CHANGELOG entries are full-URL markdown links** (owner rule,
+2026-08-20, applied from `[1.5.0-beta4]` forward — not retroactively): bare `#N`
+does not render as a link in `.md` files or release bodies, so write
+`[#N](https://github.com/OffbandMesh/meshcore-firmware/issues/N)` (or `/pull/N`
+for PRs).
+
 Tags are pushed to the **`origin` remote** (`OffbandMesh/meshcore-firmware`; moves to the
 Offband org repo after the rename) and are accessible to all working trees of the
 fork.
