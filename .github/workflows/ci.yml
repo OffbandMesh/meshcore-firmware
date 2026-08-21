@@ -253,6 +253,17 @@ jobs:
           - Xiao_S3_WIO_companion_radio_usb
           - Xiao_S3_WIO_companion_radio_wifi
           - Xiao_C6_repeater_
+          # #854 (epic #879): Heltec RadioCore RC52 (nRF52840 + HT-RA62A/SX1262).
+          # Owner-directed 2026-08-21: RC52 goes into CI as it is built out, so the
+          # build is validated, but deliberately NOT into .github/release-envs.txt
+          # until #880 (display) lands and it has had further testing. CI-only here.
+          # (No observer env exists: observer is ESP32/WiFi-only, and nRF52840 has
+          # no WiFi -- same reason Heltec_t096 has none above.)
+          # Envs carry the RC32 _without_display_ convention: this board has no
+          # display support yet (#880), so every shipping env today is headless.
+          - heltec_rc52_without_display_repeater
+          - heltec_rc52_without_display_companion_radio_ble
+          - heltec_rc52_without_display_companion_radio_usb
     steps:
       - uses: actions/checkout@v5
 
