@@ -25,7 +25,18 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
 
   // Create the BLE Device
   NimBLEDevice::init(dev_name);
-  NimBLEDevice::setMTU(MAX_FRAME_SIZE);
+  // #711: setMTU() returns false if the stack refused it, and the return was
+  // previously discarded -- a silent failure (SAFELANE §6). It matters because
+  // getMTU() then reports NimBLE's DEFAULT preferred MTU (256), not ours, and any
+  // sizing that trusts it will oversize. The frame ceiling no longer depends on
+  // this succeeding (see BleFrameSizing::deliverableFrame), but a failure here is
+  // still a real degradation and must be visible rather than inferred from a
+  // tester's truncated download.
+  if (!NimBLEDevice::setMTU(MAX_FRAME_SIZE)) {
+    BLE_DEBUG_PRINTLN("begin(): setMTU(%d) REFUSED -- getMTU() will report the "
+                      "NimBLE default (%d), not ours", (int)MAX_FRAME_SIZE,
+                      (int)NimBLEDevice::getMTU());
+  }
 
   // Security/pairing init. Bluedroid's setSecurityCallbacks(this) + BLESecurity
   // setStaticPIN/setAuthenticationMode combo becomes three NimBLE static calls

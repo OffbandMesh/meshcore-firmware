@@ -26,6 +26,9 @@ constexpr size_t kMaxFrame = 176;
 // What begin() pins our own side to: NimBLEDevice::setMTU(MAX_FRAME_SIZE).
 constexpr uint16_t kLocalMtu = 176;
 
+// What NimBLE hands back when our setMTU() never took effect (#711 re-fix).
+constexpr uint16_t kNimbleDefaultMtu = 256;
+
 // Reported MTUs worth covering. 179 and 517 are the values that fail pre-fix; 517 is what
 // Android reports in the field when the client's requestMtu() is rejected.
 const uint16_t kReportedMtus[] = {0, 1, 3, 4, 22, 23, 24, 100, 169, 172, 176, 178, 179, 185, 247, 512, 517, 65535};
@@ -158,10 +161,18 @@ TEST(BleFrameSizing, TinyMtuCannotUnderflow) {
   EXPECT_EQ(deliverableFrame(4, kMaxFrame), 1u);
 }
 
-TEST(BleFrameSizing, SerialAndTcpAreUnaffected) {
-  // Non-BLE transports have no ATT header; they keep the full frame.
-  EXPECT_EQ(deliverableFrame(kMaxFrame + ATT_NOTIFY_HEADER, kMaxFrame), kMaxFrame);
-  EXPECT_EQ(deliverableFrame(65535, kMaxFrame), kMaxFrame);
+// RENAMED + CORRECTED in the #711 re-fix. This was `SerialAndTcpAreUnaffected` and
+// asserted deliverableFrame() returns the FULL frame for a generous MTU -- which is
+// the defect itself, written down as an expectation. It also did not test what its
+// name claimed: deliverableFrame() is called ONLY from the two BLE interfaces
+// (esp32/nrf52 SerialBLEInterface); serial and TCP use the BaseSerialInterface
+// default maxFrameSize() -> MAX_FRAME_SIZE and never reach this function, so they
+// are unaffected structurally, not by anything this function returns.
+TEST(BleFrameSizing, GenerousMtuStillRespectsTheHardCeiling) {
+  const size_t ceiling = kMaxFrame - ATT_NOTIFY_HEADER;
+  EXPECT_EQ(deliverableFrame(kMaxFrame + ATT_NOTIFY_HEADER, kMaxFrame), ceiling);
+  EXPECT_EQ(deliverableFrame(65535, kMaxFrame), ceiling);
+  EXPECT_EQ(deliverableFrame(kNimbleDefaultMtu, kMaxFrame), ceiling);
 }
 
 // Guards the local mirror of MAX_FRAME_SIZE: if the real constant moves, this suite's
@@ -169,6 +180,69 @@ TEST(BleFrameSizing, SerialAndTcpAreUnaffected) {
 TEST(BleFrameSizing, FrameBufferConstantUnchanged) {
   EXPECT_EQ(kMaxFrame, 176u)
       << "MAX_FRAME_SIZE changed; revisit the expected values in this suite";
+}
+
+// --- #711 RE-FIX: the ceiling must not depend on any reported MTU ------------
+//
+// beta4 STILL clipped 3 B off every full frame on a Heltec V4.3, with this fix in.
+// Tester schill: 12751 of 12973 bytes in 75 chunks -> shortfall 222 = 3 x 74.
+// 12973 needs 76 chunks at a 171-byte payload and 75 at 174, so the device emitted
+// 174 -- the PRE-fix size -- meaning maxFrameSize() returned MAX_FRAME_SIZE.
+//
+// Cause: NimBLEDevice::getMTU() returns ble_att_preferred_mtu_val, whose NimBLE
+// DEFAULT is 256. Every test below pinned `local` to kLocalMtu (176), so the suite
+// never exercised the one value that breaks it. A test that cannot fail for the
+// real input is not a guard -- that is the whole lesson of #712.
+
+// The value NimBLE hands back when our setMTU() never took effect.
+
+// The invariant, stated independently of any MTU the stack reports: a frame must
+// never exceed what a link at our OWN configured preference can deliver. begin()
+// pins that preference to MAX_FRAME_SIZE, so the hard ceiling is MAX_FRAME_SIZE - 3.
+constexpr size_t kHardCeiling = kMaxFrame - 3;
+
+TEST(BleFrameSizing, RegressionSevenElevenB_UntrustedLocalMustNotRaiseTheCeiling) {
+  // Exactly the shipped-beta4 situation: peer says 517, local reads NimBLE's default.
+  const uint16_t effective = effectiveMtu(517, kNimbleDefaultMtu);
+  const size_t deliverable = deliverableFrame(effective, kMaxFrame);
+
+  EXPECT_LE(deliverable, kHardCeiling)
+      << "local=" << kNimbleDefaultMtu << " (NimBLE default, i.e. our setMTU did not "
+         "take effect) must not license a frame the link will clip";
+
+  const size_t payload = deliverable > 2 ? deliverable - 2 : 0;
+  EXPECT_EQ(payload, 171u) << "chunk payload must stay 171, not the pre-fix 174";
+}
+
+// The field arithmetic, end to end. At the correct cap schill's buffer needs 76
+// chunks and loses nothing; at the broken cap it takes 75 and loses exactly 222.
+TEST(BleFrameSizing, RegressionSevenElevenB_SchillCaptureArithmetic) {
+  constexpr size_t kTotal = 12973, kHeader = 2;
+
+  const size_t cap = deliverableFrame(effectiveMtu(517, kNimbleDefaultMtu), kMaxFrame) - kHeader;
+  size_t chunks = 0, delivered = 0;
+  for (size_t off = 0; off < kTotal; off += cap, ++chunks) {
+    const size_t n = (kTotal - off) < cap ? (kTotal - off) : cap;
+    ASSERT_LE(kHeader + n, kHardCeiling) << "chunk " << chunks << " would be clipped";
+    delivered += n;
+  }
+  EXPECT_EQ(delivered, kTotal);
+  EXPECT_EQ(chunks, 76u) << "76 chunks at the correct cap; the field saw 75 at the broken one";
+}
+
+// The general form: NO pair of (reported, local) may produce a frame above the
+// hard ceiling. This is the assertion that would have caught beta4 before release.
+TEST(BleFrameSizing, RegressionSevenElevenB_NoReportedLocalPairExceedsTheCeiling) {
+  const uint16_t locals[] = {0, 1, 22, 23, 100, 169, 176, 179, 185, 247, 256, 512, 517, 65535};
+  for (uint16_t reported : kReportedMtus) {
+    for (uint16_t local : locals) {
+      const size_t deliverable = deliverableFrame(effectiveMtu(reported, local), kMaxFrame);
+      EXPECT_LE(deliverable, kHardCeiling)
+          << "reported=" << reported << " local=" << local
+          << " produced a frame of " << deliverable << " B, above the "
+          << kHardCeiling << " B a MAX_FRAME_SIZE-preferred link delivers";
+    }
+  }
 }
 
 int main(int argc, char **argv) {

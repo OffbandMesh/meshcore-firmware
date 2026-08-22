@@ -283,14 +283,19 @@ size_t SerialBLEInterface::maxFrameSize() const {
   // divergent copy is what let the ESP32 side regress unnoticed. The shared function is
   // unit-tested in test/test_frame_size.
   //
-  // NOTE the asymmetry, which is intentional: ESP32 must clamp with
-  // ble_frame::effectiveMtu() because NimBLE reports the PEER's MTU and begin() pins our
-  // local side via NimBLEDevice::setMTU(). Here, Bluefruit's conn->getMtu() is the
-  // CONNECTION's negotiated MTU (already min(local, peer)), and this port sets no explicit
-  // local MTU, so there is no second value to clamp against. Do NOT invent one: passing a
-  // guessed local MTU into effectiveMtu() would silently shrink frames on healthy links.
-  // If conn->getMtu() is ever found to report a peer-preferred value instead, THAT is the
-  // bug to fix, and it should be fixed by clamping against a real configured local MTU.
+  // #711 RE-FIX: this path is now protected by the same hard ceiling as ESP32.
+  // deliverableFrame() caps at MAX_FRAME_SIZE - 3 regardless of what getMtu() reports,
+  // so a stack that over-reports here can no longer produce a clipped frame.
+  //
+  // The previous revision left this path deliberately unclamped, reasoning that
+  // Bluefruit's conn->getMtu() is already the negotiated value and that inventing a
+  // local MTU would shrink frames on healthy links. The Gemini review of #718 called
+  // that a landmine; it was right and the carve-out was wrong. The cost of being wrong
+  // was an entire board class (RAK4631, RAK3401, T1000-E, Wio Tracker, T114, T096,
+  // XIAO nRF52) potentially unable to deliver a caplog at all -- and unlike ESP32,
+  // nobody had a tester capture that would have surfaced it. The ceiling costs at most
+  // 3 bytes per frame on a link that could carry more; that is the right trade, and it
+  // needs no guessed local MTU.
   uint16_t mtu = ble_frame::MIN_ATT_MTU;
   BLEConnection* conn = (_conn_handle != BLE_CONN_HANDLE_INVALID)
                           ? Bluefruit.Connection(_conn_handle) : nullptr;
