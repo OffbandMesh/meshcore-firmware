@@ -218,17 +218,30 @@
 
 #define PIN_SPI1_MISO           (0 + 12)    // P0.12 -- NOT wired to the panel;
                                             // SPIClass still needs a valid pin
-#define PIN_SPI1_MOSI           (32 + 3)    // P1.03
-#define PIN_SPI1_SCK            (0 + 30)    // P0.30
+#define PIN_SPI1_MOSI           (32 + 2)    // P1.02 -- carrier header pin 17
+#define PIN_SPI1_SCK            (0 + 30)    // P0.30 -- carrier header pin 6
 
 ////////////////////////////////////////////////////////////////////////////////
-// TFT (T108 / NV3001B) -- DECLARED FOR REFERENCE, NOT USED BY THIS VARIANT.
+// TFT (T108 / NV3001B) -- LIVE. Driven by variants/heltec_rc52/RC52Display.cpp
+// under HELTEC_RC52_WITH_DISPLAY (#948/#949/#950).
 //
-// This variant is headless (#854). The display port is #872, because
-// NV3001BDisplay does not compile for nRF52 today: its hardware-SPI path calls
-// spi.begin(sck,miso,mosi,ss) / writeBytes() / writePattern(), all ESP32-only,
-// and its `SPIClass spi;` member is unconditional with no nRF52 default ctor --
-// so NV3001B_USE_SOFTWARE_SPI=1 does not sidestep it either.
+// ⚠ EVERY VALUE BELOW IS THE VENDOR'S, TAKEN FROM THE SOURCE OF RECORD --
+// HelTecAutomation/RadioCore_Library :: src/boards/heltec_rc52.h, read as raw
+// bytes via the GitHub API on 2026-08-23, not from a summary or a diagram:
+//
+//   RADIOCORE_NV3001B_SCK   (0 + 30)    RADIOCORE_NV3001B_MOSI  (32 + 2)
+//   RADIOCORE_NV3001B_CS    (32 + 4)    RADIOCORE_NV3001B_DC    (0 + 28)
+//   RADIOCORE_NV3001B_RST   (0 + 10)    RADIOCORE_NV3001B_ENABLE (32 + 13) LOW
+//   RADIOCORE_NV3001B_BACKLIGHT (0 + 9) HIGH
+//   USE_HARDWARE_SPI 1, SPI_INSTANCE SPI1, SPI_FREQUENCY 8000000UL
+//
+// ⚠⚠ MOSI AND CS WERE BOTH WRONG BY ONE UNTIL 2026-08-23 -- P1.03 and P1.05
+// instead of P1.02 and P1.04. Neither P1.03 nor P1.05 appears ANYWHERE in
+// Heltec's RC52 pin map; P1.02 and P1.04 are broken out on carrier header pins
+// 17 and 16. The board flashed, booted, ran the radio and lit its backlight
+// with the panel receiving nothing at all, because a write-only panel has no
+// readback to fail on and begin() returns true regardless. If this file ever
+// disagrees with the vendor header again, THIS FILE is the defect.
 //
 // !! THE TFT OCCUPIES CARRIER HEADER PINS 6-10. Anything wired to those pins
 // conflicts with a display build, and SWDIO (P0.30) is also TFT_SCK, so SWD and
@@ -236,11 +249,17 @@
 //
 // !! TFT_EN is ACTIVE LOW while TFT_BL is ACTIVE HIGH. Opposite polarities on the
 // two power/backlight controls; getting one backwards presents as a dead panel.
+//
+// !! RST is P0.10 = NFC1 and BL is P0.09 = NFC2. On nRF52840 those are reserved
+// for NFC unless UICR NFCPINS is cleared, which needs CONFIG_NFCT_PINS_AS_GPIOS
+// -- defined NOWHERE in this tree or the framework (checked 2026-08-23). If the
+// panel is still dark after the pin fix above, that is the next hypothesis, and
+// the cost of testing it is a one-way UICR write.
 
 #define PIN_TFT_SCK             (0 + 30)    // P0.30 -- also SWDIO, header pin 6
-#define PIN_TFT_MOSI            (32 + 3)    // P1.03
+#define PIN_TFT_MOSI            (32 + 2)    // P1.02 -- header pin 17
 #define PIN_TFT_MISO            (-1)        // write-only panel, no readback
-#define PIN_TFT_CS              (32 + 5)    // P1.05
+#define PIN_TFT_CS              (32 + 4)    // P1.04 -- header pin 16
 #define PIN_TFT_DC              (0 + 28)    // P0.28 -- header pin 7
 #define PIN_TFT_RST             (0 + 10)    // P0.10 -- header pin 10
 #define PIN_TFT_VDD_CTL         (32 + 13)   // P1.13 -- header pin 8
