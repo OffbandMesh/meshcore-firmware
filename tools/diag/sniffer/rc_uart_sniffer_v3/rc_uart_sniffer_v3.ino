@@ -15,11 +15,38 @@
 // WIRING
 // ---------------------------------------------------------------------------
 //                                  Feather        generic S3 WROOM
-//   RC32 pin 12 (U0TXD / GPIO43) -> RX             GPIO18     [v2, existing]
-//   RC32 pin 20 (GND)            -> GND            GND        [v2, existing]
-//   RC32 pin 18 (RST)            -> A0             GPIO17     [v3, new]
-//   RC32 pin  5 (GPIO0 / BOOT)   -> A1             GPIO16     [v3, new]
-//   sniffer TX                   -> NOT CONNECTED (either board)
+//   target UART TX               -> RX or TX pad   GPIO18     see below
+//   header pin 20 (GND)          -> GND            GND        [v2, existing]
+//   header pin 18 (RST)          -> A0             GPIO19     [v3, new]
+//   header pin  5 (BOOT / USER)  -> A1             GPIO21     [v3, new]
+//
+// (v3's header listed GPIO17/GPIO16 for RST/BOOT on the generic side while the
+//  code defined 19/21. The code is what runs; the comment was wrong. #938)
+//
+// !! WHICH PAD THE UART WIRE GOES TO DEPENDS ON THE TARGET. Heltec REVERSED the
+// !! UART header positions between board revisions:
+// !!
+// !!     RC32 / RCC6    header pin 11 = board RX    pin 12 = board TX
+// !!     RC52           header pin 11 = board TX    pin 12 = board RX
+// !!
+// !! so a rig soldered for one lands RX-to-RX on the other and receives
+// !! NOTHING -- which looks exactly like a dead board, and is the failure this
+// !! sketch's #938 change exists to prevent.
+// !!
+// !!     SNIFFER_RC52 defined    -> listen on the TX pad   (RC52)
+// !!     SNIFFER_RC52 undefined  -> listen on the RX pad   (RC32 / RCC6)
+// !!
+// !! Using the pad LABELLED TX as an input is deliberate and safe: the ESP32-S3
+// !! routes UART signals through the GPIO matrix, direction follows the argument
+// !! begin() receives, and Serial1 is opened with TX = -1 so nothing is ever
+// !! driven. The pad it meets on the idle side is the target's RX -- an input.
+// !! Two inputs on one net have nothing to fight.
+// !!
+// !! BUT `TX` AND `RX` ARE VARIANT-DEPENDENT ALIASES, NOT PIN NUMBERS. On the
+// !! plain Feather ESP32-S3 (and _nopsram, _reversetft) they are GPIO39 and
+// !! GPIO38; on adafruit_feather_esp32s3_TFT they are GPIO1 and GPIO2. Selecting
+// !! the wrong board in the IDE silently moves the pin. THE BANNER PRINTS THE
+// !! RESOLVED GPIO AT BOOT -- that line is the ground truth, not this comment.
 //
 // GND is not optional and is not a formality: without a common reference the
 // UART sees garbage or nothing at all, which reads exactly like a dead board.
