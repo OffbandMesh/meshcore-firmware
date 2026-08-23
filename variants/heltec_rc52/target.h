@@ -9,16 +9,24 @@
 #include <helpers/sensors/EnvironmentSensorManager.h>
 #include <helpers/sensors/LocationProvider.h>
 
-// Headless variant (#854). DISPLAY_CLASS is bound to NullDisplayDriver rather
-// than left undefined, following heltec_rc32's `_without_display_` envs: that
-// keeps the button/UI surface compiled in -- and the RC52 does have a real USER
-// button (P1.10) -- while the panel itself is inert.
+// DISPLAY_CLASS is always bound to something -- NullDisplayDriver on the
+// headless roles, RC52Display on the with-display ones -- rather than left
+// undefined, following heltec_rc32. That keeps the button/UI surface compiled
+// in (the RC52 does have a real USER button, P1.10) while an inert panel simply
+// draws nowhere.
 //
-// The real panel is NOT here because NV3001BDisplay does not compile for nRF52
-// today. Adding it is #872.
+// The with-display arm points at the VARIANT-LOCAL driver in this directory, not
+// at src/helpers/ui/NV3001BDisplay.h. The shared driver still does not compile
+// for nRF52; #948 chose duplication inside this variant over a fleet-wide port
+// so that RC32 and RCC6 cannot regress from RC52 work. Same shape as RC32's
+// switch below -- deliberately, so the two read alike.
 #ifdef DISPLAY_CLASS
 #include <helpers/ui/MomentaryButton.h>
+#ifdef HELTEC_RC52_WITH_DISPLAY
+#include "RC52Display.h"
+#else
 #include <helpers/ui/NullDisplayDriver.h>
+#endif
 #endif
 
 extern RC52Board board;
