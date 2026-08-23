@@ -31,6 +31,8 @@ on:
 jobs:
   diag-build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # publish assets to the diag-builds pre-release
     steps:
       - name: Clone Repo
         uses: actions/checkout@v5
@@ -92,10 +94,29 @@ jobs:
           fi
           echo "Diagnostic artifacts produced:"; ls -la out/
 
-      - name: Upload diagnostic artifact
+      - name: Upload diagnostic artifact (maintainer convenience)
         uses: actions/upload-artifact@v4
         with:
           name: "diag-${{ inputs.env }}"
           path: out/*
           if-no-files-found: error
           retention-days: 90
+
+      - name: Publish to the diag-builds pre-release (public tester link)
+        # THE point of this workflow: a self-serve download link for testers, with
+        # no maintainer download+forward. On a public repo, release assets have
+        # anonymous direct-download URLs. `diag-builds` is a rolling pre-release
+        # (NOT a version release) that acts as a permanent diagnostic file-drop.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view diag-builds >/dev/null 2>&1; then
+            gh release create diag-builds --prerelease --target "$GITHUB_SHA" \
+              --title "Diagnostic Builds (rolling -- NOT a version release)" \
+              --notes "Rolling drop for one-off diagnostic firmware images. NOT a product release -- no version semantics, no CHANGELOG, do not treat as a beta. Assets are diagnostic builds (caplog pinned on + boot beacon + UART0 mesh-log mirror), replaced as needed."
+          fi
+          gh release upload diag-builds out/*.bin --clobber
+          echo "Public download links:"
+          for f in out/*.bin; do
+            echo "  https://github.com/${GITHUB_REPOSITORY}/releases/download/diag-builds/$(basename "$f")"
+          done
