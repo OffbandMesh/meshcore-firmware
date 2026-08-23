@@ -270,4 +270,24 @@ void heartbeatTick(uint32_t now_ms);
 // deep-sleep wake / esptool hard reset.
 uint32_t bootCounterValue();
 
+#ifdef OFFBAND_CRASHLOG_HOST
+// ---------------------------------------------------------------------------
+// TEST-ONLY readback (#887). Exists solely so the ring's wrap and index
+// arithmetic is observable on a host build; every other reader of the ring
+// (crashLogDump, emitPreviousBootDump) is compiled out under
+// OFFBAND_CRASHLOG_HOST, so data goes IN and nothing can get it out.
+//
+// Guarded so it cannot reach firmware: OFFBAND_CRASHLOG_HOST is defined only
+// when neither ESP32 nor nRF52 is the target (see the platform selector above).
+//
+// Copies the ring in LOGICAL order -- oldest byte first -- which is the same
+// ordering crashLogBegin() uses when it snapshots a surviving ring. Returns the
+// number of bytes written to `out`.
+size_t crashLogTestReadRing(char* out, size_t out_cap,
+                            bool* wrapped_out, size_t* write_index_out);
+
+// Ring capacity, so tests can compute boundaries rather than hardcode them.
+size_t crashLogTestCapacity();
+#endif
+
 }  // namespace offband
