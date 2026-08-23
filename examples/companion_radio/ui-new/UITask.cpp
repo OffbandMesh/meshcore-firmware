@@ -6,7 +6,33 @@
 #ifdef WIFI_SSID
   #include <WiFi.h>
 #endif
-#ifdef OFFBAND_OBSERVER
+// ---------------------------------------------------------------------------
+// #972: UI state-machine tracing.
+//
+// These four crashLogf() call sites were gated on OFFBAND_OBSERVER. That flag
+// implies WiFi, and nRF52 has none -- so on RC52, RAK4631, T1000-E, Wio, T096 and
+// XIAO the tracing compiled out entirely. The instrument exists BECAUSE of a UI
+// bug (see the note above setCurrScreen: a SplashScreen <-> HomeScreen
+// oscillation observed on hv3-bench), so gating it on an unrelated radio
+// capability made it unavailable on a whole class of boards.
+//
+// Derived from both flags rather than moved to OFFBAND_BOOT_BEACON directly:
+//   * observer boards keep it exactly as before -- no regression where it works
+//     today;
+//   * OFFBAND_BOOT_BEACON brings in the RadioCore _diag envs (RC32, RCC6, RC52
+//     all set it), matching the standing rule that every env built during
+//     bring-up is a full diagnostic build;
+//   * the name says what it controls. OFFBAND_BOOT_BEACON is about BOOT; this is
+//     UI runtime tracing, and reusing that flag's name would mislead.
+//
+// crashLogf() itself is unconditional in CrashLog.h -- only the call sites were
+// ever gated.
+// ---------------------------------------------------------------------------
+#if defined(OFFBAND_OBSERVER) || defined(OFFBAND_BOOT_BEACON)
+  #define OFFBAND_UI_TRACE 1
+#endif
+
+#ifdef OFFBAND_UI_TRACE
   #include <helpers/diagnostics/CrashLog.h>
 #endif
 
@@ -52,7 +78,7 @@ public:
   }
 
   int render(DisplayDriver& display) override {
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_UI_TRACE
     offband::crashLogf("[ui] SplashScreen.render() at %lu", (unsigned long)millis());
 #endif
     offband::SplashInfo si( nullptr, FIRMWARE_VERSION, FIRMWARE_BUILD_DATE );
@@ -722,7 +748,7 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
 
   if (_display != NULL) {
     if (!_display->isOn() && !hasConnection() && _disp_mode != 2) {  // #542 B1: not in always-off
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_UI_TRACE
       offband::crashLogf("[ui] newMsg: display off + no conn -> turnOn");
 #endif
       _display->turnOn();
@@ -760,7 +786,7 @@ void UITask::userLedHandler() {
 }
 
 void UITask::setCurrScreen(UIScreen* c) {
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_UI_TRACE
   // Screen transition tracing: log every change so we can see if the
   // SplashScreen ↔ HomeScreen oscillation observed on hv3-bench is
   // a real state-machine bug.
@@ -889,7 +915,7 @@ void UITask::loop() {
 #endif
 
   if (c != 0 && curr) {
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_UI_TRACE
     offband::crashLogf("[ui] button event c=0x%x dispatched to curr screen", (int)c);
 #endif
     curr->handleInput(c);
