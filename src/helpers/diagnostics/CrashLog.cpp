@@ -220,8 +220,12 @@ static void crashLogSerialLine(const char* s) {
 // raw NULs into terminals that previously never saw them, AND left the two
 // dumps behaving differently. One helper, original semantics, both callers.
 template <typename AtFn>
-static void crashLogEmitRing(size_t count, AtFn at) {
+// Returns the number of bytes that actually reached the transport. #952: the
+// caller must distinguish "dumped, possibly truncated" from "wrote nothing at
+// all", because only the latter is worth retrying.
+static size_t crashLogEmitRing(size_t count, AtFn at) {
     size_t i = 0;
+    size_t written = 0;
     while (i < count) {
         int room = Serial.availableForWrite();
         if (room <= 0) break;                       // full -> stop, never wait
@@ -236,15 +240,25 @@ static void crashLogEmitRing(size_t count, AtFn at) {
             chunk[n++] = c;
         }
         if (n == 0) continue;                       // whole chunk was padding
-        if (crashLogSerialWrite(chunk, n) == 0) break;   // no progress -> stop
+        size_t w = crashLogSerialWrite(chunk, n);
+        if (w == 0) break;                          // no progress -> stop
+        written += w;
     }
+    return written;
 }
 
-static void emitPreviousBootDump(const char* why) {
-    if (s_prev_len == 0) { return; }
+// Returns true if any of the previous boot's ring actually reached the wire.
+//
+// #952: `Serial` being connected does NOT mean the transport can accept bytes --
+// availableForWrite() can be 0 with a host attached and not draining. Reporting
+// real progress lets the caller keep the one-shot pending flag alive instead of
+// spending it on a write that emitted nothing. Same defect class as the issue
+// this fixes, one layer down.
+static bool emitPreviousBootDump(const char* why) {
+    if (s_prev_len == 0) { return false; }
     // Cheap early-out: if nobody is listening there is nothing to emit TO, and
     // the whole point is not to spend boot time on it.
-    if (!Serial) return;
+    if (!Serial) return false;
 
     char hdr[160];
     crashLogSerialLine("");
@@ -259,12 +273,20 @@ static void emitPreviousBootDump(const char* why) {
     // Was a per-byte Serial.write() over up to 4080 bytes -- the call site that
     // blocked. Now chunked and bounded: each chunk writes only what fits and the
     // rest is dropped. A partial dump is the acceptable outcome; a wedged boot
-    // is not. The deferred re-dump (#378/#463) still gets a second chance later
-    // once a monitor has attached.
-    crashLogEmitRing(s_prev_len, [](size_t i) { return s_prev_snapshot[i]; });
+    // is not. The deferred re-dump (#378/#463) does get a second chance later
+    // once a monitor has attached -- as of #952 that is actually true; before it,
+    // the pending flag was spent at T+5 s whether or not anyone was listening.
+    const size_t written = crashLogEmitRing(s_prev_len, [](size_t i) { return s_prev_snapshot[i]; });
 
     crashLogSerialLine("");
     crashLogSerialLine("=== END CRASH LOG ======================================");
+
+    // A TRUNCATED dump counts as delivered -- retrying would duplicate what the
+    // reader already has. Only a dump that emitted NOTHING is worth another go.
+    // Narrow cost: if the transport fills between the header lines and the ring,
+    // the header can print twice. Cosmetic, and strictly better than the loss
+    // this issue exists to prevent.
+    return written > 0;
 }
 #endif
 
@@ -288,7 +310,10 @@ void crashLogBegin() {
         }
         s_prev_len     = count;
         s_prev_pending = true;                 // a deferred re-dump is owed
-        emitPreviousBootDump("retained RAM survived");   // immediate (attached monitors)
+        // Return deliberately ignored: best-effort immediate print for a monitor
+        // that was already attached. If it emitted nothing, s_prev_pending stays
+        // true and crashLogTick retries once a host appears (#952).
+        (void)emitPreviousBootDump("retained RAM survived");
     } else {
         // Fresh power-on (or brown-out / corrupted retained memory).
         s_prev_len     = 0;
@@ -396,15 +421,25 @@ void crashLogClear() {
     OFFBAND_CL_EXIT(&s_log_mux);
 }
 
-// #378: call once per loop. Re-emits the previous-boot crash dump ONE more time,
-// ~5 s after boot, so a serial monitor connected AFTER the reset (the normal
-// field case -- you plug in to a node you found wedged/rebooted) still sees it.
-// The boot-time print alone is lost to a host that has not attached yet.
+// #378/#952: call once per loop. Re-emits the previous-boot crash dump ONE more
+// time, once the defer delay has elapsed AND a host is actually attached, so a
+// serial monitor connected AFTER the reset (the normal field case -- you plug in
+// to a node you found wedged/rebooted) still sees it. The boot-time print alone
+// is lost to a host that has not attached yet.
+//
+// The `Serial` term is load-bearing, not defensive. Without it the flag was
+// cleared at T+5 s regardless, emitPreviousBootDump returned early on !Serial,
+// and the dump was gone -- see crashLogShouldEmitDeferred for the full account.
 void crashLogTick(uint32_t now_ms) {
 #ifndef OFFBAND_CRASHLOG_HOST
-    if (s_prev_pending && now_ms >= 5000u) {
-        s_prev_pending = false;
-        emitPreviousBootDump("deferred re-dump for late serial connect");
+    if (crashLogShouldEmitDeferred(s_prev_pending, now_ms, static_cast<bool>(Serial))) {
+        // Spend the one-shot flag only if the dump actually went out. A host that
+        // is attached but not draining leaves availableForWrite() at 0; clearing
+        // regardless would lose the log for the same reason the pre-#952 code did,
+        // just one layer deeper.
+        if (emitPreviousBootDump("deferred re-dump for late serial connect")) {
+            s_prev_pending = false;
+        }
     }
 #else
     (void)now_ms;

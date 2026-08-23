@@ -127,11 +127,41 @@ void crashLogDump();
 // reads see nothing prior. CLI / settings command on demand.
 void crashLogClear();
 
+// How long after boot the deferred re-dump becomes eligible. The delay exists
+// so a host that WAS attached through the reset has time to re-enumerate and
+// settle before the dump lands.
+static const uint32_t kCrashLogDeferMs = 5000u;
+
+// #952: is the deferred previous-boot dump eligible to be emitted right now?
+//
+// Pure, no I/O, compiled on host AND target so it can be unit-tested -- the
+// same host-testable-seam pattern as selectEvictionVictim / selectTlsPromotion.
+//
+// THE BUG THIS ENCODES. The predicate used to be `pending && now >= 5000`, and
+// crashLogTick cleared `pending` BEFORE attempting the write. emitPreviousBootDump
+// then returns early when nothing is listening -- so on a board with no host
+// attached at exactly T+5 s, the one chance was spent writing into a closed
+// transport and could never come back. On a native-USB board, which re-enumerates
+// after every reset, that is a race no human wins by hand: the RC52 case in #889
+// lost a reset reason exactly this way.
+//
+// `host_attached` closes it. The dump is spent only when it can actually land,
+// which is what #378 intended and what the comment in emitPreviousBootDump has
+// always claimed. There is deliberately no upper bound -- the snapshot is a
+// static buffer that costs nothing to keep, and a dump delivered late is
+// strictly better than one delivered to nobody. It is clearly labelled as
+// coming from the previous boot, so it cannot be mistaken for live output.
+inline bool crashLogShouldEmitDeferred(bool pending, uint32_t now_ms, bool host_attached) {
+  return pending && now_ms >= kCrashLogDeferMs && host_attached;
+}
+
 // Call once per loop iteration (pass millis()). Re-emits the previous-boot crash
-// dump ONE more time, ~5 s after boot, so a serial monitor connected AFTER the
-// reset -- the normal field case, you plug in to a node you found wedged or
-// rebooted -- still sees it. The boot-time print alone is lost to a host that
-// has not attached yet (#378). No-op after it has fired, and on a fresh boot.
+// dump ONE more time, once at least kCrashLogDeferMs has passed AND a host is
+// actually attached, so a serial monitor connected AFTER the reset -- the normal
+// field case, you plug in to a node you found wedged or rebooted -- still sees
+// it, no matter how long it took to get there (#378, #952). The boot-time print
+// alone is lost to a host that has not attached yet. No-op once it has fired,
+// and on a fresh boot with nothing to report.
 void crashLogTick(uint32_t now_ms);
 
 // ---------------------------------------------------------------------------
