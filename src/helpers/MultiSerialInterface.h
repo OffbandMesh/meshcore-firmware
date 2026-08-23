@@ -157,6 +157,31 @@ public:
     return false;
   }
 
+  // #711: MUST be overridden. Inheriting BaseSerialInterface's default returns
+  // MAX_FRAME_SIZE unconditionally, so every caller asking this wrapper how big a
+  // frame it may build got the frame-BUFFER size rather than what the transport
+  // can actually deliver -- and the BLE interfaces' MTU-aware maxFrameSize() was
+  // never consulted at all. companion_radio holds a MultiSerialInterface as its
+  // `_serial`, so that made #453/#454 and both #711 attempts dead code on the
+  // companion path. Introduced by the 1.17.0 port (#668).
+  //
+  // writeFrame() below fans a frame out to EVERY enabled interface, so the frame
+  // must fit the most constrained one: the minimum is the only safe answer, and
+  // the predicate here must stay identical to writeFrame()'s or the two disagree.
+  //
+  // Nothing enabled -> writeFrame sends nothing, so the buffer bound is the honest
+  // answer; returning 0 would surprise callers for no gain.
+  size_t maxFrameSize() const override {
+    size_t smallest = MAX_FRAME_SIZE;
+    for (const auto& iface : _interfaces) {
+      if (iface.instance && iface.instance->isEnabled()) {
+        const size_t m = iface.instance->maxFrameSize();
+        if (m < smallest) smallest = m;
+      }
+    }
+    return smallest;
+  }
+
   size_t writeFrame(const uint8_t src[], size_t len) override {
     // don't write when disabled or nothing provided
     if(!_enabled || len == 0){
