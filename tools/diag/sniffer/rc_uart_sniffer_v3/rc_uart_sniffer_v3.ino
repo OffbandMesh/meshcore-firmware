@@ -167,6 +167,12 @@
 // !! current, a plausible number that no sanity check would catch.
 //
 // The BUS register genuinely is bits 15-3, with CNVR at bit 1 and OVF at bit 0.
+// Config register and its power-on reset value, used to identify an INA219
+// POSITIVELY rather than by absence of a TI ID. [verified: TI INA219 datasheet
+// (sbos448), fetched 2026-08-22 -- reset value 0x399F]
+#define INA219_REG_CONFIG  0x00
+#define INA219_CONFIG_RESET 0x399F
+
 #define INA219_REG_SHUNT   0x01
 #define INA219_REG_BUS     0x02
 
@@ -322,7 +328,10 @@ static void inaProbe() {
     if (Wire1.endTransmission() != 0) continue;
     if (addr == MAX1704X_ADDR) continue;   // not an INA
     any = true;
-    if (ina_addr == 0) ina_addr = addr;
+    // ina_addr is NOT set here. It is set only where a part is positively
+    // identified, below -- latching the first address that merely ACKs would
+    // pin us to a device we never identified, and inaTick() would then read
+    // registers 0x01/0x02 from something unrelated. Gemini review, #938.
 
     // TWO ID register locations, because the families disagree:
     //   INA226 / INA260 / INA3221 -> MFG 0xFE, DIE 0xFF
@@ -330,7 +339,7 @@ static void inaProbe() {
     // Probing only 0xFE/0xFF would find an INA228 at 0x40, get nothing back,
     // and misreport it as an INA219 (which genuinely has no ID registers).
     // Same address, wrong chip, wrong decode, plausible-looking output.
-    uint16_t mfg_hi = 0, die_hi = 0, mfg_lo = 0, dev_lo = 0;
+    uint16_t mfg_hi = 0, die_hi = 0, mfg_lo = 0, dev_lo = 0, cfg = 0;
     bool have_hi = gaugeRead16At(addr, 0xFE, &mfg_hi) && gaugeRead16At(addr, 0xFF, &die_hi);
     bool have_lo = gaugeRead16At(addr, 0x3E, &mfg_lo) && gaugeRead16At(addr, 0x3F, &dev_lo);
 
@@ -341,6 +350,7 @@ static void inaProbe() {
     if (have_lo && mfg_lo == 0x5449) {
       // DEVICE_ID is [15:4] part, [3:0] revision -- mask the revision off.
       uint16_t part = (uint16_t)(dev_lo >> 4);
+      ina_addr = addr;
       ina_kind = (part == 0x228) ? INA_228
                : (part == 0x237) ? INA_237
                : (part == 0x238) ? INA_238
@@ -352,6 +362,7 @@ static void inaProbe() {
       Serial.print("  mfg=0x"); Serial.print(mfg_lo, HEX);
       Serial.print(" dev=0x");  Serial.print(dev_lo, HEX);
     } else if (have_hi && mfg_hi == 0x5449) {
+      ina_addr = addr;
       ina_kind = (die_hi == 0x2260) ? INA_226
                : (die_hi == 0x2270) ? INA_260
                : (die_hi == 0x3220) ? INA_3221
@@ -362,30 +373,49 @@ static void inaProbe() {
          : " -> TI part, unrecognised DIE_ID";
       Serial.print("  mfg=0x"); Serial.print(mfg_hi, HEX);
       Serial.print(" die=0x");  Serial.print(die_hi, HEX);
-    } else {
-      // NO TI MANUFACTURER ID ANYWHERE -> INA219-class.
+    } else if (gaugeRead16At(addr, INA219_REG_CONFIG, &cfg) &&
+               cfg == INA219_CONFIG_RESET) {
+      // POSITIVE identification: the config register reads its documented
+      // power-on value, 0x399F. The INA219 has no ID registers, so this is the
+      // only affirmative evidence the part offers.
       //
-      // Testing have_hi alone was WRONG and this is the bug #938 fixes. The
-      // INA219 has no ID registers at all, so the expectation was that reads of
-      // 0xFE/0xFF would FAIL and fall through to here. They do not: the part
-      // ALIASES invalid register pointers instead of NAKing, so the transaction
-      // succeeds and hands back plausible-looking garbage.
+      // WHY NOT JUST "no TI ID -> must be an INA219". Two reasons, both real:
       //
-      // Observed on the bench 2026-08-22 with a real INA219 at 0x40:
-      //     mfg=0x5959  die=0x2719   -> was reported "unrecognised DIE_ID"
+      //  1. The INA219 ALIASES invalid register pointers instead of NAKing, so
+      //     reads of 0xFE/0xFF SUCCEED and return garbage. Observed here on the
+      //     bench, 2026-08-22:  mfg=0x5959 die=0x2719, all four ID addresses
+      //     returning the same two values because only the low nibble decodes.
+      //     A successful read proves nothing; only the VALUE 0x5449 ("TI") does.
+      //  2. Absence of a TI ID is not presence of an INA219. Any unrelated I2C
+      //     peripheral parked at 0x40-0x4F would have been bucketed here and
+      //     then read as a current monitor, decoding ITS registers 0x01/0x02 as
+      //     shunt and bus voltage -- confident, entirely fictitious current.
       //
-      // 0x5449 is "TI" in ASCII and is the ONLY positive evidence that a
-      // manufacturer-ID register exists. A successful read proves nothing.
-      // Same failure shape the note above warns about, in the other direction:
-      // a wrong decode that looks like an answer.
+      // LIMIT, stated rather than hidden: this identifies an INA219 that is at
+      // its reset configuration. We never write the config register, so that
+      // holds -- but an INA219 reconfigured by some other master would be
+      // reported UNIDENTIFIED and not read. That is the safe direction to fail:
+      // refusing to read beats reading the wrong thing confidently.
       ina_kind = INA_219_CLASS;
-      id = " -> no TI mfg ID (INA219-class)";
-      // Print what we did get, so a genuinely unknown part stays diagnosable
-      // instead of being silently bucketed as an INA219.
+      ina_addr = addr;
+      id = " -> INA219 (config reads its reset value)";
+      Serial.print("  cfg=0x"); Serial.print(cfg, HEX);
+    } else {
+      // ACKed at an INA address, but is NOT a TI INA and does NOT present the
+      // INA219's config reset value. Do NOT guess.
+      //
+      // The previous revision bucketed everything here as INA219-class, which
+      // is a negative inference: ANY unrelated I2C peripheral sitting at
+      // 0x40-0x4F would have been read as a current monitor, and registers
+      // 0x01/0x02 of some other chip decoded as shunt and bus voltage. That
+      // produces confident, entirely fictitious current. Gemini review, #938.
+      ina_kind = INA_NONE;
+      id = " -> UNIDENTIFIED -- not read";
       Serial.print("  raw 0xFE=0x"); Serial.print(mfg_hi, HEX);
       Serial.print(" 0xFF=0x");      Serial.print(die_hi, HEX);
       Serial.print(" 0x3E=0x");      Serial.print(mfg_lo, HEX);
       Serial.print(" 0x3F=0x");      Serial.print(dev_lo, HEX);
+      Serial.print(" 0x00=0x");      Serial.print(cfg, HEX);
     }
     Serial.println(id);
   }
@@ -423,8 +453,13 @@ static uint32_t inaTick() {
   Serial.print("[ina] bus_mv=");
   Serial.print(bus_mv);
   Serial.print(" ma=");
-  if (ma_x10 < 0) { Serial.print('-'); ma_x10 = -ma_x10; }
-  Serial.print(ma_x10 / 10); Serial.print('.'); Serial.print(ma_x10 % 10);
+  // Negate into an UNSIGNED accumulator. `x = -x` is undefined for INT32_MIN --
+  // its magnitude has no int32_t representation. Unreachable with a 16-bit
+  // shunt register (range is +/-32767 tenths), but the pattern is wrong and
+  // costs nothing to write correctly. Gemini review, #938.
+  uint32_t mag = (ma_x10 < 0) ? (uint32_t)-(int64_t)ma_x10 : (uint32_t)ma_x10;
+  if (ma_x10 < 0) Serial.print('-');
+  Serial.print(mag / 10); Serial.print('.'); Serial.print(mag % 10);
   Serial.print("  shunt_uv=");
   Serial.print(shunt_uv);
   // Raw values printed alongside the decode for the same reason the gauge does
@@ -480,7 +515,7 @@ static void gaugeTick(uint32_t now) {
   if (bus_mv > 0 && mv > 0) {
     Serial.print("[xchk] gauge_mv-bus_mv=");
     Serial.print((int32_t)mv - (int32_t)bus_mv);
-    Serial.println(" mV  (expect ~ I*0.1ohm; 10 mV per 100 mA)");
+    Serial.println(" mV  (expect ~ shunt_uv/1000; two measurements of one drop)");
   }
 }
 #endif  // SNIFF_GAUGE
@@ -553,6 +588,14 @@ void setup() {
   Serial.begin(115200);
   while (!Serial && millis() < 3000) { }
 
+  // A STALLED I2C DEVICE MUST NOT COST CAPTURED BYTES. The loop drains the
+  // UART before servicing I2C, but that alone is not protection: the default
+  // 256-byte RX buffer fills in ~22 ms at 115200, while a Wire timeout on a
+  // wedged device is 100 ms or more. The relay would return to find the buffer
+  // overflowed and the bytes this instrument exists to capture already gone,
+  // silently. Enlarging the buffer converts that into a survivable stall.
+  // Must be called BEFORE begin(). Gemini review, #938.
+  Serial1.setRxBufferSize(4096);
   Serial1.begin(SNIFF_BAUD, SERIAL_8N1, PIN_SNIFF_RX, -1);   // RX only -- TX is -1
 
   Serial.println();
