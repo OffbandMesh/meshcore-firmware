@@ -3,27 +3,24 @@
 #include <Arduino.h>
 #include <Wire.h>
 
+#include "../../src/helpers/diagnostics/CrashLog.h"   // #857 boot-voltage self-report
+
 #ifdef NRF52_POWER_MANAGEMENT
-// #953: this exists to turn ON the RESETREAS capture and turn NOTHING else on.
+// #953 enabled NRF52_POWER_MANAGEMENT here for the RESETREAS capture; #857 then
+// established the battery path well enough to arm boot protection too.
 //
-// voltage_bootlock = 0 DISABLES boot protection (NRF52Board.h:22). That is not a
-// placeholder -- it is required by the standing decision in variant.h: RC52's
-// battery polarity is schematic-derived and NOT measured, and #602 showed an
-// unverified reading can deep-sleep a fully charged board before USB init. So
-// nothing here may gate boot on a voltage.
-//
-// With bootlock 0, checkBootVoltage() runs initPowerMgr() -- which is the whole
-// point, since that is where the reset reason captured pre-SystemInit is read --
-// then returns at the `== 0` check, before initiateShutdown() or any LPCOMP
-// configuration can be reached. The LPCOMP fields are consumed only by
-// configureVoltageWake(), which sits behind that same unreachable path.
-//
-// #857 fills in a real threshold once the battery path is measured.
+// checkBootVoltage() does two things: initPowerMgr(), which reads the reset
+// reason captured pre-SystemInit, and the low-voltage boot gate. Both are wanted
+// now. The gate was held off until the reading was corroborated -- see variant.h
+// for the three-way comparison (RC52 4130 mV vs MAX17048 4147 vs INA219 4144,
+// -0.36%) that settled it.
 const PowerMgtConfig power_config = {
+  // Unused on this board: only configureVoltageWake() reads them, and that is
+  // reached only from a board-specific initiateShutdown() override, which RC52
+  // does not have. See variant.h -- the board will not self-wake on recovery.
   .lpcomp_ain_channel = 0,
   .lpcomp_refsel      = 0,
-  .voltage_bootlock   = 0,   // 0 = boot protection DISABLED. See above; do not
-                             // set this until #857 has measured the divider.
+  .voltage_bootlock   = PWRMGT_VOLTAGE_BOOTLOCK,
 };
 #endif
 
@@ -36,6 +33,27 @@ void RC52Board::begin() {
   // is what puts a real cause in the "[boot] <role> up; reset=..." line the
   // mirror UART now carries (#953).
   checkBootVoltage(&power_config);
+
+  // #857: self-report the boot reading on the mirror UART, next to the reset
+  // reason. This is the CROSS-CHECK, made permanent instead of one-shot.
+  //
+  // Why here and not in shared code: getBattMilliVolts() is an ADC read, and
+  // adding one to crashLogStandardInit would change boot behaviour for every
+  // board in the fleet to answer a question about this one.
+  //
+  // What it is for: #602's failure was GROSS -- a fully charged board reading as
+  // dead, divider disabled or inverted -- not a percent-level error. Printing the
+  // value every boot, on the wire the bench already reads, lets it be compared
+  // against the MAX17048 + INA219 on the same battery (which agree to within
+  // 0-2 mV) without a CLI query, a monitor, or a host. If it lands within tens of
+  // mV, the path is proven and a bootlock threshold is safe to set.
+  //
+  // ADC_MULTIPLIER is 4.90, nominal from R17/R18 in the vendor schematic. At 1%
+  // parts that spans ~4.82-4.98, and the nRF52 internal 3.0V reference adds ~2%,
+  // so expect agreement to roughly +/-3.5% (~+/-145 mV at 4.15 V) -- NOT exact
+  // agreement. Anything inside that band confirms the path.
+  offband::crashLogf("[boot] vbat=%u mV (multiplier %.2f, nominal)",
+                     (unsigned)getBattMilliVolts(), (double)ADC_MULTIPLIER);
 #endif
 
   Wire.begin();
