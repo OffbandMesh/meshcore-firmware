@@ -145,6 +145,37 @@
   #define PIN_GAUGE_SCL A3
 #endif
 
+// INA219 REGISTERS -- #938. [verified: TI INA219 datasheet (sbos448), fetched
+// 2026-08-22]
+//
+//   0x00 Config (reset 0x399F)   0x01 Shunt V   0x02 Bus V
+//   0x03 Power                   0x04 Current   0x05 Calibration
+//
+// !! ONE DECODE DETAIL THE DATASHEET SUMMARY GOT WRONG, AND WHY WE DO NOT
+// !! FOLLOW IT. A summary of the datasheet reported the SHUNT register as
+// !! "bits 15-3", the same shift as the bus register. That cannot be right at
+// !! the default configuration, and the config register proves it:
+// !!
+// !!     reset value 0x399F = 0011 1001 1001 1111
+// !!                            ^^  PG = 0b11 -> PGA /8 -> +/-320 mV range
+// !!
+// !! At 10 uV per LSB, +/-320 mV needs +/-32000 counts. A 13-bit field (bits
+// !! 15-3) holds only +/-4096 counts = +/-40.96 mV, which is the PGA /1 range,
+// !! not the default. So the shunt register is a FULL signed 16-bit value and
+// !! must NOT be shifted. Computed from the mechanism rather than read off the
+// !! annotation -- shifting it would have quietly reported 1/8th of the real
+// !! current, a plausible number that no sanity check would catch.
+//
+// The BUS register genuinely is bits 15-3, with CNVR at bit 1 and OVF at bit 0.
+#define INA219_REG_SHUNT   0x01
+#define INA219_REG_BUS     0x02
+
+// Bench shunt, owner-confirmed from the silkscreen: R100 = 0.100 ohm.
+// Shunt LSB 10 uV / 0.1 ohm  ->  exactly 100 uA per count. Range +/-3.2 A.
+// Blind to single-digit-uA sleep current; that is a property of the shunt, not
+// the chip, and no averaging setting recovers it.
+#define INA219_SHUNT_MILLIOHM  100
+
 #define MAX1704X_ADDR    0x36
 #define MAX1704X_VCELL   0x02
 #define MAX1704X_SOC     0x04
@@ -361,6 +392,51 @@ static void inaProbe() {
   if (!any) Serial.println("=== no INA found on Wire1 (swept 0x40..0x4F)");
 }
 
+// Read the INA219 and print current + bus voltage. Returns the bus millivolts
+// (0 if unread) so the caller can cross-check it against the fuel gauge.
+//
+// NO CALIBRATION REGISTER IS WRITTEN, deliberately. The calibration register
+// exists so the chip can do the I = V/R division for you, and getting its value
+// wrong is the classic INA219 failure -- current and power silently read ZERO
+// until it is right. Reading the raw shunt voltage and dividing on the host
+// needs no magic constant and cannot be half-configured.
+static uint32_t inaTick() {
+  if (ina_kind != INA_219_CLASS || ina_addr == 0) return 0;
+
+  uint16_t rs = 0, rb = 0;
+  if (!gaugeRead16At(ina_addr, INA219_REG_SHUNT, &rs) ||
+      !gaugeRead16At(ina_addr, INA219_REG_BUS,   &rb)) {
+    Serial.println("[ina] read FAILED");
+    return 0;
+  }
+
+  // Shunt: full signed 16-bit, 10 uV/LSB (see the register block above).
+  int32_t shunt_uv = (int32_t)(int16_t)rs * 10;
+  // I(uA) = V(uV) / R(ohm) = shunt_uv * 1000 / milliohm
+  int32_t ua = (shunt_uv * 1000L) / (int32_t)INA219_SHUNT_MILLIOHM;
+
+  // Bus: bits 15-3, 4 mV/LSB. Bit 1 CNVR, bit 0 OVF.
+  uint32_t bus_mv = (uint32_t)(rb >> 3) * 4UL;
+  bool ovf = (rb & 0x0001) != 0;
+
+  int32_t ma_x10 = ua / 100;          // tenths of a mA
+  Serial.print("[ina] bus_mv=");
+  Serial.print(bus_mv);
+  Serial.print(" ma=");
+  if (ma_x10 < 0) { Serial.print('-'); ma_x10 = -ma_x10; }
+  Serial.print(ma_x10 / 10); Serial.print('.'); Serial.print(ma_x10 % 10);
+  Serial.print("  shunt_uv=");
+  Serial.print(shunt_uv);
+  // Raw values printed alongside the decode for the same reason the gauge does
+  // it: if the decode is ever wrong, the raw number is what lets a captured log
+  // be corrected after the fact instead of being silently wrong for hours.
+  Serial.print("  raw_shunt=0x"); Serial.print(rs, HEX);
+  Serial.print(" raw_bus=0x");    Serial.print(rb, HEX);
+  if (ovf) Serial.print("  !OVF");
+  Serial.println();
+  return bus_mv;
+}
+
 static void gaugeTick(uint32_t now) {
   if (!gauge_present || (int32_t)(now - gauge_next) < 0) return;
   gauge_next = now + GAUGE_PERIOD_MS;
@@ -389,6 +465,23 @@ static void gaugeTick(uint32_t now) {
   Serial.print(vcell, HEX);
   Serial.print(" raw_soc=0x");
   Serial.println(soc, HEX);
+
+  // TWO INSTRUMENTS, ONE TRUTH. The gauge senses UPSTREAM of the shunt and the
+  // INA senses at VIN- (load side), so the difference between them IS the shunt
+  // drop and must agree with the current we just computed:
+  //
+  //     gauge_mv - bus_mv  ~=  I * R
+  //
+  // Printed rather than asserted. If it stops agreeing, one of the gauge, the
+  // shunt value or the decode is wrong, and this line says so before a wrong
+  // number gets baked into a runtime figure (#833's "both instruments must
+  // agree" rule, now with a second independent quantity behind it).
+  uint32_t bus_mv = inaTick();
+  if (bus_mv > 0 && mv > 0) {
+    Serial.print("[xchk] gauge_mv-bus_mv=");
+    Serial.print((int32_t)mv - (int32_t)bus_mv);
+    Serial.println(" mV  (expect ~ I*0.1ohm; 10 mV per 100 mA)");
+  }
 }
 #endif  // SNIFF_GAUGE
 
