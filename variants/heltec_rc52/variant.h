@@ -112,6 +112,14 @@
 // #857 confirms it on this board, no PWRMGT_VOLTAGE_BOOTLOCK / LPCOMP / SafeBoot
 // voltage threshold is defined, so nothing can gate boot on an unverified reading.
 // Adding them is #857's job, after measurement -- not this scaffold's.
+//
+// #953 UPDATE: NRF52_POWER_MANAGEMENT IS now defined for this board, and this
+// paragraph still holds unchanged. That flag gates two unrelated things: the
+// RESETREAS capture (wanted -- it is why the crash log can name a cause) and
+// boot-voltage gating (NOT wanted yet). RC52Board.cpp sets voltage_bootlock = 0,
+// which disables the gating outright, so checkBootVoltage() returns before it can
+// reach initiateShutdown() or configureVoltageWake(). Still no threshold defined
+// here, still nothing gating boot on an unmeasured reading.
 ////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////////

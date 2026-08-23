@@ -3,8 +3,40 @@
 #include <Arduino.h>
 #include <Wire.h>
 
+#ifdef NRF52_POWER_MANAGEMENT
+// #953: this exists to turn ON the RESETREAS capture and turn NOTHING else on.
+//
+// voltage_bootlock = 0 DISABLES boot protection (NRF52Board.h:22). That is not a
+// placeholder -- it is required by the standing decision in variant.h: RC52's
+// battery polarity is schematic-derived and NOT measured, and #602 showed an
+// unverified reading can deep-sleep a fully charged board before USB init. So
+// nothing here may gate boot on a voltage.
+//
+// With bootlock 0, checkBootVoltage() runs initPowerMgr() -- which is the whole
+// point, since that is where the reset reason captured pre-SystemInit is read --
+// then returns at the `== 0` check, before initiateShutdown() or any LPCOMP
+// configuration can be reached. The LPCOMP fields are consumed only by
+// configureVoltageWake(), which sits behind that same unreachable path.
+//
+// #857 fills in a real threshold once the battery path is measured.
+const PowerMgtConfig power_config = {
+  .lpcomp_ain_channel = 0,
+  .lpcomp_refsel      = 0,
+  .voltage_bootlock   = 0,   // 0 = boot protection DISABLED. See above; do not
+                             // set this until #857 has measured the divider.
+};
+#endif
+
 void RC52Board::begin() {
   NRF52Board::begin();
+
+#ifdef NRF52_POWER_MANAGEMENT
+  // Cannot shut down here: bootlock is 0, so this returns immediately after
+  // initPowerMgr(). Present so RESETREAS reaches getResetReasonString(), which
+  // is what puts a real cause in the "[boot] <role> up; reset=..." line the
+  // mirror UART now carries (#953).
+  checkBootVoltage(&power_config);
+#endif
 
   Wire.begin();
 
