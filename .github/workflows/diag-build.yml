@@ -37,20 +37,19 @@ jobs:
         with:
           fetch-depth: 0   # build.sh reads the commit hash for the version string
 
-      - name: Validate env input
+      - name: Validate env input (charset gate)
         # Gate BEFORE any build. The input reaches build.sh where it forms file
         # paths (cp .pio/build/<env>/... out/<env>-...), so an unvalidated value
-        # is a path-traversal / injection vector. Require a plain pio-env token
-        # AND that it actually exists in platformio.ini (also catches typos, which
-        # would otherwise "succeed" with an empty artifact).
+        # is a path-traversal / injection vector. Charset-only here because pio is
+        # not installed yet; the env-EXISTS check runs after pio + secrets are
+        # available (envs are defined via extra_configs includes, NOT literally in
+        # platformio.ini -- grepping platformio.ini rejected valid envs on the
+        # first dispatch of this workflow, #957).
         env:
           INPUT_ENV: ${{ inputs.env }}
         run: |
           if ! printf '%s' "$INPUT_ENV" | grep -qE '^[A-Za-z0-9_]+$'; then
             echo "::error::Invalid env '$INPUT_ENV' -- must match [A-Za-z0-9_]+"; exit 1
-          fi
-          if ! grep -qE "^\[env:${INPUT_ENV}\]" platformio.ini; then
-            echo "::error::env '$INPUT_ENV' not found in platformio.ini"; exit 1
           fi
 
       - name: Setup Build Environment
@@ -60,6 +59,18 @@ jobs:
         run: |
           printf '[node_secrets]\nadmin_password = ci-dummy\n[wifi_secrets]\nssid = ci-dummy\npassword = ci-dummy\n[mqtt_secrets]\nhost = mqtt.example.com\nport = 1883\nuser = ci-dummy\npassword = ci-dummy\n[ota_secrets]\ntrigger_secret = ci-dummy\n[cmdrelay]\nurl = http://cmdrelay.example.com/cmd\n' > "$RUNNER_TEMP/ci-secrets.ini"
           echo "PIO_SECRETS_FILE=$RUNNER_TEMP/ci-secrets.ini" >> "$GITHUB_ENV"
+
+      - name: Validate env exists
+        # Now that pio + the secrets stub are available, confirm the env is real.
+        # `pio project config` parses the FULL config (including extra_configs) and
+        # lists each env as "env:<name>". INPUT_ENV is charset-validated above, so
+        # it is safe in the grep. Catches typos with a clear message before build.
+        env:
+          INPUT_ENV: ${{ inputs.env }}
+        run: |
+          if ! pio project config 2>/dev/null | grep -qxE "env:${INPUT_ENV}"; then
+            echo "::error::env '$INPUT_ENV' is not a known PlatformIO env"; exit 1
+          fi
 
       - name: Build diagnostic firmware
         env:
