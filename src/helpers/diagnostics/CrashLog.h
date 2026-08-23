@@ -1,12 +1,32 @@
 // src/helpers/diagnostics/CrashLog.h
 //
-// Panic-survival ring buffer using RTC_NOINIT memory on ESP32-S3.
+// Panic-survival ring buffer in retained memory. The backing store is
+// platform-selected -- see OFFBAND_RETAINED below.
 //
-// The buffer lives in RTC slow memory (RTC_NOINIT_ATTR), which is
-// preserved across soft resets (watchdog, panic, ESP.restart(), brown-
-// out) but cleared on hard power-on/deep-sleep wakeup. A magic number
-// in the header distinguishes "this survived a reset" (dump it to
-// serial as a post-mortem) from "fresh power-on" (initialize empty).
+// WHAT SURVIVES WHAT. This differs by platform and the difference matters
+// when you are reading a log that is not there:
+//
+//   ESP32  RTC slow memory (RTC_NOINIT_ATTR). Survives soft reset, watchdog,
+//          panic, ESP.restart() AND brown-out. Cleared on hard power-on and
+//          on deep-sleep wake.
+//   nRF52  .noinit in MAIN SRAM (#361). Survives soft reset and watchdog
+//          reset. Does NOT survive a brown-out or any power interruption --
+//          the supply collapse that caused the reset is what loses the RAM.
+//
+// This block used to state brown-out survival unconditionally, which was the
+// ESP32 description applied to both platforms and contradicted the nRF52 note
+// on OFFBAND_RETAINED lower in this same file. Corrected 2026-08-23.
+//
+// THE FAILURE THAT WRONG COMMENT CAUSES, since it is not obvious: after a
+// brown-out an nRF52 node prints "fresh boot; no previous-boot log to
+// recover." Believing the log should have survived, you read that as NOTHING
+// WAS LOGGED and rule out the crash you are looking for. It actually means
+// THE LOG WAS ERASED. On nRF52, that message plus a reset reason of
+// "Cold Boot" is itself the signature of a power event, because RESETREAS has
+// no brown-out bit and reads zero.
+//
+// A magic number in the header distinguishes "this survived a reset" (dump it
+// to serial as a post-mortem) from "fresh power-on" (initialize empty).
 //
 // crashLogf(...) writes to both the ring buffer AND Serial in one
 // call -- so whatever's the last thing written before the chip resets
@@ -15,7 +35,8 @@
 // host because the reset is hardware-level and instantaneous.
 //
 // Capacity: 4 KB total = ~50 short log lines (avg 80 char/line).
-// Storage cost: 4 KB of RTC slow memory (out of ~8 KB total on S3).
+// Storage cost: 4 KB of retained memory -- RTC slow memory on ESP32 (out of
+//   ~8 KB total on S3), main SRAM on nRF52 (~1.7% of app RAM).
 // Performance: each write takes a critical section + memcpy + Serial
 //   write; ~5-15 microseconds for a typical line.
 //
