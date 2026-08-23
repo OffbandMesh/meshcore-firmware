@@ -168,11 +168,15 @@ TEST(BleFrameSizing, TinyMtuCannotUnderflow) {
 // (esp32/nrf52 SerialBLEInterface); serial and TCP use the BaseSerialInterface
 // default maxFrameSize() -> MAX_FRAME_SIZE and never reach this function, so they
 // are unaffected structurally, not by anything this function returns.
-TEST(BleFrameSizing, GenerousMtuStillRespectsTheHardCeiling) {
-  const size_t ceiling = kMaxFrame - ATT_NOTIFY_HEADER;
-  EXPECT_EQ(deliverableFrame(kMaxFrame + ATT_NOTIFY_HEADER, kMaxFrame), ceiling);
-  EXPECT_EQ(deliverableFrame(65535, kMaxFrame), ceiling);
-  EXPECT_EQ(deliverableFrame(kNimbleDefaultMtu, kMaxFrame), ceiling);
+TEST(BleFrameSizing, GenerousMtuIsCappedByTheFrameBuffer) {
+  // A link that can carry more cannot be exploited: the frame buffer is
+  // uint8_t buf[MAX_FRAME_SIZE]. This is why an nRF52 at MTU 247 (244 deliverable)
+  // still sends 176-byte frames. Was GenerousMtuStillRespectsTheHardCeiling and
+  // expected kMaxFrame-3; the hard ceiling was reverted (#711) once the real
+  // defect turned out to be MultiSerialInterface never delegating at all.
+  EXPECT_EQ(deliverableFrame(kMaxFrame + ATT_NOTIFY_HEADER, kMaxFrame), kMaxFrame);
+  EXPECT_EQ(deliverableFrame(65535, kMaxFrame), kMaxFrame);
+  EXPECT_EQ(deliverableFrame(kNimbleDefaultMtu, kMaxFrame), kMaxFrame);
 }
 
 // Guards the local mirror of MAX_FRAME_SIZE: if the real constant moves, this suite's
@@ -182,65 +186,72 @@ TEST(BleFrameSizing, FrameBufferConstantUnchanged) {
       << "MAX_FRAME_SIZE changed; revisit the expected values in this suite";
 }
 
-// --- #711 RE-FIX: the ceiling must not depend on any reported MTU ------------
+// --- #711: the invariant, corrected ------------------------------------------
 //
-// beta4 STILL clipped 3 B off every full frame on a Heltec V4.3, with this fix in.
-// Tester schill: 12751 of 12973 bytes in 75 chunks -> shortfall 222 = 3 x 74.
-// 12973 needs 76 chunks at a 171-byte payload and 75 at 174, so the device emitted
-// 174 -- the PRE-fix size -- meaning maxFrameSize() returned MAX_FRAME_SIZE.
+// Three tester reports, all ESP32, all the same shape:
+//   madmax_2069   8461 of  8608 in 50 chunks  (147 = 3 x 49)
+//   schill       12751 of 12973 in 75 chunks  (222 = 3 x 74)
+//   hv4-bench-1  14246 of 14495 in 84 chunks  (249 = 3 x 83)
 //
-// Cause: NimBLEDevice::getMTU() returns ble_att_preferred_mtu_val, whose NimBLE
-// DEFAULT is 256. Every test below pinned `local` to kLocalMtu (176), so the suite
-// never exercised the one value that breaks it. A test that cannot fail for the
-// real input is not a guard -- that is the whole lesson of #712.
+// The bench client log settled the cause: the link negotiated MTU 176 and was
+// REPORTED accurately as 176. begin() pins our preferred MTU to MAX_FRAME_SIZE,
+// so an ESP32 link can never exceed 176 -> 173 deliverable. The firmware still
+// emitted 174-byte payloads because MultiSerialInterface never overrode
+// maxFrameSize() and returned the buffer size instead (see test_multiserial).
+//
+// An earlier revision added a hard ceiling of max_frame - 3 here, on the theory
+// that a stack might over-report its MTU. That theory was WRONG and is reverted:
+// the MTU was honest, and the ceiling cost 3 bytes/frame on nRF52 (MTU 247) for
+// no benefit. min(link, max_frame) is correct on both.
 
-// The value NimBLE hands back when our setMTU() never took effect.
+constexpr uint16_t kEsp32NegotiatedMtu = 176;   // pinned by begin(); cannot exceed
 
-// The invariant, stated independently of any MTU the stack reports: a frame must
-// never exceed what a link at our OWN configured preference can deliver. begin()
-// pins that preference to MAX_FRAME_SIZE, so the hard ceiling is MAX_FRAME_SIZE - 3.
-constexpr size_t kHardCeiling = kMaxFrame - 3;
-
-TEST(BleFrameSizing, RegressionSevenElevenB_UntrustedLocalMustNotRaiseTheCeiling) {
-  // Exactly the shipped-beta4 situation: peer says 517, local reads NimBLE's default.
-  const uint16_t effective = effectiveMtu(517, kNimbleDefaultMtu);
-  const size_t deliverable = deliverableFrame(effective, kMaxFrame);
-
-  EXPECT_LE(deliverable, kHardCeiling)
-      << "local=" << kNimbleDefaultMtu << " (NimBLE default, i.e. our setMTU did not "
-         "take effect) must not license a frame the link will clip";
-
-  const size_t payload = deliverable > 2 ? deliverable - 2 : 0;
-  EXPECT_EQ(payload, 171u) << "chunk payload must stay 171, not the pre-fix 174";
+// THE REGRESSION. On the link every field report was taken on, the payload must
+// be 171. 174 is what shipped and what clipped.
+TEST(BleFrameSizing, RegressionSevenEleven_Esp32LinkYields171NotThePreFix174) {
+  const size_t deliverable =
+      deliverableFrame(effectiveMtu(kEsp32NegotiatedMtu, kLocalMtu), kMaxFrame);
+  EXPECT_EQ(deliverable, 173u) << "MTU 176 delivers MTU-3";
+  EXPECT_EQ(deliverable > 2 ? deliverable - 2 : 0, 171u)
+      << "caplog CHUNK payload; 174 is the pre-fix size that lost 3 B per full frame";
 }
 
-// The field arithmetic, end to end. At the correct cap schill's buffer needs 76
-// chunks and loses nothing; at the broken cap it takes 75 and loses exactly 222.
-TEST(BleFrameSizing, RegressionSevenElevenB_SchillCaptureArithmetic) {
-  constexpr size_t kTotal = 12973, kHeader = 2;
+// The field arithmetic at the correct cap: nothing lost, and the chunk COUNT is
+// itself the tell -- 76 rather than the 75 schill saw, 85 rather than 84 on bench.
+TEST(BleFrameSizing, RegressionSevenEleven_FieldCapturesDeliverInFull) {
+  const size_t cap =
+      deliverableFrame(effectiveMtu(kEsp32NegotiatedMtu, kLocalMtu), kMaxFrame) - 2;
+  ASSERT_EQ(cap, 171u);
 
-  const size_t cap = deliverableFrame(effectiveMtu(517, kNimbleDefaultMtu), kMaxFrame) - kHeader;
-  size_t chunks = 0, delivered = 0;
-  for (size_t off = 0; off < kTotal; off += cap, ++chunks) {
-    const size_t n = (kTotal - off) < cap ? (kTotal - off) : cap;
-    ASSERT_LE(kHeader + n, kHardCeiling) << "chunk " << chunks << " would be clipped";
-    delivered += n;
+  struct Case { size_t total; size_t expect_chunks; } cases[] = {
+      {8608, 51}, {12973, 76}, {14495, 85},
+  };
+  for (const auto& c : cases) {
+    size_t chunks = 0, delivered = 0;
+    for (size_t off = 0; off < c.total; off += cap, ++chunks) {
+      const size_t n = (c.total - off) < cap ? (c.total - off) : cap;
+      ASSERT_LE(2 + n, 173u) << "chunk " << chunks << " would be clipped on the wire";
+      delivered += n;
+    }
+    EXPECT_EQ(delivered, c.total) << "total " << c.total;
+    EXPECT_EQ(chunks, c.expect_chunks) << "total " << c.total;
   }
-  EXPECT_EQ(delivered, kTotal);
-  EXPECT_EQ(chunks, 76u) << "76 chunks at the correct cap; the field saw 75 at the broken one";
 }
 
-// The general form: NO pair of (reported, local) may produce a frame above the
-// hard ceiling. This is the assertion that would have caught beta4 before release.
-TEST(BleFrameSizing, RegressionSevenElevenB_NoReportedLocalPairExceedsTheCeiling) {
+// The general invariant: for ANY (reported, local), the emitted frame must fit
+// both the link and the buffer. Sweeping `local` is what the original suite
+// missed -- it pinned local at 176 and went green on a fix that did not work.
+TEST(BleFrameSizing, NoReportedLocalPairExceedsLinkOrBuffer) {
   const uint16_t locals[] = {0, 1, 22, 23, 100, 169, 176, 179, 185, 247, 256, 512, 517, 65535};
   for (uint16_t reported : kReportedMtus) {
     for (uint16_t local : locals) {
-      const size_t deliverable = deliverableFrame(effectiveMtu(reported, local), kMaxFrame);
-      EXPECT_LE(deliverable, kHardCeiling)
-          << "reported=" << reported << " local=" << local
-          << " produced a frame of " << deliverable << " B, above the "
-          << kHardCeiling << " B a MAX_FRAME_SIZE-preferred link delivers";
+      const uint16_t eff = effectiveMtu(reported, local);
+      const size_t deliverable = deliverableFrame(eff, kMaxFrame);
+      const size_t link = eff > ATT_NOTIFY_HEADER ? (size_t)(eff - ATT_NOTIFY_HEADER) : 0;
+      EXPECT_LE(deliverable, link)
+          << "reported=" << reported << " local=" << local << ": frame would be clipped";
+      EXPECT_LE(deliverable, kMaxFrame)
+          << "reported=" << reported << " local=" << local << ": frame would overrun the buffer";
     }
   }
 }
