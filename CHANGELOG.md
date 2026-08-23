@@ -16,6 +16,34 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+## [1.5.0-beta5] - 2026-08-22
+
+### Fixed
+- **BLE transfers actually stop losing 3 bytes per frame now — the beta2–beta4 fix never
+  took effect** ([#711](https://github.com/OffbandMesh/meshcore-firmware/issues/711),
+  [PR #939](https://github.com/OffbandMesh/meshcore-firmware/pull/939)): a tester on beta4
+  still saw the exact clipping signature (222 bytes short = 3 × 74 full frames), which
+  exposed the real defect. The 1.17.0 base update wrapped the companion's serial path in
+  `MultiSerialInterface`, which overrides nine interface methods but not `maxFrameSize()` —
+  so the MTU-aware BLE frame sizing was **never consulted on the companion path at all**,
+  on any board, and every earlier fix changed code that wasn't reached. `maxFrameSize()`
+  now delegates to the enabled interfaces, using the same predicate `writeFrame()` uses.
+  **Bench-verified on a Heltec V4.3:** a near-full 16 KB caplog downloads complete in 96
+  chunks, which mathematically proves 171-byte payloads (the broken sizing gives 95).
+  Covers all three field reports. Note the wider blast radius: every chunked BLE path on
+  ESP32 — config stream, observer views, block list, GPS — shared the same sizing and was
+  silently clipping; all are corrected by this, though only the caplog path has been
+  re-tested on hardware. nRF52 boards were never affected (their frames fit the link).
+- A `setMTU()` refusal is now checked and logged instead of silently discarded
+  (same PR; previously inferable only from a truncated download).
+
+### Known issues shipping in this beta
+- **The serial-framing fix ([#718](https://github.com/OffbandMesh/meshcore-firmware/issues/718))
+  is still unverified on hardware** — merged in beta2, test-pinned, awaiting a bench capture.
+  If you see corrupted serial captures, a report either way helps.
+- **RC32 companion boots dark after RST** ([#702](https://github.com/OffbandMesh/meshcore-firmware/issues/702)) —
+  power-cycle instead; repeater role unaffected.
+
 ## [1.5.0-beta4] - 2026-08-20
 
 ### Changed
