@@ -24,6 +24,36 @@ const PowerMgtConfig power_config = {
 };
 #endif
 
+#ifdef NRF52_POWER_MANAGEMENT
+// #857: the ONLY practical wake source on this board.
+//
+// The base NRF52Board::initiateShutdown() goes straight to SYSTEMOFF with no
+// wake armed at all, which leaves a boot-locked board dead until someone finds
+// the RST pin. This adds USB-attach wake and nothing else.
+//
+// WHY NOT LPCOMP / cell-recovery wake, which is what the other nRF52 boards use:
+// it needs the battery voltage present at an LPCOMP pin while the board is off.
+// P0.31 is AIN7 so the pin is capable, but RC52's divider is FET-GATED --
+// [verified: rc52.pdf, 2026-08-23] VBAT -> Q3 (AO3401A, P-ch) -> R17 390K ->
+// ADC_IN -> R18 100K -> GND, with Q3's gate held at VBAT by R13 (10K) and pulled
+// down by Q2 (S9013) whose base is driven through R15 (1K).
+//
+// Holding that divider connected through SYSTEMOFF means holding Q2 on, which
+// costs roughly (3.3 - 0.7) / 1K = 2.6 mA CONTINUOUSLY. A board that shut down
+// to protect a depleted cell would then drain it at 2.6 mA while "off" -- faster
+// than it could plausibly recover. Self-defeating, so it is not armed.
+//
+// T096 can afford LPCOMP because its divider has no gate at all and simply costs
+// ~8 uA all the time. That is a hardware difference, not a firmware one.
+//
+// USB wake costs nothing standing. Exiting SYSTEMOFF is a reset, so plugging in
+// restarts the node -- and since #953 the boot line names the reason it woke.
+void RC52Board::initiateShutdown(uint8_t reason) {
+  configureUsbWake();
+  enterSystemOff(reason);
+}
+#endif
+
 void RC52Board::begin() {
   NRF52Board::begin();
 
