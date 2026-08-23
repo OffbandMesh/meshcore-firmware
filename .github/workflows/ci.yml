@@ -270,7 +270,6 @@ jobs:
           - heltec_rc52_without_display_companion_radio_ble_diag
           - heltec_rc52_without_display_companion_radio_usb_diag
           - heltec_rc52_without_display_room_server_diag
-          - heltec_rc52_without_display_sensor_diag
     steps:
       - uses: actions/checkout@v5
 
