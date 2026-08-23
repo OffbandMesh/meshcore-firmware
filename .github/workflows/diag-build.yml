@@ -1,0 +1,90 @@
+name: Diagnostic Build (on-demand)
+
+# Builds a DIAGNOSTIC firmware for ONE env and uploads the .bin(s) as a run
+# artifact -- NO tag, NO release. This is the sanctioned way to hand a one-off
+# diagnostic image to a tester (see #957/#956) without cutting a release.
+#
+# The diagnostic triad is injected via PLATFORMIO_BUILD_FLAGS, matching the
+# standing diag surface (owner directive 2026-08-22):
+#   -DOFFBAND_FORCE_CAPLOG   caplog pinned ON (serial/mesh log capture)
+#   -DOFFBAND_BOOT_BEACON    raw-UART0 boot beacon (survives early-boot crashes)
+#   -DOFFBAND_MESHLOG_UART0  mirror the mesh log to UART0
+# The boot beacon + pinned caplog make a diag build self-announce at runtime, and
+# the output filename/artifact carry "-diag" so it is never mistaken for a release.
+# (A version-STRING diag marker is a firmware follow-up -- build.sh stamps the
+# clean base version; tracked separately.)
+#
+# Secrets: a DUMMY secrets stub is generated (same as ci.yml) -- these are
+# diagnostic builds, never releases. WiFi/MQTT are configured on-device at
+# runtime (the observer's _sys channel), and an app-slot reflash preserves the
+# tester's existing NVS config.
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "PlatformIO env to build (e.g. Heltec_v3_companion_observer_wifi)"
+        required: true
+        default: "Heltec_v3_companion_observer_wifi"
+        type: string
+
+jobs:
+  diag-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone Repo
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # build.sh reads the commit hash for the version string
+
+      - name: Validate env input
+        # Gate BEFORE any build. The input reaches build.sh where it forms file
+        # paths (cp .pio/build/<env>/... out/<env>-...), so an unvalidated value
+        # is a path-traversal / injection vector. Require a plain pio-env token
+        # AND that it actually exists in platformio.ini (also catches typos, which
+        # would otherwise "succeed" with an empty artifact).
+        env:
+          INPUT_ENV: ${{ inputs.env }}
+        run: |
+          if ! printf '%s' "$INPUT_ENV" | grep -qE '^[A-Za-z0-9_]+$'; then
+            echo "::error::Invalid env '$INPUT_ENV' -- must match [A-Za-z0-9_]+"; exit 1
+          fi
+          if ! grep -qE "^\[env:${INPUT_ENV}\]" platformio.ini; then
+            echo "::error::env '$INPUT_ENV' not found in platformio.ini"; exit 1
+          fi
+
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-environment
+
+      - name: Generate dummy secrets stub (config interpolation only; never real)
+        run: |
+          printf '[node_secrets]\nadmin_password = ci-dummy\n[wifi_secrets]\nssid = ci-dummy\npassword = ci-dummy\n[mqtt_secrets]\nhost = mqtt.example.com\nport = 1883\nuser = ci-dummy\npassword = ci-dummy\n[ota_secrets]\ntrigger_secret = ci-dummy\n[cmdrelay]\nurl = http://cmdrelay.example.com/cmd\n' > "$RUNNER_TEMP/ci-secrets.ini"
+          echo "PIO_SECRETS_FILE=$RUNNER_TEMP/ci-secrets.ini" >> "$GITHUB_ENV"
+
+      - name: Build diagnostic firmware
+        env:
+          INPUT_ENV: ${{ inputs.env }}
+          # Output-filename marker only; the compiled FIRMWARE_VERSION is derived
+          # inside build.sh from MyMesh.h + the commit hash.
+          FIRMWARE_VERSION: "diag"
+          PLATFORMIO_BUILD_FLAGS: "-DOFFBAND_FORCE_CAPLOG -DOFFBAND_BOOT_BEACON -DOFFBAND_MESHLOG_UART0"
+        run: /usr/bin/env bash build.sh build-firmware "$INPUT_ENV"
+
+      - name: Verify a diagnostic .bin was produced
+        # build.sh masks cp errors (`cp ... 2>/dev/null || true`) and skips the
+        # copy entirely if its platform detection returns empty, so a "green"
+        # build can leave out/ empty. Fail loudly HERE, at the build stage, with a
+        # clear message -- not later at upload.
+        run: |
+          if ! ls out/*.bin >/dev/null 2>&1; then
+            echo "::error::No .bin in out/ after build -- build.sh masks cp errors; check platform detection / build output for '${{ inputs.env }}'"; exit 1
+          fi
+          echo "Diagnostic artifacts produced:"; ls -la out/
+
+      - name: Upload diagnostic artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: "diag-${{ inputs.env }}"
+          path: out/*
+          if-no-files-found: error
+          retention-days: 90
