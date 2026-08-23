@@ -208,15 +208,30 @@ static inline void offband_log_mirror_nrf_init(void) {
   static bool configured = false;     // zero-initialised, so safe pre-ctor
   NRF_UARTE_Type* u = OFFBAND_LOG_MIRROR_NRF_DEV;
 
+  // #887: the test-and-set has to be atomic. Writers reach this from more than
+  // one context -- MeshLog from any task, CrashLog from a BLE callback, the
+  // beacon from a constructor -- so two of them can both see `configured` false
+  // on first use and both run the configuration block. Cheap outer test first,
+  // so the steady-state cost after configuration stays a single read.
+  //
+  // PRIMASK is saved and restored rather than calling interrupts()
+  // unconditionally: this can be entered from a context that ALREADY has
+  // interrupts disabled (a crash path, a critical section), and re-enabling them
+  // there would be worse than the race being fixed.
   if (!configured) {
-    configured = true;
-    u->ENABLE      = 0;               // PSEL/BAUDRATE are only safe to set while disabled
-    u->PSEL.TXD    = g_ADigitalPinMap[OFFBAND_LOG_MIRROR_TX_PIN];
-    u->PSEL.RXD    = 0xFFFFFFFF;      // TX only -- we never listen
-    u->PSEL.CTS    = 0xFFFFFFFF;
-    u->PSEL.RTS    = 0xFFFFFFFF;
-    u->CONFIG      = 0;               // no parity, no flow control
-    u->BAUDRATE    = OFFBAND_LOG_MIRROR_NRF_BAUD;
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    if (!configured) {                // re-test now that we are alone
+      u->ENABLE      = 0;             // PSEL/BAUDRATE are only safe to set while disabled
+      u->PSEL.TXD    = g_ADigitalPinMap[OFFBAND_LOG_MIRROR_TX_PIN];
+      u->PSEL.RXD    = 0xFFFFFFFF;    // TX only -- we never listen
+      u->PSEL.CTS    = 0xFFFFFFFF;
+      u->PSEL.RTS    = 0xFFFFFFFF;
+      u->CONFIG      = 0;             // no parity, no flow control
+      u->BAUDRATE    = OFFBAND_LOG_MIRROR_NRF_BAUD;
+      configured     = true;          // LAST, so nobody skips init mid-configure
+    }
+    __set_PRIMASK(primask);
   }
 
   if (u->ENABLE != 8) u->ENABLE = 8;  // 8 = UARTE enabled
