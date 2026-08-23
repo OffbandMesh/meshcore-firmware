@@ -4,6 +4,21 @@
 
 #include "MyMesh.h"
 #include "helpers/diagnostics/CrashLogStandard.h"   // #472: uniform boot-survival CrashLog
+// #936 -- boot beacon. This role accepted OFFBAND_BOOT_BEACON and emitted
+// NOTHING: the flag compiled, the env was named _diag, and the instrument was
+// dead. The beacon was wired into examples/companion_radio only, so three of
+// the four roles we ship had a diagnostic that looked live and did nothing --
+// worse than none, because it is trusted.
+//
+// OFFBAND_BEACON_DEFINE_CTOR emits the constructor(101) that prints APP:CTOR
+// before every other static ctor. It must appear in exactly ONE translation
+// unit per program; each example is its own program, so this is that unit.
+//
+// Compiles to nothing unless OFFBAND_BOOT_BEACON is set -- OFFBAND_BEACON() is
+// ((void)0) otherwise -- so non-diag builds of this role are byte-identical.
+#define OFFBAND_BEACON_DEFINE_CTOR
+#include "helpers/BootBeacon.h"
+
 
 #ifdef PIN_STATUS_LED
   // Repeater heartbeat status LED (#9). Active-high default;
@@ -1125,17 +1140,33 @@ static unsigned long userBtnDownAt = 0;
 #endif
 
 void setup() {
+  // Earliest point application code runs. If this line appears after a reset
+  // but nothing later does, the fault is in setup(); if it does not appear at
+  // all, the fault is at or before the bootloader's jump to the app.
+  OFFBAND_BEACON("setup:ENTRY -- before Serial.begin");
+  // Serial.begin() software-resets the UART controller and FLUSHES its FIFO, so
+  // anything still in flight is truncated. Drain first. (#740)
+  OFFBAND_BEACON_FLUSH();
   Serial.begin(115200);
   delay(1000);
 
   // SafeBoot: pre-init power guard. Must run before board.begin()
   // (which enables LoRa TCXO, display, sensors). On low battery the
   // MCU sleeps with exponential backoff and does not return.
+  OFFBAND_BEACON("setup:before SafeBoot::checkAndMaybeSleep");
   SafeBoot::checkAndMaybeSleep();
+  OFFBAND_BEACON("setup:post SafeBoot::checkAndMaybeSleep");
 
+  OFFBAND_BEACON("setup:before board.begin");
   board.begin();
+  OFFBAND_BEACON("setup:post board.begin");
 
+  // THE PAIR THAT MATTERS. On RC32 the board dies between these two; on
+  // RC52 both fire, which is how #855 was answered with device evidence
+  // instead of USB inference.
+  OFFBAND_BEACON("setup:before crashLogStandardInit");
   offband::crashLogStandardInit(board, "repeater");   // #472: uniform CrashLog (after board.begin() for reset reason)
+  OFFBAND_BEACON("setup:post crashLogStandardInit");
 
 #ifdef PIN_STATUS_LED
   pinMode(PIN_STATUS_LED, OUTPUT);
@@ -1147,7 +1178,12 @@ void setup() {
   // BEFORE any radio/mesh/WiFi work (those are the things that can crash). If
   // the NVS boot counter has tripped, this call reboots into the other partition
   // and never returns. Otherwise it caches PENDING_VERIFY state for loop().
+  // Partition-switching call: if the NVS boot counter has tripped this
+  // reboots into the other slot and never returns. Without a marker either
+  // side, that reboot is indistinguishable from a crash.
+  OFFBAND_BEACON("setup:before board.beginBootSafety");
   board.beginBootSafety();
+  OFFBAND_BEACON("setup:post board.beginBootSafety");
 
 #ifdef HAS_EXTERNAL_WATCHDOG
   external_watchdog.begin();
