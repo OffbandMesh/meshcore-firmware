@@ -57,6 +57,35 @@
 
 #if defined(OFFBAND_LOG_MIRROR_ACTIVE)
 
+// ---------------------------------------------------------------------------
+// #887: BOUND ON A SEQUENCE OF WRITES, not just on one byte.
+//
+// Each back end's putc() spins on a hardware flag with a large guard counter, so
+// one byte to a dead peripheral is bounded but slow. That was adequate while
+// every caller wrote a line at a time. #953 sends the crash ring -- up to 4080
+// bytes -- down this path, and a per-byte bound multiplied by 4080 is not a
+// bound: the estimated worst case is tens of minutes of stalled boot. That is
+// the failure class #741/#756 exist to prevent.
+//
+// Count CONSECUTIVE timeouts and give up after a few. The counter resets to zero
+// on any successful byte, which is the important half: a transient fault costs a
+// few bytes, not the channel. An earlier attempt latched the transport dead for
+// the whole boot and was rejected for exactly that -- it turned a momentary
+// problem into permanent loss of the wire you depend on when things go wrong.
+//
+// Worst case becomes threshold x guard rather than 4080 x guard.
+#ifndef OFFBAND_LOG_MIRROR_TIMEOUT_GIVEUP
+  #define OFFBAND_LOG_MIRROR_TIMEOUT_GIVEUP 5
+#endif
+static uint8_t offband_log_mirror_timeouts = 0;
+
+// True while the transport is still considered usable. Callers that need to know
+// whether their bytes reached a wire -- rather than merely being handed over --
+// must ask, because putc() cannot report per-byte success.
+static inline bool offband_log_mirror_ok(void) {
+  return offband_log_mirror_timeouts < OFFBAND_LOG_MIRROR_TIMEOUT_GIVEUP;
+}
+
 #include <stdint.h>
 #include <stddef.h>
 
@@ -91,12 +120,20 @@
 #endif
 
 static inline void offband_log_mirror_putc(char c) {
+  if (!offband_log_mirror_ok()) return;         // #887: too many in a row
+
   uint32_t guard = 2000000;   // BOUNDED -- see "THE ONE SAFETY RULE" above
+  bool drained = false;
   while (guard--) {
     uint32_t cnt = (READ_PERI_REG(UART_STATUS_REG(OFFBAND_LOG_MIRROR_ESP32_UART))
                     >> UART_TXFIFO_CNT_S) & UART_TXFIFO_CNT_V;
-    if (cnt <= OFFBAND_LOG_MIRROR_FIFO_HIGHWATER) break;
+    if (cnt <= OFFBAND_LOG_MIRROR_FIFO_HIGHWATER) { drained = true; break; }
   }
+  if (!drained) {                               // FIFO never drained; nothing is
+    offband_log_mirror_timeouts++;              // reading this wire
+    return;                                     // (pre-#887 this wrote anyway)
+  }
+  offband_log_mirror_timeouts = 0;              // a good byte clears the count
   WRITE_PERI_REG(UART_FIFO_REG(OFFBAND_LOG_MIRROR_ESP32_UART), (uint32_t)(uint8_t)c);
 }
 
@@ -238,6 +275,7 @@ static inline void offband_log_mirror_nrf_init(void) {
 }
 
 static inline void offband_log_mirror_putc(char c) {
+  if (!offband_log_mirror_ok()) return;         // #887: too many in a row
   offband_log_mirror_nrf_init();
 
   // EasyDMA source must be in RAM. `static volatile` puts it there and avoids
@@ -256,6 +294,11 @@ static inline void offband_log_mirror_putc(char c) {
   // byte is acceptable; wedging the board under diagnosis is not.
   uint32_t guard = 2000000;
   while (guard-- && u->EVENTS_ENDTX == 0) { }
+  if (u->EVENTS_ENDTX == 0) {                   // #887: never completed
+    offband_log_mirror_timeouts++;
+    return;
+  }
+  offband_log_mirror_timeouts = 0;              // a good byte clears the count
   u->EVENTS_ENDTX = 0;
 
   // Deliberately NO TASKS_STOPTX here. STOPTX completes asynchronously and is
