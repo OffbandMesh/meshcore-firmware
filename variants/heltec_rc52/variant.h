@@ -108,10 +108,50 @@
 // SafeBoot disable the divider, sample it dead, read below SLEEP_MV and deep-sleep
 // before USB init -- a fully charged board presenting as completely dead.
 //
-// RC52's polarity above is schematic-derived (legitimate) but NOT measured. Until
-// #857 confirms it on this board, no PWRMGT_VOLTAGE_BOOTLOCK / LPCOMP / SafeBoot
-// voltage threshold is defined, so nothing can gate boot on an unverified reading.
-// Adding them is #857's job, after measurement -- not this scaffold's.
+// CORRECTED (2026-08-23): this block used to say the POLARITY was unverified.
+// That was wrong, and it muddled two different things. The polarity is settled by
+// circuit topology and needs no bench measurement:
+//   Q3 is an AO3401A P-channel MOSFET with its gate held at VBAT through R16
+//   (100K) -- off by default. Q2 (S9013, NPN) pulls that gate low when ADC_Ctrl
+//   is driven HIGH, which turns Q3 on and connects the divider. HIGH enables.
+//   R17 (390K) over R18 (100K) gives (390+100)/100 = 4.90.
+// [verified: rc52.pdf schematic, 2026-08-23] -- matching ADC_CTRL_ENABLED and
+// ADC_MULTIPLIER above.
+//
+// What is NOT established is the SCALE FACTOR'S ACCURACY. 4.90 is nominal; at 1%
+// parts the true ratio spans ~4.83-4.97, before ADC reference error. A
+// PWRMGT_VOLTAGE_BOOTLOCK threshold compares an ABSOLUTE voltage, so it is the
+// calibration -- not the polarity -- that it depends on. #602 is the cautionary
+// case: a fully charged board deep-sleeping before USB init because the value it
+// compared was wrong.
+//
+// RESOLVED 2026-08-23 -- the threshold IS now set, and the calibration worry was
+// overstated. The cross-check that settled it, all on the same battery within
+// seconds, captured on the mirror UART:
+//
+//     RC52 via this divider   4130 mV
+//     MAX17048 fuel gauge     4147 mV
+//     INA219 bus register     4144 mV
+//
+// -15 mV, or -0.36%, against a predicted worst case of +/-3.5%. Three independent
+// paths inside 17 mV. The nominal 4.90 is good, and #602's failure mode -- a
+// charged board reading as dead -- is ruled out, since that is an error of
+// hundreds of percent, not tenths.
+//
+// PWRMGT_VOLTAGE_BOOTLOCK is 3300, matching the fleet (8 other nRF52 variants;
+// two use 3100). At 0.36% observed error that is ~12 mV of uncertainty on the
+// comparison, against ~800 mV of headroom to a charged cell.
+#define PWRMGT_VOLTAGE_BOOTLOCK 3300   // Won't boot below this voltage (mV)
+
+// PWRMGT_LPCOMP_AIN / REFSEL are deliberately NOT defined, and RC52Board's
+// power_config leaves them 0. They are consumed ONLY by configureVoltageWake(),
+// which is reached only from a board-specific initiateShutdown() override. RC52
+// does not override it, so the base NRF52Board::initiateShutdown() runs and calls
+// enterSystemOff() directly -- LPCOMP is never configured.
+//
+// CONSEQUENCE, stated rather than discovered later: if this board ever boot-locks
+// it stays in SYSTEMOFF until a reset or USB attach. It will NOT self-wake when
+// the cell recovers. Correct for a bench board; revisit for a deployed one.
 //
 // #953 UPDATE: NRF52_POWER_MANAGEMENT IS now defined for this board, and this
 // paragraph still holds unchanged. That flag gates two unrelated things: the
