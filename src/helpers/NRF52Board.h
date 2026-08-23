@@ -48,6 +48,16 @@ protected:
   bool checkBootVoltage(const PowerMgtConfig* config);
   void enterSystemOff(uint8_t reason);
   void configureVoltageWake(uint8_t ain_channel, uint8_t refsel);
+
+  // Arm USB-attach (VBUS) wake from SYSTEMOFF. Extracted from
+  // configureVoltageWake() so a board can have "plug it in to bring it back"
+  // WITHOUT LPCOMP -- which is not free on every board. On one whose battery
+  // divider is FET-gated (RC52), keeping LPCOMP fed through SYSTEMOFF means
+  // holding the gate transistor on, and a board that shut down to protect a
+  // depleted cell would then drain it faster while off than it could recover.
+  // USB wake costs no standing current at all.
+  void configureUsbWake();
+
   virtual void initiateShutdown(uint8_t reason);
 #endif
 

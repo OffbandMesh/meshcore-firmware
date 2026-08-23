@@ -294,7 +294,14 @@ void NRF52Board::configureVoltageWake(uint8_t ain_channel, uint8_t refsel) {
       ain_channel, ref_num);
   }
 
-  // Configure VBUS (USB power) wake alongside LPCOMP
+  // Configure VBUS (USB power) wake alongside LPCOMP. Behaviour unchanged --
+  // this is the same block, extracted so a board can arm USB wake on its own.
+  configureUsbWake();
+}
+
+// Arm USB-attach wake from SYSTEMOFF. Exiting SYSTEMOFF is a reset, so plugging
+// in restarts the node and the new boot reports RESETREAS accordingly.
+void NRF52Board::configureUsbWake() {
   uint8_t sd_enabled = 0;
   sd_softdevice_is_enabled(&sd_enabled);
   if (sd_enabled) {

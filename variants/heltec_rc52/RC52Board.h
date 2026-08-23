@@ -34,4 +34,12 @@ public:
   uint16_t getBattMilliVolts() override;
   const char* getManufacturerName() const override;
   void powerOff() override;
+
+#ifdef NRF52_POWER_MANAGEMENT
+protected:
+  // #857: arm USB-attach wake before SYSTEMOFF -- "plug it in to bring it back".
+  // Deliberately NOT LPCOMP; see the implementation for why that is impractical
+  // on this board's FET-gated divider.
+  void initiateShutdown(uint8_t reason) override;
+#endif
 };
