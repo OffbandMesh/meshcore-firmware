@@ -5,6 +5,12 @@
 
 #include "CrashLog.h"
 
+// #953: the UART mirror. A plain TX wire -- it does not enumerate, does not
+// need a host, and keeps transmitting straight through the reset that makes
+// USB CDC vanish. On a native-USB board it is the ONLY channel that can carry
+// a crash log off the device at the moment the crash log matters.
+#include "../LogMirrorUart.h"
+
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -197,11 +203,27 @@ static bool   s_prev_pending = false;   // a deferred re-dump is still owed
 //   HardwareSerial (UART)    -> true once begun (writing to a pin is free anyway)
 static size_t crashLogSerialWrite(const char* data, size_t len) {
     if (len == 0) return 0;
-    if (!Serial) return 0;                       // no host -> drop, never wait
+
+#if defined(OFFBAND_LOG_MIRROR_ACTIVE)
+    // Unconditional and first. The mirror has no host to be absent, no buffer
+    // to be full, and no enumeration to survive -- which is the whole reason
+    // the bench rig reads this wire instead of USB. Bounded internally: the
+    // FIFO spin in offband_log_mirror_putc has a guard counter, so a dead UART
+    // degrades to silent writes and never to a wedged boot (#741/#756).
+    offband_log_mirror_write(data, len);
+    const size_t mirrored = len;
+#else
+    const size_t mirrored = 0;
+#endif
+
+    // Serial stays best-effort on exactly the old terms: never wait, never
+    // block, drop what does not fit.
+    if (!Serial) return mirrored;
     int room = Serial.availableForWrite();
-    if (room <= 0) return 0;                     // no space -> drop, never wait
+    if (room <= 0) return mirrored;              // no space -> drop, never wait
     if (len > (size_t)room) len = (size_t)room;  // bound to what fits
-    return Serial.write((const uint8_t*)data, len);
+    const size_t wrote = Serial.write((const uint8_t*)data, len);
+    return wrote > mirrored ? wrote : mirrored;  // bytes that reached ANY transport
 }
 
 static void crashLogSerialLine(const char* s) {
@@ -227,7 +249,13 @@ static size_t crashLogEmitRing(size_t count, AtFn at) {
     size_t i = 0;
     size_t written = 0;
     while (i < count) {
+        #if defined(OFFBAND_LOG_MIRROR_ACTIVE)
+        // The mirror always accepts, so the ring is never cut short by a USB
+        // buffer. Serial still gets whatever it can inside crashLogSerialWrite.
+        int room = 64;                              // == sizeof(chunk) below
+        #else
         int room = Serial.availableForWrite();
+        #endif
         if (room <= 0) break;                       // full -> stop, never wait
 
         char chunk[64];
@@ -247,6 +275,18 @@ static size_t crashLogEmitRing(size_t count, AtFn at) {
     return written;
 }
 
+// #953: "is there anywhere for this to go?" -- not "is USB attached?".
+// With the mirror compiled in there is always a live wire, so the deferred
+// dump fires on schedule and lands on the sniffer with no host present at
+// any point. Without it, behaviour is exactly the #952 rule.
+static inline bool crashLogTransportReady() {
+#if defined(OFFBAND_LOG_MIRROR_ACTIVE)
+    return true;
+#else
+    return static_cast<bool>(Serial);
+#endif
+}
+
 // Returns true if any of the previous boot's ring actually reached the wire.
 //
 // #952: `Serial` being connected does NOT mean the transport can accept bytes --
@@ -258,7 +298,8 @@ static bool emitPreviousBootDump(const char* why) {
     if (s_prev_len == 0) { return false; }
     // Cheap early-out: if nobody is listening there is nothing to emit TO, and
     // the whole point is not to spend boot time on it.
-    if (!Serial) return false;
+    // #953: the mirror counts as somewhere to emit TO.
+    if (!crashLogTransportReady()) return false;
 
     char hdr[160];
     crashLogSerialLine("");
@@ -432,7 +473,7 @@ void crashLogClear() {
 // and the dump was gone -- see crashLogShouldEmitDeferred for the full account.
 void crashLogTick(uint32_t now_ms) {
 #ifndef OFFBAND_CRASHLOG_HOST
-    if (crashLogShouldEmitDeferred(s_prev_pending, now_ms, static_cast<bool>(Serial))) {
+    if (crashLogShouldEmitDeferred(s_prev_pending, now_ms, crashLogTransportReady())) {
         // Spend the one-shot flag only if the dump actually went out. A host that
         // is attached but not draining leaves availableForWrite() at 0; clearing
         // regardless would lose the log for the same reason the pre-#952 code did,
