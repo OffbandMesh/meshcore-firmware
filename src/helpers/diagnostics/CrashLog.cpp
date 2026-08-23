@@ -454,6 +454,29 @@ void crashLogDump() {
 #endif
 }
 
+#ifdef OFFBAND_CRASHLOG_HOST
+// TEST-ONLY (#887) -- see CrashLog.h. Never compiled into firmware.
+size_t crashLogTestCapacity() { return kCrashLogDataSize; }
+
+size_t crashLogTestReadRing(char* out, size_t out_cap,
+                            bool* wrapped_out, size_t* write_index_out) {
+    if (wrapped_out)     *wrapped_out     = (s_header.wrapped != 0);
+    if (write_index_out) *write_index_out = s_header.write_index;
+    if (!out || out_cap == 0) return 0;
+
+    // Same logical ordering crashLogBegin() uses to snapshot a surviving ring:
+    // if it wrapped, the oldest byte is at write_index; otherwise at 0.
+    const size_t start = s_header.wrapped ? s_header.write_index : 0;
+    size_t count = s_header.wrapped ? kCrashLogDataSize : s_header.write_index;
+    if (count > out_cap) count = out_cap;
+
+    for (size_t i = 0; i < count; ++i) {
+        out[i] = s_data[(start + i) % kCrashLogDataSize];
+    }
+    return count;
+}
+#endif
+
 void crashLogClear() {
     OFFBAND_CL_ENTER(&s_log_mux);
     s_header.magic       = kCrashLogMagic;
