@@ -55,7 +55,7 @@ Ordered — each item unblocks the next.
 - [ ] **#763 — level-gate the UART0 mirror.**
       It is a synchronous bounded busy-wait at 115200 baud and now runs regardless of capture
       state. With `BLE_DEBUG_LOGGING=1` it blocked inside `setup()`: boot 2 s → 118 s → never
-      completing. Contained today (`OFFBAND_MESHLOG_UART0` is set on one env only) but must be
+      completing. Contained today (`OFFBAND_LOG_MIRROR_UART` is set on one env only) but must be
       fixed before the mirror spreads. Options recorded on the issue: give the mirror its own
       level ceiling, or make it drop rather than wait when the FIFO is full (matching #447).
 

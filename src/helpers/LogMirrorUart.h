@@ -47,6 +47,17 @@
 // bytes; it is never the board.
 
 // ---------------------------------------------------------------------------
+// #888 RENAME TRIPWIRE. OFFBAND_MESHLOG_UART0 became OFFBAND_LOG_MIRROR_UART.
+// A variant left on the old name would still COMPILE and would simply have no
+// mirror -- i.e. the diagnostic that exists to catch silent failures would fail
+// silently. Refuse to build instead. (Gemini review, #944 finding 5.1. The
+// rename itself is complete: no .ini/.h/.cpp in the tree sets the old name.)
+// ---------------------------------------------------------------------------
+#if defined(OFFBAND_MESHLOG_UART0)
+  #error "OFFBAND_MESHLOG_UART0 was renamed to OFFBAND_LOG_MIRROR_UART (#888). Update this env's build_flags -- the old name is inert and would leave this board with no log mirror."
+#endif
+
+// ---------------------------------------------------------------------------
 // Umbrella: the raw writer has two consumers -- the boot beacon
 // (OFFBAND_BOOT_BEACON) and the MeshLog mirror (OFFBAND_LOG_MIRROR_UART).
 // Either one alone pulls in the primitives.
@@ -56,6 +67,30 @@
 #endif
 
 #if defined(OFFBAND_LOG_MIRROR_ACTIVE)
+
+// ---------------------------------------------------------------------------
+// #944 finding 2.1 -- SIZE THE BOUND TO THE WAIT IT IS BOUNDING.
+//
+// Two different waits happen in this file and they are orders of magnitude
+// apart, so one magic number cannot serve both:
+//
+//   * A SINGLE BYTE (nRF52 ENDTX, and the TXSTOPPED handshake). The legitimate
+//     wait is one character time -- 1.04 ms at 9600, the slowest baud in the
+//     table below, and 87 us at the 115200 the bench actually runs.
+//   * A FIFO DRAIN (the ESP32 arm). That legitimately waits for up to a full
+//     128-byte hardware FIFO to clear, ~11 ms at 115200 and ~133 ms at 9600,
+//     so it keeps the large guard on purpose. Shrinking THAT one would drop
+//     bytes on a healthy board, which is the opposite of the fix.
+//
+// The per-byte guard was also 2,000,000 -- roughly 125 ms of spinning at one
+// peripheral read per ~62 ns, i.e. >1000x the wait it bounds. That matters
+// because CrashLog runs from fault and shutdown paths: a stall that long can
+// let a watchdog turn a recoverable fault into a hard reset and lose the dump.
+//
+// 2^17 leaves ~8x headroom over a 9600-baud byte while capping the worst-case
+// stall near 8 ms. Losing a byte is acceptable; wedging the board is not.
+// ---------------------------------------------------------------------------
+#define OFFBAND_LOG_MIRROR_BYTE_GUARD 131072UL
 
 // ---------------------------------------------------------------------------
 // #887: BOUND ON A SEQUENCE OF WRITES, not just on one byte.
@@ -119,6 +154,31 @@ static inline bool offband_log_mirror_ok(void) {
   #define OFFBAND_LOG_MIRROR_FIFO_HIGHWATER 100
 #endif
 
+// ---------------------------------------------------------------------------
+// #977 (#944 gate finding 1.1) -- NOT REENTRANT. READ BEFORE LOGGING FROM AN ISR.
+//
+// Both back ends share one transmit path: the nRF52 arm has a single static
+// byte_buf plus the shared TXD.PTR/TASKS_STARTTX registers, and the ESP32 arm
+// writes the FIFO register with no mutual exclusion. If an interrupt preempts a
+// write in flight and itself logs, it overwrites the byte and restarts the
+// transfer -- the preempted character is lost or garbled.
+//
+// This is NOT reachable in the tree as it stands [verified 2026-08-24, #944]:
+// the only attachInterrupt() in src/ is setPmuFlag() in
+// helpers/esp32/TBeamBoard.cpp, which sets a bool and does not log, and there
+// are no IRAM_ATTR or bare interrupt handlers anywhere. Nothing logs from an
+// ISR. The one live preemption path is a fault handler firing mid-putc, which
+// costs one mirrored character BEFORE the crash dump -- the right trade there.
+//
+// It was left unfixed deliberately. The obvious fix -- wrapping putc in
+// __disable_irq() -- puts the bounded spin loop inside a critical section, so it
+// would trade an unreachable race for a reachable multi-millisecond stall with
+// interrupts off, on the very fault path finding 2.1 above is about.
+//
+// SO: if you ever add an ISR that logs, this stops being theoretical. Fix it
+// then, and fix it by making the wait short enough to sit in a critical section
+// (or by queueing from ISR context) -- not by wrapping the loop as it stands.
+// ---------------------------------------------------------------------------
 static inline void offband_log_mirror_putc(char c) {
   if (!offband_log_mirror_ok()) return;         // #887: too many in a row
 
@@ -274,6 +334,31 @@ static inline void offband_log_mirror_nrf_init(void) {
   if (u->ENABLE != 8) u->ENABLE = 8;  // 8 = UARTE enabled
 }
 
+// ---------------------------------------------------------------------------
+// #977 (#944 gate finding 1.1) -- NOT REENTRANT. READ BEFORE LOGGING FROM AN ISR.
+//
+// Both back ends share one transmit path: the nRF52 arm has a single static
+// byte_buf plus the shared TXD.PTR/TASKS_STARTTX registers, and the ESP32 arm
+// writes the FIFO register with no mutual exclusion. If an interrupt preempts a
+// write in flight and itself logs, it overwrites the byte and restarts the
+// transfer -- the preempted character is lost or garbled.
+//
+// This is NOT reachable in the tree as it stands [verified 2026-08-24, #944]:
+// the only attachInterrupt() in src/ is setPmuFlag() in
+// helpers/esp32/TBeamBoard.cpp, which sets a bool and does not log, and there
+// are no IRAM_ATTR or bare interrupt handlers anywhere. Nothing logs from an
+// ISR. The one live preemption path is a fault handler firing mid-putc, which
+// costs one mirrored character BEFORE the crash dump -- the right trade there.
+//
+// It was left unfixed deliberately. The obvious fix -- wrapping putc in
+// __disable_irq() -- puts the bounded spin loop inside a critical section, so it
+// would trade an unreachable race for a reachable multi-millisecond stall with
+// interrupts off, on the very fault path finding 2.1 above is about.
+//
+// SO: if you ever add an ISR that logs, this stops being theoretical. Fix it
+// then, and fix it by making the wait short enough to sit in a critical section
+// (or by queueing from ISR context) -- not by wrapping the loop as it stands.
+// ---------------------------------------------------------------------------
 static inline void offband_log_mirror_putc(char c) {
   if (!offband_log_mirror_ok()) return;         // #887: too many in a row
   offband_log_mirror_nrf_init();
@@ -292,7 +377,7 @@ static inline void offband_log_mirror_putc(char c) {
   // BOUNDED. If the peripheral was never enabled, or its clock is gated,
   // EVENTS_ENDTX never fires -- so this must not be a bare `while`. Losing a
   // byte is acceptable; wedging the board under diagnosis is not.
-  uint32_t guard = 2000000;
+  uint32_t guard = OFFBAND_LOG_MIRROR_BYTE_GUARD;   // #944 2.1 -- one byte, not 125 ms
   while (guard-- && u->EVENTS_ENDTX == 0) { }
   if (u->EVENTS_ENDTX == 0) {                   // #887: never completed
     offband_log_mirror_timeouts++;
@@ -331,7 +416,7 @@ static inline void offband_log_mirror_flush(void) {
 
   // BOUNDED, same reasoning as putc: a peripheral whose clock is gated will
   // never raise TXSTOPPED, and this must not become the hang it exists to catch.
-  uint32_t guard = 2000000;
+  uint32_t guard = OFFBAND_LOG_MIRROR_BYTE_GUARD;   // #944 2.1 -- short handshake
   while (guard-- && u->EVENTS_TXSTOPPED == 0) { }
   u->EVENTS_TXSTOPPED = 0;
 
