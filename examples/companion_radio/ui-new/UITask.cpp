@@ -32,6 +32,20 @@
   #define OFFBAND_UI_TRACE 1
 #endif
 
+// The heap probe is gated SEPARATELY and is OFF by default, even on builds that
+// have the tracing above. (Gemini review finding 2, #972.)
+//
+// The transition and allocation traces are a handful of crashLogf() calls. The
+// probe is a different class of thing: it calls malloc in a loop on the boot
+// path. Folding it into OFFBAND_UI_TRACE would drag that cost onto every
+// RadioCore _diag build to answer a question almost none of them are asking.
+//
+// Turn it on deliberately, for a board you are actively investigating:
+//   -D OFFBAND_UI_TRACE_HEAP
+#if defined(OFFBAND_UI_TRACE) && defined(OFFBAND_UI_TRACE_HEAP)
+  #define OFFBAND_UI_HEAP_PROBE 1
+#endif
+
 #ifdef OFFBAND_UI_TRACE
   #include <helpers/diagnostics/CrashLog.h>
 #endif
@@ -669,23 +683,58 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 
   // #856: how much did they actually need, and how much was there?
   //
-  // sizeof() is the exact object size. The second figure is the LARGEST
-  // CONTIGUOUS BLOCK still allocatable, probed by walking malloc down until one
-  // succeeds and immediately freeing it -- that, not total free bytes, is what
-  // `new HomeScreen` has to find. Freeing 56 KB of back buffer was known to be
-  // sufficient; this says what is actually REQUIRED, so the buffer can be sized
-  // on evidence instead of on a guess.
+  // sizeof() is exact and costs nothing, so it is always logged. The heap probe
+  // below is opt-in -- see OFFBAND_UI_TRACE_HEAP above.
+  offband::crashLogf("[ui] sizeof: splash=%u home=%u msg=%u",
+                     (unsigned)sizeof(SplashScreen), (unsigned)sizeof(HomeScreen),
+                     (unsigned)sizeof(MsgPreviewScreen));
+
+#ifdef OFFBAND_UI_HEAP_PROBE
+  // LARGEST CONTIGUOUS BLOCK still allocatable -- that, not total free bytes, is
+  // what `new HomeScreen` has to find.
+  //
+  // BINARY SEARCH, not a linear walk. (Gemini review finding 1, #972.) The first
+  // version stepped down from 64 KB in 512 B decrements: up to 128 malloc calls
+  // on the boot path, and on a board with room to spare the 64 KB request
+  // SUCCEEDS -- newlib returns the block to its free list but does not hand the
+  // sbrk extension back, so a diagnostic could permanently raise the heap ceiling
+  // by 64 KB on boards that never needed it. 8 probes instead of 128, and the
+  // ceiling is sized to the question rather than to a round number.
+  //
+  // FLOOR MATTERS MORE THAN THE CEILING. The first version stepped by 512 B, so
+  // its resolution floor was 512 -- and sizeof(HomeScreen) is 480. It could not
+  // resolve the allocation it existed to measure, and reported "0" for anything
+  // under 512 B, which reads as "no memory at all" when it means "less than
+  // half a kilobyte". PROBE_FLOOR is deliberately below the smallest screen.
   {
-    size_t probe = 64u * 1024u;
-    while (probe > 256u) {
-      void* p = malloc(probe);
-      if (p) { free(p); break; }
-      probe -= 512u;
+    const size_t PROBE_CEIL  = 24u * 1024u;   // above any single screen, well under a big heap
+    const size_t PROBE_FLOOR = 64u;           // below sizeof(SplashScreen), so 0 really means 0
+
+    size_t lo = 0, hi = PROBE_CEIL, largest = 0;
+    for (int i = 0; i < 9; i++) {             // 9 halvings of 24 KB resolves to < 64 B
+      // NO `if (mid < PROBE_FLOOR) break;` here -- it was tried and it is wrong.
+      // (Gemini re-review, #972.) Breaking on the midpoint abandons the interval
+      // while the true largest block may still be inside it: with 80 B actually
+      // available the search narrows to lo=0/hi=96, computes mid=48, breaks, and
+      // reports largest=0 -- claiming no memory at all when 80 B were free. That
+      // is the exact misleading zero this rewrite existed to remove.
+      //
+      // Termination is already safe: a fixed 9 iterations, plus the hi-lo
+      // convergence check below. PROBE_FLOOR is the RESOLUTION, not a minimum
+      // probe size, so probing beneath it is intended.
+      const size_t mid = lo + (hi - lo) / 2;
+      void* p = malloc(mid);
+      if (p) { free(p); largest = mid; lo = mid; }
+      else   { hi = mid; }
+      if (hi - lo < PROBE_FLOOR) break;
     }
-    offband::crashLogf("[ui] sizeof: splash=%u home=%u msg=%u | largest_free_block=%u",
-                       (unsigned)sizeof(SplashScreen), (unsigned)sizeof(HomeScreen),
-                       (unsigned)sizeof(MsgPreviewScreen), (unsigned)probe);
+    // `largest` stays 0 unless an allocation actually succeeded, so a report of 0
+    // means nothing above PROBE_FLOOR was obtainable -- it is never a value that
+    // was merely stepped past.
+    offband::crashLogf("[ui] largest_free_block=%u (ceil=%u floor=%u)",
+                       (unsigned)largest, (unsigned)PROBE_CEIL, (unsigned)PROBE_FLOOR);
   }
+#endif
 #endif
   setCurrScreen(splash);
 }
@@ -825,6 +874,14 @@ void UITask::setCurrScreen(UIScreen* c) {
   // transition to nothing. The NULL arm was unreachable in exactly the case it
   // existed to catch, and the trace read as a healthy handoff while the UI was
   // going dark. Do not reorder these.
+  //
+  // ⚠ MAINTENANCE: this chain is hand-maintained against the screen pointers
+  // declared in UITask. Add a fourth screen and forget to add it here and its
+  // transitions log as "?" -- the trace degrades quietly rather than failing.
+  // Kept as an if/else chain deliberately: a lookup table would centralise the
+  // names but costs storage on every board for a diagnostic most never enable.
+  // (Gemini review finding 3, #972 -- accepted as a maintainability note, no
+  // functional defect.)
   const char* from = "?";
   const char* to   = "?";
   if      (curr == nullptr)     from = "NULL";
