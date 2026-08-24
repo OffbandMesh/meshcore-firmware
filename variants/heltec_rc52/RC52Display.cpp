@@ -25,6 +25,12 @@
 #include <helpers/ui/OffbandLogoRGB565.h>   // this panel's colour splash art
 #include <Arduino.h>
 #include <string.h>
+// Unconditional: the back-buffer failure paths report through crashLogf on EVERY
+// build, not only diag ones. A silent allocation failure is a SAFELANE 6 defect
+// regardless of which env is being built, and gating the reporting on a diag flag
+// would mean the one configuration nobody is watching is also the one that says
+// nothing. crashLogf itself is unconditional in CrashLog.h.
+#include <helpers/diagnostics/CrashLog.h>
 
 // These four headers are READ, not modified. #948's acceptance criterion is that
 // `git diff` touches nothing under src/helpers/ui/ -- including a shared header
@@ -139,6 +145,141 @@ ColorVal UIColor::warning_txt   = rc32_palette::WARNING_TXT;
 ColorVal UIColor::popup_bkg     = rc32_palette::POPUP_BKG;
 ColorVal UIColor::popup_txt     = rc32_palette::POPUP_TXT;
 ColorVal UIColor::corp_blue     = rc32_palette::CORP_ACCENT;
+
+// ---------------------------------------------------------------------------
+// Back-buffer pack/unpack. EVERY read and write of frame_buf goes through these
+// two, so the storage format lives in exactly one place and the drawing code
+// below is identical for both depths.
+//
+// 16bpp stores BYTE-SWAPPED RGB565, because the panel wants big-endian and that
+// makes the blit a plain byte copy with no per-pixel work.
+//
+// 8bpp stores RGB332. The expansion back to 565 replicates high bits into the
+// low ones (r3 -> r5 as (r<<2)|(r>>1)) so full-scale stays full-scale -- a plain
+// left-shift would make white come out as 0xF7DE rather than 0xFFFF, and every
+// light colour would read slightly dark.
+// ---------------------------------------------------------------------------
+// Defined further down next to drawChar, which is its other caller; the palette
+// builder needs it here to generate the blend ramps.
+static inline uint16_t blend565(uint16_t fg, uint16_t bg, uint8_t cov);
+
+#if defined(RC52_DISPLAY_BUFFER_INDEXED)
+// ---------------------------------------------------------------------------
+// INDEXED PALETTE (#856)
+//
+// 256 entries of RGB565, built once in begin(). 512 B of .bss, which is nothing
+// against the 28,160 B the 8bpp buffer saves.
+//
+// Layout, and the ordering is deliberate -- exact colours first so the common
+// case is found immediately:
+//   [0 .. NUM_BRAND-1]        the brand colours, EXACT. Every flat fill and both
+//                             endpoints of every text blend land here.
+//   [NUM_BRAND .. ramps_end]  16-step blends for the fg/bg pairs text actually
+//                             antialiases against.
+//   [ramps_end .. used_end]   a 32-step grey ramp, so anything unanticipated has
+//                             something sane to snap to.
+//
+// Entries beyond used_end are never searched. There is no need to fill 256 slots
+// for a UI that uses six colours.
+// ---------------------------------------------------------------------------
+static uint16_t s_pal[256];
+static uint16_t s_pal_used = 0;
+
+// The fg/bg pairs drawChar blends between. Anything not listed still renders --
+// it just snaps to the nearest entry rather than having a bespoke ramp.
+struct PalPair { uint16_t fg, bg; };
+
+static void rc52BuildPalette() {
+  if (s_pal_used) return;   // built once
+
+  const uint16_t brand[] = {
+    rc32_palette::WINDOW_BKG, rc32_palette::PRIMARY_TXT, rc32_palette::SECONDARY_TXT,
+    rc32_palette::TITLE_BKG,  rc32_palette::TITLE_TXT,   rc32_palette::POPUP_BKG,
+    rc32_palette::POPUP_TXT,  rc32_palette::WARNING_TXT, rc32_palette::CORP_ACCENT,
+  };
+  const uint16_t n_brand = (uint16_t)(sizeof(brand) / sizeof(brand[0]));
+  for (uint16_t i = 0; i < n_brand; i++) s_pal[i] = brand[i];
+  s_pal_used = n_brand;
+
+  const PalPair pairs[] = {
+    { rc32_palette::PRIMARY_TXT,   rc32_palette::WINDOW_BKG },
+    { rc32_palette::TITLE_TXT,     rc32_palette::TITLE_BKG  },
+    { rc32_palette::POPUP_TXT,     rc32_palette::POPUP_BKG  },
+    { rc32_palette::SECONDARY_TXT, rc32_palette::WINDOW_BKG },
+    { rc32_palette::WARNING_TXT,   rc32_palette::WINDOW_BKG },
+  };
+  for (uint16_t p = 0; p < (uint16_t)(sizeof(pairs) / sizeof(pairs[0])); p++) {
+    for (uint8_t cov = 1; cov < 15; cov++) {          // 0 and 15 are the endpoints, already exact
+      if (s_pal_used >= 256) break;
+      s_pal[s_pal_used++] = blend565(pairs[p].fg, pairs[p].bg, cov);
+    }
+  }
+
+  for (uint16_t g = 0; g < 32 && s_pal_used < 256; g++) {
+    const uint16_t v5 = (uint16_t)(g >> 0) & 0x1F;
+    const uint16_t v6 = (uint16_t)(g << 1) & 0x3F;
+    s_pal[s_pal_used++] = (uint16_t)((v5 << 11) | (v6 << 5) | v5);
+  }
+}
+
+// Nearest entry by squared error in RGB565's own channel widths. Green is
+// weighted x2 because it carries most of the luminance, so a green error is more
+// visible than an equal-magnitude red or blue one.
+static uint8_t rc52NearestIndex(uint16_t c) {
+  const int cr = (c >> 11) & 0x1F, cg = (c >> 5) & 0x3F, cb = c & 0x1F;
+  uint32_t best = 0xFFFFFFFFu;
+  uint8_t  best_i = 0;
+  for (uint16_t i = 0; i < s_pal_used; i++) {
+    const uint16_t p = s_pal[i];
+    const int dr = ((p >> 11) & 0x1F) - cr;
+    const int dg = ((p >> 5)  & 0x3F) - cg;
+    const int db = ( p        & 0x1F) - cb;
+    const uint32_t e = (uint32_t)(dr * dr) + (uint32_t)(2 * dg * dg) + (uint32_t)(db * db);
+    if (e < best) { best = e; best_i = (uint8_t)i; if (e == 0) break; }
+  }
+  return best_i;
+}
+#endif  // RC52_DISPLAY_BUFFER_INDEXED
+
+static inline rc52_px_t pxPack(uint16_t c565) {
+#if defined(RC52_DISPLAY_BUFFER_INDEXED)
+  // Exact hit short-circuits the search, and that is the common case: every flat
+  // fill and both endpoints of every glyph are brand colours sitting in the first
+  // few slots. A tiny memo covers runs of identical blend values inside a glyph.
+  static uint16_t memo_c = 0xFFFF;
+  static uint8_t  memo_i = 0;
+  if (c565 == memo_c) return (rc52_px_t)memo_i;
+  for (uint16_t i = 0; i < s_pal_used; i++) {
+    if (s_pal[i] == c565) { memo_c = c565; memo_i = (uint8_t)i; return (rc52_px_t)i; }
+  }
+  const uint8_t idx = rc52NearestIndex(c565);
+  memo_c = c565; memo_i = idx;
+  return (rc52_px_t)idx;
+#elif defined(RC52_DISPLAY_BUFFER_8BPP)
+  const uint8_t r = (uint8_t)((c565 >> 13) & 0x07);   // top 3 of 5
+  const uint8_t g = (uint8_t)((c565 >> 8)  & 0x07);   // top 3 of 6
+  const uint8_t b = (uint8_t)((c565 >> 3)  & 0x03);   // top 2 of 5
+  return (rc52_px_t)((r << 5) | (g << 2) | b);
+#else
+  return (rc52_px_t)((c565 >> 8) | (c565 << 8));
+#endif
+}
+
+static inline uint16_t pxUnpack(rc52_px_t v) {
+#if defined(RC52_DISPLAY_BUFFER_INDEXED)
+  return s_pal[v];
+#elif defined(RC52_DISPLAY_BUFFER_8BPP)
+  const uint8_t r3 = (uint8_t)((v >> 5) & 0x07);
+  const uint8_t g3 = (uint8_t)((v >> 2) & 0x07);
+  const uint8_t b2 = (uint8_t)( v       & 0x03);
+  const uint16_t r5 = (uint16_t)((r3 << 2) | (r3 >> 1));
+  const uint16_t g6 = (uint16_t)((g3 << 3) | g3);
+  const uint16_t b5 = (uint16_t)((b2 << 3) | (b2 << 1) | (b2 >> 1));
+  return (uint16_t)((r5 << 11) | (g6 << 5) | b5);
+#else
+  return (uint16_t)((v >> 8) | (v << 8));
+#endif
+}
 
 static int scaleX(int x) {
   return (int)(x * DISPLAY_SCALE_X);
@@ -533,18 +674,70 @@ void RC52Display::initPanel() {
 // this fits comfortably; the BLE companion has roughly 75 KB and does not
 // obviously fit. That is #856, and the failure is handled, not assumed away.
 void RC52Display::allocFrameBuffer() {
-  const size_t px = (size_t)RC52_SCREEN_WIDTH * RC52_SCREEN_HEIGHT;
-  const size_t bytes = px * sizeof(uint16_t);
+  // #951 LEAK FIX -- this guard is load-bearing, do not remove it.
+  //
+  // begin() runs on EVERY turnOn(), not just once: turnOff() clears is_on, so the
+  // early-out at the top of begin() stops guarding, and the whole init sequence
+  // re-runs. Without this, every display off->on cycle allocated another buffer
+  // and abandoned the previous one.
+  //
+  // Observed on hardware 2026-08-23: the board ran buffered from boot, auto-offed
+  // after 15 s, then a message arrived, turnOn() re-entered begin(), the second
+  // 28 KB allocation failed against the leaked first one, frame_buf went null and
+  // the panel flickered from then on. It presented as "8bpp did not fix the
+  // flicker" when in fact 8bpp was working and this was eating it.
+  //
+  // Keeping the buffer across off/on is also strictly better than free-and-realloc:
+  // there is no window where a transient allocation failure can cost the buffer,
+  // and nothing is gained by returning it while the display is merely dark.
+  //
+  // The same structure exists in the shared NV3001BDisplay, which this was ported
+  // from -- see #951. Boards with more headroom leak more cycles before it bites.
+  if (frame_buf) return;
 
-  frame_buf = (uint16_t*)malloc(bytes);
+  const size_t px = (size_t)RC52_SCREEN_WIDTH * RC52_SCREEN_HEIGHT;
+  const size_t bytes = px * sizeof(rc52_px_t);   // 56,320 B at 16bpp, 28,160 B at 8bpp
+
+#ifdef RC52_DISPLAY_DISABLE_BACKBUFFER
+  // #856/#951 BENCH EXPERIMENT -- deliberately skip the back buffer.
+  //
+  // Two things at once: it hands ~56 KB back to the heap, which tests whether
+  // `new HomeScreen` failing is really a memory problem; and it is the FIRST
+  // execution of the unbuffered draw path on hardware, on ANY board in this
+  // fleet. That path was written as a supported degraded state and has never
+  // once run.
+  //
+  // Expect it to look worse, and expect that honestly:
+  //   * FLICKER. startFrame() fills the whole panel over SPI before anything is
+  //     drawn, so the erase is visible. This is the exact defect #747's back
+  //     buffer was added to fix on RC32, where it was observed and then
+  //     owner-confirmed gone.
+  //   * ALIASED TEXT. drawChar() antialiases by reading the existing pixel back
+  //     out of the buffer and blending. With no buffer there is nothing to read,
+  //     so coverage is thresholded instead.
+  //
+  // NOT a shipping configuration. Bench only.
+  frame_buf = nullptr;
+  offband::crashLogf("[rc52disp] back buffer DISABLED by build flag (%u B returned to heap)",
+                     (unsigned)bytes);
+  return;
+#endif
+
+  frame_buf = (rc52_px_t*)malloc(bytes);
 
   if (!frame_buf) {
-    // Loud, not silent (SAFELANE 6). The display still works, just unbuffered
-    // and flickering, so this must not later be diagnosed as "the driver is
-    // broken" or as a bus fault.
-    Serial.print("RC52Display: back buffer alloc FAILED (");
-    Serial.print((unsigned long)bytes);
-    Serial.println(" B) -- direct panel writes, expect flicker");
+    // Loud, not silent (SAFELANE 6) -- but loud ON A CHANNEL SOMEONE READS.
+    //
+    // This previously used Serial.print. On a _ble build `Serial` is USB-CDC and
+    // is a debug channel nothing is attached to, so the message was effectively
+    // silent on exactly the board class where it fired. It cost a wrong
+    // conclusion on 2026-08-23 ("8bpp did not fix the flicker") because the
+    // allocation failure that caused it reported into the void.
+    //
+    // crashLogf goes to the ring AND out the #953 UART mirror, which is the wire
+    // that is actually being watched during bring-up.
+    offband::crashLogf("[rc52disp] back buffer alloc FAILED (%u B) -- unbuffered, expect flicker",
+                       (unsigned)bytes);
     return;
   }
 
@@ -552,7 +745,9 @@ void RC52Display::allocFrameBuffer() {
   // rather than assume, because the whole blit silently transfers garbage if it
   // is ever not true.
   if (!isRamPointer(frame_buf)) {
-    Serial.println("RC52Display: back buffer is not in SRAM -- refusing to DMA from it");
+    // Same reasoning as the alloc-failure path above: report on the mirror, not
+    // on an unread USB-CDC debug channel.
+    offband::crashLogf("[rc52disp] back buffer is not in SRAM -- refusing to DMA from it");
     free(frame_buf);
     frame_buf = nullptr;
   }
@@ -568,8 +763,38 @@ void RC52Display::blitFrameBuffer() {
   busBeginTransaction();
   digitalWrite(PIN_TFT_DC, HIGH);
   digitalWrite(PIN_TFT_CS, LOW);
+
+#if defined(RC52_DISPLAY_BUFFER_8BPP) || defined(RC52_DISPLAY_BUFFER_INDEXED)
+  // The panel always wants 16bpp big-endian, so an 8bpp buffer is expanded on
+  // the way out. pxUnpack() is either the RGB332 expansion or a palette lookup;
+  // this loop does not care which. The SPI byte count is unchanged -- 56,320 either way -- so this
+  // costs CPU, not bus time, and the bus is the bottleneck.
+  //
+  // Expanded in chunks through a stack buffer rather than pixel-by-pixel: a
+  // per-pixel transfer would be 28,160 separate calls, which is the mistake #745
+  // fixed in the shared driver. Stack, so it is SRAM and a legal DMA source.
+  {
+    static const size_t CHUNK_PX = 64;
+    uint8_t out[CHUNK_PX * 2];
+    const size_t total = (size_t)RC52_SCREEN_WIDTH * RC52_SCREEN_HEIGHT;
+    size_t done = 0;
+    while (done < total) {
+      const size_t n = (total - done) < CHUNK_PX ? (total - done) : CHUNK_PX;
+      for (size_t i = 0; i < n; i++) {
+        const uint16_t c = pxUnpack(frame_buf[done + i]);
+        out[i * 2]     = (uint8_t)(c >> 8);    // big-endian, as the panel expects
+        out[i * 2 + 1] = (uint8_t)(c & 0xff);
+      }
+      busWriteBytes(out, n * 2);
+      done += n;
+    }
+  }
+#else
+  // 16bpp is stored pre-swapped, so the blit is a straight byte copy.
   busWriteBytes((const uint8_t*)frame_buf,
-                (size_t)RC52_SCREEN_WIDTH * RC52_SCREEN_HEIGHT * sizeof(uint16_t));
+                (size_t)RC52_SCREEN_WIDTH * RC52_SCREEN_HEIGHT * sizeof(rc52_px_t));
+#endif
+
   digitalWrite(PIN_TFT_CS, HIGH);
   busEndTransaction();
 }
@@ -593,10 +818,10 @@ void RC52Display::fillPhysicalRect(int x, int y, int w, int h) {
   // intercepting here buffers every draw -- including drawChar(), which calls it
   // once per lit font pixel.
   if (frame_buf) {
-    const uint16_t swapped = (uint16_t)((color >> 8) | (color << 8));
+    const rc52_px_t packed = pxPack(color);
     for (int row = 0; row < h; row++) {
-      uint16_t* p = frame_buf + (size_t)(y + row) * RC52_SCREEN_WIDTH + x;
-      for (int col = 0; col < w; col++) p[col] = swapped;
+      rc52_px_t* p = frame_buf + (size_t)(y + row) * RC52_SCREEN_WIDTH + x;
+      for (int col = 0; col < w; col++) p[col] = packed;
     }
     return;
   }
@@ -613,10 +838,40 @@ void RC52Display::fillPhysicalRect(int x, int y, int w, int h) {
 void RC52Display::drawRGB565(int x, int y, const uint16_t* px, int w, int h) {
   if (!is_on || !px) return;
 
+#if defined(RC52_DISPLAY_BUFFER_INDEXED)
+  // INDEXED DELIBERATELY BYPASSES THE BUFFER FOR COLOUR ART.
+  //
+  // The palette holds the UI's six brand colours and their blend ramps. Full
+  // colour artwork cannot be represented in it -- forcing the splash through
+  // nearest-match would posterise it badly, and widening the palette to cover
+  // arbitrary art would give back the exactness that is the entire point.
+  //
+  // Going straight to the panel costs a visible repaint, and here that costs
+  // nothing: the splash draws ONCE at boot. Flicker matters on the 5-second UI
+  // repaint cycle, not on a one-shot boot image. So the art stays full 16bpp
+  // fidelity and the UI stays pixel-exact -- the buffer is simply not the right
+  // tool for this one call.
+  //
+  // Falls through to the unbuffered path below.
+#else
   if (frame_buf) {
+#if defined(RC52_DISPLAY_BUFFER_8BPP)
+    // rgb565::blitSwapped writes 16bpp and cannot target an 8bpp buffer, so this
+    // does the same clip and walks it through pxPack(). Clipping still comes from
+    // the shared helper so the two depths cannot disagree about geometry.
+    const rgb565::Clip c = rgb565::clip(RC52_SCREEN_WIDTH, RC52_SCREEN_HEIGHT, x, y, w, h);
+    if (!c.visible) return;
+    for (int r = 0; r < c.h; r++) {
+      const uint16_t* s = px + (size_t)(c.sy + r) * w + c.sx;
+      rc52_px_t* d = frame_buf + (size_t)(c.dy + r) * RC52_SCREEN_WIDTH + c.dx;
+      for (int i = 0; i < c.w; i++) d[i] = pxPack(s[i]);
+    }
+#else
     rgb565::blitSwapped(frame_buf, RC52_SCREEN_WIDTH, RC52_SCREEN_HEIGHT, x, y, px, w, h);
+#endif
     return;
   }
+#endif  // !RC52_DISPLAY_BUFFER_INDEXED
 
   // Unbuffered fallback. A failed back-buffer allocation is a supported degraded
   // state rather than a lost display, so this path is real and must draw rather
@@ -711,11 +966,14 @@ void RC52Display::drawChar(int x, int y, char ch) {
           for (int dx = 0; dx < scale; dx++) {
             const int tx = px + dx;
             if (tx < 0 || tx >= RC52_SCREEN_WIDTH) continue;
-            uint16_t* dst = frame_buf + (size_t)ty * RC52_SCREEN_WIDTH + tx;
-            // Buffer holds byte-swapped pixels; unswap, blend, re-swap.
-            const uint16_t bg = (uint16_t)((*dst >> 8) | (*dst << 8));
+            rc52_px_t* dst = frame_buf + (size_t)ty * RC52_SCREEN_WIDTH + tx;
+            // Read what is already there, blend at full RGB565 precision, store
+            // back in whatever the buffer's format is. The blend arithmetic is
+            // always 565 -- at 8bpp only the stored result is quantised, not the
+            // maths, which keeps the coarsening to one step instead of two.
+            const uint16_t bg = pxUnpack(*dst);
             const uint16_t out = blend565(color, bg, cov);
-            *dst = (uint16_t)((out >> 8) | (out << 8));
+            *dst = pxPack(out);
           }
         }
       } else if (cov >= 8) {
@@ -754,6 +1012,11 @@ bool RC52Display::begin() {
 
   initPanel();
   is_on = true;
+#if defined(RC52_DISPLAY_BUFFER_INDEXED)
+  // Before anything can pack a pixel. Builds once; re-entry on turnOn() is a
+  // no-op, same as the buffer.
+  rc52BuildPalette();
+#endif
   allocFrameBuffer();   // before the first fill, so it lands in the buffer
   color = 0x0000;
   fillPhysicalRect(0, 0, RC52_SCREEN_WIDTH, RC52_SCREEN_HEIGHT);
@@ -875,7 +1138,46 @@ uint16_t RC52Display::getTextWidth(const char* str) {
 // The frame is drawn into RAM by fillPhysicalRect(); push it here in one
 // transfer. An empty endFrame() is what erases and redraws the panel in front of
 // the user on every update.
+//
+// ---------------------------------------------------------------------------
+// TEMPORARY INSTRUMENT (#951) -- diag builds only, remove once answered.
+//
+// Symptom being chased: the panel holds the SPLASH image indefinitely after the
+// UI has demonstrably moved to HomeScreen ([ui] setCurrScreen SPLASH -> HOME is
+// in the trace, and the board keeps running normally afterwards).
+//
+// That symptom is only possible because startFrame() writes to the BACK BUFFER
+// and touches no SPI at all. The panel therefore shows the last frame that was
+// actually blitted. So exactly one of these is true, and this tells us which:
+//
+//   endFrame not called       -> the render loop is not reaching us; the fault is
+//                                above the driver, in UITask/HomeScreen.
+//   called, px_nonbg == 0     -> HomeScreen drew nothing into the buffer.
+//   called, px_nonbg > 0      -> content exists and the blit is not landing; the
+//                                fault is mine, in blitFrameBuffer/the bus.
+//
+// Counting 28,160 pixels at Home's 5 s cadence is free relative to the blit.
+// ---------------------------------------------------------------------------
 void RC52Display::endFrame() {
+#ifdef OFFBAND_BOOT_BEACON
+  static unsigned long s_end_calls = 0;
+  s_end_calls++;
+
+  unsigned long nonbg = 0;
+  if (frame_buf) {
+    // The buffer holds byte-swapped pixels; compare against the background in
+    // the same representation rather than unswapping 28k times.
+    const uint16_t bg_swapped =
+        (uint16_t)((UIColor::window_bkg >> 8) | (UIColor::window_bkg << 8));
+    const size_t px = (size_t)RC52_SCREEN_WIDTH * RC52_SCREEN_HEIGHT;
+    for (size_t i = 0; i < px; i++) {
+      if (frame_buf[i] != bg_swapped) nonbg++;
+    }
+  }
+  offband::crashLogf("[rc52disp] endFrame #%lu on=%d buf=%d px_nonbg=%lu",
+                     s_end_calls, (int)is_on, (int)(frame_buf != nullptr), nonbg);
+#endif
+
   blitFrameBuffer();
 }
 
