@@ -118,7 +118,7 @@ heltec_rc32_room_server
 # unreleased hardware (owner decision, 2026-08-18).
 #
 # Each EXTENDS the shipped env above and adds ONLY OFFBAND_BOOT_BEACON and
-# OFFBAND_MESHLOG_UART0. Nothing else differs. That is deliberate: a diagnostic
+# OFFBAND_LOG_MIRROR_UART. Nothing else differs. That is deliberate: a diagnostic
 # build that diverges from the shipped build diagnoses the wrong firmware, which
 # is exactly how the GPS-on-a-strapping-pin defect (#704) survived every bench
 # session -- every result came from a build that had already worked around it.
@@ -157,7 +157,7 @@ heltec_rcc6_companion_radio_usb
 heltec_rcc6_companion_observer_wifi
 heltec_rcc6_repeater_display
 #
-# DIAG builds -- SAME roles, plus OFFBAND_MESHLOG_UART0 + OFFBAND_FORCE_CAPLOG.
+# DIAG builds -- SAME roles, plus OFFBAND_LOG_MIRROR_UART + OFFBAND_FORCE_CAPLOG.
 #
 # ⚠ APPROVED EXCEPTION -- OWNER DECISION. NOT THE RULE.
 #
@@ -181,7 +181,7 @@ heltec_rcc6_repeater_display
 # SCOPE: RCC6 only, while RCC6 is beta. Revisit when the board leaves beta.
 # Extending this to another board is a fresh owner decision, not an inheritance.
 # PRIVACY POSTURE, stated so nobody has to infer it: these builds do NOT log more
-# than a prod build. OFFBAND_MESHLOG_UART0 is a TRANSPORT MIRROR -- the same MeshLog
+# than a prod build. OFFBAND_LOG_MIRROR_UART is a TRANSPORT MIRROR -- the same MeshLog
 # lines that already go to USB CDC are also written to raw UART0. Existing redaction
 # holds (WiFi PSK and broker password are redacted at their log sites). What DOES
 # change: OFFBAND_FORCE_CAPLOG pins logging ON, so a tester cannot turn it off, and
