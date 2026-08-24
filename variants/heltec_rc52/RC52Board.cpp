@@ -89,13 +89,30 @@ void RC52Board::begin() {
   Wire.begin();
 
   // ---------------------------------------------------------------------------
-  // ORDER: settle FEM_EN before raising the FEM rail.
+  // ORDER: raise the FEM rail FIRST, then assert FEM_EN. (#879 review gate.)
   //
-  // [hypothesis: untested] The reasoning is that raising VFEM_Ctrl first leaves a
-  // window in which the module is powered while its enable input is still
-  // floating. That is an argument, not a measurement -- see the FEM_EN block
-  // below for why the whole pulldown decision is unverified. The ordering costs
-  // nothing either way, so it is kept, but it is NOT evidence-backed.
+  // This was the other way round until 2026-08-24, on the argument that powering
+  // the module while its enable input floated was the greater risk. That argument
+  // was tagged [hypothesis: untested] and it was the wrong call: driving 3.3 V
+  // into a control input of an UNPOWERED chip forward-biases that pin's ESD diode
+  // and back-powers the module through it. Unreliable start-up is the mild
+  // outcome; pin degradation is the durable one.
+  //
+  // Two things say the new order is the right one. Our own powerOff() already
+  // does the correct inverse -- FEM_EN low, THEN the rail down (see below) -- so
+  // the principle was applied on the way down and simply missed on the way up.
+  // And a bench measurement now exists: rc52-bench-1 reads +15.1 dBm against a
+  // +22 dBm chip setting with the FEM enabled, -6.9 dB, with the TX-power clamp
+  // and IPEX4 seating both eliminated [verified: tinySA, owner-operated
+  // 2026-08-23, see #963]. A FEM that never came up cleanly fits that sign and
+  // rough magnitude.
+  //
+  // ⚠ THIS DIVERGES FROM THE ONLY SHIPPING IMPLEMENTATION WE HAVE. n30nex asserts
+  // FEM_EN before VFEM_Ctrl (quoted below). The working hypothesis is that it
+  // carries the same latent defect and nobody measured its conducted output --
+  // that is a hypothesis, not a finding. [hypothesis: untested] Whether this
+  // reordering recovers the missing 6.9 dB is UNPROVEN until the same rig
+  // re-measures it. Tracked on #858 / #975.
   // ---------------------------------------------------------------------------
 
   // ---------------------------------------------------------------------------
@@ -120,11 +137,13 @@ void RC52Board::begin() {
   // this line is a legitimate suspect. An earlier revision left the pin on
   // INPUT_PULLDOWN, asserting nothing; that was worse, because it left the FEM
   // in a state nobody had chosen.
-  pinMode(RADIOCORE_FEM_EN, OUTPUT);
-  digitalWrite(RADIOCORE_FEM_EN, HIGH);
+  //
+  // NOTE: the assertion itself now happens BELOW, after the rail is up. Only the
+  // ordering changed; the polarity and its evidence are untouched.
 
   // ---------------------------------------------------------------------------
-  // FEM supply rail -- raised only now that FEM_EN is at a defined level.
+  // FEM supply rail -- raised FIRST, so the module is powered before any control
+  // input is driven into it.
   //
   // VFEM_Ctrl drives the EN pin (pin 3) of U14, a TLV75733PDBVR -- a TI 3.3 V LDO
   // whose enable is ACTIVE HIGH. Driving it high turns on VDD_FEM, the front-end
@@ -134,6 +153,15 @@ void RC52Board::begin() {
   // ---------------------------------------------------------------------------
   pinMode(RADIOCORE_VFEM_CTRL, OUTPUT);
   digitalWrite(RADIOCORE_VFEM_CTRL, HIGH);
+
+  // The LDO needs to actually be up before we drive its load's enable pin.
+  // TLV75733PDBVR start-up is specified in the hundreds of microseconds; 1 ms is
+  // generous and this runs once at boot, so the cost is irrelevant.
+  delay(1);
+
+  // FEM_EN -- asserted now that VDD_FEM is live. See the ORDER block above.
+  pinMode(RADIOCORE_FEM_EN, OUTPUT);
+  digitalWrite(RADIOCORE_FEM_EN, HIGH);
 
   delay(1);
 }
