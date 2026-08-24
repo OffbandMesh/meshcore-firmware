@@ -658,6 +658,35 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   splash = new SplashScreen(this);
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
   msg_preview = new MsgPreviewScreen(this, &rtc_clock);
+#ifdef OFFBAND_UI_TRACE
+  // #951: these three are new'd with no null check, and a null `home` is SILENT --
+  // gotoHomeScreen() sets curr = nullptr, the render loop's `&& curr` guard stops
+  // firing, and the panel simply holds whatever was last blitted. On a memory-tight
+  // board that presents as "stuck on the splash screen" with a fully healthy board
+  // behind it. Log which of them actually got memory.
+  offband::crashLogf("[ui] screens alloc: splash=%d home=%d msg_preview=%d",
+                     (int)(splash != NULL), (int)(home != NULL), (int)(msg_preview != NULL));
+
+  // #856: how much did they actually need, and how much was there?
+  //
+  // sizeof() is the exact object size. The second figure is the LARGEST
+  // CONTIGUOUS BLOCK still allocatable, probed by walking malloc down until one
+  // succeeds and immediately freeing it -- that, not total free bytes, is what
+  // `new HomeScreen` has to find. Freeing 56 KB of back buffer was known to be
+  // sufficient; this says what is actually REQUIRED, so the buffer can be sized
+  // on evidence instead of on a guess.
+  {
+    size_t probe = 64u * 1024u;
+    while (probe > 256u) {
+      void* p = malloc(probe);
+      if (p) { free(p); break; }
+      probe -= 512u;
+    }
+    offband::crashLogf("[ui] sizeof: splash=%u home=%u msg=%u | largest_free_block=%u",
+                       (unsigned)sizeof(SplashScreen), (unsigned)sizeof(HomeScreen),
+                       (unsigned)sizeof(MsgPreviewScreen), (unsigned)probe);
+  }
+#endif
   setCurrScreen(splash);
 }
 
@@ -790,16 +819,22 @@ void UITask::setCurrScreen(UIScreen* c) {
   // Screen transition tracing: log every change so we can see if the
   // SplashScreen ↔ HomeScreen oscillation observed on hv3-bench is
   // a real state-machine bug.
+  // #951: nullptr is tested FIRST, and that ordering is load-bearing. If a screen
+  // pointer is itself null -- `new` returned nothing on a memory-tight board -- then
+  // `c == home` is true for a null `c`, and the old ordering printed "HOME" for a
+  // transition to nothing. The NULL arm was unreachable in exactly the case it
+  // existed to catch, and the trace read as a healthy handoff while the UI was
+  // going dark. Do not reorder these.
   const char* from = "?";
   const char* to   = "?";
-  if      (curr == splash)      from = "SPLASH";
+  if      (curr == nullptr)     from = "NULL";
+  else if (curr == splash)      from = "SPLASH";
   else if (curr == home)        from = "HOME";
   else if (curr == msg_preview) from = "MSG_PREVIEW";
-  else if (curr == nullptr)     from = "NULL";
-  if      (c == splash)         to   = "SPLASH";
+  if      (c == nullptr)        to   = "NULL";
+  else if (c == splash)         to   = "SPLASH";
   else if (c == home)           to   = "HOME";
   else if (c == msg_preview)    to   = "MSG_PREVIEW";
-  else if (c == nullptr)        to   = "NULL";
   offband::crashLogf("[ui] setCurrScreen %s -> %s", from, to);
 #endif
   curr = c;
