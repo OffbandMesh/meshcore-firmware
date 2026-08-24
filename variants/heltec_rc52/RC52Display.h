@@ -55,6 +55,45 @@
 // into this file reflexively -- it would be slower for no reason.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// BACK BUFFER STORAGE FORMAT (#856)
+//
+// The full-frame buffer is what removes flicker: without it startFrame() erases
+// the physical panel over SPI before anything is drawn, and the repaint is
+// visible. Measured on this board, unbuffered: ~167 ms per frame against ~13 ms
+// buffered, and boot ~4 s slower.
+//
+// But at 16bpp it costs 220*128*2 = 56,320 B, and on this board that is the
+// difference between `new HomeScreen` succeeding and failing (#973). RGB332
+// halves it to 28,160 B and keeps the buffer -- so flicker stays fixed and 28 KB
+// comes back.
+//
+// The cost is colour fidelity: 3 bits red, 3 green, 2 blue. Text antialiasing
+// blends through fewer distinct shades, and the colour splash art quantises.
+// Both are quality, not function.
+//
+// Default stays 16bpp. This is opt-in per env so the two can be compared on the
+// same panel rather than argued about.
+// ---------------------------------------------------------------------------
+// RC52_DISPLAY_BUFFER_INDEXED -- 8 bits per pixel, but the byte is an INDEX into
+// a 256-entry RGB565 table rather than a packed colour. Same 28,160 B as RGB332
+// and the same flicker fix, without RGB332's colour error.
+//
+// Why not RGB332: measured on this palette, RGB332 shifts DEEP (#1A7A44, the
+// title-bar green) by dR -24 dG -12 dB +16 -- it loses all its red and gains
+// blue, reading visibly more blue-green. MUTED drifts +33 blue. Blue only gets
+// 2 bits in 332, i.e. four levels across the whole channel, so any colour with a
+// small blue component snaps to the nearest quarter. Owner spotted the green on
+// hardware before this was computed.
+//
+// Indexed stores the brand colours EXACTLY. Only text-antialiasing blends are
+// approximated, and only to the nearest entry in a purpose-built ramp.
+#if defined(RC52_DISPLAY_BUFFER_INDEXED) || defined(RC52_DISPLAY_BUFFER_8BPP)
+  typedef uint8_t  rc52_px_t;
+#else
+  typedef uint16_t rc52_px_t;
+#endif
+
 class RC52Display : public DisplayDriver {
   RefCountedDigitalPin* periph_power;
   bool is_on = false;
@@ -73,7 +112,7 @@ class RC52Display : public DisplayDriver {
   // writes rather than losing the display (SAFELANE 6). On this board that is
   // not hypothetical -- 220*128*2 = 56,320 B against 237,568 B of region, and
   // the BLE companion role already spends ~162 KB of it. See #856.
-  uint16_t* frame_buf = nullptr;
+  rc52_px_t* frame_buf = nullptr;
 
   void allocFrameBuffer();
   void blitFrameBuffer();
