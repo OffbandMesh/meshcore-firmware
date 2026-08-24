@@ -88,82 +88,69 @@ void RC52Board::begin() {
 
   Wire.begin();
 
-  // ---------------------------------------------------------------------------
-  // ORDER: raise the FEM rail FIRST, then assert FEM_EN. (#879 review gate.)
-  //
-  // This was the other way round until 2026-08-24, on the argument that powering
-  // the module while its enable input floated was the greater risk. That argument
-  // was tagged [hypothesis: untested] and it was the wrong call: driving 3.3 V
-  // into a control input of an UNPOWERED chip forward-biases that pin's ESD diode
-  // and back-powers the module through it. Unreliable start-up is the mild
-  // outcome; pin degradation is the durable one.
-  //
-  // Two things say the new order is the right one. Our own powerOff() already
-  // does the correct inverse -- FEM_EN low, THEN the rail down (see below) -- so
-  // the principle was applied on the way down and simply missed on the way up.
-  // And a bench measurement now exists: rc52-bench-1 reads +15.1 dBm against a
-  // +22 dBm chip setting with the FEM enabled, -6.9 dB, with the TX-power clamp
-  // and IPEX4 seating both eliminated [verified: tinySA, owner-operated
-  // 2026-08-23, see #963]. A FEM that never came up cleanly fits that sign and
-  // rough magnitude.
-  //
-  // ⚠ THIS DIVERGES FROM THE ONLY SHIPPING IMPLEMENTATION WE HAVE. n30nex asserts
-  // FEM_EN before VFEM_Ctrl (quoted below). The working hypothesis is that it
-  // carries the same latent defect and nobody measured its conducted output --
-  // that is a hypothesis, not a finding. [hypothesis: untested] Whether this
-  // reordering recovers the missing 6.9 dB is UNPROVEN until the same rig
-  // re-measures it. Tracked on #858 / #975.
-  // ---------------------------------------------------------------------------
+  // Bring the FEM up to a defined ON state. The powered-up sequence and all of
+  // its evidence live in setLoRaFemLnaEnabled() now that the same path is a
+  // runtime capability (#983) -- this is the boot default before any app applies
+  // the persisted radio_fem_rxgain pref (which itself defaults ON).
+  setLoRaFemLnaEnabled(true);
+}
 
-  // ---------------------------------------------------------------------------
-  // FEM_EN -- ACTIVE HIGH. Asserted here.
-  //
-  // Heltec publishes no HT-RA62A datasheet (schematic only; RC52/datasheet/ and
-  // RC52/pinmap/ both 404), and the schematic cannot settle this either: the FEM
-  // is INSIDE the module. U6 exposes FEM_EN on pin 11, VDD_FEM on 25 and
-  // LNA_Ctrl on 36, and stops there.
-  //
-  // What settles it is a shipping implementation. n30nex/NeonPocketMC-RC52
-  // (v1.1.0-rc.4) drives it HIGH in its board begin(), alongside VFEM_Ctrl HIGH:
-  //
-  //     digitalWrite(RADIOCORE_FEM_EN, HIGH);
-  //     digitalWrite(RADIOCORE_VFEM_CTRL, HIGH);
-  //
-  // Its VFEM_Ctrl polarity matches this board's schematic derivation
-  // independently, which is what makes the FEM_EN half credible rather than
-  // merely present. [verified: n30nex HeltecRC52Board.cpp, read 2026-08-20]
-  //
-  // Corroboration by implementation, NOT by datasheet -- so if RF behaves oddly,
-  // this line is a legitimate suspect. An earlier revision left the pin on
-  // INPUT_PULLDOWN, asserting nothing; that was worse, because it left the FEM
-  // in a state nobody had chosen.
-  //
-  // NOTE: the assertion itself now happens BELOW, after the rail is up. Only the
-  // ordering changed; the polarity and its evidence are untouched.
+// FEM module power as the OFFBAND_CAP_FEM_LNA capability (#983). See RC52Board.h
+// for why "enable" here means WHOLE-MODULE power (FEM_EN + VFEM_CTRL), not the
+// RX-LNA-path toggle it is on T096/HV4 -- the RXEN/LNA line stays with RadioLib.
+bool RC52Board::setLoRaFemLnaEnabled(bool enable) {
+  if (enable) {
+    // -------------------------------------------------------------------------
+    // ORDER: raise the FEM rail FIRST, then assert FEM_EN. (#879 review gate.)
+    //
+    // This was the other way round until 2026-08-24, on the argument that
+    // powering the module while its enable input floated was the greater risk.
+    // That argument was tagged [hypothesis: untested] and it was the wrong call:
+    // driving 3.3 V into a control input of an UNPOWERED chip forward-biases that
+    // pin's ESD diode and back-powers the module through it. Unreliable start-up
+    // is the mild outcome; pin degradation is the durable one. powerOff() (and
+    // the disable path below) already do the correct inverse -- FEM_EN low, THEN
+    // the rail down -- so the principle was applied on the way down and simply
+    // missed on the way up.
+    //
+    // ⚠ THIS DIVERGES FROM n30nex, the only shipping RC52 implementation, which
+    // asserts FEM_EN before VFEM_Ctrl. [hypothesis: DISPROVEN 2026-08-24] The
+    // reorder was expected to recover the -6.9 dB TX deficit; a same-chain
+    // re-measure came back +14.1 dBm, flat vs the +15.1 baseline, so the
+    // power-order hypothesis is dead. The reorder stands on general
+    // power-sequencing grounds only, not as a fix. See #931 / #858 / #975.
+    //
+    // VFEM_Ctrl drives EN (pin 3) of U14, a TLV75733PDBVR 3.3 V LDO, ACTIVE HIGH,
+    // turning on VDD_FEM. Polarity DERIVED from the schematic, not a sibling
+    // board: [verified: RC52-L62_V1.02, U14 = TLV75733PDBVR, VFEM_Ctrl -> EN].
+    // FEM_EN is ACTIVE HIGH; no HT-RA62A datasheet exists (FEM is inside the
+    // module), so its polarity is corroborated by n30nex, not derived
+    // [verified: n30nex HeltecRC52Board.cpp, read 2026-08-20] -- a legitimate
+    // suspect if RF behaves oddly.
+    // -------------------------------------------------------------------------
+    pinMode(RADIOCORE_VFEM_CTRL, OUTPUT);
+    digitalWrite(RADIOCORE_VFEM_CTRL, HIGH);
 
-  // ---------------------------------------------------------------------------
-  // FEM supply rail -- raised FIRST, so the module is powered before any control
-  // input is driven into it.
-  //
-  // VFEM_Ctrl drives the EN pin (pin 3) of U14, a TLV75733PDBVR -- a TI 3.3 V LDO
-  // whose enable is ACTIVE HIGH. Driving it high turns on VDD_FEM, the front-end
-  // module's supply. This polarity is DERIVED from the schematic, not copied from
-  // a sibling board: [verified: RC52-L62_V1.02, U14 = TLV75733PDBVR, VFEM_Ctrl ->
-  // EN]. #602 is what happens when a battery/enable polarity is inherited instead.
-  // ---------------------------------------------------------------------------
-  pinMode(RADIOCORE_VFEM_CTRL, OUTPUT);
-  digitalWrite(RADIOCORE_VFEM_CTRL, HIGH);
+    // The LDO must be up before its load's enable is driven. TLV75733PDBVR
+    // start-up is hundreds of microseconds; 1 ms is generous and runs rarely.
+    delay(1);
 
-  // The LDO needs to actually be up before we drive its load's enable pin.
-  // TLV75733PDBVR start-up is specified in the hundreds of microseconds; 1 ms is
-  // generous and this runs once at boot, so the cost is irrelevant.
-  delay(1);
+    pinMode(RADIOCORE_FEM_EN, OUTPUT);
+    digitalWrite(RADIOCORE_FEM_EN, HIGH);
+    delay(1);
+  } else {
+    // Inverse order: de-assert FEM_EN BEFORE dropping the rail, so a push-pull
+    // output never holds 3.3 V into an unpowered input (the back-powering the
+    // enable path above avoids). Same reasoning as powerOff().
+    pinMode(RADIOCORE_FEM_EN, OUTPUT);
+    digitalWrite(RADIOCORE_FEM_EN, LOW);
 
-  // FEM_EN -- asserted now that VDD_FEM is live. See the ORDER block above.
-  pinMode(RADIOCORE_FEM_EN, OUTPUT);
-  digitalWrite(RADIOCORE_FEM_EN, HIGH);
+    pinMode(RADIOCORE_VFEM_CTRL, OUTPUT);
+    digitalWrite(RADIOCORE_VFEM_CTRL, LOW);
+  }
 
-  delay(1);
+  _fem_lna_enabled = enable;
+  return true;
 }
 
 uint16_t RC52Board::getBattMilliVolts() {
@@ -192,32 +179,10 @@ uint16_t RC52Board::getBattMilliVolts() {
 }
 
 void RC52Board::powerOff() {
-  // ORDER: de-assert the FEM control BEFORE dropping its rail.
-  //
-  // The first version dropped VFEM_Ctrl and left FEM_EN driven HIGH for the
-  // entire sleep -- a push-pull output holding 3.3 V into an unpowered input.
-  // That forward-biases the input's ESD structure and can back-power the
-  // module through a signal pin, for hours, on battery.
-  //
-  // This is the one sequencing question on this board with no counter-argument:
-  // whichever power-UP order is correct, nothing defends leaving a control line
-  // asserted into a dead rail. Found by the Gemini adversarial review, #879.
-  pinMode(RADIOCORE_FEM_EN, OUTPUT);
-  digitalWrite(RADIOCORE_FEM_EN, LOW);
-
-  // [hypothesis: untested] The power-UP order in begin() -- FEM_EN settled
-  // before the rail rises -- is deliberately NOT flipped to mirror this. The
-  // same review argued for VFEM_Ctrl first on a general CMOS back-powering
-  // argument. Two things stop that from being adopted: n30nex ships FEM_EN
-  // first (v1.1.0-rc.4, corroborated 2026-08-20), and no HT-RA62A datasheet
-  // exists to say whether the module's FEM_EN input is referenced to VDD_FEM
-  // or to the main supply -- the FEM is INSIDE the module. Reversing it would
-  // trade one untested hypothesis for another. Tracked under epic #929.
-
-  // Drop the FEM rail before sleeping so the LDO is not left enabled into a
-  // low-power state.
-  pinMode(RADIOCORE_VFEM_CTRL, OUTPUT);
-  digitalWrite(RADIOCORE_VFEM_CTRL, LOW);
+  // Drop the FEM through the capability setter: FEM_EN low BEFORE the rail, so a
+  // push-pull output never holds 3.3 V into an unpowered input for the sleep.
+  // Single source of truth for the sequence -- see setLoRaFemLnaEnabled().
+  setLoRaFemLnaEnabled(false);
 
   // Return the battery divider gate to its inactive sense.
   pinMode(ADC_CTRL, OUTPUT);
