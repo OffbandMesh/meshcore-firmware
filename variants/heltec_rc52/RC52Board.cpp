@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-#include "../../src/helpers/diagnostics/CrashLog.h"   // #857 boot-voltage self-report
+#include <helpers/diagnostics/CrashLog.h>   // #857 boot-voltage self-report
 
 #ifdef NRF52_POWER_MANAGEMENT
 // #953 enabled NRF52_POWER_MANAGEMENT here for the RESETREAS capture; #857 then
@@ -58,10 +58,22 @@ void RC52Board::begin() {
   NRF52Board::begin();
 
 #ifdef NRF52_POWER_MANAGEMENT
-  // Cannot shut down here: bootlock is 0, so this returns immediately after
-  // initPowerMgr(). Present so RESETREAS reaches getResetReasonString(), which
-  // is what puts a real cause in the "[boot] <role> up; reset=..." line the
-  // mirror UART now carries (#953).
+  // Two jobs: initPowerMgr() surfaces RESETREAS to getResetReasonString() -- what
+  // puts a real cause in the "[boot] <role> up; reset=..." line the mirror UART
+  // carries (#953) -- AND the low-voltage boot gate.
+  //
+  // ⚠ THE GATE IS ARMED. PWRMGT_VOLTAGE_BOOTLOCK is 3300 mV (variant.h), so
+  // this CAN shut the board down here. An earlier version of this comment said
+  // "bootlock is 0, so this returns immediately"; that was true before #857 set
+  // the threshold and was not updated when it did. Corrected 2026-08-25.
+  //
+  // ⚠ Consequence specific to this board: a false trip has no automatic escape.
+  // initiateShutdown() below arms USB-attach wake ONLY -- no LPCOMP cell-recovery
+  // wake, for the FET-gated-divider reason documented there -- so a board that
+  // boot-locks stays locked until someone plugs in USB. The single-sample nature
+  // of the check (a sag can read as a depleted cell) is tracked fleet-wide on
+  // #982; do not "fix" it by zeroing the threshold, which trades a false trip for
+  // a brownout boot loop on a genuinely flat cell.
   checkBootVoltage(&power_config);
 
   // #857: self-report the boot reading on the mirror UART, next to the reset
