@@ -126,11 +126,24 @@ bool RC52Board::setLoRaFemLnaEnabled(bool enable) {
     // missed on the way up.
     //
     // ⚠ THIS DIVERGES FROM n30nex, the only shipping RC52 implementation, which
-    // asserts FEM_EN before VFEM_Ctrl. [hypothesis: DISPROVEN 2026-08-24] The
-    // reorder was expected to recover the -6.9 dB TX deficit; a same-chain
-    // re-measure came back +14.1 dBm, flat vs the +15.1 baseline, so the
-    // power-order hypothesis is dead. The reorder stands on general
-    // power-sequencing grounds only, not as a fix. See #931 / #858 / #975.
+    // asserts FEM_EN before VFEM_Ctrl.
+    //
+    // [hypothesis: DISPROVEN -- and the premise it rested on never existed]
+    // The reorder was made to chase a reported -6.9 dB TX deficit. There is no
+    // deficit. A four-board sweep on 2026-08-25 put RC52, RC32, RCC6 and
+    // RAK4631 ALL at +20.30 dBm at tx 22 -- one FEM board and three without,
+    // three MCU families, two vendors -- against a -1.70 dB figure that is the
+    // measurement chain, not the radio. The earlier -6.9 dB AND its first
+    // "correction" to -2.04 dB were both sampling artifacts: a 2 MHz sweep for a
+    // 62.5 kHz signal parked the analyser on the carrier ~3% of the time, so
+    // most 150 ms bursts were never sampled. Resolved by zero-span gating.
+    // [verified: owner-operated bench, four boards, OliveValley, 2026-08-25]
+    //
+    // So this reorder fixed nothing, because nothing was broken. It stands ONLY
+    // on general power-sequencing grounds -- do not drive a control input into
+    // an unpowered rail -- which is reason enough to keep it and no reason to
+    // cite it as an RF fix. Do not resurrect a FEM TX-power investigation from
+    // the numbers this comment used to carry. See #931 / #858 / #975 / #963.
     //
     // VFEM_Ctrl drives EN (pin 3) of U14, a TLV75733PDBVR 3.3 V LDO, ACTIVE HIGH,
     // turning on VDD_FEM. Polarity DERIVED from the schematic, not a sibling
