@@ -160,7 +160,9 @@ static const uint8_t AREF = PIN_AREF;
 //   Setting IO3 HIGH enables the FEM (LNA for RX, PA path for TX).
 //   CTX is connected to SX1262 DIO2 — the radio handles TX/RX switching
 //   in hardware via SetDIO2AsRfSwitchCtrl (microsecond-accurate, no GPIO needed).
-//   The 5V boost for the PA is enabled by WB_IO2 (P0.34 = PIN_3V3_EN).
+//   The 5V boost for the PA is enabled by WB_IO2 (P1.02, Arduino pin 34, =
+//   PIN_3V3_EN). Corrected 2026-08-26: this said "P0.34", which does not exist --
+//   nRF52840 is P0.00-P0.31 then P1.00-P1.15.
 #define SX126X_POWER_EN (21)        // P0.21 = IO3 -> SKY66122 CSD+CPS (FEM enable)
 
 // CTX is driven by SX1262 DIO2, not a GPIO

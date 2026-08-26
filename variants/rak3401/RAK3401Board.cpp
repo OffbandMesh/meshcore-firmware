@@ -45,7 +45,11 @@ void RAK3401Board::begin() {
 
   Wire.begin();
 
-  // PIN_3V3_EN (WB_IO2, P0.34) controls the 3V3_S switched peripheral rail
+  // PIN_3V3_EN (WB_IO2, P1.02 = Arduino pin 34) controls the 3V3_S switched rail.
+  // NOTE: this read "P0.34" until 2026-08-26. There is no P0.34 -- nRF52840 has
+  // P0.00-P0.31 and P1.00-P1.15, so Arduino pin 34 is P1.02. RAK4631Board.cpp had
+  // it right for the same pin. Comment-only correction; the pin number was always
+  // correct and nothing behavioural changes.
   // AND the 5V boost regulator (U5) on the RAK13302 that powers the SKY66122 PA.
   // Must stay HIGH during radio operation — do not toggle for power saving.
   pinMode(PIN_3V3_EN, OUTPUT);
