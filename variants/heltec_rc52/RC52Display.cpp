@@ -755,6 +755,33 @@ void RC52Display::allocFrameBuffer() {
 
 // One transfer for the whole frame. Pixels are already byte-swapped in the
 // buffer, so this is a straight byte blit with no per-pixel work.
+#if defined(RC52_DISPLAY_BUFFER_INDEXED)
+// #948: FULL-COLOUR ART OVERLAY -- composited during the blit, not bypassed.
+//
+// Indexed cannot hold arbitrary art: the palette is the UI's brand colours and
+// their blend ramps, so forcing a colour logo through nearest-match posterises
+// it. The first attempt dodged that by writing art STRAIGHT TO THE PANEL and
+// skipping the buffer, reasoning that "the splash draws once at boot, so the
+// repaint costs nothing."
+//
+// That reasoning was wrong, and the hardware said so. The splash renders INSIDE
+// startFrame()/endFrame() and repeatedly -- SplashScreen::render() returns 1000,
+// so once a second for the whole boot screen -- and every endFrame() blits the
+// buffer over the entire panel. The art was painted and then immediately erased.
+// Owner-observed: "the lockup graphic flashed in and out", while the text below
+// it, which lives in the buffer, stayed put. [verified: rc52-bench-1, 2026-08-26]
+//
+// So the art is neither bypassed nor quantised. It is remembered for the frame
+// and substituted into the blit's EXISTING per-pixel unpack loop -- which only
+// runs for indexed anyway. Art pixels pass through at full RGB565; every other
+// pixel is the same palette lookup as before. One transfer, no flash, no
+// posterisation, and no extra RAM: the source stays in flash and only a pointer
+// and a rect are held. Cleared by startFrame(), so it lives exactly one frame
+// and cannot leak onto a later screen.
+static const uint16_t* s_art_px = nullptr;
+static int s_art_x = 0, s_art_y = 0, s_art_w = 0, s_art_h = 0;
+#endif
+
 void RC52Display::blitFrameBuffer() {
   if (!frame_buf || !is_on) return;
 
@@ -780,6 +807,28 @@ void RC52Display::blitFrameBuffer() {
     size_t done = 0;
     while (done < total) {
       const size_t n = (total - done) < CHUNK_PX ? (total - done) : CHUNK_PX;
+#if defined(RC52_DISPLAY_BUFFER_INDEXED)
+      // Row/col tracked incrementally: one division per 64-pixel chunk rather
+      // than per pixel. Hoisted on s_art_px so the ordinary UI path -- every
+      // frame that is not the splash -- runs byte-for-byte the loop it did
+      // before this overlay existed.
+      if (s_art_px) {
+        int y = (int)((done) / RC52_SCREEN_WIDTH);
+        int x = (int)((done) % RC52_SCREEN_WIDTH);
+        for (size_t i = 0; i < n; i++) {
+          uint16_t c;
+          const int ax = x - s_art_x, ay = y - s_art_y;
+          if (ax >= 0 && ax < s_art_w && ay >= 0 && ay < s_art_h) {
+            c = s_art_px[(size_t)ay * s_art_w + ax];   // full RGB565, untouched
+          } else {
+            c = pxUnpack(frame_buf[done + i]);
+          }
+          out[i * 2]     = (uint8_t)(c >> 8);
+          out[i * 2 + 1] = (uint8_t)(c & 0xff);
+          if (++x >= RC52_SCREEN_WIDTH) { x = 0; y++; }
+        }
+      } else
+#endif
       for (size_t i = 0; i < n; i++) {
         const uint16_t c = pxUnpack(frame_buf[done + i]);
         out[i * 2]     = (uint8_t)(c >> 8);    // big-endian, as the panel expects
@@ -839,20 +888,22 @@ void RC52Display::drawRGB565(int x, int y, const uint16_t* px, int w, int h) {
   if (!is_on || !px) return;
 
 #if defined(RC52_DISPLAY_BUFFER_INDEXED)
-  // INDEXED DELIBERATELY BYPASSES THE BUFFER FOR COLOUR ART.
+  // Colour art is composited during the blit, not written here. See the overlay
+  // note above blitFrameBuffer(): the palette cannot represent arbitrary art, and
+  // painting straight to the panel loses it to the very next endFrame() blit.
+  // Recording it keeps full RGB565 fidelity AND survives the blit.
   //
-  // The palette holds the UI's six brand colours and their blend ramps. Full
-  // colour artwork cannot be represented in it -- forcing the splash through
-  // nearest-match would posterise it badly, and widening the palette to cover
-  // arbitrary art would give back the exactness that is the entire point.
-  //
-  // Going straight to the panel costs a visible repaint, and here that costs
-  // nothing: the splash draws ONCE at boot. Flicker matters on the 5-second UI
-  // repaint cycle, not on a one-shot boot image. So the art stays full 16bpp
-  // fidelity and the UI stays pixel-exact -- the buffer is simply not the right
-  // tool for this one call.
-  //
-  // Falls through to the unbuffered path below.
+  // Cleared every startFrame(), so this is per-frame state -- art must be drawn
+  // each frame it should appear, which is exactly what SplashScreen::render()
+  // does.
+  if (frame_buf) {
+    s_art_px = px;
+    s_art_x  = x;  s_art_y = y;
+    s_art_w  = w;  s_art_h = h;
+    return;
+  }
+  // No buffer (RC52_DISPLAY_DISABLE_BACKBUFFER): fall through and paint direct,
+  // which is correct -- with nothing blitting over it, direct IS the frame.
 #else
   if (frame_buf) {
 #if defined(RC52_DISPLAY_BUFFER_8BPP)
@@ -1054,6 +1105,11 @@ void RC52Display::clear() {
 }
 
 void RC52Display::startFrame(ColorVal bkg) {
+#if defined(RC52_DISPLAY_BUFFER_INDEXED)
+  // Per-frame lifetime: art must be re-drawn each frame it should appear, so it
+  // cannot bleed onto a later screen that does not draw it.
+  s_art_px = nullptr;
+#endif
   color = bkg;
   fillPhysicalRect(0, 0, RC52_SCREEN_WIDTH, RC52_SCREEN_HEIGHT);
   color = UIColor::primary_txt;
@@ -1165,13 +1221,20 @@ void RC52Display::endFrame() {
 
   unsigned long nonbg = 0;
   if (frame_buf) {
-    // The buffer holds byte-swapped pixels; compare against the background in
-    // the same representation rather than unswapping 28k times.
-    const uint16_t bg_swapped =
-        (uint16_t)((UIColor::window_bkg >> 8) | (UIColor::window_bkg << 8));
+    // Compare against whatever the BACKGROUND WOULD BE STORED AS in this build's
+    // pixel format -- pxPack() answers that for all three (palette index, RGB332
+    // byte, or byte-swapped RGB565) -- rather than unswapping 28k pixels.
+    //
+    // ⚠ This previously hard-coded a byte-swapped uint16_t RGB565 comparand.
+    // Correct at 16bpp; WRONG the moment the buffer holds 8-bit values, because a
+    // uint8_t index can never equal a uint16_t above 255 -- so it reported
+    // px_nonbg = 28160 (every pixel) on every frame, unconditionally. It read as
+    // a rendering anomaly and is simply a broken instrument. Fixed 2026-08-26,
+    // when indexed became the shipping default and made it wrong everywhere.
+    const rc52_px_t bg_ref = pxPack(UIColor::window_bkg);
     const size_t px = (size_t)RC52_SCREEN_WIDTH * RC52_SCREEN_HEIGHT;
     for (size_t i = 0; i < px; i++) {
-      if (frame_buf[i] != bg_swapped) nonbg++;
+      if (frame_buf[i] != bg_ref) nonbg++;
     }
   }
   offband::crashLogf("[rc52disp] endFrame #%lu on=%d buf=%d px_nonbg=%lu",
