@@ -209,6 +209,45 @@
 // the chip, and no averaging setting recovers it.
 #define INA219_SHUNT_MILLIOHM  100
 
+// ---------------------------------------------------------------------------
+// INA228 (#991). Different part, different register map, DIFFERENT SHUNT.
+//
+// THE SHUNT IS A PROPERTY OF THE FITTED PART, NOT OF THE RIG. The INA219 bench
+// module carries R100 = 0.100 ohm; the Adafruit INA228 breakout carries
+// R015 = 0.015 ohm [verified: owner photo of the fitted board, 2026-08-26].
+// Reusing the INA219 constant here would under-report by 100/15 = 6.67x and look
+// entirely plausible doing it.
+//
+// NO CALIBRATION WRITE, deliberately -- same reasoning as the INA219 path above.
+// SHUNT_CAL only feeds the CURRENT/POWER/ENERGY/CHARGE registers. Reading VSHUNT
+// and dividing by a known resistance on the host needs no magic constant, cannot
+// be half-configured, and survives a part reset that would silently invalidate a
+// written calibration.
+//
+// VSHUNT and VBUS are 24-bit registers holding 20-bit data LEFT-ALIGNED in bits
+// 23:4, so both are >>4 before scaling. VSHUNT is SIGNED (two's complement over
+// 20 bits); VBUS is unsigned.
+//
+// The VSHUNT scale depends on ADCRANGE (CONFIG bit 4), so it is READ rather than
+// assumed -- if anything ever configures this part, the decode follows instead of
+// silently scaling by 4x:
+//     ADCRANGE=0   312.5   nV/LSB  ->  +/-163.84 mV  ->  +/-10.9 A at 15 mohm
+//     ADCRANGE=1    78.125 nV/LSB  ->  +/- 40.96 mV  ->  +/- 2.73 A at 15 mohm
+// At R015 that is 20.83 uA or 5.21 uA per count. A LoRa node's draw sits well
+// inside either range, so resolution is the only thing at stake.
+// ---------------------------------------------------------------------------
+#define INA228_SHUNT_MILLIOHM  15
+
+#define INA228_REG_CONFIG   0x00
+#define INA228_REG_VSHUNT   0x04
+#define INA228_REG_VBUS     0x05
+#define INA228_CONFIG_ADCRANGE  0x0010
+
+// Scales in nV per LSB, x1000 so the integer maths keeps a fractional digit.
+#define INA228_VSHUNT_NV_X1000_R0   312500UL   // 312.5   nV
+#define INA228_VSHUNT_NV_X1000_R1    78125UL   //  78.125 nV
+#define INA228_VBUS_NV_X1000       195312500UL // 195.3125 uV = 195312.5 nV
+
 #define MAX1704X_ADDR    0x36
 #define MAX1704X_VCELL   0x02
 #define MAX1704X_SOC     0x04
@@ -251,6 +290,19 @@ static bool gaugeRead16At(uint8_t addr, uint8_t reg, uint16_t* out) {
 
 static bool gaugeRead16(uint8_t reg, uint16_t* out) {
   return gaugeRead16At(MAX1704X_ADDR, reg, out);
+}
+
+// INA228's measurement registers are 24 bits, not 16. Same transaction shape as
+// gaugeRead16At, three bytes instead of two. Returned right-aligned; the caller
+// does the >>4 and sign-extension, because the field width differs per register.
+static bool gaugeRead24At(uint8_t addr, uint8_t reg, uint32_t* out) {
+  Wire1.beginTransmission(addr);
+  Wire1.write(reg);
+  if (Wire1.endTransmission(false) != 0) return false;
+  if (Wire1.requestFrom(addr, (uint8_t)3) != 3) return false;
+  uint8_t b2 = Wire1.read(), b1 = Wire1.read(), b0 = Wire1.read();
+  *out = ((uint32_t)b2 << 16) | ((uint32_t)b1 << 8) | b0;
+  return true;
 }
 
 // Forward declaration: gaugeBegin() calls this, and it is defined below.
@@ -457,8 +509,68 @@ static void inaProbe() {
 // wrong is the classic INA219 failure -- current and power silently read ZERO
 // until it is right. Reading the raw shunt voltage and dividing on the host
 // needs no magic constant and cannot be half-configured.
+// INA228 read path (#991). Emits the SAME [ina] line shape as the INA219 path so
+// existing captures, greps and parsers keep working -- bus_mv, ma, shunt_uv, then
+// the raw registers. Raw values are printed for the same reason the gauge prints
+// raw_vcell: if a scale is ever wrong, a captured log stays correctable after the
+// fact instead of being silently wrong for hours.
+static uint32_t ina228Tick() {
+  uint32_t rs = 0, rb = 0;
+  uint16_t cfg = 0;
+  if (!gaugeRead24At(ina_addr, INA228_REG_VSHUNT, &rs) ||
+      !gaugeRead24At(ina_addr, INA228_REG_VBUS,   &rb)) {
+    Serial.println("[ina] read FAILED (INA228)");
+    return 0;
+  }
+
+  // ADCRANGE is read, not assumed -- see the constants block. A failed CONFIG
+  // read falls back to the part's own reset default (ADCRANGE=0), which is the
+  // wider, coarser range: it under-resolves rather than over-reporting.
+  const bool have_cfg = gaugeRead16At(ina_addr, INA228_REG_CONFIG, &cfg);
+  const bool adcrange1 = have_cfg && (cfg & INA228_CONFIG_ADCRANGE);
+  const uint32_t nv_x1000 = adcrange1 ? INA228_VSHUNT_NV_X1000_R1
+                                      : INA228_VSHUNT_NV_X1000_R0;
+
+  // 20-bit signed, left-aligned in bits 23:4. Shift first, THEN sign-extend from
+  // bit 19 -- sign-extending the unshifted value would carry the low nibble in.
+  int32_t sh = (int32_t)(rs >> 4);
+  if (sh & 0x00080000L) sh -= 0x00100000L;
+
+  // nV then uV. int64 because 524287 * 312500 overflows int32 by a wide margin.
+  const int64_t shunt_nv = (int64_t)sh * (int64_t)nv_x1000 / 1000;
+  const int32_t shunt_uv = (int32_t)(shunt_nv / 1000);
+
+  // I(uA) = V(nV) / R(ohm) / 1000 = shunt_nv / milliohm  (the 1e3/1e3 cancels)
+  const int64_t ua = shunt_nv / (int64_t)INA228_SHUNT_MILLIOHM;
+  const int32_t ma_x10 = (int32_t)(ua / 100);
+
+  // VBUS: 20-bit unsigned, left-aligned, 195.3125 uV/LSB.
+  const uint32_t bus_mv =
+      (uint32_t)(((uint64_t)(rb >> 4) * INA228_VBUS_NV_X1000) / 1000000000ULL);
+
+  Serial.print("[ina] bus_mv=");
+  Serial.print(bus_mv);
+  Serial.print(" ma=");
+  // Negate into an UNSIGNED accumulator: `x = -x` is undefined for INT32_MIN.
+  // Unreachable at 20 bits, but the pattern is wrong and costs nothing to write
+  // correctly -- same fix as the INA219 path took in the #938 Gemini review.
+  uint32_t mag = (ma_x10 < 0) ? (uint32_t)-(int64_t)ma_x10 : (uint32_t)ma_x10;
+  if (ma_x10 < 0) Serial.print('-');
+  Serial.print(mag / 10); Serial.print('.'); Serial.print(mag % 10);
+  Serial.print("  shunt_uv=");
+  Serial.print(shunt_uv);
+  Serial.print("  raw_shunt=0x"); Serial.print(rs, HEX);
+  Serial.print(" raw_bus=0x");    Serial.print(rb, HEX);
+  Serial.print(adcrange1 ? "  adcrange=1" : "  adcrange=0");
+  if (!have_cfg) Serial.print(" (CONFIG read failed, assumed)");
+  Serial.println();
+  return bus_mv;
+}
+
 static uint32_t inaTick() {
-  if (ina_kind != INA_219_CLASS || ina_addr == 0) return 0;
+  if (ina_addr == 0) return 0;
+  if (ina_kind == INA_228) return ina228Tick();
+  if (ina_kind != INA_219_CLASS) return 0;
 
   uint16_t rs = 0, rb = 0;
   if (!gaugeRead16At(ina_addr, INA219_REG_SHUNT, &rs) ||
