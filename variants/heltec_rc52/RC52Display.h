@@ -88,6 +88,15 @@
 //
 // Indexed stores the brand colours EXACTLY. Only text-antialiasing blends are
 // approximated, and only to the nearest entry in a purpose-built ramp.
+// #856: the buffer-format flags are MUTUALLY EXCLUSIVE. INDEXED is now set in the
+// shared [Heltec_RC52_with_display] base, so a bench env that adds 8BPP on top
+// would inherit both -- and because pxPack() tests INDEXED first, it would build
+// as INDEXED while its name said 8bpp, quietly turning an A/B into a comparison
+// of indexed against itself. Refuse to build instead of measuring a lie.
+#if defined(RC52_DISPLAY_BUFFER_INDEXED) && defined(RC52_DISPLAY_BUFFER_8BPP)
+  #error "RC52_DISPLAY_BUFFER_INDEXED and _8BPP are mutually exclusive. INDEXED comes from the shared display base -- add -U RC52_DISPLAY_BUFFER_INDEXED to the env that wants 8bpp."
+#endif
+
 #if defined(RC52_DISPLAY_BUFFER_INDEXED) || defined(RC52_DISPLAY_BUFFER_8BPP)
   typedef uint8_t  rc52_px_t;
 #else
