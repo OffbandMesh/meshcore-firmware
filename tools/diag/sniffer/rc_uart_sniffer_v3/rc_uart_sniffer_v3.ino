@@ -283,8 +283,13 @@ static bool gaugeRead16At(uint8_t addr, uint8_t reg, uint16_t* out) {
   Wire1.write(reg);
   if (Wire1.endTransmission(false) != 0) return false;
   if (Wire1.requestFrom(addr, (uint8_t)2) != 2) return false;
-  uint8_t hi = Wire1.read(), lo = Wire1.read();
-  *out = ((uint16_t)hi << 8) | lo;
+  // TwoWire::read() returns int and yields -1 when the buffer is empty, which an
+  // implicit uint8_t cast turns into 0xFF -- a plausible value, silently wrong.
+  // A successful requestFrom() should guarantee the bytes, so this is defensive
+  // against a non-standard Wire, but "no silent failures" is cheap here.
+  const int hi = Wire1.read(), lo = Wire1.read();
+  if (hi < 0 || lo < 0) return false;
+  *out = ((uint16_t)hi << 8) | (uint8_t)lo;
   return true;
 }
 
@@ -300,8 +305,13 @@ static bool gaugeRead24At(uint8_t addr, uint8_t reg, uint32_t* out) {
   Wire1.write(reg);
   if (Wire1.endTransmission(false) != 0) return false;
   if (Wire1.requestFrom(addr, (uint8_t)3) != 3) return false;
-  uint8_t b2 = Wire1.read(), b1 = Wire1.read(), b0 = Wire1.read();
-  *out = ((uint32_t)b2 << 16) | ((uint32_t)b1 << 8) | b0;
+  // Same -1-becomes-0xFF trap as gaugeRead16At. It matters MORE here: an all-0xFF
+  // VBUS decodes to ~204.8 V, which is nonsense a reader would notice, but an
+  // all-0xFF VSHUNT sign-extends to -1 LSB and reads as a harmless -0.02 mA --
+  // wrong in a way nobody would ever question. (#991 review finding 1.)
+  const int b2 = Wire1.read(), b1 = Wire1.read(), b0 = Wire1.read();
+  if (b2 < 0 || b1 < 0 || b0 < 0) return false;
+  *out = ((uint32_t)(uint8_t)b2 << 16) | ((uint32_t)(uint8_t)b1 << 8) | (uint8_t)b0;
   return true;
 }
 
