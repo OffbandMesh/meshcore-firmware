@@ -68,8 +68,41 @@ from firmware_identity import get_firmware_identity  # noqa: E402
 # Constants
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-REGISTRY_PATH = PROJECT_ROOT / "hardware-devices.yaml"
-FLASH_HISTORY_PATH = PROJECT_ROOT / "flash-history.jsonl"
+
+# ---------------------------------------------------------------------------
+# Canonical per-host state directory (#1012).
+#
+# Durable per-host state MUST NOT be addressed through a checkout. PROJECT_ROOT
+# is derived from THIS SCRIPT'S OWN LOCATION, and this script is committed to
+# the repo -- so before #1012 every worktree that ran a flash silently forked
+# the device registry, the flash history and the backups. Measured 2026-08-27:
+# 80 worktrees, three registry copies (one 7 days stale), and the flash audit
+# trail split 2805 / 6 records across two files.
+#
+# That is a safety problem, not untidiness: #503 made the registry the thing
+# that decides WHICH PHYSICAL DEVICE gets written, and the history is the
+# record of what was written to it.
+#
+# One location, outside every repo, that nothing copies or relocates.
+# The resolution lives in ONE place -- scripts/offband_state.py -- because a
+# second copy of the path logic is the same class of bug as a second copy of
+# the registry. Override precedence is documented there.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from offband_state import (  # noqa: E402
+    registry_path,
+    flash_history_path,
+    backups_dir as _backups_dir,
+)
+
+STATE_DIR = registry_path().parent
+REGISTRY_PATH = registry_path()
+FLASH_HISTORY_PATH = flash_history_path()
+BACKUPS_DIR = _backups_dir()
+
+# Where these lived before #1012. Used ONLY to produce an actionable error --
+# never read as a fallback, because silently falling back to a checkout-local
+# registry is the exact failure this change exists to remove.
+_LEGACY_REGISTRY_PATH = PROJECT_ROOT / "hardware-devices.yaml"
 # #500 OWNER RULING: tokens have NO wall-clock expiry. ONE APPROVAL = ONE
 # FLASH; the owner's GO does not rot while he is away. A token is single-use
 # (deleted on confirm) and hard-invalidates on real state drift — port,
@@ -150,10 +183,25 @@ def refuse(msg: str, *, exit_code: int = 1) -> "NoReturn":
 # ---------------------------------------------------------------------------
 def load_registry() -> dict:
     if not REGISTRY_PATH.exists():
-        refuse(
-            f"hardware-devices.yaml not found at {REGISTRY_PATH}. "
-            "Run A1 first or fix PROJECT_ROOT in this script."
-        )
+        lines = [
+            f"hardware-devices.yaml not found at {REGISTRY_PATH}.",
+            "  This is the canonical per-host location (#1012); it is NOT "
+            "inside any repo or worktree.",
+        ]
+        if _LEGACY_REGISTRY_PATH.exists():
+            lines += [
+                f"  A pre-#1012 registry still exists at {_LEGACY_REGISTRY_PATH}.",
+                "  It is NOT used as a fallback -- a checkout-local registry is "
+                "the bug #1012 fixed.",
+                "  Migrate it deliberately:",
+                f"    mkdir -p '{STATE_DIR}'",
+                f"    mv '{_LEGACY_REGISTRY_PATH}' '{REGISTRY_PATH}'",
+                "  If several copies exist, pick the newest by hand -- registries "
+                "cannot be merged mechanically.",
+            ]
+        else:
+            lines.append("  Run 'pio-flash bootstrap' to register the first device.")
+        refuse(chr(10).join(lines))
     with REGISTRY_PATH.open(encoding="utf-8") as f:
         data = yaml.safe_load(f)
     if not isinstance(data, dict):
@@ -2310,7 +2358,7 @@ def cmd_backup(args, registry):
     port, entry = resolve_device(args.device, registry)
     _verify_bridge_mac(port, entry, args.device)  # #468: chip resets anyway
 
-    backups_dir = PROJECT_ROOT / "flash-backups"
+    backups_dir = BACKUPS_DIR  # #1012: canonical, not checkout-local
     backups_dir.mkdir(exist_ok=True)
 
     timestamp = time.strftime("%Y%m%d-%H%M%S")

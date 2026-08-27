@@ -111,23 +111,14 @@ def parse_self_info(body: bytes) -> dict:
 
 
 def _registry_clone_root():
-    """Locate the clone that holds the gitignored hardware-devices.yaml. It lives
-    only in the primary clone (main worktree), so resolve it via the shared git
-    common dir -- this makes the harness work whether it runs from the primary
-    clone or any worktree (where the registry file is absent)."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    try:
-        common = subprocess.run(
-            ["git", "-C", here, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            capture_output=True, text=True, timeout=10,
-        ).stdout.strip()
-        if common:
-            root = os.path.dirname(common)  # <primary>/.git -> <primary>
-            if os.path.exists(os.path.join(root, "hardware-devices.yaml")):
-                return root
-    except Exception:
-        pass
-    return os.path.dirname(here)  # fallback: this script's own clone
+    """Directory holding scripts/pio-flash.py -- this script's own clone."""
+    # Before #1012 this hunted for "the clone that has hardware-devices.yaml",
+    # because the registry was checkout-local and absent from worktrees. That
+    # hunt was a workaround for the fork bug, not a feature: the registry is
+    # now ONE per-host file outside every checkout (scripts/offband_state.py),
+    # so any copy of pio-flash.py resolves the same registry and there is
+    # nothing to search for.
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def parse_caplog_status(body: bytes) -> dict:

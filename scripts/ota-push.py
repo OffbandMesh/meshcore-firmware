@@ -75,8 +75,14 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-REGISTRY_PATH = PROJECT_ROOT / "hardware-devices.yaml"
-FLASH_HISTORY_PATH = PROJECT_ROOT / "flash-history.jsonl"
+
+# #1012: ONE registry and ONE history for this repo, outside every checkout.
+# Never checkout-local -- see scripts/offband_state.py for why.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from offband_state import registry_path, flash_history_path  # noqa: E402
+
+REGISTRY_PATH = registry_path()
+FLASH_HISTORY_PATH = flash_history_path()
 # Secrets source. LoRa#209 moved secrets out of a co-located (and now
 # deprecated) platformio.local.ini into a canonical file the BUILD reads via
 # `extra_configs = ${sysenv.PIO_SECRETS_FILE}` (see platformio.ini). ota-push
