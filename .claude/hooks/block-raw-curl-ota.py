@@ -50,7 +50,28 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-REGISTRY_PATH = PROJECT_ROOT / "hardware-devices.yaml"
+
+# #1012: the registry is per-host and canonical, NOT checkout-local.
+#
+# Resolution lives in scripts/offband_state.py and is NOT duplicated here: a
+# second copy of the path logic drifts, and a security hook reading a
+# different registry than the tool it guards is worse than no hook.
+#
+# sys.path.append (NOT insert(0)) so a file dropped in scripts/ cannot shadow
+# a stdlib module for this hook.
+sys.path.append(str(PROJECT_ROOT / "scripts"))
+try:
+    from offband_state import registry_path
+except ImportError as _e:  # no silent second implementation -- see below
+    print(
+        "WARN: block-raw-curl-ota: cannot import scripts/offband_state.py "
+        f"({_e}); OTA IP guard is OPEN. Fix the checkout.",
+        file=sys.stderr,
+    )
+    registry_path = None
+
+REGISTRY_PATH = registry_path() if registry_path else None
+
 WRAPPER_PATH = "scripts/ota-push.py"
 
 
@@ -60,7 +81,7 @@ def load_known_lora_ips() -> list[str]:
     have an 'ota' block. Returns empty list on any registry load failure
     (intentional fail-open: bad registry shouldn't block all curl usage).
     """
-    if not REGISTRY_PATH.exists():
+    if REGISTRY_PATH is None or not REGISTRY_PATH.exists():
         return []
     try:
         import yaml
