@@ -79,9 +79,19 @@ jobs:
 
   release:
     needs: [list, build]
-    # Publish only on tag pushes (not on dispatch test runs). always() so a partial
-    # build failure still publishes the envs that succeeded (publish-partial-and-flag).
-    if: ${{ always() && github.event_name == 'push' }}
+    # Publish only on tag pushes (not on dispatch test runs).
+    #
+    # NO PARTIAL RELEASES -- owner ruling 2026-08-28 (#1016). always() used to be
+    # here so a partial build failure still published whatever succeeded
+    # ("publish-partial-and-flag"). That shipped releases silently missing binaries:
+    # release-envs.txt drives a fail-fast:false matrix, so one bad env name or one
+    # broken board failed a single job while the release published anyway, and a
+    # user cannot tell a deliberate omission from a build that blew up.
+    #
+    # Without always(), needs:[list, build] skips this job if ANY matrix job failed.
+    # A red matrix now blocks the release instead of quietly shrinking it. Fix the
+    # build, re-run the tag, and it publishes complete or not at all.
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -110,8 +120,13 @@ jobs:
           # converges the release to exactly the current set.
           # Guard: an all-failed build collects NOTHING into out/. Pure
           # idempotency would then strip a previously-good release of every
-          # working asset -- worse than stale. Publish-partial-and-flag wins:
-          # keep the old set and let the run's red matrix tell the story.
+          # working asset -- worse than stale. Keep the old set and let the run's
+          # red matrix tell the story.
+          #
+          # Since #1016 removed always() from this job's condition, a failed build
+          # skips the job entirely and this path should be unreachable. Retained as
+          # defense in depth, NOT as live policy -- do not read it as sanctioning
+          # partial publishes.
           if [ -z "$(find out -type f -print -quit 2>/dev/null)" ]; then
             echo "out/ is empty (build produced nothing) -- refusing to purge a prior release."
             exit 0
