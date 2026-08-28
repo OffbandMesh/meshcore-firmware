@@ -280,7 +280,12 @@ jobs:
           - heltec_rc52_without_display_repeater_diag
           - heltec_rc52_without_display_companion_radio_ble_diag
           - heltec_rc52_without_display_companion_radio_usb_diag
-          - heltec_rc52_without_display_room_server_diag
+          # heltec_rc52_without_display_room_server_diag -- REMOVED 2026-08-28 (#1016).
+          #   room_server is excluded from RC52 ENTIRELY, owner ruling, on the
+          #   strength of #965 (watchdog reset at ~29 s, no render on first boot).
+          #   Building a headless diag variant of a role we will not ship signalled
+          #   that the headless build was somehow exempt from the bug. It is not.
+          #   Restore this AND the release envs together when #965 closes.
           # Shipped envs (.github/release-envs.txt) -- display builds
           - heltec_rc52_companion_radio_ble
           - heltec_rc52_companion_radio_usb
