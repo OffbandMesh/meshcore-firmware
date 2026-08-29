@@ -254,22 +254,45 @@ jobs:
           - Xiao_S3_WIO_companion_radio_wifi
           - Xiao_C6_repeater_
           # #854 (epic #879): Heltec RadioCore RC52 (nRF52840 + HT-RA62A/SX1262).
-          # Owner-directed 2026-08-21: RC52 goes into CI as it is built out, so the
-          # build is validated, but deliberately NOT into .github/release-envs.txt
-          # until #880 (display) lands and it has had further testing. CI-only here.
           # (No observer env exists: observer is ESP32/WiFi-only, and nRF52840 has
           # no WiFi -- same reason Heltec_t096 has none above.)
-          # Envs carry the RC32 _without_display_ convention: this board has no
-          # display support yet (#880), so every shipping env today is headless.
+          #
+          # UPDATED 2026-08-28 (#1016). The previous note here said RC52 was
+          # "deliberately NOT into .github/release-envs.txt until #880 (display)
+          # lands" and that "this board has no display support yet, so every
+          # shipping env today is headless". BOTH ARE NOW FALSE: #880/#948 landed,
+          # the display works on hardware, and RC52 is in the release matrix.
+          #
+          # WHY THE DISPLAY ENVS ARE HERE: #1016 added six RC52 envs to
+          # .github/release-envs.txt. Before this change every RC52 env in CI was a
+          # without_display _diag env, so NOTHING gated the builds that ship -- a
+          # change breaking them merged green. Anything in the release matrix is
+          # built here. That is the rule this block now follows.
+          #
+          # The four without_display _diag envs are KEPT even though they do not
+          # ship: they are a different build (no display driver linked) and are the
+          # only CI coverage of the headless path. Dropping them to save matrix time
+          # would lose that coverage, not duplicate it.
+          #
           # OWNER DIRECTIVE 2026-08-22 (#889): until a near-release beta, every env
-          # BUILT is a full diagnostic build -- forced caplog + boot beacon + UART
-          # mirror. CI therefore builds the _diag envs, not their plain parents.
-          # The parents still exist so the release-time diag/non-diag pairs are
-          # already there, correctly named, when we get to beta.
+          # BUILT is a full diagnostic build. RC52 is now shipping diag/non-diag
+          # pairs (#1016), so both halves are built.
           - heltec_rc52_without_display_repeater_diag
           - heltec_rc52_without_display_companion_radio_ble_diag
           - heltec_rc52_without_display_companion_radio_usb_diag
-          - heltec_rc52_without_display_room_server_diag
+          # heltec_rc52_without_display_room_server_diag -- REMOVED 2026-08-28 (#1016).
+          #   room_server is excluded from RC52 ENTIRELY, owner ruling, on the
+          #   strength of #965 (watchdog reset at ~29 s, no render on first boot).
+          #   Building a headless diag variant of a role we will not ship signalled
+          #   that the headless build was somehow exempt from the bug. It is not.
+          #   Restore this AND the release envs together when #965 closes.
+          # Shipped envs (.github/release-envs.txt) -- display builds
+          - heltec_rc52_companion_radio_ble
+          - heltec_rc52_companion_radio_usb
+          - heltec_rc52_repeater
+          - heltec_rc52_companion_radio_ble_diag
+          - heltec_rc52_companion_radio_usb_diag
+          - heltec_rc52_repeater_diag
     steps:
       - uses: actions/checkout@v5
 

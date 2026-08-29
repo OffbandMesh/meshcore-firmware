@@ -199,6 +199,49 @@ heltec_rcc6_repeater_display_diag
 #   -- every other observer env is ESP32/S3. Recorded as a fact worth knowing, not
 #   as a caveat: it is verified running on hardware (#830).
 
+# Heltec RadioCore RC52 (nRF52840 + HT-RA62A LoRa) -- #625 / #1016
+# The DISPLAY builds. Headless (without_display_*) is for a production low-power
+# build or a headless bench request, not the default product.
+#
+# heltec_rc52_room_server -- DELIBERATELY EXCLUDED, owner decision. #965: the
+#   room server watchdog-resets once at ~29 s and renders nothing on that first
+#   boot, then recovers and stays up. Open, P1, reproducible, and it predates the
+#   display work. Add it when #965 closes -- do NOT "complete the set" before then.
+# No RC52 sensor env exists; nothing to exclude there.
+#
+# THE THIRD DIAG EXCEPTION -- owner decision 2026-08-28 (#1016).
+#   The exceptions above (RC32 #824, RCC6 #806) are explicitly NOT inheritable:
+#   "Extending this to a third board is a fresh owner decision, not an
+#   inheritance from these two." RC52 is that third board and the owner has now
+#   made the decision. It was ASKED FOR and GRANTED, not assumed from precedent.
+#
+#   Same rationale as the other two: a beta tester on unproven hardware has to be
+#   able to produce evidence. Same scope limit: while RC52 is beta. Revisit when
+#   the board leaves beta. THIS IS STILL NOT INHERITABLE -- a fourth board needs
+#   its own decision.
+#
+#   One diag env per shipped role, and no others:
+#     * heltec_rc52_room_server_diag -- excluded, because room_server itself is
+#       excluded (#965). Pairs follow the shipped set.
+#     * heltec_rc52_companion_radio_ble_diag_nobuf -- excluded. Its own comment in
+#       variants/heltec_rc52/platformio.ini says: "BENCH EXPERIMENT ONLY -- NOT a
+#       shipping env, NOT in CI, NOT in the release matrix. Do not 'complete the
+#       set' by adding twins of this."
+#     * without_display _diag envs -- excluded; headless is not the product.
+#
+# WARNING -- these three are NOT built by ci.yml. Every RC52 env in the CI matrix
+#   is a without_display _diag env, so nothing gates the builds shipped here: a
+#   change that breaks them merges green. Adding them to ci.yml is a separate
+#   owner-approved change (#477 makes the matrix a required merge gate).
+heltec_rc52_companion_radio_ble
+heltec_rc52_companion_radio_usb
+heltec_rc52_repeater
+
+# RC52 diag pairs (see the decision note above)
+heltec_rc52_companion_radio_ble_diag
+heltec_rc52_companion_radio_usb_diag
+heltec_rc52_repeater_diag
+
 # Heltec T096 (nRF52)
 Heltec_t096_companion_radio_ble
 Heltec_t096_companion_radio_usb
