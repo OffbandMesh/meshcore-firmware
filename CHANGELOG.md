@@ -16,6 +16,19 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+## [1.5.0-beta6] - 2026-08-29
+
+### Added
+- **Heltec RadioCore RC52 (nRF52840) ships** ([#625](https://github.com/OffbandMesh/meshcore-firmware/issues/625) family, [#1016](https://github.com/OffbandMesh/meshcore-firmware/issues/1016)): first release binaries for the RC52 — companion (BLE/USB), repeater, and display variants, each with a `_diag` twin. Brought up on real hardware: TFT pins corrected and rotation confirmed on the bench ([#950](https://github.com/OffbandMesh/meshcore-firmware/issues/950)/[#951](https://github.com/OffbandMesh/meshcore-firmware/issues/951)), flicker-free indexed-palette display buffer ([#856](https://github.com/OffbandMesh/meshcore-firmware/issues/856)), FEM powered before enable with runtime FEM/LNA control ([#931](https://github.com/OffbandMesh/meshcore-firmware/issues/931)/[#983](https://github.com/OffbandMesh/meshcore-firmware/issues/983)), low-battery boot protection with USB-attach wake ([#857](https://github.com/OffbandMesh/meshcore-firmware/issues/857)), reset-cause capture ([#953](https://github.com/OffbandMesh/meshcore-firmware/issues/953)). Room server excluded from the release list for now.
+- **nRF52 boards get the diagnostic log channel** ([#887](https://github.com/OffbandMesh/meshcore-firmware/issues/887)): the UART0 caplog mirror and boot beacon — previously ESP32-only — now run on nRF52, with bench diag envs for the case-accessible boards ([#979](https://github.com/OffbandMesh/meshcore-firmware/issues/979)) and a bounded per-byte wait so the mirror can't stall a boot ([#888](https://github.com/OffbandMesh/meshcore-firmware/issues/888)).
+- **INA228 power telemetry is actually read** ([#991](https://github.com/OffbandMesh/meshcore-firmware/issues/991)): the sensor was identified but never decoded; every I²C read is now checked instead of silently becoming 0xFF.
+
+### Fixed
+- **RAK3401 configuration un-forked** ([#984](https://github.com/OffbandMesh/meshcore-firmware/issues/984)): removed the `RAK_BOARD` define that was the board's whole divergence from upstream, and disabled the GPS probe (which kills TX) on every RAK3401 env. **The board's TX investigation itself remains open on #984** — these changes clean the ground under it.
+
+### Known issues shipping in this beta
+- Serial-framing fix ([#718](https://github.com/OffbandMesh/meshcore-firmware/issues/718)) still unverified on hardware; RC32 companion RST dark-boot ([#702](https://github.com/OffbandMesh/meshcore-firmware/issues/702)) still open — power-cycle instead.
+
 ## [1.5.0-beta5] - 2026-08-22
 
 ### Fixed
