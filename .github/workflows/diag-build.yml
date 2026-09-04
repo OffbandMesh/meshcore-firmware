@@ -6,9 +6,15 @@ name: Diagnostic Build (on-demand)
 #
 # The diagnostic triad is injected via PLATFORMIO_BUILD_FLAGS, matching the
 # standing diag surface (owner directive 2026-08-22):
-#   -DOFFBAND_FORCE_CAPLOG   caplog pinned ON (serial/mesh log capture)
-#   -DOFFBAND_BOOT_BEACON    raw-UART0 boot beacon (survives early-boot crashes)
-#   -DOFFBAND_MESHLOG_UART0  mirror the mesh log to UART0
+#   -DOFFBAND_FORCE_CAPLOG      caplog pinned ON (serial/mesh log capture)
+#   -DOFFBAND_BOOT_BEACON       raw-UART0 boot beacon (survives early-boot crashes)
+#   -DOFFBAND_LOG_MIRROR_UART   mirror the mesh log to UART0
+#
+# NOTE (#1034): the mirror flag was OFFBAND_MESHLOG_UART0 until #888 renamed it.
+# LogMirrorUart.h carries an #error tripwire on the old name, so this workflow
+# failed at compile on every dispatch between that rename and 2026-09-03. When a
+# build flag is renamed, sweep .yml too -- workflows inject
+# PLATFORMIO_BUILD_FLAGS from outside the build config the tree can see.
 # The boot beacon + pinned caplog make a diag build self-announce at runtime, and
 # the output filename/artifact carry "-diag" so it is never mistaken for a release.
 # (A version-STRING diag marker is a firmware follow-up -- build.sh stamps the
@@ -80,7 +86,7 @@ jobs:
           # Output-filename marker only; the compiled FIRMWARE_VERSION is derived
           # inside build.sh from MyMesh.h + the commit hash.
           FIRMWARE_VERSION: "diag"
-          PLATFORMIO_BUILD_FLAGS: "-DOFFBAND_FORCE_CAPLOG -DOFFBAND_BOOT_BEACON -DOFFBAND_MESHLOG_UART0"
+          PLATFORMIO_BUILD_FLAGS: "-DOFFBAND_FORCE_CAPLOG -DOFFBAND_BOOT_BEACON -DOFFBAND_LOG_MIRROR_UART=1"
         run: /usr/bin/env bash build.sh build-firmware "$INPUT_ENV"
 
       - name: Verify a diagnostic .bin was produced
