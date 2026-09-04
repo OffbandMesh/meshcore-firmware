@@ -15,6 +15,7 @@
 // ((void)0) otherwise -- so non-diag builds of this role are byte-identical.
 #define OFFBAND_BEACON_DEFINE_CTOR
 #include "helpers/BootBeacon.h"
+#include "helpers/CdcConsoleFlush.h"   // #1035: right-flush (ZLP) for the USB-Serial-JTAG console
 
 
 #ifdef DISPLAY_CLASS
@@ -197,6 +198,7 @@ void loop() {
     the_mesh.handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
     if (reply[0]) {
       Serial.print("  -> "); Serial.println(reply);
+      flushSerialConsole();  // #1035: emit the USB-CDC terminator so a 64-multiple reply isn't held host-side
     }
 
     command[0] = 0;  // reset command buffer

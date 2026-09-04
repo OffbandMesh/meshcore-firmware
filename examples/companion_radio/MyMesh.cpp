@@ -4,6 +4,7 @@
 #include <Mesh.h>
 #include <MeshLog.h>  // #396: serial-capture buffer access for the caplog download
 #include <helpers/ClockSanity.h>  // #607: owner-path clock sets + audit log
+#include "helpers/CdcConsoleFlush.h"   // #1035: right-flush (ZLP) for the USB-Serial-JTAG console
 
 // Offband fork-only companion-API frame codes (config 0xC0 / GPS 0xC1 / block 0xC2)
 // + shared enums. Self-contained (only <stdint.h>); included unconditionally so the
@@ -3713,6 +3714,7 @@ void MyMesh::checkObserverSerialCli() {
       char reply[256];
       offband::cliPassthroughExecute(_obs_cli_buf, reply, sizeof(reply));
       Serial.println(reply);
+      flushSerialConsole();   // #1035: emit the USB-CDC terminator so a 64-multiple reply isn't held host-side
       _obs_cli_len = 0;
       _obs_cli_redact = false;
       continue;
