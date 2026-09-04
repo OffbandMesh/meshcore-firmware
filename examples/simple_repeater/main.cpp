@@ -18,6 +18,7 @@
 // ((void)0) otherwise -- so non-diag builds of this role are byte-identical.
 #define OFFBAND_BEACON_DEFINE_CTOR
 #include "helpers/BootBeacon.h"
+#include "helpers/CdcConsoleFlush.h"   // #1035: right-flush (ZLP) for the USB-Serial-JTAG console
 
 
 #ifdef PIN_STATUS_LED
@@ -1323,17 +1324,63 @@ void loop() {
   if (len > 0 && command[len - 1] == '\r') {  // received complete line
     Serial.print('\n');
     command[len - 1] = 0;  // replace newline with C string null terminator
-    char reply[160];
-    reply[0] = 0;
-#ifdef ETHERNET_ENABLED
-    if (!ethernet_handle_command(command, reply)) {
-      the_mesh.handleCommand(0, command, reply);
+    bool handled_diag = false;
+#ifdef OFFBAND_FORCE_CAPLOG
+    // #1035 gap x granularity control (diag build only). Reproduces the version
+    // path's structure --  echo  ->  [handleCommand gap]  ->  reply  -- with every
+    // variable under host control, so ONE flash sweeps the whole space and no
+    // theory needs a reflash.
+    //
+    //   emit <bytes> [delay_us] [bulk]
+    //     bytes    payload size 0..1024, emitted with NO "  -> " wrapper / no newline
+    //     delay_us busy-wait gap before the payload, 0..16000. Mimics the CPU-bound
+    //              sprintf+callbacks that run between the echo and the reply in the
+    //              version path; interrupts stay enabled so the HWCDC TX ISR can
+    //              drain the 9-byte echo as its own completed short transfer.
+    //     bulk     0 = byte-at-a-time Serial.write() (default), 1 = one Serial.write(buf,n)
+    //
+    // Hypothesis under test (see #1035): a hold needs BOTH bytes % 64 == 0 AND a
+    // real gap (>= ~1 USB frame) isolating the echo, so the payload rides as
+    // all-full 64-byte packets with no terminating short packet. delay=0 (either
+    // bulk) is the already-measured DELIVERED case; the new axes are delay>0 and bulk=1.
+    if (memcmp(command, "emit ", 5) == 0) {
+      static uint8_t emit_buf[1024];
+      int n = atoi(command + 5);
+      const char* a2 = strchr(command + 5, ' ');
+      int delay_us = a2 ? atoi(a2 + 1) : 0;
+      const char* a3 = a2 ? strchr(a2 + 1, ' ') : nullptr;
+      int bulk = a3 ? atoi(a3 + 1) : 0;
+      const char* a4 = a3 ? strchr(a3 + 1, ' ') : nullptr;
+      int zlp = a4 ? atoi(a4 + 1) : 0;   // #1035 A/B: 1 => apply the flushSerialConsole() fix after the payload
+      if (n < 0) n = 0;
+      if (n > 1024) n = 1024;
+      if (delay_us < 0) delay_us = 0;
+      if (delay_us > 16000) delay_us = 16000;
+      if (delay_us > 0) delayMicroseconds(delay_us);
+      if (bulk) {
+        for (int i = 0; i < n; i++) emit_buf[i] = (uint8_t)('0' + (i % 10));
+        Serial.write(emit_buf, n);
+      } else {
+        for (int i = 0; i < n; i++) Serial.write((uint8_t)('0' + (i % 10)));
+      }
+      if (zlp) flushSerialConsole();     // #1035: emit the terminating ZLP -- proves the fix on the reproducer
+      handled_diag = true;
     }
-#else
-    the_mesh.handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
 #endif
-    if (reply[0]) {
-      Serial.print("  -> "); Serial.println(reply);
+    if (!handled_diag) {
+      char reply[160];
+      reply[0] = 0;
+#ifdef ETHERNET_ENABLED
+      if (!ethernet_handle_command(command, reply)) {
+        the_mesh.handleCommand(0, command, reply);
+      }
+#else
+      the_mesh.handleCommand(0, command, reply);  // NOTE: there is no sender_timestamp via serial!
+#endif
+      if (reply[0]) {
+        Serial.print("  -> "); Serial.println(reply);
+        flushSerialConsole();  // #1035: emit the USB-CDC terminator so a 64-multiple reply isn't held host-side
+      }
     }
 
     command[0] = 0;  // reset command buffer
