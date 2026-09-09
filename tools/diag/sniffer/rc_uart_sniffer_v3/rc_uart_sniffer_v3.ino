@@ -1,9 +1,11 @@
-// RC32 UART0 sniffer + remote reset -- Adafruit Feather ESP32-S3.
-// BUILD ID: SNIFFER-v3                                          (#740, #702)
+// RadioCore UART0 sniffer + remote reset -- Adafruit Feather ESP32-S3.
+// BUILD ID: SNIFFER-v4                                   (#740, #702, #938, #1085)
 //
 // v2 was listen-only. v3 adds a command surface so a host can assert the RC32's
 // RST and BOOT lines without a human pressing buttons, which is what unblocks
-// unattended reset cycles.
+// unattended reset cycles. v4 listens on BOTH header positions at once with a
+// byte counter per pad, so the rig never has to be told which board it faces
+// (#1085, implementing what #938 specified).
 //
 // FLASH WITH ARDUINO IDE, NOT PLATFORMIO. Two prior PlatformIO attempts put
 // `Serial` on the TinyUSB CDC peripheral while the enumerated port was
@@ -33,8 +35,19 @@
 // !! NOTHING -- which looks exactly like a dead board, and is the failure this
 // !! sketch's #938 change exists to prevent.
 // !!
-// !!     SNIFFER_RC52 defined    -> listen on the TX pad   (RC52)
-// !!     SNIFFER_RC52 undefined  -> listen on the RX pad   (RC32 / RCC6)
+// !! #1085 -- THE RIG NO LONGER CHOOSES. Both pads are wired and both are
+// !! listened on, RX-only, and each has its own byte counter in the heartbeat:
+// !!
+// !!     pad A (RX pad)  <- RC32 / RCC6 board TX      counter rx_a
+// !!     pad B (TX pad)  <- RC52 board TX             counter rx_b
+// !!
+// !! Whichever board is attached, one pad receives and the other rests on that
+// !! board's RX, which transmits nothing. So there is no mode to set and no way
+// !! to have it set wrong. `SNIFFER_RC52` is retired.
+// !!
+// !! This is why: the build-time switch shipped hardcoded to RC52 and a rig
+// !! pointed at an RC32 read rx_bytes=0 for 13.3 hours. A single counter cannot
+// !! separate "wrong pad" from "dead wire" from "silent board" -- all read 0.
 // !!
 // !! Using the pad LABELLED TX as an input is deliberate and safe: the ESP32-S3
 // !! routes UART signals through the GPIO matrix, direction follows the argument
@@ -110,20 +123,50 @@
 //
 // Build for a generic board by defining SNIFFER_GENERIC_S3 (uncomment below).
 //#define SNIFFER_GENERIC_S3 1
-#define SNIFFER_RC52  1
 
+// #1085: TWO listen pins, both opened RX-only, both drained every loop. There is
+// no build-time board switch any more -- SNIFFER_RC52 is retired. Whichever board
+// is attached, one pad carries its TX and the other sits on that board's RX, so
+// the rig no longer has to be told which board it is looking at.
+//
+// Pad A is the RC32 / RCC6 position, pad B the RC52 position. Both stay soldered.
 #if defined(SNIFFER_GENERIC_S3)
-  #define PIN_SNIFF_RX   18
+  #define PIN_SNIFF_RX_A 18
+  // GPIO15 is free on every S3 WROOM variant this sketch targets: not a strapping
+  // pin (0/3/45/46), not native USB (19/20), not SPI flash (26..32), not octal
+  // PSRAM (33..37), not UART0 (43/44), not the RGB LED (48).
+  #define PIN_SNIFF_RX_B 15
   #define PIN_RC32_RST   17
   #define PIN_RC32_BOOT  16
 #else
-  #ifdef SNIFFER_RC52
-    #define PIN_SNIFF_RX  TX
-  #else
-    #define PIN_SNIFF_RX   RX
-  #endif
+  #define PIN_SNIFF_RX_A RX
+  #define PIN_SNIFF_RX_B TX
   #define PIN_RC32_RST   A0
   #define PIN_RC32_BOOT  A1
+#endif
+
+// IDLE-PAD PULL-UP -- DEFAULT ON.
+//
+// ⚠ DELIBERATE DEVIATION FROM #938, which specified this opt-in and default-OFF.
+// Its stated reason was "default-off keeps today's working behaviour" -- and that
+// was correct WHEN THERE WAS ONE LISTEN PIN AND NO IDLE PAD. #1085 creates a
+// permanently idle pad, so the premise that justified the default is gone.
+//
+// Why ON matters here: UART idle is HIGH. A floating CMOS input oscillates, the
+// UART frames the noise as start bits, and the idle pad's counter climbs. That
+// would defeat the entire point of splitting the counters -- the operator would
+// see traffic on both pads and be unable to tell which one is the real target.
+// A tool whose default state produces misleading output is worse than no tool.
+//
+// In the wired rig the idle pad rests on the target's RX, which is probably held
+// high already -- [hypothesis: untested] -- but "probably" does not cover an
+// absent or unpowered target, which is exactly when this instrument gets used.
+// A redundant pull-up costs nothing; a missing one costs a wrong diagnosis.
+//
+// This can never drive either pad: it sets a pull, not an output direction.
+// Set to 0 to restore #938's original default.
+#ifndef SNIFF_IDLE_PULLUP
+  #define SNIFF_IDLE_PULLUP 1
 #endif
 
 // ---------------------------------------------------------------------------
@@ -266,7 +309,11 @@
 #define BOOT_HOLD_AFTER_MS 100
 
 static uint32_t hb_next = 0, hb_n = 0;
-static uint32_t rx_bytes = 0;
+// #1085: one counter per listen pad. A single total could not distinguish "wrong
+// pad" from "dead wire" from "silent board" -- all three read 0. Per-pad counts
+// say which header position the attached board actually transmits on.
+static uint32_t rx_bytes_a = 0;   // pad A -- RC32 / RCC6 position
+static uint32_t rx_bytes_b = 0;   // pad B -- RC52 position
 static char cmd_buf[32];
 static uint8_t cmd_len = 0;
 
@@ -696,6 +743,28 @@ static void stamp(const char* s) {
   Serial.println("s");
 }
 
+// #1085: announce which listen pad is transmitting, but ONLY when it changes.
+// Normal operation prints this once, at the first byte, and it answers "which
+// header position is this board actually using" without anyone inferring it.
+// Repeated markers mean both pads are live -- corruption that announces itself.
+// Uses the same ">>>" prefix as stamp(), which the banner already documents as
+// "any line without [hb] or >>> is target data", so capture tooling and readers
+// need no new rule.
+static char relay_last_src = 0;
+static void relay_mark_source(char src) {
+  if (src == relay_last_src) return;
+  relay_last_src = src;
+  Serial.println();
+  Serial.print(">>> [src:");
+  Serial.print(src);
+  Serial.print("] now receiving on pad ");
+  Serial.print(src == 'A' ? "A (RC32/RCC6 header position)"
+                          : "B (RC52 header position)");
+  Serial.print("  @up=");
+  Serial.print(millis() / 1000);
+  Serial.println("s");
+}
+
 static void do_reset(bool with_boot) {
   if (with_boot) {
     stamp("BOOT asserted (download-mode entry)");
@@ -723,7 +792,7 @@ static void handle_cmd(const char* c) {
     stamp("BOOT pulsed alone");
     od_assert(PIN_RC32_BOOT); delay(RST_ASSERT_MS); od_release(PIN_RC32_BOOT);
   }
-  else if (!strcasecmp(c, "PING"))    stamp("PONG SNIFFER-v3");
+  else if (!strcasecmp(c, "PING"))    stamp("PONG SNIFFER-v4");
   else if (!strcasecmp(c, "HELP"))    stamp("cmds: RST BOOTRST BOOT PING HELP");
   else if (c[0])                      stamp("unknown cmd (try HELP)");
 }
@@ -744,15 +813,36 @@ void setup() {
   // overflowed and the bytes this instrument exists to capture already gone,
   // silently. Enlarging the buffer converts that into a survivable stall.
   // Must be called BEFORE begin(). Gemini review, #938.
+  // ⚠ BOTH UARTs MUST PASS TX = -1. Giving either pad a real TX role would drive
+  // into the attached target's TX output on one of the two board pinouts. This is
+  // a one-character mistake with hardware consequences (#938).
   Serial1.setRxBufferSize(4096);
-  Serial1.begin(SNIFF_BAUD, SERIAL_8N1, PIN_SNIFF_RX, -1);   // RX only -- TX is -1
+  Serial1.begin(SNIFF_BAUD, SERIAL_8N1, PIN_SNIFF_RX_A, -1);   // RX only -- TX is -1
+  Serial2.setRxBufferSize(4096);
+  Serial2.begin(SNIFF_BAUD, SERIAL_8N1, PIN_SNIFF_RX_B, -1);   // RX only -- TX is -1
+
+#if SNIFF_IDLE_PULLUP
+  // gpio_pullup_en(), NOT pinMode(pin, INPUT_PULLUP). Gemini review, #1085:
+  // pinMode() re-configures the pad at the GPIO level after begin() has attached
+  // it to the UART. Whether the peripheral keeps precedence is poorly documented
+  // and has varied across core versions, so the failure mode is a pad silently
+  // detached from its UART -- a deaf sniffer that still prints a heartbeat, which
+  // is precisely the class of silent-wrong-answer this whole change exists to
+  // remove. gpio_pullup_en() touches only the pull, never the direction or mux.
+  gpio_pullup_en((gpio_num_t)PIN_SNIFF_RX_A);
+  gpio_pullup_en((gpio_num_t)PIN_SNIFF_RX_B);
+#endif
 
   Serial.println();
   Serial.println("================================================");
-  Serial.println("=== RC32 UART0 SNIFFER  BUILD ID: SNIFFER-v3 ===");
-  Serial.printf ("=== listening on GPIO%d, %d 8N1\n", (int)PIN_SNIFF_RX, SNIFF_BAUD);
+  Serial.println("=== RadioCore UART0 SNIFFER  BUILD ID: SNIFFER-v4 ===");
+  // The RESOLVED GPIO numbers are the ground truth, not any comment: TX/RX are
+  // variant-dependent aliases and selecting the wrong board silently moves them.
+  Serial.printf ("=== pad A (RC32/RCC6) GPIO%d   pad B (RC52) GPIO%d   %d 8N1\n",
+                 (int)PIN_SNIFF_RX_A, (int)PIN_SNIFF_RX_B, SNIFF_BAUD);
+  Serial.println("=== both listened RX-only; heartbeat counts each separately");
   Serial.println("=== heartbeat 1/s for 30s, then 1/10s");
-  Serial.println("=== any line without [hb] or >>> is RC32 data");
+  Serial.println("=== any line without [hb] or >>> is target data");
   Serial.println("=== RST->A0  BOOT->A1  (open-drain, pull-low only)");
   Serial.println("=== cmds: RST BOOTRST BOOT PING HELP");
   Serial.println("================================================");
@@ -764,9 +854,27 @@ void setup() {
 
 void loop() {
   // Relay first so real data is never delayed behind a heartbeat.
-  while (Serial1.available()) {
-    Serial.write(Serial1.read());
-    rx_bytes++;
+  //
+  // Both pads drain into ONE stream. In the designed rig only one carries data --
+  // the other rests on the attached board's RX, an input that transmits nothing.
+  //
+  // STREAM INTEGRITY (Gemini review, #1085). The reviewer wanted every byte
+  // prefixed with its source. Rejected: this relay is a transparent passthrough,
+  // and per-byte tags would render "[BEACON] APP:CTOR" as interleaved tag noise,
+  // breaking every existing capture and every human reading a boot log.
+  //
+  // Instead the marker is emitted only when the ACTIVE PAD CHANGES. In normal
+  // operation that is one line, once, at the first byte -- and it usefully states
+  // which header position the target is really transmitting on. If both pads ever
+  // go live the markers appear repeatedly and the corruption is self-announcing
+  // rather than silent, which was the reviewer's actual concern.
+  if (Serial1.available()) {
+    relay_mark_source('A');
+    while (Serial1.available()) { Serial.write(Serial1.read()); rx_bytes_a++; }
+  }
+  if (Serial2.available()) {
+    relay_mark_source('B');
+    while (Serial2.available()) { Serial.write(Serial2.read()); rx_bytes_b++; }
   }
 
 #if SNIFF_GAUGE
@@ -801,11 +909,14 @@ void loop() {
 
   if ((int32_t)(now - hb_next) >= 0) {
     hb_next = now + (now < HB_FAST_FOR ? HB_FAST_MS : HB_SLOW_MS);
-    // rx_bytes is the payoff: a rising count proves the WIRE carries data,
-    // independently of whether that data is decodable at this baud.
-    Serial.printf("[hb] SNIFFER-v3 alive  n=%lu  up=%lus  rx_bytes=%lu\n",
+    // The per-pad counts are the payoff: a rising count proves that WIRE carries
+    // data, independently of whether the data is decodable at this baud, and says
+    // WHICH header position is live. Both at 0 now means no target is
+    // transmitting -- it can no longer mean the rig is watching the wrong pad.
+    Serial.printf("[hb] SNIFFER-v4 alive  n=%lu  up=%lus  rx_a=%lu  rx_b=%lu\n",
                   (unsigned long)++hb_n,
                   (unsigned long)(now / 1000),
-                  (unsigned long)rx_bytes);
+                  (unsigned long)rx_bytes_a,
+                  (unsigned long)rx_bytes_b);
   }
 }
