@@ -24,6 +24,51 @@ enum MeshLogLevel : uint8_t {
   MLOG_PACKET = 3,
 };
 
+// #1069: level ceiling for the raw UART0 wire (#763) ONLY. The capture ring and
+// the Serial mirror keep the runtime level (meshLogSetLevel); this caps what an
+// OFFBAND_LOG_MIRROR_UART build puts on the always-on wire, so raising capture
+// to `packet` from the client cannot flood a UART that costs ~87 us per byte.
+// Build-time on purpose: the wire must behave the same on a board nobody has
+// configured. A variant may override with -DOFFBAND_LOG_MIRROR_LEVEL=<n>.
+//
+// Default MLOG_DEBUG: a stock capture level is already DEBUG, so by default the
+// wire carries exactly what it did before; only MLOG_PACKET is held back.
+//
+// An integer literal, not the enum name, so it also works in #if and matches
+// what a -D override supplies. Out-of-range overrides fail the build below
+// rather than silently wrapping (e.g. -1 would become 255 = no ceiling at all).
+#ifndef OFFBAND_LOG_MIRROR_LEVEL
+  #define OFFBAND_LOG_MIRROR_LEVEL 2  // MLOG_DEBUG
+#endif
+static_assert(MLOG_DEBUG == 2,
+              "OFFBAND_LOG_MIRROR_LEVEL's default literal assumes MLOG_DEBUG == 2");
+static_assert((OFFBAND_LOG_MIRROR_LEVEL) >= MLOG_BOOT &&
+              (OFFBAND_LOG_MIRROR_LEVEL) <= MLOG_PACKET,
+              "OFFBAND_LOG_MIRROR_LEVEL must be an MLOG_* level (0..3)");
+
+inline bool meshLogUart0Admits(uint8_t level) {
+  return level <= (OFFBAND_LOG_MIRROR_LEVEL);
+}
+
+// Which sinks one line reaches. mesh_log_line() routes through this, so the
+// whole decision -- not just the ceiling -- is unit-testable natively.
+//   capture: ring + Serial mirror. Needs the runtime level AND capture on.
+//   wire:    raw UART0. Needs the runtime level AND the build-time ceiling, and
+//            only exists in OFFBAND_LOG_MIRROR_UART builds. Capture-independent
+//            by design (#763).
+struct MeshLogRoute {
+  bool capture;
+  bool wire;
+};
+inline MeshLogRoute meshLogRoute(uint8_t level, uint8_t max_level,
+                                 bool capture_on, bool uart0_built) {
+  MeshLogRoute r = {false, false};
+  if (level > max_level) return r;
+  r.capture = capture_on;
+  r.wire = uart0_built && meshLogUart0Admits(level);
+  return r;
+}
+
 // Fast-path enable flag, read directly by the MESH_DEBUG_PRINTLN macro so that
 // when capture is OFF the log arguments are never evaluated (short-circuit).
 // Treat as read-only from producers; mutate only via meshLogSetEnabled().

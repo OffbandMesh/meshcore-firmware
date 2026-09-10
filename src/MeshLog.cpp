@@ -139,9 +139,15 @@ void mesh_log_line(uint8_t level, const char* fmt, ...) {
   //
   // The LEVEL filter still applies to both: it is a statement about which lines
   // matter, not about which sink is live.
-  if (level > g_max_level) return;
-  const bool capture = g_meshLogEnabled;
-  if (!capture && !kMeshLogUart0) return;
+  //
+  // #1069: the wire additionally has its own build-time ceiling. Routing is
+  // decided once, up front (meshLogRoute, MeshLog.h), so a line nobody will
+  // record and the wire will refuse is never formatted.
+  const MeshLogRoute route =
+      meshLogRoute(level, g_max_level, g_meshLogEnabled, kMeshLogUart0);
+  const bool capture = route.capture;
+  const bool wire = route.wire;
+  if (!capture && !wire) return;
 
   // Format OUTSIDE the critical section (stack-frugal: one bounded buffer, no
   // heap). Timestamp prefix gives every captured line timing context.
@@ -215,7 +221,10 @@ void mesh_log_line(uint8_t level, const char* fmt, ...) {
   // IS a hardware UART, and mirroring to that same wire double-prints. Those
   // boards therefore do not enable OFFBAND_LOG_MIRROR_UART, and say so in their
   // variant config. The declaration lives where the knowledge is.
+  //
+  // #1069: subject to OFFBAND_LOG_MIRROR_LEVEL (see MeshLog.h), not only to the
+  // runtime level above.
 #if defined(OFFBAND_LOG_MIRROR_UART) && OFFBAND_LOG_MIRROR_UART
-  offband_log_mirror_write(line, total);
+  if (wire) offband_log_mirror_write(line, total);
 #endif
 }
