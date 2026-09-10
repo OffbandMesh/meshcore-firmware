@@ -47,7 +47,7 @@ static inline void flushSerialConsole() {
   // header says to flush "when usb_serial_jtag_ll_txfifo_writable() returns true". Checking
   // once and skipping raced with the in-flight packet and left ~1% of 64-multiple replies
   // unterminated (#1035). The 2 ms bound means an unread/stalled host can never wedge the
-  // reply path (SAFELANE rule 8); on timeout we flush best-effort, which is harmless.
+  // reply path; on timeout we flush best-effort, which is harmless.
   uint32_t t0 = micros();
   while (!usb_serial_jtag_ll_txfifo_writable() && (uint32_t)(micros() - t0) < 2000) { }
   usb_serial_jtag_ll_txfifo_flush();            // zero-length packet ends the USB transfer

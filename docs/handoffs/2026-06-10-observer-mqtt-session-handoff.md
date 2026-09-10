@@ -9,7 +9,7 @@
 - **Observer MQTT connectivity shipped as `crosswire-v0.15.0`** -- hardware-validated against 3 real brokers (CoreScope tcp/anon, eastme.sh wss/jwt, LetsMesh-US wss/jwt). Packets confirmed landing on eastme.sh.
 - The whole multi-hour failure (`rc=5` on wss/jwt brokers) came down to **one missing field**: the firmware sent MQTT CONNECT `username = nullptr`; the brokers require `v1_<UPPERCASE 64-hex pubkey>`. Fixed (#68).
 - Repo is **clean and releasable**: `firmware-base @ e03ef09a`, one worktree, one local branch, remote = `firmware-base` + 3 intentional experimental branches. The owner's stated next goal is to **transfer the filesystem location** -- the repo is ready for that.
-- **The biggest takeaway is process, not code** (see section 6). This session started by violating SAFELANE (guessing root causes and having the user hardware-test each guess) and recovered by switching to **empirical diagnosis** (probe the live broker). Do not regress.
+- **The biggest takeaway is process, not code** (see section 6). The session began by guessing root causes and having the user hardware-test each guess and recovered by switching to **empirical diagnosis** (probe the live broker). Do not regress.
 
 ---
 
@@ -64,7 +64,7 @@ Also: CHANGELOG `[0.15.0]` added + `[0.14.0]` completed (it had only documented 
   - **LetsMesh-US** = STRICT: audience must be **bare host** (`https://...` REJECTED), and `exp` is enforced (1970 token REJECTED -> **needs a valid wall clock**).
 - **Device clock:** firmware has **no SNTP**; it only gets time from the companion app (`CMD_SET_DEVICE_TIME` on BLE connect). Power-cycle wipes it. So an **unattended** LetsMesh observer fails until SNTP lands (epic #69). eastme.sh doesn't care (lax on exp).
 - **`analyzer.eastme.sh/api/observers` is a ~40-min STALE periodic snapshot** (timestamps batch-clustered). **Do not read freshness from it.** To verify a device is publishing live, **SUBSCRIBE to the broker** with a minted observer token and watch for `meshcore/<IATA>/<PUBKEY>/{status,packets,raw}`.
-- **Verified broker config values** (so they're never re-asked): see `reference_mqtt_broker_configs.md`. eastme.sh -> `ca_cert letsencrypt`, audience `mqtt.eastme.sh`. LetsMesh-US -> `ca_cert gts-r4`, audience `mqtt-us-v1.letsmesh.net` (bare). Owner pubkey `18315e8b...`, email `strycher@gmail.com`, IATA `HAO`.
+- **Verified broker config values** (so they're never re-asked): see `reference_mqtt_broker_configs.md`. eastme.sh -> `ca_cert letsencrypt`, audience `mqtt.eastme.sh`. LetsMesh-US -> `ca_cert gts-r4`, audience `mqtt-us-v1.letsmesh.net` (bare). Owner pubkey `<redacted>`, email `you@example.com`, IATA `HAO`.
 
 ### The diagnostic method (the antidote to guessing -- reuse it)
 For ANY broker-auth question: mint a real MeshCore token in Python (`cryptography` Ed25519 + `paho` wss), **prove the minter correct locally** (sign+verify roundtrip) so a rejection means the *broker* rejected a *valid* token, then **probe the live broker one variable at a time** reading the actual CONNACK rc, then **subscribe** to confirm packets land. Working scripts/patterns are in this session's transcript. The canonical client-side signer is HA's `mqtt_uploader.py::_create_auth_token_python` on the Pi5.
@@ -84,28 +84,18 @@ For ANY broker-auth question: mint a real MeshCore token in Python (`cryptograph
 
 ---
 
-## 6. SAFELANE / process lessons -- DO NOT LOSE THESE
+## 6. Process lessons
 
-The owner explicitly flagged multiple SAFELANE failures this session. They were corrected, but the patterns recur -- internalize them:
-
-1. **Diagnose empirically; do not guess and have the user test your guesses.** The session burned hours cycling hypotheses (audience -> clock -> registration) and asking the owner to hardware-test each. The fix was to **probe the live broker** with a proven-correct minter. SAFELANE section 1/section 2: gather evidence at the failing layer before theorizing.
-2. **A reference implementation existing != verified working.** I called HA "canonical" and diffed against it without ever observing HA's token *accepted* by eastme.sh (its path was down). Don't treat a code-read as proof.
-3. **Use the infra access you already have.** Pi5 / HA / docker / DB access was available the entire time; I asked the owner to "check HA" instead of reading it (`ssh pi5`, `docker exec homeassistant ...`). Read it yourself.
-4. **Agent Mail is communication, not hook-satisfaction.** Registering + `fetch_inbox` to refresh the ack while never *sending* coordination (and ignoring DustyFox's ack-required message all day) is "fetch-only theater." Actually reply and broadcast at milestones.
-5. **Verify the FULL state, not the convenient slice.** I called the repo "pristine" when only *local* was clean -- the remote had 6 stray branches. Check local **and** remote.
-6. **Don't claim verification from an inadequate observation.** "boot verified" was false: a 12s serial read < the 15s crash period, and the read itself (CP2102 port-open) **rebooted the device**. State precisely what was observed and what it does/doesn't show.
-7. **Verify before deleting** (patch-id, not assumption). "Safe to delete" was wrong twice -- `chore/16` was a squash-merged *different* patch; `main` looked like it had unique content. Use `git cherry` / content diff before any force-delete; record recovery SHAs.
-8. **CP2102 boards (HV3) reset on serial port-open** (DTR/RTS). Any read reboots the chip and drops BLE. Class-B "port-opening reads don't reset" only holds for native-USB S3, NOT UART-bridged boards. Bounded reads count as resets in any timing forensics.
-9. **Respect per-PR merge tollgates absolutely.** The owner approves each merge explicitly ("Merge 72"). Never `--auto` a merge off an inherited "proceed."
+Relocated to `CLAUDE.local.md` (gitignored). Working-practice notes, not engineering record.
 
 ---
 
 ## 7. Hardware & infra map
 
-- **HV3** (bench) = Heltec V3 observer. **COM6**, CP2102 `VID:PID 10C4:EA60`. Node `WSMJ898-HV3-OBS`, pubkey `8AA6DA6C...` (companion `_sys @ 8aa6da6c`). Currently flashed with `crosswire-v0.14.0-rc1-19-ge7b11cb` (= the 0.15.0 content). **Port-open resets it.**
-- **Pi5** = `192.168.50.24`, ssh alias `pi5` (= `strycher@`, key `~/.ssh/id_ed25519`). Runs (docker): `homeassistant` (meshcore-ha integration = the canonical observer client; config in `/config/.storage/core.config_entries`, signer in `custom_components/meshcore/mqtt_uploader.py`), `mosquitto`, `frigate`, `meshmonitor`, etc. `heimdalld` = systemd, currently **inactive**. NOTE: HA's *map.meshcore.io* uploader had a DNS-timeout problem; the MQTT *observer* path works (HEIMDALL node `18315e8b` publishes live).
+- **HV3** (bench) = Heltec V3 observer. **COM6**, CP2102 `VID:PID 10C4:EA60`. Node `WSMJ898-HV3-OBS`, pubkey `<redacted>` (companion `_sys @ <redacted>`). Currently flashed with `crosswire-v0.14.0-rc1-19-ge7b11cb` (= the 0.15.0 content). **Port-open resets it.**
+- **Pi5** = the mesh-gateway host (address, account and key are in `HARDWARE.local.md`, not here). Runs (docker): `homeassistant` (meshcore-ha integration = the canonical observer client; config in `/config/.storage/core.config_entries`, signer in `custom_components/meshcore/mqtt_uploader.py`), `mosquitto`, `frigate`, `meshmonitor`, etc. `heimdalld` = systemd, currently **inactive**. NOTE: HA's *map.meshcore.io* uploader had a DNS-timeout problem; the MQTT *observer* path works (HEIMDALL node `18315e8b` publishes live).
 - **Brokers:** CoreScope `mqtt.w8oof.net:1883` (tcp/anon); eastme.sh `mqtt.eastme.sh:443` (wss/jwt, `letsencrypt`, aud `mqtt.eastme.sh`); LetsMesh-US `mqtt-us-v1.letsmesh.net:443` (wss/jwt, `gts-r4`, aud bare).
-- **Owner identity:** pubkey `18315e8b...`, email `strycher@gmail.com`, IATA `HAO`.
+- **Owner identity:** recorded in `HARDWARE.local.md`, not here.
 - **FOREIGN -- NEVER TOUCH:** `COM3` = CH340K `VID:PID 1A86:7522` = `desk_command_center` (ESP32-P4). Hard-refuse any flash/serial against it.
 
 ---
@@ -127,4 +117,4 @@ The owner explicitly flagged multiple SAFELANE failures this session. They were 
 4. Pick from section 5 -- the natural next is the **#66/#67/#70 cosmetic-display fix** (one small PR, same `ObserverCli` status path) and/or pinging DustyFox to start the 1.16.0 merge.
 5. If returning to broker work: re-read section 4 and use the empirical-probe method, not guesses.
 
-**Key memory files:** `findings_2026-06-10_eastmesh_jwt_username.md`, `reference_mqtt_broker_configs.md`, `reference_meshcore_observer_ecosystem.md`, `findings_2026-05-31_heap_optimization_levers.md`, plus the SAFELANE/feedback memories.
+**Key memory files:** `findings_2026-06-10_eastmesh_jwt_username.md`, `reference_mqtt_broker_configs.md`, `reference_meshcore_observer_ecosystem.md`, `findings_2026-05-31_heap_optimization_levers.md`, plus the process/feedback memories.

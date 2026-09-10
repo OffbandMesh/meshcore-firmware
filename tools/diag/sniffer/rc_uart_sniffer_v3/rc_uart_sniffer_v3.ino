@@ -899,7 +899,7 @@ void loop() {
 
   uint32_t now = millis();
 
-  // Dead-man: never leave the target held. Loud, never silent (SAFELANE 6).
+  // Dead-man: never leave the target held. Loud, never silent.
   if (od_deadline && (int32_t)(now - od_deadline) >= 0) {
     od_release(PIN_RC32_RST);
     od_release(PIN_RC32_BOOT);

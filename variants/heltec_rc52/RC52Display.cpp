@@ -26,7 +26,7 @@
 #include <Arduino.h>
 #include <string.h>
 // Unconditional: the back-buffer failure paths report through crashLogf on EVERY
-// build, not only diag ones. A silent allocation failure is a SAFELANE 6 defect
+// build, not only diag ones. A silent allocation failure is an error-visibility defect
 // regardless of which env is being built, and gating the reporting on a diag flag
 // would mean the one configuration nobody is watching is also the one that says
 // nothing. crashLogf itself is unconditional in CrashLog.h.
@@ -460,7 +460,7 @@ void RC52Display::busWritePattern(const uint8_t* pattern, size_t plen, uint32_t 
 
   if (plen > sizeof(expanded)) {
     // Not expected -- callers use a 2-byte pixel pattern. Degrade to a plain
-    // per-repeat write rather than silently truncating (SAFELANE 6).
+    // per-repeat write rather than silently truncating.
     while (count--) busWriteBytes(pattern, plen);
     return;
   }
@@ -726,7 +726,7 @@ void RC52Display::allocFrameBuffer() {
   frame_buf = (rc52_px_t*)malloc(bytes);
 
   if (!frame_buf) {
-    // Loud, not silent (SAFELANE 6) -- but loud ON A CHANNEL SOMEONE READS.
+    // Loud, not silent -- but loud ON A CHANNEL SOMEONE READS.
     //
     // This previously used Serial.print. On a _ble build `Serial` is USB-CDC and
     // is a debug channel nothing is attached to, so the message was effectively
@@ -926,7 +926,7 @@ void RC52Display::drawRGB565(int x, int y, const uint16_t* px, int w, int h) {
 
   // Unbuffered fallback. A failed back-buffer allocation is a supported degraded
   // state rather than a lost display, so this path is real and must draw rather
-  // than silently skip (SAFELANE 6). It shares clip() with the buffered path so
+  // than silently skip. It shares clip() with the buffered path so
   // the two cannot disagree about geometry.
   //
   // NOTE this is the path #856 says has never executed on hardware on ANY board.

@@ -26,7 +26,7 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
   // Create the BLE Device
   NimBLEDevice::init(dev_name);
   // #711: setMTU() returns false if the stack refused it, and the return was
-  // previously discarded -- a silent failure (SAFELANE §6). It matters because
+  // previously discarded -- a silent failure. It matters because
   // getMTU() then reports NimBLE's DEFAULT preferred MTU (256), not ours, and any
   // sizing that trusts it will oversize. The frame ceiling no longer depends on
   // this succeeding (see BleFrameSizing::deliverableFrame), but a failure here is

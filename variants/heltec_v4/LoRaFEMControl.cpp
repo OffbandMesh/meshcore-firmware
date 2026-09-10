@@ -93,7 +93,7 @@ void LoRaFEMControl::init(void)
     // only re-attach afterwards, by which time a single print is long gone. Each
     // repeat costs 1 s of boot delay, and at ~1 Hz this WILL drown CLI replies on
     // the same serial endpoint -- which is exactly why it is opt-in. Bounded so it
-    // can never become the outage it is meant to diagnose (SAFELANE §11 r10).
+    // can never become the outage it is meant to diagnose.
     //
     //   -D FEM_DEBUG_PROBE                      -> 60 lines / ~60 s boot delay
     //   -D FEM_DEBUG_PROBE -D FEM_DEBUG_PROBE_REPEAT=1  -> single line, no delay

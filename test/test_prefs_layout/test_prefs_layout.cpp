@@ -403,7 +403,7 @@ TEST(PathB, NonBoundaryOrCorruptLengthsAreRefused) {
 // -------------------------------------------------------------- Reporting --
 
 TEST(Reporting, EveryVerdictAndReasonHasALogString) {
-  // The migration MUST log what it chose and why (SAFELANE 6). A missing
+  // The migration MUST log what it chose and why. A missing
   // string would degrade that to "unknown".
   EXPECT_STREQ(toString(PrefsLayout::Offband),  "offband");
   EXPECT_STREQ(toString(PrefsLayout::Upstream), "upstream");

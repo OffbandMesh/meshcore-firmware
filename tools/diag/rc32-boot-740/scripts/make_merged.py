@@ -112,7 +112,7 @@ def main() -> int:
 
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        # Loud, never silent (SAFELANE 6).
+        # Loud, never silent.
         print(r.stdout)
         print(r.stderr, file=sys.stderr)
         sys.exit(f"merge failed (rc={r.returncode})")

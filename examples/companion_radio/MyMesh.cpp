@@ -781,7 +781,7 @@ bool MyMesh::textMentionsSelf(const char* text) const {
     }
   }
 
-  // NO SILENT FAILURE (SAFELANE §6). A mention that did not match used to produce
+  // NO SILENT FAILURE. A mention that did not match used to produce
   // nothing at all, so a field failure left zero evidence and cost several test
   // cycles to reconstruct. If the message carried a bracketed token but it did not
   // match us, say so and show BOTH sides in full, codepoint-rendered.

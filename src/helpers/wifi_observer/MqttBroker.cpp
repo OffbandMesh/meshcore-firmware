@@ -510,7 +510,7 @@ void MqttBroker::eventHandler(void* handler_args,
                 } else if (eh->esp_transport_sock_errno != 0) {
                     err = BrokerErrorClass::Tcp;
                 }
-                // SAFELANE no-silent-failure: surface the ACTUAL reason
+                // No silent failure: surface the ACTUAL reason
                 // esp-mqtt/esp-tls reported, not just the coarse class.
                 //   sock_errno   -> ECONNREFUSED(111)=refused, EHOSTUNREACH(113/118)
                 //                   =unreachable, ETIMEDOUT(110)=timeout (TCP layer)

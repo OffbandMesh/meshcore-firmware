@@ -32,7 +32,7 @@ Provider g_providers[kMaxProviders];
 int      g_count;
 
 // Latched so a client polling config cannot turn this into a log flood
-// (SAFELANE 11 rule 10: diagnostics must not become the outage).
+// (diagnostics must not become the outage).
 bool g_warned_empty;
 
 // #366: count of key-space collisions detected across all registrations. Lets a
@@ -121,7 +121,7 @@ void flushOverlapWarnings() {
     }
 }
 
-// SAFELANE 6: an unregistered config surface must not silently masquerade as
+// an unregistered config surface must not silently masquerade as
 // "unknown config key" to the client. Report it once, visibly.
 void warnIfNoProvider(const char* op) {
     if (g_count != 0 || g_warned_empty) return;

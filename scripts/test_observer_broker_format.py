@@ -66,7 +66,7 @@ int main() {
     // Non-secret config the operator must be able to verify.
     strcpy(cfg.jwt_audience, "mqtt.meshmapper.net");
     strcpy(cfg.jwt_owner,    "18315E8B18315E8B18315E8B18315E8B18315E8B18315E8B18315E8B18315E8B");
-    strcpy(cfg.jwt_email,    "strycher@gmail.com");
+    strcpy(cfg.jwt_email,    "you@example.com");
     strcpy(cfg.ca_cert_name, "isrg-x2");
     strcpy(cfg.topic_prefix, "meshcore");
     cfg.jwt_refresh_sec = 3600;
@@ -91,7 +91,7 @@ int main() {
     if (!strstr(buf, "username=auto(v1_+pubkey)"))      return fail("username missing", buf);
     if (!strstr(buf, "jwt_audience=mqtt.meshmapper.net")) return fail("jwt_audience missing", buf);
     if (!strstr(buf, "jwt_owner=18315E8B"))             return fail("jwt_owner missing", buf);
-    if (!strstr(buf, "jwt_email=strycher@gmail.com"))   return fail("jwt_email missing", buf);
+    if (!strstr(buf, "jwt_email=you@example.com"))   return fail("jwt_email missing", buf);
     if (!strstr(buf, "jwt_refresh=3600"))               return fail("jwt_refresh missing", buf);
     if (!strstr(buf, "ca_cert=isrg-x2"))                return fail("ca_cert missing", buf);
     if (!strstr(buf, "iata=(global)"))                  return fail("iata missing", buf);

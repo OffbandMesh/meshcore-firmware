@@ -242,7 +242,7 @@ next natural 15-min publish; a 60s default false-negatived real OTAs.
 
 ```yaml
     ota:
-      lan_ip: "192.168.50.197"                 # device's home-WiFi IP (DHCP; re-check if push fails)
+      lan_ip: "192.0.2.197"                 # device's home-WiFi IP (DHCP; re-check if push fails)
       node_id: "wsmj898-ltb"                   # MQTT/cmdrelay node id
       mqtt_topic_prefix: "meshcore"            # topic root (default "meshcore")
       verify_channel: "mqtt"                   # serial | mqtt | telemetry
@@ -250,8 +250,8 @@ next natural 15-min publish; a 60s default false-negatived real OTAs.
 ```
 
 Real examples in the registry:
-- **ST-P (`stp-lab`)** — bench, USB cabled, `verify_channel: serial`, lan_ip `192.168.50.177`.
-- **patio (`wsmj898-ltb`)** — deployed, `verify_channel: mqtt`, lan_ip `192.168.50.197`.
+- **ST-P (`stp-lab`)** — bench, USB cabled, `verify_channel: serial`, lan_ip `192.0.2.177`.
+- **patio (`wsmj898-ltb`)** — deployed, `verify_channel: mqtt`, lan_ip `192.0.2.197`.
 
 > The registry stores a **pointer** (`section.key`) to the password, never the
 > password itself, so an accidental commit of `hardware-devices.yaml` leaks

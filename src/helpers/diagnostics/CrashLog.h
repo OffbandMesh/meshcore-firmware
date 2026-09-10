@@ -186,7 +186,7 @@ inline bool crashLogShouldEmitDeferred(bool pending, uint32_t now_ms, bool host_
 void crashLogTick(uint32_t now_ms);
 
 // ---------------------------------------------------------------------------
-// CrashLog v2 additions (SAFELANE "no silent failure" enforcement)
+// CrashLog v2 additions (no-silent-failure enforcement)
 // ---------------------------------------------------------------------------
 
 // Install the ESP-IDF log capture hook via esp_log_set_vprintf().

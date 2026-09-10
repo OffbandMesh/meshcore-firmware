@@ -76,7 +76,7 @@ static const int kMaxProviders = 4;
 //                  key ("mqtt.iata"). See prefixesCollide in the .cpp.
 //   prefix_count : entries in key_prefixes (0 + nullptr allowed, but then this
 //                  provider is EXEMPT from overlap detection -- discouraged).
-// Returns false if the table is full (SAFELANE 6: the caller must not ignore).
+// Returns false if the table is full (the caller must not ignore).
 //
 // OVERLAP DETECTION (#366): at registration, this provider's entries are checked
 // against each already-registered provider's. A collision (some key both would
@@ -84,7 +84,7 @@ static const int kMaxProviders = 4;
 // #301 trap) bumps overlapWarningCount() immediately AND stores a record. The
 // human-visible LOUD diagnostic (Serial / stderr, naming both roles + entries)
 // is emitted LAZILY on the first dispatchSet/dispatchGet -- NOT at registration,
-// which runs during static init before Serial.begin() (review BLOCKER-1). This
+// which runs during static init before Serial.begin(). This
 // converts the silent first-provider-wins shadow into a visible error without
 // depending on unready hardware. Registration still proceeds; dispatch is
 // unchanged -- the diagnostic is only a signal.
