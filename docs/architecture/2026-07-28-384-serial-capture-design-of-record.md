@@ -325,7 +325,7 @@ a bug. Tracked on the client issue (#430).
 
 ## 10. Proposed implementation breakdown (child issues — created AFTER sign-off)
 
-> Each a single-PR task (CLAUDE-BASE sizing). Created + parent-linked to #384 on 2026-07-28.
+> Each a single-PR task. Created + parent-linked to #384 on 2026-07-28.
 > **Not blocked-by #350** — soft coordination only (see §9). #394 was folded into #393.
 
 1. **[#393](https://github.com/OffbandMesh/meshcore-firmware/issues/393) — Core tee sink**

@@ -89,7 +89,7 @@ The Release body documents this mapping so a community member knows what to down
 ## 6. Per-task plan (design + test + acceptance)
 
 Dependency/sequence: **T1 accepted -> T2 -> T3 -> T4 -> T5**. All work on branch
-`epic/14-ci-release-pipeline`; one PR at epic completion (after T5). Each task is a commit (per CLAUDE-BASE).
+`epic/14-ci-release-pipeline`; one PR at epic completion (after T5). Each task is a commit.
 
 ### T2 (#16) -- ci.yml dev-channel artifact
 - **Design:** add one `actions/upload-artifact@v4` step after the existing `Build ${{ matrix.env }}` step;
@@ -198,7 +198,7 @@ Cost: GitHub-hosted minutes; matrix parallel. Mitigation if too slow: the env li
   #15-#18 (all done), NOT #19, so the epic push follows process with no bypass -- T5 simply stays
   open until post-merge. (An earlier erroneous attempt closed T5 as a false `done` and created a
   duplicate #23/T6; #19 was reopened and #23 closed as not-planned. No separate T6 exists.)
-- **Deliberate deviation from CLAUDE-BASE Branch&PR** ("integration test passes BEFORE the PR"):
+- **Deliberate deviation from the branch-and-PR standard** ("integration test passes BEFORE the PR"):
   T5 runs AFTER merge. Justified -- the pipeline under test triggers only on `firmware-base` + tags
   and cannot run on the pre-merge feature branch. User-directed (2026-06-07).
 - **T4 `branch-cleanup.yml` -> DELETED** (was "REVIEW"). Inert here (guarded to `Strycher/LoRa`)
