@@ -29,7 +29,7 @@ void mqttBrokerNamespace(uint8_t broker_index, char* out, size_t out_len) {
 
 #ifdef ARDUINO
 
-// #181: surface a config-write failure (SAFELANE 6 -- never silent) AND measure
+// #181: surface a config-write failure (never silent) AND measure
 // the cause (free-entry count answers "is NVS full?" with evidence, not a guess).
 // Shared by every NVS writer below. Real-device only; the host round-trip test
 // gets the no-op stub (it defines ARDUINO but not ESP_PLATFORM).
@@ -51,7 +51,7 @@ static void logCfgWriteFailure(const char*, const char*) {}
 // 30s interval, display off/0deg, empty-url broker), and the Arduino read-only
 // API can't distinguish "key absent" -- the legitimate first-boot/unset state --
 // from a deeper error, so silence-with-safe-default IS the correct, documented
-// contract for a read-miss (NOT a SAFELANE 6 violation). This is exactly why
+// contract for a read-miss (NOT an error-visibility violation). This is exactly why
 // writeBrokerConfig can safely REMOVE an empty field's key (#182): an absent key
 // just reads back as the default.
 //
@@ -224,7 +224,7 @@ bool writeBrokerConfig(uint8_t slot, const BrokerConfig& cfg) {
         if (f.val[0] == '\0') p.remove(f.key);
     }
 
-    // Phase 2 -- value puts, each CHECKED (the #181 SAFELANE-6 honesty is kept).
+    // Phase 2 -- value puts, each CHECKED (the #181 honesty is kept).
     // Only non-empty strings; topic_prefix is ALWAYS stored because its read-default
     // is "meshcore", not "" -- removing it would lose an explicit value to the default.
     bool ok = true;
@@ -459,7 +459,7 @@ void populateDefaultBrokers() {
     }
     // #181: each failed write already self-logged its NVS cause + free-entry
     // stats; surface a single boot-time summary so an incomplete default-seed
-    // is never silent (SAFELANE 6). Boot-time best-effort: a failed seed retries
+    // is never silent. Boot-time best-effort: a failed seed retries
     // on the next boot (populateDefaultBrokers is idempotent / skip-if-present).
     if (!all_ok) {
         logCfgWriteFailure("populateDefaultBrokers", "(default-seed: 1+ write failed)");

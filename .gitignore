@@ -70,6 +70,10 @@ hardware-devices.yaml
 # -- never commit. Symlink/mirror of canonical C:\Dev\LoRa\HARDWARE.md; read before any hardware work.
 HARDWARE.local.md
 
+# Local, never committed: standards pointers and repo-local working notes.
+STANDARDS.local.md
+CLAUDE.local.md
+
 # per-host flash audit log + full-flash backups (device MACs/DeviceIDs) -- never commit
 flash-history.jsonl
 flash-backups/

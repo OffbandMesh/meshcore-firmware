@@ -1,9 +1,10 @@
 # Offband (meshcore-firmware) -- Project CLAUDE.md
 
-> **Read and follow [`C:\Dev\DifferentWire\standards\SAFELANE.md`](../../DifferentWire/standards/SAFELANE.md). No exceptions.**
-> **Read and follow [`C:\Dev\DifferentWire\standards\CLAUDE-BASE.md`](../../DifferentWire/standards/CLAUDE-BASE.md). No exceptions.**
+> **Read and follow the development standards listed in `STANDARDS.local.md` (gitignored, per-host). No exceptions.**
 
-These two documents are the canonical inheritance for this project. Anything below extends or parameterizes them; nothing below overrides them. If there is a conflict, SAFELANE and CLAUDE-BASE win.
+Those documents are the canonical inheritance for this project. Anything below extends or parameterizes them;
+nothing below overrides them. If there is a conflict, the standards win. Repo-local working notes that must
+not be published live in `CLAUDE.local.md` (also gitignored).
 
 ---
 
@@ -118,7 +119,7 @@ Device inventory, RF chain (FEM / TX power), per-device MACs/roles, slot/pin map
 ## PR definition-of-done (#477 — CI matrix is a required merge gate)
 
 - `firmware-base` branch protection requires the **`ci-green`** check (aggregates `config-lint` + the FULL curated build matrix, incl. nRF52 + room_server envs). `gh pr merge --auto --rebase` therefore **waits for the matrix** — enabling auto-merge is no longer merging.
-- **A PR task is NOT complete — and must not be closed in Citadel — until `gh pr view <n> --json state` reports `MERGED`.** A red matrix leaves the PR sitting unmerged; closing the task anyway is the SAFELANE §5 "declaring success without the artifact" violation. If `ci-green` fails, fixing the build (all matrix envs, not just the ones you tested on — the #350/#463 lesson) is part of the same task.
+- **A PR task is NOT complete — and must not be closed in Citadel — until `gh pr view <n> --json state` reports `MERGED`.** A red matrix leaves the PR sitting unmerged; closing the task anyway is the "declaring success without the artifact" failure. If `ci-green` fails, fixing the build (all matrix envs, not just the ones you tested on — the #350/#463 lesson) is part of the same task.
 - Do not shrink or bypass the matrix to get green; matrix changes are owner-approved only.
 
 ## Follow-ups (bootstrap gaps to close)

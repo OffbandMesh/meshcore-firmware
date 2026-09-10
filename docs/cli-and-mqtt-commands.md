@@ -158,7 +158,7 @@ The OTA enable action's response includes:
 
 ```json
 {
-  "ota_url": "http://192.168.50.177/update",
+  "ota_url": "http://192.0.2.177/update",
   "window_sec": 600
 }
 ```
@@ -202,7 +202,7 @@ Use when: device has no home WiFi (e.g., field deploy outside coverage), or firs
 ```
 1. Ensure device WiFi is up (e.g., CLI "wifi on 30" if it isn't already)
 2. MQTT publish to <prefix>/<node>/cmd: {"action":"ota_enable", "auth":"...", "window_sec":600}
-3. Device responds with ota_url (e.g., http://192.168.50.177/update)
+3. Device responds with ota_url (e.g., http://192.0.2.177/update)
 4. POST firmware to that ota_url
 5. Device reboots, runs new firmware
 ```
@@ -279,7 +279,7 @@ import configparser, json, paho.mqtt.client as mqtt, time
 secret = configparser.ConfigParser()
 secret.read('meshcore-firmware/platformio.local.ini')
 c = mqtt.Client()
-c.connect('192.168.50.24', 1883, 30)
+c.connect('192.0.2.24', 1883, 30)
 c.publish('meshcore/stp-lab/cmd', json.dumps({
     'action':'ota_enable',
     'auth': secret['ota_secrets']['trigger_secret'],

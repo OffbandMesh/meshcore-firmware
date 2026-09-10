@@ -55,7 +55,7 @@
 //    we do NOT fall back to either table -- falling back to "upstream" was an
 //    earlier proposal and is itself a corruption path for a truncated Offband
 //    record. The caller must leave the legacy file untouched, log at error
-//    level, and boot on defaults so an operator intervenes (SAFELANE 6).
+//    level, and boot on defaults so an operator intervenes.
 //
 // This header is deliberately free of Arduino/ESP-IDF dependencies so the
 // decision logic is unit-testable on the host. Reading the file length, the
@@ -92,7 +92,7 @@ enum class PrefsFamily : uint8_t {
 };
 
 // Why a decision was reached. Surfaced so the caller can log the deciding
-// evidence rather than just the verdict (SAFELANE 6: no silent choices).
+// evidence rather than just the verdict (no silent choices).
 enum class PrefsLayoutReason : uint8_t {
   LengthUniqueOffband  = 0,  // length matches only Offband releases
   LengthUniqueUpstream = 1,  // length matches only upstream releases

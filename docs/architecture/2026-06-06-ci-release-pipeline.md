@@ -203,7 +203,7 @@ Cost: GitHub-hosted minutes; matrix parallel. Mitigation if too slow: the env li
   and cannot run on the pre-merge feature branch. User-directed (2026-06-07).
 - **T4 `branch-cleanup.yml` -> DELETED** (was "REVIEW"). Inert here (guarded to `Strycher/LoRa`)
   and pruned UNMERGED stale branches (unsafe for the one-epic-one-branch model). Not repurposed:
-  branch hygiene is handled canonically in SAFELANE/standards.
+  branch hygiene is handled canonically in the standards.
 - **Status:** T1/T2/T3/T4 done (local validation per task: YAML parse + logic review). Final
   workflow set: `ci.yml`, `release.yml`, `build-safeboot-firmwares.yml`, `sync-labels-to-board.yml`.
   Next: epic PR (human tollgate) -> merge -> T5 post-merge live test -> human sign-off closes #14.

@@ -5,7 +5,7 @@
 **Status:** DRAFT — pending Gemini adversarial review + Ben sign-off ·
 **Author:** TopazHill (session `ce5045af`) · **Date:** 2026-07-28
 
-> SAFELANE PLAN phase. This document is design-of-record only — **no firmware code lands
+> PLAN phase. This document is design-of-record only — **no firmware code lands
 > under #385.** Implementation + hardware-test child issues are created off this doc *after*
 > sign-off. All code claims below are tagged `[verified: …]` (checked against `firmware-base`
 > this session) or `[hypothesis: …]`.
@@ -140,7 +140,7 @@ role is covered by construction.
   makes the live-mirror decision authoritative at the transport layer. `[F-A3, MEDIUM]`
 
 > Perf target ~5–15 µs/line (mirror CrashLog's guard cost). `[hypothesis: validate on bench]`
-> A non-reentrant sink is a non-starter (SAFELANE §11 rules 8 + 10) — reentrancy is the
+> A non-reentrant sink is a non-starter — reentrancy is the
 > acceptance bar, not the perf number.
 
 ### 4.2 The capture buffer — separate plain-RAM ring (Q1/Q6 decision)

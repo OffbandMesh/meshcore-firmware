@@ -162,7 +162,7 @@ public:
   virtual bool isBootValidationPending() const { return false; }
 
   // Epic E (#64) / E1 #65: persistent on-device safety/diagnostic logging.
-  // Fixes SAFELANE Error Visibility violation discovered during D7 (#61) test:
+  // Fixes an error-visibility defect found during D7 (#61) test:
   // D9 SAFETY and OTA events were emitted only via Serial.println, lost if no
   // monitor attached or if monitor dropped on USB re-enumeration. These getters
   // expose the NVS-backed event ring buffer + current snapshot. Default no-op

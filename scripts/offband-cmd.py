@@ -10,7 +10,7 @@ adopted in-repo with a pure-HTTP /caplog endpoint (#572). Part of the Remote
 Diagnostics epic (#565).
 
 Config via env (so no secret lives in the repo):
-  OFFBAND_CMDRELAY_URL          e.g. http://192.168.50.24:8765
+  OFFBAND_CMDRELAY_URL          e.g. http://192.0.2.24:8765
   OFFBAND_CMDRELAY_ADMIN_TOKEN  the cmdrelay ADMIN bearer token
   OFFBAND_PI_SSH    (tail only) e.g. user@host   (ssh target for the log host)
   OFFBAND_CAPLOG_PATH (tail)    default /var/log/offband-caplog.log

@@ -79,7 +79,7 @@ constexpr const char* kDefaultTopicPrefix = "meshcore";
 // Returns false if NVS error / missing. Defaults applied at call site.
 bool readGlobalIata(char* out, size_t out_len);
 // #181: writers return false on NVS failure (begin/put), and self-log the cause
-// (+ free-entry stats) before returning -- never silent (SAFELANE 6). Callers
+// (+ free-entry stats) before returning -- never silent. Callers
 // must surface the failure rather than ACK success on an unverified write.
 bool writeGlobalIata(const char* iata);
 

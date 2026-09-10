@@ -9,7 +9,7 @@
 Adversarial re-verification of every Heltec V4 FEM/LNA claim carried in this repo. Prior in-repo
 material (firmware comments, `HARDWARE.md`, issue #298, the 2026-07-18 LLM-consult logs) was
 treated as **unverified assertion**, not as input. Claims are tagged `[verified: <source>]` or
-`[hypothesis: untested]` per SAFELANE §11. Where a source could not be obtained, that is recorded
+`[hypothesis: untested]`. Where a source could not be obtained, that is recorded
 as the finding rather than inferred around.
 
 **Source hierarchy used:** Heltec schematics and Heltec official documentation > component vendor

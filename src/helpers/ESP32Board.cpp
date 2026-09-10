@@ -197,7 +197,7 @@ static bool s_validation_pending = false;
 
 // ======================================================================// Epic E (#64) / E1 #65: Persistent safety/diagnostic event ring buffer.
 //
-// SAFELANE Error Visibility violation fix discovered during D7 (#61) testing:
+// Error-visibility fix found during D7 (#61) testing:
 // D9 SAFETY logs and OTA events were emitted only via Serial.println, lost if
 // no monitor attached or if monitor dropped on USB re-enumeration. This block
 // adds an NVS-backed ring buffer that persists events across reboots, giving
