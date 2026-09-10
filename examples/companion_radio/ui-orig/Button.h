@@ -62,7 +62,7 @@ public:
     bool isPressed() const { return _seq.isDown(); }
     EventType getLastEvent() const { return _lastEvent; }
 
-    // #527 / SAFELANE §6: input loss must be VISIBLE, never silent. Non-zero means edges
+    // #527 / input loss must be VISIBLE, never silent. Non-zero means edges
     // arrived faster than update() drained them and were discarded.
     uint32_t droppedEdges() const { return _dropped; }
 

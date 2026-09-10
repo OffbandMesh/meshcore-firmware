@@ -1,6 +1,6 @@
 # Crosswire Firmware Base Unification: Observer -> feature/safeboot
 
-> **For agentic workers:** execute phase-by-phase with the build-verify gate after each. Every step has an exact command + a rollback. Tier-2 actions (compile, push) require explicit approval per SAFELANE.
+> **For agentic workers:** execute phase-by-phase with the build-verify gate after each. Every step has an exact command + a rollback. Tier-2 actions (compile, push) require explicit approval.
 
 **Goal:** Establish one canonical Crosswire firmware base by making `feature/safeboot` the base (full history, Crosswire rebrand, SafeBoot + variant matrix, MeshCore v1.15.0) and porting the Observer/companion line onto it via granular cherry-pick.
 

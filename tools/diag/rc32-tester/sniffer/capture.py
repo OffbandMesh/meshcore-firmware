@@ -187,7 +187,7 @@ def do_capture(port: str, baud: int, out_path: str, cmd_path: str = None) -> int
                 f.write(f"[{ts()}] <capture stopped by operator>\n")
                 return 0
             except Exception as e:
-                # Loud, never silent (SAFELANE 6). A dropped port is recorded in
+                # Loud, never silent. A dropped port is recorded in
                 # the artifact itself so a gap in the log is always explained.
                 f.write(f"[{ts()}] <port error: {e!r}; retrying in 2s>\n")
                 try:

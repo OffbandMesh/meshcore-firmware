@@ -18,7 +18,7 @@ discipline had no mechanical trigger - it relied on me remembering to
 check inbox at every milestone, and the work-flow momentum reliably
 overrode that intent.
 
-block-raw-flash.py and block-raw-curl-ota.py are the precedent: SAFELANE
+block-raw-flash.py and block-raw-curl-ota.py are the precedent:
 "mechanical block does not degrade under momentum." This hook applies the
 same principle to the Agent Mail coordination requirement.
 
@@ -31,7 +31,7 @@ Behavior
 - If a state-mutating pattern matches and the ack file is stale (or
   missing), refuses with exit 2 and an instructive stderr message.
 - Honors DW_SKIP_AGENT_MAIL_CHECK=1 env var for genuine emergencies
-  (matches DW_SKIP_CITADEL_CHECK convention from CLAUDE-BASE). Bypass is
+  (matches the DW_SKIP_CITADEL_CHECK convention). Bypass is
   logged to stderr so the user sees it in real-time.
 - Fail-OPEN on JSON parse errors or unexpected exceptions (don't break
   legitimate work because of a hook bug - matches existing hook

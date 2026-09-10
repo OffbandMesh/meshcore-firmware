@@ -12,7 +12,7 @@
 
 **Test strategy (firmware-adapted):** There is no fast unit-test loop for the GPS/SNTP paths (they need hardware). "Verify" steps are therefore (a) **host/target compile** via `pio run -e <env>` (Tier-2 — needs per-action approval) and (b) **runtime serial verification on ST-P** (collected into Task F). Where a pure-logic host test is cheap (payload JSON), add one.
 
-**SAFELANE:** `pio run` (build), `git push`, flash, and merge are **all Tier-2** — explicit per-action approval for each, every time. "commit"/"land"/"finalize" do **not** authorize merge; only the word "merge" does. Frequent local commits are fine.
+**Approvals:** `pio run` (build), `git push`, flash, and merge are **all Tier-2** — explicit per-action approval for each, every time. "commit"/"land"/"finalize" do **not** authorize merge; only the word "merge" does. Frequent local commits are fine.
 
 ---
 

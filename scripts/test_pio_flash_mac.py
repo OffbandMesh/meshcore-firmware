@@ -9,7 +9,7 @@ first 6 bytes carry the ff:fe EUI-64 fill and are NOT the device base MAC. The
 real address is on the "BASE MAC:" line. The old naive regex mis-parsed this.
 
 Fixtures use synthetic, locally-administered (02:..) MACs on purpose -- never a
-real device MAC (SAFELANE redaction discipline; real MACs live only in the
+real device MAC (redaction discipline; real MACs live only in the
 gitignored hardware-devices.yaml). The output *shape* mirrors esptool v5.2.0 as
 observed on an ESP32-C6 (2026-07-14).
 """

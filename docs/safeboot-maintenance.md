@@ -351,7 +351,7 @@ estimates below.
 
 - [ ] ST-P is on the bench and accessible via USB serial (`pio device list`
       shows ST-P's port; cross-check VID:PID and MAC against
-      `hardware-devices.yaml` per SAFELANE pre-touch checklist).
+      `hardware-devices.yaml` per the pre-touch checklist).
 - [ ] Bench supply present with LiIon-range current settings ready
       (3.5V test point + 4.0V test point).
 - [ ] `meshcore-fork/` working tree clean: `git status` shows no
@@ -396,7 +396,7 @@ overrides or thresholds need re-tuning for whatever upstream changed.
 
 - [ ] Flash the heltec_v4_repeater build to ST-P:
       `python scripts/pio-flash.py flash st-p --env=heltec_v4_repeater`
-      (per SAFELANE flashing discipline, named-target only).
+      (per flashing discipline, named-target only).
 - [ ] **Normal-voltage boot** (bench supply at 4.0V): SafeBoot does NOT
       intervene; boot completes; banner observed in serial monitor.
 - [ ] **Low-voltage** (bench supply at 3.5V): SafeBoot sleeps; serial

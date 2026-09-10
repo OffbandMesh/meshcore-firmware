@@ -556,7 +556,7 @@ on the **MeshCore 1.16.0** base.
   the per-field read.
 
 ### Changed
-- **Honest observer config writes (SAFELANE §6, #181)** — the config / NVS write path used
+- **Honest observer config writes (#181)** — the config / NVS write path used
   to silently swallow failures (a broker disable could ACK success while nothing changed).
   Every writer, the live-reload path, and the crash logger itself now surface + log
   failures with context. This is what root-caused #179.

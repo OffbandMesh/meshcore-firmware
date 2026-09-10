@@ -466,7 +466,7 @@ void NV3001BDisplay::allocFrameBuffer() {
   if (!frame_buf) frame_buf = (uint16_t*)malloc(bytes);
 
   if (!frame_buf) {
-    // Loud, not silent (SAFELANE 6). The display still works, just unbuffered
+    // Loud, not silent. The display still works, just unbuffered
     // and flickering, so this must not be diagnosed as "the fix didn't work".
     Serial.printf("NV3001B: back buffer alloc FAILED (%u B) -- direct panel writes, expect flicker\n",
                   (unsigned)bytes);
@@ -542,7 +542,7 @@ void NV3001BDisplay::drawRGB565(int x, int y, const uint16_t* px, int w, int h) 
 
   // Unbuffered fallback. #747 treats a failed back-buffer allocation as a
   // supported degraded state rather than losing the display, so this path is real
-  // and must draw rather than silently skip (SAFELANE 6). It shares clip() with the
+  // and must draw rather than silently skip. It shares clip() with the
   // buffered path above so the two cannot disagree about geometry.
   const rgb565::Clip c = rgb565::clip(NV3001B_SCREEN_WIDTH, NV3001B_SCREEN_HEIGHT, x, y, w, h);
   if (!c.visible) return;

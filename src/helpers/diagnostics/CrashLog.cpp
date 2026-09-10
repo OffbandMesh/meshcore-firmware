@@ -412,7 +412,7 @@ void crashLogBegin() {
 void crashLogf(const char* fmt, ...) {
     // #181: NEVER drop a line on the floor pre-begin. The crash logger silently
     // losing a line is the one failure that erases the very evidence the log
-    // exists to capture (SAFELANE 6/1). Before crashLogBegin(), still emit to the
+    // exists to capture. Before crashLogBegin(), still emit to the
     // live path (Serial/stdout); only the RTC ring -- which begin() initializes --
     // is skipped until ready (mirrors crashlog_vprintf's pre-begin handling).
     char line[kCrashLogLineMax + 1];
@@ -697,7 +697,7 @@ void heartbeatBegin() {
         s_nvs_boot_count       = s_boot_prefs.getUInt("count", 0) + 1;
         s_prev_boot_uptime_s   = s_boot_prefs.getUInt("last_up_s", 0);
         // #181: the boot counter IS crash-cycle evidence -- a silent put failure
-        // would freeze the count and mask a reboot loop (SAFELANE 6). Surface it.
+        // would freeze the count and mask a reboot loop. Surface it.
         if (s_boot_prefs.putUInt("count", s_nvs_boot_count) == 0) {
             crashLogf("[boot] WARN: NVS cw_boot 'count' write FAILED (count=%u not persisted)",
                       (unsigned)s_nvs_boot_count);
@@ -740,7 +740,7 @@ static void maybeSaveUptime(uint32_t now_ms) {
     // #181: feeds "prev boot lasted Ns" -- the crash-cycle-PERIOD evidence. Runs
     // every 5s, so a silent failure would erase that evidence indefinitely. Log a
     // failure ONCE and re-arm on the next success, rather than flooding the 4KB
-    // ring with a repeating warning (SAFELANE 6).
+    // ring with a repeating warning.
     static bool s_uptime_save_warned = false;
     ::Preferences p;
     if (!p.begin("cw_boot", /*readOnly=*/false)) {

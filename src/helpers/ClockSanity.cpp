@@ -61,7 +61,7 @@ uint32_t clampLastmod(uint32_t lastmod) {
 void logClockSet(const char* source, uint32_t old_epoch, uint32_t new_epoch) {
 #ifdef ARDUINO
   // One line per accepted set; sets are rare human/GPS events, so this cannot
-  // flood the pipe (SAFELANE rule 10). Serial-stream so caplog tees it.
+  // flood the pipe. Serial-stream so caplog tees it.
   // %lld: a correction from a decades-poisoned clock exceeds what 32-bit
   // %ld can represent (Gemini review 2026-08-09).
   Serial.printf("[clock] set by %s: %lu -> %lu (delta %+lld s)\n",
@@ -76,7 +76,7 @@ void logClockReject(const char* source, uint32_t current, uint32_t attempted) {
 #ifdef ARDUINO
   // Rejections from AUTOMATED sources can repeat every loop while the bad
   // input persists (e.g. a GPS stuck on a rolled-over week). Cap the total
-  // per boot so diagnostics exist without flooding the pipe (SAFELANE 10).
+  // per boot so diagnostics exist without flooding the pipe.
   static uint8_t budget = 3;
   if (budget == 0) return;
   budget--;

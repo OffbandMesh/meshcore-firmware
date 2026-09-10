@@ -25,7 +25,7 @@ firmware identifiers. Neither one alone identifies a build; both together do.
 
 Tag format: `offband-vMAJOR.MINOR.PATCH`
 
-Increments per CLAUDE-BASE §Versioning:
+Increments per the versioning standard:
 
 | Increment | When |
 |-----------|------|
@@ -180,7 +180,7 @@ see FF2 / #179); the release workflow also accepts legacy `crosswire-v*` tags.
 
 ## Related references
 
-- CLAUDE-BASE §Versioning (`C:\Dev\DifferentWire\standards\CLAUDE-BASE.md`)
+- The versioning standard (located via the gitignored `STANDARDS.local.md`)
 - `docs/cli-and-mqtt-commands.md` -- CLI + MQTT command reference (`version` command, `wifi on N`, MQTT `ota_enable`, etc.)
 - `docs/safeboot-maintenance.md` -- SafeBoot-specific tag scheme details
 - Epic #176 / LoRa-edl -- this versioning discipline initiative
