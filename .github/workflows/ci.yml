@@ -293,6 +293,32 @@ jobs:
           - heltec_rc52_companion_radio_ble_diag
           - heltec_rc52_companion_radio_usb_diag
           - heltec_rc52_repeater_diag
+          # #877 (epic #773): Heltec RadioCore RC32 (ESP32-S3) and RCC6 (ESP32-C6).
+          # Same rule as the RC52 block above: anything in the release matrix is
+          # built here. Before #877 not one of these 15 shipped envs was compiled by
+          # CI, so a change that broke them merged green and surfaced only when a
+          # release tag was cut -- and since #1016 one failed env blocks the whole
+          # release. Every shipped _diag env is listed next to its base env (RC32
+          # room_server ships with no _diag twin): a _diag env extends its shipped env
+          # and adds build flags, so a green base build does not prove the diag
+          # variant compiles.
+          # RC32 -- shipped envs (.github/release-envs.txt)
+          - heltec_rc32_companion_radio_ble
+          - heltec_rc32_companion_radio_usb
+          - heltec_rc32_repeater
+          - heltec_rc32_room_server
+          - heltec_rc32_companion_radio_ble_diag
+          - heltec_rc32_companion_radio_usb_diag
+          - heltec_rc32_repeater_diag
+          # RCC6 -- shipped envs (.github/release-envs.txt)
+          - heltec_rcc6_companion_radio_ble
+          - heltec_rcc6_companion_radio_usb
+          - heltec_rcc6_repeater_display
+          - heltec_rcc6_companion_observer_wifi
+          - heltec_rcc6_companion_radio_ble_diag
+          - heltec_rcc6_companion_radio_usb_diag
+          - heltec_rcc6_repeater_display_diag
+          - heltec_rcc6_companion_observer_wifi_diag
     steps:
       - uses: actions/checkout@v5
 
