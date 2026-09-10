@@ -66,7 +66,7 @@ class NV3001BDisplay : public DisplayDriver {
   // BYTE-SWAPPED (panel wants big-endian RGB565) so the blit is a plain
   // writeBytes with no per-pixel conversion.
   // Null is a supported state: allocation failure degrades to the original
-  // direct-to-panel behaviour rather than losing the display (SAFELANE 6).
+  // direct-to-panel behaviour rather than losing the display.
   uint16_t* frame_buf = nullptr;
 
   void allocFrameBuffer();

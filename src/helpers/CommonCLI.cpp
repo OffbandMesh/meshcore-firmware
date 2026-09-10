@@ -292,7 +292,7 @@ void CommonCLI::loadPrefs(FILESYSTEM* fs) {
         // FAIL CLOSED. Do NOT migrate and do NOT fall back to either table --
         // guessing here is the corruption path this whole mechanism exists to
         // prevent. Leave the legacy file untouched, run this boot on defaults,
-        // and make it loud so an operator intervenes (SAFELANE 6).
+        // and make it loud so an operator intervenes.
         MESH_DEBUG_PRINTLN("[prefs] ERROR: cannot determine legacy layout of %s "
                            "(len=%u) -- MIGRATION REFUSED, booting on defaults. "
                            "The legacy file is untouched.", legacy, (unsigned)ev.length);

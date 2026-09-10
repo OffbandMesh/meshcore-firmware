@@ -118,7 +118,7 @@ class RC52Display : public DisplayDriver {
   // byte write with no per-pixel conversion.
   //
   // Null is a SUPPORTED state: allocation failure degrades to direct-to-panel
-  // writes rather than losing the display (SAFELANE 6). On this board that is
+  // writes rather than losing the display. On this board that is
   // not hypothetical -- 220*128*2 = 56,320 B against 237,568 B of region, and
   // the BLE companion role already spends ~162 KB of it. See #856.
   rc52_px_t* frame_buf = nullptr;

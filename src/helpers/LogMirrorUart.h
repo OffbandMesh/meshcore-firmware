@@ -40,7 +40,7 @@
 // THE ONE SAFETY RULE
 // -------------------
 // Every wait on hardware MUST be finitely bounded. A diagnostic that can hang
-// the board it is observing is not a diagnostic (SAFELANE 11.8). The ESP32 arm
+// the board it is observing is not a diagnostic. The ESP32 arm
 // learned this the hard way: its first version spun on a FIFO-count read,
 // assuming an unclocked peripheral reads 0. A gated peripheral commonly reads
 // all-ones instead, which made the wait permanent. Worst case here is losing

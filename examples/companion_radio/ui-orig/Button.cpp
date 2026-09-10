@@ -61,7 +61,7 @@ void Button::begin() {
                 break;
             }
         }
-        // SAFELANE §6: if every slot is taken, say so. The polled producer still runs,
+        // if every slot is taken, say so. The polled producer still runs,
         // so the button keeps working -- just without interrupt-grade capture.
         if (_irq_slot < 0) {
             MESH_DEBUG_PRINTLN("[btn] WARNING no IRQ slot free for pin %d, polling only", (int)_pin);
@@ -205,7 +205,7 @@ void Button::update() {
     // Resolve anything whose window has now closed.
     drainSequencer(now);
 
-    // SAFELANE §6: a dropped edge is lost user input. Report it once per occurrence
+    // a dropped edge is lost user input. Report it once per occurrence
     // rather than letting a miscounted press look like a press that never happened.
     uint32_t dropped = _dropped;
     if (dropped != _dropped_reported) {

@@ -128,7 +128,7 @@ void setDisplayAlwaysOnApplier(void (*fn)(bool)) {
 bool handleDisplayAlwaysOn(char* reply, size_t reply_size, bool on) {
     // #181: if persistence fails, surface it and do NOT apply to the live display
     // -- applying a setting that won't survive a reboot would mislead the user
-    // about what's actually stored (SAFELANE 6: state must match the ACK).
+    // about what's actually stored (state must match the ACK).
     if (!setDisplayAlwaysOn(on)) {                                     // persist (offband_ui NVS)
         snprintf(reply, reply_size, "ERROR: failed to save display setting (NVS write failed)\n");
         return true;

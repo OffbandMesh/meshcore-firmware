@@ -500,7 +500,7 @@ void MqttBrokerPool::reconcileSlot(uint8_t slot) {
     }
     // #181: the worker runs off any user channel, so a reconcile that fails to
     // bring up a configured + ENABLED slot must surface in the persistent crash
-    // log (SAFELANE 6) -- otherwise the slot silently stays Down with only
+    // log -- otherwise the slot silently stays Down with only
     // rt_.state as evidence. begin() returns false on bad auth / client-init OOM;
     // a DISABLED slot returns true with no client (expected, not a failure).
     // URL is omitted from the log -- a broker URL may carry inline credentials.

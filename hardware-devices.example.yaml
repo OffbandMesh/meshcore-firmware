@@ -4,7 +4,7 @@
 #
 # Copy this to `hardware-devices.yaml` (gitignored) and populate with YOUR
 # devices. NEVER commit the populated file -- it contains LAN IPs, MAC
-# addresses, and node identifiers (SAFELANE redaction discipline). This
+# addresses, and node identifiers (redaction discipline). This
 # example contains only placeholders.
 #
 # The wrapper (scripts/pio-flash) + the block-raw-flash / block-raw-curl-ota

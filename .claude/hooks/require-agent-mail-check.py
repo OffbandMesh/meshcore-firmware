@@ -18,7 +18,7 @@ discipline had no mechanical trigger - it relied on me remembering to
 check inbox at every milestone, and the work-flow momentum reliably
 overrode that intent.
 
-block-raw-flash.py and block-raw-curl-ota.py are the precedent: SAFELANE
+block-raw-flash.py and block-raw-curl-ota.py are the precedent:
 "mechanical block does not degrade under momentum." This hook applies the
 same principle to the Agent Mail coordination requirement.
 
