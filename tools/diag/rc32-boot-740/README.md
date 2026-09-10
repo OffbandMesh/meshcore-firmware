@@ -37,6 +37,14 @@ consistent with #702's four failed fixes.
 The beacon itself lives in the main tree at `src/helpers/BootBeacon.h`, enabled
 by `-D OFFBAND_BOOT_BEACON` (env `heltec_rc32_companion_radio_usb_diag`).
 
+> **Since #935 (2026-09-10)** that env name belongs to the shipped-derived tester
+> diag build: the shipped `heltec_rc32_companion_radio_usb` env plus
+> `OFFBAND_BOOT_BEACON` and `OFFBAND_LOG_MIRROR_UART`. It still carries the beacon
+> these steps rely on, so the commands below work unchanged. It is **not** the
+> bench env the captures in `evidence/` were taken on. That env had its own flag
+> set and was retired in #935. Recover its definition with
+> `git show 53564978:variants/heltec_rc32/platformio.ini`.
+
 ## Wiring
 
 | RC32 header | Feather | Added |
