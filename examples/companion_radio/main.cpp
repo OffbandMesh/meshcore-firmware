@@ -256,17 +256,50 @@ void setup() {
   Serial.setTxTimeoutMs(1);
 #endif
 
+#if defined(ENABLE_USB_INTERFACE)
+  // #1087: FAIL SAFE BEFORE THE FIRST LINE OF OUTPUT. This must stay the first
+  // statement in setup() that can affect logging -- everything below it, the
+  // build stamp included, depends on the guard already being in place.
+  //
+  // The authoritative test is isConsoleSharedWithProtocol(), but it compares the
+  // interface's bound stream against Serial and so cannot be asked until
+  // usb_serial_interface.begin(Serial) has run -- roughly 250 lines below, after
+  // crashLogStandardInit() has already emitted the boot banner and replayed any
+  // previous-boot ring. Gemini review found that window: a guard set after the
+  // damage is not a guard.
+  //
+  // ENABLE_USB_INTERFACE is decidable here and is sufficient, because begin() is
+  // called with Serial unconditionally on this path -- so on these builds the
+  // console IS the protocol, always. Start closed and let the authoritative
+  // check below re-affirm it, rather than starting open and hoping nothing
+  // speaks first.
+  meshLogSetMirror(false);
+#endif
+
   // #149: stamp the running build on the serial console at boot. Every test build
   // looks identical otherwise, so there's no way to confirm what's actually flashed.
+  // #1087: raw Serial.print, so it bypasses both loggers -- route it through
+  // crashLogf() where the console carries the framed protocol. The stamp still
+  // reaches the UART0 mirror and the retained ring, so nothing is lost on a diag
+  // build; it simply stops being injected into the client's frame decoder.
 #ifdef OFFBAND_VERSION
-  Serial.print("\n=== Offband build: "); Serial.print(OFFBAND_VERSION);
-  #ifdef OFFBAND_GIT_SHA
-  Serial.print(" sha "); Serial.print(OFFBAND_GIT_SHA);
-  #endif
-  Serial.println(" ===");
+  if (meshLogMirrorEnabled()) {
+    Serial.print("\n=== Offband build: "); Serial.print(OFFBAND_VERSION);
+    #ifdef OFFBAND_GIT_SHA
+    Serial.print(" sha "); Serial.print(OFFBAND_GIT_SHA);
+    #endif
+    Serial.println(" ===");
+  } else {
+    #ifdef OFFBAND_GIT_SHA
+    offband::crashLogf("=== Offband build: %s sha %s ===", OFFBAND_VERSION, OFFBAND_GIT_SHA);
+    #else
+    offband::crashLogf("=== Offband build: %s ===", OFFBAND_VERSION);
+    #endif
+  }
 #endif
 
   // SafeBoot: pre-init power guard. See src/SafeBoot.h.
+
   // #740: bracketed -- SafeBoot can deep-sleep here, which looks identical to a
   // hang from outside. A "before" with no "post" names it unambiguously.
   OFFBAND_BEACON("setup:before SafeBoot::checkAndMaybeSleep");
@@ -293,7 +326,15 @@ void setup() {
     snprintf(rr, sizeof(rr), "[boot] last reset: %s (RESETREAS=0x%lX)",
              board.getResetReasonString(board.getResetReason()),
              (unsigned long)board.getResetReason());
-    Serial.println(rr);
+    // #1087: not on a console that carries the framed protocol. This is a raw
+    // Serial.println, so it bypasses both loggers' guards and would land in the
+    // client's frame decoder as text. crashLogf() reaches the UART0 mirror and
+    // the retained ring, so a diag build loses nothing by routing it there.
+    if (meshLogMirrorEnabled()) {
+      Serial.println(rr);
+    } else {
+      offband::crashLogf("%s", rr);
+    }
   }
 #endif
 
