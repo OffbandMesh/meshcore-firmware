@@ -602,6 +602,93 @@ void setup() {
   #define OFFBAND_POWER_TELEMETRY_MS 30000
 #endif
 
+#if defined(OFFBAND_OBSERVER) || defined(OFFBAND_POWER_TELEMETRY)
+// #1071: one read of the radio's state and counters, shared by the observer
+// /status snapshot and the [radio] telemetry line, so the two can never report
+// different numbers for the same moment. Read-only use of RadioLibWrapper, and
+// memory reads only: last RSSI/SNR are NOT here because getLastRSSI/SNR() go
+// to the SX126x over SPI, and the observer path never paid for that.
+struct RadioStatus {
+  bool     listening;       // in receive mode at the instant of the read
+  int      noise_floor;     // dBm
+  uint32_t pkts_recv;
+  uint32_t pkts_recv_errors;
+  uint32_t pkts_sent;
+  uint32_t tx_air_secs;
+  uint32_t rx_air_secs;
+  uint16_t queue_len;
+  uint16_t err_flags;
+};
+
+static RadioStatus readRadioStatus() {
+  RadioStatus s;
+  s.listening        = radio_driver.isInRecvMode();
+  s.noise_floor      = radio_driver.getNoiseFloor();
+  s.pkts_recv        = radio_driver.getPacketsRecv();
+  s.pkts_recv_errors = radio_driver.getPacketsRecvErrors();
+  s.pkts_sent        = radio_driver.getPacketsSent();
+  s.tx_air_secs      = static_cast<uint32_t>(the_mesh.getTotalAirTime() / 1000UL);
+  s.rx_air_secs      = static_cast<uint32_t>(the_mesh.getReceiveAirTime() / 1000UL);
+  s.queue_len        = static_cast<uint16_t>(the_mesh.getOutboundQueueLen());
+  s.err_flags        = the_mesh.getErrFlags();
+  return s;
+}
+#endif
+
+#if defined(OFFBAND_POWER_TELEMETRY)
+// "-7.3" from -7.25 without %f: printf float support is not guaranteed on
+// every core this file builds for. NaN, inf and anything no radio could
+// report print "?" -- lroundf() of a non-finite or out-of-range value is
+// undefined, and the bound also keeps the negation below overflow-free.
+static void fmtTenths(char* out, size_t cap, float v) {
+  if (!isfinite(v) || fabsf(v) > 10000.0f) {
+    snprintf(out, cap, "?");
+    return;
+  }
+  long t = lroundf(v * 10.0f);
+  const char* sign = (t < 0) ? "-" : "";
+  if (t < 0) t = -t;
+  snprintf(out, cap, "%s%ld.%ld", sign, t / 10, t % 10);
+}
+
+// Counter delta that survives a reset: a counter that went backwards was
+// zeroed (resetStats() on the repeater/room-server mains), so everything it
+// holds now happened since the reset.
+static uint32_t counterDelta(uint32_t now, uint32_t prev) {
+  return (now >= prev) ? (now - prev) : now;
+}
+
+// #1071: is the radio up, is it doing anything, what did it last hear. One
+// line per telemetry tick -- never per packet. Deltas against the previous
+// line make "any Tx or Rx in the last 30 s" readable at a glance.
+static void emitRadioStatusLine() {
+  // Zero-initialized, so the first line's deltas are since boot.
+  static uint32_t s_prev_rx = 0, s_prev_err = 0, s_prev_tx = 0;
+
+  const RadioStatus s = readRadioStatus();
+  // Last packet's RSSI/SNR: an SPI read of the SX126x packet status. Main-loop
+  // context, like every other radio command, so nothing races the driver.
+  // Before the first packet these read whatever the chip holds -- pkts rx=0
+  // on the same line says to ignore them.
+  char rssi[12], snr[12];
+  fmtTenths(rssi, sizeof(rssi), radio_driver.getLastRSSI());
+  fmtTenths(snr, sizeof(snr), radio_driver.getLastSNR());
+  mesh_log_line(MLOG_BOOT,
+                "[radio] listening=%d nf=%d rssi=%s snr=%s pkts rx=+%lu/%lu err=+%lu/%lu "
+                "tx=+%lu/%lu air tx=%lus rx=%lus q=%u err_flags=0x%04X\n",
+                (int)s.listening, s.noise_floor, rssi, snr,
+                (unsigned long)counterDelta(s.pkts_recv, s_prev_rx), (unsigned long)s.pkts_recv,
+                (unsigned long)counterDelta(s.pkts_recv_errors, s_prev_err),
+                (unsigned long)s.pkts_recv_errors,
+                (unsigned long)counterDelta(s.pkts_sent, s_prev_tx), (unsigned long)s.pkts_sent,
+                (unsigned long)s.tx_air_secs, (unsigned long)s.rx_air_secs,
+                (unsigned)s.queue_len, (unsigned)s.err_flags);
+  s_prev_rx  = s.pkts_recv;
+  s_prev_err = s.pkts_recv_errors;
+  s_prev_tx  = s.pkts_sent;
+}
+#endif
+
 void loop() {
 #if !defined(OFFBAND_OBSERVER)
   offband::crashLogStandardTick(millis());  // #472: deferred previous-boot re-dump (all non-observer companions)
@@ -632,6 +719,7 @@ void loop() {
       mesh_log_line(MLOG_BOOT, "[pwr] mv=%u up=%us\n",
                     (unsigned)board.getBattMilliVolts(),
                     (unsigned)(now_ms / 1000UL));
+      emitRadioStatusLine();   // #1071: same tick, same channels
 
 #if defined(OFFBAND_POWER_TELEMETRY_PROBE) && defined(PIN_VBAT_READ) && defined(PIN_ADC_CTRL)
       // TEMPORARY diagnostic (#766). getBattMilliVolts() returns 0 on the RC32
@@ -821,12 +909,14 @@ void loop() {
       offband::MqttStatusSnapshot snap = {};
       snap.battery_mv     = static_cast<int>(board.getBattMilliVolts());
       snap.uptime_secs    = static_cast<uint32_t>(_now / 1000UL);
-      snap.error_flags    = the_mesh.getErrFlags();
-      snap.queue_len      = static_cast<uint16_t>(the_mesh.getOutboundQueueLen());
-      snap.noise_floor    = radio_driver.getNoiseFloor();
-      snap.tx_air_secs    = static_cast<uint32_t>(the_mesh.getTotalAirTime() / 1000UL);
-      snap.rx_air_secs    = static_cast<uint32_t>(the_mesh.getReceiveAirTime() / 1000UL);
-      snap.recv_errors    = static_cast<uint32_t>(radio_driver.getPacketsRecvErrors());
+      // #1071: the radio fields come from the same read as the [radio] line.
+      const RadioStatus rs = readRadioStatus();
+      snap.error_flags    = rs.err_flags;
+      snap.queue_len      = rs.queue_len;
+      snap.noise_floor    = rs.noise_floor;
+      snap.tx_air_secs    = rs.tx_air_secs;
+      snap.rx_air_secs    = rs.rx_air_secs;
+      snap.recv_errors    = rs.pkts_recv_errors;
       // #88: report the ACTUAL runtime radio config from NodePrefs (set via
       // companion-API CMD_SET_RADIO_PARAMS, surfaced to HA/HACS through
       // SELF_INFO) -- NOT the compile-time LORA_* macros, which on the observer
