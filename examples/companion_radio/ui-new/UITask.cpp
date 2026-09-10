@@ -6,7 +6,47 @@
 #ifdef WIFI_SSID
   #include <WiFi.h>
 #endif
-#ifdef OFFBAND_OBSERVER
+// ---------------------------------------------------------------------------
+// #972: UI state-machine tracing.
+//
+// These four crashLogf() call sites were gated on OFFBAND_OBSERVER. That flag
+// implies WiFi, and nRF52 has none -- so on RC52, RAK4631, T1000-E, Wio, T096 and
+// XIAO the tracing compiled out entirely. The instrument exists BECAUSE of a UI
+// bug (see the note above setCurrScreen: a SplashScreen <-> HomeScreen
+// oscillation observed on hv3-bench), so gating it on an unrelated radio
+// capability made it unavailable on a whole class of boards.
+//
+// Derived from both flags rather than moved to OFFBAND_BOOT_BEACON directly:
+//   * observer boards keep it exactly as before -- no regression where it works
+//     today;
+//   * OFFBAND_BOOT_BEACON brings in the RadioCore _diag envs (RC32, RCC6, RC52
+//     all set it), matching the standing rule that every env built during
+//     bring-up is a full diagnostic build;
+//   * the name says what it controls. OFFBAND_BOOT_BEACON is about BOOT; this is
+//     UI runtime tracing, and reusing that flag's name would mislead.
+//
+// crashLogf() itself is unconditional in CrashLog.h -- only the call sites were
+// ever gated.
+// ---------------------------------------------------------------------------
+#if defined(OFFBAND_OBSERVER) || defined(OFFBAND_BOOT_BEACON)
+  #define OFFBAND_UI_TRACE 1
+#endif
+
+// The heap probe is gated SEPARATELY and is OFF by default, even on builds that
+// have the tracing above. (Gemini review finding 2, #972.)
+//
+// The transition and allocation traces are a handful of crashLogf() calls. The
+// probe is a different class of thing: it calls malloc in a loop on the boot
+// path. Folding it into OFFBAND_UI_TRACE would drag that cost onto every
+// RadioCore _diag build to answer a question almost none of them are asking.
+//
+// Turn it on deliberately, for a board you are actively investigating:
+//   -D OFFBAND_UI_TRACE_HEAP
+#if defined(OFFBAND_UI_TRACE) && defined(OFFBAND_UI_TRACE_HEAP)
+  #define OFFBAND_UI_HEAP_PROBE 1
+#endif
+
+#ifdef OFFBAND_UI_TRACE
   #include <helpers/diagnostics/CrashLog.h>
 #endif
 
@@ -52,7 +92,7 @@ public:
   }
 
   int render(DisplayDriver& display) override {
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_UI_TRACE
     offband::crashLogf("[ui] SplashScreen.render() at %lu", (unsigned long)millis());
 #endif
     offband::SplashInfo si( nullptr, FIRMWARE_VERSION, FIRMWARE_BUILD_DATE );
@@ -632,6 +672,70 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   splash = new SplashScreen(this);
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
   msg_preview = new MsgPreviewScreen(this, &rtc_clock);
+#ifdef OFFBAND_UI_TRACE
+  // #951: these three are new'd with no null check, and a null `home` is SILENT --
+  // gotoHomeScreen() sets curr = nullptr, the render loop's `&& curr` guard stops
+  // firing, and the panel simply holds whatever was last blitted. On a memory-tight
+  // board that presents as "stuck on the splash screen" with a fully healthy board
+  // behind it. Log which of them actually got memory.
+  offband::crashLogf("[ui] screens alloc: splash=%d home=%d msg_preview=%d",
+                     (int)(splash != NULL), (int)(home != NULL), (int)(msg_preview != NULL));
+
+  // #856: how much did they actually need, and how much was there?
+  //
+  // sizeof() is exact and costs nothing, so it is always logged. The heap probe
+  // below is opt-in -- see OFFBAND_UI_TRACE_HEAP above.
+  offband::crashLogf("[ui] sizeof: splash=%u home=%u msg=%u",
+                     (unsigned)sizeof(SplashScreen), (unsigned)sizeof(HomeScreen),
+                     (unsigned)sizeof(MsgPreviewScreen));
+
+#ifdef OFFBAND_UI_HEAP_PROBE
+  // LARGEST CONTIGUOUS BLOCK still allocatable -- that, not total free bytes, is
+  // what `new HomeScreen` has to find.
+  //
+  // BINARY SEARCH, not a linear walk. (Gemini review finding 1, #972.) The first
+  // version stepped down from 64 KB in 512 B decrements: up to 128 malloc calls
+  // on the boot path, and on a board with room to spare the 64 KB request
+  // SUCCEEDS -- newlib returns the block to its free list but does not hand the
+  // sbrk extension back, so a diagnostic could permanently raise the heap ceiling
+  // by 64 KB on boards that never needed it. 8 probes instead of 128, and the
+  // ceiling is sized to the question rather than to a round number.
+  //
+  // FLOOR MATTERS MORE THAN THE CEILING. The first version stepped by 512 B, so
+  // its resolution floor was 512 -- and sizeof(HomeScreen) is 480. It could not
+  // resolve the allocation it existed to measure, and reported "0" for anything
+  // under 512 B, which reads as "no memory at all" when it means "less than
+  // half a kilobyte". PROBE_FLOOR is deliberately below the smallest screen.
+  {
+    const size_t PROBE_CEIL  = 24u * 1024u;   // above any single screen, well under a big heap
+    const size_t PROBE_FLOOR = 64u;           // below sizeof(SplashScreen), so 0 really means 0
+
+    size_t lo = 0, hi = PROBE_CEIL, largest = 0;
+    for (int i = 0; i < 9; i++) {             // 9 halvings of 24 KB resolves to < 64 B
+      // NO `if (mid < PROBE_FLOOR) break;` here -- it was tried and it is wrong.
+      // (Gemini re-review, #972.) Breaking on the midpoint abandons the interval
+      // while the true largest block may still be inside it: with 80 B actually
+      // available the search narrows to lo=0/hi=96, computes mid=48, breaks, and
+      // reports largest=0 -- claiming no memory at all when 80 B were free. That
+      // is the exact misleading zero this rewrite existed to remove.
+      //
+      // Termination is already safe: a fixed 9 iterations, plus the hi-lo
+      // convergence check below. PROBE_FLOOR is the RESOLUTION, not a minimum
+      // probe size, so probing beneath it is intended.
+      const size_t mid = lo + (hi - lo) / 2;
+      void* p = malloc(mid);
+      if (p) { free(p); largest = mid; lo = mid; }
+      else   { hi = mid; }
+      if (hi - lo < PROBE_FLOOR) break;
+    }
+    // `largest` stays 0 unless an allocation actually succeeded, so a report of 0
+    // means nothing above PROBE_FLOOR was obtainable -- it is never a value that
+    // was merely stepped past.
+    offband::crashLogf("[ui] largest_free_block=%u (ceil=%u floor=%u)",
+                       (unsigned)largest, (unsigned)PROBE_CEIL, (unsigned)PROBE_FLOOR);
+  }
+#endif
+#endif
   setCurrScreen(splash);
 }
 
@@ -722,7 +826,7 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
 
   if (_display != NULL) {
     if (!_display->isOn() && !hasConnection() && _disp_mode != 2) {  // #542 B1: not in always-off
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_UI_TRACE
       offband::crashLogf("[ui] newMsg: display off + no conn -> turnOn");
 #endif
       _display->turnOn();
@@ -760,20 +864,34 @@ void UITask::userLedHandler() {
 }
 
 void UITask::setCurrScreen(UIScreen* c) {
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_UI_TRACE
   // Screen transition tracing: log every change so we can see if the
   // SplashScreen ↔ HomeScreen oscillation observed on hv3-bench is
   // a real state-machine bug.
+  // #951: nullptr is tested FIRST, and that ordering is load-bearing. If a screen
+  // pointer is itself null -- `new` returned nothing on a memory-tight board -- then
+  // `c == home` is true for a null `c`, and the old ordering printed "HOME" for a
+  // transition to nothing. The NULL arm was unreachable in exactly the case it
+  // existed to catch, and the trace read as a healthy handoff while the UI was
+  // going dark. Do not reorder these.
+  //
+  // ⚠ MAINTENANCE: this chain is hand-maintained against the screen pointers
+  // declared in UITask. Add a fourth screen and forget to add it here and its
+  // transitions log as "?" -- the trace degrades quietly rather than failing.
+  // Kept as an if/else chain deliberately: a lookup table would centralise the
+  // names but costs storage on every board for a diagnostic most never enable.
+  // (Gemini review finding 3, #972 -- accepted as a maintainability note, no
+  // functional defect.)
   const char* from = "?";
   const char* to   = "?";
-  if      (curr == splash)      from = "SPLASH";
+  if      (curr == nullptr)     from = "NULL";
+  else if (curr == splash)      from = "SPLASH";
   else if (curr == home)        from = "HOME";
   else if (curr == msg_preview) from = "MSG_PREVIEW";
-  else if (curr == nullptr)     from = "NULL";
-  if      (c == splash)         to   = "SPLASH";
+  if      (c == nullptr)        to   = "NULL";
+  else if (c == splash)         to   = "SPLASH";
   else if (c == home)           to   = "HOME";
   else if (c == msg_preview)    to   = "MSG_PREVIEW";
-  else if (c == nullptr)        to   = "NULL";
   offband::crashLogf("[ui] setCurrScreen %s -> %s", from, to);
 #endif
   curr = c;
@@ -889,7 +1007,7 @@ void UITask::loop() {
 #endif
 
   if (c != 0 && curr) {
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_UI_TRACE
     offband::crashLogf("[ui] button event c=0x%x dispatched to curr screen", (int)c);
 #endif
     curr->handleInput(c);
