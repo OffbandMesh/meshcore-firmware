@@ -165,6 +165,105 @@ void halt() {
   unsigned long last_wifi_reconnect_attempt = 0;
 #endif
 
+// "-7.3" from -7.25 without %f: printf float support is not guaranteed on
+// every core this file builds for. NaN, inf and anything no radio could
+// report print "?" -- lroundf() of a non-finite or out-of-range value is
+// undefined, and the bound also keeps the negation below overflow-free.
+static void fmtTenths(char* out, size_t cap, float v) {
+  if (!isfinite(v) || fabsf(v) > 10000.0f) {
+    snprintf(out, cap, "?");
+    return;
+  }
+  long t = lroundf(v * 10.0f);
+  const char* sign = (t < 0) ? "-" : "";
+  if (t < 0) t = -t;
+  snprintf(out, cap, "%s%ld.%ld", sign, t / 10, t % 10);
+}
+
+// #1073: what is this board actually running, in two lines a tester capture
+// always contains. The build stamp alone could not answer it: nothing printed
+// the RUNNING radio config, so saved prefs overriding the build flags were
+// invisible. Emitted at the end of setup() -- after prefs load, the_mesh.begin()
+// and every interface start -- through crashLogf(), so it lands in the CrashLog
+// ring and on the UART0 mirror, and never on a USB companion's protocol line
+// (#1087). Reaching this point also means radio_init() succeeded: its failure
+// halts setup() before here, and the setup phase beacon shows where.
+//
+// Two lines, not one: a 31-char node name plus a long version string could
+// overrun crashLogf()'s 240-byte line and silently truncate the tail.
+static void emitBootSummary() {
+  const NodePrefs* p = the_mesh.getNodePrefs();
+
+  const char* ifaces =
+  #if defined(BLE_PIN_CODE)
+    "ble"
+  #endif
+  #if defined(WIFI_SSID)
+    " wifi"
+  #endif
+  #if defined(ENABLE_USB_INTERFACE)
+    " usb"
+  #endif
+  #if defined(ETHERNET_ENABLED)
+    " eth"
+  #endif
+  #if defined(SERIAL_RX)
+    " uart"
+  #endif
+    "";
+  while (*ifaces == ' ') ifaces++;   // drop the separator of a missing first entry
+
+  offband::crashLogf("[boot] id build=%s sha=%s role=companion if=%s caplog=%s/%s mirror=%d",
+                     OFFBAND_VERSION,
+  #if defined(OFFBAND_GIT_SHA)
+                     OFFBAND_GIT_SHA,
+  #else
+                     "?",
+  #endif
+                     *ifaces ? ifaces : "none",
+                     meshLogIsEnabled() ? "on" : "off", meshLogLevelName(meshLogGetLevel()),
+                     (int)meshLogMirrorEnabled());
+
+  // Prefs come from flash and may be corrupt; this line exists precisely to
+  // show a board whose prefs are wrong, so nothing below trusts them.
+  //
+  // freq to the kHz without %f: 910.525 MHz -> 910525 kHz -> "910.525". A
+  // non-finite or out-of-band value prints "?" (lroundf of NaN is undefined,
+  // and a negative value would print as "-915.-123").
+  char freq[16];
+  if (isfinite(p->freq) && p->freq > 0.0f && p->freq < 10000.0f) {
+    long khz = lroundf(p->freq * 1000.0f);
+    snprintf(freq, sizeof(freq), "%ld.%03ld", khz / 1000, khz % 1000);
+  } else {
+    snprintf(freq, sizeof(freq), "?");
+  }
+  char bw[12];
+  fmtTenths(bw, sizeof(bw), p->bw);
+  // node_name: bounded copy (the stored buffer may lack its NUL) with control
+  // characters replaced, so a name holding '\n' cannot forge a log line.
+  char name[sizeof(p->node_name)];
+  size_t n = 0;
+  for (; n < sizeof(name) - 1 && p->node_name[n]; n++) {
+    unsigned char c = (unsigned char)p->node_name[n];
+    name[n] = (c < 0x20 || c == 0x7F) ? '?' : (char)c;
+  }
+  name[n] = '\0';
+  char pk[9];
+  snprintf(pk, sizeof(pk), "%02X%02X%02X%02X", the_mesh.self_id.pub_key[0],
+           the_mesh.self_id.pub_key[1], the_mesh.self_id.pub_key[2], the_mesh.self_id.pub_key[3]);
+  offband::crashLogf("[boot] radio freq=%s bw=%s sf=%u cr=%u tx=%d name=%s pk=%s "
+                     "mv=%u shutdown_mv=%d ext=%d",
+                     freq, bw, (unsigned)p->sf, (unsigned)p->cr,
+                     (int)p->tx_power_dbm, name, pk,
+                     (unsigned)board.getBattMilliVolts(),
+  #if defined(AUTO_SHUTDOWN_MILLIVOLTS)
+                     (int)AUTO_SHUTDOWN_MILLIVOLTS,
+  #else
+                     -1,   // no auto-shutdown on this build
+  #endif
+                     (int)board.isExternalPowered());
+}
+
 void setup() {
   // #740: first statement in setup(), ahead of Serial.begin() -- the beacon does
   // not depend on the Arduino core, so this lands even if Serial.begin() stalls.
@@ -592,6 +691,7 @@ void setup() {
   board.startHeartbeat();
 #endif
 
+  emitBootSummary();   // #1073
   CW_PHASE("setup:DONE");
 }
 
@@ -636,21 +736,6 @@ static RadioStatus readRadioStatus() {
 #endif
 
 #if defined(OFFBAND_POWER_TELEMETRY)
-// "-7.3" from -7.25 without %f: printf float support is not guaranteed on
-// every core this file builds for. NaN, inf and anything no radio could
-// report print "?" -- lroundf() of a non-finite or out-of-range value is
-// undefined, and the bound also keeps the negation below overflow-free.
-static void fmtTenths(char* out, size_t cap, float v) {
-  if (!isfinite(v) || fabsf(v) > 10000.0f) {
-    snprintf(out, cap, "?");
-    return;
-  }
-  long t = lroundf(v * 10.0f);
-  const char* sign = (t < 0) ? "-" : "";
-  if (t < 0) t = -t;
-  snprintf(out, cap, "%s%ld.%ld", sign, t / 10, t % 10);
-}
-
 // Counter delta that survives a reset: a counter that went backwards was
 // zeroed (resetStats() on the repeater/room-server mains), so everything it
 // holds now happened since the reset.
