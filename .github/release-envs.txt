@@ -123,11 +123,13 @@ heltec_rc32_room_server
 # RC32 TESTER DIAGNOSTIC BUILDS -- published on EVERY release while RadioCore is
 # unreleased hardware (owner decision, 2026-08-18).
 #
-# Each EXTENDS the shipped env above and adds ONLY OFFBAND_BOOT_BEACON and
-# OFFBAND_LOG_MIRROR_UART. Nothing else differs. That is deliberate: a diagnostic
-# build that diverges from the shipped build diagnoses the wrong firmware, which
-# is exactly how the GPS-on-a-strapping-pin defect (#704) survived every bench
-# session -- every result came from a build that had already worked around it.
+# Each EXTENDS the shipped env above and adds ONLY instrumentation: the shared
+# [rc32_diag] block (OFFBAND_BOOT_BEACON, OFFBAND_LOG_MIRROR_UART,
+# OFFBAND_FORCE_CAPLOG), plus OFFBAND_POWER_TELEMETRY on the two companion envs
+# (#935). Nothing else differs. That is deliberate: a diagnostic build that
+# diverges from the shipped build diagnoses the wrong firmware, which is exactly
+# how the GPS-on-a-strapping-pin defect (#704) survived every bench session --
+# every result came from a build that had already worked around it.
 #
 # Why they ship rather than being built by hand: a beta tester whose board will
 # not boot cannot reach a CLI, and hand-packaged binaries go stale the moment
@@ -136,11 +138,14 @@ heltec_rc32_room_server
 # Reading their output needs an external UART sniffer on RC32 pin 12 (U0TXD) and
 # pin 20 (GND) -- see tools/diag/rc32-tester/.
 #
-# REVISIT when RadioCore ships as released hardware, and when #763 lands its
-# level gate: the UART0 mirror is a synchronous bounded busy-wait, and combining
-# it with debug-level logging hangs setup() (2 s -> 118 s -> never). These envs
-# do not enable debug logging, so they are safe as built -- but the hazard is why
-# this is scoped to unreleased hardware rather than made a general pattern.
+# REVISIT when RadioCore ships as released hardware. The UART0 mirror is a
+# synchronous bounded busy-wait, and a debug-level firehose on it can stall
+# setup() (#763). Since #935 these envs force caplog on at DEBUG level -- the
+# same pairing the RCC6 and RC52 diag envs already ship -- so MESH_DEBUG lines
+# reach the wire. On RC32 that pairing is build-verified only until the #773
+# epic verification runs on hardware; #1069's per-sink level ceiling is the
+# structural guard. The hazard is why this is scoped to unreleased hardware
+# rather than made a general pattern.
 heltec_rc32_companion_radio_ble_diag
 heltec_rc32_companion_radio_usb_diag
 heltec_rc32_repeater_diag
