@@ -29,7 +29,7 @@ routing traffic when it stopped.
 | | |
 |---|---|
 | Board | `rc32-bench-1` — Heltec RadioCore **RC32-L62** (ESP32-S3 + HT-RA62A) |
-| Firmware | `heltec_rc32_companion_radio_ble_diag`, build `offband-v1.5.0-beta2-26-g0a2373a` |
+| Firmware | `heltec_rc32_companion_radio_ble_diag` **as that env existed on 2026-08-18**, build `offband-v1.5.0-beta2-26-g0a2373a` — see the name note in section 8 |
 | Configuration | BLE companion, **display active**, GPS off, `DISPLAY_ROTATION=0` |
 | Cell | 2500 mAh single-cell LiPo on VBAT (header pin 2 / GND pin 20) |
 | LoRa | 910.525 MHz, SF7, BW 62.5 kHz, live mesh traffic throughout |
@@ -175,9 +175,11 @@ This is the reference point for the role and display comparisons. Both envs alre
 
 | Run | Env | Isolates |
 |---|---|---|
-| 1 ✅ | `heltec_rc32_companion_radio_ble_diag` | **baseline — 21 h 35 m, 116 mA** |
+| 1 ✅ | `heltec_rc32_companion_radio_ble_diag` (pre-#935 env) | **baseline — 21 h 35 m, 116 mA** |
 | 2 | `heltec_rc32_repeater` | role cost (no BLE, no companion protocol; display still on) |
 | 3 | `heltec_rc32_without_display_repeater` + panel removed | display cost |
+
+> ⚠ **The env name in this document was reused.** Run 1 was measured on the bring-up env that held `heltec_rc32_companion_radio_ble_diag` in August 2026. That env was **retired on 2026-09-10 ([#935](https://github.com/OffbandMesh/meshcore-firmware/issues/935))**, and the name passed to the shipped tester build. Today's `heltec_rc32_companion_radio_ble_diag` extends the production `_ble` env and carries `OFFBAND_POWER_TELEMETRY`, so it can run the same burn. It is a different build, though: it adds BLE debug logging and forced log capture, and it does not compile in the US LoRa preset the old env had. A burn on it is a new measurement, not a reproduction of this one.
 
 Run 2 keeps the panel, so the difference is role alone. Run 3 compiles out the display driver
 entirely — no SPI traffic, no UI task, no backlight — so with the panel physically removed it
