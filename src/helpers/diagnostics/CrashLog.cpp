@@ -10,6 +10,9 @@
 // USB CDC vanish. On a native-USB board it is the ONLY channel that can carry
 // a crash log off the device at the moment the crash log matters.
 #include "../LogMirrorUart.h"
+// #1087: meshLogMirrorEnabled() -- the single source of truth for "is this
+// console shared with the framed protocol". CrashLog and MeshLog must agree.
+#include "../../MeshLog.h"
 
 #include <cstdarg>
 #include <cstdio>
@@ -215,6 +218,28 @@ static size_t crashLogSerialWrite(const char* data, size_t len) {
 #else
     const size_t mirrored = 0;
 #endif
+
+    // #1087: NEVER write into a console that is carrying the framed protocol.
+    //
+    // On a `_usb` companion `Serial` IS the companion protocol, so every line
+    // emitted here lands in the client's frame decoder as raw text. A stock
+    // MeshCore client reports one "unexpected frame type" per BYTE -- 117, 112,
+    // 59, 32 ... decodes to "up; reset", i.e. our own boot line. The session then
+    // degrades: settings render empty, the channel list never syncs, and under
+    // sustained traffic the board stops transmitting.
+    //
+    // Volume is what makes it fatal rather than cosmetic on ESP32: crashLogBegin
+    // installs an ESP-IDF log capture, so the whole IDF stream routes through
+    // here. One bench capture held 498 lines.
+    //
+    // MeshLog already solved this -- main.cpp sets the mirror from
+    // isConsoleSharedWithProtocol() -- and CrashLog simply never asked. Reuse
+    // that single source of truth rather than introducing a second policy:
+    // shared console => Serial is off limits, everywhere, for both loggers.
+    //
+    // Diagnostics are NOT lost. The UART0 mirror above already took every byte,
+    // which is exactly why a diag build reads that wire instead of USB.
+    if (!meshLogMirrorEnabled()) return mirrored;
 
     // Serial stays best-effort on exactly the old terms: never wait, never
     // block, drop what does not fit.
