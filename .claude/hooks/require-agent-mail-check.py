@@ -31,7 +31,7 @@ Behavior
 - If a state-mutating pattern matches and the ack file is stale (or
   missing), refuses with exit 2 and an instructive stderr message.
 - Honors DW_SKIP_AGENT_MAIL_CHECK=1 env var for genuine emergencies
-  (matches DW_SKIP_CITADEL_CHECK convention from CLAUDE-BASE). Bypass is
+  (matches the DW_SKIP_CITADEL_CHECK convention). Bypass is
   logged to stderr so the user sees it in real-time.
 - Fail-OPEN on JSON parse errors or unexpected exceptions (don't break
   legitimate work because of a hook bug - matches existing hook
