@@ -19,6 +19,7 @@
 #define OFFBAND_BEACON_DEFINE_CTOR
 #include "helpers/BootBeacon.h"
 #include "helpers/CdcConsoleFlush.h"   // #1035: right-flush (ZLP) for the USB-Serial-JTAG console
+#include "helpers/ArduinoSerialInterface.h"   // #1093: emitw drives the real writeFrame()+loop() path for the v4.1 A/B
 
 
 #ifdef PIN_STATUS_LED
@@ -1364,6 +1365,67 @@ void loop() {
         for (int i = 0; i < n; i++) Serial.write((uint8_t)('0' + (i % 10)));
       }
       if (zlp) flushSerialConsole();     // #1035: emit the terminating ZLP -- proves the fix on the reproducer
+      handled_diag = true;
+    }
+    // #1093 companion writeFrame() reproducer: emit EXACTLY the on-wire pattern of
+    // ArduinoSerialInterface::writeFrame() -- a 3-byte header ('>' + len16 LE) then <len>
+    // payload bytes, as TWO Serial.write() calls (same as writeFrame), total 3+len bytes on
+    // the same HWCDC transport. Tests whether a frame whose on-wire length 3+len is a
+    // multiple of 64 holds host-side like the console reply did.
+    //   emitf <len> [delay_us] [zlp]     delay_us: busy-wait after the echo so the frame is
+    //   emitted as its own clean transfer (models the companion processing a command THEN
+    //   calling writeFrame -- the real frame path has no echo). zlp=1 => flushSerialConsole()
+    //   after, to A/B the terminator.
+    if (memcmp(command, "emitf ", 6) == 0) {
+      static uint8_t frame_buf[1024];
+      int len = atoi(command + 6);
+      const char* a2 = strchr(command + 6, ' ');
+      int delay_us = a2 ? atoi(a2 + 1) : 0;
+      const char* a3 = a2 ? strchr(a2 + 1, ' ') : nullptr;
+      int zlp = a3 ? atoi(a3 + 1) : 0;
+      if (len < 0) len = 0;
+      if (len > 1021) len = 1021;                  // keep 3+len <= 1024
+      if (delay_us < 0) delay_us = 0;
+      if (delay_us > 16000) delay_us = 16000;
+      if (delay_us > 0) delayMicroseconds(delay_us);  // let the echo drain, isolating the frame
+      uint8_t hdr[3] = { '>', (uint8_t)(len & 0xFF), (uint8_t)((len >> 8) & 0xFF) };
+      Serial.write(hdr, 3);                         // writeFrame() header write
+      for (int i = 0; i < len; i++) frame_buf[i] = (uint8_t)('0' + (i % 10));
+      Serial.write(frame_buf, len);                 // writeFrame() payload write
+      if (zlp) flushSerialConsole();                // #1093 A/B: the ZLP terminator after the frame
+      handled_diag = true;
+    }
+    // #1093 v4.1 validation: drive the REAL ArduinoSerialInterface::writeFrame() + loop()
+    // deferred-terminator path -- NOT a raw byte replay like emitf. This is the faithful
+    // hardware test of the shipped code: writeFrame() arms the deferred ZLP; loop() emits it
+    // once the TX ring has drained (availableForWrite back to the seeded ring capacity) and
+    // the FIFO is writable. No manual flushSerialConsole().
+    //   emitw <len> [delay_us] [pump]
+    //     len      payload bytes; on-wire frame is 3+len. 61 -> 64, 125 -> 128 (the 64-multiples);
+    //              126 -> 129 is the offset control. Capped at MAX_FRAME_SIZE (writeFrame refuses more).
+    //     delay_us busy-wait before the write, so the command echo drains and the frame is its own transfer.
+    //     pump=1 (default): service iface.loop() after the write -> the deferred ZLP fires -> delivered.
+    //     pump=0:           writeFrame() only, loop() NOT serviced -> ZLP never emitted -> held (control arm).
+    if (memcmp(command, "emitw ", 6) == 0) {
+      static ArduinoSerialInterface w_iface;
+      static bool w_init = false;
+      static uint8_t w_buf[MAX_FRAME_SIZE];
+      if (!w_init) { w_iface.begin(Serial); w_iface.enable(); w_init = true; }
+      int len = atoi(command + 6);
+      const char* a2 = strchr(command + 6, ' ');
+      int delay_us = a2 ? atoi(a2 + 1) : 0;
+      const char* a3 = a2 ? strchr(a2 + 1, ' ') : nullptr;
+      int pump = a3 ? atoi(a3 + 1) : 1;
+      if (len < 0) len = 0;
+      if (len > MAX_FRAME_SIZE) len = MAX_FRAME_SIZE;   // writeFrame refuses a frame larger than this
+      if (delay_us < 0) delay_us = 0;
+      if (delay_us > 16000) delay_us = 16000;
+      if (delay_us > 0) delayMicroseconds(delay_us);    // let the echo drain, isolating the frame
+      for (int i = 0; i < len; i++) w_buf[i] = (uint8_t)('0' + (i % 10));
+      w_iface.writeFrame(w_buf, (size_t)len);           // real path: '>' + len16 + payload, arms the deferred ZLP
+      if (pump) {
+        for (int k = 0; k < 400; k++) { w_iface.loop(); delayMicroseconds(50); }  // ~20 ms: ring drains, deferred ZLP fires
+      }
       handled_diag = true;
     }
 #endif
