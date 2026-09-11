@@ -100,6 +100,26 @@ jobs:
       - name: SafeBoot log-channel guard
         run: python scripts/test_safeboot_log_channels.py
 
+      # #1083 / #1159 / #1160 (epic #446). For fifteen months the ESP32 repeater
+      # and companion never armed their task watchdog: startWatchdog()/feedWatchdog()
+      # sat inside `#if defined(NRF52_PLATFORM)`. It compiled, it linked, and a
+      # watchdog that is never armed looks exactly like one that never had to fire
+      # -- until a field node hung and stayed hung. These are BLOCKING, not
+      # advisory: the tree is clean so they land green, and the regression they
+      # guard is an unattended node that never comes back. `test_wdt_timeout`
+      # (googletest) is picked up by the native-tests job on its own.
+      - name: Watchdog guard self-test
+        run: python scripts/test_wdt_guard.py
+
+      - name: Watchdog armed and fed on every platform, in every role
+        run: python scripts/check_wdt_guard.py
+
+      - name: "'wdt hang' is diag-only and console-only"
+        run: python scripts/test_wdt_hang_verb.py
+
+      - name: Watchdog CI wiring self-test
+        run: python scripts/test_ci_wdt_steps.py
+
       # #775 (epic #774). Guards the defect class behind #764/#765: an `else if`
       # that matches a CLI key and writes nothing, or a key claimed twice in one
       # chain so the later arm is unreachable. `get radio` returned an empty reply
