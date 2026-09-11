@@ -42,6 +42,62 @@ uint32_t brokerBackoffMs(uint32_t retry_count) {
     return retry_count < n ? kSchedule[retry_count] : kSchedule[n - 1];
 }
 
+// ---------------------------------------------------------------------------
+// Capture-ring records (BrokerEventLog.h).
+// ---------------------------------------------------------------------------
+
+// Records are stamped with the real clock. tryConnect() runs on a clock the pool
+// biases by slot * 1000 ms to stagger reconnects, and a biased stamp would hide
+// how long a record waited in the queue.
+static uint32_t eventNowMs() {
+#ifdef ARDUINO
+    return millis();
+#else
+    return 0;
+#endif
+}
+
+#ifdef ARDUINO
+// The pool re-drives a failing setup every pass: record when it starts or changes
+// reason, and count the rest for the recovery line.
+static void recordSetupFailure(RepeatedFailure& f, uint8_t slot, BrokerSetupFailure reason) {
+    if (f.fail(static_cast<uint8_t>(reason))) {
+        brokerEventQueue().push(makeSetupFailedEvent(slot, eventNowMs(), reason));
+    }
+}
+#endif
+
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+// A successful refresh ends any run of failed mid-session refreshes; its line
+// carries how many there were.
+static void recordCredentialRefreshed(RepeatedFailure& f, uint8_t slot) {
+    uint32_t failed_tries = 0;
+    f.clear(failed_tries);
+    brokerEventQueue().push(makeCredentialRefreshedEvent(slot, eventNowMs(), failed_tries));
+}
+#endif
+
+void MqttBroker::noteCleanDwell() {
+    const uint32_t before = health_.fail_penalty;
+    health_.onCleanDwell();
+    if (before == 0) return;   // healthy already: nothing to earn, nothing to record
+    if (health_.fail_penalty == 0) {
+        brokerEventQueue().push(
+            makeBrokerEvent(BrokerEventKind::PenaltyCleared, slot_, eventNowMs()));
+    } else {
+        brokerEventQueue().push(makeRehabEvent(slot_, eventNowMs(), health_.clean_streak,
+                                               OFFBAND_BROKER_SUCCESS_BAR, health_.fail_penalty));
+    }
+}
+
+void MqttBroker::clearTerminalFailure() {
+    if (rt_.state == BrokerState::Failed) {
+        brokerEventQueue().push(makeResurrectedEvent(slot_, eventNowMs(), health_.fail_penalty));
+        rt_.state = BrokerState::Down;
+        health_.reset();
+    }
+}
+
 // #69: the wall clock is "sane" (SNTP or BLE has set real time) once it is past
 // this epoch. Below it -- e.g. the build-time placeholder of May 2024 -- TLS
 // server certs read "not yet valid" and JWT iat/exp are garbage, so a wss/TLS
@@ -162,6 +218,9 @@ void MqttBroker::releaseClient(bool keep_failed) {
         delete auth_;
         auth_ = nullptr;
     }
+    // A run of failed refreshes belonged to the credential just deleted; a later
+    // session's refresh must not be credited with it.
+    refresh_fail_.forget();
     // #848 Facet A: the reaper reaps a TERMINALLY-FAILED broker's client but must
     // PRESERVE the Failed state -- a plain rt_ = {} resets it to Down, which is the
     // real cause of #823 (the broker looks Down, gets re-promoted, re-fails, is
@@ -218,6 +277,10 @@ bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg,
     // Enabling later routes through reloadSlot()->begin() which creates it.
     if (!cfg.enabled) {
         rt_ = BrokerRuntimeState{};
+        // A disabled slot waits on nothing and sets nothing up. If it is enabled
+        // again, whatever holds or fails it then is recorded afresh.
+        hold_.forget();
+        setup_fail_.forget();
         return true;
     }
     // #534: TLS/wss allocation admission. When the pool already holds its full
@@ -231,11 +294,17 @@ bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg,
          cfg.transport == BrokerTransport::Wss)) {
         rt_ = BrokerRuntimeState{};
         rt_.state = BrokerState::HeldBudget;   // #715: budget, not heap
+        if (hold_.enter(BrokerHoldReason::TlsBudget)) {
+            brokerEventQueue().push(makeHoldEvent(BrokerEventKind::Held, slot_, eventNowMs(),
+                                                  BrokerHoldReason::TlsBudget));
+        }
         return true;
     }
     auth_ = makeAuth(cfg, identity);
     if (auth_ == nullptr) {
-        return false;  // bad auth config (e.g., Jwt without audience)
+        // Bad auth config (e.g., Jwt without audience).
+        recordSetupFailure(setup_fail_, slot_, BrokerSetupFailure::AuthConfig);
+        return false;
     }
 
 #if defined(ESP_PLATFORM)
@@ -247,6 +316,7 @@ bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg,
         // Auth setup failed (e.g., JWT mint error). Leave broker Down.
         rt_.state = BrokerState::Down;
         rt_.last_error_class = BrokerErrorClass::Auth;
+        recordSetupFailure(setup_fail_, slot_, BrokerSetupFailure::AuthApply);
         return false;
     }
 
@@ -254,6 +324,7 @@ bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg,
     if (client_ == nullptr) {
         rt_.state = BrokerState::Down;
         rt_.last_error_class = BrokerErrorClass::Other;
+        recordSetupFailure(setup_fail_, slot_, BrokerSetupFailure::ClientInit);
         return false;
     }
     // ESP_EVENT_ANY_ID is `-1` (int); cast to esp_mqtt_event_id_t to
@@ -263,6 +334,11 @@ bool MqttBroker::begin(uint8_t slot, const BrokerConfig& cfg,
                                    &MqttBroker::eventHandler, this);
 #endif  // ESP_PLATFORM
 
+    no_client_reported_ = false;
+    uint32_t failed_tries = 0;
+    if (setup_fail_.clear(failed_tries)) {
+        brokerEventQueue().push(makeSetupRecoveredEvent(slot_, eventNowMs(), failed_tries));
+    }
     rt_.state = BrokerState::Down;  // Down until tryConnect
     return true;
 }
@@ -288,6 +364,7 @@ bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
     ClientLockGuard _g(client_lock_);
 #endif
     if (!isConfigured() || !cfg_.enabled) {
+        hold_.forget();   // the operator's disable is the record
         rt_.state = BrokerState::Down;
         return false;
     }
@@ -321,6 +398,10 @@ bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
         // tryConnect for HeldNoClock slots, so this releases on the first tick
         // after wallClockSane() becomes true (NTP sync or GPS lock).
         rt_.state = BrokerState::HeldNoClock;
+        if (hold_.enter(BrokerHoldReason::NoClock)) {
+            brokerEventQueue().push(makeHoldEvent(BrokerEventKind::Held, slot_, eventNowMs(),
+                                                  BrokerHoldReason::NoClock));
+        }
         return false;
     }
 
@@ -340,6 +421,11 @@ bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
         // is the heap floor, so heap wins only when the budget was actually free.
         rt_.state = tls_budget_ok ? BrokerState::HeldNoHeap    // budget free -> heap
                                   : BrokerState::HeldBudget;   // waiting its turn
+        const BrokerHoldReason why = tls_budget_ok ? BrokerHoldReason::NoHeap
+                                                   : BrokerHoldReason::TlsBudget;
+        if (hold_.enter(why)) {
+            brokerEventQueue().push(makeHoldEvent(BrokerEventKind::Held, slot_, eventNowMs(), why));
+        }
         return false;
     }
 
@@ -348,8 +434,22 @@ bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
 
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     if (client_ == nullptr) {
+        // The pool re-drives this slot every pass; recorded once until begin()
+        // creates a client again.
+        if (!no_client_reported_) {
+            no_client_reported_ = true;
+            brokerEventQueue().push(makeBrokerEvent(BrokerEventKind::NoClient, slot_, eventNowMs()));
+        }
         rt_.state = BrokerState::Down;
         return false;
+    }
+    // The holds have cleared and there is a client to start, so an attempt goes
+    // ahead. Not recorded any earlier: a winner that begin() could not give a
+    // client is held again on the next pass, and would read as released and
+    // re-held every 500 ms.
+    if (const uint8_t held = hold_.release()) {
+        brokerEventQueue().push(makeHoldEvent(BrokerEventKind::Released, slot_, eventNowMs(),
+                                              static_cast<BrokerHoldReason>(held)));
     }
     // For JWT, re-apply if needsRefresh -- the apply may have been at init
     // time and the token may have aged out before first connect attempt.
@@ -360,12 +460,16 @@ bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
         // to esp-mqtt's default 120 (-> CONNACK 0x02, #506).
         populateBaseConfig(mqcfg);
         if (!auth_->apply(mqcfg, now_ms)) {
+            // Each attempt is paced by the backoff, so each failure is recorded.
+            brokerEventQueue().push(makeCredentialFailedEvent(
+                slot_, eventNowMs(), BrokerCredentialPhase::BeforeConnect));
             rt_.retry_count++;
             rt_.last_error_class = BrokerErrorClass::Auth;
             escalateFailureOnce(now_ms);   // #739/#838
             return false;
         }
         esp_mqtt_set_config(client_, &mqcfg);
+        recordCredentialRefreshed(refresh_fail_, slot_);
     }
     // LoRa#327: pair start with a preceding stop on retries. esp-mqtt expects a
     // single start(); re-calling esp_mqtt_client_start() on an already-started
@@ -385,13 +489,14 @@ bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
         // are actually reconnecting (which would cause reconnect stutter).
         rt_.state = BrokerState::Connecting;
     }
-    brokerEventQueue().push(makeMqttConnectingEvent(slot_, now_ms, /*auto_reconnect=*/false));
+    brokerEventQueue().push(makeMqttConnectingEvent(slot_, eventNowMs(), /*auto_reconnect=*/false));
     pool_start_recorded_ = true;
     esp_err_t err = esp_mqtt_client_start(client_);
     if (err != ESP_OK) {
         // No MQTT event follows a failed start, so this is the only record of it.
         pool_start_recorded_ = false;
-        brokerEventQueue().push(makeMqttStartFailedEvent(slot_, now_ms, static_cast<int32_t>(err)));
+        brokerEventQueue().push(
+            makeMqttStartFailedEvent(slot_, eventNowMs(), static_cast<int32_t>(err)));
         rt_.retry_count++;
         rt_.last_error_class = BrokerErrorClass::Other;
         escalateFailureOnce(now_ms);   // #739/#838
@@ -425,6 +530,12 @@ void MqttBroker::loop(uint32_t now_ms) {
             populateBaseConfig(mqcfg);
             if (auth_->apply(mqcfg, now_ms)) {
                 esp_mqtt_set_config(client_, &mqcfg);
+                recordCredentialRefreshed(refresh_fail_, slot_);
+            } else if (refresh_fail_.fail(static_cast<uint8_t>(BrokerCredentialPhase::MidSession))) {
+                // Retried every worker pass while the token stays due: recorded
+                // once, and the count arrives with the refresh that succeeds.
+                brokerEventQueue().push(makeCredentialFailedEvent(
+                    slot_, eventNowMs(), BrokerCredentialPhase::MidSession));
             }
         }
     }
@@ -572,17 +683,25 @@ void MqttBroker::onConnected(uint32_t now_ms) {
     // Primary defense is the pool reaping a Failed broker's client (nothing to
     // reconnect); this is belt-and-suspenders for a connect event in flight when
     // the broker went Failed. Failed clears only by operator re-enable/reconfigure.
-    if (rt_.state == BrokerState::Failed) return;
+    if (rt_.state == BrokerState::Failed) {
+        brokerEventQueue().push(
+            makeConnectDiscardedEvent(slot_, now_ms, BrokerDiscardReason::SlotFailed));
+        return;
+    }
     // #720: same belt-and-suspenders as the Failed guard above, for the rotation
     // path. releaseClient() destroys client_ then resets state to Down; a stale
     // MQTT_EVENT_CONNECTED already queued before the teardown can be dispatched
     // afterwards. Without this guard it would set state=Up + stamp budget_hold_
     // with no client behind it -- a "zombie" that occupies the TLS budget slot
     // (rotation would evict it within a dwell, but the inconsistency is real).
-    if (!hasClient()) return;
+    if (!hasClient()) {
+        brokerEventQueue().push(
+            makeConnectDiscardedEvent(slot_, now_ms, BrokerDiscardReason::ClientReleased));
+        return;
+    }
     rt_.state = BrokerState::Up;
-    // Recorded only past the two guards above: a connect event they discard is
-    // not a transition, and logging it as "up" would be false.
+    // "up" is recorded only past the two guards above, which record their
+    // discard instead: a connect they throw away is not a transition.
     brokerEventQueue().push(makeMqttConnectedEvent(slot_, now_ms));
     session_up_ = true;
     error_before_disconnect_ = BrokerErrorClass::None;
@@ -628,8 +747,17 @@ void MqttBroker::escalateFailureOnce(uint32_t now_ms) {
 // resulting state: Failed once the penalty passes the terminal threshold,
 // otherwise Backoff. Callers have already set last_error_* / retry_count.
 void MqttBroker::noteFailure() {
+    const bool was_failed = (rt_.state == BrokerState::Failed);
     health_.onFailure();
     rt_.state = health_.isTerminal() ? BrokerState::Failed : BrokerState::Backoff;
+    if (rt_.state == BrokerState::Backoff) {
+        brokerEventQueue().push(makeBackoffEvent(slot_, eventNowMs(), health_.fail_penalty,
+                                                 brokerBackoffMs(health_.fail_penalty)));
+    } else if (!was_failed) {
+        // Once, on the way in. A client not yet reaped can still raise failures;
+        // their [mqtt] lines record them.
+        brokerEventQueue().push(makeFailedEvent(slot_, eventNowMs(), health_.fail_penalty));
+    }
 }
 
 void MqttBroker::onError(uint32_t now_ms, BrokerErrorClass err) {

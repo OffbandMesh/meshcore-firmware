@@ -274,7 +274,7 @@ TEST(BrokerEventFormat, BrokerLinesUseTheBrokerPrefix) {
     BrokerEvent b = ev(BrokerEventKind::Backoff, 0);
     b.b0 = 3;
     b.n0 = 60;
-    EXPECT_EQ(fmt(b), "[broker] s0 backoff penalty=3 next=60s");
+    EXPECT_EQ(fmt(b), "[broker] s0 backoff penalty=3 interval=60s");
 
     BrokerEvent f = ev(BrokerEventKind::Failed, 0);
     f.b0 = 8;
@@ -420,6 +420,167 @@ TEST(BrokerEventHost, HandlesEmptyNullAndTinyBuffers) {
     EXPECT_STREQ(h, "");
     brokerEventExtractHost("wss://a-very-long-hostname.example", h, sizeof(h));
     EXPECT_EQ(std::strlen(h), sizeof(h) - 1) << "must truncate, never overrun";
+}
+
+// ---------------------------------------------------------------- [broker] (#1135)
+
+TEST(BrokerPolicyBuild, BackoffCarriesPenaltyAndIntervalInSeconds) {
+    BrokerEvent e = offband::makeBackoffEvent(2, 1000, 3, 60000);
+    EXPECT_EQ(e.kind, static_cast<uint8_t>(BrokerEventKind::Backoff));
+    EXPECT_EQ(e.b0, 3);
+    EXPECT_EQ(e.n0, 60);
+    EXPECT_EQ(fmt(e), "[broker] s2 backoff penalty=3 interval=60s");
+}
+
+TEST(BrokerPolicyBuild, PenaltyClampsInsteadOfWrapping) {
+    EXPECT_EQ(offband::makeBackoffEvent(0, 0, 300, 5000).b0, 255);
+    EXPECT_EQ(offband::makeFailedEvent(0, 0, 0xFFFF).b0, 255);
+    EXPECT_EQ(offband::makeResurrectedEvent(0, 0, 256).b0, 255);
+    EXPECT_EQ(offband::makeFailedEvent(0, 0, 8).b0, 8);
+}
+
+TEST(BrokerPolicyBuild, TerminalAndResurrectionCarryThePenalty) {
+    EXPECT_EQ(fmt(offband::makeFailedEvent(1, 0, 8)),
+              "[broker] s1 FAILED penalty=8 -- gave up; needs operator enable or reboot");
+    EXPECT_EQ(fmt(offband::makeResurrectedEvent(1, 0, 9)),
+              "[broker] s1 resurrected by operator (was failed, penalty=9)");
+}
+
+TEST(BrokerPolicyBuild, HoldAndReleaseNameTheReason) {
+    EXPECT_EQ(fmt(offband::makeHoldEvent(BrokerEventKind::Held, 4, 0, BrokerHoldReason::NoHeap)),
+              "[broker] s4 held reason=no-heap");
+    EXPECT_EQ(fmt(offband::makeHoldEvent(BrokerEventKind::Released, 4, 0, BrokerHoldReason::NoClock)),
+              "[broker] s4 released reason=no-clock");
+}
+
+TEST(BrokerPolicyBuild, RehabShowsStreakAgainstTheBar) {
+    EXPECT_EQ(fmt(offband::makeRehabEvent(0, 0, 2, 3, 5)), "[broker] s0 rehab streak=2/3 penalty=5");
+}
+
+namespace {
+
+std::string operatorLine(bool was_cfg, bool was_en, bool now_cfg, bool now_en) {
+    BrokerEvent e;
+    if (!offband::makeOperatorReloadEvent(3, 0, was_cfg, was_en, now_cfg, now_en, e)) return "(none)";
+    return fmt(e);
+}
+
+}  // namespace
+
+TEST(BrokerPolicyBuild, OperatorReloadSaysWhichChangeItApplied) {
+    EXPECT_EQ(operatorLine(true, false, true, true),   "[broker] s3 enabled by operator");
+    EXPECT_EQ(operatorLine(true, true, true, false),   "[broker] s3 disabled by operator");
+    EXPECT_EQ(operatorLine(true, true, true, true),    "[broker] s3 reloaded by operator (enabled)");
+    EXPECT_EQ(operatorLine(true, false, true, false),  "[broker] s3 reloaded by operator (disabled)");
+    EXPECT_EQ(operatorLine(true, true, false, false),  "[broker] s3 cleared by operator");
+    EXPECT_EQ(operatorLine(true, false, false, false), "[broker] s3 cleared by operator");
+    // A slot configured for the first time.
+    EXPECT_EQ(operatorLine(false, false, true, true),  "[broker] s3 enabled by operator");
+    EXPECT_EQ(operatorLine(false, false, true, false), "[broker] s3 reloaded by operator (disabled)");
+    // Clearing a slot that never held a config changes nothing.
+    EXPECT_EQ(operatorLine(false, false, false, false), "(none)");
+}
+
+TEST(BrokerPolicyFormat, DiscardsSayWhyTheConnectWasThrownAway) {
+    EXPECT_EQ(fmt(offband::makeConnectDiscardedEvent(2, 0, offband::BrokerDiscardReason::SlotFailed)),
+              "[broker] s2 connect discarded -- slot is failed");
+    EXPECT_EQ(fmt(offband::makeConnectDiscardedEvent(2, 0, offband::BrokerDiscardReason::ClientReleased)),
+              "[broker] s2 connect discarded -- client already released");
+}
+
+TEST(BrokerPolicyFormat, CredentialLinesSayWhatTheFailureCost) {
+    EXPECT_EQ(fmt(offband::makeCredentialFailedEvent(1, 0, offband::BrokerCredentialPhase::BeforeConnect)),
+              "[broker] s1 credential refresh failed -- attempt abandoned");
+    EXPECT_EQ(fmt(offband::makeCredentialFailedEvent(1, 0, offband::BrokerCredentialPhase::MidSession)),
+              "[broker] s1 credential refresh failed -- session keeps its current token");
+    EXPECT_EQ(fmt(offband::makeCredentialRefreshedEvent(1, 0, 0)), "[broker] s1 credential refreshed");
+    EXPECT_EQ(fmt(offband::makeCredentialRefreshedEvent(1, 0, 42)),
+              "[broker] s1 credential refreshed after 42 failed tries");
+}
+
+TEST(BrokerPolicyFormat, SetupLinesNameTheReasonAndCountTheRecovery) {
+    EXPECT_EQ(fmt(offband::makeSetupFailedEvent(5, 0, offband::BrokerSetupFailure::AuthConfig)),
+              "[broker] s5 setup failed reason=auth-config");
+    EXPECT_EQ(fmt(offband::makeSetupFailedEvent(5, 0, offband::BrokerSetupFailure::AuthApply)),
+              "[broker] s5 setup failed reason=auth-apply");
+    EXPECT_EQ(fmt(offband::makeSetupFailedEvent(5, 0, offband::BrokerSetupFailure::ClientInit)),
+              "[broker] s5 setup failed reason=client-init");
+    EXPECT_EQ(fmt(offband::makeSetupRecoveredEvent(5, 0, 7)), "[broker] s5 setup ok after 7 failed tries");
+    EXPECT_EQ(fmt(offband::makeBrokerEvent(BrokerEventKind::NoClient, 5, 0)),
+              "[broker] s5 cannot connect: no client");
+}
+
+TEST(BrokerPolicyFormat, RepeatCountsSaturateInsteadOfGoingNegative) {
+    EXPECT_EQ(offband::makeCredentialRefreshedEvent(0, 0, UINT32_MAX).n0, INT32_MAX);
+    EXPECT_EQ(offband::makeSetupRecoveredEvent(0, 0, UINT32_MAX).n0, INT32_MAX);
+}
+
+TEST(BrokerHoldTracker, RecordsAHoldOnceAndItsReasonChanges) {
+    offband::HoldTracker h;
+    EXPECT_TRUE(h.enter(BrokerHoldReason::NoClock)) << "a new hold is recorded";
+    EXPECT_FALSE(h.enter(BrokerHoldReason::NoClock)) << "the same hold re-driven next pass is not";
+    EXPECT_FALSE(h.enter(BrokerHoldReason::NoClock));
+    EXPECT_TRUE(h.enter(BrokerHoldReason::TlsBudget)) << "a change of reason is recorded";
+    EXPECT_EQ(h.release(), static_cast<uint8_t>(BrokerHoldReason::TlsBudget))
+        << "release reports the hold that ended";
+    EXPECT_EQ(h.release(), 0) << "nothing to release twice";
+    EXPECT_TRUE(h.enter(BrokerHoldReason::TlsBudget)) << "a hold after a release is new again";
+    h.forget();
+    EXPECT_EQ(h.release(), 0) << "a forgotten hold has no release line";
+}
+
+TEST(BrokerRepeatedFailure, RecordsTheStartAndCountsEveryRepeat) {
+    offband::RepeatedFailure f;
+    uint32_t tries = 99;
+    EXPECT_FALSE(f.clear(tries)) << "no recovery without a failure";
+    EXPECT_EQ(tries, 99u) << "and the count is left alone";
+
+    EXPECT_TRUE(f.fail(2)) << "the first failure is recorded";
+    EXPECT_FALSE(f.fail(2));
+    EXPECT_FALSE(f.fail(2));
+    EXPECT_FALSE(f.fail(2));
+    ASSERT_TRUE(f.clear(tries)) << "the recovery is recorded";
+    EXPECT_EQ(tries, 4u) << "and counts every failed try, the recorded one included";
+    EXPECT_FALSE(f.clear(tries)) << "a second success is not another recovery";
+
+    EXPECT_TRUE(f.fail(2)) << "a failure after recovery is recorded afresh";
+    EXPECT_TRUE(f.fail(3)) << "so is a change of reason";
+    ASSERT_TRUE(f.clear(tries));
+    EXPECT_EQ(tries, 1u) << "a change of reason restarts the count";
+
+    EXPECT_TRUE(f.fail(1));
+    f.forget();
+    EXPECT_FALSE(f.clear(tries)) << "a forgotten failure has no recovery line";
+    EXPECT_TRUE(f.fail(1)) << "and the next failure is recorded";
+}
+
+TEST(BrokerPolicyLevel, NewFailuresAreErrorsAndProgressIsDebug) {
+    EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::ConnectDiscarded)), MLOG_ERROR);
+    EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::CredentialFailed)), MLOG_ERROR);
+    EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::SetupFailed)), MLOG_ERROR);
+    EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::NoClient)), MLOG_ERROR);
+
+    EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::OperatorReloaded)), MLOG_DEBUG);
+    EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::OperatorCleared)), MLOG_DEBUG);
+    EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::CredentialRefreshed)), MLOG_DEBUG);
+    EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::SetupRecovered)), MLOG_DEBUG);
+    EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::Held)), MLOG_DEBUG);
+    EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::Rehab)), MLOG_DEBUG);
+}
+
+TEST(BrokerPolicyFormat, LongestLinesFitTheBudget) {
+    const BrokerEvent longest[] = {
+        offband::makeCredentialFailedEvent(255, 0, offband::BrokerCredentialPhase::MidSession),
+        offband::makeCredentialRefreshedEvent(255, 0, UINT32_MAX),
+        offband::makeSetupRecoveredEvent(255, 0, UINT32_MAX),
+        offband::makeRehabEvent(255, 0, UINT32_MAX, 255, UINT32_MAX),
+        offband::makeBackoffEvent(255, 0, UINT32_MAX, UINT32_MAX),
+        offband::makeFailedEvent(255, 0, UINT32_MAX),
+        offband::makeResurrectedEvent(255, 0, UINT32_MAX),
+    };
+    for (const BrokerEvent& e : longest) {
+        EXPECT_LT(fmt(e).size(), kLineBudget) << fmt(e);
+    }
 }
 
 int main(int argc, char **argv) {

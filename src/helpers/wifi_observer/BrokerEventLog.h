@@ -49,8 +49,10 @@ enum class BrokerEventKind : uint8_t {
                             //   carries kBrokerEventNoErrorHandle when esp-mqtt gave none
     MqttStartFailed  = 5,   // w0=esp_err_t from esp_mqtt_client_start (no MQTT event fires)
 
-    // [broker] -- the pool's decisions about a slot.
-    Backoff          = 10,  // b0=penalty, n0=seconds until the next attempt
+    // [broker] -- the pool's decisions about a slot, and what happens to the slot
+    // outside the MQTT protocol.
+    Backoff          = 10,  // b0=penalty, n0=backoff interval in seconds, counted by
+                            //   the pool from the start of the last attempt
     Failed           = 11,  // b0=penalty that made it terminal
     Resurrected      = 12,  // b0=penalty it held while terminal
     OperatorDisabled = 13,
@@ -61,6 +63,14 @@ enum class BrokerEventKind : uint8_t {
     PenaltyCleared   = 18,
     ReconcileFailed  = 19,  // n0=broker state, cls
     Dropped          = 20,  // n0=records dropped since the last report (no slot)
+    OperatorReloaded = 21,  // b0=1 if the slot is enabled after the reload
+    OperatorCleared  = 22,
+    ConnectDiscarded = 23,  // b0=BrokerDiscardReason
+    CredentialFailed = 24,  // b0=BrokerCredentialPhase
+    CredentialRefreshed = 25,  // n0=failed tries before this success (0: none)
+    SetupFailed      = 26,  // b0=BrokerSetupFailure
+    SetupRecovered   = 27,  // n0=failed tries before this success
+    NoClient         = 28,
 
     // [rot] -- rotation. Wording of the two existing lines is kept verbatim.
     RotateIn         = 30,
@@ -72,6 +82,24 @@ enum class BrokerHoldReason : uint8_t {
     NoClock   = 1,   // wss/TLS waits for a sane wall clock
     NoHeap    = 2,   // free heap below the TLS floor
     TlsBudget = 3,   // the pool's live-TLS budget is taken
+};
+
+// Why onConnected() threw a CONNECTED event away.
+enum class BrokerDiscardReason : uint8_t {
+    SlotFailed     = 1,   // the slot is terminally Failed; its client awaits the reap
+    ClientReleased = 2,   // the event outlived the client it belonged to
+};
+
+enum class BrokerCredentialPhase : uint8_t {
+    BeforeConnect = 1,   // the attempt is abandoned
+    MidSession    = 2,   // the live session keeps the token it has
+};
+
+// Why MqttBroker::begin() could not set the slot up.
+enum class BrokerSetupFailure : uint8_t {
+    AuthConfig = 1,   // no auth strategy can be built from the stored config
+    AuthApply  = 2,   // the first credential could not be applied (e.g. JWT mint)
+    ClientInit = 3,   // esp_mqtt_client_init() returned null
 };
 
 // Error class codes, mirroring BrokerErrorClass in MqttBroker.h (kept as plain
@@ -92,6 +120,15 @@ inline const char* brokerHoldReasonName(uint8_t r) {
         case BrokerHoldReason::NoClock:   return "no-clock";
         case BrokerHoldReason::NoHeap:    return "no-heap";
         case BrokerHoldReason::TlsBudget: return "tls-budget";
+    }
+    return "unknown";
+}
+
+inline const char* brokerSetupFailureName(uint8_t r) {
+    switch (static_cast<BrokerSetupFailure>(r)) {
+        case BrokerSetupFailure::AuthConfig: return "auth-config";
+        case BrokerSetupFailure::AuthApply:  return "auth-apply";
+        case BrokerSetupFailure::ClientInit: return "client-init";
     }
     return "unknown";
 }
@@ -188,6 +225,158 @@ inline BrokerEvent makeMqttStartFailedEvent(uint8_t slot, uint32_t at_ms, int32_
     return e;
 }
 
+// Builders for the [broker] call sites.
+
+// The penalty is a uint16 that stops escalating at terminal, so it never nears
+// 255 in practice; clamp rather than wrap if it ever does.
+inline uint8_t brokerEventPenalty(uint32_t penalty) {
+    return penalty > 255u ? 255u : static_cast<uint8_t>(penalty);
+}
+
+inline BrokerEvent makeBackoffEvent(uint8_t slot, uint32_t at_ms, uint32_t penalty,
+                                    uint32_t interval_ms) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::Backoff, slot, at_ms);
+    e.b0 = brokerEventPenalty(penalty);
+    e.n0 = static_cast<int32_t>(interval_ms / 1000u);
+    return e;
+}
+
+inline BrokerEvent makeFailedEvent(uint8_t slot, uint32_t at_ms, uint32_t penalty) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::Failed, slot, at_ms);
+    e.b0 = brokerEventPenalty(penalty);
+    return e;
+}
+
+inline BrokerEvent makeResurrectedEvent(uint8_t slot, uint32_t at_ms, uint32_t penalty) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::Resurrected, slot, at_ms);
+    e.b0 = brokerEventPenalty(penalty);
+    return e;
+}
+
+inline BrokerEvent makeHoldEvent(BrokerEventKind kind, uint8_t slot, uint32_t at_ms,
+                                 BrokerHoldReason reason) {
+    BrokerEvent e = makeBrokerEvent(kind, slot, at_ms);
+    e.b0 = static_cast<uint8_t>(reason);
+    return e;
+}
+
+inline BrokerEvent makeRehabEvent(uint8_t slot, uint32_t at_ms, uint32_t streak,
+                                  uint32_t streak_needed, uint32_t penalty) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::Rehab, slot, at_ms);
+    e.n0 = static_cast<int32_t>(streak);
+    e.b0 = static_cast<uint8_t>(streak_needed);
+    e.w0 = penalty;
+    return e;
+}
+
+// Says which change an operator reload applied, from what the slot was running
+// before and what its stored config holds now. Returns false when there is
+// nothing to say: clearing a slot that was never configured.
+inline bool makeOperatorReloadEvent(uint8_t slot, uint32_t at_ms, bool was_configured,
+                                    bool was_enabled, bool now_configured, bool now_enabled,
+                                    BrokerEvent& out) {
+    if (!now_configured) {
+        if (!was_configured) return false;
+        out = makeBrokerEvent(BrokerEventKind::OperatorCleared, slot, at_ms);
+    } else if (now_enabled && !was_enabled) {
+        out = makeBrokerEvent(BrokerEventKind::OperatorEnabled, slot, at_ms);
+    } else if (!now_enabled && was_enabled) {
+        out = makeBrokerEvent(BrokerEventKind::OperatorDisabled, slot, at_ms);
+    } else {
+        out = makeBrokerEvent(BrokerEventKind::OperatorReloaded, slot, at_ms);
+        out.b0 = now_enabled ? 1 : 0;
+    }
+    return true;
+}
+
+inline BrokerEvent makeConnectDiscardedEvent(uint8_t slot, uint32_t at_ms,
+                                             BrokerDiscardReason reason) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::ConnectDiscarded, slot, at_ms);
+    e.b0 = static_cast<uint8_t>(reason);
+    return e;
+}
+
+inline BrokerEvent makeCredentialFailedEvent(uint8_t slot, uint32_t at_ms,
+                                             BrokerCredentialPhase phase) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::CredentialFailed, slot, at_ms);
+    e.b0 = static_cast<uint8_t>(phase);
+    return e;
+}
+
+inline BrokerEvent makeCredentialRefreshedEvent(uint8_t slot, uint32_t at_ms,
+                                                uint32_t failed_tries) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::CredentialRefreshed, slot, at_ms);
+    e.n0 = static_cast<int32_t>(failed_tries > INT32_MAX ? INT32_MAX : failed_tries);
+    return e;
+}
+
+inline BrokerEvent makeSetupFailedEvent(uint8_t slot, uint32_t at_ms, BrokerSetupFailure reason) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::SetupFailed, slot, at_ms);
+    e.b0 = static_cast<uint8_t>(reason);
+    return e;
+}
+
+inline BrokerEvent makeSetupRecoveredEvent(uint8_t slot, uint32_t at_ms, uint32_t failed_tries) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::SetupRecovered, slot, at_ms);
+    e.n0 = static_cast<int32_t>(failed_tries > INT32_MAX ? INT32_MAX : failed_tries);
+    return e;
+}
+
+// The hold a slot was last reported in. The pool re-drives a held slot every
+// worker pass (500 ms), so a hold is recorded when it starts or changes reason,
+// and its release when an attempt goes ahead -- never once per pass. Kept outside
+// the runtime state, which begin() and releaseClient() reset while a slot is
+// still waiting.
+struct HoldTracker {
+    uint8_t reason = 0;   // BrokerHoldReason, or 0 when not held
+
+    // True when the hold must be recorded: it is new, or its reason changed.
+    bool enter(BrokerHoldReason r) {
+        const uint8_t v = static_cast<uint8_t>(r);
+        if (v == reason) return false;
+        reason = v;
+        return true;
+    }
+    // The reason being released, or 0 when the slot was not held.
+    uint8_t release() {
+        const uint8_t r = reason;
+        reason = 0;
+        return r;
+    }
+    // Ends a hold that needs no line of its own (the slot was disabled).
+    void forget() { reason = 0; }
+};
+
+// A failure that recurs on every pass until something changes. It is recorded
+// when it starts or changes reason, and again when it clears, with how many
+// tries failed in all -- so a persistent failure is neither silent nor a line
+// every 500 ms.
+struct RepeatedFailure {
+    uint8_t  reason = 0;   // 0 when not failing
+    uint32_t tries  = 0;   // failed tries since the recorded start
+
+    // True when this failure must be recorded.
+    bool fail(uint8_t r) {
+        if (r == reason) {
+            if (tries != UINT32_MAX) ++tries;
+            return false;
+        }
+        reason = r;
+        tries  = 1;
+        return true;
+    }
+    // True when a failure was pending, so its recovery must be recorded;
+    // `failed_tries` receives how many tries failed before this success.
+    bool clear(uint32_t& failed_tries) {
+        if (reason == 0) return false;
+        failed_tries = tries;
+        reason = 0;
+        tries  = 0;
+        return true;
+    }
+    void forget() { reason = 0; tries = 0; }
+};
+
 // Failures and the terminal give-up are errors; every other transition is debug.
 // Both pass the default UART mirror ceiling (MLOG_DEBUG).
 inline uint8_t brokerEventLevel(const BrokerEvent& e) {
@@ -198,6 +387,10 @@ inline uint8_t brokerEventLevel(const BrokerEvent& e) {
         case BrokerEventKind::Failed:
         case BrokerEventKind::ReconcileFailed:
         case BrokerEventKind::Dropped:
+        case BrokerEventKind::ConnectDiscarded:
+        case BrokerEventKind::CredentialFailed:
+        case BrokerEventKind::SetupFailed:
+        case BrokerEventKind::NoClient:
             return MLOG_ERROR;
         default:
             return MLOG_DEBUG;
@@ -275,7 +468,7 @@ inline size_t formatBrokerEvent(const BrokerEvent& e, const char* host,
                               (unsigned long)e.w0);
             break;
         case BrokerEventKind::Backoff:
-            n = std::snprintf(out, cap, "[broker] s%u backoff penalty=%u next=%lds",
+            n = std::snprintf(out, cap, "[broker] s%u backoff penalty=%u interval=%lds",
                               s, (unsigned)e.b0, (long)e.n0);
             break;
         case BrokerEventKind::Failed:
@@ -312,6 +505,41 @@ inline size_t formatBrokerEvent(const BrokerEvent& e, const char* host,
             break;
         case BrokerEventKind::Dropped:
             n = std::snprintf(out, cap, "[broker] event queue full -- %ld events dropped", (long)e.n0);
+            break;
+        case BrokerEventKind::OperatorReloaded:
+            n = std::snprintf(out, cap, "[broker] s%u reloaded by operator (%s)", s,
+                              e.b0 ? "enabled" : "disabled");
+            break;
+        case BrokerEventKind::OperatorCleared:
+            n = std::snprintf(out, cap, "[broker] s%u cleared by operator", s);
+            break;
+        case BrokerEventKind::ConnectDiscarded:
+            n = std::snprintf(out, cap, "[broker] s%u connect discarded -- %s", s,
+                              e.b0 == static_cast<uint8_t>(BrokerDiscardReason::SlotFailed)
+                                  ? "slot is failed" : "client already released");
+            break;
+        case BrokerEventKind::CredentialFailed:
+            n = std::snprintf(out, cap, "[broker] s%u credential refresh failed -- %s", s,
+                              e.b0 == static_cast<uint8_t>(BrokerCredentialPhase::MidSession)
+                                  ? "session keeps its current token" : "attempt abandoned");
+            break;
+        case BrokerEventKind::CredentialRefreshed:
+            if (e.n0 > 0) {
+                n = std::snprintf(out, cap, "[broker] s%u credential refreshed after %ld failed tries",
+                                  s, (long)e.n0);
+            } else {
+                n = std::snprintf(out, cap, "[broker] s%u credential refreshed", s);
+            }
+            break;
+        case BrokerEventKind::SetupFailed:
+            n = std::snprintf(out, cap, "[broker] s%u setup failed reason=%s", s,
+                              brokerSetupFailureName(e.b0));
+            break;
+        case BrokerEventKind::SetupRecovered:
+            n = std::snprintf(out, cap, "[broker] s%u setup ok after %ld failed tries", s, (long)e.n0);
+            break;
+        case BrokerEventKind::NoClient:
+            n = std::snprintf(out, cap, "[broker] s%u cannot connect: no client", s);
             break;
         case BrokerEventKind::RotateIn:
             n = std::snprintf(out, cap, "[rot] ROTATE-IN s%u", s);

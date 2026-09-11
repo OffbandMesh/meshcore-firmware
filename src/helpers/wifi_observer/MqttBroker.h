@@ -10,6 +10,7 @@
 #include "BrokerHealth.h"   // #739: connection-health / penalty tracker
 #include "FailEscalateWindow.h"   // #838/#906: per-attempt escalation dedupe
 #include "BudgetHoldClock.h"      // #720: reconnect-proof TLS-budget hold clock
+#include "BrokerEventLog.h"
 #include "MqttPayload.h"
 
 #ifdef ARDUINO
@@ -169,7 +170,7 @@ public:
     // the pool when this broker is rotated out after holding a FULL dwell Up
     // with no error -- the only event that earns rehabilitation.
     const BrokerHealth&        health() const { return health_; }
-    void                       noteCleanDwell() { health_.onCleanDwell(); }
+    void                       noteCleanDwell();
 
     // #823: clear a TERMINAL Failed state. Failed is otherwise terminal -- the
     // pool's reconcileSlot() refuses to revive it via begin(), so the ONLY escape
@@ -178,12 +179,7 @@ public:
     // broker gets a fresh start instead of re-failing on its first hiccup. No-op
     // for a broker that is not terminally Failed, so tweaking a healthy/backoff
     // broker's config preserves its accumulated penalty.
-    void clearTerminalFailure() {
-        if (rt_.state == BrokerState::Failed) {
-            rt_.state = BrokerState::Down;
-            health_.reset();
-        }
-    }
+    void clearTerminalFailure();
 
     // #175: true if the esp_mqtt client handle currently exists. shutdown()
     // destroys it (client_ = nullptr) to free the ~60KB TLS context without
@@ -213,6 +209,14 @@ private:
     BrokerRuntimeState   rt_;
     BrokerHealth         health_;   // #739: sticky failure penalty + rehab
     MqttAuth*            auth_  = nullptr;  // owned
+
+    // What has already been recorded to the capture ring, so conditions the
+    // worker re-drives every pass are recorded once when they start and once when
+    // they end. Outside rt_, which begin() and releaseClient() reset mid-condition.
+    HoldTracker          hold_;
+    RepeatedFailure      setup_fail_;          // begin() could not set the slot up
+    RepeatedFailure      refresh_fail_;        // mid-session credential refresh
+    bool                 no_client_reported_ = false;
 
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     esp_mqtt_client_handle_t client_ = nullptr;

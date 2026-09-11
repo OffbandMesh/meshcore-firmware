@@ -704,6 +704,21 @@ void MqttBrokerPool::rotateTlsIfDue(uint32_t now_ms) {
     if (rotated_out_until_ms_[victim] == 0) rotated_out_until_ms_[victim] = 1;  // 0 means "not cooling"
 }
 
+// A queued reconcile comes only from reloadSlot(), which only the operator CLI
+// calls, so the change it applies is the operator's. Comparing what the slot was
+// running with what its stored config now holds says which change it was.
+static void recordOperatorReload(const MqttBroker& b, uint8_t slot) {
+    BrokerConfig next;
+    const bool now_configured = readBrokerConfig(slot, next) && next.url[0] != '\0';
+    const bool was_configured = b.isConfigured();
+    BrokerEvent e;
+    if (makeOperatorReloadEvent(slot, millis(), was_configured,
+                                was_configured && b.config().enabled,
+                                now_configured, now_configured && next.enabled, e)) {
+        brokerEventQueue().push(e);
+    }
+}
+
 void MqttBrokerPool::workerLoop() {
     for (;;) {
         // Block for a reconcile request, but wake every 500ms to drive the
@@ -714,6 +729,7 @@ void MqttBrokerPool::workerLoop() {
         if (!worker_run_) break;
 
         if (got && slot < OFFBAND_MAX_BROKERS) {
+            recordOperatorReload(brokers_[slot], slot);
             reconcileSlot(slot);
             reconciling_[slot] = false;  // hand the slot back to loopTask
         }
