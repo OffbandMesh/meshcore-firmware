@@ -78,17 +78,29 @@ TEST(BrokerEventQueue, FullQueueDropsTheNewestAndCountsIt) {
 }
 
 TEST(BrokerEventQueue, ProductionDepthAbsorbsAWholeOutageBurst) {
-    // Six enabled slots each emitting a disconnect and a backoff at once.
+    // Six slots each failing at once (an error, a disconnect and a backoff),
+    // landing on the once-a-minute status burst (a pool line and six slot lines).
     auto& q = offband::brokerEventQueue();
     BrokerEvent out;
     while (q.pop(out)) {}
     q.takeDropped();
+    size_t pushed = 0;
     for (uint8_t s = 0; s < 6; ++s) {
+        EXPECT_TRUE(q.push(ev(BrokerEventKind::MqttError, s)));
         EXPECT_TRUE(q.push(ev(BrokerEventKind::MqttDisconnected, s)));
         EXPECT_TRUE(q.push(ev(BrokerEventKind::Backoff, s)));
+        pushed += 3;
     }
-    EXPECT_EQ(q.takeDropped(), 0u) << "a whole-outage burst must not drop anything";
-    EXPECT_EQ(offband::kBrokerEventQueueDepth, 32u);
+    EXPECT_TRUE(q.push(ev(BrokerEventKind::PoolStatus)));
+    ++pushed;
+    for (uint8_t s = 0; s < 6; ++s) {
+        EXPECT_TRUE(q.push(ev(BrokerEventKind::SlotStatus, s)));
+        ++pushed;
+    }
+    EXPECT_EQ(q.takeDropped(), 0u) << "the combined burst must not drop anything";
+    EXPECT_EQ(offband::kBrokerEventQueueDepth, 48u);
+    EXPECT_GE(offband::kBrokerEventQueueDepth - pushed, 16u)
+        << "and must leave room for auto-reconnect attempts landing in the same pass";
     while (q.pop(out)) {}
 }
 
@@ -314,17 +326,18 @@ TEST(BrokerEventFormat, DroppedLineReportsTheCount) {
 }
 
 TEST(BrokerEventFormat, ExistingRotationWordingIsKept) {
-    BrokerEvent o = ev(BrokerEventKind::RotateOut, 1);
-    o.n0 = 61;
-    o.w0 = 98304;
-    o.n1 = 60;
-    EXPECT_EQ(fmt(o), "[rot] ROTATE-OUT s1 age=61s heapBefore=98304 -> cooldown 60s");
+    // The retired prints: "[rot] ROTATE-OUT s%u age=%us heapBefore=%u -> cooldown %us"
+    // and "[rot] post-shutdown s%u heapAfter=%u". Anything grepping for them still matches.
+    EXPECT_EQ(fmt(offband::makeRotateOutEvent(1, 0, 61999, 98304, 60000)),
+              "[rot] ROTATE-OUT s1 age=61s heapBefore=98304 -> cooldown 60s");
+    EXPECT_EQ(fmt(offband::makePostShutdownEvent(1, 0, 102400)),
+              "[rot] post-shutdown s1 heapAfter=102400");
+}
 
-    BrokerEvent p = ev(BrokerEventKind::PostShutdown, 1);
-    p.w0 = 102400;
-    EXPECT_EQ(fmt(p), "[rot] post-shutdown s1 heapAfter=102400");
-
-    EXPECT_EQ(fmt(ev(BrokerEventKind::RotateIn, 1)), "[rot] ROTATE-IN s1");
+TEST(BrokerEventFormat, RotateInSaysWhyThisSlotWon) {
+    EXPECT_EQ(fmt(offband::makeRotateInEvent(2, 0, 3)),
+              "[rot] ROTATE-IN s2 -- took the TLS budget, longest waiting of 3");
+    EXPECT_EQ(offband::makeRotateInEvent(2, 0, 1000).n0, 255) << "the count clamps, never wraps";
 }
 
 TEST(BrokerEventFormat, UnknownKindFormatsNothing) {
@@ -372,7 +385,6 @@ TEST(BrokerEventLevel, FailuresAreErrorsAndTransitionsAreDebug) {
     EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::MqttError)), MLOG_ERROR);
     EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::MqttStartFailed)), MLOG_ERROR);
     EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::Failed)), MLOG_ERROR);
-    EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::ReconcileFailed)), MLOG_ERROR);
     EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::Dropped)), MLOG_ERROR);
 
     EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::MqttConnecting)), MLOG_DEBUG);
@@ -581,6 +593,97 @@ TEST(BrokerPolicyFormat, LongestLinesFitTheBudget) {
     for (const BrokerEvent& e : longest) {
         EXPECT_LT(fmt(e).size(), kLineBudget) << fmt(e);
     }
+}
+
+// ---------------------------------------------------------------- periodic status (#1136)
+
+TEST(BrokerStatusFormat, PoolLineKeepsTheSchedulerFields) {
+    EXPECT_EQ(fmt(offband::makePoolStatusEvent(0, 131072, 3, 1, 2, 42500)),
+              "[rot] heap=131072 tls=3 live=1/2 dwleft=42s");
+}
+
+namespace {
+
+// Slot 1, 60 s into a run, with the transport the drain passes in.
+std::string slotLine(uint8_t state, bool enabled, bool tls, uint32_t penalty, uint32_t streak,
+                     bool up, uint32_t up_ms, uint32_t held_ms, uint32_t cooldown_ms,
+                     const char* transport) {
+    return fmt(offband::makeSlotStatusEvent(1, 60000, state, enabled, tls, penalty, streak, 3,
+                                            up, up_ms, held_ms, cooldown_ms),
+               "broker.example.net", transport);
+}
+
+}  // namespace
+
+TEST(BrokerStatusFormat, SlotLineShowsWhatMattersForEachState) {
+    // A TLS slot up: session uptime, and the budget-hold age rotation keys off.
+    EXPECT_EQ(slotLine(2, true, true, 0, 0, true, 312400, 905000, 0, "wss"),
+              "[broker] s1 status wss state=up penalty=0 up=312s held=905s");
+    // A tcp slot up: no budget, so no held=.
+    EXPECT_EQ(slotLine(2, true, false, 0, 0, true, 7200000, 7200000, 0, "tcp"),
+              "[broker] s1 status tcp state=up penalty=0 up=7200s");
+    // Backing off with a penalty: the rehab streak shows beside it.
+    EXPECT_EQ(slotLine(3, true, true, 2, 1, false, 0, 0, 0, "wss"),
+              "[broker] s1 status wss state=backoff penalty=2 streak=1/3");
+    // Rotated out and cooling down.
+    EXPECT_EQ(slotLine(6, true, true, 0, 0, false, 0, 0, 41000, "tls"),
+              "[broker] s1 status tls state=held-tls-budget penalty=0 cooldown=41s");
+    // Terminal.
+    EXPECT_EQ(slotLine(7, true, true, 8, 0, false, 0, 0, 0, "wss"),
+              "[broker] s1 status wss state=failed penalty=8 streak=0/3");
+    // Configured but disabled reads as disabled, not down.
+    EXPECT_EQ(slotLine(0, false, false, 0, 0, false, 0, 0, 0, "tcp"),
+              "[broker] s1 status tcp state=disabled penalty=0");
+}
+
+TEST(BrokerStatusFormat, StateNamesMirrorEveryBrokerState) {
+    const char* want[] = {"down", "connecting", "up", "backoff", "held-no-clock", "held-no-heap",
+                          "held-tls-budget", "failed"};
+    for (uint8_t st = 0; st < 8; ++st) EXPECT_STREQ(offband::brokerEventStateName(st), want[st]);
+    EXPECT_STREQ(offband::brokerEventStateName(8), "unknown");
+}
+
+TEST(BrokerStatusBuild, NotUpCarriesNoUptimeAndFieldsClamp) {
+    BrokerEvent down = offband::makeSlotStatusEvent(0, 0, 0, true, true, 0, 0, 3, false,
+                                                    999999, 999999, 0);
+    EXPECT_EQ(down.n0, -1) << "not up: no uptime";
+    EXPECT_EQ(down.w1, 0u) << "not up: no budget hold";
+
+    BrokerEvent big = offband::makeSlotStatusEvent(0, 0, 2, true, true, 70000, 300, 300, true,
+                                                   UINT32_MAX, UINT32_MAX, UINT32_MAX);
+    EXPECT_EQ(big.w0, 70000u) << "the penalty is kept whole here";
+    EXPECT_EQ(big.cls, 255) << "streak clamps";
+    EXPECT_EQ(big.b1, 127) << "streak-needed clamps";
+    EXPECT_EQ(big.n1, 32767) << "cooldown clamps";
+    EXPECT_EQ(big.n0, static_cast<int32_t>(UINT32_MAX / 1000u));
+}
+
+TEST(BrokerStatusLevel, StatusLinesAreDebug) {
+    EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::PoolStatus)), MLOG_DEBUG);
+    EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::SlotStatus)), MLOG_DEBUG);
+    EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::RotateOut)), MLOG_DEBUG);
+}
+
+TEST(BrokerStatusFormat, LongestStatusLinesFitTheBudget) {
+    BrokerEvent slot = offband::makeSlotStatusEvent(255, 0, 7, true, true, UINT32_MAX, 255, 127,
+                                                    true, UINT32_MAX, UINT32_MAX, UINT32_MAX);
+    const std::string s = fmt(slot, "h", "wss");
+    EXPECT_LT(s.size(), kLineBudget) << s;
+    BrokerEvent pool = offband::makePoolStatusEvent(0, UINT32_MAX, 255, 255, 127, UINT32_MAX);
+    EXPECT_LT(fmt(pool).size(), kLineBudget);
+    EXPECT_LT(fmt(offband::makeRotateInEvent(255, 0, 255)).size(), kLineBudget);
+}
+
+TEST(BrokerStatusFormat, SlotLineTruncatesSafely) {
+    BrokerEvent slot = offband::makeSlotStatusEvent(1, 0, 2, true, true, 5, 1, 3, true, 1000, 2000, 3000);
+    // The fixed part, "[broker] s1 status wss state=up penalty=5", is 41 characters:
+    // it fits, and the optional fields after it are what overflow.
+    char buf[48];
+    const size_t n = formatBrokerEvent(slot, "h", "wss", buf, sizeof(buf));
+    EXPECT_EQ(n, sizeof(buf) - 1) << "the optional fields must not run past the buffer";
+    EXPECT_EQ(buf[sizeof(buf) - 1], '\0');
+    EXPECT_EQ(std::string(buf), "[broker] s1 status wss state=up penalty=5 strea")
+        << "the fixed part whole, then the first optional field cut at the buffer's end";
 }
 
 int main(int argc, char **argv) {

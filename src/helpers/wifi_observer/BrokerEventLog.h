@@ -25,10 +25,11 @@
 // config at format time, which is also what keeps the formatter pure and
 // host-testable.
 //
-// Capacity is 32: a whole-link outage flips every enabled slot at once (one
-// disconnect plus one backoff each), which loopTask clears within a pass. A full
-// queue drops the newest record and counts it; the drain reports the count as
-// its own line, so a drop is never silent.
+// Capacity is 48. A whole-link outage flips every slot at once -- an error, a
+// disconnect and a backoff each, 18 records for six slots -- and can land on the
+// once-a-minute status burst of up to 7 more; loopTask clears the lot within a
+// pass. A full queue drops the newest record and counts it; the drain reports the
+// count as its own line, so a drop is never silent.
 //
 // Dependency-free apart from the ESP32 spinlock, so it builds under [env:native].
 
@@ -61,7 +62,7 @@ enum class BrokerEventKind : uint8_t {
     Released         = 16,  // b0=BrokerHoldReason
     Rehab            = 17,  // n0=clean-dwell streak, b0=streak needed, w0=penalty
     PenaltyCleared   = 18,
-    ReconcileFailed  = 19,  // n0=broker state, cls
+    // 19 is retired: a failed reconcile is recorded as SetupFailed, with its reason.
     Dropped          = 20,  // n0=records dropped since the last report (no slot)
     OperatorReloaded = 21,  // b0=1 if the slot is enabled after the reload
     OperatorCleared  = 22,
@@ -72,10 +73,17 @@ enum class BrokerEventKind : uint8_t {
     SetupRecovered   = 27,  // n0=failed tries before this success
     NoClient         = 28,
 
-    // [rot] -- rotation. Wording of the two existing lines is kept verbatim.
-    RotateIn         = 30,
+    // [rot] -- rotation. Wording of ROTATE-OUT and post-shutdown is kept verbatim.
+    RotateIn         = 30,  // n0=TLS candidates waiting when this one was picked
     RotateOut        = 31,  // n0=age seconds, w0=free heap before, n1=cooldown seconds
     PostShutdown     = 32,  // w0=free heap after
+    PoolStatus       = 33,  // periodic, no slot: w0=free heap, b0=TLS slots configured,
+                            //   cls=TLS live, b1=TLS budget, n0=seconds of dwell left
+    SlotStatus       = 34,  // periodic, per configured slot ([broker]): b0=BrokerState,
+                            //   w0=penalty, cls=clean streak, b1=streak needed,
+                            //   n0=seconds up (-1 when not up), w1=seconds holding the
+                            //   TLS budget, n1=cooldown seconds left; flags carries
+                            //   kBrokerEventSlotDisabled and kBrokerEventSlotTls
 };
 
 enum class BrokerHoldReason : uint8_t {
@@ -124,6 +132,22 @@ inline const char* brokerHoldReasonName(uint8_t r) {
     return "unknown";
 }
 
+// Slot state codes, mirroring BrokerState in MqttBroker.h by number (the pool
+// static_asserts the two agree).
+inline const char* brokerEventStateName(uint8_t st) {
+    switch (st) {
+        case 0:  return "down";
+        case 1:  return "connecting";
+        case 2:  return "up";
+        case 3:  return "backoff";
+        case 4:  return "held-no-clock";
+        case 5:  return "held-no-heap";
+        case 6:  return "held-tls-budget";
+        case 7:  return "failed";
+        default: return "unknown";
+    }
+}
+
 inline const char* brokerSetupFailureName(uint8_t r) {
     switch (static_cast<BrokerSetupFailure>(r)) {
         case BrokerSetupFailure::AuthConfig: return "auth-config";
@@ -158,6 +182,12 @@ constexpr uint8_t kBrokerEventWasUp = 0x02;
 
 // The connect attempt is esp-mqtt's own auto-reconnect, not a start by the pool.
 constexpr uint8_t kBrokerEventAutoReconnect = 0x04;
+
+// A periodic slot status for a slot that is configured but disabled.
+constexpr uint8_t kBrokerEventSlotDisabled = 0x08;
+
+// A periodic slot status for a TLS or wss slot, which competes for the TLS budget.
+constexpr uint8_t kBrokerEventSlotTls = 0x10;
 
 inline BrokerEvent makeBrokerEvent(BrokerEventKind kind, uint8_t slot, uint32_t at_ms) {
     BrokerEvent e;
@@ -322,6 +352,64 @@ inline BrokerEvent makeSetupRecoveredEvent(uint8_t slot, uint32_t at_ms, uint32_
     return e;
 }
 
+// Builders for the [rot] call sites and the periodic status lines.
+
+inline uint8_t brokerEventSmall(uint32_t v) { return v > 255u ? 255u : static_cast<uint8_t>(v); }
+
+inline BrokerEvent makeRotateInEvent(uint8_t slot, uint32_t at_ms, uint32_t waiting) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::RotateIn, slot, at_ms);
+    e.n0 = static_cast<int32_t>(brokerEventSmall(waiting));
+    return e;
+}
+
+inline BrokerEvent makeRotateOutEvent(uint8_t slot, uint32_t at_ms, uint32_t age_ms,
+                                      uint32_t heap_before, uint32_t cooldown_ms) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::RotateOut, slot, at_ms);
+    e.n0 = static_cast<int32_t>(age_ms / 1000u);
+    e.w0 = heap_before;
+    const uint32_t cd = cooldown_ms / 1000u;
+    e.n1 = static_cast<int16_t>(cd > 32767u ? 32767u : cd);
+    return e;
+}
+
+inline BrokerEvent makePostShutdownEvent(uint8_t slot, uint32_t at_ms, uint32_t heap_after) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::PostShutdown, slot, at_ms);
+    e.w0 = heap_after;
+    return e;
+}
+
+inline BrokerEvent makePoolStatusEvent(uint32_t at_ms, uint32_t free_heap, uint32_t tls_configured,
+                                       uint32_t tls_live, uint32_t tls_budget, uint32_t dwell_left_ms) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::PoolStatus, 0xFF, at_ms);
+    e.w0  = free_heap;
+    e.b0  = brokerEventSmall(tls_configured);
+    e.cls = brokerEventSmall(tls_live);
+    e.b1  = static_cast<int8_t>(tls_budget > 127u ? 127u : tls_budget);
+    e.n0  = static_cast<int32_t>(dwell_left_ms / 1000u);
+    return e;
+}
+
+// One configured slot's standing. `up_ms` and `held_ms` are read only when
+// `is_up`; `held_ms` is the reconnect-proof time holding the TLS budget, the
+// value rotation's eviction keys off.
+inline BrokerEvent makeSlotStatusEvent(uint8_t slot, uint32_t at_ms, uint8_t state, bool enabled,
+                                       bool tls, uint32_t penalty, uint32_t streak,
+                                       uint32_t streak_needed, bool is_up, uint32_t up_ms,
+                                       uint32_t held_ms, uint32_t cooldown_left_ms) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::SlotStatus, slot, at_ms);
+    e.b0  = state;
+    e.w0  = penalty;
+    e.cls = brokerEventSmall(streak);
+    e.b1  = static_cast<int8_t>(streak_needed > 127u ? 127u : streak_needed);
+    e.n0  = is_up ? static_cast<int32_t>(up_ms / 1000u) : -1;
+    e.w1  = is_up ? held_ms / 1000u : 0;
+    const uint32_t cd = cooldown_left_ms / 1000u;
+    e.n1  = static_cast<int16_t>(cd > 32767u ? 32767u : cd);
+    if (!enabled) e.flags |= kBrokerEventSlotDisabled;
+    if (tls)      e.flags |= kBrokerEventSlotTls;
+    return e;
+}
+
 // The hold a slot was last reported in. The pool re-drives a held slot every
 // worker pass (500 ms), so a hold is recorded when it starts or changes reason,
 // and its release when an attempt goes ahead -- never once per pass. Kept outside
@@ -385,7 +473,6 @@ inline uint8_t brokerEventLevel(const BrokerEvent& e) {
         case BrokerEventKind::MqttError:
         case BrokerEventKind::MqttStartFailed:
         case BrokerEventKind::Failed:
-        case BrokerEventKind::ReconcileFailed:
         case BrokerEventKind::Dropped:
         case BrokerEventKind::ConnectDiscarded:
         case BrokerEventKind::CredentialFailed:
@@ -499,10 +586,6 @@ inline size_t formatBrokerEvent(const BrokerEvent& e, const char* host,
         case BrokerEventKind::PenaltyCleared:
             n = std::snprintf(out, cap, "[broker] s%u penalty cleared -- rehabilitated", s);
             break;
-        case BrokerEventKind::ReconcileFailed:
-            n = std::snprintf(out, cap, "[broker] s%u reconcile begin failed state=%ld class=%s",
-                              s, (long)e.n0, brokerEventErrorClassName(e.cls));
-            break;
         case BrokerEventKind::Dropped:
             n = std::snprintf(out, cap, "[broker] event queue full -- %ld events dropped", (long)e.n0);
             break;
@@ -542,7 +625,8 @@ inline size_t formatBrokerEvent(const BrokerEvent& e, const char* host,
             n = std::snprintf(out, cap, "[broker] s%u cannot connect: no client", s);
             break;
         case BrokerEventKind::RotateIn:
-            n = std::snprintf(out, cap, "[rot] ROTATE-IN s%u", s);
+            n = std::snprintf(out, cap, "[rot] ROTATE-IN s%u -- took the TLS budget, longest waiting of %ld",
+                              s, (long)e.n0);
             break;
         case BrokerEventKind::RotateOut:
             n = std::snprintf(out, cap, "[rot] ROTATE-OUT s%u age=%lds heapBefore=%lu -> cooldown %ds",
@@ -551,6 +635,33 @@ inline size_t formatBrokerEvent(const BrokerEvent& e, const char* host,
         case BrokerEventKind::PostShutdown:
             n = std::snprintf(out, cap, "[rot] post-shutdown s%u heapAfter=%lu", s, (unsigned long)e.w0);
             break;
+        case BrokerEventKind::PoolStatus:
+            n = std::snprintf(out, cap, "[rot] heap=%lu tls=%u live=%u/%d dwleft=%lds",
+                              (unsigned long)e.w0, (unsigned)e.b0, (unsigned)e.cls, (int)e.b1,
+                              (long)e.n0);
+            break;
+        case BrokerEventKind::SlotStatus: {
+            const char* state = (e.flags & kBrokerEventSlotDisabled) ? "disabled"
+                                                                     : brokerEventStateName(e.b0);
+            n = std::snprintf(out, cap, "[broker] s%u status %s state=%s penalty=%lu", s,
+                              (transport && transport[0]) ? transport : "?", state,
+                              (unsigned long)e.w0);
+            // Optional fields, appended while there is room. n keeps the would-be
+            // length, which the clamp below turns into what was written.
+            if (n > 0 && e.w0 > 0 && static_cast<size_t>(n) < cap) {
+                n += std::snprintf(out + n, cap - n, " streak=%u/%d", (unsigned)e.cls, (int)e.b1);
+            }
+            if (n > 0 && e.n0 >= 0 && static_cast<size_t>(n) < cap) {
+                n += std::snprintf(out + n, cap - n, " up=%lds", (long)e.n0);
+                if ((e.flags & kBrokerEventSlotTls) && static_cast<size_t>(n) < cap) {
+                    n += std::snprintf(out + n, cap - n, " held=%lus", (unsigned long)e.w1);
+                }
+            }
+            if (n > 0 && e.n1 > 0 && static_cast<size_t>(n) < cap) {
+                n += std::snprintf(out + n, cap - n, " cooldown=%ds", (int)e.n1);
+            }
+            break;
+        }
         default:
             out[0] = '\0';
             return 0;
@@ -620,7 +731,7 @@ private:
     uint32_t    dropped_ = 0;
 };
 
-constexpr size_t kBrokerEventQueueDepth = 32;
+constexpr size_t kBrokerEventQueueDepth = 48;
 
 // The single process-wide queue. Producers push; MqttBrokerPool drains it on loopTask.
 inline BrokerEventQueue<kBrokerEventQueueDepth>& brokerEventQueue() {
