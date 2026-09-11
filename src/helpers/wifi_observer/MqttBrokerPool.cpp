@@ -12,6 +12,7 @@
 static_assert(sizeof(offband::PacketRecord) <= MQTT_RING_MSG_MAX,
               "MQTT_RING_MSG_MAX must be >= sizeof(PacketRecord)");
 #include "MqttPayload.h"
+#include "BrokerEventLog.h"
 #include <helpers/diagnostics/CrashLog.h>   // #181: crashLogf() -- worker has no user ACK channel
 #include <cstring>
 #include <cstdio>
@@ -25,6 +26,20 @@ namespace offband {
 #ifndef MQTT_ROTATE_DWELL_MS
   #define MQTT_ROTATE_DWELL_MS 60000U   // #175: how long a TLS slot holds the budget
 #endif
+
+// A record drained more than this long after it was captured gets its queueing
+// delay appended, so the time the transition actually happened can be recovered
+// from the drain-time stamp mesh_log_line() puts on the line.
+static constexpr uint32_t kBrokerEventLagReportMs = 50;
+
+static const char* brokerTransportName(BrokerTransport t) {
+    switch (t) {
+        case BrokerTransport::Tcp: return "tcp";
+        case BrokerTransport::Tls: return "tls";
+        case BrokerTransport::Wss: return "wss";
+    }
+    return "?";
+}
 
 // ---------------------------------------------------------------------------
 // begin
@@ -150,6 +165,45 @@ void MqttBrokerPool::loop(uint32_t now_ms) {
     //
     // On host builds (no worker) nothing drives connects; the host stubs never
     // connect anyway, so this is correct for tests.
+
+    // Broker lifecycle events are recorded by whichever task saw the transition
+    // and formatted here, so the line buffer and vsnprintf frame land on
+    // loopTask rather than on mqtt_worker or the esp-mqtt event task.
+    {
+        auto& q = brokerEventQueue();
+        BrokerEvent e;
+        char line[200];
+        char host[64];
+        // Bounded to one queue's worth per pass, so a burst of producers can never
+        // hold loopTask, which also serves the BLE command channel.
+        for (size_t i = 0; i < kBrokerEventQueueDepth && q.pop(e); ++i) {
+            host[0] = '\0';
+            const char* transport = nullptr;
+            if (e.slot < OFFBAND_MAX_BROKERS && brokers_[e.slot].isConfigured()) {
+                brokerEventExtractHost(brokers_[e.slot].config().url, host, sizeof(host));
+                transport = brokerTransportName(brokers_[e.slot].config().transport);
+            }
+            if (formatBrokerEvent(e, host, transport, line, sizeof(line)) == 0) continue;
+            // Signed: a producer on the other core can stamp a record after this
+            // pass sampled now_ms. That reads as a small negative lag -- not the
+            // ~49-day value an unsigned subtraction would wrap to.
+            const int32_t lag = static_cast<int32_t>(now_ms - e.at_ms);
+            if (lag > static_cast<int32_t>(kBrokerEventLagReportMs)) {
+                mesh_log_line(brokerEventLevel(e), "%s (queued %lums)\n", line, (unsigned long)lag);
+            } else {
+                mesh_log_line(brokerEventLevel(e), "%s\n", line);
+            }
+        }
+        const uint32_t dropped = q.takeDropped();
+        if (dropped != 0) {
+            BrokerEvent d = makeBrokerEvent(BrokerEventKind::Dropped, 0, now_ms);
+            d.n0 = static_cast<int32_t>(dropped);
+            if (formatBrokerEvent(d, nullptr, nullptr, line, sizeof(line)) > 0) {
+                mesh_log_line(brokerEventLevel(d), "%s\n", line);
+            }
+        }
+    }
+
     publishStatusIfDue(now_ms);
     // #175: drain each Up broker's ring backlog here, on loopTask. This keeps ALL
     // ring_ access single-threaded -- append (publishPacket), drain (here +
