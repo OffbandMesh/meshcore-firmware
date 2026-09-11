@@ -134,6 +134,13 @@ public:
   virtual void startWatchdog(uint32_t timeout_secs) { (void)timeout_secs; }
   virtual void feedWatchdog() { }
 
+  // #1083: one timeout for every role's startWatchdog() call. An env with a
+  // proven long blocking path in loop() raises it with -D WDT_TIMEOUT_SECS=n;
+  // nothing is excluded by platform.
+#ifndef WDT_TIMEOUT_SECS
+  #define WDT_TIMEOUT_SECS 30
+#endif
+
   // External LoRa FEM LNA control (boards with a controllable FEM override these).
   // Default: not supported (boards without an external FEM, or without a controllable LNA path).
   virtual bool setLoRaFemLnaEnabled(bool enable) { return false; }
