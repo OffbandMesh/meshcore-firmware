@@ -161,7 +161,7 @@ void setup() {
   // radio_init/store halts before this point, so a bad boot never WDT-loops).
   // Feed from loop() only -> a hung loop trips it -> auto-reset. startWatchdog is
   // a MainBoard virtual: ESP32/nRF52 override, no-op on other platforms.
-  board.startWatchdog(30);
+  board.startWatchdog(WDT_TIMEOUT_SECS);
 #if defined(NRF52_PLATFORM)
   // #275: the nRF52 WDT counts during sleep (CONFIG.SLEEP=Run), so it MUST be paired
   // with the ~10 Hz loop-wake heartbeat -- otherwise an RF-silent nap starves the feed
