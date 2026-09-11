@@ -231,6 +231,21 @@ private:
     // Host-tested in test/test_fail_escalate_window. reset() on a clean connect.
     FailEscalateWindow fail_window_;
 
+    // What the next disconnect record reports, since esp-mqtt's disconnect event
+    // carries no reason: whether this attempt's session came up, and the class of
+    // the error event raised for the same failure. rt_.state cannot answer the
+    // first -- an error escalates Up to Backoff before its disconnect arrives.
+    // Reset in onBeforeConnect(), which starts every attempt; both are read and
+    // written only by the handlers, which run in order on the esp-mqtt task.
+    bool             session_up_              = false;
+    BrokerErrorClass error_before_disconnect_ = BrokerErrorClass::None;
+
+    // tryConnect() already recorded the attempt its start() begins, so the
+    // BEFORE_CONNECT that follows must not record it again. Any other
+    // BEFORE_CONNECT is esp-mqtt's own auto-reconnect. Set on mqtt_worker before
+    // start() creates the esp-mqtt task; cleared by that task.
+    bool             pool_start_recorded_     = false;
+
     // #720: reconnect-proof clock for TLS-budget hold duration. Stamped on the
     // first Up of an occupancy, cleared on releaseClient(); a reconnect does NOT
     // reset it. Separate from rt_ (which a reconnect/rt_ reset would disturb).
@@ -243,6 +258,7 @@ private:
                              esp_event_base_t base,
                              int32_t event_id,
                              void* event_data);
+    void onBeforeConnect(uint32_t now_ms);
     void onConnected(uint32_t now_ms);
     void onDisconnected(uint32_t now_ms, BrokerErrorClass err);
     void onError(uint32_t now_ms, BrokerErrorClass err);

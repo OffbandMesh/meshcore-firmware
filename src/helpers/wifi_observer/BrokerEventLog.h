@@ -40,10 +40,14 @@ namespace offband {
 
 enum class BrokerEventKind : uint8_t {
     // [mqtt] -- MQTT protocol events only.
-    MqttConnecting   = 1,
+    MqttConnecting   = 1,   // flags carries kBrokerEventAutoReconnect
     MqttConnected    = 2,
-    MqttDisconnected = 3,   // cls, b0=esp-mqtt error_type, n0=sock_errno,
-    MqttError        = 4,   //   w0=tls_esp_err, w1=cert_flags, n1=-tls_stack_err, b1=connack
+    MqttDisconnected = 3,   // cls=class of the error event raised for the same failure (0: none);
+                            //   flags carries kBrokerEventWasUp, n0=seconds the session was up
+    MqttError        = 4,   // cls, b0=esp-mqtt error_type, n0=sock_errno, w0=tls_esp_err,
+                            //   w1=cert_flags, n1=-tls_stack_err, b1=connack; or flags
+                            //   carries kBrokerEventNoErrorHandle when esp-mqtt gave none
+    MqttStartFailed  = 5,   // w0=esp_err_t from esp_mqtt_client_start (no MQTT event fires)
 
     // [broker] -- the pool's decisions about a slot.
     Backoff          = 10,  // b0=penalty, n0=seconds until the next attempt
@@ -103,9 +107,20 @@ struct BrokerEvent {
     uint8_t  cls;     // error class code, where the kind carries one
     uint8_t  b0;      // kind-specific byte
     int8_t   b1;      // kind-specific signed byte
-    uint8_t  reserved;
+    uint8_t  flags;   // kBrokerEvent* bits
 };
 static_assert(sizeof(BrokerEvent) == 24, "BrokerEvent must stay a fixed 24-byte record");
+
+// esp-mqtt raised an error without an error handle. Kept distinct so that case
+// never reads like a handle whose every field happened to be zero.
+constexpr uint8_t kBrokerEventNoErrorHandle = 0x01;
+
+// The disconnect ended a session that had come up, as opposed to a connect that
+// never did.
+constexpr uint8_t kBrokerEventWasUp = 0x02;
+
+// The connect attempt is esp-mqtt's own auto-reconnect, not a start by the pool.
+constexpr uint8_t kBrokerEventAutoReconnect = 0x04;
 
 inline BrokerEvent makeBrokerEvent(BrokerEventKind kind, uint8_t slot, uint32_t at_ms) {
     BrokerEvent e;
@@ -116,12 +131,70 @@ inline BrokerEvent makeBrokerEvent(BrokerEventKind kind, uint8_t slot, uint32_t 
     return e;
 }
 
+// Builders for the [mqtt] call sites. The mapping from what each site has to
+// record fields lives here, where it is host-testable; the call sites sit inside
+// ESP-only code that native tests cannot reach.
+inline BrokerEvent makeMqttConnectingEvent(uint8_t slot, uint32_t at_ms, bool auto_reconnect) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::MqttConnecting, slot, at_ms);
+    if (auto_reconnect) e.flags = kBrokerEventAutoReconnect;
+    return e;
+}
+
+inline BrokerEvent makeMqttConnectedEvent(uint8_t slot, uint32_t at_ms) {
+    return makeBrokerEvent(BrokerEventKind::MqttConnected, slot, at_ms);
+}
+
+// esp-mqtt's disconnect event carries no reason of its own. What is known is
+// whether the session had come up and for how long, and the class of the error
+// event raised for the same failure, if there was one (error_cls 0: none).
+inline BrokerEvent makeMqttDisconnectedEvent(uint8_t slot, uint32_t at_ms, uint8_t error_cls,
+                                             bool was_up, uint32_t up_ms) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::MqttDisconnected, slot, at_ms);
+    e.cls = error_cls;
+    if (was_up) {
+        e.flags = kBrokerEventWasUp;
+        e.n0    = static_cast<int32_t>(up_ms / 1000u);
+    }
+    return e;
+}
+
+// Everything the esp-mqtt error handle reports. mbedTLS stack errors are negative
+// codes no larger than 0x7FFF in magnitude; the negation is stored so it fits an
+// int16 and prints as -0xNNNN.
+inline BrokerEvent makeMqttErrorEvent(uint8_t slot, uint32_t at_ms, uint8_t cls,
+                                      int error_type, int sock_errno, uint32_t tls_esp_err,
+                                      int tls_stack_err, uint32_t cert_flags, int connack) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::MqttError, slot, at_ms);
+    e.cls = cls;
+    e.b0  = static_cast<uint8_t>(error_type);
+    e.n0  = static_cast<int32_t>(sock_errno);
+    e.w0  = tls_esp_err;
+    e.n1  = static_cast<int16_t>(-tls_stack_err);
+    e.w1  = cert_flags;
+    e.b1  = static_cast<int8_t>(connack);
+    return e;
+}
+
+inline BrokerEvent makeMqttErrorNoHandleEvent(uint8_t slot, uint32_t at_ms, uint8_t cls) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::MqttError, slot, at_ms);
+    e.cls   = cls;
+    e.flags = kBrokerEventNoErrorHandle;
+    return e;
+}
+
+inline BrokerEvent makeMqttStartFailedEvent(uint8_t slot, uint32_t at_ms, int32_t esp_err) {
+    BrokerEvent e = makeBrokerEvent(BrokerEventKind::MqttStartFailed, slot, at_ms);
+    e.w0 = static_cast<uint32_t>(esp_err);
+    return e;
+}
+
 // Failures and the terminal give-up are errors; every other transition is debug.
 // Both pass the default UART mirror ceiling (MLOG_DEBUG).
 inline uint8_t brokerEventLevel(const BrokerEvent& e) {
     switch (static_cast<BrokerEventKind>(e.kind)) {
         case BrokerEventKind::MqttDisconnected:
         case BrokerEventKind::MqttError:
+        case BrokerEventKind::MqttStartFailed:
         case BrokerEventKind::Failed:
         case BrokerEventKind::ReconcileFailed:
         case BrokerEventKind::Dropped:
@@ -167,23 +240,39 @@ inline size_t formatBrokerEvent(const BrokerEvent& e, const char* host,
     int n = 0;
     switch (static_cast<BrokerEventKind>(e.kind)) {
         case BrokerEventKind::MqttConnecting:
-            n = std::snprintf(out, cap, "[mqtt] s%u connecting host=%s %s", s,
+            n = std::snprintf(out, cap, "[mqtt] s%u connecting host=%s %s by=%s", s,
                               (host && host[0]) ? host : "?",
-                              (transport && transport[0]) ? transport : "?");
+                              (transport && transport[0]) ? transport : "?",
+                              (e.flags & kBrokerEventAutoReconnect) ? "auto-reconnect" : "pool");
             break;
         case BrokerEventKind::MqttConnected:
             n = std::snprintf(out, cap, "[mqtt] s%u up", s);
             break;
         case BrokerEventKind::MqttDisconnected:
+            if (e.flags & kBrokerEventWasUp) {
+                n = std::snprintf(out, cap, "[mqtt] s%u down phase=session up=%lds error=%s", s,
+                                  (long)e.n0, brokerEventErrorClassName(e.cls));
+            } else {
+                n = std::snprintf(out, cap, "[mqtt] s%u down phase=connect error=%s", s,
+                                  brokerEventErrorClassName(e.cls));
+            }
+            break;
         case BrokerEventKind::MqttError:
-            n = std::snprintf(out, cap,
-                              "[mqtt] s%u %s class=%s type=%u sock_errno=%ld "
-                              "tls_esp_err=0x%lX tls_stack_err=-0x%04X cert_flags=0x%08lX connack=%d",
-                              s,
-                              e.kind == static_cast<uint8_t>(BrokerEventKind::MqttError) ? "error" : "down",
-                              brokerEventErrorClassName(e.cls), (unsigned)e.b0, (long)e.n0,
-                              (unsigned long)e.w0, (unsigned)(uint16_t)e.n1,
-                              (unsigned long)e.w1, (int)e.b1);
+            if (e.flags & kBrokerEventNoErrorHandle) {
+                n = std::snprintf(out, cap, "[mqtt] s%u error class=%s (no error_handle)", s,
+                                  brokerEventErrorClassName(e.cls));
+            } else {
+                n = std::snprintf(out, cap,
+                                  "[mqtt] s%u error class=%s type=%u sock_errno=%ld "
+                                  "tls_esp_err=0x%lX tls_stack_err=-0x%04X cert_flags=0x%08lX connack=%d",
+                                  s, brokerEventErrorClassName(e.cls), (unsigned)e.b0, (long)e.n0,
+                                  (unsigned long)e.w0, (unsigned)(uint16_t)e.n1,
+                                  (unsigned long)e.w1, (int)e.b1);
+            }
+            break;
+        case BrokerEventKind::MqttStartFailed:
+            n = std::snprintf(out, cap, "[mqtt] s%u start failed esp_err=0x%lX", s,
+                              (unsigned long)e.w0);
             break;
         case BrokerEventKind::Backoff:
             n = std::snprintf(out, cap, "[broker] s%u backoff penalty=%u next=%lds",

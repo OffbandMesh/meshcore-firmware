@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "helpers/wifi_observer/BrokerEventLog.h"
 
@@ -104,12 +106,19 @@ TEST(BrokerEvent, RecordIsFixedSizeAndZeroInitialized) {
 
 TEST(BrokerEventFormat, MqttLinesUseTheMqttPrefix) {
     EXPECT_EQ(fmt(ev(BrokerEventKind::MqttConnecting, 0), "mqtt1.okimesh.org", "tcp"),
-              "[mqtt] s0 connecting host=mqtt1.okimesh.org tcp");
+              "[mqtt] s0 connecting host=mqtt1.okimesh.org tcp by=pool");
     EXPECT_EQ(fmt(ev(BrokerEventKind::MqttConnected, 2)), "[mqtt] s2 up");
 }
 
-TEST(BrokerEventFormat, DisconnectCarriesTheFullErrorDetail) {
-    BrokerEvent e = ev(BrokerEventKind::MqttDisconnected, 0);
+TEST(BrokerEventFormat, ConnectingSaysWhoStartedTheAttempt) {
+    EXPECT_EQ(fmt(offband::makeMqttConnectingEvent(1, 1000, false), "mqtt2.okimesh.org", "wss"),
+              "[mqtt] s1 connecting host=mqtt2.okimesh.org wss by=pool");
+    EXPECT_EQ(fmt(offband::makeMqttConnectingEvent(1, 1000, true), "mqtt2.okimesh.org", "wss"),
+              "[mqtt] s1 connecting host=mqtt2.okimesh.org wss by=auto-reconnect");
+}
+
+TEST(BrokerEventFormat, ErrorCarriesTheFullErrorDetail) {
+    BrokerEvent e = ev(BrokerEventKind::MqttError, 0);
     e.cls = 1;             // tcp
     e.b0  = 1;             // esp-mqtt error_type
     e.n0  = 113;           // EHOSTUNREACH
@@ -118,13 +127,147 @@ TEST(BrokerEventFormat, DisconnectCarriesTheFullErrorDetail) {
     e.w1  = 0x00000008;    // cert_flags
     e.b1  = 2;             // connack
     EXPECT_EQ(fmt(e),
-              "[mqtt] s0 down class=tcp type=1 sock_errno=113 tls_esp_err=0x8006 "
+              "[mqtt] s0 error class=tcp type=1 sock_errno=113 tls_esp_err=0x8006 "
               "tls_stack_err=-0x2700 cert_flags=0x00000008 connack=2");
+}
+
+TEST(BrokerEventFormat, DisconnectSaysWhatEndedAndWhatErrorCameWithIt) {
+    // A session that was up, dropped with a TLS error event just before it.
+    EXPECT_EQ(fmt(offband::makeMqttDisconnectedEvent(0, 1000, 3, true, 312400)),
+              "[mqtt] s0 down phase=session up=312s error=tls");
+    // A session that dropped without any error event (e.g. a missed keepalive).
+    EXPECT_EQ(fmt(offband::makeMqttDisconnectedEvent(0, 1000, 0, true, 5000)),
+              "[mqtt] s0 down phase=session up=5s error=none");
+    // A connect that never came up; the up time passed in is meaningless and ignored.
+    EXPECT_EQ(fmt(offband::makeMqttDisconnectedEvent(1, 1000, 2, false, 999999)),
+              "[mqtt] s1 down phase=connect error=auth");
 }
 
 TEST(BrokerEventFormat, ErrorAndDisconnectAreDistinguished) {
     EXPECT_NE(fmt(ev(BrokerEventKind::MqttError)).find("s0 error "), std::string::npos);
     EXPECT_NE(fmt(ev(BrokerEventKind::MqttDisconnected)).find("s0 down "), std::string::npos);
+}
+
+TEST(BrokerEventFormat, AMissingErrorHandleIsSaidSoNotZeroed) {
+    const std::string missing = fmt(offband::makeMqttErrorNoHandleEvent(1, 1000, 1));
+    EXPECT_EQ(missing, "[mqtt] s1 error class=tcp (no error_handle)");
+    const std::string zeroed = fmt(offband::makeMqttErrorEvent(1, 1000, 1, 0, 0, 0, 0, 0, 0));
+    EXPECT_NE(missing, zeroed) << "no handle must never read like a handle of zeros";
+}
+
+TEST(BrokerEventFormat, StartFailureCarriesTheEspError) {
+    EXPECT_EQ(fmt(offband::makeMqttStartFailedEvent(2, 1000, 0x103)),
+              "[mqtt] s2 start failed esp_err=0x103");
+    // ESP_FAIL is -1; ESP-IDF itself prints it as 0xffffffff.
+    EXPECT_EQ(fmt(offband::makeMqttStartFailedEvent(2, 1000, -1)),
+              "[mqtt] s2 start failed esp_err=0xFFFFFFFF");
+}
+
+// ---------------------------------------------------------------- builders
+
+TEST(BrokerEventBuild, ConnectBuildersSetKindSlotAndTime) {
+    BrokerEvent c = offband::makeMqttConnectingEvent(3, 4321, false);
+    EXPECT_EQ(c.kind, static_cast<uint8_t>(BrokerEventKind::MqttConnecting));
+    EXPECT_EQ(c.slot, 3);
+    EXPECT_EQ(c.at_ms, 4321u);
+    EXPECT_EQ(c.flags, 0) << "the pool's own start carries no flag";
+    EXPECT_EQ(offband::makeMqttConnectingEvent(3, 4321, true).flags, offband::kBrokerEventAutoReconnect);
+
+    BrokerEvent u = offband::makeMqttConnectedEvent(3, 4322);
+    EXPECT_EQ(u.kind, static_cast<uint8_t>(BrokerEventKind::MqttConnected));
+    EXPECT_EQ(u.slot, 3);
+    EXPECT_EQ(u.at_ms, 4322u);
+}
+
+TEST(BrokerEventBuild, ErrorBuilderMapsEveryHandleField) {
+    BrokerEvent e = offband::makeMqttErrorEvent(4, 777, 3, 2, 113, 0x8006, -0x2700, 0x8, 5);
+    EXPECT_EQ(e.kind, static_cast<uint8_t>(BrokerEventKind::MqttError));
+    EXPECT_EQ(e.slot, 4);
+    EXPECT_EQ(e.at_ms, 777u);
+    EXPECT_EQ(e.cls, 3);
+    EXPECT_EQ(e.b0, 2) << "error_type";
+    EXPECT_EQ(e.n0, 113) << "sock_errno";
+    EXPECT_EQ(e.w0, 0x8006u) << "tls_esp_err";
+    EXPECT_EQ(e.n1, 0x2700) << "the mbedTLS stack error is stored negated";
+    EXPECT_EQ(e.w1, 0x8u) << "cert_flags";
+    EXPECT_EQ(e.b1, 5) << "connack";
+    EXPECT_EQ(e.flags, 0) << "a real handle must not carry the no-handle flag";
+}
+
+TEST(BrokerEventBuild, DisconnectBuilderCarriesUptimeOnlyForASession) {
+    BrokerEvent up = offband::makeMqttDisconnectedEvent(2, 900, 1, true, 61999);
+    EXPECT_EQ(up.kind, static_cast<uint8_t>(BrokerEventKind::MqttDisconnected));
+    EXPECT_EQ(up.cls, 1);
+    EXPECT_EQ(up.flags, offband::kBrokerEventWasUp);
+    EXPECT_EQ(up.n0, 61) << "whole seconds, truncated";
+
+    BrokerEvent never = offband::makeMqttDisconnectedEvent(2, 900, 1, false, 61999);
+    EXPECT_EQ(never.flags, 0);
+    EXPECT_EQ(never.n0, 0) << "a connect that never came up has no uptime";
+
+    // Up time is a millis() difference; the longest one must survive the conversion.
+    BrokerEvent longest = offband::makeMqttDisconnectedEvent(2, 900, 0, true, UINT32_MAX);
+    EXPECT_EQ(longest.n0, static_cast<int32_t>(UINT32_MAX / 1000u));
+}
+
+TEST(BrokerEventBuild, NoHandleBuilderSetsTheFlagAndTheClass) {
+    BrokerEvent e = offband::makeMqttErrorNoHandleEvent(1, 50, 4);
+    EXPECT_EQ(e.kind, static_cast<uint8_t>(BrokerEventKind::MqttError));
+    EXPECT_EQ(e.cls, 4);
+    EXPECT_EQ(e.flags, offband::kBrokerEventNoErrorHandle);
+}
+
+namespace {
+
+// The whitespace-separated key=value tokens of a line.
+std::vector<std::string> keyValues(const std::string& line) {
+    std::vector<std::string> out;
+    size_t i = 0;
+    while (i < line.size()) {
+        size_t j = line.find(' ', i);
+        if (j == std::string::npos) j = line.size();
+        std::string tok = line.substr(i, j - i);
+        if (tok.find('=') != std::string::npos) out.push_back(tok);
+        i = j + 1;
+    }
+    return out;
+}
+
+}  // namespace
+
+// The [mqtt-err] print this replaces is the one diagnostic the subsystem already
+// had. Moving it into the ring must not lose any of it: every key=value it
+// printed must come out of the new line with the same value.
+TEST(BrokerEventFormat, ErrorLineLosesNothingTheRetiredPrintCarried) {
+    struct Case { unsigned slot; int type, sock_errno; uint32_t tls_esp_err; int tls_stack_err;
+                  uint32_t cert_flags; int connack, cls; };
+    const Case cases[] = {
+        {0, 1, 113, 0x8006, -0x2700, 0x00000008, 0, 3},     // a TLS handshake failure
+        {5, 0, 0, 0, 0, 0, 0, 0},                           // every field zero
+        {3, 3, 104, 0xFFFFFFFF, -0x7FFF, 0xFFFFFFFF, 5, 4}, // the top of each documented range
+        {1, 2, 0, 0, 0, 0, 2, 2},                           // a CONNACK refusal (#506)
+    };
+    for (const Case& c : cases) {
+        char retired[200];
+        std::snprintf(retired, sizeof(retired),
+                      "[mqtt-err] s%u type=%d sock_errno=%d tls_esp_err=0x%X "
+                      "tls_stack_err=-0x%04X cert_flags=0x%08X connack=%d -> class=%d",
+                      c.slot, c.type, c.sock_errno, (unsigned)c.tls_esp_err,
+                      (unsigned)(-c.tls_stack_err), (unsigned)c.cert_flags, c.connack, c.cls);
+        const std::string now = fmt(offband::makeMqttErrorEvent(
+            static_cast<uint8_t>(c.slot), 1000, static_cast<uint8_t>(c.cls), c.type, c.sock_errno,
+            c.tls_esp_err, c.tls_stack_err, c.cert_flags, c.connack));
+        const std::vector<std::string> have = keyValues(now);
+
+        for (const std::string& kv : keyValues(retired)) {
+            if (kv.rfind("class=", 0) == 0) continue;   // numeric then, named now; checked below
+            EXPECT_NE(std::find(have.begin(), have.end(), kv), have.end())
+                << kv << " is missing from: " << now;
+        }
+        const std::string cls = std::string("class=") + offband::brokerEventErrorClassName(c.cls);
+        EXPECT_NE(std::find(have.begin(), have.end(), cls), have.end()) << now;
+        EXPECT_EQ(now.rfind("[mqtt] s" + std::to_string(c.slot) + " error ", 0), 0u) << now;
+    }
 }
 
 TEST(BrokerEventFormat, BrokerLinesUseTheBrokerPrefix) {
@@ -193,7 +336,7 @@ TEST(BrokerEventFormat, UnknownKindFormatsNothing) {
 }
 
 TEST(BrokerEventFormat, WorstCaseLinesFitTheBudget) {
-    BrokerEvent e = ev(BrokerEventKind::MqttDisconnected, 255);
+    BrokerEvent e = ev(BrokerEventKind::MqttError, 255);
     e.cls = 250;
     e.b0  = 255;
     e.n0  = INT32_MIN;
@@ -203,8 +346,15 @@ TEST(BrokerEventFormat, WorstCaseLinesFitTheBudget) {
     e.b1  = INT8_MIN;
     EXPECT_LT(fmt(e).size(), kLineBudget);
 
+    BrokerEvent f = offband::makeMqttStartFailedEvent(255, 1000, INT32_MIN);
+    EXPECT_LT(fmt(f).size(), kLineBudget);
+
+    BrokerEvent d = offband::makeMqttDisconnectedEvent(255, 1000, 250, true, UINT32_MAX);
+    EXPECT_LT(fmt(d).size(), kLineBudget);
+
     std::string host(64, 'h');
-    EXPECT_LT(fmt(ev(BrokerEventKind::MqttConnecting, 255), host.c_str(), "wss").size(), kLineBudget);
+    EXPECT_LT(fmt(offband::makeMqttConnectingEvent(255, 1000, true), host.c_str(), "wss").size(),
+              kLineBudget);
 }
 
 TEST(BrokerEventFormat, TruncatesSafelyIntoASmallBuffer) {
@@ -220,6 +370,7 @@ TEST(BrokerEventFormat, TruncatesSafelyIntoASmallBuffer) {
 TEST(BrokerEventLevel, FailuresAreErrorsAndTransitionsAreDebug) {
     EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::MqttDisconnected)), MLOG_ERROR);
     EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::MqttError)), MLOG_ERROR);
+    EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::MqttStartFailed)), MLOG_ERROR);
     EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::Failed)), MLOG_ERROR);
     EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::ReconcileFailed)), MLOG_ERROR);
     EXPECT_EQ(brokerEventLevel(ev(BrokerEventKind::Dropped)), MLOG_ERROR);

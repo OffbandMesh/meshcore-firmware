@@ -3,6 +3,7 @@
 // Plan 2 v2 Task 7. esp_mqtt_client wrapper with pluggable auth.
 
 #include "MqttBroker.h"
+#include "BrokerEventLog.h"
 #include "WifiObserverConfig.h"  // #171: OFFBAND_TLS_HEAP_FLOOR_BYTES
 #include <cstring>
 #include <cstdio>
@@ -384,8 +385,13 @@ bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
         // are actually reconnecting (which would cause reconnect stutter).
         rt_.state = BrokerState::Connecting;
     }
+    brokerEventQueue().push(makeMqttConnectingEvent(slot_, now_ms, /*auto_reconnect=*/false));
+    pool_start_recorded_ = true;
     esp_err_t err = esp_mqtt_client_start(client_);
     if (err != ESP_OK) {
+        // No MQTT event follows a failed start, so this is the only record of it.
+        pool_start_recorded_ = false;
+        brokerEventQueue().push(makeMqttStartFailedEvent(slot_, now_ms, static_cast<int32_t>(err)));
         rt_.retry_count++;
         rt_.last_error_class = BrokerErrorClass::Other;
         escalateFailureOnce(now_ms);   // #739/#838
@@ -489,6 +495,9 @@ void MqttBroker::eventHandler(void* handler_args,
     esp_mqtt_event_handle_t event = static_cast<esp_mqtt_event_handle_t>(event_data);
 
     switch ((esp_mqtt_event_id_t)event_id) {
+        case MQTT_EVENT_BEFORE_CONNECT:
+            self->onBeforeConnect(now_ms);
+            break;
         case MQTT_EVENT_CONNECTED:
             self->onConnected(now_ms);
             break;
@@ -519,18 +528,14 @@ void MqttBroker::eventHandler(void* handler_args,
                 //                   X1-only CA that can't build an ECDSA/X2 path)
                 //   connack      -> MQTT CONNACK refusal code (a max_keepalive-exceeded
                 //                   rejection also surfaces here as connack=2, #506)
-                Serial.printf(
-                    "[mqtt-err] s%u type=%d sock_errno=%d tls_esp_err=0x%X "
-                    "tls_stack_err=-0x%04X cert_flags=0x%08X connack=%d -> class=%d\n",
-                    (unsigned)self->slot_, (int)eh->error_type,
-                    eh->esp_transport_sock_errno,
-                    (unsigned)eh->esp_tls_last_esp_err,
-                    (unsigned)(-eh->esp_tls_stack_err),
-                    (unsigned)eh->esp_tls_cert_verify_flags,
-                    (int)eh->connect_return_code, (int)err);
+                brokerEventQueue().push(makeMqttErrorEvent(
+                    self->slot_, now_ms, static_cast<uint8_t>(err),
+                    (int)eh->error_type, eh->esp_transport_sock_errno,
+                    (uint32_t)eh->esp_tls_last_esp_err, eh->esp_tls_stack_err,
+                    (uint32_t)eh->esp_tls_cert_verify_flags, (int)eh->connect_return_code));
             } else {
-                Serial.printf("[mqtt-err] s%u (no error_handle)\n",
-                              (unsigned)self->slot_);
+                brokerEventQueue().push(makeMqttErrorNoHandleEvent(
+                    self->slot_, now_ms, static_cast<uint8_t>(err)));
             }
             self->onError(now_ms, err);
             break;
@@ -549,6 +554,19 @@ bool MqttBroker::hasClient() const {
 #endif
 }
 
+// Every connect attempt begins here: the pool's start() and esp-mqtt's own
+// auto-reconnect (which stays on -- see the Failed reap in MqttBrokerPool) both
+// enter esp-mqtt's INIT state, which raises BEFORE_CONNECT first.
+void MqttBroker::onBeforeConnect(uint32_t now_ms) {
+    session_up_ = false;
+    error_before_disconnect_ = BrokerErrorClass::None;
+    if (pool_start_recorded_) {
+        pool_start_recorded_ = false;
+        return;
+    }
+    brokerEventQueue().push(makeMqttConnectingEvent(slot_, now_ms, /*auto_reconnect=*/true));
+}
+
 void MqttBroker::onConnected(uint32_t now_ms) {
     // #739/#746: never let a connect event resurrect a terminally-Failed broker.
     // Primary defense is the pool reaping a Failed broker's client (nothing to
@@ -563,6 +581,11 @@ void MqttBroker::onConnected(uint32_t now_ms) {
     // (rotation would evict it within a dwell, but the inconsistency is real).
     if (!hasClient()) return;
     rt_.state = BrokerState::Up;
+    // Recorded only past the two guards above: a connect event they discard is
+    // not a transition, and logging it as "up" would be false.
+    brokerEventQueue().push(makeMqttConnectedEvent(slot_, now_ms));
+    session_up_ = true;
+    error_before_disconnect_ = BrokerErrorClass::None;
     rt_.went_up_ms = now_ms;   // #175: dwell clock for TLS rotation (display/age)
     budget_hold_.onConnected(now_ms);  // #720: eviction clock -- stamped once per
                                        // occupancy, NOT reset by this reconnect
@@ -574,8 +597,17 @@ void MqttBroker::onConnected(uint32_t now_ms) {
 }
 
 void MqttBroker::onDisconnected(uint32_t now_ms, BrokerErrorClass err) {
-    // Move to Backoff (esp_mqtt will not auto-retry; pool's tryConnect
-    // honors backoff schedule and re-initiates).
+    // The event handler passes a fixed class here, so the record reports the
+    // error event raised for this same failure instead (none for a drop that
+    // raised no error).
+    brokerEventQueue().push(makeMqttDisconnectedEvent(
+        slot_, now_ms, static_cast<uint8_t>(error_before_disconnect_),
+        session_up_, now_ms - rt_.went_up_ms));
+    session_up_ = false;
+    error_before_disconnect_ = BrokerErrorClass::None;
+    // Move to Backoff. esp-mqtt also keeps auto-reconnecting on its own timer
+    // (see onBeforeConnect); the pool's tryConnect restarts the client on the
+    // backoff schedule.
     rt_.last_error_ms = now_ms;
     rt_.retry_count++;
     rt_.last_error_class = err;
@@ -603,6 +635,7 @@ void MqttBroker::noteFailure() {
 void MqttBroker::onError(uint32_t now_ms, BrokerErrorClass err) {
     // Record the class so a subsequent DISCONNECTED transition (if one follows)
     // reports a meaningful reason.
+    error_before_disconnect_ = err;
     rt_.last_error_ms = now_ms;
     rt_.last_error_class = err;
     // #838: a connect-layer failure (refused/unreachable/connect-timeout) surfaces
