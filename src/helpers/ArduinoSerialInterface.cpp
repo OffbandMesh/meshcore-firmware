@@ -1,16 +1,31 @@
 #include "ArduinoSerialInterface.h"
+#include "CdcConsoleFlush.h"   // #1093: ZLP terminator for 64-multiple frames on the HWCDC console
 
 #define RECV_STATE_IDLE        0
 #define RECV_STATE_HDR_FOUND   1
 #define RECV_STATE_LEN1_FOUND  2
 #define RECV_STATE_LEN2_FOUND  3
 
-void ArduinoSerialInterface::enable() { 
+void ArduinoSerialInterface::enable() {
   _isEnabled = true;
   _state = RECV_STATE_IDLE;
+#if defined(OFFBAND_USJ_CONSOLE)
+  // #1093: seed the "fully drained" reference with the known HWCDC ring capacity BEFORE any
+  // frame is written, so it can never be under-learned under sustained load (writeFrame's
+  // running max only ever raises it, e.g. for a larger custom ring). Without this seed a
+  // stream that keeps the ring backlogged from boot could learn a too-low capacity and fire
+  // the terminator a hair early; with it, the terminator fires only when the ring is truly
+  // empty. See CdcConsoleFlush.h for why the capacity cannot be measured live at init.
+  if (_zlp_ring_capacity < HWCDC_DEFAULT_TX_RING) {
+    _zlp_ring_capacity = HWCDC_DEFAULT_TX_RING;
+  }
+#endif
 }
 void ArduinoSerialInterface::disable() {
   _isEnabled = false;
+#if defined(OFFBAND_USJ_CONSOLE)
+  _zlp_pending = false;   // #1093: drop any deferred terminator so a re-enable starts clean
+#endif
 }
 
 bool ArduinoSerialInterface::isConnected() const { 
@@ -62,7 +77,60 @@ size_t ArduinoSerialInterface::writeFrame(const uint8_t src[], size_t len) {
     return 0;
   }
   const size_t n = _serial->write(src, len);
-  return n == len ? n : 0;
+  if (n != len) {
+    return 0;   // refused: nothing reached the wire, so leave any prior _zlp_pending intact
+  }
+#if defined(OFFBAND_USJ_CONSOLE)
+  // #1093: the ESP32 USB-Serial-JTAG console (HWCDC) emits no terminating zero-length
+  // packet after a transfer whose on-wire length is a multiple of the 64-byte USB packet
+  // size, so such a frame holds host-side until the next write -- the mechanism #1044
+  // fixed for text-console replies. We must NOT drain it inline here: flushSerialConsole()
+  // blocks (Serial.flush + up-to-2 ms wait), which would regress the #149 non-blocking
+  // contract on this hot path. Instead ARM a deferred terminator; loop() emits the ZLP
+  // once the TX ring has fully drained, without ever waiting (see CdcConsoleFlush.h).
+  //
+  // `writable` is the ring free space BEFORE this write, so its running maximum is the
+  // empty-ring capacity -- the level availableForWrite() returns to once every queued byte
+  // has reached the host. loop() uses it as the "fully drained" mark.
+  if (writable > _zlp_ring_capacity) {
+    _zlp_ring_capacity = writable;
+  }
+  // This frame's bytes have already begun a new USB transfer, which terminates any prior
+  // held 64-multiple frame on the host -- so SET (not OR) the pending state from THIS
+  // frame: re-arm iff it is itself a 64-multiple on the shared USB-Serial-JTAG console,
+  // else clear (it self-terminates and has superseded any prior hold). Back-to-back
+  // 64-multiple frames arm once and are terminated by a single ZLP after the whole batch
+  // drains. A dedicated-UART bridge companion (_serial != Serial) never arms. Verified: #1093.
+  if (isConsoleSharedWithProtocol() && (frame_len % USB_FS_BULK_MAX_PACKET) == 0) {
+    _zlp_pending = true;
+  } else {
+    _zlp_pending = false;
+  }
+#endif
+  return n;
+}
+
+void ArduinoSerialInterface::loop() {
+#if defined(OFFBAND_USJ_CONSOLE)
+  // #1093: emit the deferred USB-Serial-JTAG terminator armed by writeFrame(), non-blocking.
+  // Fire only once the TX ring has fully drained (availableForWrite() back to the learned
+  // empty-ring capacity) AND the FIFO is writable -- then the last packet on the wire is the
+  // frame's own tail, so the ZLP terminates it rather than an early chunk. This is correct
+  // even for several 64-multiple frames written back to back (one ZLP after the whole batch
+  // drains). Until drained this defers to the next pass; a stalled or not-yet-connected host
+  // simply leaves the data in the ring, so availableForWrite() stays below capacity and no
+  // ZLP is emitted -- the path cannot wedge (#149).
+  //
+  // availableForWrite() is the SAME call writeFrame() already makes every frame (#718); it
+  // is reached here only while a terminator is pending (a brief window after a 64-multiple
+  // frame), and on this single-writer companion its tx_lock is uncontended so it returns
+  // without blocking. emitConsoleZlpIfReady() never waits.
+  if (_zlp_pending && _zlp_ring_capacity > 0
+      && _serial->availableForWrite() >= _zlp_ring_capacity
+      && emitConsoleZlpIfReady()) {
+    _zlp_pending = false;
+  }
+#endif
 }
 
 size_t ArduinoSerialInterface::checkRecvFrame(uint8_t dest[]) {
