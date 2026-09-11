@@ -33,8 +33,11 @@ the AsyncTCP task. Nothing in `loop()` blocks anywhere near 30 s.
 - **Sleep:** `ESP32Board::sleep()` feeds on entry (#446). On nRF52 the WDT counts during
   sleep, so roles that nap pair it with the #275 loop-wake heartbeat; the room server never
   naps and needs no pairing.
-- **Reset reason:** a trip decodes as `TASK_WDT` (ESP32, IDF code 7) or `Watchdog`
-  (nRF52 `RESETREAS=DOG`) on the next boot's banner and in the crash ring.
+- **Reset reason:** a trip decodes as `TASK_WDT` (ESP32, `ESP_RST_TASK_WDT` = 6; the ROM
+  line reads `rst:0xc (SW_CPU)` because the panic handler reboots by software reset) or
+  `Watchdog` (nRF52 `RESETREAS=DOG`) on the next boot's banner and in the crash ring.
+  First observed on `photon-c6`, 2026-09-11 (#1161): `wdt hang` → `task_wdt: Task watchdog
+  got triggered … loopTask` at ~30 s → reboot → `reset_reason=6 (TASK_WDT)`.
 
 ## Proving it without breaking something else
 
