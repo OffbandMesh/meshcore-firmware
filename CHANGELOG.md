@@ -16,6 +16,15 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+### Fixed
+- **ESP32 repeaters and companions now arm the runtime watchdog; room servers gain one on every platform** ([#1083](https://github.com/OffbandMesh/meshcore-firmware/issues/1083), epic [#446](https://github.com/OffbandMesh/meshcore-firmware/issues/446)). Since [#266](https://github.com/OffbandMesh/meshcore-firmware/issues/266) the `startWatchdog`/`feedWatchdog` calls in the repeater and companion sat inside `#if defined(NRF52_PLATFORM)`, so no ESP32 repeater or companion ever armed the ESP-IDF task watchdog — a hung node stayed hung until someone reset it by hand. The guard's reason (bridge builds blocking >30 s on network calls) no longer held: MQTT runs in its own task and the loop's network calls time out in seconds. **A hung main loop on any ESP32 board now reboots within 30 s** with `reset_reason=TASK_WDT`; nRF52 behaviour is unchanged. The timeout is one build flag, `WDT_TIMEOUT_SECS` (default 30), for any env that proves it needs longer.
+  - CI now blocks the regression: four `config-lint` steps fail if either call is ever placed inside a platform `#if` again ([#1160](https://github.com/OffbandMesh/meshcore-firmware/issues/1160)).
+  - Design of record: `docs/architecture/2026-09-11-446-esp32-task-watchdog.md`.
+
+### Added
+- **`wdt` / `wdt status` console verbs** ([#1159](https://github.com/OffbandMesh/meshcore-firmware/issues/1159)) — `wdt: armed, timeout 30 s, fed from loop()` or `wdt: NOT armed on this board`, answered by the board (whether its arming actually succeeded), not by the build flag.
+- **`wdt hang`** — diagnostic-only (`-D WDT_TEST_HANG`, never in a release image) and console-only: deliberately hangs the main loop so the watchdog can be proven on hardware.
+
 ### Changed
 - **RC32 diagnostic build filenames change: `_testdiag` → `_diag`** ([#935](https://github.com/OffbandMesh/meshcore-firmware/issues/935)). Every board's diagnostic assets now use one suffix. **If you download RC32 diag builds, the filenames differ from beta4–beta6** — they are now `heltec_rc32_companion_radio_ble_diag`, `..._usb_diag` and `heltec_rc32_repeater_diag`.
   - The `_diag` names were previously held by three RC32 bring-up envs (`..._usb_diag`, `..._ble_diag`, `..._usb_diag_nocrashlog`) that diverged from the shipped image with their own GPS/LoRa overrides — the divergence the tester-build policy exists to prevent ([#704](https://github.com/OffbandMesh/meshcore-firmware/issues/704)). Those envs served the [#702](https://github.com/OffbandMesh/meshcore-firmware/issues/702)/[#740](https://github.com/OffbandMesh/meshcore-firmware/issues/740)/[#741](https://github.com/OffbandMesh/meshcore-firmware/issues/741) investigation and were **retired**, not renamed.
