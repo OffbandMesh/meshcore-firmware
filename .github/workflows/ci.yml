@@ -117,6 +117,9 @@ jobs:
       - name: "'wdt hang' is diag-only and console-only"
         run: python scripts/test_wdt_hang_verb.py
 
+      - name: Self-hang (WDT_TEST_HANG_AFTER_MS) is flag-only and adjacent to the feed in every role
+        run: python scripts/test_wdt_self_hang.py
+
       - name: Watchdog CI wiring self-test
         run: python scripts/test_ci_wdt_steps.py
 

@@ -26,6 +26,7 @@ WDT_SCRIPTS = [
     "scripts/test_wdt_guard.py",
     "scripts/check_wdt_guard.py",
     "scripts/test_wdt_hang_verb.py",
+    "scripts/test_wdt_self_hang.py",
     "scripts/test_ci_wdt_steps.py",
 ]
 
