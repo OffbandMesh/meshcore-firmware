@@ -84,6 +84,40 @@ enum SafetyEventType : uint8_t {
   EVT_PREFS_SAVE_FAIL     = 15, // migration read OK but /prefs.json write failed; will retry next boot
 };
 
+// #1083: one timeout for every role's startWatchdog() call. An env with a
+// proven long blocking path in loop() raises it with -D WDT_TIMEOUT_SECS=n;
+// nothing is excluded by platform.
+#ifndef WDT_TIMEOUT_SECS
+  #define WDT_TIMEOUT_SECS 30
+#endif
+
+// Bench-only self-hang, so the runtime watchdog can be proven on roles that
+// have no console verb -- a companion talks to the app, not to a CLI, so
+// `wdt hang` (#1159) never reaches it. Compiled only when the env defines
+// WDT_TEST_HANG_AFTER_MS; a release image carries none of this. Each role's
+// loop() calls wdtTestHangTick() right after board.feedWatchdog(), so the hang
+// starts from a fed state and the trip lands at the full timeout.
+inline bool wdtTestHangDue(uint32_t now_ms) {
+#if defined(WDT_TEST_HANG_AFTER_MS)
+  return now_ms >= (uint32_t)(WDT_TEST_HANG_AFTER_MS);
+#else
+  (void)now_ms;
+  return false;
+#endif
+}
+
+inline void wdtTestHangTick() {
+#if defined(WDT_TEST_HANG_AFTER_MS) && ARDUINO
+  if (wdtTestHangDue(millis())) {
+    // Straight to the console: nothing prints `reply` for us, and we do not return.
+    Serial.printf("wdt: self-hang at %lu ms (WDT_TEST_HANG_AFTER_MS) -- expect a TASK_WDT reset in %u s\n",
+                  (unsigned long)millis(), (unsigned)WDT_TIMEOUT_SECS);
+    Serial.flush();
+    for (;;) { }
+  }
+#endif
+}
+
 class MainBoard {
 public:
   virtual uint16_t getBattMilliVolts() = 0;
@@ -137,13 +171,6 @@ public:
   // flag can say a watchdog is configured; only the board knows whether
   // startWatchdog() succeeded. Boards without one report false.
   virtual bool isWatchdogArmed() const { return false; }
-
-  // #1083: one timeout for every role's startWatchdog() call. An env with a
-  // proven long blocking path in loop() raises it with -D WDT_TIMEOUT_SECS=n;
-  // nothing is excluded by platform.
-#ifndef WDT_TIMEOUT_SECS
-  #define WDT_TIMEOUT_SECS 30
-#endif
 
   // External LoRa FEM LNA control (boards with a controllable FEM override these).
   // Default: not supported (boards without an external FEM, or without a controllable LNA path).

@@ -174,6 +174,7 @@ void setup() {
 void loop() {
   offband::crashLogStandardTick(millis());  // #472: deferred previous-boot re-dump for late serial connect
   board.feedWatchdog();                     // #446/#519: keep the runtime WatchDog fed; a hung loop trips it -> auto-reset
+  mesh::wdtTestHangTick();                  // bench-only (WDT_TEST_HANG_AFTER_MS); compiles to nothing otherwise
 #if defined(NRF52_PLATFORM)
   board.heartbeatTick();                    // #275: loop-driven heartbeat + wake so idle naps still service the WDT
 #endif

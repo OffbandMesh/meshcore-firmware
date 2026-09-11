@@ -753,6 +753,7 @@ void loop() {
   }
 #endif
   board.feedWatchdog();  // #257/#1083: feed from the MAIN LOOP only -> a hung loop trips the WDT
+  mesh::wdtTestHangTick();  // bench-only (WDT_TEST_HANG_AFTER_MS); compiles to nothing otherwise
 #if defined(NRF52_PLATFORM)
   board.heartbeatTick(); // #275: loop-driven green-LED heartbeat (freezes if the loop hangs)
   #if !defined(OFFBAND_OBSERVER)
