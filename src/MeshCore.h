@@ -133,6 +133,10 @@ public:
   // (nRF52, ESP32) override these.
   virtual void startWatchdog(uint32_t timeout_secs) { (void)timeout_secs; }
   virtual void feedWatchdog() { }
+  // #1159: what the board actually did, for the `wdt` console verb. A build
+  // flag can say a watchdog is configured; only the board knows whether
+  // startWatchdog() succeeded. Boards without one report false.
+  virtual bool isWatchdogArmed() const { return false; }
 
   // #1083: one timeout for every role's startWatchdog() call. An env with a
   // proven long blocking path in loop() raises it with -D WDT_TIMEOUT_SECS=n;

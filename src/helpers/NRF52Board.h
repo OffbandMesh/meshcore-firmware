@@ -80,6 +80,7 @@ public:
   // #446: now overrides the MainBoard runtime-watchdog interface.
   void startWatchdog(uint32_t timeout_secs) override;
   void feedWatchdog() override;
+  bool isWatchdogArmed() const override { return _wdt_started; }   // #1159
 
   // #275 (P0): true, ungated green-LED heartbeat. startHeartbeat() once at boot;
   // heartbeatTick() from the MAIN LOOP only. The LED toggle is loop-driven (so a hung
