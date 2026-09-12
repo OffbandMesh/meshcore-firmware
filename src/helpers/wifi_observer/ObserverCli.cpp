@@ -21,6 +21,14 @@
 #include "../config/WifiConfigProvider.h"      // #370: wifi.* handlers (moved out of this file)
 #include "../config/DisplayConfigProvider.h"   // #370: display.* handlers + NVS accessors (moved out)
 #endif
+// #1194: caplog forward on the observer. The repeater has these verbs in
+// CommonCLI, so here they are observer-only, and they share the repeater's
+// command layer (CaplogForwardCli) so both roles answer in the same words.
+#if defined(OFFBAND_OBSERVER) && defined(OFFBAND_CAPLOG_FORWARD)
+#include "../../MeshLog.h"
+#include "../CaplogForwardCli.h"
+#include "ObserverCaplogForward.h"
+#endif
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -259,6 +267,102 @@ static bool handleSetStatusInterval(char* reply, size_t reply_size, const char* 
     snprintf(reply, reply_size, "mqtt.status_interval = %ld\n", v);
     return true;
 }
+
+#if defined(OFFBAND_OBSERVER) && defined(OFFBAND_CAPLOG_FORWARD)
+// ---------------------------------------------------------------------------
+// #1194: caplog forward, with the repeater's command names and replies. Saves
+// go to NVS through ConfigSchema; a failed save is reported, never ACKed (#181).
+// ---------------------------------------------------------------------------
+
+// `caplog status` is one line in a 160-byte reply, like the repeater's.
+static constexpr size_t kCaplogReplyMax = 160;
+
+// "set syslog.host [<host>]" -- empty clears the sink; a name too long to keep
+// whole is refused, never cut.
+static bool handleSetSyslogHost(char* reply, size_t reply_size, const char* value) {
+    if (value == nullptr) value = "";
+    if (!caplogCheckSinkHost(value, kSyslogHostMax, reply, reply_size)) return true;
+    char host[kSyslogHostMax + 1];
+    strncpy(host, value, sizeof(host) - 1);
+    host[sizeof(host) - 1] = '\0';
+    if (!writeSyslogHost(host)) {
+        snprintf(reply, reply_size, "ERROR: failed to save syslog.host (NVS write failed)\n");
+        return true;
+    }
+    observerCaplogForwardSetSink(host, 0);
+    snprintf(reply, reply_size, "OK");
+    return true;
+}
+
+// "set syslog.port <1..65535>"
+static bool handleSetSyslogPort(char* reply, size_t reply_size, const char* value) {
+    const long p = (value != nullptr) ? strtol(value, nullptr, 10) : 0;
+    if (p < 1 || p > 65535) {
+        snprintf(reply, reply_size, "Error, port 1-65535");
+        return true;
+    }
+    if (!writeSyslogPort((uint16_t)p)) {
+        snprintf(reply, reply_size, "ERROR: failed to save syslog.port (NVS write failed)\n");
+        return true;
+    }
+    observerCaplogForwardSetSink(nullptr, (uint16_t)p);
+    snprintf(reply, reply_size, "OK");
+    return true;
+}
+
+// "caplog", "caplog status", "caplog start [level]", "caplog stop",
+// "caplog forward [on|off|<seconds>]". Anything else under "caplog" is not
+// ours, so the passthrough answers "unknown:".
+static bool handleCaplog(char* reply, size_t reply_size, const char* rest) {
+    const size_t cap = reply_size < kCaplogReplyMax ? reply_size : kCaplogReplyMax;
+    // #1194 (option A): capture on/off, as on the repeater. Forward never
+    // switches capture itself, and its capture-off reply points here.
+    // A failed save still switches capture for this boot, but the operator must
+    // hear that a reboot would not keep it (#181).
+    const char* start = skipPrefix(rest, "start");
+    if (start != nullptr) {
+        uint8_t level = 0;
+        const bool ok = caplogParseStartLevel(start, &level);
+        if (ok && !observerCaplogSetCapture(true, level)) {
+            snprintf(reply, cap, "ERROR: failed to save caplog (prefs write failed)\n");
+            return true;
+        }
+        caplogCaptureReply(reply, cap, ok, true, level);
+        return true;
+    }
+    if (skipPrefix(rest, "stop") != nullptr) {
+        if (!observerCaplogSetCapture(false, meshLogGetLevel())) {
+            snprintf(reply, cap, "ERROR: failed to save caplog (prefs write failed)\n");
+            return true;
+        }
+        caplogCaptureReply(reply, cap, true, false, 0);
+        return true;
+    }
+    if (*rest == '\0' || eq(rest, "status")) {
+        const CaplogForwardStatus fwd = caplogForwardStatusOf(
+            caplogForwarder(), millis(), observerCaplogForwardHost(), observerCaplogForwardPort(),
+            caplogForwardLinkUp());
+        caplogStatusLine(reply, cap, meshLogIsEnabled(), meshLogLevelName(meshLogGetLevel()),
+                         (unsigned)meshLogBytesUsed(), (unsigned)meshLogCapacity(), &fwd);
+        return true;
+    }
+    const char* arg = skipPrefix(rest, "forward");
+    if (arg == nullptr) return false;
+    const CaplogForwardArg a = caplogParseForwardArg(arg);
+    const int until_off = caplogApplyForwardArg(caplogForwarder(), a, millis());
+    // Only `on` survives a reboot (#1057 decision 5). If that cannot be saved,
+    // the arm still holds for this boot, but the operator must hear that a
+    // reboot would not keep it.
+    if (until_off >= 0 && readCaplogForwardUntilOff() != (until_off == 1) &&
+        !writeCaplogForwardUntilOff(until_off == 1)) {
+        snprintf(reply, cap, "ERROR: failed to save caplog forward (NVS write failed)\n");
+        return true;
+    }
+    caplogForwardReply(reply, cap, a, meshLogIsEnabled(), observerCaplogForwardHost()[0] != '\0',
+                       caplogForwardLinkUp(), "");
+    return true;
+}
+#endif  // OFFBAND_OBSERVER && OFFBAND_CAPLOG_FORWARD (#1194)
 
 // "set mqtt.broker.<N>.<key> <value>"
 // Returns true if handled (reply written), false to bubble up unknown.
@@ -652,6 +756,12 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
     }
 #endif  // OFFBAND_OBSERVER (display/wifi verbs -- #538 Option A)
 
+#if defined(OFFBAND_OBSERVER) && defined(OFFBAND_CAPLOG_FORWARD)
+    // #1194: "caplog" / "caplog status" / "caplog forward ...".
+    rest = skipPrefix(cmd, "caplog");
+    if (rest != nullptr) return handleCaplog(reply, reply_size, rest);
+#endif
+
     // "get wifi.<field>" -- Plan 3 Task 10 (Strycher/LoRa#272). This
     // is the first `get` verb the observer CLI handles; all earlier
     // observer commands were `set`/`mqtt.*` only. CliPassthrough
@@ -699,6 +809,19 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
             key[ki] = '\0';
             return handleGetBrokerField(reply, reply_size, slot, key);
         }
+#if defined(OFFBAND_OBSERVER) && defined(OFFBAND_CAPLOG_FORWARD)
+        // #1194: the repeater's readbacks, read from NVS (empty host = no sink).
+        if (eq(rest, "syslog.host")) {
+            char host[kSyslogHostMax + 1];
+            readSyslogHost(host, sizeof(host));
+            snprintf(reply, reply_size, "> %s", host);
+            return true;
+        }
+        if (eq(rest, "syslog.port")) {
+            snprintf(reply, reply_size, "> %u", (unsigned)readSyslogPort());
+            return true;
+        }
+#endif
         // Unknown `get` key. Return false so CliPassthrough falls
         // through to its "unknown:" reply rather than us claiming
         // ownership.
@@ -740,6 +863,15 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
         return handleSetWifiField(reply, reply_size, field, p);
     }
 #endif  // OFFBAND_OBSERVER (set web.*/wifi.* -- #538 Option A)
+#if defined(OFFBAND_OBSERVER) && defined(OFFBAND_CAPLOG_FORWARD)
+    {
+        // #1194: the caplog forward sink.
+        const char* v = skipPrefix(rest, "syslog.host");
+        if (v != nullptr) return handleSetSyslogHost(reply, reply_size, v);
+        v = skipPrefix(rest, "syslog.port");
+        if (v != nullptr) return handleSetSyslogPort(reply, reply_size, v);
+    }
+#endif
     if (strncmp(rest, "mqtt.broker.", 12) == 0) {
         const char* p = rest + 12;
         int slot = parseSlot(p);

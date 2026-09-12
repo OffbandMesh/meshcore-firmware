@@ -53,6 +53,20 @@ void caplogForwardReply(char* out, size_t out_cap, const CaplogForwardArg& arg,
 // send to the wrong place while the reply said OK.
 bool caplogCheckSinkHost(const char* host, size_t max, char* reply, size_t reply_cap);
 
+// #1194 (option A): `caplog start [level]` on the observer, with the repeater's
+// grammar and words. Parses the level after "start": empty means debug; false
+// when it is not a level name.
+bool caplogParseStartLevel(const char* arg, uint8_t* level);
+
+// The capture replies, word for word the repeater's: "caplog on (level <l>)",
+// "caplog off", or, when !ok, "ERR: level = boot|error|debug|packet".
+void caplogCaptureReply(char* out, size_t out_cap, bool ok, bool on, uint8_t level);
+
+// #1061: true for a dotted-quad IPv4 literal ("10.0.0.5"). Anything else is a
+// hostname, which WiFiUDP resolves through DNS on the calling loop -- a stall
+// the radio shares -- so a role warns when its sink is not one of these.
+bool caplogHostIsIpv4(const char* host);
+
 // What `caplog status` reports about the forwarder.
 struct CaplogForwardStatus {
     CaplogForwardMode mode;

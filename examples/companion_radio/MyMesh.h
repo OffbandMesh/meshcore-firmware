@@ -124,6 +124,11 @@ public:
 
   const char *getNodeName();
   NodePrefs *getNodePrefs();
+  // #1194: capture on (at level) or off, persisted -- the app's caplog enable/
+  // disable and the observer CLI's caplog start/stop. During a download it sets
+  // the state the download restores at its end instead of unfreezing mid-stream.
+  // Returns false when the setting could not be saved (it still holds until reboot).
+  bool setCaplogCapture(bool on, uint8_t level);
   uint32_t getBLEPin();
 
   void loop();
@@ -242,10 +247,10 @@ protected:
   }
 
 public:
-  void savePrefs() {
+  bool savePrefs() {   // #1194: false when the store could not write them
     _prefs.node_lat = sensors.node_lat;
     _prefs.node_lon = sensors.node_lon;
-    _store->savePrefs(_prefs);
+    return _store->savePrefs(_prefs);
   }
 
 #if ENV_INCLUDE_GPS == 1

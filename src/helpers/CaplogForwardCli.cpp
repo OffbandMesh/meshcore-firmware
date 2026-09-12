@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../MeshLog.h"   // the level names (Arduino-free)
+
 namespace offband {
 
 static bool isSpace(char c) {
@@ -102,6 +104,56 @@ bool caplogCheckSinkHost(const char* host, size_t max, char* reply, size_t reply
         snprintf(reply, reply_cap, "Error, host max %lu chars", (unsigned long)max);
     }
     return false;
+}
+
+bool caplogParseStartLevel(const char* arg, uint8_t* level) {
+    if (level == nullptr) return false;
+    if (arg == nullptr) arg = "";
+    while (isSpace(*arg)) ++arg;
+    char name[16];
+    size_t n = 0;
+    while (arg[n] != '\0' && !isSpace(arg[n]) && n + 1 < sizeof(name)) {
+        name[n] = arg[n];
+        ++n;
+    }
+    name[n] = '\0';
+    for (const char* rest = arg + n; *rest != '\0'; ++rest) {
+        if (!isSpace(*rest)) return false;   // a second word, or a name too long to be a level
+    }
+    if (n == 0) {
+        *level = MLOG_DEBUG;
+        return true;
+    }
+    return meshLogLevelFromName(name, level);
+}
+
+void caplogCaptureReply(char* out, size_t out_cap, bool ok, bool on, uint8_t level) {
+    if (out == nullptr || out_cap == 0) return;
+    if (!ok) {
+        snprintf(out, out_cap, "ERR: level = boot|error|debug|packet");
+    } else if (on) {
+        snprintf(out, out_cap, "caplog on (level %s)", meshLogLevelName(level));
+    } else {
+        snprintf(out, out_cap, "caplog off");
+    }
+}
+
+bool caplogHostIsIpv4(const char* host) {
+    if (host == nullptr) return false;
+    const char* p = host;
+    for (int parts = 1;; ++parts) {
+        unsigned value = 0;
+        int digits = 0;
+        while (*p >= '0' && *p <= '9') {
+            value = value * 10u + (unsigned)(*p - '0');
+            if (++digits > 3 || value > 255u) return false;
+            ++p;
+        }
+        if (digits == 0) return false;
+        if (*p == '\0') return parts == 4;
+        if (*p != '.' || parts == 4) return false;
+        ++p;
+    }
 }
 
 CaplogForwardStatus caplogForwardStatusOf(CaplogForward& fwd, uint32_t now_ms,
