@@ -101,6 +101,15 @@ size_t meshLogConsume(uint8_t* out, size_t out_cap) {
   return n;
 }
 
+size_t meshLogReadFrom(uint64_t* cursor, uint8_t* out, size_t out_cap, uint64_t* lost) {
+  // #1193: copy under the lock and remove nothing (short critical section: a
+  // memory copy, no I/O). The caller ships `out` off-device outside the lock.
+  MLOG_ENTER();
+  size_t n = g_ring.readFrom(cursor, out, out_cap, lost);
+  MLOG_EXIT();
+  return n;
+}
+
 void meshLogDumpSerial() {
   // Read in small chunks, each under a brief lock, writing to Serial between
   // locks so the critical section stays short (Serial writes can block).

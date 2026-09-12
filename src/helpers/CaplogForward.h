@@ -12,10 +12,18 @@
 // comes in as an argument to service(); the caller owns the link (#1045).
 // Two things are injected, which also keeps the core testable on the native
 // env:
-//   - the read: how new bytes are taken from the capture ring
-//     (meshLogConsume() on the repeater);
+//   - the read: how new bytes are taken from the capture ring;
 //   - the sink: where each framed datagram goes (a WiFiUDP sender on the
 //     device, see CaplogUdpSink.h).
+//
+// The read comes in one of two modes:
+//   - Consume (the repeater): meshLogConsume() removes what it returns, so
+//     forwarded lines leave the ring.
+//   - Cursor (the observer, #1193): meshLogReadFrom() copies from a position
+//     the helper keeps and removes nothing, so the app's caplog download still
+//     has every line and the sink gets a copy. If eviction overtakes the
+//     cursor while the window is open, the gap is counted in bytesLost() and
+//     announced to the sink as "[caplog] forward lost N bytes".
 //
 // service() reads ONE chunk of at most kChunkBytes per call, never the whole
 // ring. A full-ring drain is hundreds of UDP sends that can block on LwIP
@@ -25,8 +33,15 @@
 
 namespace offband {
 
-// Takes up to out_cap bytes of captured lines into out; returns bytes taken.
+// Consume mode: takes up to out_cap bytes of captured lines into out, removing
+// them from the ring; returns bytes taken.
 using CaplogReadFn = size_t (*)(uint8_t* out, size_t out_cap);
+
+// Cursor mode: copies up to out_cap bytes of whole lines from the absolute
+// position *cursor into out and advances *cursor, removing nothing. Adds any
+// bytes eviction skipped to *lost, unless lost is nullptr; returns bytes copied.
+using CaplogCursorReadFn = size_t (*)(uint64_t* cursor, uint8_t* out, size_t out_cap,
+                                      uint64_t* lost);
 
 // Receives one framed datagram: the syslog prefix, then one line without its
 // trailing newline.
@@ -65,8 +80,16 @@ public:
     // `programname startswith 'caplog-'` filter routes on. A longer tag is cut
     // to kTagMax so the ": " separator always survives.
     CaplogForward(const char* tag, CaplogReadFn read, CaplogDatagramSink& sink);
+    CaplogForward(const char* tag, CaplogCursorReadFn read, CaplogDatagramSink& sink);
 
     // Opens a window of window_sec seconds from now_ms. 0 disarms.
+    //
+    // Cursor mode: from the first arm on, the sink gets a copy of the capture
+    // with every gap marked. The very first read starts at the oldest line held,
+    // so the ring's backlog goes first and nothing counts as lost. After that
+    // the cursor carries across windows: a later window starts where the last
+    // one stopped, and anything evicted in between, window open or not, is
+    // reported as lost.
     void armFor(uint32_t window_sec, uint32_t now_ms);
     void disarm();
 
@@ -79,15 +102,24 @@ public:
 
     const char* prefix() const { return prefix_; }
     uint32_t    linesSent() const { return lines_sent_; }
+    // Cursor mode: bytes eviction took before they could be sent, saturating.
+    uint32_t    bytesLost() const { return bytes_lost_; }
 
 private:
-    CaplogReadFn        read_;
+    void initPrefix(const char* tag);
+    void reportLoss(const char* host, uint16_t port, uint64_t lost);
+
+    CaplogReadFn        read_        = nullptr;
+    CaplogCursorReadFn  cursor_read_ = nullptr;
     CaplogDatagramSink& sink_;
     char                prefix_[kPrefixMax];
     uint8_t             buf_[kChunkBytes];
-    bool                armed_      = false;
-    uint32_t            until_ms_   = 0;
-    uint32_t            lines_sent_ = 0;
+    bool                armed_       = false;
+    uint32_t            until_ms_    = 0;
+    uint32_t            lines_sent_  = 0;
+    uint64_t            cursor_      = 0;
+    bool                started_     = false;  // a cursor read has happened
+    uint32_t            bytes_lost_  = 0;
 };
 
 }  // namespace offband
