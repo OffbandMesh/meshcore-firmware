@@ -22,8 +22,8 @@
 //   - Cursor (the observer, #1193): meshLogReadFrom() copies from a position
 //     the helper keeps and removes nothing, so the app's caplog download still
 //     has every line and the sink gets a copy. If eviction overtakes the
-//     cursor while the window is open, the gap is counted in bytesLost() and
-//     announced to the sink as "[caplog] forward lost N bytes".
+//     cursor, the gap is counted in bytesLost() and announced to the sink as
+//     "[caplog] forward lost N bytes".
 //
 // service() reads ONE chunk of at most kChunkBytes per call, never the whole
 // ring. A full-ring drain is hundreds of UDP sends that can block on LwIP
@@ -32,6 +32,28 @@
 // promptly, spread across passes.
 
 namespace offband {
+
+// #1059: RFC 3164 caps a syslog TAG at 32 characters. "caplog-", a tag body of
+// up to this many characters, and the ':' come to exactly 32.
+constexpr size_t kCaplogTagMax = 24;
+
+// #1059: longest identity announced when a window opens. The observer's
+// device_id is its public key as 64 hex digits.
+constexpr size_t kCaplogIdentityMax = 64;
+
+// #1059: writes tag into out as a legal syslog TAG body, which the receiver's
+// `programname startswith 'caplog-'` filter depends on:
+//   - letters, digits, '_' and '-' are kept; anything else (spaces,
+//     punctuation, non-ASCII bytes) becomes '-';
+//   - at most kCaplogTagMax characters, and at most out_cap - 1;
+//   - a null or empty tag becomes "unknown".
+void caplogSanitizeTag(const char* tag, char* out, size_t out_cap);
+
+// #1059: the observer's tag: the first 8 bytes of its public key as 16
+// uppercase hex digits. That is also the start of its MQTT device_id, so a
+// caplog line can be matched to the node's MQTT feed. out needs 17 bytes for
+// all 16 digits.
+void caplogPubKeyTag(const uint8_t* pub_key, char* out, size_t out_cap);
 
 // Consume mode: takes up to out_cap bytes of captured lines into out, removing
 // them from the ring; returns bytes taken.
@@ -72,15 +94,25 @@ class CaplogForward {
 public:
     static constexpr size_t kChunkBytes = 512;
     static constexpr size_t kPrefixMax  = 48;
-    // Room left for the tag once "<134>caplog-" and ": " are in: 33 characters.
-    static constexpr size_t kTagMax     = kPrefixMax - sizeof("<134>caplog-: ");
+    static constexpr size_t kTagMax     = kCaplogTagMax;
+    static_assert(kTagMax + sizeof("<134>caplog-: ") <= kPrefixMax,
+                  "the longest prefix must fit in prefix_");
 
-    // tag must already be a legal syslog TAG body. Each datagram starts with
-    // "<134>caplog-<tag>: " (PRI 134 = local0.info), which the receiver's
-    // `programname startswith 'caplog-'` filter routes on. A longer tag is cut
-    // to kTagMax so the ": " separator always survives.
+    // Each datagram starts with "<134>caplog-<tag>: " (PRI 134 = local0.info).
+    // The tag is sanitized once, here or in setTag(), never per line.
     CaplogForward(const char* tag, CaplogReadFn read, CaplogDatagramSink& sink);
     CaplogForward(const char* tag, CaplogCursorReadFn read, CaplogDatagramSink& sink);
+
+    // #1059: replaces the tag, for a role whose identity is loaded after this
+    // object is constructed (the observer's public key).
+    void setTag(const char* tag);
+
+    // #1059: an identity to announce each time a window opens, as one
+    // datagram ahead of the lines: "[caplog] forward on: id=<identity>
+    // sink=<host>:<port>". The tag is short, so this is where the sink learns
+    // the node's full id. Empty, the default, announces nothing. Longer than
+    // kCaplogIdentityMax is cut.
+    void setIdentity(const char* identity);
 
     // Opens a window of window_sec seconds from now_ms. 0 disarms.
     //
@@ -106,15 +138,17 @@ public:
     uint32_t    bytesLost() const { return bytes_lost_; }
 
 private:
-    void initPrefix(const char* tag);
     void reportLoss(const char* host, uint16_t port, uint64_t lost);
+    void sendNote(const char* host, uint16_t port, const char* text, int len);
 
     CaplogReadFn        read_        = nullptr;
     CaplogCursorReadFn  cursor_read_ = nullptr;
     CaplogDatagramSink& sink_;
     char                prefix_[kPrefixMax];
+    char                identity_[kCaplogIdentityMax + 1] = {};
     uint8_t             buf_[kChunkBytes];
     bool                armed_       = false;
+    bool                announce_    = false;  // the open window is not announced yet
     uint32_t            until_ms_    = 0;
     uint32_t            lines_sent_  = 0;
     uint64_t            cursor_      = 0;
