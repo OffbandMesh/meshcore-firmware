@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <limits>
 #include "../../variants/qcc_badge/QccBattery.h"
 
 TEST(QccBattery, DividerRatioMatchesTheSchematic) {
@@ -40,6 +41,37 @@ TEST(QccBattery, FullScaleFitsInSixteenBits) {
 TEST(QccBattery, SampleTimeCoversTheDividerImpedance) {
   // 680k || 1M = ~405k source impedance; 40 us is the longest SAADC acquisition.
   EXPECT_EQ(40u, qcc::kAdcSampleUs);
+}
+
+TEST(QccBattery, TheBoardScaleAgreesWithTheConstantAtTheDefaultMultiplier) {
+  for (uint32_t raw : {0u, 2u, 3u, 2370u, 2844u, 4095u}) {
+    EXPECT_EQ(qcc::battMilliVolts(raw), qcc::scaleToMilliVolts(qcc::kBattMvPerCount, raw)) << raw;
+  }
+}
+
+TEST(QccBattery, AnUnusableMultiplierReadsAsNoReading) {
+  // 0 mV is "no reading": the runtime low-battery shutdown ignores it.
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float inf = std::numeric_limits<float>::infinity();
+  EXPECT_EQ(0, qcc::scaleToMilliVolts(nan, 2844));
+  EXPECT_EQ(0, qcc::scaleToMilliVolts(inf, 2844));
+  EXPECT_EQ(0, qcc::scaleToMilliVolts(-inf, 2844));
+  EXPECT_EQ(0, qcc::scaleToMilliVolts(-1.5f, 2844));
+}
+
+TEST(QccBattery, AHugeMultiplierSaturatesInsteadOfWrapping) {
+  // 20 mV/count * 4095 = 81,900 mV, which would wrap to 16,364 in a uint16_t.
+  EXPECT_EQ(65535, qcc::scaleToMilliVolts(20.0f, 4095));
+  EXPECT_EQ(65535, qcc::scaleToMilliVolts(1e30f, 4095));
+}
+
+TEST(QccBattery, NonFiniteIsDecidedOnTheBits) {
+  EXPECT_TRUE(qcc::isNonFinite(std::numeric_limits<float>::quiet_NaN()));
+  EXPECT_TRUE(qcc::isNonFinite(std::numeric_limits<float>::infinity()));
+  EXPECT_TRUE(qcc::isNonFinite(-std::numeric_limits<float>::infinity()));
+  EXPECT_FALSE(qcc::isNonFinite(0.0f));
+  EXPECT_FALSE(qcc::isNonFinite(-1.5f));
+  EXPECT_FALSE(qcc::isNonFinite(std::numeric_limits<float>::max()));
 }
 
 int main(int argc, char** argv) {

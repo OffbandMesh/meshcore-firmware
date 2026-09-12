@@ -73,3 +73,31 @@ def test_badge_outputs_share_no_pin_with_any_bus():
     assert outputs.isdisjoint(buses)
     assert 17 not in buses   # P0.17 is the radio's RXEN
     assert 32 not in buses   # P1.00 is the user button
+
+
+def ini_flag(name):
+    m = re.search(r"-D\s+%s=(\d+)" % name, (QCC / "platformio.ini").read_text())
+    assert m, f"-D {name}=N missing from variants/qcc_badge/platformio.ini"
+    return int(m.group(1))
+
+
+def test_env_pin_flags_name_the_badge_pins():
+    # Shared code reads these as bare numbers; they must equal the variant's names.
+    assert ini_flag("PIN_STATUS_LED") == define("PIN_QCC_MSG_LED")
+    assert ini_flag("PIN_BUZZER") == define("PIN_QCC_BUZZER")
+    assert ini_flag("PIN_GPS_EN") == define("PIN_QCC_GPS_POWER")
+
+
+def test_safeboot_and_board_share_one_divider_ratio():
+    m = re.search(r"-D\s+SAFEBOOT_ADC_MULTIPLIER=([\d.]+)f", (QCC / "platformio.ini").read_text())
+    assert m and float(m.group(1)) == 1.68
+
+
+def test_safeboot_reads_the_battery_pin():
+    # SafeBoot.cpp can't see PromicroBoard.h's PIN_VBAT_READ. Without this flag SafeBoot
+    # compiles out and the D2 boot gate does nothing (#1176). It must name the pin the
+    # board itself reads, and that pin must be the divider's P0.31.
+    board_h = (ROOT / "variants" / "promicro" / "PromicroBoard.h").read_text()
+    board_pin = int(re.search(r"#define\s+PIN_VBAT_READ\s+(\d+)", board_h).group(1))
+    assert ini_flag("SAFEBOOT_PIN_VBAT_READ") == board_pin
+    assert pin_map(QCC / "variant.cpp")[board_pin] == 31   # P0.31 <- R4/R5 divider
