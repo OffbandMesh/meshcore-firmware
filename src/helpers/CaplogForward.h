@@ -41,6 +41,13 @@ constexpr size_t kCaplogTagMax = 24;
 // device_id is its public key as 64 hex digits.
 constexpr size_t kCaplogIdentityMax = 64;
 
+// #1060: the longest bounded window. At 2^31 ms or more the wrap-safe deadline
+// compare misreads, so a longer need is what "on until off" is for.
+constexpr uint32_t kCaplogMaxWindowSec = 0x7FFFFFFFu / 1000u;   // 2147483 s, ~24.8 days
+
+// #1060: what a forwarder is doing, for `caplog status`.
+enum class CaplogForwardMode : uint8_t { Off, Bounded, UntilOff };
+
 // #1059: writes tag into out as a legal syslog TAG body, which the receiver's
 // `programname startswith 'caplog-'` filter depends on:
 //   - letters, digits, '_' and '-' are kept; anything else (spaces,
@@ -114,7 +121,8 @@ public:
     // kCaplogIdentityMax is cut.
     void setIdentity(const char* identity);
 
-    // Opens a window of window_sec seconds from now_ms. 0 disarms.
+    // Opens a window of window_sec seconds from now_ms. 0 disarms; above
+    // kCaplogMaxWindowSec is clamped to it.
     //
     // Cursor mode: from the first arm on, the sink gets a copy of the capture
     // with every gap marked. The very first read starts at the oldest line held,
@@ -123,10 +131,20 @@ public:
     // one stopped, and anything evicted in between, window open or not, is
     // reported as lost.
     void armFor(uint32_t window_sec, uint32_t now_ms);
+
+    // #1060: opens a window with no deadline, which stays open until
+    // disarm() or a bounded armFor(). The deadline check is skipped outright,
+    // so it cannot expire across any number of millis() wraps.
+    void armUntilOff(uint32_t now_ms);
     void disarm();
 
-    // True while a window is open; closes it once its deadline has passed.
+    // True while a window is open; closes a bounded one once its deadline has
+    // passed.
     bool armed(uint32_t now_ms);
+
+    // #1060: for `caplog status`. Both close an expired window first.
+    CaplogForwardMode mode(uint32_t now_ms);
+    uint32_t          secondsLeft(uint32_t now_ms);   // rounded up; 0 unless Bounded
 
     // Sends one chunk's worth of lines when armed, a host is set and the link
     // is up. Otherwise it reads nothing, so lines wait in the ring.
@@ -148,6 +166,7 @@ private:
     char                identity_[kCaplogIdentityMax + 1] = {};
     uint8_t             buf_[kChunkBytes];
     bool                armed_       = false;
+    bool                until_off_   = false;  // the open window has no deadline
     bool                announce_    = false;  // the open window is not announced yet
     uint32_t            until_ms_    = 0;
     uint32_t            lines_sent_  = 0;

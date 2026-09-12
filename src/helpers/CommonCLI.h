@@ -91,6 +91,9 @@ public:
   // via `set syslog.host` / `set syslog.port`.
   char     syslog_host[64];
   uint16_t syslog_port = 0;
+  // #1060: 1 = `caplog forward on` (until off) is armed and re-arms at boot. A
+  // bounded window never persists.
+  uint8_t  caplog_fwd = 0;
 
 private:
   class RadioPrefs : public ConfigSerializer {
@@ -211,6 +214,7 @@ private:
       def("caplog_lvl", _parent->caplog_level);    // #562
       def("sys_host", _parent->syslog_host, sizeof(_parent->syslog_host));  // #566
       def("sys_port", _parent->syslog_port);       // #566
+      def("caplog_fwd", _parent->caplog_fwd);      // #1060
     }
   public:
     LogPrefs(NodePrefs* parent) : _parent(parent) { }

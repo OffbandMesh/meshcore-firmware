@@ -8,11 +8,12 @@ link the operator had set up. This guard fails the build if any such call comes
 back into a forward code path.
 
 Scanned, with comments blanked first:
-  - examples/simple_repeater/main.cpp: the bodies of
-    wifi_telemetry_caplog_forward() and wifi_telemetry_caplog_forward_service()
+  - examples/simple_repeater/main.cpp: the bodies of the role hooks
+    caplogForwarder() and caplogForwardLinkUp() (#1060) and of
+    wifi_telemetry_caplog_forward_service()
   - src/helpers/CommonCLI.cpp: the `caplog forward` command arm
-  - src/helpers/CaplogForward.h / .cpp and CaplogUdpSink.h: the whole files,
-    when they exist
+  - src/helpers/CaplogForward.h / .cpp, CaplogUdpSink.h and
+    CaplogForwardCli.h / .cpp: the whole files, when they exist
 
 A required target that cannot be found is a failure, not a pass. Otherwise a
 renamed function would take the guard with it, silently.
@@ -42,8 +43,10 @@ REPEATER_MAIN = os.path.join("examples", "simple_repeater", "main.cpp")
 COMMON_CLI = os.path.join("src", "helpers", "CommonCLI.cpp")
 HELPER_FILES = (os.path.join("src", "helpers", "CaplogForward.h"),
                 os.path.join("src", "helpers", "CaplogForward.cpp"),
-                os.path.join("src", "helpers", "CaplogUdpSink.h"))
-FORWARD_FUNCTIONS = ("wifi_telemetry_caplog_forward", "wifi_telemetry_caplog_forward_service")
+                os.path.join("src", "helpers", "CaplogUdpSink.h"),
+                os.path.join("src", "helpers", "CaplogForwardCli.h"),
+                os.path.join("src", "helpers", "CaplogForwardCli.cpp"))
+FORWARD_FUNCTIONS = ("caplogForwarder", "caplogForwardLinkUp", "wifi_telemetry_caplog_forward_service")
 
 
 def match_brace(s, start):

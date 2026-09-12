@@ -167,10 +167,13 @@ static uint16_t g_wifi_on_pct_last_24h_x100 = 0;  // 0-10000 = 0.00-100.00%
 // (empty host = forward off). Drains via meshLogConsume() in the MAIN LOOP so
 // the hot-path sink (mesh_log_line) is untouched. The mechanism is the
 // role-neutral CaplogForward (#1058); this role supplies the tag, the read and
-// the link state.
-#ifdef ENABLE_WIFI_TELEMETRY
+// the link state. #1060: built only with OFFBAND_CAPLOG_FORWARD.
+#if defined(OFFBAND_CAPLOG_FORWARD) && !defined(ENABLE_WIFI_TELEMETRY)
+  #error "OFFBAND_CAPLOG_FORWARD on the repeater needs ENABLE_WIFI_TELEMETRY: the forward sends over that WiFi link"
+#endif
+#ifdef OFFBAND_CAPLOG_FORWARD
   #include "../../src/MeshLog.h"
-  #include "../../src/helpers/CaplogForward.h"
+  #include "../../src/helpers/CaplogForwardCli.h"   // CaplogForward + the role hooks
   #include "../../src/helpers/CaplogUdpSink.h"
   static offband::CaplogUdpSink g_caplog_sink;
   static offband::CaplogForward g_caplog_fwd(WIFI_TELEMETRY_NODE_ID, meshLogConsume, g_caplog_sink);
@@ -274,6 +277,16 @@ static void wifi_telemetry_setup() {
     // the message callback with the transport. Subscription to the cmd topic
     // happens later in the publish cycle when MQTT connect is verified.
     wifi_telemetry_remote_command_setup();
+
+#ifdef OFFBAND_CAPLOG_FORWARD
+    // #1059: announce the full public key when a window opens, so the sink can
+    // match this node's short tag to its identity. #1060: `caplog forward on`
+    // survives a reboot; a timed window does not.
+    char pub_key_hex[PUB_KEY_SIZE * 2 + 1];
+    mesh::Utils::toHex(pub_key_hex, the_mesh.self_id.pub_key, PUB_KEY_SIZE);
+    g_caplog_fwd.setIdentity(pub_key_hex);
+    if (the_mesh.getNodePrefs()->caplog_fwd) g_caplog_fwd.armUntilOff(millis());
+#endif
 
     g_tel_next_publish_ms = millis();
 }
@@ -651,7 +664,7 @@ static void wifi_telemetry_loop() {
     }
 #endif
 
-#ifdef ENABLE_WIFI_TELEMETRY
+#ifdef OFFBAND_CAPLOG_FORWARD
     // #561: ship any newly-captured lines while a forward window is open + WiFi up.
     wifi_telemetry_caplog_forward_service();
 #endif
@@ -769,27 +782,6 @@ void wifi_telemetry_set_persistent(uint32_t duration_ms) {
     // collect_and_publish will skip transport.end() because persistent is set.
     g_tel_next_publish_ms = millis();
 }
-
-#ifdef ENABLE_WIFI_TELEMETRY
-// #561: arm/disarm caplog live syslog forward for `window_sec`; window_sec == 0
-// disarms. Capture-enable is done by the CLI verb. This opens and closes the
-// forward window only: it never brings the WiFi link up or down, and never
-// extends or shortens it (#1045). Lines send while a link the operator brought
-// up is there, and the CLI says when there is none.
-void wifi_telemetry_caplog_forward(uint32_t window_sec) {
-    if (window_sec == 0) {
-        g_caplog_fwd.disarm();
-        return;
-    }
-    g_caplog_fwd.armFor(window_sec, millis());
-}
-
-// Whether the WiFi link is up right now, so the CLI can say when a forward has
-// no link to send over.
-int wifi_telemetry_link_up(void) {
-    return WiFi.status() == WL_CONNECTED ? 1 : 0;
-}
-#endif
 
 int wifi_telemetry_is_persistent(void) {
     return g_tel_persistent_until_ms != 0 ? 1 : 0;
@@ -1063,7 +1055,7 @@ static void wifi_telemetry_http_cmd_poll() {
 }
 #endif // CMD_TRANSPORT_HTTP
 
-#ifdef ENABLE_WIFI_TELEMETRY
+#ifdef OFFBAND_CAPLOG_FORWARD
 // #561: drain new caplog lines and ship each as a UDP syslog datagram. Called
 // each servicing pass. The helper reads one bounded chunk per call and does
 // nothing unless its window is open, a sink host is set and WiFi is up. All
@@ -1076,7 +1068,18 @@ static void wifi_telemetry_caplog_forward_service() {
     g_caplog_fwd.service(prefs->syslog_host, prefs->syslog_port,
                          WiFi.status() == WL_CONNECTED, millis());
 }
-#endif // ENABLE_WIFI_TELEMETRY (#561 caplog forward)
+
+// #1060: what the shared `caplog forward` command needs from this role. The
+// forward opens and closes its window only; the link is the operator's, set
+// with `wifi on <min>`, and is only ever read here (#1045).
+offband::CaplogForward& offband::caplogForwarder() {
+    return g_caplog_fwd;
+}
+
+bool offband::caplogForwardLinkUp() {
+    return WiFi.status() == WL_CONNECTED;
+}
+#endif // OFFBAND_CAPLOG_FORWARD (#561 caplog forward)
 
 // Constructs the remote command handler + callbacks, registers the
 // transport-level message callback. Called once from wifi_telemetry_setup().

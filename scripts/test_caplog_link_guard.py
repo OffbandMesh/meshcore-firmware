@@ -16,31 +16,28 @@ import check_caplog_link_guard as g
 MAIN = g.REPEATER_MAIN
 CLI = g.COMMON_CLI
 
-# The shape the repeater had before #1045: arm and disarm both moved the link.
+# The #1045 bug, in the shape the repeater has had since #1060: a role hook
+# that moves the link when the command arms, and a service that reconnects.
 MAIN_BEFORE = '''
 static void wifi_telemetry_caplog_forward_service();
-void wifi_telemetry_caplog_forward(uint32_t window_sec) {
-    if (window_sec == 0) {
-        g_caplog_fwd_until_ms = 0;
-        wifi_telemetry_set_persistent(0);
-        return;
-    }
-    g_caplog_fwd_until_ms = millis() + window_sec * 1000UL;
-    wifi_telemetry_set_persistent(window_sec * 1000UL);
+offband::CaplogForward& offband::caplogForwarder() {
+    wifi_telemetry_set_persistent(300 * 1000UL);
+    return g_caplog_fwd;
 }
+bool offband::caplogForwardLinkUp() { return WiFi.status() == WL_CONNECTED; }
 static void wifi_telemetry_caplog_forward_service() {
-    if (WiFi.status() != WL_CONNECTED) return;
+    if (WiFi.status() != WL_CONNECTED) WiFi.reconnect();
 }
 '''
 
 MAIN_AFTER = '''
 static void wifi_telemetry_caplog_forward_service();
 void wifi_telemetry_set_persistent(uint32_t duration_ms) { g_until = duration_ms; }
-void wifi_telemetry_caplog_forward(uint32_t window_sec) {
-    // The old version called wifi_telemetry_set_persistent(0) here.
-    if (window_sec == 0) { g_caplog_fwd_until_ms = 0; return; }
-    g_caplog_fwd_until_ms = millis() + window_sec * 1000UL;
+offband::CaplogForward& offband::caplogForwarder() {
+    // The old arm called wifi_telemetry_set_persistent(0) here.
+    return g_caplog_fwd;
 }
+bool offband::caplogForwardLinkUp() { return WiFi.status() == WL_CONNECTED; }
 static void wifi_telemetry_caplog_forward_service() {
     /* WiFi.begin() is never called from here */
     if (WiFi.status() != WL_CONNECTED) return;
@@ -54,9 +51,10 @@ void handle(char* command, char* reply) {
     if (memcmp(command, "wifi on", 7) == 0) {
       wifi_telemetry_set_persistent(15 * 60000UL);
     } else if (memcmp(command, "caplog forward", 14) == 0 && (command[14] == 0 || command[14] == ' ')) {
-#if defined(ENABLE_WIFI_TELEMETRY)
-      wifi_telemetry_caplog_forward(300);
-      if (wifi_telemetry_link_up()) { strcpy(reply, "on"); } else { strcpy(reply, "no link"); }
+#if defined(OFFBAND_CAPLOG_FORWARD)
+      const offband::CaplogForwardArg arg = offband::caplogParseForwardArg(&command[15]);
+      offband::caplogApplyForwardArg(offband::caplogForwarder(), arg, millis());
+      offband::caplogForwardReply(reply, 160, arg, true, true, offband::caplogForwardLinkUp(), "");
 #else
       strcpy(reply, "caplog forward: not available on this build");
 #endif
@@ -74,16 +72,17 @@ def run(main_src=MAIN_AFTER, cli_src=CLI_CLEAN, helper_h=None, helper_cpp=None):
 
 # ------------------------------------------------------------ the real bug ---
 
-def test_the_pre_1045_repeater_code_is_caught_on_both_calls():
+def test_link_control_in_the_role_hooks_is_caught_on_both_calls():
     violations, missing = run(main_src=MAIN_BEFORE)
     assert missing == []
     calls = [(v[0], v[2]) for v in violations]
-    assert calls == [(MAIN, "wifi_telemetry_set_persistent")] * 2, calls
+    assert calls == [(MAIN, "wifi_telemetry_set_persistent"), (MAIN, "WiFi.reconnect")], calls
 
 
 def test_a_link_call_in_the_command_arm_is_caught():
-    cli = CLI_CLEAN.replace("wifi_telemetry_caplog_forward(300);",
-                            "wifi_telemetry_caplog_forward(300); wifi_telemetry_force_now();")
+    cli = CLI_CLEAN.replace("offband::caplogApplyForwardArg(offband::caplogForwarder(), arg, millis());",
+                            "offband::caplogApplyForwardArg(offband::caplogForwarder(), arg, millis()); "
+                            "wifi_telemetry_force_now();")
     violations, _ = run(cli_src=cli)
     assert [v[2] for v in violations] == ["wifi_telemetry_force_now"], violations
 
@@ -98,6 +97,14 @@ def test_a_link_call_in_the_udp_sink_is_caught():
              g.HELPER_FILES[2]: "void send() { udp_.beginPacket(h, p); WiFi.begin(s, k); }"}
     violations, _ = g.analyze(files)
     assert [(v[0], v[2]) for v in violations] == [(g.HELPER_FILES[2], "WiFi.begin")], violations
+
+
+def test_a_link_call_in_the_command_layer_is_caught():
+    files = {MAIN: MAIN_AFTER, CLI: CLI_CLEAN,
+             g.HELPER_FILES[4]: "int caplogApplyForwardArg() { wifi_telemetry_set_persistent(0); return 0; }"}
+    violations, _ = g.analyze(files)
+    assert [(v[0], v[2]) for v in violations] == [(g.HELPER_FILES[4], "wifi_telemetry_set_persistent")], \
+        violations
 
 
 def test_an_esp_idf_link_call_is_caught():
@@ -131,7 +138,7 @@ def test_link_calls_outside_the_forward_paths_are_not_reported():
 
 
 def test_reading_link_state_is_allowed():
-    # The service reads WiFi.status(); the arm asks wifi_telemetry_link_up().
+    # The service and caplogForwardLinkUp() read WiFi.status().
     assert run()[0] == []
 
 
@@ -141,10 +148,16 @@ def test_the_forward_declaration_is_not_taken_for_the_definition():
     assert "loop_body" in MAIN_AFTER[body[0]:body[1]]
 
 
-def test_the_shorter_name_does_not_match_the_service():
-    body = g.function_body(g.strip_comments(MAIN_AFTER), "wifi_telemetry_caplog_forward")
+def test_a_shorter_name_does_not_match_a_longer_one():
+    clean = g.strip_comments(MAIN_AFTER)
+    assert g.function_body(clean, "caplogForward") is None
+    assert g.function_body(clean, "wifi_telemetry_caplog_forward") is None
+
+
+def test_a_qualified_definition_is_found():
+    body = g.function_body(g.strip_comments(MAIN_AFTER), "caplogForwarder")
     assert body is not None
-    assert "millis()" in MAIN_AFTER[body[0]:body[1]]
+    assert "return g_caplog_fwd" in MAIN_AFTER[body[0]:body[1]]
 
 
 # ------------------------------------------------- missing targets fail ---
@@ -154,6 +167,12 @@ def test_a_renamed_forward_function_fails_rather_than_passing():
     violations, missing = run(main_src=renamed)
     assert violations == []
     assert missing == [f"{MAIN}: wifi_telemetry_caplog_forward_service()"], missing
+
+
+def test_a_missing_role_hook_fails():
+    gone = MAIN_AFTER.replace("caplogForwardLinkUp", "linkUp")
+    _, missing = run(main_src=gone)
+    assert missing == [f"{MAIN}: caplogForwardLinkUp()"], missing
 
 
 def test_a_missing_command_arm_fails():
