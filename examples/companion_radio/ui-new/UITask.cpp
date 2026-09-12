@@ -63,10 +63,41 @@ public:
 
   void poll() override {
     if (millis() >= dismiss_after) {
+#ifdef QCC_BADGE_SELFTEST
+      _task->gotoSelfTest();
+#else
       _task->gotoHomeScreen();
+#endif
     }
   }
 };
+
+#ifdef QCC_BADGE_SELFTEST
+// Bring-up legend (#1173): names the badge's physical outputs so they can be found
+// without opening the badge. Shown once after the splash, on diag builds only.
+class SelfTestScreen : public UIScreen {
+  UITask* _task;
+  unsigned long _dismiss_after = 0;
+
+public:
+  explicit SelfTestScreen(UITask* task) : _task(task) {}
+  void arm() { _dismiss_after = millis() + 6000; }
+
+  int render(DisplayDriver& display) override {
+    display.setTextSize(1);
+    display.setColor(UIColor::primary_txt);
+    display.drawTextLeftAlign(0, 0, "SELF-TEST (diag)");
+    display.drawTextLeftAlign(0, 16, "P0.08 LED: heartbeat");
+    display.drawTextLeftAlign(0, 28, "P0.15 LED: BT advert");
+    display.drawTextLeftAlign(0, 40, "P0.06 buzz: boot tune");
+    return 500;
+  }
+
+  void poll() override {
+    if (millis() >= _dismiss_after) _task->gotoHomeScreen();
+  }
+};
+#endif
 
 class HomeScreen : public UIScreen {
   enum HomePage {
@@ -632,6 +663,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   splash = new SplashScreen(this);
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
   msg_preview = new MsgPreviewScreen(this, &rtc_clock);
+#ifdef QCC_BADGE_SELFTEST
+  self_test = new SelfTestScreen(this);
+#endif
   setCurrScreen(splash);
 }
 
@@ -645,6 +679,13 @@ void UITask::setAlwaysOn(bool on) {
   if (_disp_mode == 2) return;
   setDisplayMode(on ? 1 : 0);
 }
+
+#ifdef QCC_BADGE_SELFTEST
+void UITask::gotoSelfTest() {
+  ((SelfTestScreen*)self_test)->arm();
+  setCurrScreen(self_test);
+}
+#endif
 
 // #542 B1: OLED mode. 0 auto (on, blanks after timeout), 1 always-on, 2 always-off (dark).
 // Applied live; the loop's blank decision honours _disp_mode. Reused by the observer

@@ -3,9 +3,11 @@
 The badge drives its buzzer from P0.06 and its LED from P0.08 -- the ProMicro
 variant's default Serial1 TX/RX. Opening Serial1 on those defaults would hold the
 buzzer on. This test fails if a badge role, or Serial1, lands on the wrong GPIO.
-Run: python -m pytest scripts/test_qcc_variant_pins.py -q
+Run: python scripts/test_qcc_variant_pins.py
+  or python -m pytest scripts/test_qcc_variant_pins.py -q
 """
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -101,3 +103,25 @@ def test_safeboot_reads_the_battery_pin():
     board_pin = int(re.search(r"#define\s+PIN_VBAT_READ\s+(\d+)", board_h).group(1))
     assert ini_flag("SAFEBOOT_PIN_VBAT_READ") == board_pin
     assert pin_map(QCC / "variant.cpp")[board_pin] == 31   # P0.31 <- R4/R5 divider
+
+
+def test_diag_log_mirror_transmits_on_the_spare_pad():
+    # The mirror is a UART transmitter: pointed at P0.06/P0.08 it would drive the
+    # buzzer and LED MOSFETs, the same hazard as the ProMicro Serial1 default.
+    m = re.search(r"-D\s+OFFBAND_LOG_MIRROR_TX_PIN=(\w+)", (QCC / "platformio.ini").read_text())
+    assert m and m.group(1) == "PIN_QCC_SPARE_GPIO33"
+    assert gpio("PIN_QCC_SPARE_GPIO33") == 33   # P1.01, not a badge output
+
+
+if __name__ == "__main__":
+    failures = 0
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            try:
+                fn()
+                print(f"PASS {name}")
+            except AssertionError as e:
+                failures += 1
+                print(f"FAIL {name}: {e}")
+    print(f"\n{failures} failure(s)")
+    sys.exit(1 if failures else 0)
