@@ -117,6 +117,13 @@ void drawSplash(DisplayDriver& display, const SplashInfo& info) {
   const DisplayDriver::ColourArt* art = display.colourSplashArt();
   const bool colour = (art != nullptr);
 
+#ifdef OFFBAND_EVENT_SPLASH
+  if (!colour && !isCompact(display)) {
+    drawEventSplash(display, info);
+    return;
+  }
+#endif
+
   display.setColor(UIColor::primary_txt);
 
   if (isCompact(display)) {
