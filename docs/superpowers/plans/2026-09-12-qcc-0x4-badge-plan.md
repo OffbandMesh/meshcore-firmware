@@ -29,10 +29,10 @@
 | # | Decision | Proposed |
 |---|---|---|
 | D1 | Radio defaults seeded by the departure env | The US community preset your fleet runs: 910.525 MHz / 62.5 kHz / SF7 / CR 5. The ProMicro envs inherit the upstream default (869.618 MHz); this build is for a US event. |
-| D2 | Low-voltage policy (one policy; SafeBoot runs first, before `board.begin()`) | SafeBoot sleep **3500 mV** / wake **3700 mV**, runtime `AUTO_SHUTDOWN_MILLIVOLTS` **3400 mV**. Sleeping above the runtime cutoff stops a pack that just tripped shutdown from reboot-looping. `PWRMGT_VOLTAGE_BOOTLOCK` is not compiled for this board. ProMicro today: 3400 / 3700, no runtime cutoff. |
+| D2 | Low-voltage policy (one policy; SafeBoot runs first, before `board.begin()`) | SafeBoot sleep **3500 mV** / wake **3700 mV**, runtime `AUTO_SHUTDOWN_MILLIVOLTS` **3400 mV**. Sleeping above the runtime cutoff stops a pack that just tripped shutdown from reboot-looping. `PWRMGT_VOLTAGE_BOOTLOCK` is not compiled for this board. ProMicro today: 3400 / 3700 configured, but SafeBoot is compiled out there (D5), and no runtime cutoff. |
 | D3 | CI matrix | Add `QCC_Badge_companion_radio_ble` to `.github/workflows/ci.yml` so the badge build is gated like the others (matrix changes are owner-approved). |
 | D4 | Spec change | Keep the ProMicro sensor drivers the spec said to drop. Flash is at 58.8%, and SAO add-ons may carry sensors. |
-| D5 | FYI | On the stock ProMicro env, SafeBoot reads the battery ~12% lower than the board does: the board treats `ADC_MULTIPLIER` (1.815) as mV per count, SafeBoot as a divider ratio × 3.6 V / 4096 (`SafeBoot.cpp:287-389`). Filed separately under #206; epic 1 avoids it for the badge by construction. |
+| D5 | FYI (corrected 2026-09-12, Task 1.2) | On the stock ProMicro env, **SafeBoot is compiled out**: `PIN_VBAT_READ` and `ADC_MULTIPLIER` live in `PromicroBoard.h`, which `SafeBoot.cpp` never includes, so `SAFE_BOOT_ENABLED` is 0 and the env's thresholds do nothing (`nm`: `SafeBoot::checkAndMaybeSleep()` is the 12-byte stub). The ~12% multiplier mismatch first reported here is latent behind that. Tracked on #1176 under #206. The badge sets `SAFEBOOT_PIN_VBAT_READ` explicitly (Task 1.4). |
 
 ## Conventions for every task
 
@@ -250,7 +250,7 @@ void initVariant()
 #define BUTTON_PIN           PIN_BUTTON1
 ```
 
-The I2C and SPI defaults are kept identical to ProMicro on purpose: `PromicroBoard::begin()` moves `Wire` to `PIN_BOARD_SDA/SCL`, and the radio driver sets its own SPI pins.
+**As built** (`728b1d72`, review on #1177): the I2C and SPI defaults are *not* ProMicro's. `PromicroBoard::begin()` and the radio driver set their own pins, but a library that uses the defaults or `SS` would land on RXEN, the GPS pins, the GPS power switch or the user button. So `Wire` defaults to P1.04/P0.11, `SPI` to the radio bus, and SPI1/Wire1 are not defined. The guard test gained three checks for this (6 tests).
 
 - [ ] **Step 5: Run the test and confirm it passes**
 
@@ -392,6 +392,11 @@ Expected: `SUCCESS`, flash 418,832 B as in the baseline (the hook compiles out w
 git add variants/qcc_badge/QccBattery.h src/SafeBoot.cpp test/test_qcc_battery/test_qcc_battery.cpp
 git commit -m "feat(#N): QCC battery math and a SafeBoot ADC sample-time hook"
 ```
+
+**As built** (`e9c3dc80`, review on #1178):
+- The tests assert exact values (`battMilliVolts(2844)` is 4199, `(2370)` is 3499) and add rounding and full-scale cases, 8 in all. `QccBattery.h` static_asserts that the whole 12-bit range fits in `uint16_t`.
+- The hook static_asserts the values the core accepts, and restores the core-default sample time after SafeBoot's read.
+- Step 6 found that SafeBoot is compiled out on ProMicro (D5). The hook was therefore proven with SafeBoot forced on (`-D SAFEBOOT_PIN_VBAT_READ=17`), and Task 1.4 sets that flag for the badge.
 
 ---
 
@@ -692,12 +697,18 @@ def test_env_pin_flags_name_the_badge_pins():
 def test_safeboot_and_board_share_one_divider_ratio():
     m = re.search(r"-D\s+SAFEBOOT_ADC_MULTIPLIER=([\d.]+)f", (QCC / "platformio.ini").read_text())
     assert m and float(m.group(1)) == 1.68
+
+
+def test_safeboot_reads_the_battery_pin():
+    # SafeBoot.cpp can't see PromicroBoard.h's PIN_VBAT_READ. Without this flag SafeBoot
+    # compiles out and the D2 boot gate does nothing (#1176).
+    assert ini_flag("SAFEBOOT_PIN_VBAT_READ") == define("BATTERY_PIN")
 ```
 
 - [ ] **Step 2: Run it and confirm the new tests fail**
 
 Run: `python -m pytest scripts/test_qcc_variant_pins.py -q`
-Expected: 2 failed (`platformio.ini` missing), 3 passed.
+Expected: 3 failed (`platformio.ini` missing), 6 passed.
 
 - [ ] **Step 3: Create `variants/qcc_badge/QccBadgeBoard.h`**
 
@@ -728,13 +739,18 @@ public:
 #include <Arduino.h>
 #include "QccBadgeBoard.h"
 
-#ifdef SAFEBOOT_ADC_MULTIPLIER
-// SafeBoot reads the same pin before the board is up. One divider ratio, or the boot
-// gate and the runtime reading disagree.
+// The badge's low-voltage policy (D2) starts with SafeBoot, which can't see this
+// board's headers: without these flags it compiles out and the boot gate does nothing.
+#if !defined(SAFEBOOT_PIN_VBAT_READ) || !defined(SAFEBOOT_ADC_MULTIPLIER) || !defined(SAFEBOOT_ADC_SAMPLE_US)
+#error "QCC badge: set SAFEBOOT_PIN_VBAT_READ, SAFEBOOT_ADC_MULTIPLIER and SAFEBOOT_ADC_SAMPLE_US"
+#endif
+// SafeBoot reads the same pin before the board is up. One pin, one divider ratio and one
+// acquisition time, or the boot gate and the runtime reading disagree.
+static_assert(SAFEBOOT_PIN_VBAT_READ == PIN_VBAT_READ, "SafeBoot must read the board's battery pin");
 static_assert(SAFEBOOT_ADC_MULTIPLIER - qcc::kDividerRatio < 0.0005f &&
               qcc::kDividerRatio - SAFEBOOT_ADC_MULTIPLIER < 0.0005f,
               "SAFEBOOT_ADC_MULTIPLIER must equal qcc::kDividerRatio");
-#endif
+static_assert(SAFEBOOT_ADC_SAMPLE_US == qcc::kAdcSampleUs, "SafeBoot must sample like the board");
 
 uint16_t QccBadgeBoard::getBattMilliVolts() {
   analogReference(AR_INTERNAL);
@@ -868,6 +884,7 @@ build_flags = ${nrf52_base.build_flags}
   -D ENV_INCLUDE_INA3221=1
   -D ENV_INCLUDE_INA219=1
   ; --- one low-voltage policy (D2): SafeBoot runs first, then the runtime cutoff ---
+  -D SAFEBOOT_PIN_VBAT_READ=17         ; P0.31; SafeBoot can't see PromicroBoard.h (#1176)
   -D SAFEBOOT_ADC_MULTIPLIER=1.68f     ; divider RATIO; must equal qcc::kDividerRatio
   -D SAFEBOOT_ADC_SAMPLE_US=40         ; ~405k source impedance
   -D DEFAULT_SAFE_BOOT_WAKE_MV=3700
@@ -921,12 +938,16 @@ lib_deps = ${QCC_Badge.lib_deps}
 - [ ] **Step 8: Run the guard test and confirm it passes**
 
 Run: `python -m pytest scripts/test_qcc_variant_pins.py -q`
-Expected: `5 passed`.
+Expected: `9 passed`.
 
 - [ ] **Step 9: Build the badge env** (first link of the variant)
 
 Run: `pio run -e QCC_Badge_companion_radio_ble`
 Expected: `SUCCESS`. Record flash and RAM on the task issue next to the 418,832 / 163,400 B baseline.
+
+Then confirm SafeBoot is in the image, not the stub:
+`~/.platformio/packages/toolchain-gccarmnoneeabi/bin/arm-none-eabi-nm -C -S .pio/build/QCC_Badge_companion_radio_ble/firmware.elf | grep -E "checkAndMaybeSleep|analogSampleTime"`
+Expected: `SafeBoot::checkAndMaybeSleep()` in the hundreds of bytes (ProMicro with SafeBoot forced on: 684), not the 12-byte disabled stub, and `analogSampleTime` present.
 
 - [ ] **Step 10: Gemini review**, then **commit**
 
@@ -1609,7 +1630,7 @@ git commit -m "feat(#N): QCC diag env and the bring-up self-test legend"
   - 5.7 Events: add **message sent**, a short confirm tone (owner, 2026-09-12: stock Meshtastic plays one on send).
   - 5.1: replace "drop the environmental-sensor drivers" with "keep them: measured flash is 58.8% (418,832 / 712,704 B), and SAO add-ons may carry sensors" (D4).
   - 5.12: replace "verified in epic 1" with the verified behavior: with a display and the default `BLE_PIN_CODE=123456`, the companion picks a random PIN each session and shows it (`MyMesh.cpp:1415-1422`).
-  - 5.10: record D2's thresholds and the SafeBoot sample-time hook.
+  - 5.10: record D2's thresholds and the SafeBoot sample-time hook. Record that SafeBoot only runs on this board because the env sets `SAFEBOOT_PIN_VBAT_READ`: `SafeBoot.cpp` can't see `PromicroBoard.h`, and ProMicro has the same gap (#1176).
 
 - [ ] **Step 2: Commit**
 
