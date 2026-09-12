@@ -668,6 +668,11 @@ git add src/helpers/ui/TpFont.h src/helpers/ui/TpFont.cpp src/helpers/ui/OLEDDis
 git commit -m "feat(#N): ThingPulse-font renderer for any DisplayDriver"
 ```
 
+**As built** (review on #1179):
+- `OLEDDisplayFonts.h` also needed `#include <stdint.h>`. The tables use `uint8_t`, which the header reached only through `<Arduino.h>`, and the red run failed on it first.
+- The renderer clips each column to the font's height, not the byte padding below it (Gemini). `InkBelowTheCellIsNotDrawn` pins that.
+- Result: 8 tests; the full native suite passes 301/301.
+
 ---
 
 ### Task 1.4: Board class, target and the badge env
