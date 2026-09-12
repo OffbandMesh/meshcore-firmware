@@ -107,6 +107,54 @@ def test_a_link_call_in_the_command_layer_is_caught():
         violations
 
 
+# The observer's caplog/syslog handlers (#1194) beside its own `wifi enable`
+# verb, which is operator link control and belongs in the same file.
+OBS_CLEAN = '''
+static bool handleCaplog(char* reply, size_t n, const char* rest) {
+    caplogApplyForwardArg(caplogForwarder(), a, millis());
+    return caplogForwardLinkUp();
+}
+static bool handleSetSyslogHost(char* reply, size_t n, const char* v) { return writeSyslogHost(v); }
+static bool handleSetSyslogPort(char* reply, size_t n, const char* v) { return writeSyslogPort(1); }
+bool dispatch(const char* cmd, char* r, size_t n) {
+    if (eq(cmd, "wifi enable")) return handleSetWifiEnabled(r, n, true);
+    return false;
+}
+'''
+OBS_FWD = g.HELPER_FILES[6]
+
+
+def observer(obs_src=OBS_CLEAN, fwd_src=None):
+    return g.analyze({MAIN: MAIN_AFTER, CLI: CLI_CLEAN, g.OBSERVER_CLI: obs_src, OBS_FWD: fwd_src})
+
+
+def test_the_observer_handlers_are_clean_and_its_wifi_verb_is_not_reported():
+    assert observer() == ([], [])
+
+
+def test_link_control_in_an_observer_handler_is_caught():
+    obs = OBS_CLEAN.replace("return caplogForwardLinkUp();",
+                            "handleSetWifiEnabled(reply, n, true); return caplogForwardLinkUp();")
+    violations, _ = observer(obs_src=obs)
+    assert [(v[0], v[2]) for v in violations] == [(g.OBSERVER_CLI, "handleSetWifiEnabled")], violations
+
+
+def test_bringing_up_the_observer_link_from_the_forwarder_is_caught():
+    fwd = "bool caplogForwardLinkUp() { wifiBootstrap().begin(); return wifiBootstrap().isStaConnected(); }"
+    violations, _ = observer(fwd_src=fwd)
+    assert [(v[0], v[2]) for v in violations] == [(OBS_FWD, "wifiBootstrap().begin")], violations
+
+
+def test_reading_the_observer_link_is_allowed():
+    fwd = "bool caplogForwardLinkUp() { return wifiBootstrap().isStaConnected(); }"
+    assert observer(fwd_src=fwd) == ([], [])
+
+
+def test_a_missing_observer_handler_fails():
+    _, missing = observer(obs_src=OBS_CLEAN.replace("handleSetSyslogPort", "setPort"))
+    assert missing == [f"{g.OBSERVER_CLI}: handleSetSyslogPort()"], missing
+
+
 def test_an_esp_idf_link_call_is_caught():
     violations, _ = run(helper_cpp="void f() { esp_wifi_disconnect(); }")
     assert [v[2] for v in violations] == ["esp_wifi_disconnect"], violations

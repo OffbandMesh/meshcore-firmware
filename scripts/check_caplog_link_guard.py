@@ -12,8 +12,12 @@ Scanned, with comments blanked first:
     caplogForwarder() and caplogForwardLinkUp() (#1060) and of
     wifi_telemetry_caplog_forward_service()
   - src/helpers/CommonCLI.cpp: the `caplog forward` command arm
-  - src/helpers/CaplogForward.h / .cpp, CaplogUdpSink.h and
-    CaplogForwardCli.h / .cpp: the whole files, when they exist
+  - src/helpers/wifi_observer/ObserverCli.cpp: the bodies of the observer's
+    caplog and syslog handlers (#1194). Only those: the same file's `wifi`
+    verbs are the operator's link control and are correct there.
+  - src/helpers/CaplogForward.h / .cpp, CaplogUdpSink.h, CaplogForwardCli.h /
+    .cpp and wifi_observer/ObserverCaplogForward.h / .cpp: the whole files,
+    when they exist
 
 A required target that cannot be found is a failure, not a pass. Otherwise a
 renamed function would take the guard with it, silently.
@@ -37,16 +41,26 @@ LINK_CONTROL = [re.compile(p) for p in (
     r"\bwifi_telemetry_reset_state\s*\(",
     r"\bWiFi\s*\.\s*(?:begin|disconnect|reconnect|mode|setSleep|softAP|softAPdisconnect|enableSTA|enableAP)\s*\(",
     r"\besp_wifi_(?:start|stop|connect|disconnect|set_mode|set_ps|restore|init|deinit)\s*\(",
+    # #1194: the observer's link. wifiBootstrap() brings STA up and drives its
+    # reconnects; the config handlers behind `wifi enable|disable|clear` and
+    # `set wifi.*` change it. isStaConnected() is a read and stays allowed.
+    r"\bwifiBootstrap\s*\(\s*\)\s*\.\s*(?:begin|loop)\s*\(",
+    r"\bhandleSetWifi(?:Enabled|Field)\s*\(",
+    r"\bhandleClearWifi\s*\(",
 )]
 
 REPEATER_MAIN = os.path.join("examples", "simple_repeater", "main.cpp")
 COMMON_CLI = os.path.join("src", "helpers", "CommonCLI.cpp")
+OBSERVER_CLI = os.path.join("src", "helpers", "wifi_observer", "ObserverCli.cpp")
 HELPER_FILES = (os.path.join("src", "helpers", "CaplogForward.h"),
                 os.path.join("src", "helpers", "CaplogForward.cpp"),
                 os.path.join("src", "helpers", "CaplogUdpSink.h"),
                 os.path.join("src", "helpers", "CaplogForwardCli.h"),
-                os.path.join("src", "helpers", "CaplogForwardCli.cpp"))
+                os.path.join("src", "helpers", "CaplogForwardCli.cpp"),
+                os.path.join("src", "helpers", "wifi_observer", "ObserverCaplogForward.h"),
+                os.path.join("src", "helpers", "wifi_observer", "ObserverCaplogForward.cpp"))
 FORWARD_FUNCTIONS = ("caplogForwarder", "caplogForwardLinkUp", "wifi_telemetry_caplog_forward_service")
+OBSERVER_FUNCTIONS = ("handleCaplog", "handleSetSyslogHost", "handleSetSyslogPort")
 
 
 def match_brace(s, start):
@@ -99,6 +113,23 @@ def violations_in(src, span, path):
     return found
 
 
+def scan_functions(files, path, names, required, violations, missing):
+    """Scan the bodies of `names` in files[path]. A missing file is a failure
+    only when `required`; a missing function in a present file always is."""
+    text = files.get(path)
+    if text is None:
+        if required:
+            missing.append(path)
+        return
+    clean = strip_comments(text)
+    for fn in names:
+        span = function_body(clean, fn)
+        if span is None:
+            missing.append(f"{path}: {fn}()")
+        else:
+            violations += violations_in(clean, span, path)
+
+
 def analyze(files):
     """files: {relative path: source text or None if absent}.
 
@@ -106,17 +137,7 @@ def analyze(files):
     human-readable target names that could not be found."""
     violations, missing = [], []
 
-    main = files.get(REPEATER_MAIN)
-    if main is None:
-        missing.append(REPEATER_MAIN)
-    else:
-        clean = strip_comments(main)
-        for fn in FORWARD_FUNCTIONS:
-            span = function_body(clean, fn)
-            if span is None:
-                missing.append(f"{REPEATER_MAIN}: {fn}()")
-            else:
-                violations += violations_in(clean, span, REPEATER_MAIN)
+    scan_functions(files, REPEATER_MAIN, FORWARD_FUNCTIONS, True, violations, missing)
 
     cli = files.get(COMMON_CLI)
     if cli is None:
@@ -129,6 +150,8 @@ def analyze(files):
         else:
             violations += violations_in(clean, span, COMMON_CLI)
 
+    scan_functions(files, OBSERVER_CLI, OBSERVER_FUNCTIONS, False, violations, missing)
+
     for path in HELPER_FILES:
         text = files.get(path)
         if text is not None:
@@ -140,7 +163,7 @@ def analyze(files):
 
 def read_tree(root):
     files = {}
-    for path in (REPEATER_MAIN, COMMON_CLI) + HELPER_FILES:
+    for path in (REPEATER_MAIN, COMMON_CLI, OBSERVER_CLI) + HELPER_FILES:
         full = os.path.join(root, path)
         if os.path.exists(full):
             with open(full, encoding="utf-8", errors="replace") as f:

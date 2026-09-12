@@ -8,6 +8,7 @@
 #include <cstring>
 #include <string>
 
+#include "MeshLog.h"   // MLOG_* levels
 #include "helpers/CaplogForwardCli.h"
 
 using offband::CaplogForward;
@@ -173,6 +174,56 @@ TEST(CaplogSinkHost, EmptyAndNullClearTheSink) {
     char out[160] = "";
     EXPECT_TRUE(offband::caplogCheckSinkHost("", 63, out, sizeof(out)));
     EXPECT_TRUE(offband::caplogCheckSinkHost(nullptr, 63, out, sizeof(out)));
+}
+
+// ------------------------------------------------------------ caplog start|stop (#1194, option A)
+// The observer answers with the repeater's words (CommonCLI's caplog start/stop).
+
+TEST(CaplogCapture, StartLevels) {
+    uint8_t lvl = 99;
+    EXPECT_TRUE(offband::caplogParseStartLevel("", &lvl));
+    EXPECT_EQ(lvl, (uint8_t)MLOG_DEBUG) << "bare start captures at debug, like the repeater";
+    EXPECT_TRUE(offband::caplogParseStartLevel(nullptr, &lvl));
+    EXPECT_EQ(lvl, (uint8_t)MLOG_DEBUG);
+    EXPECT_TRUE(offband::caplogParseStartLevel("packet", &lvl));
+    EXPECT_EQ(lvl, (uint8_t)MLOG_PACKET);
+    EXPECT_TRUE(offband::caplogParseStartLevel(" error ", &lvl));
+    EXPECT_EQ(lvl, (uint8_t)MLOG_ERROR);
+}
+
+TEST(CaplogCapture, NotALevelIsRefused) {
+    uint8_t lvl = 0;
+    for (const char* s : {"verbose", "debug please", "packetpacketpacketpacket", "DEBUG"}) {
+        EXPECT_FALSE(offband::caplogParseStartLevel(s, &lvl)) << s;
+    }
+}
+
+TEST(CaplogCapture, RepliesAreTheRepeatersWords) {
+    char out[160];
+    offband::caplogCaptureReply(out, sizeof(out), true, true, MLOG_DEBUG);
+    EXPECT_STREQ(out, "caplog on (level debug)");
+    offband::caplogCaptureReply(out, sizeof(out), true, true, MLOG_PACKET);
+    EXPECT_STREQ(out, "caplog on (level packet)");
+    offband::caplogCaptureReply(out, sizeof(out), true, false, 0);
+    EXPECT_STREQ(out, "caplog off");
+    offband::caplogCaptureReply(out, sizeof(out), false, true, 0);
+    EXPECT_STREQ(out, "ERR: level = boot|error|debug|packet");
+}
+
+// ------------------------------------------------------------ IP or hostname (#1061)
+
+TEST(CaplogSinkHost, DottedQuadsAreIpLiterals) {
+    for (const char* s : {"10.0.0.5", "192.0.2.10", "0.0.0.0", "255.255.255.255"}) {
+        EXPECT_TRUE(offband::caplogHostIsIpv4(s)) << s;
+    }
+}
+
+TEST(CaplogSinkHost, EverythingElseIsAHostname) {
+    for (const char* s : {"sink.example.net", "pi5.local", "256.1.1.1", "1.2.3", "1.2.3.4.5",
+                          "1..2.3", ".1.2.3", "1.2.3.", "1.2.3.4 ", "1.2.3.4a", "1234.1.1.1", ""}) {
+        EXPECT_FALSE(offband::caplogHostIsIpv4(s)) << '"' << s << '"';
+    }
+    EXPECT_FALSE(offband::caplogHostIsIpv4(nullptr));
 }
 
 // ------------------------------------------------------------ status

@@ -86,6 +86,25 @@ bool writeGlobalIata(const char* iata);
 uint16_t readStatusIntervalSec();
 bool     writeStatusIntervalSec(uint16_t seconds);
 
+// ---------------------------------------------------------------------------
+// #1194: caplog forward -- the syslog sink and whether `caplog forward on`
+// (until off) is armed, in the "observer" namespace. Same meaning as the
+// repeater's syslog.host / syslog.port / caplog_fwd prefs.
+// ---------------------------------------------------------------------------
+constexpr const char* kKeySyslogHost     = "sys_host";
+constexpr const char* kKeySyslogPort     = "sys_port";
+constexpr const char* kKeyCaplogFwd      = "caplog_fwd";
+constexpr uint16_t    kDefaultSyslogPort = 514;
+constexpr size_t      kSyslogHostMax     = 63;   // + NUL; the repeater's syslog_host[64]
+
+// Empty (and false) on a miss: no sink, so forward stays off.
+bool     readSyslogHost(char* out, size_t out_len);
+bool     writeSyslogHost(const char* host);      // "" clears the sink
+uint16_t readSyslogPort();                       // kDefaultSyslogPort on a miss or 0
+bool     writeSyslogPort(uint16_t port);         // 1..65535
+bool     readCaplogForwardUntilOff();            // false on a miss
+bool     writeCaplogForwardUntilOff(bool on);
+
 // #370: display.* accessors (getDisplayAlwaysOn / setDisplayAlwaysOn /
 // getDisplayRotation / setDisplayRotation) moved to
 // src/helpers/config/DisplayConfigProvider.h -- role-neutral, no schema coupling.
