@@ -106,6 +106,7 @@ extern "C" {
   int  wifi_telemetry_is_persistent(void);
   uint32_t wifi_telemetry_persistent_remaining_ms(void);
   void wifi_telemetry_caplog_forward(uint32_t window_sec);  // #561 live syslog forward (#566: runtime target)
+  int  wifi_telemetry_link_up(void);                          // is there a link for the forward to use
 #ifdef CMD_TRANSPORT_HTTP
   // LoRa#216: HTTP cmd-poll controls
   void     wifi_telemetry_cmd_poll_now(void);
@@ -1127,7 +1128,14 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
         _prefs->caplog_enabled = 1;
         savePrefs();
         wifi_telemetry_caplog_forward(sec);
-        snprintf(reply, 160, "caplog forward on %us (streaming to syslog)", (unsigned)sec);
+        // The forward never brings a link up (#1045), so say when there is none
+        // rather than claim it is streaming.
+        if (wifi_telemetry_link_up()) {
+          snprintf(reply, 160, "caplog forward on %us (streaming to syslog)", (unsigned)sec);
+        } else {
+          snprintf(reply, 160, "caplog forward on %us -- no WiFi link; lines send once one is up (wifi on <min>)",
+                   (unsigned)sec);
+        }
       }
 #else
       strcpy(reply, "caplog forward: not available on this build");

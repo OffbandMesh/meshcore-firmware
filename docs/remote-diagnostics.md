@@ -100,13 +100,16 @@ reboots. Set it over the serial console or remotely via the command surface
 ```
 set syslog.host <this-host-ip>
 set syslog.port 514            # only if you changed it from the default
+wifi on 30                     # hold WiFi up; caplog forward does not bring it up
 caplog forward 300            # arm a 300-second window; streams to the sink
 ```
 
-- `caplog forward <sec>` opens a bounded window (min 30 s, default 300),
-  enables capture, and brings WiFi up for the duration so lines stream live. It
-  auto-reverts (drops WiFi, closes the window) when the timer expires.
-- `caplog forward off` disarms immediately and stops capture.
+- `caplog forward <sec>` opens a bounded window (min 30 s, default 300) and
+  enables capture. It never brings WiFi up or down: lines send only while a link
+  is up, and the reply says `no WiFi link` when there is none. The window closes
+  when the timer expires, and the link is left as it was.
+- `caplog forward off` disarms immediately and stops capture. WiFi is left as it
+  is.
 - `get syslog.host` reads back the configured sink (empty = forward off).
 - `caplog start [boot|error|debug|packet]` sets the capture verbosity; `packet`
   is the most detail (every LoRa RX/TX). Higher levels = more datagrams.

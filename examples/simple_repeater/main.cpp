@@ -768,17 +768,23 @@ void wifi_telemetry_set_persistent(uint32_t duration_ms) {
 }
 
 #ifdef ENABLE_WIFI_TELEMETRY
-// #561: arm/disarm caplog live syslog forward for `window_sec`. Opens the
-// forward window and brings WiFi up (persistent) for the same window so lines
-// stream live; capture-enable is done by the CLI verb. window_sec == 0 disarms.
+// #561: arm/disarm caplog live syslog forward for `window_sec`; window_sec == 0
+// disarms. Capture-enable is done by the CLI verb. This opens and closes the
+// forward window only: it never brings the WiFi link up or down, and never
+// extends or shortens it (#1045). Lines send while a link the operator brought
+// up is there, and the CLI says when there is none.
 void wifi_telemetry_caplog_forward(uint32_t window_sec) {
     if (window_sec == 0) {
         g_caplog_fwd_until_ms = 0;
-        wifi_telemetry_set_persistent(0);
         return;
     }
     g_caplog_fwd_until_ms = millis() + window_sec * 1000UL;
-    wifi_telemetry_set_persistent(window_sec * 1000UL);
+}
+
+// Whether the WiFi link is up right now, so the CLI can say when a forward has
+// no link to send over.
+int wifi_telemetry_link_up(void) {
+    return WiFi.status() == WL_CONNECTED ? 1 : 0;
 }
 #endif
 
@@ -1062,7 +1068,7 @@ static void wifi_telemetry_http_cmd_poll() {
 static void wifi_telemetry_caplog_forward_service() {
     if (g_caplog_fwd_until_ms == 0) return;
     if ((int32_t)(millis() - g_caplog_fwd_until_ms) >= 0) {
-        g_caplog_fwd_until_ms = 0;   // window closed; persistent-mode auto-revert (loop) drops WiFi
+        g_caplog_fwd_until_ms = 0;   // window closed; the WiFi link is left as it is
         return;
     }
     if (WiFi.status() != WL_CONNECTED) return;
