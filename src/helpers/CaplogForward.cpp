@@ -58,24 +58,44 @@ void CaplogForward::armFor(uint32_t window_sec, uint32_t now_ms) {
         disarm();
         return;
     }
+    if (window_sec > kCaplogMaxWindowSec) window_sec = kCaplogMaxWindowSec;
     // Opening a window, as opposed to extending an open one.
     if (!armed(now_ms)) announce_ = true;
     until_ms_ = now_ms + window_sec * 1000UL;
+    until_off_ = false;
+    armed_ = true;
+}
+
+void CaplogForward::armUntilOff(uint32_t now_ms) {
+    if (!armed(now_ms)) announce_ = true;
+    until_off_ = true;
     armed_ = true;
 }
 
 void CaplogForward::disarm() {
     armed_ = false;
+    until_off_ = false;
 }
 
 bool CaplogForward::armed(uint32_t now_ms) {
     if (!armed_) return false;
+    if (until_off_) return true;
     // Wrap-safe: true once now_ms has reached the deadline, across a millis() wrap.
     if ((int32_t)(now_ms - until_ms_) >= 0) {
         armed_ = false;
         return false;
     }
     return true;
+}
+
+CaplogForwardMode CaplogForward::mode(uint32_t now_ms) {
+    if (!armed(now_ms)) return CaplogForwardMode::Off;
+    return until_off_ ? CaplogForwardMode::UntilOff : CaplogForwardMode::Bounded;
+}
+
+uint32_t CaplogForward::secondsLeft(uint32_t now_ms) {
+    if (mode(now_ms) != CaplogForwardMode::Bounded) return 0;
+    return (until_ms_ - now_ms + 999u) / 1000u;   // armed, so the deadline is ahead
 }
 
 void CaplogForward::sendNote(const char* host, uint16_t port, const char* text, int len) {

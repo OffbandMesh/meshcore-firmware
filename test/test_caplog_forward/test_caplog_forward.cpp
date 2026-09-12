@@ -222,6 +222,75 @@ TEST_F(CaplogForwardTest, ADeadlineThatLandsOnZeroStillCounts) {
     EXPECT_TRUE(fwd.armed(start + 1000u));
 }
 
+// ------------------------------------------------------------ until off (#1060)
+
+using offband::CaplogForwardMode;
+
+TEST_F(CaplogForwardTest, UntilOffIsNotATimerInDisguise) {
+    // No deadline at all: it holds past 2^31 ms, past the millis() wrap, and
+    // past a second wrap, where any large-number window would have closed.
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.armUntilOff(1000);
+    for (uint32_t now : {1001u, 0x7FFFFFFFu, 0x80000000u, 0xFFFFFFFFu, 0u, 999u, 0x80000001u}) {
+        EXPECT_TRUE(fwd.armed(now)) << now;
+        EXPECT_EQ(fwd.mode(now), CaplogForwardMode::UntilOff) << now;
+        EXPECT_EQ(fwd.secondsLeft(now), 0u) << now;
+    }
+    g_chunks.push_back("a\n");
+    fwd.service("h", 514, true, 0xFFFFFFFFu);
+    EXPECT_EQ(lines(sink), (std::vector<std::string>{"a"}));
+}
+
+TEST_F(CaplogForwardTest, DisarmEndsUntilOff) {
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.armUntilOff(0);
+    fwd.disarm();
+    EXPECT_EQ(fwd.mode(1), CaplogForwardMode::Off);
+    g_chunks.push_back("a\n");
+    fwd.service("h", 514, true, 2);
+    EXPECT_EQ(g_reads, 0);
+}
+
+TEST_F(CaplogForwardTest, ABoundedArmReplacesUntilOff) {
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.armUntilOff(0);
+    fwd.armFor(30, 0);
+    EXPECT_EQ(fwd.mode(1), CaplogForwardMode::Bounded);
+    EXPECT_FALSE(fwd.armed(30000)) << "the deadline applies again";
+}
+
+TEST_F(CaplogForwardTest, UntilOffReplacesABoundedWindowWithoutReannouncing) {
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.setIdentity("ID");
+    fwd.armFor(30, 0);
+    fwd.service("h", 514, true, 1);          // announces the window
+    fwd.armUntilOff(2);                      // same window, now without a deadline
+    fwd.service("h", 514, true, 60000);
+    EXPECT_TRUE(fwd.armed(60000));
+    EXPECT_EQ(lines(sink), (std::vector<std::string>{"[caplog] forward on: id=ID sink=h:514"}));
+}
+
+TEST_F(CaplogForwardTest, ModeAndSecondsLeftDescribeABoundedWindow) {
+    CaplogForward fwd("n", fakeRead, sink);
+    EXPECT_EQ(fwd.mode(0), CaplogForwardMode::Off);
+    fwd.armFor(300, 1000);
+    EXPECT_EQ(fwd.mode(1000), CaplogForwardMode::Bounded);
+    EXPECT_EQ(fwd.secondsLeft(1000), 300u);
+    EXPECT_EQ(fwd.secondsLeft(1500), 300u) << "rounded up, so 299.5 s reads 300";
+    EXPECT_EQ(fwd.secondsLeft(300999), 1u);
+    EXPECT_EQ(fwd.mode(301000), CaplogForwardMode::Off);
+    EXPECT_EQ(fwd.secondsLeft(301000), 0u);
+}
+
+TEST_F(CaplogForwardTest, AWindowPastTheLimitIsClampedNotWrapped) {
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.armFor(4000000000u, 0);              // would wrap in the multiply
+    const uint32_t limit_ms = offband::kCaplogMaxWindowSec * 1000u;
+    EXPECT_TRUE(fwd.armed(limit_ms - 1));
+    EXPECT_FALSE(fwd.armed(limit_ms));
+    EXPECT_EQ(offband::kCaplogMaxWindowSec, 2147483u);
+}
+
 // ------------------------------------------------------------ the prefix
 
 TEST_F(CaplogForwardTest, ATagAtTheLimitFitsWhole) {

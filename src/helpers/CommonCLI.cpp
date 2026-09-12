@@ -10,6 +10,11 @@
 #include "TxtDataHelpers.h"
 #include <RTClib.h>
 #include "MeshLog.h"   // serial-capture sink control (#395 caplog verbs)
+// #1060: `caplog forward` and the forward fields of `caplog status`, shared with
+// the observer. With OFFBAND_CAPLOG_FORWARD the role provides caplogForwarder()
+// and caplogForwardLinkUp(); nothing else of its WiFi stack is needed here.
+// Included on every build for the `set syslog.host` length check (#1194).
+#include "CaplogForwardCli.h"
 
 // Plan 2 v2 Task 11 / #538 / #554: ObserverCli dispatcher (the broker-config
 // CLI). Reached as a fall-through from the real command terminals -- bare
@@ -105,8 +110,6 @@ extern "C" {
   void wifi_telemetry_set_persistent(uint32_t duration_ms);
   int  wifi_telemetry_is_persistent(void);
   uint32_t wifi_telemetry_persistent_remaining_ms(void);
-  void wifi_telemetry_caplog_forward(uint32_t window_sec);  // #561 live syslog forward (#566: runtime target)
-  int  wifi_telemetry_link_up(void);                          // is there a link for the forward to use
 #ifdef CMD_TRANSPORT_HTTP
   // LoRa#216: HTTP cmd-poll controls
   void     wifi_telemetry_cmd_poll_now(void);
@@ -1109,34 +1112,21 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
         snprintf(reply, 160, "caplog on (level %s)", meshLogLevelName(lvl));
       }
     } else if (memcmp(command, "caplog forward", 14) == 0 && (command[14] == 0 || command[14] == ' ')) {
-      // #561: live syslog forward -- stream captured lines off-device during a
-      // bounded window (survives a reboot the RAM ring cannot). Telemetry-only.
-      // #566: gated on ENABLE_WIFI_TELEMETRY only -- the sink host/port is a
-      // runtime pref (set syslog.host/port), no longer a build-time flag.
-#if defined(ENABLE_WIFI_TELEMETRY)
-      const char* arg = (command[14] == ' ') ? &command[15] : "";
-      if (memcmp(arg, "off", 3) == 0) {
-        wifi_telemetry_caplog_forward(0);
-        offband_applyCaplog(_prefs->caplog_level, false);
-        _prefs->caplog_enabled = 0;
+      // #561: live syslog forward -- stream captured lines off-device to the sink
+      // in syslog.host/port (#566). #1060: gated on OFFBAND_CAPLOG_FORWARD, with
+      // an until-off mode (`on`) that survives a reboot. Arming never switches
+      // capture on and never touches the WiFi link (#1045): the reply names what
+      // is missing instead. A malformed argument leaves a running forward alone.
+#if defined(OFFBAND_CAPLOG_FORWARD)
+      const offband::CaplogForwardArg arg =
+          offband::caplogParseForwardArg((command[14] == ' ') ? &command[15] : "");
+      const int until_off = offband::caplogApplyForwardArg(offband::caplogForwarder(), arg, millis());
+      if (until_off >= 0 && _prefs->caplog_fwd != (uint8_t)until_off) {
+        _prefs->caplog_fwd = (uint8_t)until_off;
         savePrefs();
-        strcpy(reply, "caplog forward off");
-      } else {
-        uint32_t sec = (*arg) ? (uint32_t)_atoi(arg) : 300;   // bare -> 5 min default
-        if (sec < 30) sec = 30;                                // floor: focused test
-        meshLogSetEnabled(true);
-        _prefs->caplog_enabled = 1;
-        savePrefs();
-        wifi_telemetry_caplog_forward(sec);
-        // The forward never brings a link up (#1045), so say when there is none
-        // rather than claim it is streaming.
-        if (wifi_telemetry_link_up()) {
-          snprintf(reply, 160, "caplog forward on %us (streaming to syslog)", (unsigned)sec);
-        } else {
-          snprintf(reply, 160, "caplog forward on %us -- no WiFi link; lines send once one is up (wifi on <min>)",
-                   (unsigned)sec);
-        }
       }
+      offband::caplogForwardReply(reply, 160, arg, meshLogIsEnabled(), _prefs->syslog_host[0] != '\0',
+                                  offband::caplogForwardLinkUp(), " (wifi on <min>)");
 #else
       strcpy(reply, "caplog forward: not available on this build");
 #endif
@@ -1153,10 +1143,20 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       strcpy(reply, "   EOF");
     } else if ((memcmp(command, "caplog status", 13) == 0 && (command[13] == 0 || command[13] == ' '))
                || (memcmp(command, "caplog", 6) == 0 && command[6] == 0)) {
+#if defined(OFFBAND_CAPLOG_FORWARD)
+      // #1060: which forward mode is active, where it sends, and what it has sent
+      // and lost, so an operator can tell until-off from a timed window.
+      const offband::CaplogForwardStatus fwd = offband::caplogForwardStatusOf(
+          offband::caplogForwarder(), millis(), _prefs->syslog_host, _prefs->syslog_port,
+          offband::caplogForwardLinkUp());
+      offband::caplogStatusLine(reply, 160, meshLogIsEnabled(), meshLogLevelName(meshLogGetLevel()),
+                                (unsigned)meshLogBytesUsed(), (unsigned)meshLogCapacity(), &fwd);
+#else
       snprintf(reply, 160, "caplog: %s level=%s used=%u/%u",
                meshLogIsEnabled() ? "on" : "off",
                meshLogLevelName(meshLogGetLevel()),
                (unsigned)meshLogBytesUsed(), (unsigned)meshLogCapacity());
+#endif
     } else if (sender_timestamp == 0 && memcmp(command, "stats-packets", 13) == 0 && (command[13] == 0 || command[13] == ' ')) {
       _callbacks->formatPacketStatsReply(reply);
     } else if (sender_timestamp == 0 && memcmp(command, "stats-radio", 11) == 0 && (command[11] == 0 || command[11] == ' ')) {
@@ -1376,10 +1376,14 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     }
   } else if (memcmp(config, "syslog.host ", 12) == 0) {
     // #566: runtime caplog syslog-forward sink host (empty = forward off).
-    strncpy(_prefs->syslog_host, &config[12], sizeof(_prefs->syslog_host) - 1);
-    _prefs->syslog_host[sizeof(_prefs->syslog_host) - 1] = '\0';
-    savePrefs();
-    strcpy(reply, "OK");
+    // #1194: a name too long to keep whole is refused, never cut -- a cut name
+    // would send to the wrong place while the reply said OK.
+    if (offband::caplogCheckSinkHost(&config[12], sizeof(_prefs->syslog_host) - 1, reply, 160)) {
+      strncpy(_prefs->syslog_host, &config[12], sizeof(_prefs->syslog_host) - 1);
+      _prefs->syslog_host[sizeof(_prefs->syslog_host) - 1] = '\0';
+      savePrefs();
+      strcpy(reply, "OK");
+    }
   } else if (memcmp(config, "syslog.port ", 12) == 0) {
     int p = atoi(&config[12]);
     if (p > 0 && p <= 65535) {
