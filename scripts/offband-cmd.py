@@ -21,7 +21,7 @@ Examples:
   offband-cmd status wsmj898-ltb                        # liveness + recent cmds
   offband-cmd result wsmj898-ltb 7 --wait 120           # fetch a cmd's reply
   offband-cmd caplog wsmj898-ltb forward 300            # arm the syslog forward
-  offband-cmd caplog wsmj898-ltb off                    # disarm + stop capture
+  offband-cmd caplog wsmj898-ltb off                    # disarm (capture stays as it is)
   offband-cmd caplog wsmj898-ltb tail -n 50             # last 50 forwarded lines
 """
 import argparse
@@ -235,7 +235,7 @@ def build_parser():
     csub = c.add_subparsers(dest="caplog_action", required=True)
     cf = csub.add_parser("forward", help="arm live syslog forward for <sec>")
     cf.add_argument("seconds", type=int)
-    csub.add_parser("off", help="disarm forward + stop capture")
+    csub.add_parser("off", help="disarm forward (capture stays as it is)")
     ct = csub.add_parser("tail", help="last N forwarded lines (SSH)")
     ct.add_argument("-n", "--lines", type=int, default=40)
     c.set_defaults(func=cmd_caplog)
