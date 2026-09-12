@@ -1,7 +1,7 @@
 # Queen City Con 0x4 badge — design of record
 
 **Feature:** [#1172](https://github.com/OffbandMesh/meshcore-firmware/issues/1172) · **Epic:** [#1173](https://github.com/OffbandMesh/meshcore-firmware/issues/1173) · **Task:** [#1174](https://github.com/OffbandMesh/meshcore-firmware/issues/1174) · **Client companion:** [OffbandMesh/meshcore-client#657](https://github.com/OffbandMesh/meshcore-client/issues/657)
-**Date:** 2026-09-12 · **Status:** draft for owner review
+**Date:** 2026-09-12 · **Status:** approved by the owner 2026-09-12; updated 2026-09-12 with epic 1 as built ([#1184](https://github.com/OffbandMesh/meshcore-firmware/issues/1184))
 **Agent:** MaroonDesert (session 81df237c)
 
 ## 1. Summary
@@ -48,7 +48,7 @@ Sources: the badge schematic (EasyEDA "QCC 0x4 Badges" V1.0, 2026-03-21), the st
 | Battery sense | 680 k / 1 M divider on the switched battery | P0.31 | ratio 1.68; always connected (~2.5 µA) |
 | Bootloader | Adafruit UF2 with S140 6.1.1 | — | the stock UF2 starts at 0x26000 |
 
-**Hazard.** P0.06 and P0.08 are the ProMicro variant's default `Serial1` TX/RX. Any UART use must set its pins explicitly; opening `Serial1` on its defaults holds the buzzer on.
+**Hazard.** P0.06 and P0.08 are the ProMicro variant's default `Serial1` TX/RX; opening `Serial1` on those defaults would hold the buzzer on. The badge variant moves `Serial1` to the GPS pins. It also points the default SPI and Wire at the badge's own buses, because ProMicro's defaults land on RXEN, the GPS pins and the button. It defines no SPI1 or Wire1 (#1177).
 
 **Quirk.** D1/D2 (two 1N914) feed VCC from the switched battery. The schematic labels this a workaround for ProMicro boards that do not boot on battery power.
 
@@ -69,27 +69,43 @@ The stock firmware is Meshtastic 2.7.15 built from `nrf52_promicro_diy_tcxo`, th
 - **Radio:** the con gets its own config (frequency pending). A departure build uses normal defaults and stays QCC-branded.
 - **CTF:** parked to the end, with no dependency on MQTT.
 
+Agreed with the implementation plan (2026-09-12):
+
+- **D1, departure radio defaults:** the US community preset, 910.525 MHz / 62.5 kHz / SF7 / CR 5.
+- **D2, one low-voltage policy:** SafeBoot, before `board.begin()`, sleeps below 3500 mV and wakes at 3700 mV. At runtime, `AUTO_SHUTDOWN_MILLIVOLTS` is 3400 mV. Sleeping above the runtime cutoff stops a pack that just tripped shutdown from reboot-looping.
+- **D3:** the badge's BLE companion env is in the CI build matrix.
+- **D4:** keep the ProMicro sensor drivers.
+
 ## 5. Architecture
 
 ### 5.1 Variant and envs
 
-- `variants/qcc_badge/`: board class, `variant.h` / `variant.cpp` (the ProMicro pin map with `Serial1` remapped to the GPS pins), `target.*`, `platformio.ini`.
+- `variants/qcc_badge/` holds:
+  - the board class (a `PromicroBoard` subclass);
+  - `variant.h` / `variant.cpp`: the ProMicro pin map, with `Serial1` on the GPS pins and the default SPI and Wire on the badge's own buses (§3);
+  - `target.*`;
+  - `platformio.ini`.
 - Envs, all BLE companion on `ui-new`:
-  - `QCC_Badge_companion_radio_ble`: departure flavor, normal radio defaults.
-  - `QCC_Badge_con_companion_radio_ble`: con flavor, con radio defaults.
-  - A `_diag` twin of each until beta: boot beacon, forced caplog, and the UART log mirror on the spare GPIO33 pad (P1.01), never on P0.06 or P0.08. Logs otherwise go over the ProMicro's USB.
-- The badge envs drop the environmental-sensor drivers the ProMicro base pulls in (AHTX0, BME280, BMP280, INA3221, INA219) to recover flash.
+  - `QCC_Badge_companion_radio_ble`: departure flavor, normal radio defaults (D1).
+  - `QCC_Badge_con_companion_radio_ble`: con flavor, con radio defaults (epic 6, once the con config is known).
+  - A `_diag` twin of each until beta: boot beacon, forced caplog, and the UART log mirror on the spare GPIO33 pad (P1.01), never on P0.06 or P0.08. Logs otherwise go over the ProMicro's USB. The departure twin is `QCC_Badge_companion_radio_ble_diag`.
+- The badge envs keep the environmental-sensor drivers the ProMicro base pulls in (AHTX0, BME280, BMP280, INA3221, INA219) (D4).
+  - Flash leaves room: the ProMicro companion measured 58.8% (418,832 / 712,704 B), and the badge BLE env measures 60.7% with its splash (432,376 B).
+  - SAO add-ons may carry sensors.
 - Release-matrix entries are added only when a release is cut (owner-gated).
 
 ### 5.2 Gating
 
-Badge behavior is switched on by flags set only in the badge envs. Shared-code changes — the font hook, the keyboard input source, the history store, the bridge command — are additive and off by default, so other boards build unchanged.
+Badge behavior is switched on by flags set only in the badge envs. Shared-code changes — the font renderer and splash hook, the keyboard input source, the history store, the bridge command — are additive and off by default, so other boards build unchanged.
 
 ### 5.3 Display and fonts
 
 - `SSD1306Display` (Adafruit) drives the panel. The controller is confirmed on the bench; `SH1106Display` exists if the part turns out to be an SH1106.
-- A new additive `DisplayDriver` text hook renders ThingPulse-format fonts (`ArialMT_Plain_10` / `_16`, already in `OLEDDisplayFonts.cpp`). A driver that does not implement it falls back to its built-in font.
-- The QCC art is a 50×50 XBM drawn with `drawXbm`, through a badge-level hook in the shared `offband::drawSplash`, selected by the badge env. The hook is board-level, not driver-level as #822's color art is, because event art belongs to this board and not to the SSD1306 driver that many boards share.
+- **ThingPulse fonts.** A driver-agnostic renderer, `offband::tpfont` (`src/helpers/ui/TpFont.*`), draws ThingPulse-format fonts (`ArialMT_Plain_10` / `_16`, already in `OLEDDisplayFonts.cpp`) through `DisplayDriver::fillRect`, one call per vertical run of ink. No driver changes; drivers keep their built-in fonts for everything else.
+- **The QCC art** is a 50×50 XBM drawn with `drawXbm`, through a badge-level hook in the shared `offband::drawSplash`.
+  - With `OFFBAND_EVENT_SPLASH` set (badge envs only), `drawSplash()` calls the board's `drawEventSplash()` on full-size mono panels. A board that sets the flag without supplying the function fails to link, deliberately.
+  - The hook is board-level, not driver-level as #822's color art is, because event art belongs to this board and not to the SSD1306 driver that many boards share.
+  - `scripts/gen-qcc-splash.py` converts the badge team's LSB-first XBM to the MSB-first order `drawXbm` reads.
 
 ### 5.4 Keyboard
 
@@ -113,8 +129,8 @@ Badge behavior is switched on by flags set only in the badge envs. Shared-code c
 
 ### 5.7 Sound
 
-- `PIN_BUZZER` = P0.06, on the existing `genericBuzzer` (RTTTL).
-- Events: startup, channel message, DM, shutdown. A CTF tone may be added later.
+- `PIN_BUZZER` = P0.06, on the existing `genericBuzzer` (RTTTL; `helpers/ui/buzzer.cpp` with the NonBlockingRTTTL library).
+- Events: startup, channel message, DM, message sent, shutdown. The message-sent tone is a short confirmation, like the one stock Meshtastic plays on send (owner, 2026-09-12). A CTF tone may be added later.
 - **Tones screen:** a preset or a custom tone per event. Custom tones accept RTTTL or Nokia composer codes (converted to RTTTL), with preview, saved in prefs.
 - Software mute is the existing notify scope. The MUTE switch is mechanical and invisible to firmware.
 
@@ -135,8 +151,15 @@ Badge behavior is switched on by flags set only in the badge envs. Shared-code c
 
 ### 5.10 Power and battery
 
-- ADC multiplier derived from the 1.68 divider and the ADC reference, then calibrated against a meter.
-- SafeBoot (`SLEEP_MV` / `WAKE_MV`), `AUTO_SHUTDOWN_MILLIVOLTS` and `PWRMGT_VOLTAGE_BOOTLOCK` are enumerated and aligned as one low-voltage policy.
+- **Battery reading** (`variants/qcc_badge/QccBattery.h`):
+  - The 1.68 divider on P0.31 is read against the internal 0.6 V reference at gain 1/6 (3.6 V full scale), 12-bit, with a 40 µs acquisition for the ~405 kΩ source. That gives 1.4765625 mV per count.
+  - The multiplier is user-settable. A NaN, infinite or non-positive result reads 0 ("no reading"), and an oversized one saturates, rather than wrapping to a plausible voltage.
+  - Calibrated against a meter on the bench (epic 1).
+- **One low-voltage policy (D2):** SafeBoot sleeps at 3500 mV and wakes at 3700 mV, then the runtime `AUTO_SHUTDOWN_MILLIVOLTS` cuts at 3400 mV. `PWRMGT_VOLTAGE_BOOTLOCK` is not compiled for this board.
+- **SafeBoot runs on this board only because the env sets `SAFEBOOT_PIN_VBAT_READ`.**
+  - `SafeBoot.cpp` cannot see `PromicroBoard.h`, where `PIN_VBAT_READ` lives. Without the flag, SafeBoot compiles out silently; the stock ProMicro envs have exactly that gap (#1176).
+  - The badge build fails without the SafeBoot flags. It also static-asserts that SafeBoot and the board share one pin, one divider ratio and one acquisition time.
+  - SafeBoot's `SAFEBOOT_ADC_SAMPLE_US` hook sets the acquisition time for its read, then restores the core default.
 - Current in each mode (lights, GPS, BLE, idle) measured with the INA228 inline on the battery lead.
 
 ### 5.11 Radio defaults
@@ -146,7 +169,9 @@ Badge behavior is switched on by flags set only in the badge envs. Shared-code c
 
 ### 5.12 Bluetooth
 
-A random PIN shown on the OLED at pairing, not a fixed PIN. Current behavior with a display and no fixed PIN is verified in epic 1.
+A random PIN shown on the OLED at pairing, not a fixed PIN. Verified in code (`MyMesh.cpp:1415-1429`):
+- With a display, no PIN saved from the app, and the default `BLE_PIN_CODE=123456`, the companion picks a random six-digit PIN each session and shows it.
+- A PIN saved from the app is used as-is.
 
 ### 5.13 About screen
 
@@ -154,13 +179,18 @@ Offband version, "on MeshCore" with its version, build date, handle, public-key 
 
 ### 5.14 Self-test
 
-Settings → Self-test, and automatically at first boot on diag builds: pulse P0.08, then P0.15, then chirp the buzzer, naming each on screen.
+- **Epic 1, as built:** on diag builds, a legend screen follows the splash for 6 s. It names the outputs already active at boot:
+  - P0.08: the heartbeat;
+  - P0.15: blinks while Bluetooth advertises (whether it can be seen through the badge is still a bench question, §3);
+  - P0.06: the boot tune.
+  The legend drives nothing itself.
+- **Not yet scheduled:** a Settings → Self-test that pulses each output on demand. It belongs with the lights and sound work and is to be planned with epic 4.
 
 ## 6. UI
 
 **Principles.** One visual system: an inverted title bar carrying Bluetooth and battery; ArialMT 10 body text; the 5×7 font only for times and counters; generous spacing; no clutter; nothing on screen blinks except the text cursor.
 
-**Screens.** Splash A; Home (today's pages, and typing jumps straight into a reply); Inbox; Thread with a compose line; New message (type to filter channels and people); join a channel by typing `#name`; Settings (handle, tones, lights, GPS, Bluetooth, self-test); About; first-boot handle; new-message card.
+**Screens** (the target UI; each is built in its epic, §7). Splash A; Home (today's pages, and typing jumps straight into a reply); Inbox; Thread with a compose line; New message (type to filter channels and people); join a channel by typing `#name`; Settings (handle, tones, lights, GPS, Bluetooth, self-test); About; first-boot handle; new-message card.
 
 **Keys.** Arrows move; Enter opens or sends; Esc backs out; Backspace deletes; typing on a list filters it; typing on Home starts a reply.
 
@@ -196,7 +226,7 @@ Pixel-accurate mockups of splash A, the inbox, the thread with compose line, the
 
 - The con radio config (owner, from the con).
 - Whether badges run Offband during the con, or only after the departure flash.
-- Which preset "normal defaults" means for the departure build.
+- ~~Which preset "normal defaults" means for the departure build.~~ Answered by D1: the US community preset.
 - Where the LED sits on the keyboard-fitted badge (the self-test will show).
 - The GPS module and whether it has a backup cell (bench).
 - Battery capacity.
