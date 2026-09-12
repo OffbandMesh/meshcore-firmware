@@ -228,7 +228,8 @@ TEST_F(CaplogForwardTest, ATagAtTheLimitFitsWhole) {
     std::string tag(CaplogForward::kTagMax, 't');
     CaplogForward fwd(tag.c_str(), fakeRead, sink);
     EXPECT_EQ(std::string(fwd.prefix()), "<134>caplog-" + tag + ": ");
-    EXPECT_EQ(CaplogForward::kTagMax, 33u);
+    // "caplog-" + 24 + ':' is the RFC 3164 TAG limit of 32.
+    EXPECT_EQ(CaplogForward::kTagMax, 24u);
 }
 
 TEST_F(CaplogForwardTest, AnOverlongTagIsCutButKeepsTheSeparator) {
@@ -241,15 +242,162 @@ TEST_F(CaplogForwardTest, AnOverlongTagIsCutButKeepsTheSeparator) {
     EXPECT_LT(std::strlen(fwd.prefix()), CaplogForward::kPrefixMax);
 }
 
-TEST_F(CaplogForwardTest, PercentSignsInATagAreCopiedLiterally) {
-    // The tag is an argument to %s, not part of the format string.
+TEST_F(CaplogForwardTest, PercentSignsInATagBecomeDashes) {
+    // Never part of the format string, and not legal in a TAG either.
     CaplogForward fwd("a%s%n%x", fakeRead, sink);
-    EXPECT_STREQ(fwd.prefix(), "<134>caplog-a%s%n%x: ");
+    EXPECT_STREQ(fwd.prefix(), "<134>caplog-a-s-n-x: ");
 }
 
-TEST_F(CaplogForwardTest, ANullTagStillFormsAPrefix) {
+TEST_F(CaplogForwardTest, ANullTagBecomesUnknown) {
     CaplogForward fwd(nullptr, fakeRead, sink);
-    EXPECT_STREQ(fwd.prefix(), "<134>caplog-: ");
+    EXPECT_STREQ(fwd.prefix(), "<134>caplog-unknown: ");
+}
+
+TEST_F(CaplogForwardTest, TheRepeaterTagsInUseAreUnchanged) {
+    // The repeater keeps WIFI_TELEMETRY_NODE_ID; sanitizing must not alter it.
+    CaplogForward a("wsmj898-ltb", fakeRead, sink);
+    CaplogForward b("stp-lab", fakeRead, sink);
+    EXPECT_STREQ(a.prefix(), "<134>caplog-wsmj898-ltb: ");
+    EXPECT_STREQ(b.prefix(), "<134>caplog-stp-lab: ");
+}
+
+TEST_F(CaplogForwardTest, SetTagReplacesThePrefix) {
+    CaplogForward fwd(nullptr, fakeRead, sink);   // identity not loaded yet
+    fwd.setTag("4A1B2C3D4E5F6071");
+    EXPECT_STREQ(fwd.prefix(), "<134>caplog-4A1B2C3D4E5F6071: ");
+}
+
+TEST_F(CaplogForwardTest, SetTagSanitizesTheNewTag) {
+    CaplogForward fwd("old-tag", fakeRead, sink);
+    fwd.setTag("a new tag that is over 24 chars long");
+    EXPECT_STREQ(fwd.prefix(), "<134>caplog-a-new-tag-that-is-over-2: ");
+}
+
+// ------------------------------------------------------------ tag sanitizing (#1059)
+
+namespace {
+
+std::string sanitized(const char* in, size_t cap = 64) {
+    char out[64];
+    offband::caplogSanitizeTag(in, out, cap);
+    return out;
+}
+
+}  // namespace
+
+TEST(CaplogTag, LegalCharactersAreKept) {
+    EXPECT_EQ(sanitized("Node_01-ab"), "Node_01-ab");
+}
+
+TEST(CaplogTag, SpacesBecomeDashes) {
+    EXPECT_EQ(sanitized("my node 2"), "my-node-2");
+}
+
+TEST(CaplogTag, PunctuationBecomesDashes) {
+    EXPECT_EQ(sanitized("a.b:c[1]/d!"), "a-b-c-1--d-");
+}
+
+TEST(CaplogTag, NonAsciiBytesBecomeDashes) {
+    EXPECT_EQ(sanitized("caf\xC3\xA9"), "caf--");   // one dash per UTF-8 byte
+}
+
+TEST(CaplogTag, OverlongInputIsCutAtTheLimit) {
+    EXPECT_EQ(sanitized("abcdefghijklmnopqrstuvwxyz0123456789"),
+              "abcdefghijklmnopqrstuvwx");   // 24
+}
+
+TEST(CaplogTag, EmptyAndNullBecomeUnknown) {
+    EXPECT_EQ(sanitized(""), "unknown");
+    EXPECT_EQ(sanitized(nullptr), "unknown");
+}
+
+TEST(CaplogTag, ASmallOutputBufferIsRespected) {
+    EXPECT_EQ(sanitized("abcdefgh", 5), "abcd");
+    char one[1] = {'x'};
+    offband::caplogSanitizeTag("abc", one, sizeof(one));
+    EXPECT_EQ(one[0], '\0');
+}
+
+TEST(CaplogTag, PubKeyTagIsTheFirstEightBytesInUppercaseHex) {
+    const uint8_t key[32] = {0x4a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f, 0x60, 0x71, 0xff, 0xee};
+    char out[17];
+    offband::caplogPubKeyTag(key, out, sizeof(out));
+    // Uppercase, as the MQTT device_id is, so the tag is a prefix of it.
+    EXPECT_STREQ(out, "4A1B2C3D4E5F6071");
+}
+
+TEST(CaplogTag, PubKeyTagWithoutAKeyIsEmptyAndSanitizesToUnknown) {
+    char out[17] = {'x'};
+    offband::caplogPubKeyTag(nullptr, out, sizeof(out));
+    EXPECT_STREQ(out, "");
+    EXPECT_EQ(sanitized(out), "unknown");
+}
+
+TEST(CaplogTag, PubKeyTagRespectsASmallOutputBuffer) {
+    const uint8_t key[8] = {0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89};
+    char out[6];
+    offband::caplogPubKeyTag(key, out, sizeof(out));
+    EXPECT_STREQ(out, "ABCD");   // whole bytes only
+}
+
+// ------------------------------------------------------------ the announcement (#1059)
+
+TEST_F(CaplogForwardTest, OpeningAWindowAnnouncesTheFullIdAndTheSink) {
+    const std::string id(64, 'A');
+    CaplogForward fwd("4A1B2C3D4E5F6071", fakeRead, sink);
+    fwd.setIdentity(id.c_str());
+    fwd.armFor(300, 0);
+    g_chunks.push_back("x\n");
+    fwd.service("sink.example.net", 514, true, 1);
+    EXPECT_EQ(lines(sink), (std::vector<std::string>{
+                               "[caplog] forward on: id=" + id + " sink=sink.example.net:514", "x"}));
+    EXPECT_EQ(sink.sent[0].prefix, "<134>caplog-4A1B2C3D4E5F6071: ");
+    EXPECT_EQ(fwd.linesSent(), 1u) << "the announcement is not a forwarded line";
+}
+
+TEST_F(CaplogForwardTest, TheAnnouncementIsOncePerWindow) {
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.setIdentity("ID");
+    fwd.armFor(300, 0);
+    fwd.service("h", 514, true, 1);
+    fwd.service("h", 514, true, 2);
+    fwd.armFor(300, 3);                  // extends the open window
+    fwd.service("h", 514, true, 4);
+    fwd.disarm();
+    fwd.armFor(300, 5);                  // a new window
+    fwd.service("h", 514, true, 6);
+    EXPECT_EQ(lines(sink), (std::vector<std::string>{
+                               "[caplog] forward on: id=ID sink=h:514",
+                               "[caplog] forward on: id=ID sink=h:514"}));
+}
+
+TEST_F(CaplogForwardTest, TheAnnouncementWaitsForTheLink) {
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.setIdentity("ID");
+    fwd.armFor(300, 0);
+    fwd.service("h", 514, false, 1);
+    EXPECT_TRUE(sink.sent.empty());
+    fwd.service("h", 514, true, 2);
+    EXPECT_EQ(lines(sink), (std::vector<std::string>{"[caplog] forward on: id=ID sink=h:514"}));
+}
+
+TEST_F(CaplogForwardTest, NoIdentityMeansNoAnnouncement) {
+    CaplogForward fwd("n", fakeRead, sink);   // the repeater today
+    fwd.armFor(300, 0);
+    g_chunks.push_back("x\n");
+    fwd.service("h", 514, true, 1);
+    EXPECT_EQ(lines(sink), (std::vector<std::string>{"x"}));
+}
+
+TEST_F(CaplogForwardTest, AnOverlongIdentityIsCut) {
+    const std::string id(100, 'B');
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.setIdentity(id.c_str());
+    fwd.armFor(300, 0);
+    fwd.service("h", 514, true, 1);
+    ASSERT_EQ(sink.sent.size(), 1u);
+    EXPECT_EQ(sink.sent[0].line,
+              "[caplog] forward on: id=" + std::string(offband::kCaplogIdentityMax, 'B') + " sink=h:514");
 }
 
 // ------------------------------------------------------------ cursor mode (#1193)
