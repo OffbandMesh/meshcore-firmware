@@ -127,6 +127,15 @@ jobs:
           name: cli-dispatch
           path: ${{ runner.temp }}/cli-dispatch.json
 
+      # #1048 (epic #1045). A log forwarder may depend on a WiFi link, but it must
+      # never bring one up, tear one down, or move its deadline. The first caplog
+      # forward did both, overriding the link the operator had set. The self-test
+      # also runs the guard over the tree. Advisory, like the dispatch guard above:
+      # whether it blocks merges is decided separately.
+      - name: Caplog forward never controls the WiFi link (advisory)
+        continue-on-error: true
+        run: python scripts/test_caplog_link_guard.py
+
       # ADVISORY until #648 (the capability inventory) validates what this asserts.
       # ci-green is a hard merge gate for every PR in the repo (#477), so a check
       # built on unvalidated assumptions must not block other people's work. The
