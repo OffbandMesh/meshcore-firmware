@@ -961,6 +961,13 @@ git add variants/qcc_badge/QccBadgeBoard.h variants/qcc_badge/QccBadgeBoard.cpp 
 git commit -m "feat(#N): QCC badge board class, target and BLE companion env"
 ```
 
+**As built** (review on #1180):
+- `PIN_BUZZER` pulls in the existing buzzer code. The env therefore also needs `+<helpers/ui/buzzer.cpp>` and `end2endzone/NonBlockingRTTTL@^1.3.0`, as the other buzzer boards have; the first build failed without them.
+- The reading goes through `qcc::scaleToMilliVolts()` in `QccBattery.h`, which is host-tested. `adc_mult` is user-settable, so a NaN, infinite or non-positive result reads 0 and an oversized one saturates at 65535.
+- Device builds use `-Ofast`, so NaN is detected from the float's bits. The disassembly confirms the `0x7f800000` test survives.
+- The SafeBoot pin test compares the flag with `PromicroBoard.h`'s `PIN_VBAT_READ` and pins P0.31.
+- Build: Flash 423,144 B, RAM 163,256 B. SafeBoot is compiled in (684 bytes), and only `variants/qcc_badge` supplies `variant.h`/`variant.cpp`.
+
 ---
 
 ### Task 1.5: Splash art
