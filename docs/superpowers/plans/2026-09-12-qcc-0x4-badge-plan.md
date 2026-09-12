@@ -1175,6 +1175,12 @@ git add variants/qcc_badge/art/qcc_eye_50x50.xbm scripts/gen-qcc-splash.py scrip
 git commit -m "feat(#N): QCC eye splash art and its MSB-first generator"
 ```
 
+**As built** (review on #1181):
+- `parse_xbm` finds the `<name>_bits[]` array first, then reads that name's `_width`/`_height`. Braces in comments and look-alike or hotspot defines therefore can't mislead it, and missing parts raise `ValueError`. Two tests were added, 7 in all.
+- The generated header notes that it is static data for one includer, as `OffbandLogo.h` is.
+- The committed XBM bytes are identical to the badge team's `icon_bits` array.
+- The source file carries no dimensions. At the 7-byte row stride that renders the eye (the mockup approved 2026-09-12), the XBM padding bits are empty and the art has 649 ink pixels.
+
 ---
 
 ### Task 1.6: Event-splash hook and splash A
