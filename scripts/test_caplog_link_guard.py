@@ -93,6 +93,13 @@ def test_a_link_call_in_the_helper_is_caught():
     assert [(v[0], v[2]) for v in violations] == [(g.HELPER_FILES[1], "WiFi.reconnect")], violations
 
 
+def test_a_link_call_in_the_udp_sink_is_caught():
+    files = {MAIN: MAIN_AFTER, CLI: CLI_CLEAN,
+             g.HELPER_FILES[2]: "void send() { udp_.beginPacket(h, p); WiFi.begin(s, k); }"}
+    violations, _ = g.analyze(files)
+    assert [(v[0], v[2]) for v in violations] == [(g.HELPER_FILES[2], "WiFi.begin")], violations
+
+
 def test_an_esp_idf_link_call_is_caught():
     violations, _ = run(helper_cpp="void f() { esp_wifi_disconnect(); }")
     assert [v[2] for v in violations] == ["esp_wifi_disconnect"], violations
