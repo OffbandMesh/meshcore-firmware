@@ -1504,6 +1504,13 @@ git add src/helpers/ui/OffbandSplash.h src/helpers/ui/OffbandSplash.cpp variants
 git commit -m "feat(#N): event-splash hook and the QCC splash A"
 ```
 
+**As built** (review on #1182):
+- The corner splitter also splits at a space, so an `OFFBAND_BUILD_TAG` stays off the splash. Two cases cover it.
+- The eye test also runs the widest corner lines the splitter can reach: "v123.45" (38 px) and "beta6+1" (39 px). A new test pins the 40 px bound against the eye's actual ink, with a margin of 3 columns. 16 tests; native suite 321/321.
+- A board that sets `OFFBAND_EVENT_SPLASH` without a `drawEventSplash` fails at link time on purpose. Gemini's weak-symbol fallback would reintroduce the silent-fallback failure that `OffbandSplash.h` records.
+- `OffbandSplash.h`'s version-format comment is corrected: the short version keeps its `v`.
+- Sizes: badge Flash 432,376 B, RAM 163,256 B. ProMicro is byte-identical at 418,832 B.
+
 ---
 
 ### Task 1.7: Diag env and the self-test legend

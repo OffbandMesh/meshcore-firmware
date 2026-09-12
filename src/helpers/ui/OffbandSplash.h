@@ -44,8 +44,8 @@ struct SplashInfo {
 // clipping trap #758 hit when a taller font pushed the last line past the panel.
 int splashLastLineY();
 
-// The compact Offband version shown on the splash -- "1.5.0", "1.5.0+3*", plus any
-// OFFBAND_BUILD_TAG. Derived from OFFBAND_VERSION (git describe) per #222. It lived
+// The compact Offband version shown on the splash -- "v1.5.0", "v1.5.0-rc1+3*", plus
+// any OFFBAND_BUILD_TAG after a space. Derived from OFFBAND_VERSION (git describe) per #222. It lived
 // in ui-new, which is why only the companion splash ever showed it correctly;
 // moved here so all six roles report identically.
 const char* offbandShortVersion();
@@ -67,5 +67,12 @@ void drawSplash(DisplayDriver& display, const SplashInfo& info);
 // not the splash (the repeater's "Turning OFF"). Returns the y below the artwork
 // so the caller can place its own text without re-deriving the art height.
 int drawBrandLockup(DisplayDriver& display, int y = 1);
+
+// #1172: a board's own event splash (the QCC 0x4 badge). drawSplash() draws it INSTEAD
+// of the Offband lockup on full-size mono panels when the env defines
+// OFFBAND_EVENT_SPLASH; the board supplies the definition. Board-level rather than
+// driver-level like colourSplashArt(), because event art belongs to one board, not
+// to a display driver many boards share.
+void drawEventSplash(DisplayDriver& display, const SplashInfo& info);
 
 }  // namespace offband
