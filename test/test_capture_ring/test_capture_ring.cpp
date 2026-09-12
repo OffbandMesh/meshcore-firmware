@@ -191,6 +191,146 @@ TEST(CaptureRing, ConsumeNoNewlineForcesProgress) {
   EXPECT_EQ(0u, r.bytesUsed());
 }
 
+// #1193: the monotonic counter and readFrom(), the non-destructive cursor read
+// that lets the observer forward lines without taking them out of caplog.
+
+static std::string readAt(const CaptureRing& r, uint64_t* cursor, size_t cap, uint64_t* lost) {
+  uint8_t out[512];
+  if (cap > sizeof(out)) cap = sizeof(out);
+  size_t n = r.readFrom(cursor, out, cap, lost);
+  return std::string(reinterpret_cast<char*>(out), n);
+}
+
+TEST(CaptureRing, TotalAppendedCountsEvictedBytes) {
+  uint8_t buf[16];
+  CaptureRing r(buf, sizeof(buf));
+  appendStr(r, "aaaa\n");
+  appendStr(r, "bbbb\n");
+  appendStr(r, "cccc\n");
+  appendStr(r, "dddd\n");                    // evicts "aaaa\n"
+  EXPECT_EQ(20u, r.totalAppended());
+  EXPECT_EQ(15u, r.bytesUsed());
+  EXPECT_EQ(5u, r.oldestPosition());
+}
+
+TEST(CaptureRing, TotalAppendedCountsAnOversizedChunkWhole) {
+  uint8_t buf[8];
+  CaptureRing r(buf, sizeof(buf));
+  appendStr(r, "0123456789\n");              // 11 bytes, 8 kept
+  EXPECT_EQ(11u, r.totalAppended());
+  EXPECT_EQ(3u, r.oldestPosition());
+}
+
+TEST(CaptureRing, TotalAppendedIsUntouchedByConsumeAndClear) {
+  uint8_t buf[64];
+  CaptureRing r(buf, sizeof(buf));
+  uint8_t out[64];
+  appendStr(r, "one\ntwo\n");                // 8
+  r.consume(out, sizeof(out));
+  EXPECT_EQ(8u, r.totalAppended());
+  EXPECT_EQ(8u, r.oldestPosition());
+  appendStr(r, "three\n");                   // 6
+  r.clear();
+  EXPECT_EQ(14u, r.totalAppended());
+  EXPECT_EQ(14u, r.oldestPosition());
+}
+
+TEST(CaptureRing, ReadFromRemovesNothing) {
+  uint8_t buf[64];
+  CaptureRing r(buf, sizeof(buf));
+  appendStr(r, "one\ntwo\n");
+  uint64_t cursor = 0, lost = 0;
+  EXPECT_EQ("one\ntwo\n", readAt(r, &cursor, 64, &lost));
+  EXPECT_EQ(8u, cursor);
+  EXPECT_EQ(8u, r.bytesUsed());
+  EXPECT_EQ("one\ntwo\n", snap(r));          // the download still has both lines
+  EXPECT_EQ(0u, lost);
+}
+
+TEST(CaptureRing, ReadFromTakesWholeLinesThatFitAndAdvances) {
+  uint8_t buf[64];
+  CaptureRing r(buf, sizeof(buf));
+  appendStr(r, "aaaa\nbbbb\ncccc\n");        // three 5-byte lines
+  uint64_t cursor = 0;
+  EXPECT_EQ("aaaa\nbbbb\n", readAt(r, &cursor, 12, nullptr));
+  EXPECT_EQ(10u, cursor);
+  EXPECT_EQ("cccc\n", readAt(r, &cursor, 12, nullptr));
+  EXPECT_EQ(15u, cursor);
+  EXPECT_EQ("", readAt(r, &cursor, 12, nullptr));   // caught up
+  EXPECT_EQ(15u, cursor);
+}
+
+TEST(CaptureRing, ReadFromReportsTheExactGapWhenEvictionOvertakes) {
+  uint8_t buf[16];
+  CaptureRing r(buf, sizeof(buf));
+  appendStr(r, "aaaa\n");
+  uint64_t cursor = 0, lost = 0;
+  appendStr(r, "bbbb\n");
+  appendStr(r, "cccc\n");
+  appendStr(r, "dddd\n");                    // evicts "aaaa\n" before it was read
+  EXPECT_EQ("bbbb\ncccc\ndddd\n", readAt(r, &cursor, 64, &lost));
+  EXPECT_EQ(5u, lost);                       // exactly "aaaa\n"
+  EXPECT_EQ(20u, cursor);
+}
+
+TEST(CaptureRing, ReadFromWithoutALossPointerSkipsWithoutCounting) {
+  uint8_t buf[16];
+  CaptureRing r(buf, sizeof(buf));
+  appendStr(r, "aaaa\nbbbb\ncccc\n");
+  appendStr(r, "dddd\n");                    // evicts "aaaa\n"
+  uint64_t cursor = 0;
+  EXPECT_EQ("bbbb\ncccc\ndddd\n", readAt(r, &cursor, 64, nullptr));
+  EXPECT_EQ(20u, cursor);
+}
+
+TEST(CaptureRing, ReadFromKeepsPaceAcrossManyPhysicalWraps) {
+  uint8_t buf[16];
+  CaptureRing r(buf, sizeof(buf));
+  uint64_t cursor = 0, lost = 0;
+  for (int i = 0; i < 100; ++i) {
+    const char line[5] = {char('0' + i / 100), char('0' + (i / 10) % 10),
+                          char('0' + i % 10), '\n', '\0'};
+    appendStr(r, line);
+    ASSERT_EQ(std::string(line), readAt(r, &cursor, 64, &lost)) << "line " << i;
+  }
+  EXPECT_EQ(400u, r.totalAppended());        // the 16-byte ring wrapped 25 times
+  EXPECT_EQ(400u, cursor);
+  EXPECT_EQ(0u, lost);
+}
+
+TEST(CaptureRing, ReadFromCountsAClearedBacklogAsLost) {
+  uint8_t buf[64];
+  CaptureRing r(buf, sizeof(buf));
+  appendStr(r, "abcd\n");
+  uint64_t cursor = 0, lost = 0;
+  r.clear();
+  EXPECT_EQ("", readAt(r, &cursor, 64, &lost));
+  EXPECT_EQ(5u, lost);
+  EXPECT_EQ(5u, cursor);
+}
+
+TEST(CaptureRing, ReadFromNoNewlineForcesProgress) {
+  uint8_t buf[16];
+  CaptureRing r(buf, sizeof(buf));
+  appendStr(r, "abcdefgh");                  // no newline
+  uint64_t cursor = 0;
+  EXPECT_EQ("abcd", readAt(r, &cursor, 4, nullptr));
+  EXPECT_EQ("efgh", readAt(r, &cursor, 4, nullptr));
+  EXPECT_EQ(8u, cursor);
+}
+
+TEST(CaptureRing, ReadFromHoldsACursorPastTheEndAtTheEnd) {
+  uint8_t buf[16];
+  CaptureRing r(buf, sizeof(buf));
+  appendStr(r, "abc\n");
+  uint64_t cursor = 100, lost = 0;
+  EXPECT_EQ("", readAt(r, &cursor, 16, &lost));
+  EXPECT_EQ(4u, cursor);
+  EXPECT_EQ(0u, lost);
+  appendStr(r, "def\n");
+  EXPECT_EQ("def\n", readAt(r, &cursor, 16, &lost));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

@@ -75,6 +75,12 @@ size_t meshLogSnapshot(uint8_t* out, size_t out_cap, size_t offset = 0);
 // lines and ship them off-device (syslog/UDP) without offset-tracking across
 // eviction. Network I/O by the caller happens OUTSIDE this lock.
 size_t meshLogConsume(uint8_t* out, size_t out_cap);
+// #1193: the non-destructive twin of meshLogConsume(), for a forwarder that must
+// leave the capture intact so the app's download still has every line. Copies
+// whole lines from the absolute position *cursor and advances it; removes
+// nothing. If eviction has overtaken *cursor it skips to the oldest byte held
+// and adds the gap to *lost (nullptr: skip without counting). Same short lock.
+size_t meshLogReadFrom(uint64_t* cursor, uint8_t* out, size_t out_cap, uint64_t* lost);
 // Stream the captured buffer to Serial in chunks (local-console `caplog dump`).
 // Best-effort: stop capture first for a clean dump. Framed remote download is #396.
 void   meshLogDumpSerial();
