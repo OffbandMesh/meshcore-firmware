@@ -1723,16 +1723,26 @@ Designed when unparked: provisioning over USB (never in firmware), a zero-hop ra
 
 Epic 1 tasks 1.1–1.11 are filed as `type:task` sub-issues of #1173, each with a Citadel task depending on `Crosswire-izh`, and run in order 1.1 → 1.11: several share files (1.1/1.4 the guard test, 1.3/1.6 the native build list, 1.4/1.6/1.7 the badge `.ini`), so each depends on the one before. Epics 2–6 are filed as `type:epic` sub-issues of #1172, with their Citadel entries depending on `Crosswire-xdo`; their tasks are filed when each epic's detailed plan is written. The issue numbers go into this table, and each commit subject uses its own task's number.
 
-| Task | Issue |
-|---|---|
-| 1.1 Pin map | filed at AGREE |
-| 1.2 Battery math + SafeBoot hook | filed at AGREE |
-| 1.3 Font renderer | filed at AGREE |
-| 1.4 Board, target, env | filed at AGREE |
-| 1.5 Splash art | filed at AGREE |
-| 1.6 Event splash | filed at AGREE |
-| 1.7 Diag env + legend | filed at AGREE |
-| 1.8 Spec touch-ups | filed at AGREE |
-| 1.9 Bench bring-up | filed at AGREE |
-| 1.10 Battery calibration | filed at AGREE |
-| 1.11 Epic 1 verification | filed at AGREE |
+Filed 2026-09-12 after the owner agreed this plan (D1 US preset; D2, D3, D4 yes).
+
+| Task | Issue | Citadel |
+|---|---|---|
+| 1.1 Pin map | #1177 | Crosswire-2e1 |
+| 1.2 Battery math + SafeBoot hook | #1178 | Crosswire-3r7 |
+| 1.3 Font renderer | #1179 | Crosswire-6wi |
+| 1.4 Board, target, env | #1180 | Crosswire-ey9 |
+| 1.5 Splash art | #1181 | Crosswire-viu |
+| 1.6 Event splash | #1182 | Crosswire-p4z |
+| 1.7 Diag env + legend + CI entry | #1183 | Crosswire-wzu |
+| 1.8 Spec touch-ups | #1184 | Crosswire-qjt |
+| 1.9 Bench bring-up | #1185 | Crosswire-zdw |
+| 1.10 Battery calibration | #1186 | Crosswire-3he |
+| 1.11 Epic 1 verification | #1187 | Crosswire-loq |
+
+| Epic | Issue | Citadel |
+|---|---|---|
+| 2 Keyboard and standalone messaging | #1188 | Crosswire-kqp |
+| 3 Badge-to-client bridge | #1189 | Crosswire-jqd |
+| 4 Sound, lights, GPS power | #1190 | Crosswire-30i |
+| 5 CTF beacon (parked) | #1191 | Crosswire-1xv |
+| 6 Integration testing | #1192 | Crosswire-zhb |
