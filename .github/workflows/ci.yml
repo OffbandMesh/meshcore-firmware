@@ -73,6 +73,16 @@ jobs:
       - name: Font generator self-test
         run: python scripts/test_gen_jbm_font.py
 
+      # #1172: the QCC badge guards. The pin-map guard fails if a badge output, Serial1,
+      # a default bus or the diag log mirror lands on the wrong GPIO -- the ProMicro
+      # Serial1 default would drive the badge's buzzer and LED. The splash-art test fails
+      # if the committed header drifts from its generator.
+      - name: QCC badge pin-map guard
+        run: python scripts/test_qcc_variant_pins.py
+
+      - name: QCC splash-art generator self-test
+        run: python scripts/test_gen_qcc_splash.py
+
       # #775 (epic #774). Guards the defect class behind #764/#765: an `else if`
       # that matches a CLI key and writes nothing, or a key claimed twice in one
       # chain so the later arm is unreachable. `get radio` returned an empty reply
@@ -319,6 +329,9 @@ jobs:
           - heltec_rcc6_companion_radio_usb_diag
           - heltec_rcc6_repeater_display_diag
           - heltec_rcc6_companion_observer_wifi_diag
+          # #1172 (epic #1173): Queen City Con 0x4 badge -- ProMicro nRF52840 + SX1262,
+          # 128x64 OLED, event splash. Owner-approved matrix add (D3, 2026-09-12).
+          - QCC_Badge_companion_radio_ble
     steps:
       - uses: actions/checkout@v5
 

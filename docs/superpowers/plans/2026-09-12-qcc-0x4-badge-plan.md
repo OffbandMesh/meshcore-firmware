@@ -1644,6 +1644,18 @@ git add variants/qcc_badge/platformio.ini examples/companion_radio/ui-new/UITask
 git commit -m "feat(#N): QCC diag env and the bring-up self-test legend"
 ```
 
+**As built** (review on #1183):
+- Sizes:
+  - prod 432,376 B, unchanged, because the legend is diag-only;
+  - diag 442,156 B;
+  - ProMicro unchanged.
+  `nm` shows `SelfTestScreen` and the log mirror only in the diag image.
+- CI:
+  - The badge env joins the build matrix (D3).
+  - config-lint also runs the two badge guard scripts. They now run standalone, as the repo's other `scripts/test_*.py` do, and still run under pytest.
+  - The guard gained a check that the diag log mirror transmits on the spare pad.
+- Gemini's one finding was that the diag twin isn't in the matrix. That is the owner's decision, since D3 covered only the base env; it is raised on #1183.
+
 ---
 
 ### Task 1.8: Spec touch-ups

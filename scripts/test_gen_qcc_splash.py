@@ -1,10 +1,10 @@
 """Tests for scripts/gen-qcc-splash.py (#1172).
-Run: python -m pytest scripts/test_gen_qcc_splash.py -q
+Run: python scripts/test_gen_qcc_splash.py
+  or python -m pytest scripts/test_gen_qcc_splash.py -q
 """
 import importlib.util
+import sys
 from pathlib import Path
-
-import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "variants" / "qcc_badge" / "art" / "qcc_eye_50x50.xbm"
@@ -23,6 +23,15 @@ def pixels_lsb(w, h, data):
 def pixels_msb(w, h, data):
     rb = (w + 7) // 8
     return {(c, r) for r in range(h) for c in range(w) if data[r * rb + c // 8] & (0x80 >> (c % 8))}
+
+
+def rejects(text):
+    # config-lint runs these without pytest, so no pytest.raises.
+    try:
+        gen.parse_xbm(text)
+    except ValueError:
+        return True
+    return False
 
 
 def test_reverse_bits():
@@ -44,13 +53,11 @@ def test_conversion_keeps_every_pixel_in_place():
 
 
 def test_a_short_source_is_rejected():
-    with pytest.raises(ValueError):
-        gen.parse_xbm("#define a_width 50\n#define a_height 50\nstatic unsigned char a_bits[] = { 0x00 };")
+    assert rejects("#define a_width 50\n#define a_height 50\nstatic unsigned char a_bits[] = { 0x00 };")
 
 
 def test_a_source_without_dimensions_is_rejected():
-    with pytest.raises(ValueError):
-        gen.parse_xbm("static char a_bits[] = { 0x00 };")
+    assert rejects("static char a_bits[] = { 0x00 };")
 
 
 def test_dimensions_come_from_the_bits_arrays_own_name():
@@ -70,3 +77,17 @@ def test_dimensions_come_from_the_bits_arrays_own_name():
 def test_committed_header_matches_the_generator():
     w, h, data = gen.parse_xbm(SRC.read_text())
     assert HDR.read_text() == gen.render_header(w, h, gen.to_msb_first(data))
+
+
+if __name__ == "__main__":
+    failures = 0
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            try:
+                fn()
+                print(f"PASS {name}")
+            except AssertionError as e:
+                failures += 1
+                print(f"FAIL {name}: {e}")
+    print(f"\n{failures} failure(s)")
+    sys.exit(1 if failures else 0)
