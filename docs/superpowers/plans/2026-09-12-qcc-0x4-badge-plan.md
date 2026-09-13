@@ -1655,6 +1655,7 @@ git commit -m "feat(#N): QCC diag env and the bring-up self-test legend"
   - config-lint also runs the two badge guard scripts. They now run standalone, as the repo's other `scripts/test_*.py` do, and still run under pytest.
   - The guard gained a check that the diag log mirror transmits on the spare pad.
 - Gemini's one finding was that the diag twin isn't in the matrix. That is the owner's decision, since D3 covered only the base env; it is raised on #1183.
+- **Bench correction (#1185, 2026-09-12):** the "P0.15 LED: BT advert" line was dropped and the buzzer line moved up to y = 28. The ProMicro's P0.15 LED isn't visible on the badge; the blue LED seen under the display is the GPS module's own.
 
 ---
 
@@ -1712,9 +1713,17 @@ Every `pio-flash.py` run is its own owner approval: `list`, `bootstrap`, `previe
   - [ ] Battery mV is plausible (calibrated in 1.10).
   - [ ] With approval, `python scripts/pio-flash.py monitor qcc-badge-1` (one held session): boot beacon lines, the SafeBoot battery line, `[boot]` lines.
 
+**Bench results so far** (#1185, 2026-09-12):
+- Steps 1–6 done. The bootloader is UF2 0.10.0 with S140 6.1.1. It enumerates with the same USB identity as the app, so only the UF2 drive shows which mode the badge is in. Registered as `qcc-badge-1`; `offband-v1.5.0-beta6-30-g3509757` flashed, **VERIFIED OK**.
+- Step 7, owner-observed: splash A, the legend then Home, the startup tune, model "QCC 0x4 Badge", BLE pairing with the OLED PIN (Offband and stock clients), radio configured and a message sent.
+- LEDs: the heartbeat (P0.08) is the red LED beside the LCD. P0.15 isn't visible, so its legend line was dropped. The blue LED under the display is the GPS module's: it went dark with GPS off in the app and blinked at its fix rate when turned back on, which also shows the P0.24 cut works.
+- **The boot-log step doesn't work as written.** Nothing in `setup()` waits for the USB host before SafeBoot prints, and the port drops on every reset, so a USB monitor can't be relied on to catch the line. The beacon never goes to USB at all. The evidence comes from the Feather sniffer on the GPIO33 pad (P1.01), which shows the `setup:before/post SafeBoot` pair. SafeBoot's Vbat line is USB-only, so the wire shows that the gate ran, not the value it read.
+
 ---
 
 ### Task 1.10: Battery calibration (bench)
+
+**Deferred by the owner (2026-09-12):** battery readings against a meter become their own thread. #1186 is parked as deferred, and #1173's "battery within 2% of a meter" criterion waits with it.
 
 - [ ] **Step 1:** Owner measures the cell at the battery connector with a meter (or the INA228 inline on the battery lead) at two states of charge, for example near full and about 3.7 V. At each, read the badge's battery mV in the app.
 - [ ] **Step 2:** Record the pairs on the task issue. Error = badge / meter − 1.
