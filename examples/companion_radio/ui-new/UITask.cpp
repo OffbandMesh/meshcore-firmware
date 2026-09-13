@@ -14,6 +14,9 @@
   #include <SafeBoot.h>
   #include "QccSelfTest.h"
 #endif
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+  #include <helpers/ui/LineEdit.h>
+#endif
 
 #ifndef AUTO_OFF_MILLIS
   #define AUTO_OFF_MILLIS     15000   // 15 seconds
@@ -98,11 +101,66 @@ public:
     char safeboot[qcc::kSelfTestLineChars + 1];
     qcc::formatSafeBootLine(safeboot, sizeof(safeboot), SafeBoot::bootBattMilliVolts());
     display.drawTextLeftAlign(0, 40, safeboot);
+#if UI_HAS_CARDKB
+    char kbd[qcc::kSelfTestLineChars + 1];
+    qcc::formatKeyboardLine(kbd, sizeof(kbd), _task->hasKeyboard());
+    display.drawTextLeftAlign(0, 52, kbd);
+#endif
     return 500;
   }
 
   void poll() override {
     if (millis() >= _dismiss_after) _task->gotoHomeScreen();
+  }
+};
+#endif
+
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+// Diag key test (#1207): the bench instrument for the keyboard and SW1. It shows the
+// last key as its name and raw code (Fn-layer keys included, which the UI otherwise
+// ignores), SW1's last gesture, and a typed line. Esc leaves, and so does a long SW1
+// press, so a keyboard that fails mid-test cannot strand the screen. TAB on Home opens it.
+class KeyTestScreen : public UIScreen {
+  UITask* _task;
+  LineEdit<40> _line;
+
+public:
+  explicit KeyTestScreen(UITask* task) : _task(task) {}
+  void reset() { _line.clear(); }
+
+  int render(DisplayDriver& display) override {
+    char name[12], row[qcc::kSelfTestLineChars + 1];
+    display.setTextSize(1);
+    display.setColor(UIColor::primary_txt);
+    display.drawTextLeftAlign(0, 0, "KEY TEST  ESC=exit");
+    const uint8_t raw = _task->lastKeyboardRaw();
+    if (raw == 0) {
+      snprintf(row, sizeof(row), "KB  -");
+    } else {
+      cardkb::keyName(raw, name, sizeof(name));
+      snprintf(row, sizeof(row), "KB  %s 0x%02X", name, (unsigned)raw);
+    }
+    display.drawTextLeftAlign(0, 16, row);
+    snprintf(row, sizeof(row), "SW1 %s", buttonEventName(_task->lastButtonEvent()));
+    display.drawTextLeftAlign(0, 28, row);
+    snprintf(row, sizeof(row), ">%s_", _line.tail(qcc::kSelfTestLineChars - 2));
+    display.drawTextLeftAlign(0, 44, row);
+    return 200;   // Fn keys and triple-clicks change the screen without a dispatch
+  }
+
+  bool handleInput(char c) override {
+    const uint8_t key = (uint8_t)c;
+    if (!_task->inputFromKeyboard()) {
+      if (key == KEY_ENTER) _task->gotoHomeScreen();   // SW1 long press leaves
+      return true;                                     // other gestures are only shown
+    }
+    if (key == KEY_CANCEL) return false;   // Esc: UITask backs out to Home
+    if (key == KEY_ENTER) {
+      _line.clear();
+      return true;
+    }
+    _line.apply(key);
+    return true;   // arrows and the rest are shown on the KB line and do nothing else
   }
 };
 #endif
@@ -500,6 +558,12 @@ public:
       }
       return true;
     }
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+    if ((uint8_t)c == KEY_TAB && _task->hasKeyboard()) {   // #1207: diag key test
+      _task->gotoKeyTest();
+      return true;
+    }
+#endif
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
       if (_task->isBluetoothEnabled()) {  // toggle Bluetooth on/off
         _task->disableBluetooth();
@@ -679,6 +743,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #ifdef QCC_BADGE_SELFTEST
   self_test = new SelfTestScreen(this);
 #endif
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+  key_test = new KeyTestScreen(this);
+#endif
   setCurrScreen(splash);
 }
 
@@ -697,6 +764,13 @@ void UITask::setAlwaysOn(bool on) {
 void UITask::gotoSelfTest() {
   ((SelfTestScreen*)self_test)->arm();
   setCurrScreen(self_test);
+}
+#endif
+
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+void UITask::gotoKeyTest() {
+  ((KeyTestScreen*)key_test)->reset();
+  setCurrScreen(key_test);
 }
 #endif
 
@@ -895,6 +969,9 @@ void UITask::loop() {
   }
 #elif defined(PIN_USER_BTN)
   int ev = user_btn.check();
+#if UI_HAS_CARDKB
+  if (ev != BUTTON_EVENT_NONE) _last_btn_event = ev;   // #1207: before a handler consumes it
+#endif
   if (ev == BUTTON_EVENT_CLICK) {
     c = checkDisplayOn(KEY_NEXT);
   } else if (ev == BUTTON_EVENT_LONG_PRESS) {
@@ -909,10 +986,15 @@ void UITask::loop() {
   // #1205: one key per poll. Like a button event it wakes a dark display first, but it
   // never goes through handleLongPress(), so typing can never enter CLI rescue. A
   // button event in the same pass wins; the key is the rarer of the two.
+  _input_from_kbd = false;
   const uint8_t kbd_raw = _kbd.poll(millis());
   if (kbd_raw != 0) {
+    _last_kbd_raw = kbd_raw;   // #1207: shown by the key test, Fn-layer keys included
     const uint8_t key = cardkb::toUiKey(kbd_raw);
-    if (key != 0 && c == 0) c = checkDisplayOn((char)key);
+    if (key != 0 && c == 0) {
+      _input_from_kbd = true;
+      c = checkDisplayOn((char)key);
+    }
   }
 #endif
 #if defined(UI_HAS_ROTARY_INPUT)

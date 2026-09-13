@@ -8,6 +8,17 @@
 #define BUTTON_EVENT_DOUBLE_CLICK 3
 #define BUTTON_EVENT_TRIPLE_CLICK 4
 
+// A short label for an event, for diagnostic screens.
+inline const char* buttonEventName(int event) {
+  switch (event) {
+    case BUTTON_EVENT_CLICK:        return "click";
+    case BUTTON_EVENT_DOUBLE_CLICK: return "double";
+    case BUTTON_EVENT_TRIPLE_CLICK: return "triple";
+    case BUTTON_EVENT_LONG_PRESS:   return "long";
+  }
+  return "-";
+}
+
 class MomentaryButton {
   int8_t _pin;
   int8_t prev, cancel;

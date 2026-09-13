@@ -32,6 +32,22 @@ TEST(QccSelfTest, AShortBufferTruncatesAndStaysTerminated) {
   EXPECT_STREQ("SafeBoo", buf);
 }
 
+TEST(QccSelfTest, SaysWhetherTheKeyboardAnsweredAndHowToTestIt) {
+  char buf[32];
+  qcc::formatKeyboardLine(buf, sizeof buf, true);
+  EXPECT_STREQ("KB: found  TAB=keys", buf);
+  qcc::formatKeyboardLine(buf, sizeof buf, false);
+  EXPECT_STREQ("KB: none", buf);
+}
+
+TEST(QccSelfTest, TheKeyboardLineFitsTheScreen) {
+  char buf[64];
+  for (bool found : {true, false}) {
+    qcc::formatKeyboardLine(buf, sizeof buf, found);
+    EXPECT_LE(strlen(buf), qcc::kSelfTestLineChars) << buf;
+  }
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

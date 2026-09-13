@@ -121,7 +121,7 @@ The bench instrument for this slice.
 - On `_diag` builds with a keyboard, TAB on Home opens it.
 - The self-test legend says so: `KB: found  TAB=keys`, or `KB: none`.
 - **What it shows:**
-  - the last keyboard key, as name and raw hex (`LEFT 0xB4`, `'a' 0x61`, `FN+128 0x80`);
+  - the last keyboard key, as name and raw hex (`LEFT 0xB4`, `'a' 0x61`, `FN+ESC 0x80`);
   - the last SW1 gesture;
   - a typed line with a cursor: printables append, Del deletes, Tab inserts a space, Enter clears.
 - **Leaving it:** Esc exits to Home. A long press on SW1 also exits, so a badge whose keyboard fails mid-test is never stuck.
@@ -145,7 +145,7 @@ The bench instrument for this slice.
    - **both** space keys, and the four arrows.
 3. Sticky modifiers:
    - Shift+a gives `'A' 0x41`, and Sym+q gives `'{' 0x7B`;
-   - Fn+1 shows `FN+129 0x81` (shown, not acted on);
+   - Fn+1 shows `FN+1 0x81` (shown, not acted on);
    - a double-tap lock keeps applying until tapped again.
 4. SW1 on the key-test screen shows click, double-click and triple-click, and a long press exits.
 5. Home:
