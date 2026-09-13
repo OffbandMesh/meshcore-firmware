@@ -83,6 +83,12 @@ jobs:
       - name: QCC splash-art generator self-test
         run: python scripts/test_gen_qcc_splash.py
 
+      # #1199: the WROOM sniffer sketch is a copy of the Feather one, because Arduino
+      # builds a sketch from its own folder only. This fails if the two drift apart
+      # outside their marked VARIANT blocks.
+      - name: Sniffer WROOM-copy drift guard
+        run: python scripts/test_sniffer_wroom_copy.py
+
       # #775 (epic #774). Guards the defect class behind #764/#765: an `else if`
       # that matches a CLI key and writes nothing, or a key claimed twice in one
       # chain so the later arm is unreachable. `get radio` returned an empty reply

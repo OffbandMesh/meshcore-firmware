@@ -1,5 +1,8 @@
 // ==== VARIANT BEGIN: banner ====
-// RadioCore UART0 sniffer + remote reset -- Adafruit Feather ESP32-S3.
+// RadioCore UART0 sniffer + remote reset -- ESP32-WROOM boards, classic ESP32 or
+// ESP32-S3. A copy of rc_uart_sniffer_v3, the Feather build (#1199): the two differ
+// only inside the VARIANT blocks, and scripts/test_sniffer_wroom_copy.py fails CI if
+// they drift. Change both, or neither. "Feather" in shared comments means this board.
 // ==== VARIANT END: banner ====
 // BUILD ID: SNIFFER-v4                                   (#740, #702, #938, #1085)
 //
@@ -17,17 +20,20 @@
 //
 // ==== VARIANT BEGIN: wiring ====
 // ---------------------------------------------------------------------------
-// WIRING
+// WIRING -- ESP32-WROOM boards
 // ---------------------------------------------------------------------------
-//                                  Feather        generic S3 WROOM
-//   target UART TX               -> RX or TX pad   GPIO18     see below
-//   header pin 20 (GND)          -> GND            GND        [v2, existing]
-//   header pin 18 (RST)          -> A0             GPIO17     [v3, new]
-//   header pin  5 (BOOT / USER)  -> A1             GPIO16     [v3, new]
+//                                  classic ESP32    ESP32-S3
+//   target UART TX (pad A)       -> GPIO18           GPIO18
+//   second listen pad (pad B)    -> GPIO19           GPIO15
+//   header pin 20 (GND)          -> GND              GND
+//   header pin 18 (RST)          -> GPIO17           GPIO17     open-drain
+//   header pin  5 (BOOT / USER)  -> GPIO16           GPIO16     open-drain
+//   gauge + INA I2C (Wire1)      -> SDA 21, SCL 22   SDA 8, SCL 9
 //
-// (The generic column has drifted from the code twice, #938 and #1199. The
-//  #defines in the PIN MAP block are what runs, and the boot banner prints them.
-//  ESP32-WROOM boards have their own copy of this sketch: rc_uart_sniffer_v3_wroom.)
+//   QCC 0x4 badge (#1172): the badge's GPIO33 pad (P1.01, its diag log mirror)
+//   -> pad A, and badge GND -> GND. Nothing else; never the badge's 3v3 pad.
+//
+// The #defines in the PIN MAP block are what runs, and the boot banner prints them.
 // ==== VARIANT END: wiring ====
 //
 // !! WHICH PAD THE UART WIRE GOES TO DEPENDS ON THE TARGET. Heltec REVERSED the
@@ -106,50 +112,37 @@
 
 // ==== VARIANT BEGIN: board-pins ====
 // ---------------------------------------------------------------------------
-// PIN MAP -- Feather by default, generic ESP32-S3 WROOM via one #define
+// PIN MAP -- ESP32-WROOM: classic ESP32 (WROOM-32) or ESP32-S3 (WROOM-1)
 // ---------------------------------------------------------------------------
-// On the Feather these are symbolic names resolved by the board variant header,
-// and raw GPIO numbers must NOT be substituted -- they differ across Feather S3
-// variants.
+// Explicit GPIO numbers, picked for the chip at compile time. The Feather's
+// symbolic names do not carry over: on a classic ESP32 `RX` is GPIO3, UART0 on the
+// USB bridge, and the core defines no A1/A2; on an S3 DevKitC `RX` is GPIO44, the
+// same bridge. Sniffing on either puts two drivers on the console UART.
 //
-// On a generic ESP32-S3 WROOM DevKitC those same names are wrong in a way that
-// looks like a wiring fault rather than a config error: `RX` resolves to
-// GPIO44, which IS U0RXD and is wired to the onboard USB-UART bridge. Sniffing
-// on it puts two drivers on the console UART. So the generic build uses explicit
-// GPIOs chosen to be free on every S3 WROOM module variant.
+// Avoided on the ESP32-S3:
+//   GPIO0/3/45/46  strapping pins       GPIO19/20  native USB D-/D+
+//   GPIO26..32     SPI flash            GPIO33..37 octal PSRAM (N8R8 / N16R8)
+//   GPIO43/44      UART0 / USB bridge   GPIO48     onboard RGB LED
+// Avoided on the classic ESP32:
+//   GPIO0/2/5/12/15  strapping pins     GPIO1/3    UART0 / USB bridge
+//   GPIO6..11        SPI flash          GPIO34..39 input-only, no pull-up for pad B
+// GPIO16/17 are free on WROOM modules only. On a WROVER they belong to the PSRAM.
 //
-// Avoided deliberately on the generic map:
-//   GPIO0/3/45/46  strapping pins
-//   GPIO19/20      native USB D-/D+
-//   GPIO26..32     SPI flash
-//   GPIO33..37     octal PSRAM -- unusable on N8R8 / N16R8 modules, which is
-//                  most of what ships as "ESP32-S3 WROOM"
-//   GPIO43/44      UART0 / USB-UART bridge
-//   GPIO48         onboard RGB LED
-//
-// Build for a generic board by defining SNIFFER_GENERIC_S3 (uncomment below).
-//#define SNIFFER_GENERIC_S3 1
-
-// #1085: TWO listen pins, both opened RX-only, both drained every loop. There is
-// no build-time board switch any more -- SNIFFER_RC52 is retired. Whichever board
-// is attached, one pad carries its TX and the other sits on that board's RX, so
-// the rig no longer has to be told which board it is looking at.
-//
-// Pad A is the RC32 / RCC6 position, pad B the RC52 position. Both stay soldered.
-#if defined(SNIFFER_GENERIC_S3)
+// #1085: TWO listen pins, both opened RX-only, both drained every loop. Whichever
+// board is attached, one pad carries its TX and the other sits on that board's RX,
+// so the rig never has to be told which board it is looking at. Pad A is the
+// RC32 / RCC6 position, pad B the RC52 position.
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
   #define PIN_SNIFF_RX_A 18
-  // GPIO15 is free on every S3 WROOM variant this sketch targets: not a strapping
-  // pin (0/3/45/46), not native USB (19/20), not SPI flash (26..32), not octal
-  // PSRAM (33..37), not UART0 (43/44), not the RGB LED (48).
   #define PIN_SNIFF_RX_B 15
-  #define PIN_RC32_RST   17
-  #define PIN_RC32_BOOT  16
+#elif defined(CONFIG_IDF_TARGET_ESP32)
+  #define PIN_SNIFF_RX_A 18
+  #define PIN_SNIFF_RX_B 19
 #else
-  #define PIN_SNIFF_RX_A RX
-  #define PIN_SNIFF_RX_B TX
-  #define PIN_RC32_RST   A0
-  #define PIN_RC32_BOOT  A1
+  #error "rc_uart_sniffer_v3_wroom: select ESP32 Dev Module or ESP32S3 Dev Module"
 #endif
+#define PIN_RC32_RST   17
+#define PIN_RC32_BOOT  16
 // ==== VARIANT END: board-pins ====
 
 // IDLE-PAD PULL-UP -- DEFAULT ON.
@@ -214,13 +207,23 @@
 #define SNIFF_GAUGE 1
 
 // ==== VARIANT BEGIN: gauge-pins ====
-// Free on the sniffer: RX carries the sniff line, A0/A1 carry RST/BOOT.
-// A2/A3 are unused. Change these to match however you actually wire it.
-#ifndef PIN_GAUGE_SDA
-  #define PIN_GAUGE_SDA A2
-#endif
-#ifndef PIN_GAUGE_SCL
-  #define PIN_GAUGE_SCL A3
+// The chip's standard I2C pins, clear of the sniff and control lines above. A WROOM
+// board has no onboard gauge, but Wire1 stays the bus for anything plugged in, as
+// on the Feather. Change these to match however you actually wire it.
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+  #ifndef PIN_GAUGE_SDA
+    #define PIN_GAUGE_SDA 8
+  #endif
+  #ifndef PIN_GAUGE_SCL
+    #define PIN_GAUGE_SCL 9
+  #endif
+#else
+  #ifndef PIN_GAUGE_SDA
+    #define PIN_GAUGE_SDA 21
+  #endif
+  #ifndef PIN_GAUGE_SCL
+    #define PIN_GAUGE_SCL 22
+  #endif
 #endif
 // ==== VARIANT END: gauge-pins ====
 
