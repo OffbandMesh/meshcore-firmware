@@ -108,6 +108,16 @@ TEST(Sw1Button, AlmostOneSecondIsStillAClick) {
   EXPECT_EQ(Events{BUTTON_EVENT_CLICK}, sw.events);
 }
 
+TEST(Sw1Button, EachEventHasAShortLabel) {
+  // Shown on the diag key-test screen (#1207).
+  EXPECT_STREQ("-", buttonEventName(BUTTON_EVENT_NONE));
+  EXPECT_STREQ("click", buttonEventName(BUTTON_EVENT_CLICK));
+  EXPECT_STREQ("double", buttonEventName(BUTTON_EVENT_DOUBLE_CLICK));
+  EXPECT_STREQ("triple", buttonEventName(BUTTON_EVENT_TRIPLE_CLICK));
+  EXPECT_STREQ("long", buttonEventName(BUTTON_EVENT_LONG_PRESS));
+  EXPECT_STREQ("-", buttonEventName(99));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

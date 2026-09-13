@@ -58,6 +58,9 @@ class UITask : public AbstractUITask {
 #endif
 #if UI_HAS_CARDKB
   CardKbInput _kbd;   // #1205: an optional CardKB-compatible keyboard on Wire
+  uint8_t _last_kbd_raw = 0;      // #1207: the keyboard's last byte, for the key test
+  int  _last_btn_event = 0;       // #1207: SW1's last gesture, recorded before any handler
+  bool _input_from_kbd = false;   // #1207: whether the key being dispatched is a keyboard key
 #endif
 
   UIScreen* splash;
@@ -65,6 +68,9 @@ class UITask : public AbstractUITask {
   UIScreen* msg_preview;
 #ifdef QCC_BADGE_SELFTEST
   UIScreen* self_test;
+#endif
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+  UIScreen* key_test;
 #endif
   UIScreen* curr;
 
@@ -90,6 +96,15 @@ public:
   void gotoHomeScreen() { setCurrScreen(home); }
 #ifdef QCC_BADGE_SELFTEST
   void gotoSelfTest();
+#endif
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+  void gotoKeyTest();
+#endif
+#if UI_HAS_CARDKB
+  bool hasKeyboard() const { return _kbd.isPresent(); }
+  uint8_t lastKeyboardRaw() const { return _last_kbd_raw; }
+  int lastButtonEvent() const { return _last_btn_event; }
+  bool inputFromKeyboard() const { return _input_from_kbd; }
 #endif
   void showAlert(const char* text, int duration_millis);
   int  getMsgCount() const { return _msgcount; }
