@@ -146,6 +146,14 @@ def test_pad_beacon_is_diag_only():
     assert len(re.findall(r"-D\s+OFFBAND_PAD_BEACON\b", ini)) == 1, "only the diag env may"
 
 
+def test_badge_env_enables_the_keyboard():
+    # The badge's CardKB-compatible keyboard (#1204/#1205): the UI only polls it when the
+    # flag is set, and the driver must be compiled into the env for that to link.
+    ini = (QCC / "platformio.ini").read_text()
+    assert re.search(r"-D\s+UI_HAS_CARDKB=1\b", ini)
+    assert "+<helpers/ui/CardKbInput.cpp>" in ini
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
