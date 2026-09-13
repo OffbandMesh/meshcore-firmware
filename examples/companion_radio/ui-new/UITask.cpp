@@ -1,5 +1,6 @@
 #include "UITask.h"
 #include "helpers/ui/OffbandSplash.h"
+#include <helpers/ui/KeyNav.h>
 #include <helpers/TxtDataHelpers.h>
 #include "../MyMesh.h"
 #include "target.h"
@@ -489,13 +490,12 @@ public:
   }
 
   bool handleInput(char c) override {
-    if (c == KEY_LEFT || c == KEY_PREV) {
-      _page = (_page + HomePage::Count - 1) % HomePage::Count;
-      return true;
-    }
-    if (c == KEY_NEXT || c == KEY_RIGHT) {
-      _page = (_page + 1) % HomePage::Count;
-      if (_page == HomePage::RECENT) {
+    // #1205: the arrows move pages too, Up and Down included, the same way the
+    // button's click and double-click do.
+    const keynav::Step step = keynav::pageStep((uint8_t)c);
+    if (step != keynav::Step::None) {
+      _page = keynav::stepPage(_page, HomePage::Count, step);
+      if (step == keynav::Step::Next && _page == HomePage::RECENT) {
         _task->showAlert("Recent adverts", 800);
       }
       return true;
@@ -639,6 +639,12 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #endif
 #if defined(PIN_USER_BTN_ANA)
   analog_btn.begin();
+#endif
+#if UI_HAS_CARDKB
+  // #1205: optional. Without it the badge stays button-driven. Wire is already up
+  // from board.begin().
+  const bool kbd_found = _kbd.begin(Wire);
+  MESH_DEBUG_PRINTLN("UITask: CardKB keyboard %s", kbd_found ? "found" : "not found");
 #endif
 
   _node_prefs = node_prefs;
@@ -899,6 +905,16 @@ void UITask::loop() {
     c = handleTripleClick(KEY_SELECT);
   }
 #endif
+#if UI_HAS_CARDKB
+  // #1205: one key per poll. Like a button event it wakes a dark display first, but it
+  // never goes through handleLongPress(), so typing can never enter CLI rescue. A
+  // button event in the same pass wins; the key is the rarer of the two.
+  const uint8_t kbd_raw = _kbd.poll(millis());
+  if (kbd_raw != 0) {
+    const uint8_t key = cardkb::toUiKey(kbd_raw);
+    if (key != 0 && c == 0) c = checkDisplayOn((char)key);
+  }
+#endif
 #if defined(UI_HAS_ROTARY_INPUT)
   RotaryInputEvent rotaryEv = rotary_input.poll();
   if (c == 0 && _display != NULL && _display->isOn()) {
@@ -940,7 +956,10 @@ void UITask::loop() {
 #ifdef OFFBAND_OBSERVER
     offband::crashLogf("[ui] button event c=0x%x dispatched to curr screen", (int)c);
 #endif
-    curr->handleInput(c);
+    // #1205: Esc backs out to Home from any screen that does not take it.
+    if (!curr->handleInput(c) && keynav::backsOut((uint8_t)c) && curr != home) {
+      gotoHomeScreen();
+    }
     _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
     _next_refresh = 100;  // trigger refresh
   }

@@ -22,6 +22,10 @@
 #include "../AbstractUITask.h"
 #include "../NodePrefs.h"
 
+#if UI_HAS_CARDKB
+  #include <helpers/ui/CardKbInput.h>
+#endif
+
 class UITask : public AbstractUITask {
   DisplayDriver* _display;
   SensorManager* _sensors;
@@ -51,6 +55,9 @@ class UITask : public AbstractUITask {
 
 #ifdef PIN_USER_BTN_ANA
   unsigned long _analogue_pin_read_millis = millis();
+#endif
+#if UI_HAS_CARDKB
+  CardKbInput _kbd;   // #1205: an optional CardKB-compatible keyboard on Wire
 #endif
 
   UIScreen* splash;
