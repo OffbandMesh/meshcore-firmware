@@ -162,6 +162,7 @@ Badge behavior is switched on by flags set only in the badge envs. Shared-code c
   - `SafeBoot.cpp` cannot see `PromicroBoard.h`, where `PIN_VBAT_READ` lives. Without the flag, SafeBoot compiles out silently; the stock ProMicro envs have exactly that gap (#1176).
   - The badge build fails without the SafeBoot flags. It also static-asserts that SafeBoot and the board share one pin, one divider ratio and one acquisition time.
   - SafeBoot's `SAFEBOOT_ADC_SAMPLE_US` hook sets the acquisition time for its read, then restores the core default.
+  - SafeBoot also continues the boot without checking when its read comes back 0 ("no battery rail"). From outside that looks like a pass, so the diag self-test screen shows which happened (§5.14).
 - Current in each mode (lights, GPS, BLE, idle) measured with the INA228 inline on the battery lead.
 
 ### 5.11 Radio defaults
@@ -184,6 +185,7 @@ Offband version, "on MeshCore" with its version, build date, handle, public-key 
 - **Epic 1, as built:** on diag builds, a legend screen follows the splash for 6 s. It names the outputs already active at boot:
   - P0.08: the heartbeat;
   - P0.06: the boot tune.
+  It also shows the battery reading SafeBoot let the boot through on (`SafeBoot: <n> mV`), or `SafeBoot: no reading` when SafeBoot's read came back 0 and it skipped the check (#1185).
   The legend drives nothing itself. It first also listed P0.15 ("BT advert"). The bench showed that LED isn't visible on the badge, so the line was dropped (owner-agreed, 2026-09-12, #1185).
 - **Not yet scheduled:** a Settings → Self-test that pulses each output on demand. It belongs with the lights and sound work and is to be planned with epic 4.
 

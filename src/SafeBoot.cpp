@@ -99,6 +99,7 @@ namespace
 bool g_settled = false;
 bool g_wokeFromSafeBoot = false;
 bool g_lastResetUnclean = false;
+uint16_t g_bootBattMv = 0;
 } // namespace
 
 // ===========================================================================
@@ -659,6 +660,7 @@ void SafeBoot::checkAndMaybeSleep()
         clear.flags = 0;
         storePersisted(clear);
         g_settled = true;
+        g_bootBattMv = mv;
         Serial.printf("[SafeBoot] Vbat=%u mV stable -- continuing boot (attempts=%u, unclean=%d)\r\n", (unsigned)mv,
                       (unsigned)st.attempts, (int)g_lastResetUnclean);
         return;
@@ -713,4 +715,9 @@ bool SafeBoot::wokeFromSafeBoot()
 bool SafeBoot::lastResetWasUnclean()
 {
     return g_lastResetUnclean;
+}
+
+uint16_t SafeBoot::bootBattMilliVolts()
+{
+    return g_bootBattMv;
 }
