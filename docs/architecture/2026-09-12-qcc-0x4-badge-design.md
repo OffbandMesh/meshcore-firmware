@@ -41,12 +41,13 @@ Sources: the badge schematic (EasyEDA "QCC 0x4 Badges" V1.0, 2026-03-21), the st
 | Display | 128×64 OLED, ~63 mm diagonal | I2C | controller unconfirmed; 2.42"-class modules usually carry an SSD1309 |
 | Keyboard | CardKB-compatible, HY2.0-4P | I2C | owner-stated |
 | Buzzer | BZ1 "4 kHz" via MOSFET Q3, MUTE switch in series | P0.06 | the mute switch is mechanical and not readable by firmware |
-| LED | MSG_LED (green) via MOSFET Q2, also on connector Q2D | P0.08 | single color; position on the keyboard-fitted badge not yet known |
-| ProMicro LED | onboard blue | P0.15 | visibility on the badge not yet known |
-| GPS | 4-pin header, ground switched by MOSFET Q1 | P0.24 (HIGH = on); UART P0.20 (MCU TX) / P0.22 (MCU RX) | hard power cut; the module has no EN pin |
+| LED | MSG_LED (XL-502UGD) via MOSFET Q2, also on connector Q2D | P0.08 | single color; on the owner's keyboard-fitted badge it is the red LED beside the LCD (bench, 2026-09-12) |
+| ProMicro LED | onboard blue | P0.15 | not visible on the owner's badge (bench, 2026-09-12) |
+| GPS | 4-pin header, ground switched by MOSFET Q1 | P0.24 (HIGH = on); UART P0.20 (MCU TX) / P0.22 (MCU RX) | hard power cut; the module has no EN pin. Its own blue fix LED sits under the display and goes dark when the cut is applied (bench, 2026-09-12) |
 | Button | user button (10 k pull-up, 100 nF) | P1.00 | |
 | Battery sense | 680 k / 1 M divider on the switched battery | P0.31 | ratio 1.68; always connected (~2.5 µA) |
-| Bootloader | Adafruit UF2 with S140 6.1.1 | — | the stock UF2 starts at 0x26000 |
+| Spare pads | GPIO33 / GPIO34 / GPIO38 / GPIO39, plus GND and 3v3 | P1.01 / P1.02 / P1.06 / P1.07 | single-pin pads. The diag log mirror transmits on GPIO33. P1.01, P1.02 and P1.07 reach the badge through the ProMicro's three inner holes |
+| Bootloader | Adafruit UF2 0.10.0 with S140 6.1.1 | — | the stock UF2 starts at 0x26000. The bootloader enumerates with the app's USB identity (same VID:PID and serial); only the UF2 drive tells the modes apart (bench, 2026-09-12) |
 
 **Hazard.** P0.06 and P0.08 are the ProMicro variant's default `Serial1` TX/RX; opening `Serial1` on those defaults would hold the buzzer on. The badge variant moves `Serial1` to the GPS pins. It also points the default SPI and Wire at the badge's own buses, because ProMicro's defaults land on RXEN, the GPS pins and the button. It defines no SPI1 or Wire1 (#1177).
 
@@ -136,7 +137,7 @@ Badge behavior is switched on by flags set only in the badge envs. Shared-code c
 
 ### 5.8 Lights
 
-- One LED line (P0.08), plus P0.15 if the bench shows the ProMicro LED is visible.
+- One LED line (P0.08). The ProMicro's P0.15 LED is not visible on the badge (bench, 2026-09-12), so it takes no part.
 - **Scheduler:** traffic flicker on RX/TX overrides everything; message waiting replaces the heartbeat with a distinct pattern; otherwise the heartbeat runs. Never solid-on.
 - Honors the existing indicator `led off` setting, from the client or the badge.
 - Optional breathing heartbeat via PWM, subject to a check that it does not contend with the buzzer for a PWM unit.
@@ -148,13 +149,14 @@ Badge behavior is switched on by flags set only in the badge envs. Shared-code c
 - Power save: every N minutes (default 60, configurable, floor 60 unless the owner lowers it) power the module through P0.24, wait for a fix up to a timeout (default 180 s, configurable), record the position and sync the clock, then cut power and release the UART pins. No fix before the timeout: cut power and log it.
 - The GPS screen shows the mode, the age of the last fix and the time to the next poll.
 - On the bench: time to first fix after a power cut, and current in each mode.
+- **Bench, 2026-09-12 (owner):** the P0.24 cut works. With GPS off in the app the module's LED goes dark; turned back on, it blinks at its fix rate. Current in each mode is still to be measured.
 
 ### 5.10 Power and battery
 
 - **Battery reading** (`variants/qcc_badge/QccBattery.h`):
   - The 1.68 divider on P0.31 is read against the internal 0.6 V reference at gain 1/6 (3.6 V full scale), 12-bit, with a 40 µs acquisition for the ~405 kΩ source. That gives 1.4765625 mV per count.
   - The multiplier is user-settable. A NaN, infinite or non-positive result reads 0 ("no reading"), and an oversized one saturates, rather than wrapping to a plausible voltage.
-  - Calibrated against a meter on the bench (epic 1).
+  - Calibration against a meter (Task 1.10, #1186) is deferred by the owner (2026-09-12); battery readings get their own thread.
 - **One low-voltage policy (D2):** SafeBoot sleeps at 3500 mV and wakes at 3700 mV, then the runtime `AUTO_SHUTDOWN_MILLIVOLTS` cuts at 3400 mV. `PWRMGT_VOLTAGE_BOOTLOCK` is not compiled for this board.
 - **SafeBoot runs on this board only because the env sets `SAFEBOOT_PIN_VBAT_READ`.**
   - `SafeBoot.cpp` cannot see `PromicroBoard.h`, where `PIN_VBAT_READ` lives. Without the flag, SafeBoot compiles out silently; the stock ProMicro envs have exactly that gap (#1176).
@@ -181,9 +183,8 @@ Offband version, "on MeshCore" with its version, build date, handle, public-key 
 
 - **Epic 1, as built:** on diag builds, a legend screen follows the splash for 6 s. It names the outputs already active at boot:
   - P0.08: the heartbeat;
-  - P0.15: blinks while Bluetooth advertises (whether it can be seen through the badge is still a bench question, §3);
   - P0.06: the boot tune.
-  The legend drives nothing itself.
+  The legend drives nothing itself. It first also listed P0.15 ("BT advert"). The bench showed that LED isn't visible on the badge, so the line was dropped (owner-agreed, 2026-09-12, #1185).
 - **Not yet scheduled:** a Settings → Self-test that pulses each output on demand. It belongs with the lights and sound work and is to be planned with epic 4.
 
 ## 6. UI
@@ -227,7 +228,7 @@ Pixel-accurate mockups of splash A, the inbox, the thread with compose line, the
 - The con radio config (owner, from the con).
 - Whether badges run Offband during the con, or only after the departure flash.
 - ~~Which preset "normal defaults" means for the departure build.~~ Answered by D1: the US community preset.
-- Where the LED sits on the keyboard-fitted badge (the self-test will show).
+- ~~Where the LED sits on the keyboard-fitted badge.~~ Answered on the bench: the red LED beside the LCD (P0.08). The blue LED under the display is the GPS module's.
 - The GPS module and whether it has a backup cell (bench).
 - Battery capacity.
 - How many badges are available for integration testing.

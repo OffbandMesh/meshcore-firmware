@@ -88,8 +88,7 @@ public:
     display.setColor(UIColor::primary_txt);
     display.drawTextLeftAlign(0, 0, "SELF-TEST (diag)");
     display.drawTextLeftAlign(0, 16, "P0.08 LED: heartbeat");
-    display.drawTextLeftAlign(0, 28, "P0.15 LED: BT advert");
-    display.drawTextLeftAlign(0, 40, "P0.06 buzz: boot tune");
+    display.drawTextLeftAlign(0, 28, "P0.06 buzz: boot tune");
     return 500;
   }
 
