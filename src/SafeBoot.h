@@ -63,4 +63,11 @@ bool wokeFromSafeBoot();
  */
 bool lastResetWasUnclean();
 
+/**
+ * The battery reading, in mV, that let this boot through. 0 when there was
+ * none: SafeBoot continues the boot without checking when its read comes
+ * back 0, and never reads at all where it is compiled out.
+ */
+uint16_t bootBattMilliVolts();
+
 } // namespace SafeBoot

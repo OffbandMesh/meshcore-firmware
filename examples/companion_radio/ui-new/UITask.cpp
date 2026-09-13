@@ -9,6 +9,10 @@
 #ifdef OFFBAND_OBSERVER
   #include <helpers/diagnostics/CrashLog.h>
 #endif
+#ifdef QCC_BADGE_SELFTEST
+  #include <SafeBoot.h>
+  #include "QccSelfTest.h"
+#endif
 
 #ifndef AUTO_OFF_MILLIS
   #define AUTO_OFF_MILLIS     15000   // 15 seconds
@@ -74,7 +78,8 @@ public:
 
 #ifdef QCC_BADGE_SELFTEST
 // Bring-up legend (#1173): names the badge's physical outputs so they can be found
-// without opening the badge. Shown once after the splash, on diag builds only.
+// without opening the badge, and shows the battery reading SafeBoot let this boot
+// through on (#1185). Shown once after the splash, on diag builds only.
 class SelfTestScreen : public UIScreen {
   UITask* _task;
   unsigned long _dismiss_after = 0;
@@ -89,6 +94,9 @@ public:
     display.drawTextLeftAlign(0, 0, "SELF-TEST (diag)");
     display.drawTextLeftAlign(0, 16, "P0.08 LED: heartbeat");
     display.drawTextLeftAlign(0, 28, "P0.06 buzz: boot tune");
+    char safeboot[qcc::kSelfTestLineChars + 1];
+    qcc::formatSafeBootLine(safeboot, sizeof(safeboot), SafeBoot::bootBattMilliVolts());
+    display.drawTextLeftAlign(0, 40, safeboot);
     return 500;
   }
 
