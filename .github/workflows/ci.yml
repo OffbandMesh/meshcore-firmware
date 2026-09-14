@@ -89,6 +89,11 @@ jobs:
       - name: Sniffer WROOM-copy drift guard
         run: python scripts/test_sniffer_wroom_copy.py
 
+      # #1199: capture.py on a CP2102/CH340 rig. --no-dtr must keep GPIO0 high, and
+      # --reset must reboot the rig from flash once, never again on a reconnect.
+      - name: Sniffer capture bridge-flag tests
+        run: python scripts/test_capture_bridge_flags.py
+
       # #775 (epic #774). Guards the defect class behind #764/#765: an `else if`
       # that matches a CLI key and writes nothing, or a key claimed twice in one
       # chain so the later arm is unreachable. `get radio` returned an empty reply

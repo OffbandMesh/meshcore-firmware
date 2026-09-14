@@ -19,9 +19,17 @@ attach, which is why every log ever captured that way came from a boot that
 SUCCEEDED (#702). This script talks only to the Feather, which is a separate
 device on a separate USB port, so opening it has no effect on the RC32.
 
-DTR/RTS are forced low before open so the Feather is not reset on attach. That
-matters less than it does for the RC32 (the Feather holds no state worth
-keeping) but a reset mid-capture costs bytes, so we avoid it.
+RTS stays low: on ESP boards it is the reset line. DTR is ASSERTED by default,
+because the Feather's native-USB CDC stays silent without it (see open_port).
+
+USB-UART BRIDGE RIGS NEED THE OPPOSITE (#1199). On a CP2102/CH340 DevKit (the
+WROOM sniffers) DTR and RTS drive the auto-reset circuit:
+    dtr off, rts off -> runs          dtr off, rts on -> held in reset (EN low)
+    dtr on,  rts off -> GPIO0 low, so any reset boots ROM DOWNLOAD mode
+With the default, a reset during the capture leaves the sniffer in download mode,
+silent until the next reset. Pass --no-dtr on those rigs; add --reset to reboot
+the sniffer from flash once the port is open, so the capture starts with its
+banner.
 
 USAGE
 -----
@@ -29,6 +37,7 @@ USAGE
     python capture.py --list
     python capture.py --port COM16 --send  RST   # standalone only, see below
     python capture.py --port COM16 --out ../evidence/rst-session.log --queue RST
+    python capture.py --port COM6 --out ../evidence/qcc.log --no-dtr --reset   # WROOM rig
 
 ISSUING COMMANDS WHILE CAPTURING
 --------------------------------
@@ -105,8 +114,21 @@ def open_port(port: str, baud: int, assert_dtr: bool = True) -> "serial.Serial":
     return s
 
 
-def do_send(port: str, baud: int, cmd: str) -> int:
-    with open_port(port, baud) as s:
+def pulse_reset(s) -> None:
+    """Reboot a USB-UART bridge rig from flash (#1199).
+
+    RTS on with DTR off holds EN low; releasing RTS lets the chip boot with GPIO0
+    high, which is a normal boot. Never call this with DTR asserted: that holds
+    GPIO0 low, and the same pulse would land the rig in ROM download mode.
+    """
+    s.dtr = False
+    s.rts = True
+    time.sleep(0.25)
+    s.rts = False
+
+
+def do_send(port: str, baud: int, cmd: str, assert_dtr: bool = True) -> int:
+    with open_port(port, baud, assert_dtr) as s:
         time.sleep(0.2)                      # let the port settle
         s.write((cmd.strip() + "\n").encode())
         s.flush()
@@ -158,7 +180,8 @@ def drain_cmd_file(cmd_path: str, s, f) -> None:
             pass
 
 
-def do_capture(port: str, baud: int, out_path: str, cmd_path: str = None) -> int:
+def do_capture(port: str, baud: int, out_path: str, cmd_path: str = None,
+               assert_dtr: bool = True, reset_first: bool = False) -> int:
     if cmd_path is None:
         cmd_path = out_path + ".cmd"
     print(f"[{ts()}] capture -> {out_path}  (port {port} @ {baud})", flush=True)
@@ -166,14 +189,21 @@ def do_capture(port: str, baud: int, out_path: str, cmd_path: str = None) -> int
     # Line-buffered append. Append, never truncate: an accidental re-run must
     # not destroy an overnight capture.
     with open(out_path, "a", buffering=1, encoding="utf-8", errors="replace") as f:
-        f.write(f"\n===== capture started {ts()} port={port} baud={baud} =====\n")
+        f.write(f"\n===== capture started {ts()} port={port} baud={baud} "
+                f"dtr={'on' if assert_dtr else 'off'} =====\n")
         f.write(f"===== command queue: {cmd_path} =====\n")
         s = None
         while True:
             try:
                 if s is None:
-                    s = open_port(port, baud)
+                    s = open_port(port, baud, assert_dtr)
                     f.write(f"[{ts()}] <port opened>\n")
+                    # Once, on the first open only: a reconnect after a port error
+                    # must not reboot the sniffer again.
+                    if reset_first:
+                        f.write(f"[{ts()}] <reset: RTS pulse, DTR off -> boot from flash>\n")
+                        pulse_reset(s)
+                        reset_first = False
                 # Checked every loop iteration. readline() returns on its 1 s
                 # timeout even when the wire is silent, so a queued command is
                 # picked up within ~1 s regardless of traffic.
@@ -212,12 +242,21 @@ def main() -> int:
                                     "(writes <out>.cmd; needs --out to locate the queue)")
     ap.add_argument("--cmd-file", default=None,
                     help="override the command-queue path (default: <out>.cmd)")
+    ap.add_argument("--no-dtr", action="store_true",
+                    help="never assert DTR -- for USB-UART bridge rigs (CP2102/CH340 DevKits), "
+                         "where DTR holds GPIO0 low and a reset boots download mode (#1199)")
+    ap.add_argument("--reset", action="store_true",
+                    help="with --no-dtr: pulse RTS once after opening, so the sniffer reboots "
+                         "from flash and the capture starts with its banner")
     a = ap.parse_args()
 
     if a.list:
         return do_list()
     if not a.port:
         ap.error("--port is required (use --list to find it)")
+    if a.reset and not a.no_dtr:
+        ap.error("--reset needs --no-dtr: with DTR asserted, a bridge rig resets into "
+                 "download mode")
     if a.queue:
         if not a.out:
             print("--queue needs --out so the queue file can be located", file=sys.stderr)
@@ -229,10 +268,11 @@ def main() -> int:
         return 0
 
     if a.send:
-        return do_send(a.port, a.baud, a.send)
+        return do_send(a.port, a.baud, a.send, assert_dtr=not a.no_dtr)
     if not a.out:
         ap.error("--out is required for capture")
-    return do_capture(a.port, a.baud, a.out, a.cmd_file)
+    return do_capture(a.port, a.baud, a.out, a.cmd_file,
+                      assert_dtr=not a.no_dtr, reset_first=a.reset)
 
 
 if __name__ == "__main__":

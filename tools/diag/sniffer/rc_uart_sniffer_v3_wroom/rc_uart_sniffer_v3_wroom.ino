@@ -4,20 +4,24 @@
 // only inside the VARIANT blocks, and scripts/test_sniffer_wroom_copy.py fails CI if
 // they drift. Change both, or neither. "Feather" in shared comments means this board.
 // ==== VARIANT END: banner ====
-// BUILD ID: SNIFFER-v4                                   (#740, #702, #938, #1085)
+// BUILD ID: SNIFFER-v5                            (#740, #702, #938, #1085, #1199)
 //
 // v2 was listen-only. v3 adds a command surface so a host can assert the RC32's
 // RST and BOOT lines without a human pressing buttons, which is what unblocks
 // unattended reset cycles. v4 listens on BOTH header positions at once with a
 // byte counter per pad, so the rig never has to be told which board it faces
-// (#1085, implementing what #938 specified).
+// (#1085, implementing what #938 specified). v5 reads the INA whether or not a
+// fuel gauge answered, asks again for a gauge that was missing at boot, and takes
+// per-board pad labels and optional edge counters from the PIN MAP (#1199).
 //
 // FLASH WITH ARDUINO IDE, NOT PLATFORMIO. Two prior PlatformIO attempts put
 // `Serial` on the TinyUSB CDC peripheral while the enumerated port was
 // USB-Serial-JTAG: the sketch flashed and verified but printed nothing. The
 // Arduino IDE handles the Feather's USB config correctly out of the box.
 // (#704 handoff.)
-//
+
+#define SNIFF_BUILD_ID "SNIFFER-v5"   // the banner, every heartbeat and PING print it
+
 // ==== VARIANT BEGIN: wiring ====
 // ---------------------------------------------------------------------------
 // WIRING -- ESP32-WROOM boards
@@ -25,13 +29,21 @@
 //                                  classic ESP32    ESP32-S3
 //   target UART TX (pad A)       -> GPIO18           GPIO18
 //   second listen pad (pad B)    -> GPIO19           GPIO15
+//   edge counters C / D          -> GPIO4 / GPIO5    GPIO4 / GPIO5
 //   header pin 20 (GND)          -> GND              GND
 //   header pin 18 (RST)          -> GPIO17           GPIO17     open-drain
 //   header pin  5 (BOOT / USER)  -> GPIO16           GPIO16     open-drain
 //   gauge + INA I2C (Wire1)      -> SDA 21, SCL 22   SDA 8, SCL 9
 //
-//   QCC 0x4 badge (#1172): the badge's GPIO33 pad (P1.01, its diag log mirror)
-//   -> pad A, and badge GND -> GND. Nothing else; never the badge's 3v3 pad.
+//   QCC 0x4 badge rig (#1172, #1199). Its WROOM boards are CLASSIC ESP32 DevKits,
+//   so build it as "ESP32 Dev Module". DevKit silkscreen in brackets:
+//     badge GPIO33 pad (P1.01, the diag log mirror today) -> pad A  [D18]
+//     badge GPIO38 pad (P1.06)                            -> pad B  [D19]
+//     badge GPIO34 pad (P1.02)                            -> edge C [D4]
+//     badge GPIO39 pad (P1.07)                            -> edge D [D5]
+//     INA228 + MAX17048                                   -> SDA [D21], SCL [D22]
+//     badge GND -> GND. Never the badge's 3v3 pad.
+//   The MAX17048 is powered by its cell, so it only answers with a battery on it.
 //
 // The #defines in the PIN MAP block are what runs, and the boot banner prints them.
 // ==== VARIANT END: wiring ====
@@ -143,6 +155,21 @@
 #endif
 #define PIN_RC32_RST   17
 #define PIN_RC32_BOOT  16
+
+// Names the banner and the >>> source marker print for each listen pad (#1199).
+#define SNIFF_TITLE "QCC badge UART SNIFFER (WROOM)"
+#define PAD_A_NAME  "A (badge GPIO33)"
+#define PAD_B_NAME  "B (badge GPIO38)"
+
+// #1199: two more badge pads, edge-counted rather than decoded. Nothing on the badge
+// drives them yet. Input with pull-up, never driven. Free on both chips: GPIO4 is
+// no strap on either, and GPIO5 straps only SDIO-slave timing on the classic ESP32,
+// which nothing here uses.
+#define SNIFF_EDGE_PINS 1
+#define PIN_EDGE_C 4
+#define PIN_EDGE_D 5
+#define EDGE_C_NAME "C (badge GPIO34)"
+#define EDGE_D_NAME "D (badge GPIO39)"
 // ==== VARIANT END: board-pins ====
 
 // IDLE-PAD PULL-UP -- DEFAULT ON.
@@ -432,8 +459,13 @@ static void gaugeBegin() {
     Serial.print("FOUND at 0x36, VERSION=0x");
     Serial.println(ver, HEX);
   } else {
-    Serial.println("NOT FOUND -- check wiring, and that it is NOT in the STEMMA");
-    Serial.println("    port (that is Wire, where the onboard gauge already sits at 0x36)");
+    // The MAX17048 is powered by the cell it measures, not by the I2C supply, so
+    // with no battery on it no wiring fix will make it answer (#1199).
+    Serial.println("NOT FOUND -- check wiring, and that its battery is connected (it runs");
+    Serial.println("    from the cell). On a Feather: NOT in the STEMMA port -- that is Wire,");
+    Serial.println("    where the onboard gauge already sits at 0x36.");
+    Serial.printf ("    Asked again every %d s, so connecting it later is picked up.\n",
+                   GAUGE_PERIOD_MS / 1000);
   }
 
   inaProbe();
@@ -681,33 +713,49 @@ static uint32_t inaTick() {
 }
 
 static void gaugeTick(uint32_t now) {
-  if (!gauge_present || (int32_t)(now - gauge_next) < 0) return;
+  if ((int32_t)(now - gauge_next) < 0) return;
   gauge_next = now + GAUGE_PERIOD_MS;
 
-  uint16_t vcell = 0, soc = 0;
-  if (!gaugeRead16(MAX1704X_VCELL, &vcell) || !gaugeRead16(MAX1704X_SOC, &soc)) {
-    Serial.println("[gauge] read FAILED");
-    return;
+  // #1199: ask again for a gauge that did not answer at boot. One targeted read at
+  // its fixed address, never a scan (#294). The MAX17048 is powered by the cell it
+  // measures, so it stays silent until a battery is connected to it.
+  if (!gauge_present) {
+    uint16_t ver = 0;
+    gauge_present = gaugeRead16(MAX1704X_VERSION, &ver);
+    if (gauge_present) {
+      Serial.print("=== fuel gauge on Wire1: FOUND at 0x36 after boot, VERSION=0x");
+      Serial.println(ver, HEX);
+    }
   }
 
-  // MAX17048: VCELL LSB = 78.125 uV, charge = SOC / 256 %.
-  // Raw values are printed alongside the decode deliberately. If this turns out
-  // to be a MAX17043 the scaling differs (12-bit VCELL, 1.25 mV/LSB) and the raw
-  // number is what lets that be corrected after the fact instead of silently
-  // logging a wrong voltage for hours.
-  uint32_t mv = ((uint32_t)vcell * 78125UL) / 1000000UL;
-  uint32_t pct_x10 = ((uint32_t)soc * 10UL) / 256UL;
+  // #1199: v4 returned early when no gauge answered, which silenced a found INA as
+  // well. Each instrument is read on its own now; only the cross-check needs both.
+  uint32_t mv = 0;
+  if (gauge_present) {
+    uint16_t vcell = 0, soc = 0;
+    if (!gaugeRead16(MAX1704X_VCELL, &vcell) || !gaugeRead16(MAX1704X_SOC, &soc)) {
+      Serial.println("[gauge] read FAILED");
+    } else {
+      // MAX17048: VCELL LSB = 78.125 uV, charge = SOC / 256 %.
+      // Raw values are printed alongside the decode deliberately. If this turns
+      // out to be a MAX17043 the scaling differs (12-bit VCELL, 1.25 mV/LSB) and
+      // the raw number is what lets that be corrected after the fact instead of
+      // silently logging a wrong voltage for hours.
+      mv = ((uint32_t)vcell * 78125UL) / 1000000UL;
+      const uint32_t pct_x10 = ((uint32_t)soc * 10UL) / 256UL;
 
-  Serial.print("[gauge] mv=");
-  Serial.print(mv);
-  Serial.print(" charge=");
-  Serial.print(pct_x10 / 10);
-  Serial.print('.');
-  Serial.print(pct_x10 % 10);
-  Serial.print("%  raw_vcell=0x");
-  Serial.print(vcell, HEX);
-  Serial.print(" raw_soc=0x");
-  Serial.println(soc, HEX);
+      Serial.print("[gauge] mv=");
+      Serial.print(mv);
+      Serial.print(" charge=");
+      Serial.print(pct_x10 / 10);
+      Serial.print('.');
+      Serial.print(pct_x10 % 10);
+      Serial.print("%  raw_vcell=0x");
+      Serial.print(vcell, HEX);
+      Serial.print(" raw_soc=0x");
+      Serial.println(soc, HEX);
+    }
+  }
 
   // TWO INSTRUMENTS, ONE TRUTH. The gauge senses UPSTREAM of the shunt and the
   // INA senses at VIN- (load side), so the difference between them IS the shunt
@@ -770,8 +818,7 @@ static void relay_mark_source(char src) {
   Serial.print(">>> [src:");
   Serial.print(src);
   Serial.print("] now receiving on pad ");
-  Serial.print(src == 'A' ? "A (RC32/RCC6 header position)"
-                          : "B (RC52 header position)");
+  Serial.print(src == 'A' ? PAD_A_NAME : PAD_B_NAME);
   Serial.print("  @up=");
   Serial.print(millis() / 1000);
   Serial.println("s");
@@ -804,10 +851,20 @@ static void handle_cmd(const char* c) {
     stamp("BOOT pulsed alone");
     od_assert(PIN_RC32_BOOT); delay(RST_ASSERT_MS); od_release(PIN_RC32_BOOT);
   }
-  else if (!strcasecmp(c, "PING"))    stamp("PONG SNIFFER-v4");
+  else if (!strcasecmp(c, "PING"))    stamp("PONG " SNIFF_BUILD_ID);
   else if (!strcasecmp(c, "HELP"))    stamp("cmds: RST BOOTRST BOOT PING HELP");
   else if (c[0])                      stamp("unknown cmd (try HELP)");
 }
+
+#if SNIFF_EDGE_PINS
+// #1199: edge counters for pads that carry no UART. A rising count proves the wire
+// moves, and the heartbeat also prints where each pad rests. Sized for toggles and
+// pulse trains; decode real UART traffic on pads A/B instead.
+static volatile uint32_t edges_c = 0, edges_d = 0;
+// Written out, not ++: C++20 deprecates ++ on a volatile.
+static void IRAM_ATTR edge_isr_c() { edges_c = edges_c + 1; }
+static void IRAM_ATTR edge_isr_d() { edges_d = edges_d + 1; }
+#endif
 
 void setup() {
   // FIRST: park both control lines high-Z before anything else can run, so a
@@ -845,14 +902,28 @@ void setup() {
   gpio_pullup_en((gpio_num_t)PIN_SNIFF_RX_B);
 #endif
 
+#if SNIFF_EDGE_PINS
+  // Input with pull-up: never driven, and an undriven pad rests high instead of
+  // counting noise.
+  pinMode(PIN_EDGE_C, INPUT_PULLUP);
+  pinMode(PIN_EDGE_D, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(PIN_EDGE_C), edge_isr_c, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN_EDGE_D), edge_isr_d, CHANGE);
+#endif
+
   Serial.println();
   Serial.println("================================================");
-  Serial.println("=== RadioCore UART0 SNIFFER  BUILD ID: SNIFFER-v4 ===");
+  Serial.println("=== " SNIFF_TITLE "  BUILD ID: " SNIFF_BUILD_ID " ===");
   // The RESOLVED GPIO numbers are the ground truth, not any comment: TX/RX are
   // variant-dependent aliases and selecting the wrong board silently moves them.
-  Serial.printf ("=== pad A (RC32/RCC6) GPIO%d   pad B (RC52) GPIO%d   %d 8N1\n",
-                 (int)PIN_SNIFF_RX_A, (int)PIN_SNIFF_RX_B, SNIFF_BAUD);
+  Serial.printf ("=== pad %s GPIO%d   pad %s GPIO%d   %d 8N1\n",
+                 PAD_A_NAME, (int)PIN_SNIFF_RX_A, PAD_B_NAME, (int)PIN_SNIFF_RX_B,
+                 SNIFF_BAUD);
   Serial.println("=== both listened RX-only; heartbeat counts each separately");
+#if SNIFF_EDGE_PINS
+  Serial.printf ("=== edges %s GPIO%d   %s GPIO%d   input, pull-up, never driven\n",
+                 EDGE_C_NAME, (int)PIN_EDGE_C, EDGE_D_NAME, (int)PIN_EDGE_D);
+#endif
   Serial.println("=== heartbeat 1/s for 30s, then 1/10s");
   Serial.println("=== any line without [hb] or >>> is target data");
   Serial.printf ("=== RST->GPIO%d  BOOT->GPIO%d  (open-drain, pull-low only)\n",
@@ -926,10 +997,17 @@ void loop() {
     // data, independently of whether the data is decodable at this baud, and says
     // WHICH header position is live. Both at 0 now means no target is
     // transmitting -- it can no longer mean the rig is watching the wrong pad.
-    Serial.printf("[hb] SNIFFER-v4 alive  n=%lu  up=%lus  rx_a=%lu  rx_b=%lu\n",
+    Serial.printf("[hb] " SNIFF_BUILD_ID " alive  n=%lu  up=%lus  rx_a=%lu  rx_b=%lu",
                   (unsigned long)++hb_n,
                   (unsigned long)(now / 1000),
                   (unsigned long)rx_bytes_a,
                   (unsigned long)rx_bytes_b);
+#if SNIFF_EDGE_PINS
+    // Pulled up, an undriven pad rests at 1, so a 0 means something holds it low.
+    Serial.printf("  edges_c=%lu  edges_d=%lu  lvl_c=%d  lvl_d=%d",
+                  (unsigned long)edges_c, (unsigned long)edges_d,
+                  digitalRead(PIN_EDGE_C), digitalRead(PIN_EDGE_D));
+#endif
+    Serial.println();
   }
 }
