@@ -1735,12 +1735,27 @@ Every `pio-flash.py` run is its own owner approval: `list`, `bootstrap`, `previe
 
 ### Task 1.11: Epic 1 verification
 
-- [ ] All epic 1 tasks closed, each with evidence and a Gemini review on its issue.
-- [ ] `pio test -e native -v`: every suite passes. `python -m pytest scripts/test_qcc_variant_pins.py scripts/test_gen_qcc_splash.py -q`: all pass.
-- [ ] `pio run -e QCC_Badge_companion_radio_ble -e QCC_Badge_companion_radio_ble_diag -e ProMicro_companion_radio_ble`: `SUCCESS` ×3, with sizes recorded.
-- [ ] Bench results from 1.9 and 1.10 recorded on the issues.
-- [ ] #1173's criteria met: boots Offband, splash renders, heartbeat visible, the legend identifies the LED(s), battery within 2% of a meter, BLE pairs.
+- [x] All epic 1 tasks closed, each with evidence and a Gemini review on its issue. Exceptions:
+  - the plan (#1175) was agreed by the owner and has no Gemini review on file;
+  - 1.10 (#1186) is deferred by the owner;
+  - the sniffer chore (#1199) is open for its follow-ups.
+- [x] `pio test -e native -v`: 342/342 at `8e0441b8`. The pytest guards pass: 33 checks across `test_qcc_variant_pins.py`, `test_gen_qcc_splash.py` and the three guards added during bring-up.
+- [x] `pio run -e QCC_Badge_companion_radio_ble -e QCC_Badge_companion_radio_ble_diag -e ProMicro_companion_radio_ble`: `SUCCESS` ×3, clean builds at `8e0441b8`.
+
+  | Env | RAM | Flash |
+  |---|---|---|
+  | `ProMicro_companion_radio_ble` | 163,400 B (69.4%) | 418,832 B (58.8%) |
+  | `QCC_Badge_companion_radio_ble` | 163,256 B (69.3%) | 432,520 B (60.7%) |
+  | `QCC_Badge_companion_radio_ble_diag` | 163,296 B (69.3%) | 443,164 B (62.2%) |
+- [x] Bench results recorded. 1.9 is on #1185: SafeBoot read 4081 mV at boot, seen on the rig. 1.10 is deferred by the owner (#1186).
+- [x] #1173's criteria met, except battery within 2% of a meter, which is deferred with 1.10.
+  - The owner observed the splash, the heartbeat, the legend's LED lines and BLE pairing on 2026-09-12.
+  - The rig log shows the boot on 2026-09-14.
 - [ ] Owner sign-off. Then push the epic branch and open the epic PR (each its own owner approval).
+
+**Epic-level Gemini 2.5 review (2026-09-14):** no change. Both findings were checked against the code and declined:
+- **The pad beacon's interrupt window.** Nothing writes to the log mirror from an interrupt. MeshLog requires task context, and the beacon's scheduler hold covers every task.
+- **TpFont reading PROGMEM directly.** No AVR env exists, and every supported MCU maps flash into the address space.
 
 ---
 
