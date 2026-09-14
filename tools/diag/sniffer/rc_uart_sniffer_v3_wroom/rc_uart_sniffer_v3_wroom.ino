@@ -4,7 +4,7 @@
 // only inside the VARIANT blocks, and scripts/test_sniffer_wroom_copy.py fails CI if
 // they drift. Change both, or neither. "Feather" in shared comments means this board.
 // ==== VARIANT END: banner ====
-// BUILD ID: SNIFFER-v7                            (#740, #702, #938, #1085, #1199)
+// BUILD ID: SNIFFER-v8                            (#740, #702, #938, #1085, #1199)
 //
 // v2 was listen-only. v3 adds a command surface so a host can assert the RC32's
 // RST and BOOT lines without a human pressing buttons, which is what unblocks
@@ -16,6 +16,8 @@
 // sweep the I2C bus once at boot, per board, to find a device that does not answer
 // where it should (#1199). v7 can decode two more pads through the RMT and tag every
 // line with the pin it arrived on, so one board reads four pads continuously (#1199).
+// v8 fixes the [xchk] hint: what the gauge-vs-INA difference should be depends on
+// where the INA reads VBUS (#1199).
 //
 // FLASH WITH ARDUINO IDE, NOT PLATFORMIO. Two prior PlatformIO attempts put
 // `Serial` on the TinyUSB CDC peripheral while the enumerated port was
@@ -23,7 +25,7 @@
 // Arduino IDE handles the Feather's USB config correctly out of the box.
 // (#704 handoff.)
 
-#define SNIFF_BUILD_ID "SNIFFER-v7"   // the banner, every heartbeat and PING print it
+#define SNIFF_BUILD_ID "SNIFFER-v8"   // the banner, every heartbeat and PING print it
 
 // ==== VARIANT BEGIN: wiring ====
 // ---------------------------------------------------------------------------
@@ -854,21 +856,31 @@ static void gaugeTick(uint32_t now) {
     }
   }
 
-  // TWO INSTRUMENTS, ONE TRUTH. The gauge senses UPSTREAM of the shunt and the
-  // INA senses at VIN- (load side), so the difference between them IS the shunt
-  // drop and must agree with the current we just computed:
+  // TWO INSTRUMENTS, ONE TRUTH. The gauge senses UPSTREAM of the shunt. What the
+  // difference should be depends on where the INA reads its bus voltage:
   //
-  //     gauge_mv - bus_mv  ~=  I * R
+  //   at VIN- (load side), as an INA219 always does: the difference IS the
+  //   shunt drop, and must agree with the current we just computed,
+  //       gauge_mv - bus_mv  ~=  I * R
   //
-  // Printed rather than asserted. If it stops agreeing, one of the gauge, the
-  // shunt value or the decode is wrong, and this line says so before a wrong
-  // number gets baked into a runtime figure (#833's "both instruments must
-  // agree" rule, now with a second independent quantity behind it).
+  //   at VIN+ (battery side), as an INA226/228 does when its VBUS pin is tied
+  //   there (the Adafruit INA228's VBUS jumper, as on the QCC WROOM rig): both
+  //   read the same node, so the difference is ~0 at any current.
+  //
+  // The sketch knows the chip but not the VBUS wiring, so the hint says which
+  // case applies or names both. Printed rather than asserted. If it stops
+  // agreeing, one of the gauge, the shunt value or the decode is wrong, and this
+  // line says so before a wrong number gets baked into a runtime figure (#833's
+  // "both instruments must agree" rule, now with a second independent quantity
+  // behind it).
   uint32_t bus_mv = inaTick();
   if (bus_mv > 0 && mv > 0) {
     Serial.print("[xchk] gauge_mv-bus_mv=");
     Serial.print((int32_t)mv - (int32_t)bus_mv);
-    Serial.println(" mV  (expect ~ shunt_uv/1000; two measurements of one drop)");
+    if (ina_kind == INA_219_CLASS)
+      Serial.println(" mV  (INA219 reads VIN-: expect ~ shunt_uv/1000)");
+    else
+      Serial.println(" mV  (expect ~0 if VBUS is on VIN+, ~ shunt_uv/1000 if on VIN-)");
   }
 }
 #endif  // SNIFF_GAUGE
