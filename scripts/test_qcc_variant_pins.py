@@ -113,6 +113,34 @@ def test_diag_log_mirror_transmits_on_the_spare_pad():
     assert gpio("PIN_QCC_SPARE_GPIO33") == 33   # P1.01, not a badge output
 
 
+def beacon_pads():
+    src = (QCC / "variant.h").read_text()
+    m = re.search(r"#define\s+OFFBAND_PAD_BEACON_PADS\b(.*?)(?:\n\s*\n|\n#)", src, re.S)
+    assert m, "OFFBAND_PAD_BEACON_PADS is missing from variant.h"
+    return [(int(pin), name) for pin, name in re.findall(r'\{\s*(\d+)\s*,\s*"([^"]+)"\s*\}', m.group(1))]
+
+
+def test_pad_beacon_drives_only_the_four_spare_pads():
+    # #1210: the diag ID beacon sets these pins as outputs and transmits on them. Every
+    # one must be a spare pad, never the buzzer (P0.06), the LED (P0.08), the GPS power
+    # switch or a bus pin.
+    pads = beacon_pads()
+    assert [pin for pin, _ in pads] == [33, 34, 38, 39]
+    for pin, name in pads:
+        port, bit = divmod(pin, 32)
+        assert name == "GPIO%d P%d.%02d" % (pin, port, bit), name
+    taken = {gpio(n) for n in ("PIN_QCC_MSG_LED", "PIN_QCC_BUZZER", "PIN_QCC_GPS_POWER",
+                               "PIN_SERIAL1_TX", "PIN_SERIAL1_RX", "PIN_WIRE_SDA", "PIN_WIRE_SCL")}
+    assert not taken & {pin for pin, _ in pads}
+
+
+def test_pad_beacon_is_diag_only():
+    ini = (QCC / "platformio.ini").read_text()
+    diag = ini.split("[qcc_badge_diag]", 1)[1].split("\n[", 1)[0]
+    assert re.search(r"-D\s+OFFBAND_PAD_BEACON\b", diag), "the diag env must enable the beacon"
+    assert len(re.findall(r"-D\s+OFFBAND_PAD_BEACON\b", ini)) == 1, "only the diag env may"
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
