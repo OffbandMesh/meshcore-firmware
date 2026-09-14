@@ -4,7 +4,7 @@
 // only inside the VARIANT blocks, and scripts/test_sniffer_wroom_copy.py fails CI if
 // they drift. Change both, or neither. "Feather" in shared comments means this board.
 // ==== VARIANT END: banner ====
-// BUILD ID: SNIFFER-v6                            (#740, #702, #938, #1085, #1199)
+// BUILD ID: SNIFFER-v7                            (#740, #702, #938, #1085, #1199)
 //
 // v2 was listen-only. v3 adds a command surface so a host can assert the RC32's
 // RST and BOOT lines without a human pressing buttons, which is what unblocks
@@ -14,7 +14,8 @@
 // fuel gauge answered, asks again for a gauge that was missing at boot, and takes
 // per-board pad labels and optional edge counters from the PIN MAP (#1199). v6 can
 // sweep the I2C bus once at boot, per board, to find a device that does not answer
-// where it should (#1199).
+// where it should (#1199). v7 can decode two more pads through the RMT and tag every
+// line with the pin it arrived on, so one board reads four pads continuously (#1199).
 //
 // FLASH WITH ARDUINO IDE, NOT PLATFORMIO. Two prior PlatformIO attempts put
 // `Serial` on the TinyUSB CDC peripheral while the enumerated port was
@@ -22,7 +23,7 @@
 // Arduino IDE handles the Feather's USB config correctly out of the box.
 // (#704 handoff.)
 
-#define SNIFF_BUILD_ID "SNIFFER-v6"   // the banner, every heartbeat and PING print it
+#define SNIFF_BUILD_ID "SNIFFER-v7"   // the banner, every heartbeat and PING print it
 
 // ==== VARIANT BEGIN: wiring ====
 // ---------------------------------------------------------------------------
@@ -162,15 +163,28 @@
 #define PAD_A_NAME  "A (badge GPIO33)"
 #define PAD_B_NAME  "B (badge GPIO38)"
 
-// #1199: two more badge pads, edge-counted rather than decoded. Nothing on the badge
-// drives them yet. Input with pull-up, never driven. Free on both chips: GPIO4 is
-// no strap on either, and GPIO5 straps only SDIO-slave timing on the classic ESP32,
-// which nothing here uses.
-#define SNIFF_EDGE_PINS 1
-#define PIN_EDGE_C 4
-#define PIN_EDGE_D 5
-#define EDGE_C_NAME "C (badge GPIO34)"
-#define EDGE_D_NAME "D (badge GPIO39)"
+// #1199: all four badge pads are read continuously. Pads C and D have no UART left,
+// so the RMT decodes them. Every received line is tagged with the pin it came in on.
+// Inputs with pull-up, never driven. Free on both chips: GPIO4 is no strap on either,
+// and GPIO5 straps only SDIO-slave timing on the classic ESP32, which nothing here uses.
+#define SNIFF_TAG_LINES 1
+#define SNIFF_RMT_PADS  1
+#define PIN_RMT_C 4
+#define PIN_RMT_D 5
+#define PAD_C_NAME "C (badge GPIO34)"
+#define PAD_D_NAME "D (badge GPIO39)"
+// Tags use the DevKit silkscreen names; the S3 build has no such labels.
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+  #define TAG_A "GPIO18"
+  #define TAG_B "GPIO15"
+  #define TAG_C "GPIO4"
+  #define TAG_D "GPIO5"
+#else
+  #define TAG_A "D18"
+  #define TAG_B "D19"
+  #define TAG_C "D4"
+  #define TAG_D "D5"
+#endif
 // ==== VARIANT END: board-pins ====
 
 // IDLE-PAD PULL-UP -- DEFAULT ON.
@@ -195,6 +209,16 @@
 // Set to 0 to restore #938's original default.
 #ifndef SNIFF_IDLE_PULLUP
   #define SNIFF_IDLE_PULLUP 1
+#endif
+
+// #1199: tagged lines and the RMT-decoded pads live in a header beside the WROOM
+// sketch. Arduino puts its generated prototypes above the first function here, where
+// types declared further down are not visible yet; a header is not scanned.
+#if SNIFF_RMT_PADS && !SNIFF_TAG_LINES
+  #error "SNIFF_RMT_PADS prints through the tagged-line output: set SNIFF_TAG_LINES 1."
+#endif
+#if SNIFF_TAG_LINES
+  #include "sniffer_pads.h"
 #endif
 
 // ---------------------------------------------------------------------------
@@ -883,6 +907,7 @@ static void stamp(const char* s) {
 // Uses the same ">>>" prefix as stamp(), which the banner already documents as
 // "any line without [hb] or >>> is target data", so capture tooling and readers
 // need no new rule.
+#if !SNIFF_TAG_LINES
 static char relay_last_src = 0;
 static void relay_mark_source(char src) {
   if (src == relay_last_src) return;
@@ -896,6 +921,7 @@ static void relay_mark_source(char src) {
   Serial.print(millis() / 1000);
   Serial.println("s");
 }
+#endif
 
 static void do_reset(bool with_boot) {
   if (with_boot) {
@@ -928,16 +954,6 @@ static void handle_cmd(const char* c) {
   else if (!strcasecmp(c, "HELP"))    stamp("cmds: RST BOOTRST BOOT PING HELP");
   else if (c[0])                      stamp("unknown cmd (try HELP)");
 }
-
-#if SNIFF_EDGE_PINS
-// #1199: edge counters for pads that carry no UART. A rising count proves the wire
-// moves, and the heartbeat also prints where each pad rests. Sized for toggles and
-// pulse trains; decode real UART traffic on pads A/B instead.
-static volatile uint32_t edges_c = 0, edges_d = 0;
-// Written out, not ++: C++20 deprecates ++ on a volatile.
-static void IRAM_ATTR edge_isr_c() { edges_c = edges_c + 1; }
-static void IRAM_ATTR edge_isr_d() { edges_d = edges_d + 1; }
-#endif
 
 void setup() {
   // FIRST: park both control lines high-Z before anything else can run, so a
@@ -975,15 +991,6 @@ void setup() {
   gpio_pullup_en((gpio_num_t)PIN_SNIFF_RX_B);
 #endif
 
-#if SNIFF_EDGE_PINS
-  // Input with pull-up: never driven, and an undriven pad rests high instead of
-  // counting noise.
-  pinMode(PIN_EDGE_C, INPUT_PULLUP);
-  pinMode(PIN_EDGE_D, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(PIN_EDGE_C), edge_isr_c, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(PIN_EDGE_D), edge_isr_d, CHANGE);
-#endif
-
   Serial.println();
   Serial.println("================================================");
   Serial.println("=== " SNIFF_TITLE "  BUILD ID: " SNIFF_BUILD_ID " ===");
@@ -993,12 +1000,16 @@ void setup() {
                  PAD_A_NAME, (int)PIN_SNIFF_RX_A, PAD_B_NAME, (int)PIN_SNIFF_RX_B,
                  SNIFF_BAUD);
   Serial.println("=== both listened RX-only; heartbeat counts each separately");
-#if SNIFF_EDGE_PINS
-  Serial.printf ("=== edges %s GPIO%d   %s GPIO%d   input, pull-up, never driven\n",
-                 EDGE_C_NAME, (int)PIN_EDGE_C, EDGE_D_NAME, (int)PIN_EDGE_D);
+#if SNIFF_RMT_PADS
+  rmtPadBegin(rmt_c, PAD_C_NAME);
+  rmtPadBegin(rmt_d, PAD_D_NAME);
 #endif
   Serial.println("=== heartbeat 1/s for 30s, then 1/10s");
+#if SNIFF_TAG_LINES
+  Serial.println("=== target data prints as [pin] line, e.g. [" TAG_A "] ...");
+#else
   Serial.println("=== any line without [hb] or >>> is target data");
+#endif
   Serial.printf ("=== RST->GPIO%d  BOOT->GPIO%d  (open-drain, pull-low only)\n",
                  (int)PIN_RC32_RST, (int)PIN_RC32_BOOT);
   Serial.println("=== cmds: RST BOOTRST BOOT PING HELP");
@@ -1025,6 +1036,22 @@ void loop() {
   // which header position the target is really transmitting on. If both pads ever
   // go live the markers appear repeatedly and the corruption is self-announcing
   // rather than silent, which was the reviewer's actual concern.
+#if SNIFF_TAG_LINES
+  // #1199: this build tags per LINE instead, which the review above did not weigh:
+  // the rig's whole question is which pin each line arrives on, and whole tagged
+  // lines stay readable where per-byte tags would not.
+  {
+    const uint32_t t = millis();
+    while (Serial1.available()) { tagByte(tag_a, (uint8_t)Serial1.read(), t); rx_bytes_a++; }
+    while (Serial2.available()) { tagByte(tag_b, (uint8_t)Serial2.read(), t); rx_bytes_b++; }
+    tagIdle(tag_a, t);
+    tagIdle(tag_b, t);
+  #if SNIFF_RMT_PADS
+    rmtPadService(rmt_c, t);
+    rmtPadService(rmt_d, t);
+  #endif
+  }
+#else
   if (Serial1.available()) {
     relay_mark_source('A');
     while (Serial1.available()) { Serial.write(Serial1.read()); rx_bytes_a++; }
@@ -1033,6 +1060,7 @@ void loop() {
     relay_mark_source('B');
     while (Serial2.available()) { Serial.write(Serial2.read()); rx_bytes_b++; }
   }
+#endif
 
 #if SNIFF_GAUGE
   // After the relay, never before it. An I2C transaction takes a few hundred
@@ -1075,11 +1103,16 @@ void loop() {
                   (unsigned long)(now / 1000),
                   (unsigned long)rx_bytes_a,
                   (unsigned long)rx_bytes_b);
-#if SNIFF_EDGE_PINS
-    // Pulled up, an undriven pad rests at 1, so a 0 means something holds it low.
-    Serial.printf("  edges_c=%lu  edges_d=%lu  lvl_c=%d  lvl_d=%d",
-                  (unsigned long)edges_c, (unsigned long)edges_d,
-                  digitalRead(PIN_EDGE_C), digitalRead(PIN_EDGE_D));
+#if SNIFF_RMT_PADS
+    // Decoded bytes and framing errors per RMT pad. Errors with no bytes mean the pad
+    // is moving, but not as 115200 8N1. full_* counts captures that overflowed.
+    Serial.printf("  rx_c=%lu  rx_d=%lu  bad_c=%lu  bad_d=%lu",
+                  (unsigned long)rmt_c.bytes, (unsigned long)rmt_d.bytes,
+                  (unsigned long)rmt_c.bad, (unsigned long)rmt_d.bad);
+    if (rmt_c.full || rmt_d.full) {
+      Serial.printf("  full_c=%lu  full_d=%lu", (unsigned long)rmt_c.full,
+                    (unsigned long)rmt_d.full);
+    }
 #endif
     Serial.println();
   }
