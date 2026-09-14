@@ -140,6 +140,11 @@ Sleep 120s, attempt #1, unclean=0.
 
 If you see neither line, SafeBoot is compiled out (no `PIN_VBAT_READ` /
 `SAFEBOOT_PIN_VBAT_READ` defined for your variant; SafeBoot is a no-op).
+
+Both lines go through MeshLog (`mesh_log_print`, #1211). On a build with the
+raw UART log mirror (`OFFBAND_LOG_MIRROR_UART`), they also appear on that wire.
+That is how a bench rig sees them on a native-USB board, where nothing is
+listening on USB this early in boot.
 Confirm with `pio run -e <env> -t menu` or check the variant's
 `platformio.ini`.
 

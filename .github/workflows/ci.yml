@@ -94,6 +94,12 @@ jobs:
       - name: Sniffer capture bridge-flag tests
         run: python scripts/test_capture_bridge_flags.py
 
+      # #1211: SafeBoot's battery lines go through MeshLog, so a bench rig reading
+      # the raw UART log mirror sees them, and the low-battery path lets the
+      # mirror finish its line before the board sleeps.
+      - name: SafeBoot log-channel guard
+        run: python scripts/test_safeboot_log_channels.py
+
       # #775 (epic #774). Guards the defect class behind #764/#765: an `else if`
       # that matches a CLI key and writes nothing, or a key claimed twice in one
       # chain so the later arm is unreachable. `get radio` returned an empty reply

@@ -219,3 +219,25 @@ void mesh_log_line(uint8_t level, const char* fmt, ...) {
   offband_log_mirror_write(line, total);
 #endif
 }
+
+void mesh_log_print(uint8_t level, const char* fmt, ...) {
+  char text[MLOG_LINE_MAX];
+  va_list args;
+  va_start(args, fmt);
+  const int m = vsnprintf(text, sizeof(text), fmt, args);
+  va_end(args);
+  if (m < 0) return;
+
+  // mesh_log_line() echoes a line to the console only while capture is on, the
+  // echo is live and the level passes. Otherwise the console gets its copy here,
+  // raw and unprefixed, the way these lines have always printed. A flag flipped
+  // between this check and the call can add or drop one copy: the same tolerance
+  // as every MeshLog line (see g_max_level above).
+  const bool echoed = level <= g_max_level && g_meshLogEnabled && g_meshLogMirror;
+  mesh_log_line(level, "%s", text);
+  if (!echoed) Serial.write(reinterpret_cast<const uint8_t*>(text), strlen(text));
+}
+
+void meshLogDrainUart() {
+  offband_log_mirror_flush();
+}
