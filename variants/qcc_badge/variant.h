@@ -45,6 +45,12 @@
 #define PIN_QCC_GPS_POWER    (5)    // P0.24 -> MOSFET Q1 -> GPS header ground (HIGH = on)
 #define PIN_QCC_SPARE_GPIO33 (18)   // P1.01 -> "GPIO33" pad
 
+// The four spare pads, for the diag pad ID beacon (#1210). Raw nRF pin numbers
+// (port * 32 + pin), which is also how the badge names them. P1.07 has no entry in
+// the inherited pin map, so the beacon never goes through g_ADigitalPinMap.
+#define OFFBAND_PAD_BEACON_PADS \
+  { {33, "GPIO33 P1.01"}, {34, "GPIO34 P1.02"}, {38, "GPIO38 P1.06"}, {39, "GPIO39 P1.07"} }
+
 ////////////////////////////////////////////////////////////////////////////////
 // UART pin definition -- the GPS header, NOT the ProMicro default (see header)
 
