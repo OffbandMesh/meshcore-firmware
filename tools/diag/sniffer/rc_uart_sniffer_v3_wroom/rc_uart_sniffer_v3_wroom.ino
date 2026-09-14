@@ -40,8 +40,8 @@
 //
 //   QCC 0x4 badge rig (#1172, #1199). Its WROOM boards are CLASSIC ESP32 DevKits,
 //   so build it as "ESP32 Dev Module". DevKit silkscreen in brackets:
-//     badge GPIO33 pad (P1.01, the diag log mirror today) -> pad A  [D18]
-//     badge GPIO38 pad (P1.06)                            -> pad B  [D19]
+//     badge GPIO33 pad (P1.01)                            -> pad A  [D18]
+//     badge GPIO38 pad (P1.06, the diag log mirror)       -> pad B  [D19]
 //     badge GPIO34 pad (P1.02)                            -> edge C [D4]
 //     badge GPIO39 pad (P1.07)                            -> edge D [D5]
 //     INA228 + MAX17048                                   -> SDA [D21], SCL [D22]

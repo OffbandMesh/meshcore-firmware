@@ -46,7 +46,7 @@ Sources: the badge schematic (EasyEDA "QCC 0x4 Badges" V1.0, 2026-03-21), the st
 | GPS | 4-pin header, ground switched by MOSFET Q1 | P0.24 (HIGH = on); UART P0.20 (MCU TX) / P0.22 (MCU RX) | hard power cut; the module has no EN pin. Its own blue fix LED sits under the display and goes dark when the cut is applied (bench, 2026-09-12) |
 | Button | user button (10 k pull-up, 100 nF) | P1.00 | |
 | Battery sense | 680 k / 1 M divider on the switched battery | P0.31 | ratio 1.68; always connected (~2.5 µA). The design also offers a 220 k / 330 k pair (ratio 1.667, 0.8% lower); the 680 k / 1 M pair is the one used (confirmed 2026-09-13) |
-| Spare pads | GPIO33 / GPIO34 / GPIO38 / GPIO39, plus GND and 3v3 | P1.01 / P1.02 / P1.06 / P1.07 | physical solder pads (owner-verified, 2026-09-13), each wired only to its ProMicro pin. The diag log mirror transmits on GPIO33. P1.01, P1.02 and P1.07 reach the badge through the ProMicro's three inner holes. None is analog-capable. P1.07 is missing from the pin map inherited from `variants/promicro`, which has P1.05 at index 20; fix that entry before driving GPIO39 |
+| Spare pads | GPIO33 / GPIO34 / GPIO38 / GPIO39, plus GND and 3v3 | P1.01 / P1.02 / P1.06 / P1.07 | physical solder pads (owner-verified, 2026-09-13), each wired only to its ProMicro pin. The diag log mirror transmits on GPIO38: the pad ID beacon (#1210) showed only GPIO38 reaching the sniffer, while GPIO33, GPIO34 and GPIO39 carried nothing. P1.01, P1.02 and P1.07 reach the badge through the ProMicro's three inner holes. None is analog-capable. P1.07 is missing from the pin map inherited from `variants/promicro`, which has P1.05 at index 20; fix that entry before driving GPIO39 |
 | Switch pads | Q1D(24) / Q2D(8) / Q3D(6) | drains of Q1 / Q2 / Q3 | physical solder pads (owner-verified, 2026-09-13): the GPS ground, the LED's low side and the buzzer's low side. The number is the GPIO driving the gate. They only sink current |
 | Bootloader | Adafruit UF2 0.10.0 with S140 6.1.1 | — | the stock UF2 starts at 0x26000. The bootloader enumerates with the app's USB identity (same VID:PID and serial); only the UF2 drive tells the modes apart (bench, 2026-09-12) |
 
@@ -90,7 +90,7 @@ Agreed with the implementation plan (2026-09-12):
 - Envs, all BLE companion on `ui-new`:
   - `QCC_Badge_companion_radio_ble`: departure flavor, normal radio defaults (D1).
   - `QCC_Badge_con_companion_radio_ble`: con flavor, con radio defaults (epic 6, once the con config is known).
-  - A `_diag` twin of each until beta: boot beacon, forced caplog, and the UART log mirror on the spare GPIO33 pad (P1.01), never on P0.06 or P0.08. Logs otherwise go over the ProMicro's USB. The departure twin is `QCC_Badge_companion_radio_ble_diag`.
+  - A `_diag` twin of each until beta: boot beacon, forced caplog, and the UART log mirror on the spare GPIO38 pad (P1.06), never on P0.06 or P0.08. Logs otherwise go over the ProMicro's USB. The departure twin is `QCC_Badge_companion_radio_ble_diag`.
 - The badge envs keep the environmental-sensor drivers the ProMicro base pulls in (AHTX0, BME280, BMP280, INA3221, INA219) (D4).
   - Flash leaves room: the ProMicro companion measured 58.8% (418,832 / 712,704 B), and the badge BLE env measures 60.7% with its splash (432,376 B).
   - SAO add-ons may carry sensors.

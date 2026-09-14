@@ -59,7 +59,7 @@ def test_default_buses_are_the_badge_buses():
 
 
 def test_unused_second_buses_do_not_exist():
-    # SPI1 would share P1.01 with the diag log mirror; Wire1 would share the LoRa NSS/MOSI.
+    # SPI1 would share P1.01 with the GPIO33 pad; Wire1 would share the LoRa NSS/MOSI.
     src = (QCC / "variant.h").read_text()
     assert re.search(r"#define\s+SPI_INTERFACES_COUNT\s+1\b", src)
     assert re.search(r"#define\s+WIRE_INTERFACES_COUNT\s+1\b", src)
@@ -107,10 +107,15 @@ def test_safeboot_reads_the_battery_pin():
 
 def test_diag_log_mirror_transmits_on_the_spare_pad():
     # The mirror is a UART transmitter: pointed at P0.06/P0.08 it would drive the
-    # buzzer and LED MOSFETs, the same hazard as the ProMicro Serial1 default.
+    # buzzer and LED MOSFETs, the same hazard as the ProMicro Serial1 default. It sits
+    # on GPIO38, the one spare pad the pad ID beacon proved reaches the sniffer (#1210).
     m = re.search(r"-D\s+OFFBAND_LOG_MIRROR_TX_PIN=(\w+)", (QCC / "platformio.ini").read_text())
-    assert m and m.group(1) == "PIN_QCC_SPARE_GPIO33"
-    assert gpio("PIN_QCC_SPARE_GPIO33") == 33   # P1.01, not a badge output
+    assert m and m.group(1) == "PIN_QCC_SPARE_GPIO38"
+    assert gpio("PIN_QCC_SPARE_GPIO38") == 38   # P1.06, not a badge output
+    taken = {gpio(n) for n in ("PIN_QCC_MSG_LED", "PIN_QCC_BUZZER", "PIN_QCC_GPS_POWER",
+                               "PIN_SERIAL1_TX", "PIN_SERIAL1_RX", "PIN_WIRE_SDA", "PIN_WIRE_SCL",
+                               "PIN_SPI_SCK", "PIN_SPI_MISO", "PIN_SPI_MOSI", "PIN_SPI_NSS")}
+    assert 38 not in taken
 
 
 def beacon_pads():
