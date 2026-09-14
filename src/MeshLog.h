@@ -83,3 +83,18 @@ void   meshLogDumpSerial();
 // early-out) when capture is disabled or the level is filtered out.
 void mesh_log_line(uint8_t level, const char* fmt, ...)
     __attribute__((format(printf, 2, 3)));
+
+// #1211: for a line that has always gone to the serial console, such as
+// SafeBoot's battery reading. It still goes there, and now also goes through
+// mesh_log_line(): into the capture ring while capture is on, and onto the raw
+// UART mirror where one is built, which is the wire the bench rig reads. When
+// the capture echo is live, the echo is the console's copy, so the console gets
+// the line once either way. Like Serial.print, it writes to the console even
+// where the console carries the framed protocol, so use it only for lines that
+// already did.
+void mesh_log_print(uint8_t level, const char* fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+
+// Waits until the raw UART mirror has sent everything written so far, so a
+// line logged just before a sleep or reset isn't cut off. No-op without it.
+void meshLogDrainUart();

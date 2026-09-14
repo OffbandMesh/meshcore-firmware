@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cmath>
+#include <string>
 #include "Stream.h"
 
 inline uint32_t g_mock_millis = 0;
@@ -25,8 +26,10 @@ inline void delay(uint32_t ms) {
 inline void noInterrupts() {}
 inline void interrupts() {}
 
-// Sink for MeshLog's console mirror. Discards output -- the tests assert on the
-// capture ring, never on what reached the console.
+// Sink for MeshLog's console mirror. Discards output unless a test sets `record`,
+// in which case everything written lands in `captured` (#1211: the console must
+// see a mesh_log_print line exactly once). Off by default, so every other test
+// keeps the discarding sink.
 //
 // #718: derives from Stream, not Print. ArduinoSerialInterface compares its
 // target against `&Serial` (isConsoleSharedWithProtocol, #411) via a
@@ -35,8 +38,17 @@ inline void interrupts() {}
 // framed serial transport natively.
 class MockSerial : public Stream {
 public:
-  size_t write(uint8_t) override { return 1; }
-  size_t write(const uint8_t*, size_t size) override { return size; }
+  bool record = false;
+  std::string captured;
+
+  size_t write(uint8_t c) override {
+    if (record) captured += static_cast<char>(c);
+    return 1;
+  }
+  size_t write(const uint8_t* buf, size_t size) override {
+    if (record) captured.append(reinterpret_cast<const char*>(buf), size);
+    return size;
+  }
   void begin(unsigned long) {}
   // MeshLog throttles its console mirror on this; a large constant means
   // "never backpressure", which is what a discarding sink should report.

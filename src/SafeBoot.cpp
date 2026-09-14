@@ -17,6 +17,7 @@
  */
 
 #include "SafeBoot.h"
+#include "MeshLog.h"
 
 #include <Arduino.h>
 #include <stdint.h>
@@ -661,8 +662,11 @@ void SafeBoot::checkAndMaybeSleep()
         storePersisted(clear);
         g_settled = true;
         g_bootBattMv = mv;
-        Serial.printf("[SafeBoot] Vbat=%u mV stable -- continuing boot (attempts=%u, unclean=%d)\r\n", (unsigned)mv,
-                      (unsigned)st.attempts, (int)g_lastResetUnclean);
+        // Through MeshLog, so the reading also reaches the raw UART log mirror a
+        // bench rig reads. On a native-USB board nothing is listening on USB
+        // this early in boot (#1211).
+        mesh_log_print(MLOG_BOOT, "[SafeBoot] Vbat=%u mV stable -- continuing boot (attempts=%u, unclean=%d)\r\n",
+                       (unsigned)mv, (unsigned)st.attempts, (int)g_lastResetUnclean);
         return;
     }
 
@@ -684,11 +688,13 @@ void SafeBoot::checkAndMaybeSleep()
     next.flags = (uint16_t)(g_lastResetUnclean ? 1u : 0u);
     storePersisted(next);
 
-    Serial.printf("[SafeBoot] Vbat=%u mV below safe threshold (wake=%u sleep=%u). "
-                  "Sleep %us, attempt #%u, unclean=%d.\r\n",
-                  (unsigned)mv, (unsigned)DEFAULT_SAFE_BOOT_WAKE_MV, (unsigned)DEFAULT_SAFE_BOOT_SLEEP_MV, (unsigned)sleep_secs,
-                  (unsigned)next.attempts, (int)g_lastResetUnclean);
+    mesh_log_print(MLOG_BOOT,
+                   "[SafeBoot] Vbat=%u mV below safe threshold (wake=%u sleep=%u). "
+                   "Sleep %us, attempt #%u, unclean=%d.\r\n",
+                   (unsigned)mv, (unsigned)DEFAULT_SAFE_BOOT_WAKE_MV, (unsigned)DEFAULT_SAFE_BOOT_SLEEP_MV,
+                   (unsigned)sleep_secs, (unsigned)next.attempts, (int)g_lastResetUnclean);
     Serial.flush();
+    meshLogDrainUart();   // the sleep would cut the mirror's copy off mid-line
 
     enterSafeBootSleep(sleep_secs);
 }
