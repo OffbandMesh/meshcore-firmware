@@ -417,6 +417,33 @@ static uint8_t ina_addr = 0;
 
 static void inaProbe();
 
+// #1199: probe the gauge and report what happened. The register read alone can
+// only say "failed": on ESP32, endTransmission(false) sends nothing, it only arms a
+// repeated start (arduino-esp32 3.3.11 Wire.cpp:456-475). A bare address write is a
+// real transaction, so it separates "nothing answered at 0x36" from a bus fault,
+// and the VERSION read then checks that what answered is readable. Returns 0 when
+// found, else the address probe's Wire error, or GAUGE_READ_FAILED when the address
+// answered but the read did not.
+#define GAUGE_READ_FAILED 0xFF
+static uint8_t gauge_last_probe = 0;
+
+static uint8_t gaugeProbe(uint16_t* ver) {
+  Wire1.beginTransmission(MAX1704X_ADDR);
+  const uint8_t err = Wire1.endTransmission();
+  if (err != 0) return err;
+  return gaugeRead16(MAX1704X_VERSION, ver) ? 0 : GAUGE_READ_FAILED;
+}
+
+// endTransmission() codes, from the same source: 2 = NACK, 5 = timeout, 4 = other.
+static const char* gaugeProbeMeaning(uint8_t err) {
+  switch (err) {
+    case 2:                 return "no ACK: nothing answered at 0x36";
+    case 5:                 return "bus timeout";
+    case GAUGE_READ_FAILED: return "0x36 ACKed, but the VERSION read failed";
+    default:                return "other bus error";
+  }
+}
+
 static void gaugeBegin() {
   // ESP32 takes the pins as arguments to begin(). nRF52 needs setPins() FIRST.
   // See the header comment -- this order is the whole trap.
@@ -432,7 +459,8 @@ static void gaugeBegin() {
   // peripheral on the C6 (#294 -- hangs at 0x0d and never returns, so setup()
   // never reaches loop()). We know the address; there is no reason to sweep.
   uint16_t ver = 0;
-  gauge_present = gaugeRead16(MAX1704X_VERSION, &ver);
+  gauge_last_probe = gaugeProbe(&ver);
+  gauge_present = (gauge_last_probe == 0);
 
   Serial.print("=== fuel gauge on Wire1 (SDA=");
   Serial.print((int)PIN_GAUGE_SDA);
@@ -443,13 +471,11 @@ static void gaugeBegin() {
     Serial.print("FOUND at 0x36, VERSION=0x");
     Serial.println(ver, HEX);
   } else {
-    // The MAX17048 is powered by the cell it measures, not by the I2C supply, so
-    // with no battery on it no wiring fix will make it answer (#1199).
-    Serial.println("NOT FOUND -- check wiring, and that its battery is connected (it runs");
-    Serial.println("    from the cell). On a Feather: NOT in the STEMMA port -- that is Wire,");
-    Serial.println("    where the onboard gauge already sits at 0x36.");
-    Serial.printf ("    Asked again every %d s, so connecting it later is picked up.\n",
-                   GAUGE_PERIOD_MS / 1000);
+    Serial.printf ("NOT FOUND -- probe error %u (%s)\n",
+                   (unsigned)gauge_last_probe, gaugeProbeMeaning(gauge_last_probe));
+    Serial.println("    On a Feather it must NOT be in the STEMMA port: that is Wire, where");
+    Serial.println("    the onboard gauge already sits at 0x36.");
+    Serial.printf ("    Asked again every %d s.\n", GAUGE_PERIOD_MS / 1000);
   }
 
   inaProbe();
@@ -700,16 +726,21 @@ static void gaugeTick(uint32_t now) {
   if ((int32_t)(now - gauge_next) < 0) return;
   gauge_next = now + GAUGE_PERIOD_MS;
 
-  // #1199: ask again for a gauge that did not answer at boot. One targeted read at
-  // its fixed address, never a scan (#294). The MAX17048 is powered by the cell it
-  // measures, so it stays silent until a battery is connected to it.
+  // #1199: ask again for a gauge that did not answer at boot: one targeted probe at
+  // its fixed address, never a scan (#294). The probe error prints only when it
+  // changes, so a fault that moves shows up without flooding the log.
   if (!gauge_present) {
     uint16_t ver = 0;
-    gauge_present = gaugeRead16(MAX1704X_VERSION, &ver);
+    const uint8_t probe = gaugeProbe(&ver);
+    gauge_present = (probe == 0);
     if (gauge_present) {
       Serial.print("=== fuel gauge on Wire1: FOUND at 0x36 after boot, VERSION=0x");
       Serial.println(ver, HEX);
+    } else if (probe != gauge_last_probe) {
+      Serial.printf("=== fuel gauge still NOT FOUND -- probe error %u (%s)\n",
+                    (unsigned)probe, gaugeProbeMeaning(probe));
     }
+    gauge_last_probe = probe;
   }
 
   // #1199: v4 returned early when no gauge answered, which silenced a found INA as
