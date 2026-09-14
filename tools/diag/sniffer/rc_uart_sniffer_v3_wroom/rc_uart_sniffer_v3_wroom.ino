@@ -4,7 +4,7 @@
 // only inside the VARIANT blocks, and scripts/test_sniffer_wroom_copy.py fails CI if
 // they drift. Change both, or neither. "Feather" in shared comments means this board.
 // ==== VARIANT END: banner ====
-// BUILD ID: SNIFFER-v5                            (#740, #702, #938, #1085, #1199)
+// BUILD ID: SNIFFER-v6                            (#740, #702, #938, #1085, #1199)
 //
 // v2 was listen-only. v3 adds a command surface so a host can assert the RC32's
 // RST and BOOT lines without a human pressing buttons, which is what unblocks
@@ -12,7 +12,9 @@
 // byte counter per pad, so the rig never has to be told which board it faces
 // (#1085, implementing what #938 specified). v5 reads the INA whether or not a
 // fuel gauge answered, asks again for a gauge that was missing at boot, and takes
-// per-board pad labels and optional edge counters from the PIN MAP (#1199).
+// per-board pad labels and optional edge counters from the PIN MAP (#1199). v6 can
+// sweep the I2C bus once at boot, per board, to find a device that does not answer
+// where it should (#1199).
 //
 // FLASH WITH ARDUINO IDE, NOT PLATFORMIO. Two prior PlatformIO attempts put
 // `Serial` on the TinyUSB CDC peripheral while the enumerated port was
@@ -20,7 +22,7 @@
 // Arduino IDE handles the Feather's USB config correctly out of the box.
 // (#704 handoff.)
 
-#define SNIFF_BUILD_ID "SNIFFER-v5"   // the banner, every heartbeat and PING print it
+#define SNIFF_BUILD_ID "SNIFFER-v6"   // the banner, every heartbeat and PING print it
 
 // ==== VARIANT BEGIN: wiring ====
 // ---------------------------------------------------------------------------
@@ -251,6 +253,9 @@
     #define PIN_GAUGE_SCL 22
   #endif
 #endif
+// One-time I2C sweep at boot, the owner-approved exception to the no-scan rule on
+// this rig (#1199): its MAX17048 did not answer at 0x36.
+#define SNIFF_BUS_SWEEP 1
 // ==== VARIANT END: gauge-pins ====
 
 // INA219 REGISTERS -- #938. [verified: TI INA219 datasheet (sbos448), fetched
@@ -459,6 +464,40 @@ static const char* gaugeProbeMeaning(uint8_t err) {
   }
 }
 
+#if SNIFF_BUS_SWEEP
+// #1199: a one-time sweep of the whole bus at boot, enabled per board, to find a
+// device that does not answer where it should. It breaks the no-scan rule above on
+// purpose; the #294 hang was on an ESP32-C6. It announces itself before it starts,
+// so a hang would show where it stopped, and it gives up after three bus timeouts
+// in a row.
+static void busSweep() {
+  Serial.println("=== I2C sweep on Wire1, 0x08..0x77, once at boot:");
+  Serial.print("===   answered:");
+  uint8_t found = 0, errors = 0, timeouts_in_row = 0;
+  for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+    Wire1.beginTransmission(addr);
+    const uint8_t err = Wire1.endTransmission();
+    if (err == 0) {
+      Serial.printf(" 0x%02X", addr);
+      found++;
+      timeouts_in_row = 0;
+    } else if (err == 2) {
+      timeouts_in_row = 0;                  // no ACK: nothing at this address
+    } else {
+      errors++;
+      timeouts_in_row = (err == 5) ? (uint8_t)(timeouts_in_row + 1) : 0;
+      if (timeouts_in_row >= 3) {
+        Serial.printf(" -- stopped at 0x%02X after 3 bus timeouts in a row", addr);
+        break;
+      }
+    }
+  }
+  if (!found) Serial.print(" none");
+  Serial.println();
+  if (errors) Serial.printf("===   bus errors other than no-ACK: %u\n", (unsigned)errors);
+}
+#endif
+
 static void gaugeBegin() {
   // ESP32 takes the pins as arguments to begin(). nRF52 needs setPins() FIRST.
   // See the header comment -- this order is the whole trap.
@@ -468,6 +507,10 @@ static void gaugeBegin() {
   Wire1.begin();
 #else
   Wire1.begin(PIN_GAUGE_SDA, PIN_GAUGE_SCL, 100000);
+#endif
+
+#if SNIFF_BUS_SWEEP
+  busSweep();
 #endif
 
   // Targeted probe, NOT a bus scan. A blind scan is what wedges the I2C
