@@ -43,12 +43,14 @@
 #define PIN_QCC_MSG_LED      (0)    // P0.08 -> MOSFET Q2 -> MSG_LED and connector Q2D
 #define PIN_QCC_BUZZER       (1)    // P0.06 -> MOSFET Q3 -> MUTE switch -> BZ1
 #define PIN_QCC_GPS_POWER    (5)    // P0.24 -> MOSFET Q1 -> GPS header ground (HIGH = on)
-#define PIN_QCC_SPARE_GPIO33 (18)   // P1.01 -> "GPIO33" pad
+#define PIN_QCC_SPARE_GPIO33 (18)   // P1.01 -> "GPIO33" pad; not connected as built (#1210)
 #define PIN_QCC_SPARE_GPIO38 (9)    // P1.06 -> "GPIO38" pad: the diag log mirror (#1210)
 
 // The four spare pads, for the diag pad ID beacon (#1210). Raw nRF pin numbers
 // (port * 32 + pin), which is also how the badge names them. P1.07 has no entry in
-// the inherited pin map, so the beacon never goes through g_ADigitalPinMap.
+// the inherited pin map, so the beacon never goes through g_ADigitalPinMap. As built,
+// only GPIO38 is connected: P1.01, P1.02 and P1.07 are the ProMicro's inner holes, and
+// the owner's badge has no header pins in them.
 #define OFFBAND_PAD_BEACON_PADS \
   { {33, "GPIO33 P1.01"}, {34, "GPIO34 P1.02"}, {38, "GPIO38 P1.06"}, {39, "GPIO39 P1.07"} }
 
