@@ -206,8 +206,7 @@ bool InboxScreen::drawItem(DisplayDriver& d, int row, const Item& item, bool sel
   if ((int)strlen(left) > room) left[room > 0 ? room : 0] = 0;
   textAt(d, 0, y, left, inverted);
   if (count[0] != 0) countBox(d, count_end, y, count, inverted);
-  if (age[0] != 0) textAt(d, age_x, y, age, inverted);
-  if (muted && !inverted) dither(d, 0, y, kScreenPx, kRowPx);
+  if (age[0] != 0) textAt(d, age_x, y, age, inverted);   // a muted row says "muted" here
   return false;
 }
 
@@ -666,7 +665,9 @@ int ContactsScreen::render(DisplayDriver& d) {
     formatAge(secs, age, sizeof(age));
     const bool stale = secs >= kStaleSecs;
     if (stale) {
-      // The design: quiet nodes dim and read "stale" rather than disappear.
+      // The design: quiet nodes read "stale" rather than disappear. It also dims them,
+      // which a 1-bit panel can only do by knocking out pixels, and that left the text
+      // unreadable on the owner's badge, so the word does it alone.
       if (strcmp(age, "old") == 0) snprintf(info, sizeof(info), "stale");
       else snprintf(info, sizeof(info), "stale %s", age);
     } else if (c != nullptr && c->out_path_len != OUT_PATH_UNKNOWN) {
@@ -680,7 +681,6 @@ int ContactsScreen::render(DisplayDriver& d) {
     if (selected) fillRow(d, row);
     textAt(d, 0, row * kRowPx, left, selected);
     textAt(d, info_x, row * kRowPx, info, selected);
-    if (stale && !selected) dither(d, 0, row * kRowPx, kScreenPx, kRowPx);
   }
   if (more_below) {
     dark(d);

@@ -52,8 +52,8 @@ private:
 };
 
 // #1231: chat contacts, most recently heard first, with their hops and when they were
-// last heard (design 1a). Contacts gone quiet are dimmed rather than dropped. Enter
-// opens the DM thread.
+// last heard (design 1a). Contacts gone quiet read "stale" rather than being dropped.
+// Enter opens the DM thread.
 class ContactsScreen : public UIScreen {
 public:
   explicit ContactsScreen(UITask* task) : _task(task) {}
