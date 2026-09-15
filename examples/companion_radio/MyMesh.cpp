@@ -417,22 +417,39 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 #endif
 }
 
-#ifdef OFFBAND_OBSERVER
-// Strycher/LoRa#335: tee every PARSED RX packet into the observer pipeline's
-// /packets path. Dispatcher::checkRecv calls logRx (Dispatcher.cpp:237) for
-// every successfully-parsed packet BEFORE routing, so it is promiscuous (sees
-// all heard traffic) and -- unlike logRxRaw -- hands us the parsed mesh::Packet,
-// which the /packets JSON needs for route/payload_type/path + the dedupe hash
-// CoreScope keys on. RSSI/SNR/airtime are still valid here: same checkRecv
-// iteration, no new RX between the radio read and this call. Score is scaled to
-// MeshCore's milli convention (matches the serial RX log + processRecvPacket).
+#if defined(OFFBAND_OBSERVER) || UI_HAS_CARDKB
+// Dispatcher::checkRecv calls logRx (Dispatcher.cpp:237) for every successfully-parsed
+// packet BEFORE routing and before the duplicate filter, so it sees all heard traffic,
+// repeats of our own packets included.
 void MyMesh::logRx(mesh::Packet* pkt, int len, float score) {
   if (pkt == nullptr) return;
+#if UI_HAS_CARDKB
+  // #1232: a repeater passing one of the badge's channel sends on. The repeat carries
+  // the send's payload unchanged, so it has the send's packet hash.
+  const uint32_t now_ms = _ms->getMillis();
+  if (pkt->getPayloadType() == PAYLOAD_TYPE_GRP_TXT && _badge_repeats.watching(now_ms)) {
+    uint8_t hash[MAX_HASH_SIZE];
+    pkt->calculatePacketHash(hash);
+    const uint32_t seq = _badge_repeats.heard(hash, now_ms);
+    if (seq != 0) _badge_store.setStatus(seq, offband::BadgeSend::Delivered);
+  }
+#endif
+#ifdef OFFBAND_OBSERVER
+  // Strycher/LoRa#335: tee every parsed RX packet into the observer pipeline's
+  // /packets path. Unlike logRxRaw this hands us the parsed mesh::Packet, which the
+  // /packets JSON needs for route/payload_type/path + the dedupe hash CoreScope keys
+  // on. RSSI/SNR/airtime are still valid here: same checkRecv iteration, no new RX
+  // between the radio read and this call. Score is scaled to MeshCore's milli
+  // convention (matches the serial RX log + processRecvPacket).
   int   rssi        = (int)_radio->getLastRSSI();
   float snr         = _radio->getLastSNR();
   int   score_milli = (int)(score * 1000.0f);
   int   duration    = (int)_radio->getEstAirtimeFor(len);
   offband::observerLogRxParsedTrampoline(*pkt, rssi, snr, score_milli, duration);
+#else
+  (void)len;
+  (void)score;
+#endif
 }
 #endif
 
@@ -1316,9 +1333,13 @@ bool MyMesh::uiSendChannel(int channel_idx, const char* text) {
     return false;
   }
   recordSentPktHash(timestamp, (uint8_t)channel_idx, sent_hash);
-  // #1229: into the channel's thread. A channel send has no receipt, so no status.
+  // #1229: into the channel's thread. A channel send has no receipt; #1232 watches for
+  // a repeater passing it on instead, which ticks it.
   const int c = _badge_store.convo(BadgeMsgStore::Channel, channel.channel.secret, channel.name);
-  if (c >= 0) _badge_store.addOutgoing(c, timestamp, text, 0, offband::BadgeSend::None);
+  if (c >= 0) {
+    const uint32_t seq = _badge_store.addOutgoing(c, timestamp, text, 0, offband::BadgeSend::Sending);
+    _badge_repeats.watch(sent_hash, seq, _ms->getMillis());
+  }
   return true;
 }
 
@@ -1376,6 +1397,8 @@ bool MyMesh::uiResend(uint32_t seq) {
 void MyMesh::badgeSendTick() {
   // #1229: a DM the tracker has finished with shows its outcome in the thread.
   _badge_store.refreshSending([this](uint16_t h) { return _badge_dms.status(h); });
+  // #1232: a channel send stops waiting for a repeat after 30 s.
+  _badge_store.expireChannelSends(getRTCClock()->getCurrentTime(), kBadgeRepeatWaitSecs);
   for (int i = 0; i < kBadgeDmSlots; i++) {
     const uint16_t handle = _badge_dms.due(_ms->getMillis());
     if (handle == 0) return;
