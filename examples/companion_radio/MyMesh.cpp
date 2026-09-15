@@ -562,6 +562,7 @@ ContactInfo*  MyMesh::processAck(const uint8_t *data) {
   memcpy(&ack_crc, data, 4);
   const uint16_t badge_dm = _badge_dms.ack(ack_crc);
   if (badge_dm != 0) {
+    _badge_store.setStatusForHandle(badge_dm, offband::BadgeSend::Delivered);   // #1229, late ones too
     const auto* dm = _badge_dms.find(badge_dm);
     return dm != NULL ? lookupContactByPubKey(dm->key, sizeof(dm->key)) : NULL;
   }
@@ -636,6 +637,18 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
     frame[0] = PUSH_CODE_MSG_WAITING; // send push 'tickle'
     _serial->writeFrame(frame, 1);
   }
+
+#if UI_HAS_CARDKB
+  // #1229: the badge's inbox keeps its own copy of each DM, before the UI hears of it.
+  if (txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN) {
+    const int c = _badge_store.convo(BadgeMsgStore::Contact, from.id.pub_key, from.name);
+    if (c >= 0) {
+      _badge_store.addIncoming(c, getRTCClock()->getCurrentTime(), "", text,
+                               pkt->isRouteFlood() ? pkt->getPathHashCount() : 0xFF,
+                               rssiToInt8(_radio->getLastRSSI()));
+    }
+  }
+#endif
 
 #ifdef DISPLAY_CLASS
   // we only want to show text messages on display, not cli data
@@ -919,6 +932,20 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
     frame[0] = PUSH_CODE_MSG_WAITING; // send push 'tickle'
     _serial->writeFrame(frame, 1);
   }
+#if UI_HAS_CARDKB
+  // #1229: and the badge's inbox keeps its own copy, filed by the channel's secret.
+  ChannelDetails badge_channel;
+  if (getChannel(channel_idx, badge_channel)) {
+    char sender[BadgeMsgStore::kSenderLen];
+    const char* body = offband::splitSender(text, sender, sizeof(sender));
+    const int c = _badge_store.convo(BadgeMsgStore::Channel, badge_channel.channel.secret, badge_channel.name);
+    if (c >= 0) {
+      _badge_store.addIncoming(c, getRTCClock()->getCurrentTime(), sender, body,
+                               pkt->isRouteFlood() ? pkt->getPathHashCount() : 0xFF,
+                               rssiToInt8(_radio->getLastRSSI()));
+    }
+  }
+#endif
 #ifdef DISPLAY_CLASS
   // #510: the notification scope decides whether this sounds -- NOT the client
   // connection state.
@@ -1289,6 +1316,9 @@ bool MyMesh::uiSendChannel(int channel_idx, const char* text) {
     return false;
   }
   recordSentPktHash(timestamp, (uint8_t)channel_idx, sent_hash);
+  // #1229: into the channel's thread. A channel send has no receipt, so no status.
+  const int c = _badge_store.convo(BadgeMsgStore::Channel, channel.channel.secret, channel.name);
+  if (c >= 0) _badge_store.addOutgoing(c, timestamp, text, 0, offband::BadgeSend::None);
   return true;
 }
 
@@ -1306,12 +1336,17 @@ uint16_t MyMesh::uiSendDirect(const ContactInfo& contact, const char* text) {
   } else {
     _badge_dms.sent(handle, expected_ack, _ms->getMillis(), est_timeout);
   }
+  // #1229: into the contact's thread, still sending or already failed.
+  const int c = _badge_store.convo(BadgeMsgStore::Contact, contact.id.pub_key, contact.name);
+  if (c >= 0) _badge_store.addOutgoing(c, timestamp, text, handle, _badge_dms.status(handle));
   return handle;
 }
 
 // #1227: the next attempt for any badge DM whose ACK didn't come in time. Each pass
 // sends an attempt or fails the DM, so at most kBadgeDmSlots handles come back.
 void MyMesh::badgeSendTick() {
+  // #1229: a DM the tracker has finished with shows its outcome in the thread.
+  _badge_store.refreshSending([this](uint16_t h) { return _badge_dms.status(h); });
   for (int i = 0; i < kBadgeDmSlots; i++) {
     const uint16_t handle = _badge_dms.due(_ms->getMillis());
     if (handle == 0) return;
