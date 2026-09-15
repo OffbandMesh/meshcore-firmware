@@ -113,13 +113,16 @@ inline void battery(DisplayDriver& d, int x, int y, int pct) {
   lit(d);
 }
 
-// #1231: where SW1's cycle is (design 1f): the three lists, the current one inverted.
-// Shown for 2 s after each move. " MSGS CONTACTS STATUS" is exactly 21 cells.
+// #1231: where SW1's cycle is (design 1f): the lists, the current one inverted. Shown
+// for 2 s after each move. #1234 made it four stops, and four full names don't fit 21
+// cells, so each is four letters: " MSGS CONT NEAR STAT".
 inline void breadcrumb(DisplayDriver& d, int row, int pos) {
-  static const char* const kLabels[3] = {"MSGS", "CONTACTS", "STATUS"};
-  static const int kCol[3] = {1, 6, 15};
-  for (int i = 0; i < 3; i++) cell(d, kCol[i], row, kLabels[i], i == pos);
+  static const char* const kLabels[kCycleStops] = {"MSGS", "CONT", "NEAR", "STAT"};
+  for (int i = 0; i < kCycleStops; i++) cell(d, 1 + 5 * i, row, kLabels[i], i == pos);
 }
+
+// "2 of 4": the title's right slot while the breadcrumb shows.
+inline void cycleTitle(char* out, size_t n, int pos) { snprintf(out, n, "%d of %d", pos + 1, kCycleStops); }
 
 // Three dots: a message still sending.
 inline void sendingDots(DisplayDriver& d, int x, int y) {

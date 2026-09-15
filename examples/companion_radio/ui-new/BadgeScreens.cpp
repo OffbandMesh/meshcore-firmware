@@ -201,7 +201,7 @@ int InboxScreen::render(DisplayDriver& d) {
 
   char right[20];
   if (crumb) {
-    snprintf(right, sizeof(right), "1 of 3");
+    cycleTitle(right, sizeof(right), 0);
   } else {
     // At most "99+ new" and two marks: 9 cells, clear of " Messages".
     int n = 0;
@@ -608,7 +608,7 @@ int ContactsScreen::render(DisplayDriver& d) {
 
   char right[16];
   if (crumb) {
-    snprintf(right, sizeof(right), "2 of 3");
+    cycleTitle(right, sizeof(right), 1);
   } else {
     int n = snprintf(right, sizeof(right), "%d", _total);
     if (top > 0) right[n++] = kGlyphUp;
@@ -693,6 +693,180 @@ bool ContactsScreen::handleInput(char c) {
   return false;
 }
 
+// ---- Nearby (#1234) -------------------------------------------------------------------
+
+namespace {
+
+// The marker before a node's name: a person, a repeater, a room, or anything else.
+char nearbyMarker(const NearbyNode& n) {
+  if (!n.contact) return '*';
+  switch (n.type) {
+    case ADV_TYPE_CHAT:     return '@';
+    case ADV_TYPE_REPEATER: return '^';
+    case ADV_TYPE_ROOM:     return '&';
+    default:                return '*';
+  }
+}
+
+}  // namespace
+
+// Contacts heard in the last hour, then the advert table's nodes, which include the
+// ones that aren't contacts. The same node from both is one row.
+void NearbyScreen::reload() {
+  _list.clear();
+  const uint32_t now = rtc_clock.getCurrentTime();
+  const int n = the_mesh.getNumContacts();
+  for (int i = 0; i < n; i++) {
+    ContactInfo c;
+    // The first MAX_ANON_CONTACTS slots of the table hold transient anonymous peers.
+    if (!the_mesh.getContactByIdx(MAX_ANON_CONTACTS + i, c)) continue;
+    if (now < c.lastmod || now - c.lastmod >= kWindowSecs) continue;
+    NearbyNode node = {};
+    node.heard = c.lastmod;
+    memcpy(node.key, c.id.pub_key, PUB_KEY_SIZE);
+    node.key_len = PUB_KEY_SIZE;
+    node.type = c.type;
+    node.hops = (c.out_path_len != OUT_PATH_UNKNOWN) ? (c.out_path_len & 63) : 0xFF;
+    node.contact = true;
+    snprintf(node.name, sizeof(node.name), "%s", c.name);
+    _list.offer(node);
+  }
+  the_mesh.uiEachHeard([&](const AdvertPath& p) {
+    if (now < p.recv_timestamp || now - p.recv_timestamp >= kWindowSecs) return;
+    NearbyNode node = {};
+    node.heard = p.recv_timestamp;
+    memcpy(node.key, p.pubkey_prefix, sizeof(p.pubkey_prefix));
+    node.key_len = sizeof(p.pubkey_prefix);
+    node.hops = p.path_len & 63;
+    snprintf(node.name, sizeof(node.name), "%s", p.name);
+    _list.offer(node);
+  });
+  for (int i = 0; i < _list.count(); i++) {   // the selection stays with its node
+    const NearbyNode& node = _list.at(i);
+    const int k = node.key_len < _sel_key_len ? node.key_len : _sel_key_len;
+    if (k > 0 && memcmp(node.key, _sel_key, (size_t)k) == 0) {
+      _sel = i;
+      _loaded_at = millis();
+      return;
+    }
+  }
+  select(_sel);
+  _loaded_at = millis();
+}
+
+void NearbyScreen::select(int sel) {
+  const int count = _list.count();
+  if (count == 0) {
+    _sel = 0;
+    return;
+  }
+  _sel = sel < 0 ? 0 : (sel >= count ? count - 1 : sel);
+  memcpy(_sel_key, _list.at(_sel).key, PUB_KEY_SIZE);
+  _sel_key_len = _list.at(_sel).key_len;
+}
+
+// Enter on a person opens the DM thread; there's nothing to write to anyone else.
+void NearbyScreen::open(char first_key) {
+  if (_list.count() == 0) return;
+  const NearbyNode& n = _list.at(_sel);
+  if (!n.contact || n.type != ADV_TYPE_CHAT) return;
+  const ContactInfo* c = the_mesh.lookupContactByPubKey(n.key, PUB_KEY_SIZE);
+  if (c == nullptr) return;
+  const int convo = the_mesh.badgeStore().convo(Store::Contact, c->id.pub_key, c->name);
+  if (convo < 0) {
+    _task->showAlert("Inbox full", 1000);
+    return;
+  }
+  _task->gotoThread(convo, first_key);
+}
+
+int NearbyScreen::render(DisplayDriver& d) {
+  if (millis() - _loaded_at > 5000) reload();
+  const int count = _list.count();
+  const bool crumb = _task->breadcrumbShown();
+  const int first_row = crumb ? 2 : 1;
+  const int rows = kListRows - (crumb ? 1 : 0);
+  int top = listTop(_sel, count, rows);
+  const bool more_below = count - top > rows;
+  if (more_below) top = listTop(_sel, count, rows - 1);
+
+  char right[16];
+  if (crumb) {
+    cycleTitle(right, sizeof(right), 2);
+  } else {
+    int m = snprintf(right, sizeof(right), "%d", count);
+    if (top > 0) right[m++] = kGlyphUp;
+    if (more_below) right[m++] = kGlyphDown;
+    right[m] = 0;
+  }
+  bar(d, 0, " Nearby", right);
+  if (crumb) breadcrumb(d, 1, 2);
+
+  if (count == 0) {
+    cell(d, 0, first_row + 1, " nobody heard lately");
+    return crumb ? 250 : 5000;
+  }
+  const uint32_t now = rtc_clock.getCurrentTime();
+  for (int r = 0; r < rows && top + r < count; r++) {
+    const NearbyNode& n = _list.at(top + r);
+    const int row = first_row + r;
+    const bool selected = (top + r == _sel);
+    char shown[24], left[28], age[6], info[16];
+    d.translateUTF8ToBlocks(shown, n.name, sizeof(shown));
+    snprintf(left, sizeof(left), " %c%s", nearbyMarker(n), shown);
+    formatAge(now > n.heard ? now - n.heard : 0, age, sizeof(age));
+    // Radio hops, as everywhere on the badge: 1 is heard directly.
+    if (n.hops != 0xFF) snprintf(info, sizeof(info), "%uhop %s", (unsigned)n.hops + 1, age);
+    else snprintf(info, sizeof(info), "%s", age);
+    const int info_x = kScreenPx - 1 - textPx(info);
+    const int room = (info_x - kCellPx) / kCellPx;
+    if ((int)strlen(left) > room) left[room > 0 ? room : 0] = 0;
+    if (selected) fillRow(d, row);
+    textAt(d, 0, row * kRowPx, left, selected);
+    textAt(d, info_x, row * kRowPx, info, selected);
+  }
+  if (more_below) {
+    dark(d);
+    d.fillRect(0, kScreenRowsPx - 4, kScreenPx, 4);
+    lit(d);
+  }
+  return crumb ? 250 : 1000;
+}
+
+bool NearbyScreen::handleInput(char c) {
+  const uint8_t key = (uint8_t)c;
+  if (!_task->inputFromKeyboard()) {   // SW1: a tap moves along the cycle
+    if (key == KEY_NEXT) _task->cycle(1);
+    else if (key == KEY_PREV) _task->cycle(-1);
+    else if (key == KEY_ENTER) open(0);
+    return true;
+  }
+  switch (key) {
+    case KEY_UP:
+      select(_sel - 1);
+      return true;
+    case KEY_DOWN:
+      select(_sel + 1);
+      return true;
+    case KEY_ENTER:
+      open(0);
+      return true;
+    case KEY_LEFT:
+      _task->cycle(-1);
+      return true;
+    case KEY_RIGHT:
+      _task->cycle(1);
+      return true;
+    default:
+      break;
+  }
+  if (printable(key)) {   // typing starts a DM to the selected person
+    open((char)key);
+    return true;
+  }
+  return false;
+}
+
 // ---- Status (#1231) -------------------------------------------------------------------
 
 namespace {
@@ -710,8 +884,12 @@ void counts(char* out, size_t n, uint32_t tx, uint32_t rx) {
 int StatusScreen::drawAs(DisplayDriver& d, const char* title, int pos) {
   const bool crumb = _task->breadcrumbShown() && _task->cyclePos() == pos;
   char right[8];
-  snprintf(right, sizeof(right), "%d of 3", pos + 1);
-  bar(d, 0, title, crumb ? right : "OFFBAND");
+  cycleTitle(right, sizeof(right), pos);
+  // Status carries the brand (design 1a); as the empty inbox it carries the inbox's
+  // battery instead.
+  const bool as_status = (pos == kCycleStops - 1);
+  bar(d, 0, title, crumb ? right : (as_status ? "OFFBAND" : ""));
+  if (!crumb && !as_status) battery(d, kScreenPx - 13, 2, batteryPct(_task->getBattMilliVolts()));
   int row = 1;
   if (crumb) breadcrumb(d, row++, pos);
 

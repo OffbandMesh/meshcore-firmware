@@ -766,6 +766,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   thread = new ThreadScreen(this);
   tools = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
   contacts = new ContactsScreen(this);   // #1231
+  nearby = new NearbyScreen(this);       // #1234
   status = new StatusScreen(this);       // #1231
   settings = new SettingsScreen(this);   // #1233
   zones = new ZonePickerScreen(this);    // #1233
@@ -840,16 +841,20 @@ int UITask::renderStatusAs(DisplayDriver& d, const char* title, int pos) {
 
 int UITask::cyclePos() const {
   if (curr == contacts) return 1;
-  if (curr == status) return 2;
+  if (curr == nearby) return 2;
+  if (curr == status) return 3;
   return 0;   // Messages, and anything reached from it
 }
 
 void UITask::cycle(int step) {
-  const int pos = (cyclePos() + step + 3) % 3;
+  const int pos = (cyclePos() + step + badgeui::kCycleStops) % badgeui::kCycleStops;
   if (pos == 1) {
     ((ContactsScreen*)contacts)->reload();
     setCurrScreen(contacts);
   } else if (pos == 2) {
+    ((NearbyScreen*)nearby)->reload();
+    setCurrScreen(nearby);
+  } else if (pos == 3) {
     setCurrScreen(status);
   } else {
     setCurrScreen(home);

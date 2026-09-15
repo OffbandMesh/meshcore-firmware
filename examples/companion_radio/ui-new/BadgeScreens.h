@@ -7,6 +7,7 @@
 #include <helpers/ui/UIScreen.h>
 #include <helpers/ui/MsgCompose.h>
 #include <helpers/ui/BadgeLayout.h>
+#include <helpers/ui/NearbyList.h>
 #include "../MyMesh.h"
 
 class UITask;
@@ -80,12 +81,37 @@ private:
   void open(char first_key);
 };
 
+// #1234: who's around. Every node heard in the last hour, newest first: `@` a person,
+// `^` a repeater, `&` a room, `*` a node that isn't a contact. Enter on a person opens
+// the DM thread. The third stop on the SW1 cycle.
+class NearbyScreen : public UIScreen {
+public:
+  explicit NearbyScreen(UITask* task) : _task(task) {}
+  void reload();   // on the way in, and every few seconds while shown
+  int render(DisplayDriver& display) override;
+  bool handleInput(char c) override;
+
+  static constexpr int kMax = 32;
+  static constexpr uint32_t kWindowSecs = 3600;
+
+private:
+  UITask* _task;
+  badgeui::NearbyList<kMax> _list;
+  int _sel = 0;
+  uint8_t _sel_key[PUB_KEY_SIZE] = {0};   // the selection follows its node
+  uint8_t _sel_key_len = 0;
+  uint32_t _loaded_at = 0;
+
+  void select(int sel);
+  void open(char first_key);
+};
+
 // #1231: what the radio is doing (design 1a, "the empty state is the status screen").
 // The BLE pairing PIN moved here from Home. Enter opens the device pages.
 class StatusScreen : public UIScreen {
 public:
   explicit StatusScreen(UITask* task) : _task(task) {}
-  int render(DisplayDriver& display) override { return drawAs(display, " Status", 2); }
+  int render(DisplayDriver& display) override { return drawAs(display, " Status", 3); }
   bool handleInput(char c) override;
 
   // Draws this screen under `title`, as cycle position `pos`: the inbox's empty state

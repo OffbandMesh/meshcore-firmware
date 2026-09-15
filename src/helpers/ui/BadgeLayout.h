@@ -20,6 +20,7 @@ constexpr int kTagCols = 5;       // a channel message's sender tag
 constexpr int kIndent = 6;        // text after the tag and a space
 constexpr int kMineEnd = 19;      // my messages end before this column...
 constexpr int kMarkCol = 20;      // ...and their status mark sits here
+constexpr int kCycleStops = 4;    // SW1's cycle: Messages, Contacts, Nearby, Status
 
 // "now", "4m", "2h", "3d": how old something `secs` old is. "old" past 99 days.
 inline void formatAge(uint32_t secs, char* out, size_t n) {

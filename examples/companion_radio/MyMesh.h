@@ -166,6 +166,14 @@ public:
   bool uiResend(uint32_t seq);
   // #1233: the badge's own advert, zero-hop or flood, as the phone's command sends it.
   bool uiAdvert(bool flood);
+  // #1234: each node in the advert table (the last few heard, contacts or not), in
+  // place. Sized by sizeof: the table's macro is defined further down.
+  template <class Visit>
+  void uiEachHeard(Visit visit) const {
+    for (size_t i = 0; i < sizeof(advert_paths) / sizeof(advert_paths[0]); i++) {
+      if (advert_paths[i].recv_timestamp != 0) visit(advert_paths[i]);
+    }
+  }
 #endif
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
