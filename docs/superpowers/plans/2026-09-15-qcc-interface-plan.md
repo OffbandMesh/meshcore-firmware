@@ -74,6 +74,13 @@
 - **Navigation:** "GPS opened from Settings is fine. Nearby agreed. Radio settings can be in the next iteration."
   - Nearby (#1234) is the third stop on the SW1 cycle. The breadcrumb reads " MSGS CONT NEAR STAT", since four full names don't fit 21 cells.
   - GPS (#1235) opens from Settings' GPS row. It shows the fix, position, altitude and the GPS's UTC time.
+- **The keyboard is always there.**
+  - The Supporter badge never runs without its keyboard.
+  - The regular con badge has no display or keyboard today. Its designer wants people to be able to add both. With them added, it's equivalent to the Supporter badge.
+  - So SW1 alone never has to leave Settings or GPS. Both screens use SW1's tap and hold for their rows.
+- **No GPS module:** "If we can detect that there is no GPS module, and GPS is switched on, then I would prefer to say 'No GPS Module'."
+  - With the GPS switched on and no module found by the sensor manager's check at boot, Settings' GPS row and the GPS screen's title say "No GPS Module".
+  - Once a fix arrives, it shows the fix whatever the check said.
 
 ## Still open
 
@@ -81,5 +88,4 @@
    - a region preset row;
    - TX above the regional limit: refuse or warn;
    - settings on the SW1 cycle, or Fn+S only.
-2. **SW1 without the keyboard.** Settings and GPS take SW1's tap and hold for their rows. Without a keyboard there's no Esc, so SW1 alone can't leave them.
-3. **A badge with no GPS module.** With the GPS turned on, it shows "no fix" indefinitely. The boot check that knows whether a module answered isn't exposed to the UI.
+2. **The boot check on an empty GPS header.** The check listens for any byte from the module. The nRF52 core leaves the RX pin without a pull-up. On a badge with no module, a floating pin that picks up noise would still count as a module, so the badge would show "no fix". That hasn't been tried on a badge without a module.

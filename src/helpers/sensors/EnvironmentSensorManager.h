@@ -57,6 +57,8 @@ public:
   #endif
   #if ENV_INCLUDE_GPS
   bool gpsHasFix() { return gps_active && _location != nullptr && _location->isValid(); }
+  // #1235: whether a GPS module answered when probed (on nRF52, once at boot).
+  bool gpsDetected() const { return gps_detected; }
   uint32_t getGpsClockSyncTime() const override { return _last_gps_clock_sync; }   // #152
   size_t getGpsStatusText(char* out, size_t cap) override;   // #149
   #endif

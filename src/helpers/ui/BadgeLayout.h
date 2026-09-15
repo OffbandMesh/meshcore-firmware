@@ -67,6 +67,18 @@ inline void formatAltitude(long alt_mm, char* out, size_t n) {
   snprintf(out, n, "%s%lum", (alt_mm < 0 && m != 0) ? "-" : "", m);
 }
 
+// #1235: the GPS in a few words, for the GPS screen's title and Settings' GPS row:
+// "off"; "No GPS Module" (the owner's wording) while it's on and no module answered;
+// "no fix"; "fix 9", or "fix" before any satellites are counted. A fix proves there's
+// a module, whatever the check said.
+inline void formatGpsState(bool on, bool module, bool fix, long sats, char* out, size_t n) {
+  if (!on) snprintf(out, n, "off");
+  else if (fix && sats > 0) snprintf(out, n, "fix %ld", sats);
+  else if (fix) snprintf(out, n, "fix");
+  else if (!module) snprintf(out, n, "No GPS Module");
+  else snprintf(out, n, "no fix");
+}
+
 // "17:07:42": the time of day, UTC, from UTC seconds.
 inline void formatUtcTime(uint32_t t, char* out, size_t n) {
   const uint32_t s = t % 86400;

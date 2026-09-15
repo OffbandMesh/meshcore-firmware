@@ -107,6 +107,33 @@ TEST(BadgeLayoutGps, AltitudeInWholeMeters) {
   EXPECT_EQ(std::to_string((0UL - (unsigned long)LONG_MIN + 500) / 1000) + "m", lowest.substr(1));
 }
 
+namespace {
+std::string gpsState(bool on, bool module, bool fix, long sats) {
+  char buf[16];
+  formatGpsState(on, module, fix, sats, buf, sizeof(buf));
+  return buf;
+}
+}  // namespace
+
+TEST(BadgeLayoutGps, StateInAFewWords) {
+  EXPECT_EQ("off", gpsState(false, true, false, 0));
+  EXPECT_EQ("off", gpsState(false, false, true, 9));   // off says off, module or not
+  EXPECT_EQ("No GPS Module", gpsState(true, false, false, 0));
+  EXPECT_EQ("no fix", gpsState(true, true, false, 0));
+  EXPECT_EQ("fix 9", gpsState(true, true, true, 9));
+  EXPECT_EQ("fix", gpsState(true, true, true, 0));     // RMC's fix before GGA counts satellites
+}
+
+// A module that missed the check at boot still shows its fix once it has one.
+TEST(BadgeLayoutGps, AFixOutranksTheModuleCheck) {
+  EXPECT_EQ("fix 7", gpsState(true, false, true, 7));
+}
+
+// The longest word fits Settings' GPS row: " GPS", a space, then the value.
+TEST(BadgeLayoutGps, NoGpsModuleFitsTheSettingsRow) {
+  EXPECT_LE(strlen(" GPS ") + gpsState(true, false, false, 0).size(), (size_t)kCols);
+}
+
 TEST(BadgeLayoutGps, UtcTimeOfDay) {
   char buf[12];
   formatUtcTime(kNow + 42, buf, sizeof(buf));
