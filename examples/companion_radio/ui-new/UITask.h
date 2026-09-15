@@ -24,6 +24,7 @@
 
 #if UI_HAS_CARDKB
   #include <helpers/ui/CardKbInput.h>
+  #include <helpers/ui/MsgCompose.h>   // #1228
 #endif
 
 class UITask : public AbstractUITask {
@@ -72,6 +73,10 @@ class UITask : public AbstractUITask {
 #if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
   UIScreen* key_test;
 #endif
+#if UI_HAS_CARDKB
+  UIScreen* picker;     // #1228: where a message goes
+  UIScreen* composer;   // #1228: typing and sending it
+#endif
   UIScreen* curr;
 
   void userLedHandler();
@@ -101,6 +106,8 @@ public:
   void gotoKeyTest();
 #endif
 #if UI_HAS_CARDKB
+  void gotoPicker();                               // #1228
+  void gotoCompose(const compose::Target& target);  // #1228
   bool hasKeyboard() const { return _kbd.isPresent(); }
   uint8_t lastKeyboardRaw() const { return _last_kbd_raw; }
   int lastButtonEvent() const { return _last_btn_event; }
