@@ -74,8 +74,8 @@ class UITask : public AbstractUITask {
   UIScreen* key_test;
 #endif
 #if UI_HAS_CARDKB
-  UIScreen* picker;     // #1228: where a message goes
-  UIScreen* composer;   // #1228: typing and sending it
+  UIScreen* thread;     // #1230: one conversation, with compose
+  UIScreen* tools;      // #1230: the device pages Home used to hold
 #endif
   UIScreen* curr;
 
@@ -106,8 +106,9 @@ public:
   void gotoKeyTest();
 #endif
 #if UI_HAS_CARDKB
-  void gotoPicker();                               // #1228
-  void gotoCompose(const compose::Target& target);  // #1228
+  // #1230: a conversation's thread; `first_key` is typed into its compose line.
+  void gotoThread(int convo, char first_key = 0);
+  void gotoTools();   // #1230
   bool hasKeyboard() const { return _kbd.isPresent(); }
   uint8_t lastKeyboardRaw() const { return _last_kbd_raw; }
   int lastButtonEvent() const { return _last_btn_event; }
