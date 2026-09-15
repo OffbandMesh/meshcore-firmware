@@ -53,12 +53,24 @@
 - Unread counts live with the conversation and survive eviction.
 - The old popup's 4.6 KB preview queue isn't allocated on badge builds.
 
-## Open questions for the owner (my default applies until answered)
+## Owner's answers (2026-09-15)
 
-1. **Inbox shape.** One merged inbox (1a, 1c) or split Channels and DMs lists (2a)? Default: merged, as "the Unread/messages screen". The row grammar is the same either way.
-2. **Clock times.** Should there be a time zone setting, so rows show the con's local time? Default: ages.
-3. **Channel ticks.** Should the badge detect heard repeats, so a channel send can show ✓? Default: no mark.
-4. **The design's own settings questions:**
+- **Inbox:** "Inbox should be merged with unread at the top. That's what I specified to Claude Design." That's what was built: one merged inbox, pinned first (nothing can be pinned yet), then unread, then most recent.
+- **Time zone** (#1233):
+  - A Settings row opens the zone picker (the design's option list). It holds US and EU zones with daylight saving, and plain UTC offsets.
+  - Once a zone is set, rows show today's clock time, and older messages show an age.
+  - A GPS fix marks the suggested zone ("gps"). The owner: "If we can detect time zone from GPS on and suggest it, fantastic."
+- **Channel ticks** (#1232): a channel send shows ✓ once a repeater is heard passing it on. After 30 s with no repeat heard, it shows no mark.
+- **Settings** (#1233): the owner's list, in the 3a grammar: Bluetooth on/off, Time zone, Advert zero-hop, Advert flood, Hibernate. Also GPS on/off, and Device pages (the old pages, until Nearby replaces their recent-adverts list).
+  - It opens from Status (Enter) and with Fn+S from anywhere.
+  - Hibernate goes through the design's gate. It says the badge stays off until the next reset (SYSTEMOFF arms no button wake) and that the badge's messages are cleared (the store is RAM).
+- **New screens the owner wants:** Nearby Nodes and GPS. The mockups and navigation are waiting on the owner's OK.
+
+## Still open
+
+1. **Navigation for Nearby and GPS.** Proposed: Nearby in the SW1 cycle (Messages → Contacts → Nearby → Status); GPS as a Settings row.
+2. **The design's radio settings** (Name, Freq, BW, SF, CR, TX and the apply gate): now or later?
+3. **The design's own settings questions:**
    - a region preset row;
    - TX above the regional limit: refuse or warn;
    - settings on the SW1 cycle, or Fn+S only.
