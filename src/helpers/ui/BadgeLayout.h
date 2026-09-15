@@ -31,12 +31,14 @@ inline void formatAge(uint32_t secs, char* out, size_t n) {
   else snprintf(out, n, "old");
 }
 
-// #1233: when something at `t` happened, as a row shows it. With a time zone set and
-// the clock set, today's times read as the clock does ("13:07", the design's); anything
-// older, or with no zone or no clock yet, reads as an age.
-inline void formatWhen(int zone, uint32_t t, uint32_t now, char* out, size_t n) {
+// #1233: when something at `t` happened, as a row shows it. With a time zone set and a
+// `trusted` clock, today's times read as the clock does ("13:07", the design's); anything
+// older, or with no zone yet, reads as an age. The clock is trusted once the phone or the
+// GPS has set it since boot: until then it runs from the newest contact's last-heard
+// time, which can be hours or days behind, and only an age is true.
+inline void formatWhen(int zone, uint32_t t, uint32_t now, bool trusted, char* out, size_t n) {
   namespace tz = offband::tz;
-  if (tz::isSet(zone) && tz::clockSet(now) && tz::clockSet(t) && t <= now && tz::sameLocalDay(zone, t, now)) {
+  if (trusted && tz::isSet(zone) && tz::clockSet(now) && tz::clockSet(t) && t <= now && tz::sameLocalDay(zone, t, now)) {
     tz::clock(zone, t, out, n);
   } else {
     formatAge(now > t ? now - t : 0, out, n);

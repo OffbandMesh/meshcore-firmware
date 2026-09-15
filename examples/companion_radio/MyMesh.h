@@ -92,6 +92,7 @@
 #include <helpers/BadgeSendTracker.h>   // #1227: DMs typed on the badge
 #include <helpers/BadgeStore.h>         // #1229: the badge's inbox and threads
 #include <helpers/HeardRepeats.h>       // #1232: a tick when a repeater passes ours on
+#include <helpers/ClockJump.h>          // #1233: the clock set under stored messages
 #endif
 
 /* -------------------------------------------------------------------------------------- */
@@ -157,6 +158,10 @@ public:
   static constexpr int kBadgeMsgs = 32;
   using BadgeMsgStore = offband::BadgeStore<kBadgeConvos, kBadgeMsgs, MAX_TEXT_LEN, PUB_KEY_SIZE>;
   BadgeMsgStore& badgeStore() { return _badge_store; }
+  // #1233: whether the phone or the GPS has set the clock since boot. Until then it runs
+  // from the newest contact's last-heard time (bootstrapRTCfromContacts), which can be
+  // hours or days behind, so the badge shows ages rather than clock times.
+  bool badgeClockTrusted() const;
 
   // #1230: sends to conversation c of the badge store. Its channel is found by its
   // secret and its contact by its whole key, so the send goes where the thread says.
@@ -438,6 +443,10 @@ private:
   void badgeSendTick();
   BadgeMsgStore _badge_store;   // #1229
   offband::HeardRepeats<16, MAX_HASH_SIZE> _badge_repeats;   // #1232: recent channel sends
+  // #1233: notices the clock being set under the stored messages, and moves them with it.
+  void badgeClockCheck();
+  offband::ClockJump _badge_clock;
+  bool _badge_clock_set_by_phone = false;
 #endif
 
   #define ADVERT_PATH_TABLE_SIZE   16

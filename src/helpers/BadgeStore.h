@@ -185,6 +185,17 @@ public:
     }
   }
 
+  // #1233: the clock was corrected under the stored messages (the phone or the GPS set
+  // it), so their times move by the same amount and their ages stay true.
+  void shiftTimes(int64_t delta) {
+    for (Msg& m : _msgs) {
+      if (m.seq != 0) m.time = shifted(m.time, delta);
+    }
+    for (Convo& c : _convos) {
+      if (c.kind != Empty && c.last_seq != 0) c.last_time = shifted(c.last_time, delta);
+    }
+  }
+
   // Drops one message, as when a failed DM is sent again in its place.
   bool remove(uint32_t seq) {
     Msg* m = msgRef(seq);
@@ -264,6 +275,11 @@ private:
   int _open = -1;
 
   bool live(int c) const { return c >= 0 && c < CONVOS && _convos[c].kind != Empty; }
+
+  static uint32_t shifted(uint32_t t, int64_t delta) {
+    const int64_t v = (int64_t)t + delta;
+    return v < 0 ? 0u : (v > (int64_t)0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)v);
+  }
 
   static void copy(char* dst, const char* src, size_t n) {
     if (src == nullptr) src = "";

@@ -191,6 +191,40 @@ TEST(BadgeStore, ChannelSendsStopWaitingForARepeat) {
   EXPECT_EQ(BadgeSend::Delivered, s.msg(old_send)->status);
 }
 
+// #1233: the phone set the clock 19 hours forward. Messages stamped before that move
+// with it, so a message that came a minute ago still reads a minute old.
+TEST(BadgeStore, AClockCorrectionMovesTheStoredTimes) {
+  Store s;
+  const int a = s.convo(Store::Channel, Key(1).b, "Public");
+  const uint32_t in = incoming(s, a, "hi", 1000);
+  const uint32_t out = s.addOutgoing(a, 1060, "yo", 0, BadgeSend::Sending);
+  const int32_t jump = 19 * 3600;
+  s.shiftTimes(jump);
+  EXPECT_EQ(1000u + jump, s.msg(in)->time);
+  EXPECT_EQ(1060u + jump, s.msg(out)->time);
+  EXPECT_EQ(1060u + jump, s.convoAt(a)->last_time);
+  // A channel send keeps its wait for a repeat: it isn't suddenly 19 hours old.
+  s.expireChannelSends(1070 + jump, 30);
+  EXPECT_EQ(BadgeSend::Sending, s.msg(out)->status);
+}
+
+TEST(BadgeStore, AClockCorrectionBackwardStopsAtZero) {
+  Store s;
+  const int a = s.convo(Store::Channel, Key(1).b, "Public");
+  const uint32_t in = incoming(s, a, "hi", 1000);
+  s.shiftTimes(-5000);
+  EXPECT_EQ(0u, s.msg(in)->time);
+  EXPECT_EQ(0u, s.convoAt(a)->last_time);
+}
+
+// A conversation with nothing in it yet has no time to move.
+TEST(BadgeStore, AClockCorrectionLeavesEmptyConversationsAlone) {
+  Store s;
+  const int a = s.convo(Store::Channel, Key(1).b, "Public");
+  s.shiftTimes(3600);
+  EXPECT_EQ(0u, s.convoAt(a)->last_time);
+}
+
 TEST(BadgeStore, RemoveDropsOneMessage) {
   Store s;
   const int a = s.convo(Store::Contact, Key(1).b, "Abend");

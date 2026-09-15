@@ -153,7 +153,9 @@ inline bool sameLocalDay(int index, uint32_t a, uint32_t b) {
   return (la >= 0 ? la / 86400 : (la - 86399) / 86400) == (lb >= 0 ? lb / 86400 : (lb - 86399) / 86400);
 }
 
-// A clock reading before 2024 hasn't been set by a phone, GPS or a contact's advert.
+// A reading before 2024 can't be a real time. A later one isn't proof the clock is right:
+// MeshCore's fallback clock starts in May 2024, and at boot the clock starts from the
+// newest contact's last-heard time.
 inline bool clockSet(uint32_t utc) { return utc >= 1704067200u; }
 
 // A zone for a GPS position in degrees: coarse US and European boundaries, then the

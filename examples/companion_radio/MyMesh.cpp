@@ -660,6 +660,7 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
   if (txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN) {
     const int c = _badge_store.convo(BadgeMsgStore::Contact, from.id.pub_key, from.name);
     if (c >= 0) {
+      badgeClockCheck();   // #1233
       _badge_store.addIncoming(c, getRTCClock()->getCurrentTime(), "", text,
                                pkt->isRouteFlood() ? pkt->getPathHashCount() : 0xFF,
                                rssiToInt8(_radio->getLastRSSI()));
@@ -957,6 +958,7 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
     const char* body = offband::splitSender(text, sender, sizeof(sender));
     const int c = _badge_store.convo(BadgeMsgStore::Channel, badge_channel.channel.secret, badge_channel.name);
     if (c >= 0) {
+      badgeClockCheck();   // #1233
       _badge_store.addIncoming(c, getRTCClock()->getCurrentTime(), sender, body,
                                pkt->isRouteFlood() ? pkt->getPathHashCount() : 0xFF,
                                rssiToInt8(_radio->getLastRSSI()));
@@ -1327,6 +1329,7 @@ bool MyMesh::uiSendChannel(int channel_idx, const char* text) {
   if (strlen(_prefs.node_name) + 2 + strlen(text) > MAX_TEXT_LEN) return false;
   ChannelDetails channel;
   if (!getChannel(channel_idx, channel)) return false;
+  badgeClockCheck();   // #1233: the GPS may have set the clock since the last loop
   const uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
   uint8_t sent_hash[MAX_HASH_SIZE];
   if (!sendGroupMessage(timestamp, channel.channel, _prefs.node_name, text, strlen(text), sent_hash)) {
@@ -1348,6 +1351,7 @@ bool MyMesh::uiSendChannel(int channel_idx, const char* text) {
 // still returns a handle, which reports Failed.
 uint16_t MyMesh::uiSendDirect(const ContactInfo& contact, const char* text) {
   if (text == NULL || text[0] == 0) return 0;
+  badgeClockCheck();   // #1233: the GPS may have set the clock since the last loop
   const uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
   const uint16_t handle = _badge_dms.begin(contact.id.pub_key, timestamp, text);
   if (handle == 0) return 0;
@@ -1406,7 +1410,22 @@ bool MyMesh::uiResend(uint32_t seq) {
 
 // #1227: the next attempt for any badge DM whose ACK didn't come in time. Each pass
 // sends an attempt or fails the DM, so at most kBadgeDmSlots handles come back.
+// #1233: the phone, the GPS or the CLI can set the clock under the stored messages. A
+// jump the elapsed time doesn't account for moves their times by the same amount, so
+// a message from a minute ago doesn't read as 19 hours old once the phone corrects a
+// clock that started from a stale contact time. Runs every loop and before each
+// message is stored, so none gets stamped on the far side of an unapplied jump.
+void MyMesh::badgeClockCheck() {
+  const int64_t jump = _badge_clock.check(getRTCClock()->getCurrentTime(), (uint32_t)_ms->getMillis());
+  if (jump != 0) _badge_store.shiftTimes(jump);
+}
+
+bool MyMesh::badgeClockTrusted() const {
+  return _badge_clock_set_by_phone || sensors.getGpsClockSyncTime() != 0;
+}
+
 void MyMesh::badgeSendTick() {
+  badgeClockCheck();   // #1233: before anything reads the stored times
   // #1229: a DM the tracker has finished with shows its outcome in the thread.
   _badge_store.refreshSending([this](uint16_t h) { return _badge_dms.status(h); });
   // #1232: a channel send stops waiting for a repeat after 30 s.
@@ -2744,6 +2763,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint32_t curr = getRTCClock()->getCurrentTime();
     getRTCClock()->setCurrentTime(secs);
     offband::logClockSet("client-set-time", curr, secs);
+#if UI_HAS_CARDKB
+    _badge_clock_set_by_phone = true;   // #1233: the badge can show clock times now
+#endif
     writeOKFrame();
   } else if (cmd_frame[0] == CMD_SEND_SELF_ADVERT) {
     mesh::Packet* pkt;
