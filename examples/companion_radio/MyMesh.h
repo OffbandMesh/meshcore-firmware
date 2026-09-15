@@ -443,7 +443,8 @@ private:
   void badgeSendTick();
   BadgeMsgStore _badge_store;   // #1229
   offband::HeardRepeats<16, MAX_HASH_SIZE> _badge_repeats;   // #1232: recent channel sends
-  // #1233: notices the clock being set under the stored messages, and moves them with it.
+  // #1233: notices the clock being set under this run's stamps (messages, contacts heard,
+  // the advert table), and moves them with it.
   void badgeClockCheck();
   offband::ClockJump _badge_clock;
   bool _badge_clock_set_by_phone = false;

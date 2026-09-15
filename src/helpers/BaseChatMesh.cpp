@@ -78,6 +78,15 @@ void BaseChatMesh::bootstrapRTCfromContacts() {
   }
 }
 
+void BaseChatMesh::shiftContactTimes(uint32_t from, uint32_t to, int64_t by) {
+  for (int i = 0; i < num_contacts; i++) {
+    const uint32_t t = contacts[i].lastmod;
+    if (t < from || t > to) continue;
+    const int64_t v = (int64_t)t + by;
+    contacts[i].lastmod = v < 0 ? 0 : (v > (int64_t)0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)v);
+  }
+}
+
 ContactInfo* BaseChatMesh::allocateContactSlot(bool transient_only) {
   int oldest_idx = -1;
   uint32_t oldest_lastmod = 0xFFFFFFFF;
