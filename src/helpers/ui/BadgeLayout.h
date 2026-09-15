@@ -43,6 +43,36 @@ inline void formatWhen(int zone, uint32_t t, uint32_t now, char* out, size_t n) 
   }
 }
 
+// #1235: one coordinate as the GPS screen shows it, "39.1031N": four decimals (about
+// 11 m), rounded. `e6` is millionths of a degree, as the location provider reports it.
+// A value that rounds to zero takes the positive hemisphere's letter.
+inline int formatDegrees(long e6, char pos, char neg, char* out, size_t n) {
+  const unsigned long mag = e6 < 0 ? 0UL - (unsigned long)e6 : (unsigned long)e6;
+  const unsigned long t = (mag + 50) / 100;   // ten-thousandths of a degree
+  return snprintf(out, n, "%lu.%04lu%c", t / 10000, t % 10000, (e6 < 0 && t != 0) ? neg : pos);
+}
+
+// "39.1031N  84.5120W": at most 19 characters.
+inline void formatPosition(long lat_e6, long lon_e6, char* out, size_t n) {
+  char lat[16], lon[16];
+  formatDegrees(lat_e6, 'N', 'S', lat, sizeof(lat));
+  formatDegrees(lon_e6, 'E', 'W', lon, sizeof(lon));
+  snprintf(out, n, "%s  %s", lat, lon);
+}
+
+// "265m" from millimeters, rounded; below sea level, "-86m".
+inline void formatAltitude(long alt_mm, char* out, size_t n) {
+  const unsigned long mag = alt_mm < 0 ? 0UL - (unsigned long)alt_mm : (unsigned long)alt_mm;
+  const unsigned long m = (mag + 500) / 1000;
+  snprintf(out, n, "%s%lum", (alt_mm < 0 && m != 0) ? "-" : "", m);
+}
+
+// "17:07:42": the time of day, UTC, from UTC seconds.
+inline void formatUtcTime(uint32_t t, char* out, size_t n) {
+  const uint32_t s = t % 86400;
+  snprintf(out, n, "%02u:%02u:%02u", (unsigned)(s / 3600), (unsigned)(s / 60 % 60), (unsigned)(s % 60));
+}
+
 struct Span {
   uint16_t start, len;
 };
