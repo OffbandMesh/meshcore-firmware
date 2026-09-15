@@ -1410,14 +1410,25 @@ bool MyMesh::uiResend(uint32_t seq) {
 
 // #1227: the next attempt for any badge DM whose ACK didn't come in time. Each pass
 // sends an attempt or fails the DM, so at most kBadgeDmSlots handles come back.
-// #1233: the phone, the GPS or the CLI can set the clock under the stored messages. A
-// jump the elapsed time doesn't account for moves their times by the same amount, so
-// a message from a minute ago doesn't read as 19 hours old once the phone corrects a
-// clock that started from a stale contact time. Runs every loop and before each
-// message is stored, so none gets stamped on the far side of an unapplied jump.
+// #1233: the phone, the GPS or the CLI can set the clock under the badge's stored
+// messages, and under the contacts and advert-table entries its Contacts and Nearby
+// screens age. A jump the elapsed time doesn't account for moves this run's stamps by
+// the same amount, so a message or a contact from a minute ago doesn't read as 19
+// hours old once the phone corrects a clock that started from a stale contact time.
+// Runs every loop and before each message is stored, so none gets stamped on the far
+// side of an unapplied jump.
 void MyMesh::badgeClockCheck() {
-  const int64_t jump = _badge_clock.check(getRTCClock()->getCurrentTime(), (uint32_t)_ms->getMillis());
-  if (jump != 0) _badge_store.shiftTimes(jump);
+  const offband::ClockJump::Jump j = _badge_clock.check(getRTCClock()->getCurrentTime(), (uint32_t)_ms->getMillis());
+  if (j.by == 0) return;
+  _badge_store.shiftTimes(j.by);   // it only holds this run's messages
+  // Saved contacts are older than this run's window only when the clock started from
+  // them, which MeshCore does when their newest time is plausible. Started from its
+  // fallback instead (May 2024), saved times from an earlier such run could fall inside
+  // the window, so the contacts stay as they are.
+  if (offband::plausibleEpoch(j.from)) shiftContactTimes(j.from, j.to, j.by);
+  for (AdvertPath& a : advert_paths) {   // RAM only: every entry is this run's
+    if (j.covers(a.recv_timestamp)) a.recv_timestamp = offband::ClockJump::moved(a.recv_timestamp, j.by);
+  }
 }
 
 bool MyMesh::badgeClockTrusted() const {
