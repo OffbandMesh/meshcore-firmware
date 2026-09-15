@@ -69,6 +69,10 @@
 #ifndef MAX_LORA_TX_POWER
 #define MAX_LORA_TX_POWER LORA_TX_POWER
 #endif
+// #1236: whether the GPS starts on when no settings are saved yet (a first boot).
+#ifndef DEFAULT_GPS_ENABLED
+#define DEFAULT_GPS_ENABLED 0
+#endif
 
 #ifndef MAX_CONTACTS
 #define MAX_CONTACTS 100
