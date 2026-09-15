@@ -145,6 +145,16 @@ TEST(CardKb, NamesAnFnCodeByTheKeyUnderIt) {
   }
 }
 
+// #1233: Fn+S opens Settings from anywhere (design 3a), so the key under an Fn code
+// has to be recoverable.
+TEST(CardKb, FnBaseNamesTheKeyUnderAnFnCode) {
+  EXPECT_EQ('s', cardkb::fnBase(155));   // 128 + the index of 's'
+  EXPECT_EQ('1', cardkb::fnBase(129));
+  EXPECT_EQ(0, cardkb::fnBase('s'));     // a plain key is not an Fn code
+  EXPECT_EQ(0, cardkb::fnBase(0));
+  EXPECT_EQ(0, cardkb::fnBase(151));     // the map's one empty slot
+}
+
 TEST(CardKb, NamesFitAShortBufferAndStayTerminated) {
   char buf[6];
   cardkb::keyName(183, buf, sizeof buf);          // "RIGHT" exactly fills it

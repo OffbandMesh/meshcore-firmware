@@ -578,8 +578,8 @@ public:
     }
 #endif
 #if UI_HAS_CARDKB
-    if (c == KEY_ENTER && _page == HomePage::FIRST) {   // #1231: back to Status
-      _task->gotoStatus();
+    if (c == KEY_ENTER && _page == HomePage::FIRST) {   // #1233: back to Settings, which opened them
+      _task->gotoSettings();
       return true;
     }
 #endif
@@ -767,6 +767,8 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   tools = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
   contacts = new ContactsScreen(this);   // #1231
   status = new StatusScreen(this);       // #1231
+  settings = new SettingsScreen(this);   // #1233
+  zones = new ZonePickerScreen(this);    // #1233
   msg_preview = NULL;
 #else
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
@@ -820,6 +822,16 @@ void UITask::gotoTools() {
 
 void UITask::gotoStatus() {
   setCurrScreen(status);
+}
+
+void UITask::gotoSettings() {
+  ((SettingsScreen*)settings)->begin();
+  setCurrScreen(settings);
+}
+
+void UITask::gotoZones() {
+  ((ZonePickerScreen*)zones)->begin();
+  setCurrScreen(zones);
 }
 
 int UITask::renderStatusAs(DisplayDriver& d, const char* title, int pos) {
@@ -1075,6 +1087,16 @@ void UITask::loop() {
   const uint8_t kbd_raw = _kbd.poll(millis());
   if (kbd_raw != 0) {
     _last_kbd_raw = kbd_raw;   // #1207: shown by the key test, Fn-layer keys included
+    // #1233: Fn+S opens Settings from anywhere (design 3a), except the diag key test,
+    // which has to show it. A key that wakes a dark display is spent on waking it, as
+    // any other key is.
+    bool key_test_up = false;
+#if defined(QCC_BADGE_SELFTEST)
+    key_test_up = (curr == key_test);
+#endif
+    if (cardkb::fnBase(kbd_raw) == 's' && c == 0 && !key_test_up && checkDisplayOn(KEY_CANCEL) != 0) {
+      gotoSettings();
+    }
     const uint8_t key = cardkb::toUiKey(kbd_raw);
     if (key != 0 && c == 0) {
       _input_from_kbd = true;
@@ -1123,11 +1145,14 @@ void UITask::loop() {
 #ifdef OFFBAND_OBSERVER
     offband::crashLogf("[ui] button event c=0x%x dispatched to curr screen", (int)c);
 #endif
-    // #1205: Esc backs out to Home from any screen that does not take it. #1231: from
-    // the device pages it goes back to Status, where they were opened.
+    // #1205: Esc backs out to Home from any screen that does not take it. On the badge
+    // it goes up one level instead: the device pages and the zone picker to Settings
+    // (#1233), and Settings to Status, where it was opened.
     if (!curr->handleInput(c) && keynav::backsOut((uint8_t)c) && curr != home) {
 #if UI_HAS_CARDKB
-      if (curr == tools) gotoStatus(); else
+      if (curr == tools || curr == zones) gotoSettings();
+      else if (curr == settings) gotoStatus();
+      else
 #endif
       gotoHomeScreen();
     }

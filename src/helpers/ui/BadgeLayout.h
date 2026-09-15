@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "../TimeZones.h"
 
 namespace badgeui {
 
@@ -27,6 +28,18 @@ inline void formatAge(uint32_t secs, char* out, size_t n) {
   else if (secs < 86400) snprintf(out, n, "%uh", (unsigned)(secs / 3600));
   else if (secs < 100u * 86400u) snprintf(out, n, "%ud", (unsigned)(secs / 86400));
   else snprintf(out, n, "old");
+}
+
+// #1233: when something at `t` happened, as a row shows it. With a time zone set and
+// the clock set, today's times read as the clock does ("13:07", the design's); anything
+// older, or with no zone or no clock yet, reads as an age.
+inline void formatWhen(int zone, uint32_t t, uint32_t now, char* out, size_t n) {
+  namespace tz = offband::tz;
+  if (tz::isSet(zone) && tz::clockSet(now) && tz::clockSet(t) && t <= now && tz::sameLocalDay(zone, t, now)) {
+    tz::clock(zone, t, out, n);
+  } else {
+    formatAge(now > t ? now - t : 0, out, n);
+  }
 }
 
 struct Span {

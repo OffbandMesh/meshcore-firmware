@@ -41,6 +41,29 @@ TEST(BadgeLayoutAge, NowThenMinutesHoursDays) {
   EXPECT_EQ("old", age(100u * 86400u));
 }
 
+namespace {
+std::string when(int zone, uint32_t t, uint32_t now) {
+  char buf[8];
+  formatWhen(zone, t, now, buf, sizeof(buf));
+  return buf;
+}
+constexpr uint32_t kNow = 1789492020;   // 2026-09-15 17:07 UTC, 13:07 EDT
+}  // namespace
+
+// #1233: with a zone set, today reads as the clock does; older, as an age.
+TEST(BadgeLayoutWhen, TodayInTheZoneIsAClockTime) {
+  EXPECT_EQ("12:04", when(offband::tz::kEastern, kNow - 3780, kNow));   // an hour and 3 minutes ago
+}
+
+TEST(BadgeLayoutWhen, YesterdayIsAnAge) {
+  EXPECT_EQ("1d", when(offband::tz::kEastern, kNow - 86400, kNow));
+}
+
+TEST(BadgeLayoutWhen, NoZoneOrNoClockIsAnAge) {
+  EXPECT_EQ("1h", when(offband::tz::kNotSet, kNow - 3780, kNow));
+  EXPECT_EQ("1h", when(offband::tz::kEastern, 1000, 1000 + 3780));   // a clock never set (1970)
+}
+
 TEST(BadgeLayoutWrap, BreaksAtSpaces) {
   EXPECT_EQ((std::vector<std::string>{"anyone at the", "CTF table?"}), lines("anyone at the CTF table?", 15));
 }

@@ -32,6 +32,11 @@ constexpr uint8_t kNormalLayer[48] = {
   kDown, kRight, 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', kSpace,
 };
 
+// #1233: the key an Fn-layer code came from ('s' for Fn+S), or 0 for any other byte.
+inline uint8_t fnBase(uint8_t raw) {
+  return (raw >= kFnFirst && raw <= kFnLast) ? kNormalLayer[raw - kFnFirst] : 0;
+}
+
 // The key the UI should receive for one byte read from the keyboard, or 0 for none.
 // 0 is an idle read and 0xFF a bus with nothing on it. The Fn layer is dropped until a
 // screen has a use for it.

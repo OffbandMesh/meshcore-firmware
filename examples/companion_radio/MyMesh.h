@@ -164,6 +164,8 @@ public:
   UiSend uiSendTo(int convo, const char* text);
   // #1230: a failed DM, sent again. The new one replaces it in the thread.
   bool uiResend(uint32_t seq);
+  // #1233: the badge's own advert, zero-hop or flood, as the phone's command sends it.
+  bool uiAdvert(bool flood);
 #endif
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);

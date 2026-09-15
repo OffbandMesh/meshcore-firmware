@@ -78,6 +78,8 @@ class UITask : public AbstractUITask {
   UIScreen* tools;      // #1230: the device pages Home used to hold
   UIScreen* contacts;   // #1231
   UIScreen* status;     // #1231
+  UIScreen* settings;   // #1233
+  UIScreen* zones;      // #1233: the time zone picker
   uint32_t _cycle_at = 0;   // #1231: when SW1 last moved along the cycle
 #endif
   UIScreen* curr;
@@ -118,6 +120,8 @@ public:
   int cyclePos() const;   // 0 Messages, 1 Contacts, 2 Status
   bool breadcrumbShown() const { return _cycle_at != 0 && millis() - _cycle_at < 2000; }
   void gotoStatus();
+  void gotoSettings();   // #1233: from Status, or Fn+S from anywhere (design 3a)
+  void gotoZones();      // #1233
   // The Status screen under another title, as cycle position `pos`: the inbox's empty state.
   int renderStatusAs(DisplayDriver& d, const char* title, int pos);
   bool hasKeyboard() const { return _kbd.isPresent(); }
