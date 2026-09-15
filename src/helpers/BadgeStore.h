@@ -175,6 +175,16 @@ public:
     }
   }
 
+  // #1232: a channel send (no tracker handle) waits `after_secs` for a repeater to be
+  // heard passing it on, then stops waiting: no mark rather than a failure, since nodes
+  // in direct range got it without echoing. A repeat heard later still ticks it.
+  void expireChannelSends(uint32_t now, uint32_t after_secs) {
+    for (Msg& m : _msgs) {
+      if (m.seq == 0 || !m.outgoing || m.handle != 0 || m.status != BadgeSend::Sending) continue;
+      if (now >= m.time && now - m.time >= after_secs) m.status = BadgeSend::None;
+    }
+  }
+
   // Drops one message, as when a failed DM is sent again in its place.
   bool remove(uint32_t seq) {
     Msg* m = msgRef(seq);

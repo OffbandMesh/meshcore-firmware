@@ -367,7 +367,9 @@ void ThreadScreen::drawRow(DisplayDriver& d, int screen_row, const Row& r, bool 
     if (m->outgoing) {
       switch (m->status) {
         case BadgeSend::Sending:   snprintf(meta, sizeof(meta), "sending"); break;
-        case BadgeSend::Delivered: snprintf(meta, sizeof(meta), "delivered %s", age); break;
+        case BadgeSend::Delivered:   // a DM's ACK, or a repeater heard passing a channel send on
+          snprintf(meta, sizeof(meta), "%s %s", channel ? "repeated" : "delivered", age);
+          break;
         case BadgeSend::Failed:    snprintf(meta, sizeof(meta), "failed  Enter=resend"); break;
         default:                   snprintf(meta, sizeof(meta), "sent %s", age); break;
       }
