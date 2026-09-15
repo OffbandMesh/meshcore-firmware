@@ -77,6 +77,7 @@ class UITask : public AbstractUITask {
   UIScreen* thread;     // #1230: one conversation, with compose
   UIScreen* tools;      // #1230: the device pages Home used to hold
   UIScreen* contacts;   // #1231
+  UIScreen* nearby;     // #1234
   UIScreen* status;     // #1231
   UIScreen* settings;   // #1233
   UIScreen* zones;      // #1233: the time zone picker
@@ -114,10 +115,11 @@ public:
   // #1230: a conversation's thread; `first_key` is typed into its compose line.
   void gotoThread(int convo, char first_key = 0);
   void gotoTools();   // #1230
-  // #1231: SW1's tap moves Messages -> Contacts -> Status and round; `step` is 1 or -1.
-  // A breadcrumb shows where you are for 2 s after each move (design 1f).
+  // #1231: SW1's tap moves Messages -> Contacts -> Nearby (#1234) -> Status and round;
+  // `step` is 1 or -1. A breadcrumb shows where you are for 2 s after each move
+  // (design 1f).
   void cycle(int step);
-  int cyclePos() const;   // 0 Messages, 1 Contacts, 2 Status
+  int cyclePos() const;   // 0 Messages, 1 Contacts, 2 Nearby, 3 Status
   bool breadcrumbShown() const { return _cycle_at != 0 && millis() - _cycle_at < 2000; }
   void gotoStatus();
   void gotoSettings();   // #1233: from Status, or Fn+S from anywhere (design 3a)
