@@ -99,6 +99,47 @@ private:
   int _farthest = 0;
 };
 
+// #1233: Settings in the design's grammar (3a): one list, label left and value right.
+// The owner's list: Bluetooth, time zone, advert (zero-hop and flood) and hibernate,
+// with GPS on/off beside them. Hibernate asks first, as the design's gate does.
+class SettingsScreen : public UIScreen {
+public:
+  explicit SettingsScreen(UITask* task) : _task(task) {}
+  void begin();
+  int render(DisplayDriver& display) override;
+  bool handleInput(char c) override;
+  void poll() override;
+
+private:
+  enum Row : uint8_t { Bluetooth, TimeZone, Gps, AdvertZeroHop, AdvertFlood, Hibernate, DevicePages, kRows };
+  UITask* _task;
+  int _sel = 0;
+  bool _gate = false;              // "Hibernate?" is up
+  bool _shutdown_pending = false;  // after SW1's hold is let go
+  int _sent_row = -1;              // an advert row saying "sent" for a moment
+  uint32_t _sent_until = 0;
+
+  static bool shown(int row);
+  void step(int dir);
+  void act();
+  int drawGate(DisplayDriver& d);
+};
+
+// #1233: the time zone, as the design's option list (3a): each zone with its offset
+// now, "now" beside the one in use and "gps" beside the one a GPS fix suggests.
+class ZonePickerScreen : public UIScreen {
+public:
+  explicit ZonePickerScreen(UITask* task) : _task(task) {}
+  void begin();   // on the zone in use, else on the GPS suggestion
+  int render(DisplayDriver& display) override;
+  bool handleInput(char c) override;
+
+private:
+  UITask* _task;
+  int _sel = 0;
+  int _suggested = 0;   // 0: no GPS fix to go on
+};
+
 // One conversation, newest at the bottom, with the compose line under a dotted rule
 // (design 1a). The name shows in a bar for 2 s on entry. Past one line the editor
 // takes the screen, keeping the destination and the room left in its footer.

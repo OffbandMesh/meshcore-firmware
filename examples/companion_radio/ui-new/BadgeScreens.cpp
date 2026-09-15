@@ -23,10 +23,10 @@ using offband::BadgeSend;
 
 namespace {
 
-// How long ago `t` (RTC seconds) was. A clock that moved back reads as "now".
-void ageOf(uint32_t t, char* out, size_t n) {
-  const uint32_t now = rtc_clock.getCurrentTime();
-  formatAge(now > t ? now - t : 0, out, n);
+// #1233: when `t` happened, as message rows show it: today's clock time once a time
+// zone is set (the design's "12:04"), else an age.
+void whenOf(uint32_t t, char* out, size_t n) {
+  formatWhen(the_mesh.getNodePrefs()->ui_tz, t, rtc_clock.getCurrentTime(), out, n);
 }
 
 int batteryPct(uint16_t mv) {
@@ -155,7 +155,7 @@ bool InboxScreen::drawItem(DisplayDriver& d, int row, const Item& item, bool sel
   if (unread > 99) snprintf(count, sizeof(count), "99+");
   else if (unread > 0) snprintf(count, sizeof(count), "%u", (unsigned)unread);
   if (muted) snprintf(age, sizeof(age), "muted");
-  else if (active) ageOf(last_time, age, sizeof(age));
+  else if (active) whenOf(last_time, age, sizeof(age));
 
   const int y = row * kRowPx;
   const bool inverted = selected || (item.convo == _flash_convo && before(now_ms, _flash_until));
@@ -363,7 +363,7 @@ void ThreadScreen::drawRow(DisplayDriver& d, int screen_row, const Row& r, bool 
 
   if (r.kind == RowKind::Meta) {   // design 1a "Message selected": one line of detail
     char meta[24], age[6];
-    ageOf(m->time, age, sizeof(age));
+    whenOf(m->time, age, sizeof(age));
     if (m->outgoing) {
       switch (m->status) {
         case BadgeSend::Sending:   snprintf(meta, sizeof(meta), "sending"); break;
@@ -775,15 +775,15 @@ int StatusScreen::drawAs(DisplayDriver& d, const char* title, int pos) {
 
 bool StatusScreen::handleInput(char c) {
   const uint8_t key = (uint8_t)c;
-  if (!_task->inputFromKeyboard()) {   // SW1: a tap moves along the cycle; a hold opens tools
+  if (!_task->inputFromKeyboard()) {   // SW1: a tap moves along the cycle; a hold opens Settings
     if (key == KEY_NEXT) _task->cycle(1);
     else if (key == KEY_PREV) _task->cycle(-1);
-    else if (key == KEY_ENTER) _task->gotoTools();
+    else if (key == KEY_ENTER) _task->gotoSettings();
     return true;
   }
   switch (key) {
-    case KEY_ENTER:   // the device pages: Bluetooth, advert, radio, hibernate
-      _task->gotoTools();
+    case KEY_ENTER:   // #1233: Settings, which holds what the device pages did
+      _task->gotoSettings();
       return true;
     case KEY_LEFT:
       _task->cycle(-1);
@@ -794,6 +794,212 @@ bool StatusScreen::handleInput(char c) {
     default:
       return false;   // Esc: UITask backs out to Messages
   }
+}
+
+// ---- Settings (#1233) ------------------------------------------------------------------
+
+void SettingsScreen::begin() {
+  _gate = false;
+  _shutdown_pending = false;
+  _sent_until = 0;
+  if (!shown(_sel)) _sel = 0;
+}
+
+bool SettingsScreen::shown(int row) {
+#if ENV_INCLUDE_GPS == 1
+  return row >= 0 && row < kRows;
+#else
+  return row >= 0 && row < kRows && row != Gps;
+#endif
+}
+
+void SettingsScreen::step(int dir) {
+  int next = _sel;
+  do {
+    next = (next + dir + kRows) % kRows;
+  } while (!shown(next));
+  _sel = next;
+}
+
+void SettingsScreen::act() {
+  switch (_sel) {
+    case Bluetooth:
+      if (_task->isBluetoothEnabled()) _task->disableBluetooth(); else _task->enableBluetooth();
+      break;
+    case TimeZone:
+      _task->gotoZones();
+      break;
+    case Gps:
+      _task->toggleGPS();
+      break;
+    case AdvertZeroHop:
+    case AdvertFlood:
+      if (the_mesh.uiAdvert(_sel == AdvertFlood)) {
+        _task->notify(UIEventType::ack);
+        _sent_row = _sel;
+        _sent_until = millis() + 2000;
+      } else {
+        _task->showAlert("Advert failed", 1000);
+      }
+      break;
+    case Hibernate:
+      _gate = true;
+      break;
+    case DevicePages:
+      _task->gotoTools();
+      break;
+  }
+}
+
+// The design's gate: what happens, then Enter to go ahead or Esc to back out.
+int SettingsScreen::drawGate(DisplayDriver& d) {
+  bar(d, 0, " Hibernate", "");
+  cell(d, 0, 1, " radio and screen off");
+  cell(d, 0, 2, " until the next reset");
+  cell(d, 0, 4, " messages on the badge");
+  cell(d, 0, 5, " are cleared");
+  fillRow(d, kListRows);
+  textAt(d, 0, kListRows * kRowPx, " Enter sleep", true);
+  textAt(d, kScreenPx - 1 - textPx("Esc no"), kListRows * kRowPx, "Esc no", true);
+  return 1000;
+}
+
+int SettingsScreen::render(DisplayDriver& d) {
+  if (_gate) return drawGate(d);
+  bar(d, 0, " Settings", "");
+  const NodePrefs* prefs = the_mesh.getNodePrefs();
+  const bool sent = before(millis(), _sent_until);
+  int row = 1;
+  for (int r = 0; r < kRows; r++) {
+    if (!shown(r)) continue;
+    const char* label = "";
+    char value[12] = "";
+    switch (r) {
+      case Bluetooth:     label = "Bluetooth"; snprintf(value, sizeof(value), "%s", _task->isBluetoothEnabled() ? "on" : "off"); break;
+      case TimeZone:      label = "Time zone"; snprintf(value, sizeof(value), "%s", offband::tz::zone(prefs->ui_tz).name); break;
+      case Gps:           label = "GPS"; snprintf(value, sizeof(value), "%s", _task->getGPSState() ? "on" : "off"); break;
+      case AdvertZeroHop: label = "Advert zero-hop"; snprintf(value, sizeof(value), "%s", sent && _sent_row == r ? "sent" : "send"); break;
+      case AdvertFlood:   label = "Advert flood"; snprintf(value, sizeof(value), "%s", sent && _sent_row == r ? "sent" : "send"); break;
+      case Hibernate:     label = "Hibernate"; break;
+      case DevicePages:   label = "Device pages"; break;
+    }
+    const bool selected = (r == _sel);
+    char left[24];
+    snprintf(left, sizeof(left), " %s", label);
+    if (selected) fillRow(d, row);
+    textAt(d, 0, row * kRowPx, left, selected);
+    if (value[0] != 0) textAt(d, kScreenPx - 1 - textPx(value), row * kRowPx, value, selected);
+    row++;
+  }
+  return sent ? 250 : 1000;
+}
+
+bool SettingsScreen::handleInput(char c) {
+  const uint8_t key = (uint8_t)c;
+  const bool from_button = !_task->inputFromKeyboard();
+  if (_gate) {
+    if (key == KEY_ENTER) {
+      // A hold on SW1 is still down: wait for its release, as the old hibernate page
+      // did. A key from the keyboard can go now.
+      if (from_button) _shutdown_pending = true; else _task->shutdown();
+    } else if (key == KEY_CANCEL || (from_button && key == KEY_NEXT)) {
+      _gate = false;
+    }
+    return true;
+  }
+  if (from_button) {   // SW1 walks the list; a hold picks
+    if (key == KEY_NEXT) step(1);
+    else if (key == KEY_PREV) step(-1);
+    else if (key == KEY_ENTER) act();
+    return true;
+  }
+  switch (key) {
+    case KEY_UP:    step(-1); return true;
+    case KEY_DOWN:  step(1); return true;
+    case KEY_ENTER: act(); return true;
+    default:        return false;   // Esc: back to Status
+  }
+}
+
+void SettingsScreen::poll() {
+  if (_shutdown_pending && !_task->isButtonPressed()) _task->shutdown();
+}
+
+// ---- Time zone picker (#1233) ----------------------------------------------------------
+
+void ZonePickerScreen::begin() {
+  _suggested = 0;
+#if ENV_INCLUDE_GPS == 1
+  LocationProvider* gps = sensors.getLocationProvider();
+  if (gps != nullptr && gps->isValid()) {
+    _suggested = offband::tz::suggest(gps->getLatitude() / 1000000.0, gps->getLongitude() / 1000000.0);
+  }
+#endif
+  const int current = the_mesh.getNodePrefs()->ui_tz;
+  _sel = offband::tz::isSet(current) ? current : (offband::tz::isSet(_suggested) ? _suggested : offband::tz::kUtc);
+}
+
+int ZonePickerScreen::render(DisplayDriver& d) {
+  namespace tz = offband::tz;
+  const int count = tz::kZoneCount;
+  int top = listTop(_sel, count, kListRows);
+  const bool more_below = count - top > kListRows;
+  if (more_below) top = listTop(_sel, count, kListRows - 1);
+  char marks[3] = {0};
+  int m = 0;
+  if (top > 0) marks[m++] = kGlyphUp;
+  if (more_below) marks[m++] = kGlyphDown;
+  bar(d, 0, " Time zone", marks);
+
+  const int current = the_mesh.getNodePrefs()->ui_tz;
+  const uint32_t now = rtc_clock.getCurrentTime();
+  for (int r = 0; r < kListRows && top + r < count; r++) {
+    const int z = top + r;
+    const int row = 1 + r;
+    const bool selected = (z == _sel);
+    char left[16], right[16], offset[8];
+    snprintf(left, sizeof(left), " %s", tz::zone(z).name);
+    if (!tz::isSet(z)) {
+      snprintf(right, sizeof(right), "ages");
+    } else {
+      tz::formatOffset(tz::offsetMinutes(z, now), offset, sizeof(offset));
+      const char* mark = (z == current) ? "now " : (z == _suggested ? "gps " : "");
+      snprintf(right, sizeof(right), "%s%s", mark, offset);
+    }
+    if (selected) fillRow(d, row);
+    textAt(d, 0, row * kRowPx, left, selected);
+    textAt(d, kScreenPx - 1 - textPx(right), row * kRowPx, right, selected);
+  }
+  if (more_below) {
+    dark(d);
+    d.fillRect(0, kScreenRowsPx - 4, kScreenPx, 4);
+    lit(d);
+  }
+  return 1000;
+}
+
+bool ZonePickerScreen::handleInput(char c) {
+  const uint8_t key = (uint8_t)c;
+  const int count = offband::tz::kZoneCount;
+  const bool from_button = !_task->inputFromKeyboard();
+  if ((from_button && key == KEY_NEXT) || key == KEY_DOWN) {
+    _sel = (_sel + 1) % count;
+    return true;
+  }
+  if ((from_button && key == KEY_PREV) || key == KEY_UP) {
+    _sel = (_sel + count - 1) % count;
+    return true;
+  }
+  if (key == KEY_ENTER) {
+    NodePrefs* prefs = the_mesh.getNodePrefs();
+    if (prefs->ui_tz != (uint8_t)_sel) {   // a flash write only for a change
+      prefs->ui_tz = (uint8_t)_sel;
+      the_mesh.savePrefs();
+    }
+    _task->gotoSettings();
+    return true;
+  }
+  return false;   // Esc: back to Settings, unchanged
 }
 
 #endif  // UI_HAS_CARDKB

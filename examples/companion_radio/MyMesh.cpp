@@ -1380,6 +1380,18 @@ MyMesh::UiSend MyMesh::uiSendTo(int convo, const char* text) {
   return uiSendDirect(*contact, text) != 0 ? UiSend::Sent : UiSend::Busy;
 }
 
+bool MyMesh::uiAdvert(bool flood) {
+  if (!flood) return advert();
+  mesh::Packet* pkt = (_prefs.advert_loc_policy == ADVERT_LOC_NONE)
+                          ? createSelfAdvert(_prefs.node_name)
+                          : createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
+  if (pkt == NULL) return false;
+  TransportKey default_scope;   // as CMD_SEND_SELF_ADVERT floods it
+  memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
+  sendFloodScoped(default_scope, pkt, 0);
+  return true;
+}
+
 bool MyMesh::uiResend(uint32_t seq) {
   const auto* m = _badge_store.msg(seq);
   if (m == NULL || !m->outgoing || m->status != offband::BadgeSend::Failed) return false;
