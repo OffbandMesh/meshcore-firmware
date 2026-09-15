@@ -91,6 +91,7 @@
 #if UI_HAS_CARDKB
 #include <helpers/BadgeSendTracker.h>   // #1227: DMs typed on the badge
 #include <helpers/BadgeStore.h>         // #1229: the badge's inbox and threads
+#include <helpers/HeardRepeats.h>       // #1232: a tick when a repeater passes ours on
 #endif
 
 /* -------------------------------------------------------------------------------------- */
@@ -145,6 +146,7 @@ public:
   // A DM gets up to kBadgeDmAttempts attempts; uiSendStatus() reports how it ended.
   static constexpr int kBadgeDmSlots = 4;
   static constexpr int kBadgeDmAttempts = 3;
+  static constexpr uint32_t kBadgeRepeatWaitSecs = 30;   // #1232: a channel send's wait for a repeat
   bool uiSendChannel(int channel_idx, const char* text);
   uint16_t uiSendDirect(const ContactInfo& contact, const char* text);
   offband::BadgeSend uiSendStatus(uint16_t handle) const { return _badge_dms.status(handle); }
@@ -225,8 +227,9 @@ protected:
   void sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis=0) override;
 
   void logRxRaw(float snr, float rssi, const uint8_t raw[], int len) override;
-#ifdef OFFBAND_OBSERVER
-  void logRx(mesh::Packet* pkt, int len, float score) override;   // Strycher/LoRa#335: /packets path
+#if defined(OFFBAND_OBSERVER) || UI_HAS_CARDKB
+  // Strycher/LoRa#335: the observer's /packets path. #1232: the badge's heard repeats.
+  void logRx(mesh::Packet* pkt, int len, float score) override;
 #endif
   bool isAutoAddEnabled() const override;
   bool shouldAutoAddContactType(uint8_t type) const override;
@@ -424,6 +427,7 @@ private:
   offband::BadgeSendTracker<kBadgeDmSlots, kBadgeDmAttempts, MAX_TEXT_LEN, PUB_KEY_SIZE> _badge_dms;
   void badgeSendTick();
   BadgeMsgStore _badge_store;   // #1229
+  offband::HeardRepeats<16, MAX_HASH_SIZE> _badge_repeats;   // #1232: recent channel sends
 #endif
 
   #define ADVERT_PATH_TABLE_SIZE   16

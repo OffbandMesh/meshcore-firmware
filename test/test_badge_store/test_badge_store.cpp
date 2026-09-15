@@ -173,6 +173,24 @@ TEST(BadgeStore, RefreshSendingTakesTheTrackersWord) {
   EXPECT_EQ(BadgeSend::Failed, s.msg(m2)->status);
 }
 
+// #1232: a channel send waits for a repeater to be heard. No repeat in time leaves no
+// mark rather than an X: nodes in direct range got it without echoing. A repeat heard
+// later still ticks it. DMs are the tracker's business.
+TEST(BadgeStore, ChannelSendsStopWaitingForARepeat) {
+  Store s;
+  const int a = s.convo(Store::Channel, Key(1).b, "Public");
+  const uint32_t old_send = s.addOutgoing(a, 100, "old", 0, BadgeSend::Sending);
+  const uint32_t new_send = s.addOutgoing(a, 125, "new", 0, BadgeSend::Sending);
+  const int d = s.convo(Store::Contact, Key(2).b, "Abend");
+  const uint32_t dm = s.addOutgoing(d, 100, "dm", 7, BadgeSend::Sending);
+  s.expireChannelSends(130, 30);
+  EXPECT_EQ(BadgeSend::None, s.msg(old_send)->status);
+  EXPECT_EQ(BadgeSend::Sending, s.msg(new_send)->status);
+  EXPECT_EQ(BadgeSend::Sending, s.msg(dm)->status);
+  EXPECT_TRUE(s.setStatus(old_send, BadgeSend::Delivered));
+  EXPECT_EQ(BadgeSend::Delivered, s.msg(old_send)->status);
+}
+
 TEST(BadgeStore, RemoveDropsOneMessage) {
   Store s;
   const int a = s.convo(Store::Contact, Key(1).b, "Abend");
