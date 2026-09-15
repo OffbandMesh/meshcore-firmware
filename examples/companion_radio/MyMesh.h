@@ -90,6 +90,7 @@
 #include "OffbandConfigProtocol.h"
 #if UI_HAS_CARDKB
 #include <helpers/BadgeSendTracker.h>   // #1227: DMs typed on the badge
+#include <helpers/BadgeStore.h>         // #1229: the badge's inbox and threads
 #endif
 
 /* -------------------------------------------------------------------------------------- */
@@ -147,6 +148,13 @@ public:
   bool uiSendChannel(int channel_idx, const char* text);
   uint16_t uiSendDirect(const ContactInfo& contact, const char* text);
   offband::BadgeSend uiSendStatus(uint16_t handle) const { return _badge_dms.status(handle); }
+
+  // #1229: the badge's own copy of recent messages, for its inbox and threads. Filled
+  // on receive and on every badge send.
+  static constexpr int kBadgeConvos = 24;
+  static constexpr int kBadgeMsgs = 32;
+  using BadgeMsgStore = offband::BadgeStore<kBadgeConvos, kBadgeMsgs, MAX_TEXT_LEN, PUB_KEY_SIZE>;
+  BadgeMsgStore& badgeStore() { return _badge_store; }
 #endif
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
@@ -408,6 +416,7 @@ private:
   // the phone is never told about a message it didn't send.
   offband::BadgeSendTracker<kBadgeDmSlots, kBadgeDmAttempts, MAX_TEXT_LEN, PUB_KEY_SIZE> _badge_dms;
   void badgeSendTick();
+  BadgeMsgStore _badge_store;   // #1229
 #endif
 
   #define ADVERT_PATH_TABLE_SIZE   16
