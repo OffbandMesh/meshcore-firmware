@@ -76,6 +76,9 @@ class UITask : public AbstractUITask {
 #if UI_HAS_CARDKB
   UIScreen* thread;     // #1230: one conversation, with compose
   UIScreen* tools;      // #1230: the device pages Home used to hold
+  UIScreen* contacts;   // #1231
+  UIScreen* status;     // #1231
+  uint32_t _cycle_at = 0;   // #1231: when SW1 last moved along the cycle
 #endif
   UIScreen* curr;
 
@@ -109,6 +112,14 @@ public:
   // #1230: a conversation's thread; `first_key` is typed into its compose line.
   void gotoThread(int convo, char first_key = 0);
   void gotoTools();   // #1230
+  // #1231: SW1's tap moves Messages -> Contacts -> Status and round; `step` is 1 or -1.
+  // A breadcrumb shows where you are for 2 s after each move (design 1f).
+  void cycle(int step);
+  int cyclePos() const;   // 0 Messages, 1 Contacts, 2 Status
+  bool breadcrumbShown() const { return _cycle_at != 0 && millis() - _cycle_at < 2000; }
+  void gotoStatus();
+  // The Status screen under another title, as cycle position `pos`: the inbox's empty state.
+  int renderStatusAs(DisplayDriver& d, const char* title, int pos);
   bool hasKeyboard() const { return _kbd.isPresent(); }
   uint8_t lastKeyboardRaw() const { return _last_kbd_raw; }
   int lastButtonEvent() const { return _last_btn_event; }

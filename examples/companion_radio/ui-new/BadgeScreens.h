@@ -50,6 +50,55 @@ private:
   bool drawItem(DisplayDriver& d, int row, const Item& item, bool selected, uint32_t now_ms);
 };
 
+// #1231: chat contacts, most recently heard first, with their hops and when they were
+// last heard (design 1a). Contacts gone quiet are dimmed rather than dropped. Enter
+// opens the DM thread.
+class ContactsScreen : public UIScreen {
+public:
+  explicit ContactsScreen(UITask* task) : _task(task) {}
+  void reload();   // on the way in, and every few seconds while shown
+  int render(DisplayDriver& display) override;
+  bool handleInput(char c) override;
+
+  static constexpr int kMax = 64;              // the most recently heard
+  static constexpr uint32_t kStaleSecs = 3 * 3600;
+
+private:
+  struct Entry {
+    uint32_t heard;              // lastmod, by our clock
+    uint8_t key[PUB_KEY_SIZE];   // the whole key: slots move when the phone edits
+  };
+  UITask* _task;
+  Entry _list[kMax];
+  int _count = 0;
+  int _total = 0;
+  int _sel = 0;
+  uint8_t _sel_key[PUB_KEY_SIZE] = {0};
+  uint32_t _loaded_at = 0;
+
+  void select(int sel);
+  void open(char first_key);
+};
+
+// #1231: what the radio is doing (design 1a, "the empty state is the status screen").
+// The BLE pairing PIN moved here from Home. Enter opens the device pages.
+class StatusScreen : public UIScreen {
+public:
+  explicit StatusScreen(UITask* task) : _task(task) {}
+  int render(DisplayDriver& display) override { return drawAs(display, " Status", 2); }
+  bool handleInput(char c) override;
+
+  // Draws this screen under `title`, as cycle position `pos`: the inbox's empty state
+  // is this screen under the Messages title.
+  int drawAs(DisplayDriver& display, const char* title, int pos);
+
+private:
+  UITask* _task;
+  uint32_t _stats_at = 0;   // the nodes-heard count is refreshed every 10 s
+  int _heard = 0;
+  int _farthest = 0;
+};
+
 // One conversation, newest at the bottom, with the compose line under a dotted rule
 // (design 1a). The name shows in a bar for 2 s on entry. Past one line the editor
 // takes the screen, keeping the destination and the room left in its footer.

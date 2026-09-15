@@ -186,42 +186,50 @@ int InboxScreen::render(DisplayDriver& d) {
   const int count = items(list, kMaxItems);
   follow(list, count);
 
-  // Seven rows under the title. When more follow, the seventh is cut in half: the
-  // design's way of saying so without spending a row.
-  int top = listTop(_sel, count, kListRows);
-  const bool more_below = count - top > kListRows;
-  if (more_below) top = listTop(_sel, count, kListRows - 1);
+  // The design: a fresh badge shows what the radio is doing, not an apology.
+  if (count == 0) return _task->renderStatusAs(d, " Messages", 0);
+
+  // Rows under the title: seven, or six while the cycle's breadcrumb takes the first.
+  // When more follow, the last is cut in half: the design's way of saying so without
+  // spending a row.
+  const bool crumb = _task->breadcrumbShown();
+  const int first_row = crumb ? 2 : 1;
+  const int rows = kListRows - (crumb ? 1 : 0);
+  int top = listTop(_sel, count, rows);
+  const bool more_below = count - top > rows;
+  if (more_below) top = listTop(_sel, count, rows - 1);
 
   char right[20];
-  int n = 0;
-  // At most "99+ new" and two marks: 9 cells, clear of " Messages".
-  const unsigned unread = store.totalUnread();
-  if (unread > 99) n = snprintf(right, sizeof(right), "99+ new");
-  else if (unread > 0) n = snprintf(right, sizeof(right), "%u new", unread);
-  if (top > 0) right[n++] = kGlyphUp;
-  if (more_below) right[n++] = kGlyphDown;
-  right[n] = 0;
+  if (crumb) {
+    snprintf(right, sizeof(right), "1 of 3");
+  } else {
+    // At most "99+ new" and two marks: 9 cells, clear of " Messages".
+    int n = 0;
+    const unsigned unread = store.totalUnread();
+    if (unread > 99) n = snprintf(right, sizeof(right), "99+ new");
+    else if (unread > 0) n = snprintf(right, sizeof(right), "%u new", unread);
+    if (top > 0) right[n++] = kGlyphUp;
+    if (more_below) right[n++] = kGlyphDown;
+    right[n] = 0;
+  }
   fillRow(d, 0);
   textAt(d, 0, 0, " Messages", true);
   textAt(d, kScreenPx - 15 - textPx(right), 0, right, true);
   battery(d, kScreenPx - 13, 2, batteryPct(_task->getBattMilliVolts()));
-
-  if (count == 0) {
-    cell(d, 0, 3, " quiet on the mesh");
-    return 5000;
-  }
+  if (crumb) breadcrumb(d, 1, 0);
 
   const uint32_t now_ms = millis();
   bool scrolling = false;
-  for (int r = 0; r < kListRows && top + r < count; r++) {
-    scrolling |= drawItem(d, 1 + r, list[top + r], top + r == _sel, now_ms);
+  for (int r = 0; r < rows && top + r < count; r++) {
+    scrolling |= drawItem(d, first_row + r, list[top + r], top + r == _sel, now_ms);
   }
   if (more_below) {
     dark(d);
-    d.fillRect(0, kScreenPx / 2 - 4, kScreenPx, 4);   // the bottom half of the last row
+    d.fillRect(0, kScreenRowsPx - 4, kScreenPx, 4);   // the bottom half of the last row
     lit(d);
   }
   if (scrolling) return 80;
+  if (crumb) return 250;   // redraw when the breadcrumb goes
   if (before(now_ms, _flash_until)) return (int)(_flash_until - now_ms) + 10;
   return 1000;
 }
@@ -232,9 +240,9 @@ bool InboxScreen::handleInput(char c) {
   const int count = items(list, kMaxItems);
   follow(list, count);
 
-  if (!_task->inputFromKeyboard()) {   // SW1: click down, double-click up, hold opens
-    if (key == KEY_NEXT) select(list, count, _sel + 1 < count ? _sel + 1 : 0);
-    else if (key == KEY_PREV) select(list, count, _sel > 0 ? _sel - 1 : count - 1);
+  if (!_task->inputFromKeyboard()) {   // SW1: a tap moves along the cycle (design 1f)
+    if (key == KEY_NEXT) _task->cycle(1);
+    else if (key == KEY_PREV) _task->cycle(-1);
     else if (key == KEY_ENTER && count > 0) open(list[_sel], 0);
     return true;
   }
@@ -248,8 +256,11 @@ bool InboxScreen::handleInput(char c) {
     case KEY_ENTER:
       if (count > 0) open(list[_sel], 0);
       return true;
-    case KEY_RIGHT:   // the device pages, until Status holds them (#1231)
-      _task->gotoTools();
+    case KEY_LEFT:    // the keyboard's way round the same cycle
+      _task->cycle(-1);
+      return true;
+    case KEY_RIGHT:
+      _task->cycle(1);
       return true;
 #if defined(QCC_BADGE_SELFTEST)
     case KEY_TAB:     // #1207: the diag key test
@@ -362,9 +373,11 @@ void ThreadScreen::drawRow(DisplayDriver& d, int screen_row, const Row& r, bool 
       }
       textAt(d, kScreenPx - textPx(meta), y, meta);
     } else {
+      // Radio hops, as the design counts them: 1 is heard directly. A direct-routed
+      // packet (0xFF) doesn't say how many.
       char hops[8];
       if (m->hops == 0xFF) snprintf(hops, sizeof(hops), "direct");
-      else snprintf(hops, sizeof(hops), "%uhop%s", (unsigned)m->hops, m->hops == 1 ? "" : "s");
+      else snprintf(hops, sizeof(hops), "%uhop%s", (unsigned)m->hops + 1, m->hops == 0 ? "" : "s");
       if (m->rssi != 0) snprintf(meta, sizeof(meta), "%s %s %d", age, hops, (int)m->rssi);
       else snprintf(meta, sizeof(meta), "%s %s", age, hops);
       textAt(d, ((channel ? kIndent : 0) + 1) * kCellPx, y, meta);
@@ -527,6 +540,258 @@ bool ThreadScreen::handleInput(char c) {
     _entered_at = millis() - 2000;
   }
   return true;
+}
+
+// ---- Contacts (#1231) -----------------------------------------------------------------
+
+// Chat contacts, most recently heard first. Only the newest kMax are kept; each by its
+// whole key, since the phone can move contacts between slots at any time.
+void ContactsScreen::reload() {
+  _count = 0;
+  _total = 0;
+  const int n = the_mesh.getNumContacts();
+  for (int i = 0; i < n; i++) {
+    ContactInfo c;
+    // The first MAX_ANON_CONTACTS slots of the table hold transient anonymous peers.
+    if (!the_mesh.getContactByIdx(MAX_ANON_CONTACTS + i, c) || c.type != ADV_TYPE_CHAT) continue;
+    _total++;
+    int pos = _count;
+    while (pos > 0 && _list[pos - 1].heard < c.lastmod) pos--;
+    if (pos >= kMax) continue;
+    for (int k = (_count < kMax ? _count : kMax - 1); k > pos; k--) _list[k] = _list[k - 1];
+    _list[pos].heard = c.lastmod;
+    memcpy(_list[pos].key, c.id.pub_key, PUB_KEY_SIZE);
+    if (_count < kMax) _count++;
+  }
+  for (int i = 0; i < _count; i++) {   // the selection stays with its contact
+    if (memcmp(_list[i].key, _sel_key, PUB_KEY_SIZE) == 0) {
+      _sel = i;
+      _loaded_at = millis();
+      return;
+    }
+  }
+  select(_sel);
+  _loaded_at = millis();
+}
+
+void ContactsScreen::select(int sel) {
+  if (_count == 0) {
+    _sel = 0;
+    return;
+  }
+  _sel = sel < 0 ? 0 : (sel >= _count ? _count - 1 : sel);
+  memcpy(_sel_key, _list[_sel].key, PUB_KEY_SIZE);
+}
+
+void ContactsScreen::open(char first_key) {
+  if (_count == 0) return;
+  const ContactInfo* c = the_mesh.lookupContactByPubKey(_list[_sel].key, PUB_KEY_SIZE);
+  if (c == nullptr) return;   // deleted since the last reload
+  const int convo = the_mesh.badgeStore().convo(Store::Contact, c->id.pub_key, c->name);
+  if (convo < 0) {
+    _task->showAlert("Inbox full", 1000);
+    return;
+  }
+  _task->gotoThread(convo, first_key);
+}
+
+int ContactsScreen::render(DisplayDriver& d) {
+  if (millis() - _loaded_at > 5000) reload();
+  const bool crumb = _task->breadcrumbShown();
+  const int first_row = crumb ? 2 : 1;
+  const int rows = kListRows - (crumb ? 1 : 0);
+  int top = listTop(_sel, _count, rows);
+  const bool more_below = _count - top > rows;
+  if (more_below) top = listTop(_sel, _count, rows - 1);
+
+  char right[16];
+  if (crumb) {
+    snprintf(right, sizeof(right), "2 of 3");
+  } else {
+    int n = snprintf(right, sizeof(right), "%d", _total);
+    if (top > 0) right[n++] = kGlyphUp;
+    if (more_below) right[n++] = kGlyphDown;
+    right[n] = 0;
+  }
+  bar(d, 0, " Contacts", right);
+  if (crumb) breadcrumb(d, 1, 1);
+
+  if (_count == 0) {
+    cell(d, 0, first_row + 1, " nobody heard yet");
+    return crumb ? 250 : 5000;
+  }
+  const uint32_t now = rtc_clock.getCurrentTime();
+  for (int r = 0; r < rows && top + r < _count; r++) {
+    const Entry& e = _list[top + r];
+    const ContactInfo* c = the_mesh.lookupContactByPubKey(e.key, PUB_KEY_SIZE);
+    const int row = first_row + r;
+    const bool selected = (top + r == _sel);
+    char shown[32], left[34], age[6], info[16];
+    d.translateUTF8ToBlocks(shown, c != nullptr ? c->name : "?", sizeof(shown));
+    snprintf(left, sizeof(left), " @%s", shown);
+    const uint32_t secs = now > e.heard ? now - e.heard : 0;
+    formatAge(secs, age, sizeof(age));
+    const bool stale = secs >= kStaleSecs;
+    if (stale) {
+      // The design: quiet nodes dim and read "stale" rather than disappear.
+      if (strcmp(age, "old") == 0) snprintf(info, sizeof(info), "stale");
+      else snprintf(info, sizeof(info), "stale %s", age);
+    } else if (c != nullptr && c->out_path_len != OUT_PATH_UNKNOWN) {
+      snprintf(info, sizeof(info), "%uhop %s", (unsigned)(c->out_path_len & 63) + 1, age);
+    } else {
+      snprintf(info, sizeof(info), "%s", age);
+    }
+    const int info_x = kScreenPx - 1 - textPx(info);
+    const int room = (info_x - kCellPx) / kCellPx;
+    if ((int)strlen(left) > room) left[room > 0 ? room : 0] = 0;
+    if (selected) fillRow(d, row);
+    textAt(d, 0, row * kRowPx, left, selected);
+    textAt(d, info_x, row * kRowPx, info, selected);
+    if (stale && !selected) dither(d, 0, row * kRowPx, kScreenPx, kRowPx);
+  }
+  if (more_below) {
+    dark(d);
+    d.fillRect(0, kScreenRowsPx - 4, kScreenPx, 4);
+    lit(d);
+  }
+  return crumb ? 250 : 1000;
+}
+
+bool ContactsScreen::handleInput(char c) {
+  const uint8_t key = (uint8_t)c;
+  if (!_task->inputFromKeyboard()) {   // SW1: a tap moves along the cycle
+    if (key == KEY_NEXT) _task->cycle(1);
+    else if (key == KEY_PREV) _task->cycle(-1);
+    else if (key == KEY_ENTER) open(0);
+    return true;
+  }
+  switch (key) {
+    case KEY_UP:
+      select(_sel - 1);
+      return true;
+    case KEY_DOWN:
+      select(_sel + 1);
+      return true;
+    case KEY_ENTER:
+      open(0);
+      return true;
+    case KEY_LEFT:
+      _task->cycle(-1);
+      return true;
+    case KEY_RIGHT:
+      _task->cycle(1);
+      return true;
+    default:
+      break;
+  }
+  if (printable(key)) {   // typing starts a DM to the selected contact
+    open((char)key);
+    return true;
+  }
+  return false;
+}
+
+// ---- Status (#1231) -------------------------------------------------------------------
+
+namespace {
+
+// "tx 41 rx 219", with counts past 9999 in thousands so the row fits.
+void counts(char* out, size_t n, uint32_t tx, uint32_t rx) {
+  char a[8], b[8];
+  if (tx > 9999) snprintf(a, sizeof(a), "%luk", (unsigned long)(tx / 1000)); else snprintf(a, sizeof(a), "%lu", (unsigned long)tx);
+  if (rx > 9999) snprintf(b, sizeof(b), "%luk", (unsigned long)(rx / 1000)); else snprintf(b, sizeof(b), "%lu", (unsigned long)rx);
+  snprintf(out, n, "tx %s rx %s", a, b);
+}
+
+}  // namespace
+
+int StatusScreen::drawAs(DisplayDriver& d, const char* title, int pos) {
+  const bool crumb = _task->breadcrumbShown() && _task->cyclePos() == pos;
+  char right[8];
+  snprintf(right, sizeof(right), "%d of 3", pos + 1);
+  bar(d, 0, title, crumb ? right : "OFFBAND");
+  int row = 1;
+  if (crumb) breadcrumb(d, row++, pos);
+
+  char buf[40], shown[32];
+  d.translateUTF8ToBlocks(shown, the_mesh.getNodeName(), sizeof(shown));
+  snprintf(buf, sizeof(buf), " @%s", shown);
+  cell(d, 0, row++, buf);
+
+  // Uptime as h:mm:ss, and as days and hours once that would not fit.
+  const unsigned long up = millis() / 1000;
+  const uint8_t* id = the_mesh.self_id.pub_key;
+  if (up < 100UL * 3600UL) {
+    snprintf(buf, sizeof(buf), " node %02X%02X up %lu:%02lu:%02lu", id[0], id[1], up / 3600, up / 60 % 60, up % 60);
+  } else {
+    snprintf(buf, sizeof(buf), " node %02X%02X up %lud %luh", id[0], id[1], up / 86400, up / 3600 % 24);
+  }
+  cell(d, 0, row++, buf);
+  if (!crumb) row++;   // the design's breathing room, given up to the breadcrumb
+
+  // Nodes heard in the last hour, and how far the farthest is in radio hops. The scan
+  // copies every contact, so it runs every 10 s rather than on every redraw.
+  if (_stats_at == 0 || millis() - _stats_at >= 10000) {
+    const uint32_t now = rtc_clock.getCurrentTime();
+    _heard = 0;
+    _farthest = 0;
+    const int n = the_mesh.getNumContacts();
+    for (int i = 0; i < n; i++) {
+      ContactInfo c;
+      if (!the_mesh.getContactByIdx(MAX_ANON_CONTACTS + i, c)) continue;
+      if (now < c.lastmod || now - c.lastmod >= 3600) continue;
+      _heard++;
+      if (c.out_path_len != OUT_PATH_UNKNOWN && (int)(c.out_path_len & 63) + 1 > _farthest) _farthest = (c.out_path_len & 63) + 1;
+    }
+    _stats_at = millis() | 1;
+  }
+  if (_heard == 0) snprintf(buf, sizeof(buf), " no nodes this hour");
+  else if (_farthest > 0) snprintf(buf, sizeof(buf), " %d node%s  %d hop%s", _heard, _heard == 1 ? "" : "s", _farthest, _farthest == 1 ? "" : "s");
+  else snprintf(buf, sizeof(buf), " %d node%s", _heard, _heard == 1 ? "" : "s");
+  cell(d, 0, row++, buf);
+
+  const NodePrefs* prefs = the_mesh.getNodePrefs();
+  snprintf(buf, sizeof(buf), " %.3fMHz SF%d", (double)prefs->freq, (int)prefs->sf);
+  cell(d, 0, row++, buf);
+
+  snprintf(buf, sizeof(buf), " batt %d%%", batteryPct(_task->getBattMilliVolts()));
+  cell(d, 0, row, buf);
+  char tx_rx[20];
+  counts(tx_rx, sizeof(tx_rx), radio_driver.getPacketsSent(), radio_driver.getPacketsRecv());
+  textAt(d, kScreenPx - 1 - textPx(tx_rx), row * kRowPx, tx_rx);
+
+  // The footer: the Bluetooth pairing PIN while a phone could pair, which used to be
+  // Home's job on this board.
+  dottedRule(d, kListRows * kRowPx);
+  if (_task->hasConnection()) snprintf(buf, sizeof(buf), " phone connected");
+  else if (!_task->isBluetoothEnabled()) snprintf(buf, sizeof(buf), " bluetooth off");
+  else if (the_mesh.getBLEPin() != 0) snprintf(buf, sizeof(buf), " BT pin %06lu", (unsigned long)the_mesh.getBLEPin());
+  else snprintf(buf, sizeof(buf), " quiet on the mesh");
+  textAt(d, 0, kListRows * kRowPx + 1, buf);
+  return crumb ? 250 : 1000;
+}
+
+bool StatusScreen::handleInput(char c) {
+  const uint8_t key = (uint8_t)c;
+  if (!_task->inputFromKeyboard()) {   // SW1: a tap moves along the cycle; a hold opens tools
+    if (key == KEY_NEXT) _task->cycle(1);
+    else if (key == KEY_PREV) _task->cycle(-1);
+    else if (key == KEY_ENTER) _task->gotoTools();
+    return true;
+  }
+  switch (key) {
+    case KEY_ENTER:   // the device pages: Bluetooth, advert, radio, hibernate
+      _task->gotoTools();
+      return true;
+    case KEY_LEFT:
+      _task->cycle(-1);
+      return true;
+    case KEY_RIGHT:
+      _task->cycle(1);
+      return true;
+    default:
+      return false;   // Esc: UITask backs out to Messages
+  }
 }
 
 #endif  // UI_HAS_CARDKB
