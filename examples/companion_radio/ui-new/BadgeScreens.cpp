@@ -59,6 +59,16 @@ LocationProvider* liveGps(UITask* task) {
   return nullptr;
 }
 
+// #1235: whether a GPS module answered the sensor manager's check. A build that can't
+// tell counts as having one, so it never claims the module is missing.
+bool gpsModuleFound() {
+#if ENV_INCLUDE_GPS == 1
+  return sensors.gpsDetected();
+#else
+  return true;
+#endif
+}
+
 }  // namespace
 
 // ---- Inbox ------------------------------------------------------------------------
@@ -1072,7 +1082,7 @@ int SettingsScreen::render(DisplayDriver& d) {
   for (int r = 0; r < kRows; r++) {
     if (!shown(r)) continue;
     const char* label = "";
-    char value[12] = "";
+    char value[16] = "";   // "No GPS Module" is the longest
     switch (r) {
       case Bluetooth:     label = "Bluetooth"; snprintf(value, sizeof(value), "%s", _task->isBluetoothEnabled() ? "on" : "off"); break;
       case TimeZone:      label = "Time zone"; snprintf(value, sizeof(value), "%s", offband::tz::zone(prefs->ui_tz).name); break;
@@ -1194,10 +1204,8 @@ bool ZonePickerScreen::handleInput(char c) {
 
 void GpsScreen::summary(UITask* task, char* out, size_t n) {
   LocationProvider* gps = liveGps(task);
-  if (gps == nullptr) snprintf(out, n, "off");
-  else if (!gps->isValid()) snprintf(out, n, "no fix");
-  else if (gps->satellitesCount() > 0) snprintf(out, n, "fix %ld", gps->satellitesCount());
-  else snprintf(out, n, "fix");   // a fix from RMC before any GGA has counted satellites
+  const bool fix = gps != nullptr && gps->isValid();
+  formatGpsState(gps != nullptr, gpsModuleFound(), fix, fix ? gps->satellitesCount() : 0, out, n);
 }
 
 int GpsScreen::suggestedZone(UITask* task) {
@@ -1240,7 +1248,8 @@ int GpsScreen::render(DisplayDriver& d) {
   if (gps == nullptr) {
     cell(d, 0, 1, " GPS is off");
   } else if (!gps->isValid()) {
-    cell(d, 0, 1, " waiting for a fix");
+    // With no module the title says "No GPS Module"; otherwise one is still looking.
+    if (gpsModuleFound()) cell(d, 0, 1, " waiting for a fix");
   } else {
     formatPosition(gps->getLatitude(), gps->getLongitude(), part, sizeof(part));
     snprintf(buf, sizeof(buf), " %s", part);

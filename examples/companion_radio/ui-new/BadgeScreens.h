@@ -178,7 +178,8 @@ public:
   int render(DisplayDriver& display) override;
   bool handleInput(char c) override;
 
-  // "fix 9", "no fix" or "off": the title's right slot, and Settings' GPS row.
+  // "fix 9", "no fix", "No GPS Module" or "off": the title's right slot, and Settings'
+  // GPS row.
   static void summary(UITask* task, char* out, size_t n);
   // The zone a current fix suggests; 0 (not set) with the GPS off or no fix.
   static int suggestedZone(UITask* task);
