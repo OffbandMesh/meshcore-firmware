@@ -555,6 +555,17 @@ void MyMesh::onContactPathUpdated(const ContactInfo &contact) {
 }
 
 ContactInfo*  MyMesh::processAck(const uint8_t *data) {
+#if UI_HAS_CARDKB
+  // #1227: an ACK for a DM typed on the badge. Checked first and kept from the phone,
+  // which never sent it. Returning the recipient lets BaseChatMesh treat it as ours.
+  uint32_t ack_crc;
+  memcpy(&ack_crc, data, 4);
+  const uint16_t badge_dm = _badge_dms.ack(ack_crc);
+  if (badge_dm != 0) {
+    const auto* dm = _badge_dms.find(badge_dm);
+    return dm != NULL ? lookupContactByPubKey(dm->key, sizeof(dm->key)) : NULL;
+  }
+#endif
   // see if matches any in a table
   for (int i = 0; i < EXPECTED_ACK_TABLE_SIZE; i++) {
     if (memcmp(data, &expected_ack_table[i].ack, 4) == 0) { // got an ACK from recipient
@@ -1260,6 +1271,62 @@ uint32_t MyMesh::calcDirectTimeoutMillisFor(uint32_t pkt_airtime_millis, uint8_t
 }
 
 void MyMesh::onSendTimeout() {}
+
+#if UI_HAS_CARDKB
+// #1227: a channel message typed on the badge. The same call and bookkeeping as the
+// phone path (CMD_SEND_CHANNEL_TXT_MSG); channels have no delivery receipt.
+bool MyMesh::uiSendChannel(int channel_idx, const char* text) {
+  if (text == NULL || text[0] == 0) return false;
+  // sendGroupMessage sends "<name>: <text>" and silently cuts it at MAX_TEXT_LEN. Refuse
+  // text that won't fit rather than send it truncated; the compose screen stops typing
+  // at the same limit.
+  if (strlen(_prefs.node_name) + 2 + strlen(text) > MAX_TEXT_LEN) return false;
+  ChannelDetails channel;
+  if (!getChannel(channel_idx, channel)) return false;
+  const uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
+  uint8_t sent_hash[MAX_HASH_SIZE];
+  if (!sendGroupMessage(timestamp, channel.channel, _prefs.node_name, text, strlen(text), sent_hash)) {
+    return false;
+  }
+  recordSentPktHash(timestamp, (uint8_t)channel_idx, sent_hash);
+  return true;
+}
+
+// #1227: a DM typed on the badge. Returns a handle for uiSendStatus(), or 0 when the text
+// is empty or kBadgeDmSlots DMs are still waiting. A first attempt the mesh can't send
+// still returns a handle, which reports Failed.
+uint16_t MyMesh::uiSendDirect(const ContactInfo& contact, const char* text) {
+  if (text == NULL || text[0] == 0) return 0;
+  const uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
+  const uint16_t handle = _badge_dms.begin(contact.id.pub_key, timestamp, text);
+  if (handle == 0) return 0;
+  uint32_t expected_ack = 0, est_timeout = 0;
+  if (sendMessage(contact, timestamp, 0, text, expected_ack, est_timeout) == MSG_SEND_FAILED) {
+    _badge_dms.sendFailed(handle);
+  } else {
+    _badge_dms.sent(handle, expected_ack, _ms->getMillis(), est_timeout);
+  }
+  return handle;
+}
+
+// #1227: the next attempt for any badge DM whose ACK didn't come in time. Each pass
+// sends an attempt or fails the DM, so at most kBadgeDmSlots handles come back.
+void MyMesh::badgeSendTick() {
+  for (int i = 0; i < kBadgeDmSlots; i++) {
+    const uint16_t handle = _badge_dms.due(_ms->getMillis());
+    if (handle == 0) return;
+    const auto* dm = _badge_dms.find(handle);
+    ContactInfo* contact = (dm != NULL) ? lookupContactByPubKey(dm->key, sizeof(dm->key)) : NULL;
+    uint32_t expected_ack = 0, est_timeout = 0;
+    if (contact == NULL ||
+        sendMessage(*contact, dm->timestamp, dm->attempts, dm->text, expected_ack, est_timeout) == MSG_SEND_FAILED) {
+      _badge_dms.sendFailed(handle);
+    } else {
+      _badge_dms.sent(handle, expected_ack, _ms->getMillis(), est_timeout);
+    }
+  }
+}
+#endif
 
 MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui)
     : BaseChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(16), tables),
@@ -3758,6 +3825,9 @@ void MyMesh::checkObserverSerialCli() {
 
 void MyMesh::loop() {
   BaseChatMesh::loop();
+#if UI_HAS_CARDKB
+  badgeSendTick();   // #1227
+#endif
 
   if (_cli_rescue) {
     checkCLIRescueCmd();

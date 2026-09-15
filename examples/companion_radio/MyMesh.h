@@ -88,6 +88,9 @@
 // (OFFBAND_PKTHASH_RING_SLOTS) rather than a duplicated literal. Safe to include
 // here -- this header pulls only <stdint.h> and defines no types of its own.
 #include "OffbandConfigProtocol.h"
+#if UI_HAS_CARDKB
+#include <helpers/BadgeSendTracker.h>   // #1227: DMs typed on the badge
+#endif
 
 /* -------------------------------------------------------------------------------------- */
 
@@ -135,6 +138,16 @@ public:
   void handleCmdFrame(size_t len);
   bool advert();
   void enterCLIRescue();
+
+#if UI_HAS_CARDKB
+  // #1227: messages typed on the badge, sent with the same mesh calls as the phone path.
+  // A DM gets up to kBadgeDmAttempts attempts; uiSendStatus() reports how it ended.
+  static constexpr int kBadgeDmSlots = 4;
+  static constexpr int kBadgeDmAttempts = 3;
+  bool uiSendChannel(int channel_idx, const char* text);
+  uint16_t uiSendDirect(const ContactInfo& contact, const char* text);
+  offband::BadgeSend uiSendStatus(uint16_t handle) const { return _badge_dms.status(handle); }
+#endif
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
 
@@ -389,6 +402,13 @@ private:
   #define EXPECTED_ACK_TABLE_SIZE 8
   AckTableEntry expected_ack_table[EXPECTED_ACK_TABLE_SIZE]; // circular table
   int next_ack_idx;
+
+#if UI_HAS_CARDKB
+  // #1227: DMs typed on the badge. Their ACKs are kept apart from expected_ack_table so
+  // the phone is never told about a message it didn't send.
+  offband::BadgeSendTracker<kBadgeDmSlots, kBadgeDmAttempts, MAX_TEXT_LEN> _badge_dms;
+  void badgeSendTick();
+#endif
 
   #define ADVERT_PATH_TABLE_SIZE   16
   AdvertPath advert_paths[ADVERT_PATH_TABLE_SIZE]; // circular table
