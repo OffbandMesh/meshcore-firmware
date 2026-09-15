@@ -93,15 +93,6 @@ inline void dottedRule(DisplayDriver& d, int y) {
   for (int x = 0; x < kScreenPx; x += 2) d.fillRect(x, y, 1, 1);
 }
 
-// Knocks out every other pixel: a 1-bit display's way of dimming a quiet row.
-inline void dither(DisplayDriver& d, int x0, int y0, int w, int h) {
-  dark(d);
-  for (int y = y0; y < y0 + h; y++) {
-    for (int x = x0 + ((y + x0) & 1); x < x0 + w; x += 2) d.fillRect(x, y, 1, 1);
-  }
-  lit(d);
-}
-
 // A 10 x 5 battery, filled to `pct`, drawn dark for a title bar.
 inline void battery(DisplayDriver& d, int x, int y, int pct) {
   if (pct < 0) pct = 0;
