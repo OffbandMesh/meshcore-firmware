@@ -1,0 +1,532 @@
+// #1230: the badge's inbox and thread screens. See BadgeScreens.h.
+
+#if UI_HAS_CARDKB
+
+#include "BadgeScreens.h"
+
+#include <stdio.h>
+#include <string.h>
+#include "BadgeUi.h"
+#include "UITask.h"
+#include "target.h"
+
+using namespace badgeui;
+using Store = MyMesh::BadgeMsgStore;
+using offband::BadgeSend;
+
+#ifndef BATT_MIN_MILLIVOLTS
+  #define BATT_MIN_MILLIVOLTS 3000
+#endif
+#ifndef BATT_MAX_MILLIVOLTS
+  #define BATT_MAX_MILLIVOLTS 4200
+#endif
+
+namespace {
+
+// How long ago `t` (RTC seconds) was. A clock that moved back reads as "now".
+void ageOf(uint32_t t, char* out, size_t n) {
+  const uint32_t now = rtc_clock.getCurrentTime();
+  formatAge(now > t ? now - t : 0, out, n);
+}
+
+int batteryPct(uint16_t mv) {
+  const int pct = ((int)mv - BATT_MIN_MILLIVOLTS) * 100 / (BATT_MAX_MILLIVOLTS - BATT_MIN_MILLIVOLTS);
+  return pct < 0 ? 0 : (pct > 100 ? 100 : pct);
+}
+
+bool printable(uint8_t key) { return key >= 32 && key < 127; }
+
+bool before(uint32_t now_ms, uint32_t until_ms) { return until_ms != 0 && (int32_t)(now_ms - until_ms) < 0; }
+
+}  // namespace
+
+// ---- Inbox ------------------------------------------------------------------------
+
+int InboxScreen::items(Item* out, int max) const {
+  Store& store = the_mesh.badgeStore();
+  uint8_t order[MyMesh::kBadgeConvos];
+  const int n = store.ordered(order, MyMesh::kBadgeConvos);
+  int k = 0;
+  for (int i = 0; i < n && k < max; i++) out[k++] = {(int16_t)order[i], -1};
+  for (int s = 0; s < MAX_GROUP_CHANNELS && k < max; s++) {
+    ChannelDetails ch;
+    if (the_mesh.getChannel(s, ch) && ch.name[0] != 0 && store.find(Store::Channel, ch.channel.secret) < 0) {
+      out[k++] = {-1, (int16_t)s};
+    }
+  }
+  return k;
+}
+
+// Who a row is: a conversation's kind and key, or for a channel the store hasn't seen
+// yet, its secret, which is the key the store will give it.
+bool InboxScreen::identity(const Item& item, uint8_t& kind, uint8_t* key) {
+  if (item.convo >= 0) {
+    const Store::Convo* v = the_mesh.badgeStore().convoAt(item.convo);
+    if (v == nullptr) return false;
+    kind = v->kind;
+    memcpy(key, v->key, PUB_KEY_SIZE);
+    return true;
+  }
+  ChannelDetails ch;
+  if (!the_mesh.getChannel(item.slot, ch)) return false;
+  kind = Store::Channel;
+  memcpy(key, ch.channel.secret, PUB_KEY_SIZE);
+  return true;
+}
+
+// Rows reorder as messages arrive; the selection stays on its conversation. If that's
+// gone, it stays at the same position.
+void InboxScreen::follow(const Item* list, int count) {
+  uint8_t kind, key[PUB_KEY_SIZE];
+  for (int i = 0; i < count; i++) {
+    if (identity(list[i], kind, key) && kind == _sel_kind && memcmp(key, _sel_key, PUB_KEY_SIZE) == 0) {
+      _sel = i;
+      return;
+    }
+  }
+  if (_sel >= count) _sel = count - 1;
+  if (_sel < 0) _sel = 0;
+  if (count > 0) identity(list[_sel], _sel_kind, _sel_key);
+}
+
+void InboxScreen::select(const Item* list, int count, int sel) {
+  if (count == 0) return;
+  _sel = sel < 0 ? 0 : (sel >= count ? count - 1 : sel);
+  identity(list[_sel], _sel_kind, _sel_key);
+  _marquee_from = millis();
+}
+
+void InboxScreen::open(const Item& item, char first_key) {
+  int c = item.convo;
+  if (c < 0) {   // a channel with nothing in it yet
+    ChannelDetails ch;
+    if (!the_mesh.getChannel(item.slot, ch)) return;
+    c = the_mesh.badgeStore().convo(Store::Channel, ch.channel.secret, ch.name);
+    if (c < 0) {
+      _task->showAlert("Inbox full", 1000);
+      return;
+    }
+  }
+  _task->gotoThread(c, first_key);
+}
+
+void InboxScreen::flash() {
+  Store& store = the_mesh.badgeStore();
+  uint32_t newest = 0;
+  _flash_convo = -1;
+  for (int i = 0; i < MyMesh::kBadgeConvos; i++) {
+    const Store::Convo* v = store.convoAt(i);
+    if (v != nullptr && v->last_seq > newest) {
+      newest = v->last_seq;
+      _flash_convo = i;
+    }
+  }
+  _flash_until = millis() + 1000;
+}
+
+// One inbox row: name on the left; the unread count and age on the right (design 1a,
+// 1c). Selected or flashing, it inverts. A selected row too long to show whole
+// becomes one string that scrolls (design 2a). Returns whether it is scrolling.
+bool InboxScreen::drawItem(DisplayDriver& d, int row, const Item& item, bool selected, uint32_t now_ms) {
+  Store& store = the_mesh.badgeStore();
+  const char* name = "";
+  char sigil = '#';
+  bool pinned = false, muted = false, active = false;
+  uint16_t unread = 0;
+  uint32_t last_time = 0;
+  ChannelDetails ch;
+  if (item.convo >= 0) {
+    const Store::Convo* v = store.convoAt(item.convo);
+    if (v == nullptr) return false;
+    name = v->name;
+    sigil = (v->kind == Store::Channel) ? '#' : '@';
+    pinned = v->pinned;
+    muted = v->muted;
+    unread = v->unread;
+    active = v->last_seq != 0;
+    last_time = v->last_time;
+  } else if (the_mesh.getChannel(item.slot, ch)) {
+    name = ch.name;
+  }
+
+  char shown[32], left[40], count[5] = "", age[6] = "";
+  d.translateUTF8ToBlocks(shown, name, sizeof(shown));
+  snprintf(left, sizeof(left), " %s%c%s", pinned ? "\x07" : "", sigil, shown);
+  if (unread > 99) snprintf(count, sizeof(count), "99+");
+  else if (unread > 0) snprintf(count, sizeof(count), "%u", (unsigned)unread);
+  if (muted) snprintf(age, sizeof(age), "muted");
+  else if (active) ageOf(last_time, age, sizeof(age));
+
+  const int y = row * kRowPx;
+  const bool inverted = selected || (item.convo == _flash_convo && before(now_ms, _flash_until));
+  const int age_x = kScreenPx - 1 - textPx(age);
+  const int count_end = age[0] != 0 ? age_x - 3 : kScreenPx - 1;
+  const int right_x = count[0] != 0 ? count_end - textPx(count) - 1 : (age[0] != 0 ? age_x : kScreenPx);
+  if (inverted) fillRow(d, row);
+
+  if (selected && textPx(left) + kCellPx > right_x) {
+    char all[64];
+    snprintf(all, sizeof(all), "%s   %s%s%s", left, count, count[0] != 0 ? " new   " : "", age);
+    textAt(d, -marqueeOffset(textPx(all), kScreenPx, now_ms - _marquee_from), y, all, true);
+    return textPx(all) > kScreenPx;
+  }
+
+  const int room = (right_x - kCellPx) / kCellPx;   // a cell between name and count
+  if ((int)strlen(left) > room) left[room > 0 ? room : 0] = 0;
+  textAt(d, 0, y, left, inverted);
+  if (count[0] != 0) countBox(d, count_end, y, count, inverted);
+  if (age[0] != 0) textAt(d, age_x, y, age, inverted);
+  if (muted && !inverted) dither(d, 0, y, kScreenPx, kRowPx);
+  return false;
+}
+
+int InboxScreen::render(DisplayDriver& d) {
+  Store& store = the_mesh.badgeStore();
+  Item list[kMaxItems];
+  const int count = items(list, kMaxItems);
+  follow(list, count);
+
+  // Seven rows under the title. When more follow, the seventh is cut in half: the
+  // design's way of saying so without spending a row.
+  int top = listTop(_sel, count, kListRows);
+  const bool more_below = count - top > kListRows;
+  if (more_below) top = listTop(_sel, count, kListRows - 1);
+
+  char right[20];
+  int n = 0;
+  // At most "99+ new" and two marks: 9 cells, clear of " Messages".
+  const unsigned unread = store.totalUnread();
+  if (unread > 99) n = snprintf(right, sizeof(right), "99+ new");
+  else if (unread > 0) n = snprintf(right, sizeof(right), "%u new", unread);
+  if (top > 0) right[n++] = kGlyphUp;
+  if (more_below) right[n++] = kGlyphDown;
+  right[n] = 0;
+  fillRow(d, 0);
+  textAt(d, 0, 0, " Messages", true);
+  textAt(d, kScreenPx - 15 - textPx(right), 0, right, true);
+  battery(d, kScreenPx - 13, 2, batteryPct(_task->getBattMilliVolts()));
+
+  if (count == 0) {
+    cell(d, 0, 3, " quiet on the mesh");
+    return 5000;
+  }
+
+  const uint32_t now_ms = millis();
+  bool scrolling = false;
+  for (int r = 0; r < kListRows && top + r < count; r++) {
+    scrolling |= drawItem(d, 1 + r, list[top + r], top + r == _sel, now_ms);
+  }
+  if (more_below) {
+    dark(d);
+    d.fillRect(0, kScreenPx / 2 - 4, kScreenPx, 4);   // the bottom half of the last row
+    lit(d);
+  }
+  if (scrolling) return 80;
+  if (before(now_ms, _flash_until)) return (int)(_flash_until - now_ms) + 10;
+  return 1000;
+}
+
+bool InboxScreen::handleInput(char c) {
+  const uint8_t key = (uint8_t)c;
+  Item list[kMaxItems];
+  const int count = items(list, kMaxItems);
+  follow(list, count);
+
+  if (!_task->inputFromKeyboard()) {   // SW1: click down, double-click up, hold opens
+    if (key == KEY_NEXT) select(list, count, _sel + 1 < count ? _sel + 1 : 0);
+    else if (key == KEY_PREV) select(list, count, _sel > 0 ? _sel - 1 : count - 1);
+    else if (key == KEY_ENTER && count > 0) open(list[_sel], 0);
+    return true;
+  }
+  switch (key) {
+    case KEY_UP:
+      if (_sel > 0) select(list, count, _sel - 1);
+      return true;
+    case KEY_DOWN:
+      if (_sel + 1 < count) select(list, count, _sel + 1);
+      return true;
+    case KEY_ENTER:
+      if (count > 0) open(list[_sel], 0);
+      return true;
+    case KEY_RIGHT:   // the device pages, until Status holds them (#1231)
+      _task->gotoTools();
+      return true;
+#if defined(QCC_BADGE_SELFTEST)
+    case KEY_TAB:     // #1207: the diag key test
+      _task->gotoKeyTest();
+      return true;
+#endif
+    default:
+      break;
+  }
+  if (printable(key) && count > 0) {   // typing starts a reply to the selected row
+    open(list[_sel], (char)key);
+    return true;
+  }
+  return false;
+}
+
+// ---- Thread -----------------------------------------------------------------------
+
+void ThreadScreen::begin(int convo) {
+  Store& store = the_mesh.badgeStore();
+  const Store::Convo* v = store.convoAt(convo);
+  if (v == nullptr) return;
+  const bool same = _convo >= 0 && v->kind == _kind && memcmp(v->key, _key, PUB_KEY_SIZE) == 0;
+  _convo = convo;
+  _kind = v->kind;
+  memcpy(_key, v->key, PUB_KEY_SIZE);
+  _unread_at_entry = v->unread;
+  _entered_at = millis();
+  _sel_seq = 0;
+  _note_until = 0;
+  if (!same) {
+    _line.start(v->kind == Store::Channel ? compose::budget(true, strlen(the_mesh.getNodeName()), MAX_TEXT_LEN)
+                                          : MAX_TEXT_LEN);
+  }
+  store.setOpen(convo);
+}
+
+void ThreadScreen::note(const char* text) {
+  _note = text;
+  _note_until = millis() + 2000;
+}
+
+void ThreadScreen::leave() {
+  the_mesh.badgeStore().setOpen(-1);
+  _task->gotoHomeScreen();
+}
+
+void ThreadScreen::send() {
+  switch (the_mesh.uiSendTo(_convo, _line.text())) {
+    case MyMesh::UiSend::Sent:    _line.clear(); break;
+    case MyMesh::UiSend::Gone:    note(" no longer here"); break;
+    case MyMesh::UiSend::NotSent: note(" not sent"); break;
+    case MyMesh::UiSend::Busy:    note(" busy, try again"); break;
+  }
+}
+
+bool ThreadScreen::failedSelected() const {
+  const Store::Msg* m = the_mesh.badgeStore().msg(_sel_seq);
+  return m != nullptr && m->outgoing && m->status == BadgeSend::Failed;
+}
+
+// Enter on a failed DM sends it again.
+void ThreadScreen::resend() {
+  if (!failedSelected()) return;
+  if (the_mesh.uiResend(_sel_seq)) {
+    _sel_seq = 0;
+  } else {
+    note(" not sent");
+  }
+}
+
+void ThreadScreen::selectOlder() {
+  const int n = the_mesh.badgeStore().thread(_convo, _seqs, kShow);
+  if (n == 0) return;
+  int i = n;
+  for (int k = 0; k < n; k++) {
+    if (_seqs[k] == _sel_seq) i = k;
+  }
+  if (i > 0) _sel_seq = _seqs[i - 1];
+  _entered_at = millis() - 2000;   // the name bar gives way
+}
+
+void ThreadScreen::selectNewer() {
+  if (_sel_seq == 0) return;
+  const int n = the_mesh.badgeStore().thread(_convo, _seqs, kShow);
+  for (int k = 0; k < n; k++) {
+    if (_seqs[k] == _sel_seq) {
+      _sel_seq = (k + 1 < n) ? _seqs[k + 1] : 0;   // past the newest: nothing selected
+      return;
+    }
+  }
+  _sel_seq = 0;
+}
+
+void ThreadScreen::drawRow(DisplayDriver& d, int screen_row, const Row& r, bool channel) {
+  const int y = screen_row * kRowPx;
+  const Store::Msg* m = the_mesh.badgeStore().msg(_seqs[r.msg]);
+  if (m == nullptr) return;
+  if (r.caret) textAt(d, 0, y, ">");
+
+  if (r.kind == RowKind::Meta) {   // design 1a "Message selected": one line of detail
+    char meta[24], age[6];
+    ageOf(m->time, age, sizeof(age));
+    if (m->outgoing) {
+      switch (m->status) {
+        case BadgeSend::Sending:   snprintf(meta, sizeof(meta), "sending"); break;
+        case BadgeSend::Delivered: snprintf(meta, sizeof(meta), "delivered %s", age); break;
+        case BadgeSend::Failed:    snprintf(meta, sizeof(meta), "failed  Enter=resend"); break;
+        default:                   snprintf(meta, sizeof(meta), "sent %s", age); break;
+      }
+      textAt(d, kScreenPx - textPx(meta), y, meta);
+    } else {
+      char hops[8];
+      if (m->hops == 0xFF) snprintf(hops, sizeof(hops), "direct");
+      else snprintf(hops, sizeof(hops), "%uhop%s", (unsigned)m->hops, m->hops == 1 ? "" : "s");
+      if (m->rssi != 0) snprintf(meta, sizeof(meta), "%s %s %d", age, hops, (int)m->rssi);
+      else snprintf(meta, sizeof(meta), "%s %s", age, hops);
+      textAt(d, ((channel ? kIndent : 0) + 1) * kCellPx, y, meta);
+    }
+    return;
+  }
+
+  const MsgView& v = _views[r.msg];
+  if (r.first && !v.outgoing && channel) cell(d, r.caret ? 1 : 0, screen_row, _tag[r.msg], true);
+  char line[kCols + 1];
+  memcpy(line, v.text + r.span.start, r.span.len);
+  line[r.span.len] = 0;
+  textAt(d, r.col * kCellPx, y, line);
+  if (r.last && v.outgoing) {   // sending shows three dots; only a dead send shows X
+    const int x = kMarkCol * kCellPx;
+    const char tick[2] = {kGlyphTick, 0};
+    if (m->status == BadgeSend::Delivered) textAt(d, x, y, tick);
+    else if (m->status == BadgeSend::Sending) sendingDots(d, x, y);
+    else if (m->status == BadgeSend::Failed) textAt(d, x, y, "X");
+  }
+}
+
+// The compose line under a dotted rule. The room left shows once typing starts.
+void ThreadScreen::drawCompose(DisplayDriver& d, int row) {
+  const int y = row * kRowPx;
+  dottedRule(d, y);
+  if (before(millis(), _note_until)) {
+    textAt(d, 0, y + 1, _note);
+    return;
+  }
+  char buf[kCols + 1];
+  snprintf(buf, sizeof(buf), "> %s", _line.tail(kInlineChars));
+  textAt(d, 0, y + 1, buf);
+  if ((millis() / 500) % 2 == 0) {
+    lit(d);
+    d.fillRect(textPx(buf), y + 1, 1, 7);
+  }
+  if (_line.length() > 0) {
+    char room[6];
+    snprintf(room, sizeof(room), "%d", _line.remaining());
+    textAt(d, kScreenPx - textPx(room) - 1, y + 1, room);
+  }
+}
+
+// Past one line the editor takes the screen; its footer keeps the destination and the
+// room left (design 1a, "Compose full").
+void ThreadScreen::drawEditor(DisplayDriver& d, const char* name) {
+  const char* text = _line.text();
+  Span spans[16];
+  const int n = wrap(text, kCols - 2, spans, 16);
+  const int first = n > 7 ? n - 7 : 0;
+  int cursor_x = 2 * kCellPx, cursor_y = 0;
+  for (int i = first; i < n; i++) {
+    char buf[kCols + 1];
+    snprintf(buf, sizeof(buf), "%s%.*s", i == 0 ? "> " : "  ", (int)spans[i].len, text + spans[i].start);
+    const int y = (i - first) * kRowPx;
+    textAt(d, 0, y, buf);
+    if (i == n - 1) {   // after the last character typed, trailing spaces included
+      int len = (int)strlen(text) - spans[i].start;
+      if (len > kCols - 2) len = kCols - 2;
+      cursor_x = (2 + len) * kCellPx;
+      cursor_y = y;
+    }
+  }
+  if ((millis() / 500) % 2 == 0) {
+    lit(d);
+    d.fillRect(cursor_x, cursor_y, 1, 7);
+  }
+  dottedRule(d, 7 * kRowPx);
+  char room[6], footer[24];
+  snprintf(room, sizeof(room), "%d", _line.remaining());
+  snprintf(footer, sizeof(footer), " %s", name);
+  const int max_name = (kScreenPx - textPx(room) - 2 * kCellPx) / kCellPx;
+  if ((int)strlen(footer) > max_name) footer[max_name] = 0;
+  textAt(d, 0, 7 * kRowPx + 1, footer);
+  textAt(d, kScreenPx - textPx(room) - 1, 7 * kRowPx + 1, room);
+}
+
+int ThreadScreen::render(DisplayDriver& d) {
+  Store& store = the_mesh.badgeStore();
+  const Store::Convo* v = store.convoAt(_convo);
+  if (v == nullptr) {
+    _task->gotoHomeScreen();
+    return 100;
+  }
+  store.setOpen(_convo);   // on screen, so whatever arrives here is read
+
+  const bool channel = v->kind == Store::Channel;
+  char shown[32], name[36];
+  d.translateUTF8ToBlocks(shown, v->name, sizeof(shown));
+  snprintf(name, sizeof(name), "%c%s", channel ? '#' : '@', shown);
+
+  if ((int)_line.length() > kInlineChars) {
+    drawEditor(d, name);
+    return 500;   // the cursor blinks
+  }
+
+  const uint32_t now = millis();
+  const bool entry = now - _entered_at < 2000;
+
+  const int n = store.thread(_convo, _seqs, kShow);
+  int sel = -1;
+  for (int i = 0; i < n; i++) {
+    const Store::Msg* m = store.msg(_seqs[i]);
+    d.translateUTF8ToBlocks(_txt[i], m->text, sizeof(_txt[i]));
+    char tag[Store::kSenderLen];
+    d.translateUTF8ToBlocks(tag, m->sender, sizeof(tag));
+    snprintf(_tag[i], sizeof(_tag[i]), "%.5s", tag);
+    _views[i] = {m->outgoing, _tag[i], _txt[i]};
+    if (_seqs[i] == _sel_seq) sel = i;
+  }
+  if (sel < 0) _sel_seq = 0;   // it was evicted
+
+  // Seven rows of thread, newest at the bottom: under the name bar for the first 2 s,
+  // then above the compose line.
+  const int nrows = layoutThread(_views, n, channel, sel, _rows, kMaxRows);
+  const int visible = kListRows;
+  const int top = threadTop(_rows, nrows, visible, sel);
+  const int count = nrows - top < visible ? nrows - top : visible;
+  const int first = (entry ? 1 : 0) + (visible - count);
+
+  if (entry) {
+    char left[40], right[16] = "";
+    snprintf(left, sizeof(left), " %s", name);
+    if (_unread_at_entry > 0) snprintf(right, sizeof(right), "%u unread", (unsigned)_unread_at_entry);
+    bar(d, 0, left, right);
+  }
+  for (int r = 0; r < count; r++) drawRow(d, first + r, _rows[top + r], channel);
+  if (n == 0) cell(d, 0, 3, " nothing here yet");
+  if (!entry) drawCompose(d, kListRows);
+  return entry ? (int)(2000 - (now - _entered_at)) + 10 : 500;
+}
+
+bool ThreadScreen::handleInput(char c) {
+  const uint8_t key = (uint8_t)c;
+  if (!_task->inputFromKeyboard()) {   // SW1: a click leaves. A hold does nothing here:
+    if (key == KEY_NEXT) leave();      // the design keeps it for the supporter card, and
+    return true;                       // a stray one mustn't send a half-typed message
+  }
+  switch (key) {
+    case KEY_UP:
+      selectOlder();
+      return true;
+    case KEY_DOWN:
+      selectNewer();
+      return true;
+    case KEY_ENTER:   // a selected failed DM goes first; the draft stays for later
+      if (failedSelected()) resend();
+      else if (_line.length() > 0) send();
+      return true;
+    case KEY_CANCEL:   // Esc drops a selection first, then leaves; the draft stays
+      if (_sel_seq != 0) _sel_seq = 0; else leave();
+      return true;
+    default:
+      break;
+  }
+  if (_line.apply(key)) {
+    _sel_seq = 0;
+    _note_until = 0;
+    _entered_at = millis() - 2000;
+  }
+  return true;
+}
+
+#endif  // UI_HAS_CARDKB

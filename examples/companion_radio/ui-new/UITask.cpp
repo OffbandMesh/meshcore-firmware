@@ -17,6 +17,9 @@
 #if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
   #include <helpers/ui/LineEdit.h>
 #endif
+#if UI_HAS_CARDKB
+  #include "BadgeScreens.h"   // #1230: the inbox and thread screens
+#endif
 
 #ifndef AUTO_OFF_MILLIS
   #define AUTO_OFF_MILLIS     15000   // 15 seconds
@@ -168,9 +171,6 @@ public:
 class HomeScreen : public UIScreen {
   enum HomePage {
     FIRST,
-#if UI_HAS_CARDKB
-    MESSAGE,   // #1228: write a message on the keyboard; skipped when there isn't one
-#endif
     RECENT,
     RADIO,
     BLUETOOTH,
@@ -326,14 +326,6 @@ public:
         sprintf(tmp, "Pin:%d", the_mesh.getBLEPin());
         display.drawTextCentered(display.width() / 2, 43, tmp);
       }
-#if UI_HAS_CARDKB
-    } else if (_page == HomePage::MESSAGE) {   // #1228
-      display.setColor(UIColor::primary_txt);
-      display.setTextSize(2);
-      display.drawTextCentered(display.width() / 2, 22, "Message");
-      display.setTextSize(1);
-      display.drawTextCentered(display.width() / 2, 44, "Enter: write");
-#endif
     } else if (_page == HomePage::RECENT) {
       the_mesh.getRecentlyHeard(recent, UI_RECENT_LIST_SIZE);
       display.setColor(UIColor::primary_txt);
@@ -564,23 +556,11 @@ public:
     const keynav::Step step = keynav::pageStep((uint8_t)c);
     if (step != keynav::Step::None) {
       _page = keynav::stepPage(_page, HomePage::Count, step);
-#if UI_HAS_CARDKB
-      // #1228: no keyboard, nothing to write with, so step past the Message page.
-      if (_page == HomePage::MESSAGE && !_task->hasKeyboard()) {
-        _page = keynav::stepPage(_page, HomePage::Count, step);
-      }
-#endif
       if (step == keynav::Step::Next && _page == HomePage::RECENT) {
         _task->showAlert("Recent adverts", 800);
       }
       return true;
     }
-#if UI_HAS_CARDKB
-    if (c == KEY_ENTER && _page == HomePage::MESSAGE) {   // #1228
-      _task->gotoPicker();
-      return true;
-    }
-#endif
 #if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
     if ((uint8_t)c == KEY_TAB && _task->hasKeyboard()) {   // #1207: diag key test
       _task->gotoKeyTest();
@@ -716,241 +696,6 @@ public:
   }
 };
 
-#if UI_HAS_CARDKB
-// Contact i of getNumContacts(). getContactByIdx() counts from the start of the table,
-// where the first MAX_ANON_CONTACTS slots hold transient anonymous peers, so the
-// contacts proper start after them, as in startContactsIterator().
-static bool badgeContactAt(int i, ContactInfo& c) {
-  return the_mesh.getContactByIdx(MAX_ANON_CONTACTS + i, c);
-}
-
-// Whether contact i is a chat contact, and its key prefix. buildTargets() and
-// findContact() both ask this.
-static bool badgeChatKey(int i, uint8_t* prefix) {
-  ContactInfo c;
-  if (!badgeContactAt(i, c) || c.type != ADV_TYPE_CHAT) return false;
-  memcpy(prefix, c.id.pub_key, compose::Target::kKeyLen);
-  return true;
-}
-
-// The contact a picked target names now. False when it's gone, or when another contact
-// shares its key prefix (see compose::findContact).
-static bool badgeFindContact(const compose::Target& t, ContactInfo& c) {
-  const int i = compose::findContact(t.key, the_mesh.getNumContacts(), badgeChatKey);
-  return i >= 0 && badgeContactAt(i, c);
-}
-
-// #1228: where a message goes. Named channels first, then chat contacts. The arrows or
-// a SW1 click and double-click move; Enter or a SW1 hold picks; Esc goes back to Home.
-class TargetPickerScreen : public UIScreen {
-  UITask* _task;
-  compose::TargetList<MAX_GROUP_CHANNELS + MAX_CONTACTS> _list;
-  int _sel = 0;
-  static constexpr int kRows = 4;
-
-  static bool channelNamed(int i) {
-    ChannelDetails ch;
-    return the_mesh.getChannel(i, ch) && ch.name[0] != 0;
-  }
-  // A contact's row is found the way Enter finds it, so the row names whoever Enter will
-  // pick, or "?" when nobody would be picked.
-  static void nameOf(const compose::Target& t, char* out, size_t n) {
-    if (t.kind == compose::Target::Channel) {
-      ChannelDetails ch;
-      snprintf(out, n, "#%s", the_mesh.getChannel(t.index, ch) ? ch.name : "?");
-    } else {
-      ContactInfo c;
-      snprintf(out, n, "%s", badgeFindContact(t, c) ? c.name : "?");
-    }
-  }
-
-public:
-  explicit TargetPickerScreen(UITask* task) : _task(task) {}
-
-  void reload() {
-    compose::buildTargets(_list, MAX_GROUP_CHANNELS, channelNamed, the_mesh.getNumContacts(), badgeChatKey);
-    _sel = 0;
-  }
-
-  int render(DisplayDriver& display) override {
-    display.setTextSize(1);
-    display.setColor(UIColor::primary_txt);
-    display.drawTextLeftAlign(0, 0, "SEND TO    ESC=back");
-    const int count = (int)_list.count();
-    if (count == 0) {
-      display.drawTextLeftAlign(0, 20, "No channels or");
-      display.drawTextLeftAlign(0, 30, "contacts yet");
-      return 1000;
-    }
-    int first = _sel - 1;   // keep one row above the selection in view
-    if (first > count - kRows) first = count - kRows;
-    if (first < 0) first = 0;
-    for (int r = 0; r < kRows && first + r < count; r++) {
-      char name[40], shown[40], row[44];
-      nameOf(_list.at(first + r), name, sizeof(name));
-      display.translateUTF8ToBlocks(shown, name, sizeof(shown));
-      snprintf(row, sizeof(row), "%c%s", (first + r == _sel) ? '>' : ' ', shown);
-      display.drawTextEllipsized(0, 14 + r * 12, display.width(), row);
-    }
-    return 1000;
-  }
-
-  bool handleInput(char c) override {
-    const uint8_t key = (uint8_t)c;
-    const int count = (int)_list.count();
-    const keynav::Step step = keynav::pageStep(key);
-    if (step != keynav::Step::None) {
-      if (count > 0) _sel = keynav::stepPage(_sel, count, step);
-      return true;
-    }
-    if (key == KEY_ENTER) {
-      if (count > 0) _task->gotoCompose(_list.at(_sel));
-      return true;
-    }
-    return false;   // Esc: UITask backs out to Home
-  }
-};
-
-// #1228: type a message and send it. The number at the bottom right is the room left,
-// and typing stops at zero. Enter sends. Esc goes back to Home, and so does a SW1 hold.
-// A DM shows "Sending..." until it's delivered or fails, even while the next message is
-// typed; a channel message shows "Sent", since channels have no receipts. A finished
-// status clears at the next key.
-class ComposeScreen : public UIScreen {
-  UITask* _task;
-  compose::Target _target = {compose::Target::Channel, 0, {0}};
-  ChannelDetails _channel{};       // the channel as it was when picked
-  uint8_t _key[PUB_KEY_SIZE] = {0};   // the picked contact's whole key
-  bool _valid = false;             // the target existed when picked
-  char _to[40] = {0};
-  compose::Composer<MAX_TEXT_LEN> _line;
-  uint16_t _dm = 0;                // the last DM, for its status
-  const char* _note = "";          // the last send's outcome when there's no DM to show
-  static constexpr size_t kCols = 21;   // characters per line at text size 1, 128 px
-  static constexpr size_t kLines = 3;
-
-  const char* status() const {
-    if (_dm != 0) {
-      switch (the_mesh.uiSendStatus(_dm)) {
-        case offband::BadgeSend::Sending:   return "Sending...";
-        case offband::BadgeSend::Delivered: return "Delivered";
-        case offband::BadgeSend::Failed:    return "Failed";
-        default: break;
-      }
-    }
-    return _note;
-  }
-
-  // The slot that holds the picked channel now, or -1. The phone can rename, re-key or
-  // move a channel while this screen is up, so the slot it was picked from isn't enough.
-  int channelSlot() const {
-    for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
-      ChannelDetails ch;
-      if (the_mesh.getChannel(i, ch) && strncmp(ch.name, _channel.name, sizeof(ch.name)) == 0 &&
-          memcmp(&ch.channel, &_channel.channel, sizeof(ch.channel)) == 0) {
-        return i;
-      }
-    }
-    return -1;
-  }
-
-  void send() {
-    if (_line.length() == 0) return;
-    _dm = 0;
-    if (!_valid) {
-      _note = "Not found";
-      return;
-    }
-    if (_target.kind == compose::Target::Channel) {
-      const int slot = channelSlot();
-      const bool ok = slot >= 0 && the_mesh.uiSendChannel(slot, _line.text());
-      _note = (slot < 0) ? "Not found" : ok ? "Sent" : "Not sent";
-      if (ok) _line.clear();
-    } else {
-      // Looked up again by its whole key rather than kept from the pick: the contact may
-      // be gone, and its path may have changed while the text was typed.
-      const ContactInfo* c = the_mesh.lookupContactByPubKey(_key, PUB_KEY_SIZE);
-      if (c == nullptr) {
-        _note = "Not found";
-        return;
-      }
-      _dm = the_mesh.uiSendDirect(*c, _line.text());
-      _note = (_dm != 0) ? "" : "Busy, try again";
-      if (_dm != 0) _line.clear();
-    }
-  }
-
-public:
-  explicit ComposeScreen(UITask* task) : _task(task) {}
-
-  void begin(const compose::Target& target) {
-    _target = target;
-    _dm = 0;
-    _note = "";
-    snprintf(_to, sizeof(_to), "?");
-    if (target.kind == compose::Target::Channel) {
-      _valid = the_mesh.getChannel(target.index, _channel) && _channel.name[0] != 0;
-      if (_valid) snprintf(_to, sizeof(_to), "#%s", _channel.name);
-      _line.start(compose::budget(true, strlen(the_mesh.getNodeName()), MAX_TEXT_LEN));
-    } else {
-      ContactInfo c;
-      _valid = badgeFindContact(target, c);
-      if (_valid) {
-        memcpy(_key, c.id.pub_key, sizeof(_key));
-        snprintf(_to, sizeof(_to), "%s", c.name);
-      }
-      _line.start(compose::budget(false, 0, MAX_TEXT_LEN));
-    }
-  }
-
-  int render(DisplayDriver& display) override {
-    char tmp[48], shown[48];
-    display.setTextSize(1);
-    display.setColor(UIColor::primary_txt);
-    display.translateUTF8ToBlocks(shown, _to, sizeof(shown));
-    snprintf(tmp, sizeof(tmp), "To %s", shown);
-    display.drawTextEllipsized(0, 0, display.width(), tmp);
-    display.drawRect(0, 10, display.width(), 1);
-
-    // The text's last three lines, with a cursor. The keyboard types ASCII only.
-    char text[kCols * kLines + 1];
-    snprintf(text, sizeof(text), "%s_", _line.tail(kCols * kLines - 1));
-    const size_t len = strlen(text);
-    for (size_t r = 0; r < kLines && r * kCols < len; r++) {
-      char row[kCols + 1];
-      const size_t n = (len - r * kCols) < kCols ? (len - r * kCols) : kCols;
-      memcpy(row, text + r * kCols, n);
-      row[n] = '\0';
-      display.drawTextLeftAlign(0, 14 + (int)r * 10, row);
-    }
-
-    display.drawTextLeftAlign(0, 54, status());
-    snprintf(tmp, sizeof(tmp), "%d", _line.remaining());
-    display.drawTextRightAlign(display.width() - 1, 54, tmp);
-    const bool waiting = _dm != 0 && the_mesh.uiSendStatus(_dm) == offband::BadgeSend::Sending;
-    return waiting ? 500 : 1000;
-  }
-
-  bool handleInput(char c) override {
-    const uint8_t key = (uint8_t)c;
-    if (!_task->inputFromKeyboard()) {
-      if (key == KEY_ENTER) _task->gotoHomeScreen();   // a SW1 hold leaves
-      return true;                                     // other presses do nothing here
-    }
-    if (key == KEY_CANCEL) return false;   // Esc: UITask backs out to Home
-    if (key == KEY_ENTER) {
-      send();
-      return true;
-    }
-    if (_line.apply(key)) {   // typing clears a finished status; a DM still sending stays
-      if (_dm != 0 && the_mesh.uiSendStatus(_dm) != offband::BadgeSend::Sending) _dm = 0;
-      _note = "";
-    }
-    return true;
-  }
-};
-#endif
-
 void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs) {
   _display = display;
   _sensors = sensors;
@@ -996,17 +741,24 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   _alert_expiry = 0;
 
   splash = new SplashScreen(this);
+#if UI_HAS_CARDKB
+  // #1230: the Messages inbox is Home (owner: "I want the Unread/messages screen to
+  // become the Home screen instead of the PIN screen"). The pages Home held stay
+  // reachable as tools. A message arriving flashes its row in the inbox instead of
+  // opening the preview popup, so the popup's queue isn't allocated.
+  home = new InboxScreen(this);
+  thread = new ThreadScreen(this);
+  tools = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
+  msg_preview = NULL;
+#else
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
   msg_preview = new MsgPreviewScreen(this, &rtc_clock);
+#endif
 #ifdef QCC_BADGE_SELFTEST
   self_test = new SelfTestScreen(this);
 #endif
 #if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
   key_test = new KeyTestScreen(this);
-#endif
-#if UI_HAS_CARDKB
-  picker = new TargetPickerScreen(this);   // #1228
-  composer = new ComposeScreen(this);      // #1228
 #endif
   setCurrScreen(splash);
 }
@@ -1037,15 +789,15 @@ void UITask::gotoKeyTest() {
 #endif
 
 #if UI_HAS_CARDKB
-// #1228: the list is rebuilt on every visit, so new contacts and channels show up.
-void UITask::gotoPicker() {
-  ((TargetPickerScreen*)picker)->reload();
-  setCurrScreen(picker);
+void UITask::gotoThread(int convo, char first_key) {
+  ((ThreadScreen*)thread)->begin(convo);
+  setCurrScreen(thread);
+  the_mesh.badgeStore().setOpen(convo);   // setCurrScreen closed it
+  if (first_key != 0) thread->handleInput(first_key);
 }
 
-void UITask::gotoCompose(const compose::Target& target) {
-  ((ComposeScreen*)composer)->begin(target);
-  setCurrScreen(composer);
+void UITask::gotoTools() {
+  setCurrScreen(tools);
 }
 #endif
 
@@ -1112,16 +864,25 @@ switch(t){
 
 void UITask::msgRead(int msgcount) {
   _msgcount = msgcount;
+#if !UI_HAS_CARDKB
+  // #1230: on the badge the phone catching up is no reason to leave what's on screen.
   if (msgcount == 0) {
     gotoHomeScreen();
   }
+#endif
 }
 
 void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) {
   _msgcount = msgcount;
 
+#if UI_HAS_CARDKB
+  // #1230: the message is already in the badge store. Its row jumps to the top of the
+  // inbox and flashes; nothing takes the screen away (design 1a, "no lost keystrokes").
+  ((InboxScreen*)home)->flash();
+#else
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from_name, text);
   setCurrScreen(msg_preview);
+#endif
 
   if (_display != NULL) {
     if (!_display->isOn() && !hasConnection() && _disp_mode != 2) {  // #542 B1: not in always-off
@@ -1178,6 +939,10 @@ void UITask::setCurrScreen(UIScreen* c) {
   else if (c == msg_preview)    to   = "MSG_PREVIEW";
   else if (c == nullptr)        to   = "NULL";
   offband::crashLogf("[ui] setCurrScreen %s -> %s", from, to);
+#endif
+#if UI_HAS_CARDKB
+  // #1230: a thread off screen isn't being read. It marks itself open when it draws.
+  the_mesh.badgeStore().setOpen(-1);
 #endif
   curr = c;
   _next_refresh = 100;
@@ -1371,6 +1136,9 @@ void UITask::loop() {
     // #141: always-on (mode 1) skips the auto-blank; auto (mode 0) blanks on timeout.
     if (_disp_mode == 2 || (!_always_on && millis() > _auto_off)) {
       _display->turnOff();
+#if UI_HAS_CARDKB
+      the_mesh.badgeStore().setOpen(-1);   // #1230: a dark thread isn't being read
+#endif
     }
 #endif
   } else if (_display != NULL) {

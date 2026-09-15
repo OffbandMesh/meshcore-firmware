@@ -1342,6 +1342,35 @@ uint16_t MyMesh::uiSendDirect(const ContactInfo& contact, const char* text) {
   return handle;
 }
 
+MyMesh::UiSend MyMesh::uiSendTo(int convo, const char* text) {
+  const auto* v = _badge_store.convoAt(convo);
+  if (v == NULL) return UiSend::Gone;
+  if (v->kind == BadgeMsgStore::Channel) {
+    for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+      ChannelDetails ch;
+      if (getChannel(i, ch) && memcmp(ch.channel.secret, v->key, PUB_KEY_SIZE) == 0) {
+        return uiSendChannel(i, text) ? UiSend::Sent : UiSend::NotSent;
+      }
+    }
+    return UiSend::Gone;
+  }
+  ContactInfo* contact = lookupContactByPubKey(v->key, PUB_KEY_SIZE);
+  if (contact == NULL) return UiSend::Gone;
+  return uiSendDirect(*contact, text) != 0 ? UiSend::Sent : UiSend::Busy;
+}
+
+bool MyMesh::uiResend(uint32_t seq) {
+  const auto* m = _badge_store.msg(seq);
+  if (m == NULL || !m->outgoing || m->status != offband::BadgeSend::Failed) return false;
+  // Copied first: the send can evict the old message to make room for the new one.
+  char text[MAX_TEXT_LEN + 1];
+  memcpy(text, m->text, sizeof(text));
+  const int convo = m->convo;
+  if (uiSendTo(convo, text) != UiSend::Sent) return false;
+  _badge_store.remove(seq);
+  return true;
+}
+
 // #1227: the next attempt for any badge DM whose ACK didn't come in time. Each pass
 // sends an attempt or fails the DM, so at most kBadgeDmSlots handles come back.
 void MyMesh::badgeSendTick() {

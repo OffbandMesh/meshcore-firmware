@@ -155,6 +155,13 @@ public:
   static constexpr int kBadgeMsgs = 32;
   using BadgeMsgStore = offband::BadgeStore<kBadgeConvos, kBadgeMsgs, MAX_TEXT_LEN, PUB_KEY_SIZE>;
   BadgeMsgStore& badgeStore() { return _badge_store; }
+
+  // #1230: sends to conversation c of the badge store. Its channel is found by its
+  // secret and its contact by its whole key, so the send goes where the thread says.
+  enum class UiSend : uint8_t { Sent, Gone, NotSent, Busy };
+  UiSend uiSendTo(int convo, const char* text);
+  // #1230: a failed DM, sent again. The new one replaces it in the thread.
+  bool uiResend(uint32_t seq);
 #endif
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
