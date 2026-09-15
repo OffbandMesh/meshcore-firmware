@@ -17,13 +17,16 @@ namespace offband {
 
 enum class BadgeSend : uint8_t { None = 0, Sending, Delivered, Failed };
 
-template <int SLOTS, int MAX_ATTEMPTS, int TEXT_CAP>
+// KEY_LEN is the recipient's whole public key (PUB_KEY_SIZE). Every retry looks the
+// recipient up by it, and a shorter prefix could match someone else.
+template <int SLOTS, int MAX_ATTEMPTS, int TEXT_CAP, int KEY_LEN>
 class BadgeSendTracker {
   // Handles are 16-bit and never reused while a slot holds one.
   static_assert(SLOTS > 0 && SLOTS < 0xFFFF, "one handle per slot, 16-bit handles");
   // MeshCore hashes only attempt & 3 into the ACK, so a fifth attempt would reuse the
   // first attempt's ACK.
   static_assert(MAX_ATTEMPTS > 0 && MAX_ATTEMPTS <= 4, "attempts 0-3 have distinct ACKs");
+  static_assert(KEY_LEN > 0, "a DM needs its recipient's key");
 
 public:
   // An attempt waits at least this long, so a zero timeout from the mesh can't make one
@@ -37,16 +40,16 @@ public:
     uint32_t  timestamp;           // shared by every attempt
     uint32_t  deadline;            // millis when the current attempt times out
     uint32_t  acks[MAX_ATTEMPTS];  // each attempt's expected ACK
-    uint8_t   key[6];              // the recipient's public-key prefix
+    uint8_t   key[KEY_LEN];        // the recipient's public key
     char      text[TEXT_CAP + 1];
   };
 
   BadgeSendTracker() { memset(_slots, 0, sizeof(_slots)); }
 
-  // Starts a DM. Returns its handle, never 0, or 0 when every slot is still sending or
-  // the text doesn't fit.
-  uint16_t begin(const uint8_t key_prefix[6], uint32_t timestamp, const char* text) {
-    if (key_prefix == nullptr || text == nullptr || strlen(text) > (size_t)TEXT_CAP) return 0;
+  // Starts a DM to the recipient whose public key is `key` (KEY_LEN bytes). Returns its
+  // handle, never 0, or 0 when every slot is still sending or the text doesn't fit.
+  uint16_t begin(const uint8_t* key, uint32_t timestamp, const char* text) {
+    if (key == nullptr || text == nullptr || strlen(text) > (size_t)TEXT_CAP) return 0;
     Slot* s = freeSlot();
     if (s == nullptr) return 0;
     const uint16_t handle = nextHandle();
@@ -54,7 +57,7 @@ public:
     s->handle = handle;
     s->status = BadgeSend::Sending;
     s->timestamp = timestamp;
-    memcpy(s->key, key_prefix, 6);
+    memcpy(s->key, key, KEY_LEN);
     memcpy(s->text, text, strlen(text) + 1);
     return handle;
   }
