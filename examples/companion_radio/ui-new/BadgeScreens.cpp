@@ -24,9 +24,9 @@ using offband::BadgeSend;
 namespace {
 
 // #1233: when `t` happened, as message rows show it: today's clock time once a time
-// zone is set (the design's "12:04"), else an age.
+// zone is set and the phone or GPS has set the clock (the design's "12:04"), else an age.
 void whenOf(uint32_t t, char* out, size_t n) {
-  formatWhen(the_mesh.getNodePrefs()->ui_tz, t, rtc_clock.getCurrentTime(), out, n);
+  formatWhen(the_mesh.getNodePrefs()->ui_tz, t, rtc_clock.getCurrentTime(), the_mesh.badgeClockTrusted(), out, n);
 }
 
 int batteryPct(uint16_t mv) {

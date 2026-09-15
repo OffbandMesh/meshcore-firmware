@@ -43,9 +43,9 @@ TEST(BadgeLayoutAge, NowThenMinutesHoursDays) {
 }
 
 namespace {
-std::string when(int zone, uint32_t t, uint32_t now) {
+std::string when(int zone, uint32_t t, uint32_t now, bool trusted = true) {
   char buf[8];
-  formatWhen(zone, t, now, buf, sizeof(buf));
+  formatWhen(zone, t, now, trusted, buf, sizeof(buf));
   return buf;
 }
 constexpr uint32_t kNow = 1789492020;   // 2026-09-15 17:07 UTC, 13:07 EDT
@@ -63,6 +63,14 @@ TEST(BadgeLayoutWhen, YesterdayIsAnAge) {
 TEST(BadgeLayoutWhen, NoZoneOrNoClockIsAnAge) {
   EXPECT_EQ("1h", when(offband::tz::kNotSet, kNow - 3780, kNow));
   EXPECT_EQ("1h", when(offband::tz::kEastern, 1000, 1000 + 3780));   // a clock never set (1970)
+}
+
+// The owner's bench (2026-09-15): after a reboot the badge's clock ran from the newest
+// contact's last-heard time, hours behind. Until the phone or the GPS sets it, a row
+// shows an age, which is true, rather than a clock time, which isn't.
+TEST(BadgeLayoutWhen, AClockNobodyHasSetShowsAnAge) {
+  EXPECT_EQ("3m", when(offband::tz::kEastern, kNow - 180, kNow, false));
+  EXPECT_EQ("3m", when(offband::tz::kEastern, 1715770351 + 60, 1715770351 + 240, false));   // MeshCore's fallback start
 }
 
 namespace {
