@@ -13,6 +13,7 @@ namespace badgeui {
 constexpr int kRowPx = 8;
 constexpr int kCellPx = 6;
 constexpr int kScreenPx = 128;
+constexpr int kScreenRowsPx = 64;
 constexpr int kListRows = 7;   // under a title bar
 
 // Code page 437 glyphs in the display's built-in font.
@@ -110,6 +111,14 @@ inline void battery(DisplayDriver& d, int x, int y, int pct) {
   d.fillRect(x + 10, y + 1, 1, 3);   // the cap
   d.fillRect(x + 1, y + 1, (8 * pct) / 100, 3);
   lit(d);
+}
+
+// #1231: where SW1's cycle is (design 1f): the three lists, the current one inverted.
+// Shown for 2 s after each move. " MSGS CONTACTS STATUS" is exactly 21 cells.
+inline void breadcrumb(DisplayDriver& d, int row, int pos) {
+  static const char* const kLabels[3] = {"MSGS", "CONTACTS", "STATUS"};
+  static const int kCol[3] = {1, 6, 15};
+  for (int i = 0; i < 3; i++) cell(d, kCol[i], row, kLabels[i], i == pos);
 }
 
 // Three dots: a message still sending.

@@ -35,7 +35,13 @@
 - **Times.** Rows show an age ("now", "4m", "2h") instead of a clock time. MeshCore keeps UTC only, and a standalone badge may never be synced, so a clock time needs a time zone setting. The Contacts mockup already uses ages.
 - **Channel ticks.** A channel message has no receipt on the badge. MeshCore sends no ACK, and the repeat check lives in the phone client. So channel sends show `···` while queued and no mark after. DMs show ✓ or X. A tick for heard repeats is a follow-up.
 - **DM threads drop the sender tag.** There's only one sender. Channel threads keep it.
-- **SW1.** Tap cycles the three lists. Double-tap and hold keep their current jobs (back, and Enter) until the name tag and the supporter card exist. That way a badge whose keyboard fails can still get around.
+- **SW1.**
+  - In the lists, a tap cycles forward and a double-tap goes back. A hold opens the selected row, and on Status it opens the old pages.
+  - In a thread, a tap leaves. A hold does nothing, so a stray one can't send a half-typed message.
+  - The name tag and the supporter card will take over the double-tap and the hold when they're built.
+- **Hops.** Hops count radio hops: 1 means heard directly. A direct-routed message says "direct", since its hop count isn't known.
+- **Contacts** lists the 64 most recently heard chat contacts. The rest stay reachable from the phone.
+- **The BLE PIN** moved to the Status footer, where it shows while a phone could pair. Otherwise the footer says "phone connected", "bluetooth off" or "quiet on the mesh".
 - **Fn hints.** "Hold Fn" can't be seen. The keyboard latches Fn and reports only the finished key, so the hints need a different trigger. That's a later slice.
 - **The old Home pages** (Bluetooth toggle, advert, hibernate, radio, recent adverts) stay reachable: Enter on Status opens them, until Settings replaces them.
 - **Diag builds** get the same Home. They keep the self-test screen after the splash, and Tab still opens the key test.

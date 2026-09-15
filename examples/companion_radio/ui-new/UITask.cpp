@@ -304,6 +304,16 @@ public:
     }
 
     if (_page == HomePage::FIRST) {
+#if UI_HAS_CARDKB
+      // #1231: on the badge these pages are tools, opened from Status, which now holds
+      // the message count and the pairing PIN.
+      display.setColor(UIColor::primary_txt);
+      display.setTextSize(2);
+      display.drawTextCentered(display.width() / 2, 22, "Tools");
+      display.setTextSize(1);
+      display.drawTextCentered(display.width() / 2, 44, "Enter: back");
+      return 5000;
+#endif
       display.setColor(UIColor::primary_txt);
       display.setTextSize(2);
       sprintf(tmp, "MSG: %d", _task->getMsgCount());
@@ -567,6 +577,12 @@ public:
       return true;
     }
 #endif
+#if UI_HAS_CARDKB
+    if (c == KEY_ENTER && _page == HomePage::FIRST) {   // #1231: back to Status
+      _task->gotoStatus();
+      return true;
+    }
+#endif
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
       if (_task->isBluetoothEnabled()) {  // toggle Bluetooth on/off
         _task->disableBluetooth();
@@ -749,6 +765,8 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   home = new InboxScreen(this);
   thread = new ThreadScreen(this);
   tools = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
+  contacts = new ContactsScreen(this);   // #1231
+  status = new StatusScreen(this);       // #1231
   msg_preview = NULL;
 #else
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
@@ -798,6 +816,33 @@ void UITask::gotoThread(int convo, char first_key) {
 
 void UITask::gotoTools() {
   setCurrScreen(tools);
+}
+
+void UITask::gotoStatus() {
+  setCurrScreen(status);
+}
+
+int UITask::renderStatusAs(DisplayDriver& d, const char* title, int pos) {
+  return ((StatusScreen*)status)->drawAs(d, title, pos);
+}
+
+int UITask::cyclePos() const {
+  if (curr == contacts) return 1;
+  if (curr == status) return 2;
+  return 0;   // Messages, and anything reached from it
+}
+
+void UITask::cycle(int step) {
+  const int pos = (cyclePos() + step + 3) % 3;
+  if (pos == 1) {
+    ((ContactsScreen*)contacts)->reload();
+    setCurrScreen(contacts);
+  } else if (pos == 2) {
+    setCurrScreen(status);
+  } else {
+    setCurrScreen(home);
+  }
+  _cycle_at = millis();
 }
 #endif
 
@@ -1078,8 +1123,12 @@ void UITask::loop() {
 #ifdef OFFBAND_OBSERVER
     offband::crashLogf("[ui] button event c=0x%x dispatched to curr screen", (int)c);
 #endif
-    // #1205: Esc backs out to Home from any screen that does not take it.
+    // #1205: Esc backs out to Home from any screen that does not take it. #1231: from
+    // the device pages it goes back to Status, where they were opened.
     if (!curr->handleInput(c) && keynav::backsOut((uint8_t)c) && curr != home) {
+#if UI_HAS_CARDKB
+      if (curr == tools) gotoStatus(); else
+#endif
       gotoHomeScreen();
     }
     _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
