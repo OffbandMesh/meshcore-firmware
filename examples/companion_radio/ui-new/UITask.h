@@ -81,6 +81,7 @@ class UITask : public AbstractUITask {
   UIScreen* status;     // #1231
   UIScreen* settings;   // #1233
   UIScreen* zones;      // #1233: the time zone picker
+  UIScreen* gps;        // #1235
   uint32_t _cycle_at = 0;   // #1231: when SW1 last moved along the cycle
 #endif
   UIScreen* curr;
@@ -124,6 +125,7 @@ public:
   void gotoStatus();
   void gotoSettings();   // #1233: from Status, or Fn+S from anywhere (design 3a)
   void gotoZones();      // #1233
+  void gotoGps();        // #1235: from Settings' GPS row
   // The Status screen under another title, as cycle position `pos`: the inbox's empty state.
   int renderStatusAs(DisplayDriver& d, const char* title, int pos);
   bool hasKeyboard() const { return _kbd.isPresent(); }

@@ -127,7 +127,8 @@ private:
 
 // #1233: Settings in the design's grammar (3a): one list, label left and value right.
 // The owner's list: Bluetooth, time zone, advert (zero-hop and flood) and hibernate,
-// with GPS on/off beside them. Hibernate asks first, as the design's gate does.
+// with the GPS beside them, whose row opens its screen (#1235). Hibernate asks first,
+// as the design's gate does.
 class SettingsScreen : public UIScreen {
 public:
   explicit SettingsScreen(UITask* task) : _task(task) {}
@@ -164,6 +165,32 @@ private:
   UITask* _task;
   int _sel = 0;
   int _suggested = 0;   // 0: no GPS fix to go on
+};
+
+// #1235: the GPS, opened from its row in Settings (owner: "GPS opened from Settings is
+// fine"). The fix, the position, the altitude and the GPS's own UTC time, then rows in
+// the Settings grammar: "Use zone <the fix's zone>" while that differs from the zone in
+// use, and GPS on/off.
+class GpsScreen : public UIScreen {
+public:
+  explicit GpsScreen(UITask* task) : _task(task) {}
+  void begin();   // on "Use zone" when there's a zone to use
+  int render(DisplayDriver& display) override;
+  bool handleInput(char c) override;
+
+  // "fix 9", "no fix" or "off": the title's right slot, and Settings' GPS row.
+  static void summary(UITask* task, char* out, size_t n);
+  // The zone a current fix suggests; 0 (not set) with the GPS off or no fix.
+  static int suggestedZone(UITask* task);
+
+private:
+  enum Row : uint8_t { UseZone, Power };
+  UITask* _task;
+  int _sel = Power;
+  bool _use_shown = false;   // whether the last render drew "Use zone"
+
+  int pending() const;   // the suggested zone while it differs from the one in use, else 0
+  void act();
 };
 
 // One conversation, newest at the bottom, with the compose line under a dotted rule

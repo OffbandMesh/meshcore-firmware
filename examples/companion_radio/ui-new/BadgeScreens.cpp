@@ -38,6 +38,27 @@ bool printable(uint8_t key) { return key >= 32 && key < 127; }
 
 bool before(uint32_t now_ms, uint32_t until_ms) { return until_ms != 0 && (int32_t)(now_ms - until_ms) < 0; }
 
+// One row in the Settings grammar (design 3a): the label from the left, the value flush
+// right, the whole row lit when selected.
+void listRow(DisplayDriver& d, int row, const char* label, const char* value, bool selected) {
+  char left[24];
+  snprintf(left, sizeof(left), " %s", label);
+  if (selected) fillRow(d, row);
+  textAt(d, 0, row * kRowPx, left, selected);
+  if (value[0] != 0) textAt(d, kScreenPx - 1 - textPx(value), row * kRowPx, value, selected);
+}
+
+// #1235: the GPS while it's on, else null. MicroNMEA keeps its last fix after the GPS
+// is turned off, which would otherwise read as current.
+LocationProvider* liveGps(UITask* task) {
+#if ENV_INCLUDE_GPS == 1
+  if (task->getGPSState()) return sensors.getLocationProvider();
+#else
+  (void)task;
+#endif
+  return nullptr;
+}
+
 }  // namespace
 
 // ---- Inbox ------------------------------------------------------------------------
@@ -1008,7 +1029,7 @@ void SettingsScreen::act() {
       _task->gotoZones();
       break;
     case Gps:
-      _task->toggleGPS();
+      _task->gotoGps();
       break;
     case AdvertZeroHop:
     case AdvertFlood:
@@ -1055,18 +1076,13 @@ int SettingsScreen::render(DisplayDriver& d) {
     switch (r) {
       case Bluetooth:     label = "Bluetooth"; snprintf(value, sizeof(value), "%s", _task->isBluetoothEnabled() ? "on" : "off"); break;
       case TimeZone:      label = "Time zone"; snprintf(value, sizeof(value), "%s", offband::tz::zone(prefs->ui_tz).name); break;
-      case Gps:           label = "GPS"; snprintf(value, sizeof(value), "%s", _task->getGPSState() ? "on" : "off"); break;
+      case Gps:           label = "GPS"; GpsScreen::summary(_task, value, sizeof(value)); break;
       case AdvertZeroHop: label = "Advert zero-hop"; snprintf(value, sizeof(value), "%s", sent && _sent_row == r ? "sent" : "send"); break;
       case AdvertFlood:   label = "Advert flood"; snprintf(value, sizeof(value), "%s", sent && _sent_row == r ? "sent" : "send"); break;
       case Hibernate:     label = "Hibernate"; break;
       case DevicePages:   label = "Device pages"; break;
     }
-    const bool selected = (r == _sel);
-    char left[24];
-    snprintf(left, sizeof(left), " %s", label);
-    if (selected) fillRow(d, row);
-    textAt(d, 0, row * kRowPx, left, selected);
-    if (value[0] != 0) textAt(d, kScreenPx - 1 - textPx(value), row * kRowPx, value, selected);
+    listRow(d, row, label, value, r == _sel);
     row++;
   }
   return sent ? 250 : 1000;
@@ -1106,13 +1122,7 @@ void SettingsScreen::poll() {
 // ---- Time zone picker (#1233) ----------------------------------------------------------
 
 void ZonePickerScreen::begin() {
-  _suggested = 0;
-#if ENV_INCLUDE_GPS == 1
-  LocationProvider* gps = sensors.getLocationProvider();
-  if (gps != nullptr && gps->isValid()) {
-    _suggested = offband::tz::suggest(gps->getLatitude() / 1000000.0, gps->getLongitude() / 1000000.0);
-  }
-#endif
+  _suggested = GpsScreen::suggestedZone(_task);
   const int current = the_mesh.getNodePrefs()->ui_tz;
   _sel = offband::tz::isSet(current) ? current : (offband::tz::isSet(_suggested) ? _suggested : offband::tz::kUtc);
 }
@@ -1178,6 +1188,106 @@ bool ZonePickerScreen::handleInput(char c) {
     return true;
   }
   return false;   // Esc: back to Settings, unchanged
+}
+
+// ---- GPS (#1235) -----------------------------------------------------------------------
+
+void GpsScreen::summary(UITask* task, char* out, size_t n) {
+  LocationProvider* gps = liveGps(task);
+  if (gps == nullptr) snprintf(out, n, "off");
+  else if (!gps->isValid()) snprintf(out, n, "no fix");
+  else if (gps->satellitesCount() > 0) snprintf(out, n, "fix %ld", gps->satellitesCount());
+  else snprintf(out, n, "fix");   // a fix from RMC before any GGA has counted satellites
+}
+
+int GpsScreen::suggestedZone(UITask* task) {
+  LocationProvider* gps = liveGps(task);
+  if (gps == nullptr || !gps->isValid()) return offband::tz::kNotSet;
+  return offband::tz::suggest(gps->getLatitude() / 1000000.0, gps->getLongitude() / 1000000.0);
+}
+
+int GpsScreen::pending() const {
+  const int zone = suggestedZone(_task);
+  return (offband::tz::isSet(zone) && zone != the_mesh.getNodePrefs()->ui_tz) ? zone : offband::tz::kNotSet;
+}
+
+void GpsScreen::begin() {
+  _use_shown = offband::tz::isSet(pending());   // as the first render will draw it
+  _sel = _use_shown ? UseZone : Power;
+}
+
+void GpsScreen::act() {
+  if (_sel == Power) {
+    _task->toggleGPS();
+    return;
+  }
+  // Checked again: the fix can go between a render and the key.
+  const int zone = pending();
+  if (offband::tz::isSet(zone)) {
+    the_mesh.getNodePrefs()->ui_tz = (uint8_t)zone;
+    the_mesh.savePrefs();
+    _task->notify(UIEventType::ack);
+  }
+  _sel = Power;
+}
+
+int GpsScreen::render(DisplayDriver& d) {
+  char buf[24], part[24];
+  summary(_task, part, sizeof(part));
+  bar(d, 0, " GPS", part);
+
+  LocationProvider* gps = liveGps(_task);
+  if (gps == nullptr) {
+    cell(d, 0, 1, " GPS is off");
+  } else if (!gps->isValid()) {
+    cell(d, 0, 1, " waiting for a fix");
+  } else {
+    formatPosition(gps->getLatitude(), gps->getLongitude(), part, sizeof(part));
+    snprintf(buf, sizeof(buf), " %s", part);
+    cell(d, 0, 1, buf);
+    // The provider reports 0 for an altitude it hasn't got (no GGA yet). A real reading
+    // of exactly 0.0 m hides too, which only sea level makes possible.
+    const long alt_mm = gps->getAltitude();
+    if (alt_mm != 0) {
+      formatAltitude(alt_mm, part, sizeof(part));
+      snprintf(buf, sizeof(buf), " alt %s", part);
+      cell(d, 0, 2, buf);
+    }
+  }
+  // The GPS's own clock, which can arrive before a position does.
+  const long t = (gps != nullptr) ? gps->getTimestamp() : 0;
+  if (t > 0) {
+    formatUtcTime((uint32_t)t, part, sizeof(part));
+    snprintf(buf, sizeof(buf), " %s UTC", part);
+    cell(d, 0, 3, buf);
+  }
+
+  // The rows sit at the foot.
+  const int zone = pending();
+  _use_shown = offband::tz::isSet(zone);
+  if (_use_shown) {
+    snprintf(buf, sizeof(buf), "Use zone %s", offband::tz::zone(zone).name);
+    listRow(d, kListRows - 1, buf, "", _sel == UseZone);
+  } else {
+    _sel = Power;   // the fix went, or the zone is in use now
+  }
+  listRow(d, kListRows, "GPS", _task->getGPSState() ? "on" : "off", _sel == Power);
+  return 1000;
+}
+
+bool GpsScreen::handleInput(char c) {
+  const uint8_t key = (uint8_t)c;
+  const bool from_button = !_task->inputFromKeyboard();
+  if (key == KEY_UP || key == KEY_DOWN || (from_button && (key == KEY_NEXT || key == KEY_PREV))) {
+    // Two rows at most: a move goes to the other one, when it's on the screen.
+    _sel = (_sel == Power && _use_shown) ? UseZone : Power;
+    return true;
+  }
+  if (key == KEY_ENTER) {
+    act();
+    return true;
+  }
+  return from_button;   // Esc: back to Settings
 }
 
 #endif  // UI_HAS_CARDKB

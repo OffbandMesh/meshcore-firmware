@@ -770,6 +770,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   status = new StatusScreen(this);       // #1231
   settings = new SettingsScreen(this);   // #1233
   zones = new ZonePickerScreen(this);    // #1233
+  gps = new GpsScreen(this);             // #1235
   msg_preview = NULL;
 #else
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
@@ -833,6 +834,11 @@ void UITask::gotoSettings() {
 void UITask::gotoZones() {
   ((ZonePickerScreen*)zones)->begin();
   setCurrScreen(zones);
+}
+
+void UITask::gotoGps() {
+  ((GpsScreen*)gps)->begin();
+  setCurrScreen(gps);
 }
 
 int UITask::renderStatusAs(DisplayDriver& d, const char* title, int pos) {
@@ -1151,11 +1157,11 @@ void UITask::loop() {
     offband::crashLogf("[ui] button event c=0x%x dispatched to curr screen", (int)c);
 #endif
     // #1205: Esc backs out to Home from any screen that does not take it. On the badge
-    // it goes up one level instead: the device pages and the zone picker to Settings
-    // (#1233), and Settings to Status, where it was opened.
+    // it goes up one level instead: the device pages, the zone picker (#1233) and the
+    // GPS (#1235) to Settings, and Settings to Status, where it was opened.
     if (!curr->handleInput(c) && keynav::backsOut((uint8_t)c) && curr != home) {
 #if UI_HAS_CARDKB
-      if (curr == tools || curr == zones) gotoSettings();
+      if (curr == tools || curr == zones || curr == gps) gotoSettings();
       else if (curr == settings) gotoStatus();
       else
 #endif

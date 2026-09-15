@@ -3,6 +3,7 @@
 // what scrolls into view, and the selected row's marquee.
 
 #include <gtest/gtest.h>
+#include <climits>
 #include <string>
 #include <vector>
 #include "helpers/ui/BadgeLayout.h"
@@ -62,6 +63,56 @@ TEST(BadgeLayoutWhen, YesterdayIsAnAge) {
 TEST(BadgeLayoutWhen, NoZoneOrNoClockIsAnAge) {
   EXPECT_EQ("1h", when(offband::tz::kNotSet, kNow - 3780, kNow));
   EXPECT_EQ("1h", when(offband::tz::kEastern, 1000, 1000 + 3780));   // a clock never set (1970)
+}
+
+namespace {
+std::string position(long lat_e6, long lon_e6) {
+  char buf[24];
+  formatPosition(lat_e6, lon_e6, buf, sizeof(buf));
+  return buf;
+}
+std::string altitude(long mm) {
+  char buf[16];
+  formatAltitude(mm, buf, sizeof(buf));
+  return buf;
+}
+}  // namespace
+
+// #1235: the GPS screen's position, four decimals, hemispheres as letters.
+TEST(BadgeLayoutGps, PositionInEachHemisphere) {
+  EXPECT_EQ("39.1031N  84.5120W", position(39103100, -84512000));
+  EXPECT_EQ("33.8688S  151.2093E", position(-33868800, 151209300));
+}
+
+TEST(BadgeLayoutGps, PositionRoundsAndCarries) {
+  EXPECT_EQ("39.1032N  84.5121W", position(39103150, -84512050));   // halves round away from zero
+  EXPECT_EQ("40.0000N  0.0000E", position(39999950, 0));             // the carry reaches the degrees
+  EXPECT_EQ("0.0000N  0.0000E", position(-40, -49));                 // too small to have a side
+}
+
+TEST(BadgeLayoutGps, TheWidestPositionFitsTheRow) {
+  EXPECT_EQ("90.0000S  180.0000W", position(-90000000, -180000000));
+  EXPECT_LE(position(-90000000, -180000000).size() + 1, (size_t)kCols);   // after the row's space
+}
+
+TEST(BadgeLayoutGps, AltitudeInWholeMeters) {
+  EXPECT_EQ("265m", altitude(265400));
+  EXPECT_EQ("266m", altitude(265500));
+  EXPECT_EQ("0m", altitude(-499));
+  EXPECT_EQ("-86m", altitude(-86000));
+  EXPECT_EQ("-87m", altitude(-86500));
+  // The most negative value takes no signed overflow on the way.
+  const std::string lowest = altitude(LONG_MIN);
+  EXPECT_EQ('-', lowest[0]);
+  EXPECT_EQ(std::to_string((0UL - (unsigned long)LONG_MIN + 500) / 1000) + "m", lowest.substr(1));
+}
+
+TEST(BadgeLayoutGps, UtcTimeOfDay) {
+  char buf[12];
+  formatUtcTime(kNow + 42, buf, sizeof(buf));
+  EXPECT_STREQ("17:07:42", buf);
+  formatUtcTime(0, buf, sizeof(buf));
+  EXPECT_STREQ("00:00:00", buf);
 }
 
 TEST(BadgeLayoutWrap, BreaksAtSpaces) {
