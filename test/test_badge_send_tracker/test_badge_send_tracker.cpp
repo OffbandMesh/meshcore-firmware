@@ -6,11 +6,15 @@
 #include "helpers/BadgeSendTracker.h"
 
 using offband::BadgeSend;
-using Tracker = offband::BadgeSendTracker<2, 3, 16>;   // 2 slots, 3 attempts, 16-byte text
+// 2 slots, 3 attempts, 16-byte text, 32-byte keys (PUB_KEY_SIZE, as on the badge)
+using Tracker = offband::BadgeSendTracker<2, 3, 16, 32>;
 
 namespace {
-const uint8_t kKey[6] = {1, 2, 3, 4, 5, 6};
-const uint8_t kOtherKey[6] = {9, 9, 9, 9, 9, 9};
+// Two keys that share their first six bytes: only the whole key tells them apart.
+const uint8_t kKey[32] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+                          17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32};
+const uint8_t kOtherKey[32] = {1, 2, 3, 4, 5, 6, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+                               9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9};
 }  // namespace
 
 TEST(BadgeSendTracker, AckForTheFirstAttemptDelivers) {
@@ -35,7 +39,7 @@ TEST(BadgeSendTracker, TimeoutAsksForTheNextAttempt) {
   EXPECT_EQ(1, s->attempts);           // the next attempt is number 1
   EXPECT_EQ(1000u, s->timestamp);      // retries reuse the first timestamp...
   EXPECT_STREQ("hi", s->text);         // ...and the text
-  EXPECT_EQ(0, memcmp(kKey, s->key, 6));
+  EXPECT_EQ(0, memcmp(kKey, s->key, sizeof(kKey)));   // the whole key, not a prefix
   t.sent(h, 0xAAAA0002, 5000, 5000);
   EXPECT_EQ(0, t.due(9999));
   EXPECT_EQ(BadgeSend::Sending, t.status(h));
@@ -96,6 +100,18 @@ TEST(BadgeSendTracker, UnknownOrZeroAckIsNotOurs) {
   EXPECT_EQ(0, t.ack(0xBBBB0001));
   EXPECT_EQ(0, t.ack(0));              // 0 means "no ACK expected" in MeshCore
   EXPECT_EQ(BadgeSend::Sending, t.status(h));
+}
+
+// Retries find the recipient by the key a DM keeps, so two recipients whose keys start
+// alike must still each keep their own.
+TEST(BadgeSendTracker, KeepsEachRecipientsWholeKey) {
+  Tracker t;
+  const uint16_t a = t.begin(kKey, 1, "a");
+  const uint16_t b = t.begin(kOtherKey, 2, "b");
+  ASSERT_NE(nullptr, t.find(a));
+  ASSERT_NE(nullptr, t.find(b));
+  EXPECT_EQ(0, memcmp(kKey, t.find(a)->key, sizeof(kKey)));
+  EXPECT_EQ(0, memcmp(kOtherKey, t.find(b)->key, sizeof(kOtherKey)));
 }
 
 TEST(BadgeSendTracker, FullTableRefusesThenReusesAFinishedSlot) {

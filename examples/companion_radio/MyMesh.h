@@ -406,7 +406,7 @@ private:
 #if UI_HAS_CARDKB
   // #1227: DMs typed on the badge. Their ACKs are kept apart from expected_ack_table so
   // the phone is never told about a message it didn't send.
-  offband::BadgeSendTracker<kBadgeDmSlots, kBadgeDmAttempts, MAX_TEXT_LEN> _badge_dms;
+  offband::BadgeSendTracker<kBadgeDmSlots, kBadgeDmAttempts, MAX_TEXT_LEN, PUB_KEY_SIZE> _badge_dms;
   void badgeSendTick();
 #endif
 
