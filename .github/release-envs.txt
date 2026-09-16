@@ -1,9 +1,11 @@
 # Curated release env set for release.yml (epic #14 / T3 / #17).
 # One PlatformIO env per line. Lines starting with # and blank lines are ignored.
-# 99 active envs; verified against variants/*/platformio.ini. GATED (CI-built,
-# not released): heltec_v4_repeater_telemetry (#20, runtime-config secrets), the
-# three companion_radio_wifi envs (#325, runtime WiFi provisioning) -- all bake
-# placeholder creds at compile time. Uncomment when their gate issue lands.
+# Every name here is verified against variants/*/platformio.ini. There is no count
+# in this comment: it said 99 while the file held 108, and release.yml already
+# prints the real one ("Selected N env(s) for release") from the file itself (#1241).
+# GATED (CI-built, not released): heltec_v4_repeater_telemetry (#20, runtime-config
+# secrets), the three companion_radio_wifi envs (#325, runtime WiFi provisioning) --
+# all bake placeholder creds at compile time. Uncomment when their gate issue lands.
 
 # RAK4631 (nRF52)
 RAK_4631_companion_radio_ble
@@ -307,3 +309,18 @@ LilyGo_T-Echo_room_server
 LilyGo_TDeck_companion_radio_ble
 LilyGo_TDeck_companion_radio_usb
 LilyGo_TDeck_repeater
+
+# Queen City Con 0x4 badge (ProMicro nRF52840 + Ra-01SH + SSD1306 + CardKB) -- #1188
+# One env, not the three or four the other nRF52 sections carry, and that is the
+# design, not a gap: "One Feature. BLE companion only", with repeater and room-server
+# roles on badges named as non-goals
+# (docs/architecture/2026-09-12-qcc-0x4-badge-design.md). A second prod env, the
+# con-radio-defaults flavor, joins it when the con's config is known.
+# build.sh already emits the .uf2 and the DFU .zip an nRF52 board takes (#1241).
+QCC_Badge_companion_radio_ble
+#QCC_Badge_companion_radio_ble_diag   # GATED: needs the owner's word, not this file's
+#   precedent. Diag envs are instruments and are NOT released; RC32, RCC6 and RC52 each
+#   got that exception separately, and the rule above says extending it to a further
+#   board is a fresh owner decision. The badge fits the same reason -- unreleased
+#   hardware with a tester on it who is not the owner -- but the reason is not the
+#   decision. Uncomment on his say-so.
