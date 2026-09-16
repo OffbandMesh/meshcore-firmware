@@ -33,11 +33,21 @@ inline int rowsFor(const Face& f, int px = kScreenRowsPx) { return px / f.row_px
 // footers -- stay in the smallest face at every step, as the mixed layout does.
 enum TextSize : uint8_t { kTextLarge = 0, kTextMedium = 1, kTextSmall = 2, kTextSteps = 3 };
 
+// #1244: what a badge boots into before anyone changes it -- the owner asked for the
+// large size. NodePrefs ships this as a raw byte, so the enum's order is load-bearing:
+// reorder it and a badge flashed from empty comes up in a different face.
+constexpr uint8_t kDefaultTextSize = kTextLarge;
+
+// #1244: a size we never wrote -- a corrupt or pre-#1238 preference -- reads as the
+// shipped default, not as a second one. Before this, an unknown value came back Org_01
+// while a fresh badge booted large, which is two answers to the same question.
 inline const Face& bodyFaceFor(int size) {
-  if (size == kTextLarge) return fixedFace();      // the display's own 6 x 8
+  if (size == kTextMedium) return bodyFace();      // Org_01, proportional
   if (size == kTextSmall) return metaFace();       // TomThumb throughout
-  return bodyFace();                               // Org_01, the default
+  return fixedFace();                              // large: the display's own 6 x 8
 }
+static_assert(kDefaultTextSize == kTextLarge,
+              "bodyFaceFor() falls through to the large face, so that must be the default");
 
 inline const Face& detailFace() { return metaFace(); }
 
