@@ -1,0 +1,234 @@
+// test/test_battery_gauge/test_battery_gauge.cpp -- Offband #1246
+//
+// The owner, on the bench: the badge bounces between 97% and 100% at full, and never
+// shows 100%. These cover both halves of the answer -- endpoints a real cell reaches,
+// and an average that a single noisy reading cannot move -- and the thing that would
+// make the average a lie, which is hiding a battery that is genuinely going flat.
+//
+// Folder MUST stay `test_`-prefixed and this file provides its own main() -- this repo
+// does not link gtest_main.
+
+#include <gtest/gtest.h>
+#include <cstdlib>
+#include "../../src/helpers/ui/BatteryGauge.h"
+
+using namespace offband;
+
+namespace {
+
+// The badge's own ends. Empty is the voltage SafeBoot refuses to start from, not the one
+// a running badge dies at (3400) -- there is reserve below 0%. Full is where a charged
+// cell settles once the charger lets go.
+constexpr uint16_t kEmpty = 3500;
+constexpr uint16_t kFull = 4150;
+constexpr uint16_t kDies = 3400;
+
+int pct(uint16_t mv) { return batteryPercent(mv, kEmpty, kFull); }
+
+// Pseudo-random noise rather than a balanced sawtooth, which would flatter any average by
+// summing to nothing over its period. `bias` tilts it, to catch a filter that leans.
+uint16_t settle(BatteryAverage& a, uint16_t mv, int wobble_mv, int readings, int bias = 0) {
+  uint32_t s = 0x2545F491u;
+  for (int i = 0; i < readings; i++) {
+    s ^= s << 13; s ^= s >> 17; s ^= s << 5;          // xorshift32
+    const int noise = (int)(s % (uint32_t)(2 * wobble_mv + 1)) - wobble_mv + bias;
+    a.feed((uint16_t)((int)mv + noise));
+  }
+  return a.value();
+}
+
+}  // namespace
+
+// The symptom the owner reported: a charged cell reads 100, and holds it.
+TEST(BatteryGauge, AFullCellReadsFull) {
+  EXPECT_EQ(100, pct(4150));     // where a charged cell settles
+  EXPECT_EQ(100, pct(4160));
+  EXPECT_EQ(100, pct(4180));
+  EXPECT_EQ(100, pct(4200));     // and on the charger, still 100 rather than over
+}
+
+// The other end, which was as wrong and less visible. 0% is the voltage SafeBoot refuses
+// to start from: below it the badge will not come back, whatever is left in the cell.
+TEST(BatteryGauge, EmptyIsWhereTheBadgeWillNotStart) {
+  EXPECT_EQ(0, pct(3500));
+  EXPECT_EQ(0, pct(kDies));       // the reserve it keeps running on, below 0%
+  EXPECT_EQ(0, pct(0));
+  EXPECT_EQ(42, batteryPercent(3500, 3000, 4200));   // what the old scale said there
+}
+
+// The reserve is real and deliberate: the badge runs for another 100 mV past 0%. What it
+// must never do is draw charge on a badge that cannot be turned back on.
+TEST(BatteryGauge, NothingIsShownBelowTheStartingVoltage) {
+  for (uint16_t mv = kDies; mv < kEmpty; mv += 10) {
+    EXPECT_EQ(0, pct(mv)) << "mv " << mv;
+  }
+  EXPECT_GT(pct(kEmpty + 10), 0);   // and the moment it can start again, it shows
+}
+
+TEST(BatteryGauge, TheMiddleIsRoundedNotTruncated) {
+  EXPECT_EQ(50, pct(3825));                  // exactly half of 3500..4150
+  EXPECT_EQ(1, pct(3505));                   // 0.77% rounds up rather than to nothing
+  EXPECT_EQ(99, pct(4145));
+  for (uint16_t mv = 3300; mv <= 4250; mv += 5) {
+    const int p = pct(mv);
+    EXPECT_GE(p, 0) << "mv " << mv;
+    EXPECT_LE(p, 100) << "mv " << mv;
+  }
+}
+
+TEST(BatteryGauge, ANonsenseRangeReadsEmptyRatherThanDividingByZero) {
+  EXPECT_EQ(0, batteryPercent(4000, 4200, 4200));
+  EXPECT_EQ(0, batteryPercent(4000, 4200, 3000));
+}
+
+// The first reading is taken whole, so the bar is right at boot instead of climbing to
+// the truth over the first quarter minute.
+TEST(BatteryAverageTest, TheFirstReadingIsTakenWhole) {
+  BatteryAverage a;
+  EXPECT_FALSE(a.seeded());
+  EXPECT_EQ(0, a.value());
+  a.feed(4100);
+  EXPECT_TRUE(a.seeded());
+  EXPECT_EQ(4100, a.value());
+}
+
+// The cause of the bounce: the number was whatever the ADC said at the instant of a
+// redraw. A wobble of this size is what the bench showed -- 97% to 100% on the old
+// scale, which was 36 mV.
+TEST(BatteryAverageTest, NoiseThatMovedThePercentageNoLongerDoes) {
+  BatteryAverage a;
+  const uint16_t v = settle(a, 4160, 18, 60);
+  EXPECT_NEAR(4160, v, 4);                 // within a few mV of the truth
+  // and on the badge's scale that is a single percentage, unmoving
+  EXPECT_EQ(100, pct(v));
+
+  BatteryAverage mid;
+  const uint16_t m = settle(mid, 3800, 18, 60);
+  EXPECT_NEAR(3800, m, 4);
+  EXPECT_EQ(pct(3800), pct(m));
+}
+
+// The test the issue asked for: the average must not hide a battery going flat. A cell
+// falling at a realistic rate is tracked, and one that falls off a cliff is caught in
+// seconds, not minutes.
+TEST(BatteryAverageTest, ARealDischargeStillComesThrough) {
+  BatteryAverage a;
+  a.feed(4100);
+  // a slow fall: 1 mV a second is about a 12-hour discharge across this cell's range
+  uint16_t mv = 4100;
+  for (int s = 0; s < 600; s++) {
+    mv = (uint16_t)(4100 - s);
+    a.feed(mv);
+  }
+  EXPECT_NEAR(mv, a.value(), 20) << "a slow fall must be tracked, not averaged away";
+
+  // a cliff: the supply drops 300 mV and stays there. The dip guard holds it off for a
+  // few readings and then believes it, and the average closes the rest of the way.
+  BatteryAverage b;
+  b.feed(4000);
+  for (int s = 0; s < 120; s++) b.feed(3700);
+  EXPECT_NEAR(3700, b.value(), 10) << "a sustained drop must arrive, not be averaged away";
+  EXPECT_EQ(pct(3700), pct(b.value()));
+}
+
+// A transmit pulls over a hundred milliamps and sags the supply for as long as it lasts.
+// That is not the charge falling, and it must not move the number at all.
+TEST(BatteryAverageTest, OneDipDoesNotMoveItAtAll) {
+  BatteryAverage a;
+  for (int i = 0; i < 40; i++) a.feed(4000);
+  const uint16_t before = a.value();
+  a.feed(3850);                            // one reading taken during a transmit
+  EXPECT_EQ(before, a.value());
+  EXPECT_EQ(pct(before), pct(a.value()));
+  a.feed(4000);                            // the transmit ends
+  EXPECT_EQ(before, a.value());
+}
+
+// Two in a row is still a transmit; three is the cell.
+TEST(BatteryAverageTest, ADipIsBelievedOnceItKeepsHappening) {
+  BatteryAverage a;
+  for (int i = 0; i < 40; i++) a.feed(4000);
+  const uint16_t before = a.value();
+  a.feed(3850);
+  a.feed(3850);
+  EXPECT_EQ(before, a.value());
+  a.feed(3850);
+  EXPECT_LT(a.value(), before) << "a third reading in a row is not a transmit";
+}
+
+// Only a fall is suspect. A rise is a charger being plugged in, and is taken as it comes.
+TEST(BatteryAverageTest, ARiseIsNeverHeldOff) {
+  BatteryAverage a;
+  for (int i = 0; i < 40; i++) a.feed(3800);
+  const uint16_t before = a.value();
+  a.feed(4200);
+  EXPECT_GT(a.value(), before);
+}
+
+// Guarding only falls could lean the average upwards, because a high sample is taken and
+// a low one is not. It does not, because the threshold is far outside the noise: at the
+// spread the bench showed, and at three times it, the average still lands on the truth.
+TEST(BatteryAverageTest, GuardingDipsDoesNotLeanTheAverageUp) {
+  BatteryAverage a;
+  a.feed(4000);
+  EXPECT_NEAR(4000, settle(a, 4000, 18, 300), 5);
+
+  BatteryAverage b;
+  b.feed(4000);
+  EXPECT_NEAR(4000, settle(b, 4000, 55, 300), 12) << "still centred at three times the spread";
+}
+
+// A filter that leaned would show here, where the readings themselves lean.
+TEST(BatteryAverageTest, ALopsidedReadingIsFollowed) {
+  BatteryAverage a;
+  a.feed(4000);
+  EXPECT_NEAR(4030, settle(a, 4000, 18, 300, 30), 6);
+  BatteryAverage b;
+  b.feed(4000);
+  EXPECT_NEAR(3970, settle(b, 4000, 18, 300, -30), 6);
+}
+
+// The review's case: boot during a transmit and the average is seeded low. It must climb
+// out at once, not crawl for a quarter of a minute showing a false low battery.
+TEST(BatteryAverageTest, ASeedTakenDuringATransmitIsCorrectedAtOnce) {
+  BatteryAverage a;
+  a.feed(3850);              // the first reading landed under load
+  EXPECT_EQ(3850, a.value());
+  a.feed(4000);              // the transmit ends
+  EXPECT_EQ(4000, a.value()) << "a large rise is taken whole, not crawled to";
+}
+
+// The review's other case: a transmit every other second. The loaded readings are held
+// off and the unloaded ones are believed, so the average tracks the cell and not the
+// radio -- which is the point, not a way around the counter.
+TEST(BatteryAverageTest, ATransmitEveryOtherSecondTracksTheCellNotTheRadio) {
+  BatteryAverage a;
+  a.feed(4000);
+  for (int i = 0; i < 60; i++) a.feed(i % 2 ? 3850 : 4000);
+  EXPECT_EQ(4000, a.value());
+
+  // and when the cell itself falls under that pattern, the unloaded readings carry it --
+  // trailing the last of them by about the lag of an average that only sees every other
+  // second, and nowhere near the 3700 the radio keeps pulling it to.
+  BatteryAverage b;
+  b.feed(4000);
+  for (int i = 0; i < 200; i++) b.feed(i % 2 ? 3700 : (uint16_t)(4000 - i / 2));
+  const uint16_t last_unloaded = 4000 - 198 / 2;      // 3901
+  EXPECT_GT(b.value(), last_unloaded);
+  EXPECT_LT(b.value() - last_unloaded, 20);
+  EXPECT_GT(b.value(), 3800) << "the radio must not drag the reading down with it";
+}
+
+TEST(BatteryAverageTest, ResetForgetsEverything) {
+  BatteryAverage a;
+  a.feed(4000);
+  a.reset();
+  EXPECT_FALSE(a.seeded());
+  a.feed(3500);
+  EXPECT_EQ(3500, a.value());
+}
+
+int main(int argc, char** argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}

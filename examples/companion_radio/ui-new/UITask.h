@@ -1,6 +1,7 @@
 #pragma once
 
 #include <MeshCore.h>
+#include <helpers/ui/BatteryGauge.h>   // #1246
 #include <helpers/ui/DisplayDriver.h>
 #include <helpers/ui/UIScreen.h>
 #include <helpers/SensorManager.h>
@@ -42,6 +43,10 @@ class UITask : public AbstractUITask {
   unsigned long _alert_expiry;
   int _msgcount;
   unsigned long ui_started_at, next_batt_chck;
+  // #1246: the battery the screens show, averaged over readings taken on a cadence --
+  // not once per redraw, which is what made the number move on its own.
+  offband::BatteryAverage _batt;
+  unsigned long _next_batt_read = 0;
   int next_backlight_btn_check = 0;
   bool _always_on = false;   // #141: when true, never auto-blank the display
   uint8_t _disp_mode = 0;    // #542 B1: 0 auto, 1 always-on, 2 always-off (dark)
@@ -116,6 +121,11 @@ public:
   // does not leave the screen about to blank on the old.
   uint16_t autoOffSecs() const;
   void setAutoOffSecs(uint16_t secs);
+
+  // #1246: the battery as the screens should show it -- an average across readings
+  // rather than whatever the ADC said at the instant of a redraw. `getBattMilliVolts()`
+  // is still the raw read, and is what the low-battery shutdown acts on.
+  uint16_t smoothedBattMilliVolts() const;
 
   void gotoHomeScreen() { setCurrScreen(home); }
 #ifdef QCC_BADGE_SELFTEST
