@@ -1065,8 +1065,10 @@ static void wifi_telemetry_caplog_forward_service() {
     // #566: runtime sink from prefs. Empty host = no sink configured (the
     // build-flag WIFI_SYSLOG_HOST only seeds the default).
     NodePrefs* prefs = the_mesh.getNodePrefs();
+    // #1240: the capture switch, so a sink is told when `caplog stop` is what
+    // silenced the stream rather than a quiet node.
     g_caplog_fwd.service(prefs->syslog_host, prefs->syslog_port,
-                         WiFi.status() == WL_CONNECTED, millis());
+                         WiFi.status() == WL_CONNECTED, meshLogIsEnabled(), millis());
 }
 
 // #1060: what the shared `caplog forward` command needs from this role. The

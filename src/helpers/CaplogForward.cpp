@@ -1,6 +1,7 @@
 #include "CaplogForward.h"
 
 #include <stdio.h>
+#include <string.h>
 
 namespace offband {
 
@@ -59,15 +60,24 @@ void CaplogForward::armFor(uint32_t window_sec, uint32_t now_ms) {
         return;
     }
     if (window_sec > kCaplogMaxWindowSec) window_sec = kCaplogMaxWindowSec;
-    // Opening a window, as opposed to extending an open one.
-    if (!armed(now_ms)) announce_ = true;
+    // Opening a window, as opposed to extending an open one. #1240: the capture
+    // state belongs to the window the same way the announcement does, so a new
+    // window opened against a stopped capture says so under its own announce
+    // line instead of inheriting an earlier window's silence.
+    if (!armed(now_ms)) {
+        announce_     = true;
+        capture_seen_ = false;
+    }
     until_ms_ = now_ms + window_sec * 1000UL;
     until_off_ = false;
     armed_ = true;
 }
 
 void CaplogForward::armUntilOff(uint32_t now_ms) {
-    if (!armed(now_ms)) announce_ = true;
+    if (!armed(now_ms)) {
+        announce_     = true;
+        capture_seen_ = false;   // #1240, as in armFor()
+    }
     until_off_ = true;
     armed_ = true;
 }
@@ -111,7 +121,13 @@ void CaplogForward::reportLoss(const char* host, uint16_t port, uint64_t lost) {
     sendNote(host, port, note, len < (int)sizeof(note) ? len : (int)sizeof(note) - 1);
 }
 
-void CaplogForward::service(const char* host, uint16_t port, bool link_up, uint32_t now_ms) {
+// #1240: the wording is the operator's, approved 2026-09-15. Keep both lines in
+// the "[caplog] " family the sink already greps for.
+const char kCaplogCaptureOffNote[] = "[caplog] capture off, nothing to forward";
+const char kCaplogCaptureOnNote[]  = "[caplog] capture on, forwarding resumed";
+
+void CaplogForward::service(const char* host, uint16_t port, bool link_up, bool capture_on,
+                            uint32_t now_ms) {
     if (!armed(now_ms)) return;
     if (!link_up) return;
     if (host == nullptr || host[0] == '\0') return;
@@ -122,6 +138,20 @@ void CaplogForward::service(const char* host, uint16_t port, bool link_up, uint3
             const int len = snprintf(line, sizeof(line), "[caplog] forward on: id=%s sink=%s:%u",
                                      identity_, host, (unsigned)port);
             sendNote(host, port, line, len < (int)sizeof(line) ? len : (int)sizeof(line) - 1);
+        }
+    }
+    // #1240: one note per change, and only where it can be delivered -- this is
+    // past the armed / link / host checks, so a node that stops capturing while
+    // offline tells the sink when the link returns, not never.
+    if (!capture_seen_ || capture_on != capture_on_) {
+        const bool first = !capture_seen_;
+        capture_seen_ = true;
+        capture_on_   = capture_on;
+        // Armed while capturing is the ordinary start and says nothing; armed
+        // while stopped is the case worth naming.
+        if (!first || !capture_on) {
+            const char* note = capture_on ? kCaplogCaptureOnNote : kCaplogCaptureOffNote;
+            sendNote(host, port, note, (int)strlen(note));
         }
     }
     size_t n;

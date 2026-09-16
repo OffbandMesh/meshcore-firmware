@@ -48,6 +48,12 @@ constexpr uint32_t kCaplogMaxWindowSec = 0x7FFFFFFFu / 1000u;   // 2147483 s, ~2
 // #1060: what a forwarder is doing, for `caplog status`.
 enum class CaplogForwardMode : uint8_t { Off, Bounded, UntilOff };
 
+// #1240: at the sink, a stopped capture looks exactly like a quiet one -- both
+// are silence. An armed forward names which it is, once per change, so nobody
+// has to ask the node why nothing is arriving.
+extern const char kCaplogCaptureOffNote[];
+extern const char kCaplogCaptureOnNote[];
+
 // #1059: writes tag into out as a legal syslog TAG body, which the receiver's
 // `programname startswith 'caplog-'` filter depends on:
 //   - letters, digits, '_' and '-' are kept; anything else (spaces,
@@ -148,7 +154,12 @@ public:
 
     // Sends one chunk's worth of lines when armed, a host is set and the link
     // is up. Otherwise it reads nothing, so lines wait in the ring.
-    void service(const char* host, uint16_t port, bool link_up, uint32_t now_ms);
+    //
+    // capture_on is the caller's capture switch, the same way link_up is the
+    // caller's link (#1240). A change in it sends one note to the sink; the
+    // reading below is unaffected, so lines captured before a stop still leave.
+    void service(const char* host, uint16_t port, bool link_up, bool capture_on,
+                 uint32_t now_ms);
 
     const char* prefix() const { return prefix_; }
     uint32_t    linesSent() const { return lines_sent_; }
@@ -173,6 +184,11 @@ private:
     uint64_t            cursor_      = 0;
     bool                started_     = false;  // a cursor read has happened
     uint32_t            bytes_lost_  = 0;
+    // #1240: the capture state the sink was last told about. seen_ is false
+    // until the first serviced pass, so an ordinary start -- armed while
+    // capturing -- announces the window only, with no note of its own.
+    bool                capture_seen_ = false;
+    bool                capture_on_   = false;
 };
 
 }  // namespace offband
