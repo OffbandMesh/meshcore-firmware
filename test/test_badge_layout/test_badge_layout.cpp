@@ -17,9 +17,15 @@ std::string age(uint32_t secs) {
   return buf;
 }
 
-std::vector<std::string> lines(const char* text, int width) {
+// #1237: the layout measures pixels. These wrap tests use the fixed 6 px face, so a
+// width in characters is still readable as one; the face tests below use the real
+// proportional widths.
+const Face& kFixed = fixedFace();
+constexpr int kCellPx = 6;
+
+std::vector<std::string> lines(const char* text, int chars, const Face& f = kFixed) {
   Span spans[16];
-  const int n = wrap(text, width, spans, 16);
+  const int n = wrap(f, text, chars * kCellPx, spans, 16);
   std::vector<std::string> out;
   for (int i = 0; i < n; i++) out.push_back(std::string(text + spans[i].start, spans[i].len));
   return out;
@@ -100,7 +106,8 @@ TEST(BadgeLayoutGps, PositionRoundsAndCarries) {
 
 TEST(BadgeLayoutGps, TheWidestPositionFitsTheRow) {
   EXPECT_EQ("90.0000S  180.0000W", position(-90000000, -180000000));
-  EXPECT_LE(position(-90000000, -180000000).size() + 1, (size_t)kCols);   // after the row's space
+  // It fits a row after the leading space, in either face.
+  EXPECT_LE(textPx(kFixed, (" " + position(-90000000, -180000000)).c_str()), kScreenPx);
 }
 
 TEST(BadgeLayoutGps, AltitudeInWholeMeters) {
@@ -139,7 +146,7 @@ TEST(BadgeLayoutGps, AFixOutranksTheModuleCheck) {
 
 // The longest word fits Settings' GPS row: " GPS", a space, then the value.
 TEST(BadgeLayoutGps, NoGpsModuleFitsTheSettingsRow) {
-  EXPECT_LE(strlen(" GPS ") + gpsState(true, false, false, 0).size(), (size_t)kCols);
+  EXPECT_LE(textPx(kFixed, " GPS ") + textPx(kFixed, gpsState(true, false, false, 0).c_str()), kScreenPx);
 }
 
 TEST(BadgeLayoutGps, UtcTimeOfDay) {
@@ -169,21 +176,63 @@ TEST(BadgeLayoutWrap, ShortTextIsOneLine) {
 
 TEST(BadgeLayoutWrap, StopsAtMaxLines) {
   Span spans[2];
-  EXPECT_EQ(2, wrap("a b c d e", 1, spans, 2));
+  EXPECT_EQ(2, wrap(kFixed, "a b c d e", kCellPx, spans, 2));
 }
 
-// A channel message: the sender's tag in columns 0-4, text from column 6, and the
-// rows after it indented to match (design 1a, "Thread settled").
+// #1237: with a proportional face, what fits is measured, not counted. "iiiiiiii" is
+// narrow and "MMMM" is wide, so the same box takes more of one than the other.
+TEST(BadgeLayoutWrap, TheBodyFaceMeasuresEachCharacter) {
+  const Face& body = bodyFace();
+  EXPECT_LT(textPx(body, "iiiiiiii"), textPx(kFixed, "iiiiiiii"));
+  EXPECT_EQ((std::vector<std::string>{"iiiiiiiiiiii"}), lines("iiiiiiiiiiii", 5, body));
+  EXPECT_EQ((std::vector<std::string>{"MMMM", "MMMM"}), lines("MMMMMMMM", 4, body));
+}
+
+// However a line breaks, it never draws wider than its box -- except a box too narrow
+// for even one character, where a line takes that character so the wrap still advances.
+TEST(BadgeLayoutWrap, NoLineIsWiderThanItsBox) {
+  const Face& body = bodyFace();
+  const char* text = "flag drop at the CTF table, bring the badge and a laptop";
+  for (int px = 2; px <= 128; px += 3) {
+    Span spans[24];
+    const int n = wrap(body, text, px, spans, 24);
+    for (int i = 0; i < n; i++) {
+      const bool fits = spanPx(body, text, spans[i]) <= px;
+      EXPECT_TRUE(fits || spans[i].len == 1) << "at " << px << " px, line " << i;
+    }
+  }
+}
+
+// #1237: the faces stop at 0x7E. Anything else -- what translateUTF8ToBlocks leaves for
+// an emoji or an accent -- measures as one block, which is what the screen draws.
+TEST(BadgeLayoutFace, OutOfRangeCharactersMeasureAsBlocks) {
+  const Face& body = bodyFace();
+  const Face& meta = metaFace();
+  EXPECT_EQ(body.missing, charPx(body, '\xDB'));
+  EXPECT_EQ(meta.missing, charPx(meta, '\x07'));
+  EXPECT_EQ(textPx(body, "ab") + body.missing, textPx(body, "a\xDB" "b"));
+}
+
+TEST(BadgeLayoutFace, FitPxCutsToWhatFits) {
+  const Face& body = bodyFace();
+  EXPECT_EQ(0, fitPx(body, "Abend", 2));
+  EXPECT_EQ(5, fitPx(body, "Abend", 128));
+  const int n = fitPx(body, "Abend", textPx(body, "Abe"));
+  EXPECT_EQ(3, n);
+}
+
+// A channel message: the sender's tag in the left kTagPx, text after it, and the rows
+// after it indented to match (design 1a, "Thread settled").
 TEST(BadgeLayoutThread, ChannelMessageTagsItsFirstRow) {
   const MsgView msgs[] = {{false, "Abend", "anyone at the CTF table?"}};
   Row rows[8];
-  const int n = layoutThread(msgs, 1, true, -1, rows, 8);
+  const int n = layoutThread(kFixed, msgs, 1, true, -1, rows, 8);
   ASSERT_EQ(2, n);
   EXPECT_TRUE(rows[0].first);
-  EXPECT_EQ(kIndent, rows[0].col);
+  EXPECT_EQ(kTagPx + kGapPx, rows[0].x_px);
   EXPECT_EQ("anyone at the", rowText(msgs, rows[0]));
   EXPECT_FALSE(rows[1].first);
-  EXPECT_EQ(kIndent, rows[1].col);
+  EXPECT_EQ(kTagPx + kGapPx, rows[1].x_px);
   EXPECT_EQ("CTF table?", rowText(msgs, rows[1]));
   EXPECT_TRUE(rows[1].last);
 }
@@ -192,51 +241,70 @@ TEST(BadgeLayoutThread, ChannelMessageTagsItsFirstRow) {
 TEST(BadgeLayoutThread, DmMessageUsesTheWholeWidth) {
   const MsgView msgs[] = {{false, "", "see you at the CTF table"}};
   Row rows[8];
-  const int n = layoutThread(msgs, 1, false, -1, rows, 8);
+  const int n = layoutThread(kFixed, msgs, 1, false, -1, rows, 8);
   ASSERT_EQ(2, n);
-  EXPECT_EQ(0, rows[0].col);
+  EXPECT_EQ(0, rows[0].x_px);
   EXPECT_EQ("see you at the CTF", rowText(msgs, rows[0]));
 }
 
-// Mine sit on the right, ending at column 18, with columns 19-20 for the mark.
+// Mine sit flush right, clear of the status mark at the edge.
 TEST(BadgeLayoutThread, OwnMessagesAreRightAligned) {
   const MsgView msgs[] = {{true, "", "omw, 5 min"}};
   Row rows[8];
-  ASSERT_EQ(1, layoutThread(msgs, 1, true, -1, rows, 8));
-  EXPECT_EQ(kMineEnd - 10, rows[0].col);
+  ASSERT_EQ(1, layoutThread(kFixed, msgs, 1, true, -1, rows, 8));
+  EXPECT_EQ(kScreenPx - kMarkPx - kEdgePx - 10 * kCellPx, rows[0].x_px);
   EXPECT_TRUE(rows[0].first);
   EXPECT_TRUE(rows[0].last);
+}
+
+// The body face measures each character, so my message still ends at the same edge.
+TEST(BadgeLayoutThread, OwnMessagesAreRightAlignedInTheBodyFace) {
+  const Face& body = bodyFace();
+  const MsgView msgs[] = {{true, "", "omw, 5 min"}};
+  Row rows[8];
+  ASSERT_EQ(1, layoutThread(body, msgs, 1, true, -1, rows, 8));
+  EXPECT_EQ(kScreenPx - kMarkPx - kEdgePx - textPx(body, "omw, 5 min"), rows[0].x_px);
 }
 
 TEST(BadgeLayoutThread, MessagesStayInOrder) {
   const MsgView msgs[] = {{false, "Abend", "one"}, {true, "", "two"}, {false, "Stryc", "three"}};
   Row rows[8];
-  ASSERT_EQ(3, layoutThread(msgs, 3, true, -1, rows, 8));
+  ASSERT_EQ(3, layoutThread(kFixed, msgs, 3, true, -1, rows, 8));
   EXPECT_EQ(0, rows[0].msg);
   EXPECT_EQ(1, rows[1].msg);
   EXPECT_EQ(2, rows[2].msg);
 }
 
-// The selected message: a caret in column 0 on each of its rows, everything else one
-// column right, and one meta row after it (design 1a, "Message selected").
+// The selected message: a caret at the left on each of its rows, everything else clear
+// of it, and one meta row after it (design 1a, "Message selected").
 TEST(BadgeLayoutThread, SelectedMessageGetsACaretAndAMetaRow) {
   const MsgView msgs[] = {{false, "Abend", "anyone?"}, {false, "Stryc", "flag drop at the CTF table"}};
   Row rows[8];
-  const int n = layoutThread(msgs, 2, true, 1, rows, 8);
+  const int n = layoutThread(kFixed, msgs, 2, true, 1, rows, 8);
   ASSERT_EQ(4, n);   // "anyone?", two rows of Stryc's, and the meta row
   EXPECT_FALSE(rows[0].caret);
   EXPECT_TRUE(rows[1].caret);
-  EXPECT_EQ(kIndent + 1, rows[1].col);
+  EXPECT_EQ(kTagPx + kGapPx + charPx(kFixed, '>') + 1, rows[1].x_px);   // clear of the caret
   EXPECT_EQ("flag drop at", rowText(msgs, rows[1]));
   EXPECT_TRUE(rows[2].caret);
   EXPECT_EQ(RowKind::Meta, rows[3].kind);
   EXPECT_EQ(1, rows[3].msg);
 }
 
+// The caret takes the body face's own '>' width, not a cell.
+TEST(BadgeLayoutThread, TheBodyFaceShiftsForItsOwnCaret) {
+  const Face& body = bodyFace();
+  const MsgView msgs[] = {{false, "Abend", "anyone at the CTF table?"}};
+  Row rows[8];
+  ASSERT_LE(1, layoutThread(body, msgs, 1, true, 0, rows, 8));
+  EXPECT_TRUE(rows[0].caret);
+  EXPECT_EQ(kTagPx + kGapPx + charPx(body, '>') + 1, rows[0].x_px);
+}
+
 TEST(BadgeLayoutThread, StopsAtMaxRows) {
   const MsgView msgs[] = {{false, "", "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll mmmm nnnn"}};
   Row rows[3];
-  EXPECT_EQ(3, layoutThread(msgs, 1, false, -1, rows, 3));
+  EXPECT_EQ(3, layoutThread(kFixed, msgs, 1, false, -1, rows, 3));
 }
 
 // With nothing selected, the newest rows sit at the bottom.

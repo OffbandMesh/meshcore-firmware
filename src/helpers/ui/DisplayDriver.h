@@ -35,6 +35,11 @@ public:
   virtual void clear() = 0;
   virtual void startFrame(ColorVal bkg = UIColor::window_bkg) = 0;
   virtual void setTextSize(int sz) = 0;
+  // Offband (#1237): choose a text face. 0 is the driver's own font; a driver that has
+  // smaller faces (the badge's OLED, which carries Org_01 and TomThumb) maps the higher
+  // ids onto them and keeps drawing text from its top-left, as id 0 does. Drivers
+  // without other faces ignore it, so every screen still draws.
+  virtual void setFace(int id) { (void)id; }
   virtual void setColor(ColorVal c) = 0;
   virtual void setCursor(int x, int y) = 0;
   virtual void print(const char* str) = 0;

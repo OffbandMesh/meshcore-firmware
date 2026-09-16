@@ -1,8 +1,9 @@
 #pragma once
 
-// #1230: layout for the badge screens in the owner's design (the QCC mockups). The
-// display's built-in 6 x 8 font makes a 21 x 8 grid. Pure, so it is unit-tested
-// natively; the screens draw what it decides.
+// #1230: layout for the badge screens in the owner's design (the QCC mockups).
+// #1237: measured in pixels, not characters. The body face (Org_01) is proportional,
+// so BadgeFonts.h says what each character measures and this decides where text goes.
+// Pure, so it is unit-tested natively; the screens draw what it decides.
 //
 // Text here is display-ready: one byte per character, as translateUTF8ToBlocks()
 // leaves it.
@@ -12,15 +13,20 @@
 #include <stdio.h>
 #include <string.h>
 #include "../TimeZones.h"
+#include "BadgeFonts.h"
 
 namespace badgeui {
 
-constexpr int kCols = 21;         // 6 px cells across 128 px
-constexpr int kTagCols = 5;       // a channel message's sender tag
-constexpr int kIndent = 6;        // text after the tag and a space
-constexpr int kMineEnd = 19;      // my messages end before this column...
-constexpr int kMarkCol = 20;      // ...and their status mark sits here
-constexpr int kCycleStops = 4;    // SW1's cycle: Messages, Contacts, Nearby, Status
+constexpr int kScreenPx = 128;      // the panel
+constexpr int kScreenRowsPx = 64;
+constexpr int kEdgePx = 1;          // the margin anything flush right keeps
+constexpr int kTagPx = 30;          // a channel message's sender tag
+constexpr int kGapPx = 2;           // between that tag and its text
+constexpr int kMarkPx = 8;          // my message's status mark, at the right edge
+constexpr int kCycleStops = 4;      // SW1's cycle: Messages, Contacts, Nearby, Status
+
+// How many rows of a face fit in `px` of screen.
+inline int rowsFor(const Face& f, int px = kScreenRowsPx) { return px / f.row_px; }
 
 // "now", "4m", "2h", "3d": how old something `secs` old is. "old" past 99 days.
 inline void formatAge(uint32_t secs, char* out, size_t n) {
@@ -91,34 +97,50 @@ struct Span {
   uint16_t start, len;
 };
 
-// Splits text into lines of at most `width` characters. A line breaks at its last
-// space if it has one, else mid-word; spaces at a break are dropped. Returns the line
-// count, at most max_lines.
-inline int wrap(const char* text, int width, Span* out, int max_lines) {
+inline int spanPx(const Face& f, const char* text, const Span& s) {
+  int px = 0;
+  for (uint16_t i = 0; i < s.len; i++) px += charPx(f, text[s.start + i]);
+  return px;
+}
+
+// Splits text into lines at most `width_px` wide. A line breaks at its last space if it
+// has one, else mid-word; spaces at a break are dropped. Returns the line count, at most
+// max_lines. A box too narrow for even one character still takes one per line, so the
+// wrap always advances; the screen clips what won't fit.
+inline int wrap(const Face& f, const char* text, int width_px, Span* out, int max_lines) {
   const int total = (int)strlen(text);
   int pos = 0, n = 0;
   while (n < max_lines) {
     while (pos < total && text[pos] == ' ') pos++;
     if (pos >= total) break;
-    int len;
-    int next;
-    if (total - pos <= width) {
+    int fit = 0, used = 0;   // characters that fit on this line
+    while (pos + fit < total) {
+      const int w = charPx(f, text[pos + fit]);
+      if (used + w > width_px) break;
+      used += w;
+      fit++;
+    }
+    int len, next;
+    if (pos + fit >= total) {              // the rest fits
       len = total - pos;
       next = total;
+    } else if (text[pos + fit] == ' ') {   // it breaks exactly at a space
+      len = fit;
+      next = pos + fit + 1;
     } else {
       int sp = -1;
-      for (int i = pos + width; i > pos; i--) {
-        if (text[i] == ' ') {
-          sp = i;
+      for (int i = fit; i > 0; i--) {
+        if (text[pos + i - 1] == ' ') {
+          sp = i - 1;
           break;
         }
       }
-      if (sp > pos) {
-        len = sp - pos;
-        next = sp + 1;
-      } else {
-        len = width;
-        next = pos + width;
+      if (sp > 0) {
+        len = sp;
+        next = pos + sp + 1;
+      } else {                             // one word, wider than the line
+        len = fit > 0 ? fit : 1;
+        next = pos + len;
       }
     }
     while (len > 0 && text[pos + len - 1] == ' ') len--;
@@ -145,37 +167,39 @@ struct Row {
   RowKind kind;
   bool first;       // the message's first row: an incoming channel message's tag goes here
   bool last;        // its last text row: my message's status mark goes here
-  bool caret;       // the message is selected: a caret in column 0
-  uint8_t col;      // where the text starts
+  bool caret;       // the message is selected: a caret at the left edge
+  int16_t x_px;     // where the text starts
   Span span;        // into the message's text
 };
 
 // Lays a thread's messages (oldest first) out as rows, oldest first.
-// - An incoming channel message has its sender's tag in columns 0-4 of its first row,
-//   and its text from column 6 on every row.
-// - An incoming DM has one sender, so no tag: its text starts at column 0.
-// - My messages are right-aligned, ending before column 19; the mark goes in 20.
-// - The selected message (or -1) has a caret in column 0 on each row, with everything
-//   else one column right, then one Meta row the screen fills in.
+// - An incoming channel message has its sender's tag in the left kTagPx of its first
+//   row, and its text after that on every row.
+// - An incoming DM has one sender, so no tag: its text starts at the left edge.
+// - My messages are flush right, clear of the status mark at the edge.
+// - The selected message (or -1) has a caret at the left on each row, with everything
+//   else shifted clear of it, then one Meta row the screen fills in.
 // Returns the row count, at most max_rows.
-inline int layoutThread(const MsgView* msgs, int count, bool channel, int selected, Row* out, int max_rows) {
+inline int layoutThread(const Face& f, const MsgView* msgs, int count, bool channel, int selected,
+                        Row* out, int max_rows) {
+  const int caret_px = charPx(f, '>') + 1;
   int n = 0;
   for (int m = 0; m < count && n < max_rows; m++) {
     const bool sel = (m == selected);
-    const int shift = sel ? 1 : 0;
-    int col, width;
+    const int shift = sel ? caret_px : 0;
+    int x, width;
     if (msgs[m].outgoing) {
-      col = 0;
-      width = kMineEnd - shift;
+      x = 0;   // each line is placed flush right below
+      width = kScreenPx - kMarkPx - kEdgePx - shift;
     } else if (channel) {
-      col = kIndent + shift;
-      width = kCols - col;
+      x = kTagPx + kGapPx + shift;
+      width = kScreenPx - kEdgePx - x;
     } else {
-      col = shift;
-      width = kCols - col;
+      x = shift;
+      width = kScreenPx - kEdgePx - x;
     }
     Span spans[16];
-    const int lines = wrap(msgs[m].text, width, spans, 16);
+    const int lines = wrap(f, msgs[m].text, width, spans, 16);
     for (int i = 0; i < lines && n < max_rows; i++) {
       Row& r = out[n++];
       r.msg = (uint8_t)m;
@@ -183,7 +207,9 @@ inline int layoutThread(const MsgView* msgs, int count, bool channel, int select
       r.first = (i == 0);
       r.last = (i == lines - 1);
       r.caret = sel;
-      r.col = (uint8_t)(msgs[m].outgoing ? kMineEnd - spans[i].len : col);
+      r.x_px = msgs[m].outgoing
+                   ? (int16_t)(kScreenPx - kMarkPx - kEdgePx - spanPx(f, msgs[m].text, spans[i]))
+                   : (int16_t)x;
       r.span = spans[i];
     }
     if (sel && n < max_rows) {
@@ -192,7 +218,7 @@ inline int layoutThread(const MsgView* msgs, int count, bool channel, int select
       r.kind = RowKind::Meta;
       r.first = r.last = false;
       r.caret = false;
-      r.col = 0;
+      r.x_px = 0;
       r.span = {0, 0};
     }
   }

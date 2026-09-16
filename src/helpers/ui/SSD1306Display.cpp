@@ -78,10 +78,32 @@ void SSD1306Display::startFrame(ColorVal bkg) {
   display.setTextColor(_color);
   display.setTextSize(1);
   display.cp437(true);         // Use full 256 char 'Code Page 437' font
+  setFace(0);                  // #1237: every frame starts on the built-in face
 }
 
 void SSD1306Display::setTextSize(int sz) {
   display.setTextSize(sz);
+}
+
+// #1237: the badge's smaller faces. GFX draws a custom face from its baseline, so each
+// carries the drop from the text's top-left: Org_01's ink sits 4 px above its baseline
+// and TomThumb's 5 px, both 6 px tall. setCursor adds it, so callers keep giving
+// top-left positions whichever face is on.
+void SSD1306Display::setFace(int id) {
+  switch (id) {
+    case 1:
+      display.setFont(&Org_01);
+      _baseline = 4;
+      break;
+    case 2:
+      display.setFont(&TomThumb);
+      _baseline = 5;
+      break;
+    default:
+      display.setFont(NULL);   // the built-in 6 x 8, which GFX draws from the top-left
+      _baseline = 0;
+      break;
+  }
 }
 
 void SSD1306Display::setColor(ColorVal c) {
@@ -90,7 +112,7 @@ void SSD1306Display::setColor(ColorVal c) {
 }
 
 void SSD1306Display::setCursor(int x, int y) {
-  display.setCursor(x, y);
+  display.setCursor(x, y + _baseline);   // #1237: top-left in, baseline out
 }
 
 void SSD1306Display::print(const char* str) {
