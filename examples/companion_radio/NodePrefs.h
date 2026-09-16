@@ -9,6 +9,14 @@
 #define ADVERT_LOC_NONE       0
 #define ADVERT_LOC_SHARE      1
 
+// #1244: the text size a badge boots into. It is badgeui::kTextLarge, and the badge's
+// own BadgeScreens.cpp static_asserts these two against each other -- this header is
+// shared by every board, so it cannot include the badge's layout to say so directly.
+// Boards without the badge UI carry the value and never read it.
+#ifndef DEFAULT_UI_TEXT_SIZE
+  #define DEFAULT_UI_TEXT_SIZE  0
+#endif
+
 class NodePrefs : public ConfigSerializer {  // persisted to file
 public:
   float airtime_factor = 0;
@@ -130,7 +138,10 @@ public:
   uint8_t ui_led_enabled = 1;     // #542 B1
   uint8_t ui_display_mode = 0;    // #542 B1
   uint8_t ui_tz = 0;              // #1233: a TimeZones.h index; 0 = not set (show ages)
-  uint8_t ui_text_size = 1;       // #1238: 0 large, 1 medium (Org_01), 2 small
+  // #1238: 0 large, 1 medium (Org_01), 2 small. #1244: the owner asked for large.
+  // Named, because BadgeLayout.h has to agree and this header is shared by every
+  // board: BadgeScreens.cpp static_asserts the two against each other.
+  uint8_t ui_text_size = DEFAULT_UI_TEXT_SIZE;
 
 private:
   // ---- Offband-only prefs -------------------------------------------------

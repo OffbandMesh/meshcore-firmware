@@ -14,6 +14,11 @@ using namespace badgeui;
 using Store = MyMesh::BadgeMsgStore;
 using offband::BadgeSend;
 
+// #1244: NodePrefs ships a raw byte and BadgeLayout names the size it stands for. This
+// is the only place that sees both, so it is where they are held together.
+static_assert(DEFAULT_UI_TEXT_SIZE == badgeui::kDefaultTextSize,
+              "NodePrefs ships a different text size than BadgeLayout's default names");
+
 #ifndef BATT_MIN_MILLIVOLTS
   #define BATT_MIN_MILLIVOLTS 3000
 #endif

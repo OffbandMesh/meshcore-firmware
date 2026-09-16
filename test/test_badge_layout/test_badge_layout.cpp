@@ -220,10 +220,30 @@ TEST(BadgeLayoutTextSize, EachStepPicksItsBodyFace) {
   EXPECT_EQ(bodyFace().id, bodyFaceFor(kTextMedium).id);
   EXPECT_EQ(metaFace().id, bodyFaceFor(kTextSmall).id);
   EXPECT_EQ(metaFace().id, detailFace().id);
-  EXPECT_EQ(bodyFace().id, bodyFaceFor(99).id);   // anything unknown reads as the default
+}
+
+// #1244: the owner asked for the badge to start in the large size. NodePrefs ships the
+// byte, not the enumerator, so this is what makes that byte mean large. The byte itself
+// is held to this by a static_assert in BadgeScreens.cpp, which a native test cannot
+// reach -- change one without the other and the badge stops building.
+TEST(BadgeLayoutTextSize, ABadgeBootsIntoTheLargeFace) {
+  EXPECT_EQ(0, (int)kDefaultTextSize);            // the value NodePrefs::ui_text_size holds
+  EXPECT_EQ((int)kTextLarge, (int)kDefaultTextSize);
+  EXPECT_EQ(fixedFace().id, bodyFaceFor(kDefaultTextSize).id);
+}
+
+// #1244: a size nothing ever wrote -- a corrupt preference, or one saved before #1238
+// existed -- reads as the shipped default. It used to come back Org_01 while a fresh
+// badge booted large, which is two answers to one question.
+TEST(BadgeLayoutTextSize, AnUnknownSizeReadsAsTheShippedDefault) {
+  for (int size : {99, 3, 255, -1}) {
+    SCOPED_TRACE(size);
+    EXPECT_EQ(bodyFaceFor(kDefaultTextSize).id, bodyFaceFor(size).id);
+  }
 }
 
 // Each step down fits at least as many rows and characters as the one above.
+
 TEST(BadgeLayoutTextSize, StepsGetSmaller) {
   int rows = 0, width = 0;
   for (int size = kTextLarge; size < kTextSteps; size++) {
