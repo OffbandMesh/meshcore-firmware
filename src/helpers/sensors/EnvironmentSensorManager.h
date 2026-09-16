@@ -3,6 +3,9 @@
 #include <Mesh.h>
 #include <helpers/SensorManager.h>
 #include <helpers/sensors/LocationProvider.h>
+#if ENV_INCLUDE_GPS
+  #include <helpers/sensors/GpsStatusLine.h>   // #1247: only a board with a GPS needs it
+#endif
 
 class EnvironmentSensorManager : public SensorManager {
 protected:
@@ -61,6 +64,9 @@ public:
   bool gpsDetected() const { return gps_detected; }
   uint32_t getGpsClockSyncTime() const override { return _last_gps_clock_sync; }   // #152
   size_t getGpsStatusText(char* out, size_t cap) override;   // #149
+  // #1247: the state the status line is rendered from. The periodic log line takes the
+  // same snapshot and renders it without the coordinates.
+  offband::GpsSnapshot gpsSnapshot() const;
   #endif
   bool begin() override;
   bool querySensors(uint8_t requester_permissions, CayenneLPP& telemetry) override;
