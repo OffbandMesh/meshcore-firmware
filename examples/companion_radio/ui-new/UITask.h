@@ -88,6 +88,7 @@ class UITask : public AbstractUITask {
   UIScreen* settings;   // #1233
   UIScreen* zones;      // #1233: the time zone picker
   UIScreen* gps;        // #1235
+  UIScreen* battery;    // #1254
   uint32_t _cycle_at = 0;   // #1231: when SW1 last moved along the cycle
 #endif
   UIScreen* curr;
@@ -133,7 +134,9 @@ public:
   // of the two ways it got there; clearing it hands the cell back to auto-learn.
   uint16_t battFullMilliVolts() const;
   bool battFullIsUserSet() const;
-  void setBattFullMilliVolts(uint16_t mv);   // the Calibrate action
+  // The Calibrate action. False when the reading is not a plausible full cell -- the
+  // caller says so rather than the value being dropped quietly.
+  bool setBattFullMilliVolts(uint16_t mv);
   void clearBattFullMilliVolts();            // Back to auto
 
   void gotoHomeScreen() { setCurrScreen(home); }
@@ -157,6 +160,7 @@ public:
   void gotoSettings();   // #1233: from Status, or Fn+S from anywhere (design 3a)
   void gotoZones();      // #1233
   void gotoGps();        // #1235: from Settings' GPS row
+  void gotoBattery();    // #1254: from Settings' Battery row
   // The Status screen under another title, as cycle position `pos`: the inbox's empty state.
   int renderStatusAs(DisplayDriver& d, const char* title, int pos);
   bool hasKeyboard() const { return _kbd.isPresent(); }
