@@ -28,6 +28,25 @@ constexpr int kCycleStops = 4;      // SW1's cycle: Messages, Contacts, Nearby, 
 // How many rows of a face fit in `px` of screen.
 inline int rowsFor(const Face& f, int px = kScreenRowsPx) { return px / f.row_px; }
 
+// #1238: the Text size setting, which the owner asked for in three steps. Only the body
+// text changes; the detail lines -- the Status rows, a selected message's detail and the
+// footers -- stay in the smallest face at every step, as the mixed layout does.
+enum TextSize : uint8_t { kTextLarge = 0, kTextMedium = 1, kTextSmall = 2, kTextSteps = 3 };
+
+inline const Face& bodyFaceFor(int size) {
+  if (size == kTextLarge) return fixedFace();      // the display's own 6 x 8
+  if (size == kTextSmall) return metaFace();       // TomThumb throughout
+  return bodyFace();                               // Org_01, the default
+}
+
+inline const Face& detailFace() { return metaFace(); }
+
+inline const char* textSizeName(int size) {
+  if (size == kTextLarge) return "large";
+  if (size == kTextSmall) return "small";
+  return "medium";
+}
+
 // "now", "4m", "2h", "3d": how old something `secs` old is. "old" past 99 days.
 inline void formatAge(uint32_t secs, char* out, size_t n) {
   if (secs < 60) snprintf(out, n, "now");

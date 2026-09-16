@@ -130,6 +130,7 @@ public:
   uint8_t ui_led_enabled = 1;     // #542 B1
   uint8_t ui_display_mode = 0;    // #542 B1
   uint8_t ui_tz = 0;              // #1233: a TimeZones.h index; 0 = not set (show ages)
+  uint8_t ui_text_size = 1;       // #1238: 0 large, 1 medium (Org_01), 2 small
 
 private:
   // ---- Offband-only prefs -------------------------------------------------
@@ -144,6 +145,7 @@ private:
       def("disp", _parent->ui_display_mode);      // #542 B1
       def("notify", _parent->notify_scope);       // #510
       def("tz", _parent->ui_tz);                  // #1233
+      def("txt", _parent->ui_text_size);          // #1238
       // #509 button-action matrix: 4 bytes, one per OFFBAND_UI_SEQ_*.
       def("btn", _parent->button_actions, sizeof(_parent->button_actions));
     }
