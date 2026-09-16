@@ -14,6 +14,7 @@
 #include <string.h>
 #include "../TimeZones.h"
 #include "BadgeFonts.h"
+#include "ScreenOff.h"   // #1245: the auto-off arithmetic, shared with every ui-new board
 
 namespace badgeui {
 
@@ -55,6 +56,38 @@ inline const char* textSizeName(int size) {
   if (size == kTextLarge) return "large";
   if (size == kTextSmall) return "small";
   return "medium";
+}
+
+// #1245: the Screen off setting. The owner: fifteen seconds is too short by default, and
+// it needs a setting. The stored value is seconds rather than a step index, so it means
+// something on its own -- and 0 means "whatever the board was compiled with", which is
+// what every board but the badge keeps, since the badge is the only one with the row.
+static constexpr uint16_t kScreenOffSteps[] = {15, 30, 60, 120, 300};
+constexpr int kScreenOffStepCount = 5;
+constexpr uint16_t kDefaultScreenOffSecs = 60;
+static_assert(kDefaultScreenOffSecs == kScreenOffSteps[2], "the default has to be a step");
+
+// The next step up, wrapping back to the shortest. A value that is not one of the steps
+// -- set from the phone, or left by an older build -- lands on the first one, so the row
+// always cycles from somewhere the owner chose.
+inline uint16_t nextScreenOffSecs(uint16_t secs) {
+  for (int i = 0; i < kScreenOffStepCount; i++) {
+    if (kScreenOffSteps[i] == secs) return kScreenOffSteps[(i + 1) % kScreenOffStepCount];
+  }
+  return kScreenOffSteps[0];
+}
+
+// The arithmetic behind the row -- how long the display actually waits -- is every
+// ui-new board's, not the badge's, and lives in ScreenOff.h beside it.
+
+// "15s", "30s", "1m", "2m", "5m", and for a value from elsewhere the plainest thing that
+// is true of it. 0 has no time to show: the board's compiled default stands in for it
+// before this is ever called.
+inline void screenOffName(uint16_t secs, char* out, size_t n) {
+  if (secs == 0) snprintf(out, n, "-");
+  else if (secs < 60) snprintf(out, n, "%us", (unsigned)secs);
+  else if (secs % 60 == 0) snprintf(out, n, "%um", (unsigned)(secs / 60));
+  else snprintf(out, n, "%um%us", (unsigned)(secs / 60), (unsigned)(secs % 60));
 }
 
 // "now", "4m", "2h", "3d": how old something `secs` old is. "old" past 99 days.

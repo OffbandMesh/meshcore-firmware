@@ -138,23 +138,24 @@ public:
   void poll() override;
 
 private:
-  enum Row : uint8_t { Bluetooth, TextSize, TimeZone, Gps, AdvertZeroHop, AdvertFlood,
-                       Hibernate, DevicePages, kRows };
+  enum Row : uint8_t { Bluetooth, TextSize, ScreenOff, TimeZone, Gps, AdvertZeroHop,
+                       AdvertFlood, Hibernate, DevicePages, kRows };
   UITask* _task;
   int _sel = 0;
   bool _gate = false;              // "Hibernate?" is up
   bool _shutdown_pending = false;  // after SW1's hold is let go
   int _sent_row = -1;              // an advert row saying "sent" for a moment
   uint32_t _sent_until = 0;
-  // #1238: the text size is saved once the cycling settles, so trying all three sizes
-  // is one write rather than three.
-  static constexpr uint32_t kSizeSettleMs = 3000;
-  uint32_t _size_at = 0;
+  // #1238, #1245: a row that cycles through values takes effect at once and is saved
+  // once the cycling settles, so walking all the way round is one write and not five.
+  static constexpr uint32_t kCycleSettleMs = 3000;
+  uint32_t _cycled_at = 0;
 
   static bool shown(int row);
+  static bool cycles(int row);   // #1245: a row whose press steps a value
   void step(int dir);
   void act();
-  void saveSizeIfPending();   // #1238: before the screen goes, or another row acts
+  void saveCycledIfPending();   // #1238: before the screen goes, or another row acts
   int drawGate(DisplayDriver& d);
 };
 
