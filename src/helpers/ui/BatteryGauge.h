@@ -248,4 +248,11 @@ inline bool FullPointLearner::plausibleFullMv(uint16_t mv) {
   return mv >= kFloorMv && mv <= kCeilMv;
 }
 
+// #1254: where the full point in use came from, for the Battery screen to show. `stored`
+// is the preference, 0 when nothing has been learned or pinned.
+inline const char* fullPointSourceName(uint16_t stored, bool user_set) {
+  if (stored == 0) return "default";   // the board's compiled value
+  return user_set ? "set" : "learned";
+}
+
 }  // namespace offband

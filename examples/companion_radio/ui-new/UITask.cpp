@@ -774,6 +774,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   settings = new SettingsScreen(this);   // #1233
   zones = new ZonePickerScreen(this);    // #1233
   gps = new GpsScreen(this);             // #1235
+  battery = new BatteryScreen(this);     // #1254
   msg_preview = NULL;
 #else
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
@@ -843,6 +844,8 @@ void UITask::gotoGps() {
   ((GpsScreen*)gps)->begin();
   setCurrScreen(gps);
 }
+
+void UITask::gotoBattery() { setCurrScreen(battery); }   // #1254
 
 int UITask::renderStatusAs(DisplayDriver& d, const char* title, int pos) {
   return ((StatusScreen*)status)->drawAs(d, title, pos);
@@ -1169,7 +1172,7 @@ void UITask::loop() {
     // GPS (#1235) to Settings, and Settings to Status, where it was opened.
     if (!curr->handleInput(c) && keynav::backsOut((uint8_t)c) && curr != home) {
 #if UI_HAS_CARDKB
-      if (curr == tools || curr == zones || curr == gps) gotoSettings();
+      if (curr == tools || curr == zones || curr == gps || curr == battery) gotoSettings();
       else if (curr == settings) gotoStatus();
       else
 #endif
@@ -1307,15 +1310,17 @@ bool UITask::battFullIsUserSet() const {
   return _node_prefs != NULL && _node_prefs->batt_full_user != 0;
 }
 
-void UITask::setBattFullMilliVolts(uint16_t mv) {
-  if (_node_prefs == NULL) return;
+bool UITask::setBattFullMilliVolts(uint16_t mv) {
+  if (_node_prefs == NULL) return false;
   // A press at the wrong moment must not pin a number that makes the bar meaningless --
-  // below the empty end it would read 0% everywhere. Same band the learner uses.
-  if (!offband::FullPointLearner::plausibleFullMv(mv)) return;
+  // below the empty end it would read 0% everywhere. Same band the learner uses. The
+  // answer goes back to the caller so the screen can say which way it was wrong.
+  if (!offband::FullPointLearner::plausibleFullMv(mv)) return false;
   _node_prefs->batt_full_mv = mv;
   _node_prefs->batt_full_user = 1;
   _full_learner.reset();          // a pending window would otherwise overwrite this
   the_mesh.savePrefs();
+  return true;
 }
 
 void UITask::clearBattFullMilliVolts() {

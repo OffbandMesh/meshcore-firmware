@@ -1131,6 +1131,9 @@ void SettingsScreen::act() {
     case Gps:
       _task->gotoGps();
       break;
+    case Battery:
+      _task->gotoBattery();
+      break;
     case AdvertZeroHop:
     case AdvertFlood:
       if (the_mesh.uiAdvert(_sel == AdvertFlood)) {
@@ -1201,6 +1204,7 @@ int SettingsScreen::render(DisplayDriver& d) {
       case ScreenOff:     label = "Screen off"; screenOffName(_task->autoOffSecs(), value, sizeof(value)); break;
       case TimeZone:      label = "Time zone"; snprintf(value, sizeof(value), "%s", offband::tz::zone(prefs->ui_tz).name); break;
       case Gps:           label = "GPS"; GpsScreen::summary(_task, value, sizeof(value)); break;
+      case Battery:       label = "Battery"; BatteryScreen::summary(_task, value, sizeof(value)); break;
       case AdvertZeroHop: label = "Advert zero-hop"; snprintf(value, sizeof(value), "%s", sent && _sent_row == r ? "sent" : "send"); break;
       case AdvertFlood:   label = "Advert flood"; snprintf(value, sizeof(value), "%s", sent && _sent_row == r ? "sent" : "send"); break;
       case Hibernate:     label = "Hibernate"; break;
@@ -1250,6 +1254,83 @@ void SettingsScreen::poll() {
   if (_shutdown_pending && !_task->isButtonPressed()) _task->shutdown();
   // #1238, #1245: once the cycling has settled, one write covers whatever was stepped.
   if (_cycled_at != 0 && millis() - _cycled_at > kCycleSettleMs) saveCycledIfPending();
+}
+
+// ---- Battery (#1254) -------------------------------------------------------------------
+
+void BatteryScreen::summary(UITask* task, char* out, size_t n) {
+  snprintf(out, n, "%d%%",
+           batteryPct(task->smoothedBattMilliVolts(), task->battFullMilliVolts()));
+}
+
+int BatteryScreen::render(DisplayDriver& d) {
+  const Face& kBody = uiBody();
+  const int kListRows = uiListRows();
+  char buf[24], part[16];
+  summary(_task, part, sizeof(part));
+  bar(d, kBody, 0, " Battery", part);
+
+  const uint16_t now_mv = _task->smoothedBattMilliVolts();
+  snprintf(buf, sizeof(buf), " reading %u mV", (unsigned)now_mv);
+  line(d, kBody, 1, buf);
+
+  // Where 100% is, and how the badge came by it. The preference is 0 until something is
+  // learned or pinned, which is what tells "default" from the other two.
+  const NodePrefs* prefs = the_mesh.getNodePrefs();
+  snprintf(buf, sizeof(buf), " 100%% at %u mV", (unsigned)_task->battFullMilliVolts());
+  line(d, kBody, 2, buf);
+  snprintf(buf, sizeof(buf), " %s",
+           offband::fullPointSourceName(prefs->batt_full_mv, _task->battFullIsUserSet()));
+  line(d, kBody, 3, buf);
+
+  // The actions sit at the foot, as the GPS screen's do. There is nothing to hand back
+  // until something has been learned or pinned.
+  if (canClear()) {
+    listRow(d, kListRows - 1, "Back to auto", "", _sel == BackToAuto);
+  } else {
+    _sel = SetHere;
+  }
+  listRow(d, kListRows, "Set 100% here", "", _sel == SetHere);
+  return 1000;
+}
+
+// Read from the preference, not from what the last render happened to draw -- a key can
+// arrive before the first render, and a flag written by one and read by the other is
+// stale exactly then.
+bool BatteryScreen::canClear() const { return the_mesh.getNodePrefs()->batt_full_mv != 0; }
+
+void BatteryScreen::act() {
+  if (_sel == BackToAuto) {
+    _task->clearBattFullMilliVolts();
+    _task->notify(UIEventType::ack);
+    _sel = SetHere;
+    return;
+  }
+  // Pinning a reading that is not a plausible full cell would leave the bar meaningless.
+  // The task decides; the screen says which way it was wrong, because "not charged" is
+  // false for a reading that came back too high.
+  const uint16_t mv = _task->smoothedBattMilliVolts();
+  if (_task->setBattFullMilliVolts(mv)) {
+    _task->notify(UIEventType::ack);
+  } else {
+    _task->showAlert(mv > offband::FullPointLearner::kCeilMv ? "Reading too high"
+                                                             : "Not charged yet", 1200);
+  }
+}
+
+bool BatteryScreen::handleInput(char c) {
+  const uint8_t key = (uint8_t)c;
+  const bool from_button = !_task->inputFromKeyboard();
+  if (key == KEY_UP || key == KEY_DOWN || (from_button && (key == KEY_NEXT || key == KEY_PREV))) {
+    // Two rows at most: a move goes to the other one, when it's on the screen.
+    _sel = (_sel == SetHere && canClear()) ? BackToAuto : SetHere;
+    return true;
+  }
+  if (key == KEY_ENTER) {
+    act();
+    return true;
+  }
+  return from_button;   // Esc: back to Settings
 }
 
 // ---- Time zone picker (#1233) ----------------------------------------------------------

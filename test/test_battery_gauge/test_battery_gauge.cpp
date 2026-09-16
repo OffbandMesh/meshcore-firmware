@@ -460,6 +460,15 @@ TEST(FullPoint, OnlyAPlausibleValueCanBePinned) {
   EXPECT_FALSE(FullPointLearner::plausibleFullMv(0));
 }
 
+// #1254: the Battery screen says where the number came from, so a mistimed press is
+// visible rather than silent. Nothing stored means the board's compiled value is in use.
+TEST(FullPoint, TheScreenSaysWhereTheNumberCameFrom) {
+  EXPECT_STREQ("default", fullPointSourceName(0, false));
+  EXPECT_STREQ("default", fullPointSourceName(0, true));    // stored nothing, so nothing is set
+  EXPECT_STREQ("learned", fullPointSourceName(4126, false));
+  EXPECT_STREQ("set", fullPointSourceName(4126, true));
+}
+
 TEST(FullPoint, ResetForgetsAPendingWindow) {
   FullPointLearner l;
   uint32_t t = 0;
