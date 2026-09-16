@@ -335,11 +335,12 @@ QCC_Badge_companion_radio_ble
 # 115200; a once-a-second ID line on each spare pad; and the diag self-test screens.
 # It does not log message contents -- the chat paths log lengths and types only.
 #
-#QCC_Badge_companion_radio_ble_diag   # GATED: uncomment after #1247 (location on a pad)
-#   The decision to ship this build is made and is not what waits. #1247 is: the GPS
-#   status line carries lat and lon, it is written every five seconds at DEBUG, the
-#   badge ships with its GPS on (#1236), and the mirror is a pad anyone can clip onto.
-#   Turning the GPS off in Settings does not stop it -- the last fix is never cleared.
-#   A conference badge that broadcasts where its wearer is standing is not the build
-#   the owner asked for, so it waits here, gated like #20 and #325 are, rather than
-#   going out behind a warning comment nothing enforces.
+# POSITION: the log carries none. The periodic GPS line reports `pos=valid` or
+# `pos=invalid` -- whether the stored coordinates are believable -- and never lat or
+# lon (#1247, the owner). Coordinates go only to the paired client that asks for them
+# by CMD_OFFBAND_GPS, which is a person asking their own device where it is.
+#
+# The pad itself is a wire to the sniffer: reading it takes a probe physically
+# attached, not a receiver. That is the owner's assessment and it is why this is a
+# tidying of a diagnostic line rather than a hole being closed.
+QCC_Badge_companion_radio_ble_diag
