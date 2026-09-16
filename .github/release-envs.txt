@@ -318,9 +318,28 @@ LilyGo_TDeck_repeater
 # con-radio-defaults flavor, joins it when the con's config is known.
 # build.sh already emits the .uf2 and the DFU .zip an nRF52 board takes (#1241).
 QCC_Badge_companion_radio_ble
-#QCC_Badge_companion_radio_ble_diag   # GATED: needs the owner's word, not this file's
-#   precedent. Diag envs are instruments and are NOT released; RC32, RCC6 and RC52 each
-#   got that exception separately, and the rule above says extending it to a further
-#   board is a fresh owner decision. The badge fits the same reason -- unreleased
-#   hardware with a tester on it who is not the owner -- but the reason is not the
-#   decision. Uncomment on his say-so.
+#
+# THE FOURTH DIAG EXCEPTION -- owner decision 2026-09-15 (#1243), and the first one
+# that is not about evidence. RC32, RCC6 and RC52 ship diag builds because a beta
+# tester on unproven hardware has to be able to produce a log. The badge ships one
+# because the people it is going to want it: the conference is a hacker con, and the
+# diag build is a thing they may enjoy having. It is a product here, not an instrument.
+#
+# Do NOT read this as the beta reasoning extended to a fourth board, and do NOT cite
+# it for a fifth. The rule above still stands wherever it is not excepted, and each
+# exception has been the owner's to make.
+#
+# WHAT THE BUILD DOES, stated so nobody has to infer it, as the RCC6 block states its
+# own. On top of the prod env it adds: the boot beacon; caplog forced on at DEBUG and
+# un-silenceable, `caplog stop` included; the log mirrored to the spare pad P1.06 at
+# 115200; a once-a-second ID line on each spare pad; and the diag self-test screens.
+# It does not log message contents -- the chat paths log lengths and types only.
+#
+#QCC_Badge_companion_radio_ble_diag   # GATED: uncomment after #1247 (location on a pad)
+#   The decision to ship this build is made and is not what waits. #1247 is: the GPS
+#   status line carries lat and lon, it is written every five seconds at DEBUG, the
+#   badge ships with its GPS on (#1236), and the mirror is a pad anyone can clip onto.
+#   Turning the GPS off in Settings does not stop it -- the last fix is never cleared.
+#   A conference badge that broadcasts where its wearer is standing is not the build
+#   the owner asked for, so it waits here, gated like #20 and #325 are, rather than
+#   going out behind a warning comment nothing enforces.
