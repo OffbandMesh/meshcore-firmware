@@ -67,7 +67,7 @@ TEST_F(CaplogForwardTest, OneLineIsOneDatagramWithThePrefixAndNoNewline) {
     CaplogForward fwd("wsmj898-ltb", fakeRead, sink);
     fwd.armFor(300, 1000);
     g_chunks.push_back("[123] hello\n");
-    fwd.service("sink.example.net", 514, true, 2000);
+    fwd.service("sink.example.net", 514, true, true, 2000);
     ASSERT_EQ(sink.sent.size(), 1u);
     EXPECT_EQ(sink.sent[0].host, "sink.example.net");
     EXPECT_EQ(sink.sent[0].port, 514);
@@ -79,7 +79,7 @@ TEST_F(CaplogForwardTest, ManyLinesInAChunkLeaveInOrder) {
     CaplogForward fwd("n", fakeRead, sink);
     fwd.armFor(300, 0);
     g_chunks.push_back("a\nbb\nccc\n");
-    fwd.service("h", 514, true, 1);
+    fwd.service("h", 514, true, true, 1);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{"a", "bb", "ccc"}));
     EXPECT_EQ(fwd.linesSent(), 3u);
 }
@@ -88,14 +88,14 @@ TEST_F(CaplogForwardTest, AFinalLineWithoutNewlineStillLeaves) {
     CaplogForward fwd("n", fakeRead, sink);
     fwd.armFor(300, 0);
     g_chunks.push_back("first\nsecond");
-    fwd.service("h", 514, true, 1);
+    fwd.service("h", 514, true, true, 1);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{"first", "second"}));
 }
 
 TEST_F(CaplogForwardTest, EmptyInputSendsNothing) {
     CaplogForward fwd("n", fakeRead, sink);
     fwd.armFor(300, 0);
-    fwd.service("h", 514, true, 1);   // the ring has nothing
+    fwd.service("h", 514, true, true, 1);   // the ring has nothing
     EXPECT_TRUE(sink.sent.empty());
     EXPECT_EQ(g_reads, 1);
 }
@@ -104,7 +104,7 @@ TEST_F(CaplogForwardTest, EmptyLinesAreSkipped) {
     CaplogForward fwd("n", fakeRead, sink);
     fwd.armFor(300, 0);
     g_chunks.push_back("\n\nabc\n\n");
-    fwd.service("h", 514, true, 1);
+    fwd.service("h", 514, true, true, 1);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{"abc"}));
 }
 
@@ -115,8 +115,8 @@ TEST_F(CaplogForwardTest, ALineCrossingTheChunkBoundaryLeavesAsTwoDatagrams) {
     fwd.armFor(300, 0);
     g_chunks.push_back(std::string(CaplogForward::kChunkBytes, 'x'));
     g_chunks.push_back("tail\n");
-    fwd.service("h", 514, true, 1);
-    fwd.service("h", 514, true, 2);
+    fwd.service("h", 514, true, true, 1);
+    fwd.service("h", 514, true, true, 2);
     ASSERT_EQ(sink.sent.size(), 2u);
     EXPECT_EQ(sink.sent[0].line, std::string(CaplogForward::kChunkBytes, 'x'));
     EXPECT_EQ(sink.sent[1].line, "tail");
@@ -140,11 +140,11 @@ TEST_F(CaplogForwardTest, EachServiceCallReadsExactlyOneChunk) {
     g_chunks.push_back("a\n");
     g_chunks.push_back("b\n");
     g_chunks.push_back("c\n");
-    fwd.service("h", 514, true, 1);
+    fwd.service("h", 514, true, true, 1);
     EXPECT_EQ(g_reads, 1) << "one read per call, never the whole ring";
     EXPECT_EQ(lines(sink), (std::vector<std::string>{"a"}));
-    fwd.service("h", 514, true, 2);
-    fwd.service("h", 514, true, 3);
+    fwd.service("h", 514, true, true, 2);
+    fwd.service("h", 514, true, true, 3);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{"a", "b", "c"}));
 }
 
@@ -153,7 +153,7 @@ TEST_F(CaplogForwardTest, EachServiceCallReadsExactlyOneChunk) {
 TEST_F(CaplogForwardTest, NotArmedReadsNothing) {
     CaplogForward fwd("n", fakeRead, sink);
     g_chunks.push_back("a\n");
-    fwd.service("h", 514, true, 1);
+    fwd.service("h", 514, true, true, 1);
     EXPECT_EQ(g_reads, 0);
     EXPECT_TRUE(sink.sent.empty());
 }
@@ -162,9 +162,9 @@ TEST_F(CaplogForwardTest, LinkDownReadsNothingSoLinesWait) {
     CaplogForward fwd("n", fakeRead, sink);
     fwd.armFor(300, 0);
     g_chunks.push_back("a\n");
-    fwd.service("h", 514, false, 1);
+    fwd.service("h", 514, false, true, 1);
     EXPECT_EQ(g_reads, 0) << "a down link must not take lines out of the ring";
-    fwd.service("h", 514, true, 2);
+    fwd.service("h", 514, true, true, 2);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{"a"}));
 }
 
@@ -172,8 +172,8 @@ TEST_F(CaplogForwardTest, NoSinkHostReadsNothing) {
     CaplogForward fwd("n", fakeRead, sink);
     fwd.armFor(300, 0);
     g_chunks.push_back("a\n");
-    fwd.service("", 514, true, 1);
-    fwd.service(nullptr, 514, true, 2);
+    fwd.service("", 514, true, true, 1);
+    fwd.service(nullptr, 514, true, true, 2);
     EXPECT_EQ(g_reads, 0);
     EXPECT_TRUE(sink.sent.empty());
 }
@@ -202,7 +202,7 @@ TEST_F(CaplogForwardTest, DisarmStopsImmediately) {
     fwd.armFor(300, 0);
     fwd.disarm();
     g_chunks.push_back("a\n");
-    fwd.service("h", 514, true, 1);
+    fwd.service("h", 514, true, true, 1);
     EXPECT_EQ(g_reads, 0);
 }
 
@@ -237,7 +237,7 @@ TEST_F(CaplogForwardTest, UntilOffIsNotATimerInDisguise) {
         EXPECT_EQ(fwd.secondsLeft(now), 0u) << now;
     }
     g_chunks.push_back("a\n");
-    fwd.service("h", 514, true, 0xFFFFFFFFu);
+    fwd.service("h", 514, true, true, 0xFFFFFFFFu);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{"a"}));
 }
 
@@ -247,7 +247,7 @@ TEST_F(CaplogForwardTest, DisarmEndsUntilOff) {
     fwd.disarm();
     EXPECT_EQ(fwd.mode(1), CaplogForwardMode::Off);
     g_chunks.push_back("a\n");
-    fwd.service("h", 514, true, 2);
+    fwd.service("h", 514, true, true, 2);
     EXPECT_EQ(g_reads, 0);
 }
 
@@ -263,9 +263,9 @@ TEST_F(CaplogForwardTest, UntilOffReplacesABoundedWindowWithoutReannouncing) {
     CaplogForward fwd("n", fakeRead, sink);
     fwd.setIdentity("ID");
     fwd.armFor(30, 0);
-    fwd.service("h", 514, true, 1);          // announces the window
+    fwd.service("h", 514, true, true, 1);          // announces the window
     fwd.armUntilOff(2);                      // same window, now without a deadline
-    fwd.service("h", 514, true, 60000);
+    fwd.service("h", 514, true, true, 60000);
     EXPECT_TRUE(fwd.armed(60000));
     EXPECT_EQ(lines(sink), (std::vector<std::string>{"[caplog] forward on: id=ID sink=h:514"}));
 }
@@ -417,7 +417,7 @@ TEST_F(CaplogForwardTest, OpeningAWindowAnnouncesTheFullIdAndTheSink) {
     fwd.setIdentity(id.c_str());
     fwd.armFor(300, 0);
     g_chunks.push_back("x\n");
-    fwd.service("sink.example.net", 514, true, 1);
+    fwd.service("sink.example.net", 514, true, true, 1);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{
                                "[caplog] forward on: id=" + id + " sink=sink.example.net:514", "x"}));
     EXPECT_EQ(sink.sent[0].prefix, "<134>caplog-4A1B2C3D4E5F6071: ");
@@ -428,13 +428,13 @@ TEST_F(CaplogForwardTest, TheAnnouncementIsOncePerWindow) {
     CaplogForward fwd("n", fakeRead, sink);
     fwd.setIdentity("ID");
     fwd.armFor(300, 0);
-    fwd.service("h", 514, true, 1);
-    fwd.service("h", 514, true, 2);
+    fwd.service("h", 514, true, true, 1);
+    fwd.service("h", 514, true, true, 2);
     fwd.armFor(300, 3);                  // extends the open window
-    fwd.service("h", 514, true, 4);
+    fwd.service("h", 514, true, true, 4);
     fwd.disarm();
     fwd.armFor(300, 5);                  // a new window
-    fwd.service("h", 514, true, 6);
+    fwd.service("h", 514, true, true, 6);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{
                                "[caplog] forward on: id=ID sink=h:514",
                                "[caplog] forward on: id=ID sink=h:514"}));
@@ -444,9 +444,9 @@ TEST_F(CaplogForwardTest, TheAnnouncementWaitsForTheLink) {
     CaplogForward fwd("n", fakeRead, sink);
     fwd.setIdentity("ID");
     fwd.armFor(300, 0);
-    fwd.service("h", 514, false, 1);
+    fwd.service("h", 514, false, true, 1);
     EXPECT_TRUE(sink.sent.empty());
-    fwd.service("h", 514, true, 2);
+    fwd.service("h", 514, true, true, 2);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{"[caplog] forward on: id=ID sink=h:514"}));
 }
 
@@ -454,7 +454,7 @@ TEST_F(CaplogForwardTest, NoIdentityMeansNoAnnouncement) {
     CaplogForward fwd("n", fakeRead, sink);   // the repeater today
     fwd.armFor(300, 0);
     g_chunks.push_back("x\n");
-    fwd.service("h", 514, true, 1);
+    fwd.service("h", 514, true, true, 1);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{"x"}));
 }
 
@@ -463,7 +463,7 @@ TEST_F(CaplogForwardTest, AnOverlongIdentityIsCut) {
     CaplogForward fwd("n", fakeRead, sink);
     fwd.setIdentity(id.c_str());
     fwd.armFor(300, 0);
-    fwd.service("h", 514, true, 1);
+    fwd.service("h", 514, true, true, 1);
     ASSERT_EQ(sink.sent.size(), 1u);
     EXPECT_EQ(sink.sent[0].line,
               "[caplog] forward on: id=" + std::string(offband::kCaplogIdentityMax, 'B') + " sink=h:514");
@@ -506,7 +506,7 @@ TEST_F(CaplogCursorTest, ForwardedLinesStayInTheRing) {
     CaplogForward fwd("n", ringReadFrom, sink);
     add("aaaa\nbbbb\n");
     fwd.armFor(300, 0);
-    fwd.service("h", 514, true, 1);
+    fwd.service("h", 514, true, true, 1);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{"aaaa", "bbbb"}));
     EXPECT_EQ(held(), "aaaa\nbbbb\n") << "the app's download must still have both lines";
 }
@@ -515,10 +515,10 @@ TEST_F(CaplogCursorTest, EachLineIsSentOnce) {
     CaplogForward fwd("n", ringReadFrom, sink);
     fwd.armFor(300, 0);
     add("aaaa\n");
-    fwd.service("h", 514, true, 1);
-    fwd.service("h", 514, true, 2);   // nothing new
+    fwd.service("h", 514, true, true, 1);
+    fwd.service("h", 514, true, true, 2);   // nothing new
     add("bbbb\n");
-    fwd.service("h", 514, true, 3);
+    fwd.service("h", 514, true, true, 3);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{"aaaa", "bbbb"}));
     EXPECT_EQ(g_reads, 3) << "one read per call";
 }
@@ -526,11 +526,11 @@ TEST_F(CaplogCursorTest, EachLineIsSentOnce) {
 TEST_F(CaplogCursorTest, LossIsAnnouncedWithTheExactCountBeforeTheNextLines) {
     CaplogForward fwd("n", ringReadFrom, sink);
     fwd.armFor(300, 0);
-    fwd.service("h", 514, true, 1);    // starts at the empty ring
+    fwd.service("h", 514, true, true, 1);    // starts at the empty ring
     add("aaaa\nbbbb\ncccc\n");
-    fwd.service("h", 514, false, 2);   // link down: nothing read
+    fwd.service("h", 514, false, true, 2);   // link down: nothing read
     add("dddd\n");                      // evicts "aaaa\n" unsent
-    fwd.service("h", 514, true, 3);
+    fwd.service("h", 514, true, true, 3);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{
                                "[caplog] forward lost 5 bytes", "bbbb", "cccc", "dddd"}));
     EXPECT_EQ(sink.sent[0].prefix, "<134>caplog-n: ");
@@ -543,7 +543,7 @@ TEST_F(CaplogCursorTest, TheFirstArmSendsTheBacklogWithoutALossReport) {
     add("dddd\n");                      // "aaaa\n" evicted before forwarding began
     CaplogForward fwd("n", ringReadFrom, sink);
     fwd.armFor(300, 0);
-    fwd.service("h", 514, true, 1);
+    fwd.service("h", 514, true, true, 1);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{"bbbb", "cccc", "dddd"}));
     EXPECT_EQ(fwd.bytesLost(), 0u);
 }
@@ -552,11 +552,11 @@ TEST_F(CaplogCursorTest, ALaterWindowStartsWhereTheLastStopped) {
     CaplogForward fwd("n", ringReadFrom, sink);
     add("aaaa\n");
     fwd.armFor(300, 0);
-    fwd.service("h", 514, true, 1);
+    fwd.service("h", 514, true, true, 1);
     fwd.disarm();
     add("bbbb\n");
     fwd.armFor(300, 10);
-    fwd.service("h", 514, true, 11);
+    fwd.service("h", 514, true, true, 11);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{"aaaa", "bbbb"})) << "no line twice";
     EXPECT_EQ(fwd.bytesLost(), 0u);
 }
@@ -567,12 +567,12 @@ TEST_F(CaplogCursorTest, AGapBetweenWindowsIsReported) {
     CaplogForward fwd("n", ringReadFrom, sink);
     fwd.armFor(300, 0);
     add("aaaa\n");
-    fwd.service("h", 514, true, 1);
+    fwd.service("h", 514, true, true, 1);
     fwd.disarm();
     add("bbbb\ncccc\ndddd\n");
     add("eeee\n");                      // evicts sent "aaaa\n" and unsent "bbbb\n"
     fwd.armFor(300, 10);
-    fwd.service("h", 514, true, 11);
+    fwd.service("h", 514, true, true, 11);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{
                                "aaaa", "[caplog] forward lost 5 bytes", "cccc", "dddd", "eeee"}));
     EXPECT_EQ(fwd.bytesLost(), 5u);
@@ -581,10 +581,10 @@ TEST_F(CaplogCursorTest, AGapBetweenWindowsIsReported) {
 TEST_F(CaplogCursorTest, ErasingUnsentLinesIsReportedAsLoss) {
     CaplogForward fwd("n", ringReadFrom, sink);
     fwd.armFor(300, 0);
-    fwd.service("h", 514, true, 1);
+    fwd.service("h", 514, true, true, 1);
     add("abc\n");
     ring.clear();                       // `caplog erase` before the next pass
-    fwd.service("h", 514, true, 2);
+    fwd.service("h", 514, true, true, 2);
     EXPECT_EQ(lines(sink), (std::vector<std::string>{"[caplog] forward lost 4 bytes"}));
     EXPECT_EQ(fwd.bytesLost(), 4u);
 }
@@ -592,12 +592,109 @@ TEST_F(CaplogCursorTest, ErasingUnsentLinesIsReportedAsLoss) {
 TEST_F(CaplogCursorTest, NotArmedOrLinkDownReadsNothing) {
     CaplogForward fwd("n", ringReadFrom, sink);
     add("aaaa\n");
-    fwd.service("h", 514, true, 1);    // never armed
+    fwd.service("h", 514, true, true, 1);    // never armed
     fwd.armFor(300, 0);
-    fwd.service("h", 514, false, 2);   // link down
-    fwd.service("", 514, true, 3);     // no host
+    fwd.service("h", 514, false, true, 2);   // link down
+    fwd.service("", 514, true, true, 3);     // no host
     EXPECT_EQ(g_reads, 0);
     EXPECT_TRUE(sink.sent.empty());
+}
+
+// ------------------------------------------------------- capture state (#1240)
+
+TEST_F(CaplogForwardTest, ArmingWhileCapturingAnnouncesTheWindowAndNothingElse) {
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.setIdentity("ID");
+    fwd.armFor(300, 0);
+    g_chunks.push_back("a\n");
+    fwd.service("h", 514, true, true, 1);
+    EXPECT_EQ(lines(sink), (std::vector<std::string>{
+                               "[caplog] forward on: id=ID sink=h:514", "a"}));
+}
+
+TEST_F(CaplogForwardTest, CaptureStoppingUnderAnArmedForwardIsNamedOnce) {
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.armFor(300, 0);
+    fwd.service("h", 514, true, true, 1);
+    fwd.service("h", 514, true, false, 2);
+    fwd.service("h", 514, true, false, 3);   // unchanged, so no second note
+    EXPECT_EQ(lines(sink), (std::vector<std::string>{offband::kCaplogCaptureOffNote}));
+}
+
+TEST_F(CaplogForwardTest, CaptureReturningIsNamedOnce) {
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.armFor(300, 0);
+    fwd.service("h", 514, true, true, 1);
+    fwd.service("h", 514, true, false, 2);
+    fwd.service("h", 514, true, true, 3);
+    fwd.service("h", 514, true, true, 4);
+    EXPECT_EQ(lines(sink), (std::vector<std::string>{offband::kCaplogCaptureOffNote,
+                                                     offband::kCaplogCaptureOnNote}));
+}
+
+TEST_F(CaplogForwardTest, ArmingWhileCaptureIsOffNamesItImmediately) {
+    // The case that cost 30 hours of silence on the bench (#1063): a forward
+    // armed against a stopped capture looked exactly like a quiet node.
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.armFor(300, 0);
+    fwd.service("h", 514, true, false, 1);
+    EXPECT_EQ(lines(sink), (std::vector<std::string>{offband::kCaplogCaptureOffNote}));
+}
+
+TEST_F(CaplogForwardTest, ACaptureChangeIsHeldUntilItCanBeDelivered) {
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.armFor(300, 0);
+    fwd.service("h", 514, false, false, 1);   // link down
+    fwd.service("", 514, true, false, 2);     // no host
+    EXPECT_TRUE(sink.sent.empty());
+    fwd.service("h", 514, true, false, 3);    // deliverable now
+    EXPECT_EQ(lines(sink), (std::vector<std::string>{offband::kCaplogCaptureOffNote}));
+}
+
+TEST_F(CaplogForwardTest, ADisarmedForwardSaysNothingAboutCapture) {
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.service("h", 514, true, false, 1);   // never armed
+    fwd.armFor(300, 0);
+    fwd.disarm();
+    fwd.service("h", 514, true, false, 2);
+    EXPECT_TRUE(sink.sent.empty());
+}
+
+TEST_F(CaplogForwardTest, ANewWindowOverAStoppedCaptureSaysSoAgain) {
+    // The state is remembered per window, not forever: a window opened against a
+    // stopped capture must not inherit the previous window's silence, or its
+    // announce line is followed by nothing and means nothing.
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.setIdentity("ID");
+    fwd.armFor(300, 0);
+    fwd.service("h", 514, true, false, 1);
+    fwd.disarm();
+    fwd.armFor(300, 10);
+    fwd.service("h", 514, true, false, 11);
+    EXPECT_EQ(lines(sink), (std::vector<std::string>{
+                               "[caplog] forward on: id=ID sink=h:514",
+                               offband::kCaplogCaptureOffNote,
+                               "[caplog] forward on: id=ID sink=h:514",
+                               offband::kCaplogCaptureOffNote}));
+}
+
+TEST_F(CaplogForwardTest, ANewWindowWhileCapturingStaysQuiet) {
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.armFor(300, 0);
+    fwd.service("h", 514, true, false, 1);
+    fwd.disarm();
+    fwd.armFor(300, 10);
+    fwd.service("h", 514, true, true, 11);   // capturing again under a new window
+    EXPECT_EQ(lines(sink), (std::vector<std::string>{offband::kCaplogCaptureOffNote}));
+}
+
+TEST_F(CaplogForwardTest, LinesCapturedBeforeAStopStillLeaveAfterTheNote) {
+    CaplogForward fwd("n", fakeRead, sink);
+    fwd.armFor(300, 0);
+    g_chunks.push_back("before the stop\n");
+    fwd.service("h", 514, true, false, 1);
+    EXPECT_EQ(lines(sink), (std::vector<std::string>{offband::kCaplogCaptureOffNote,
+                                                     "before the stop"}));
 }
 
 int main(int argc, char** argv) {

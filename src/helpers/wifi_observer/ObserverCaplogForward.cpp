@@ -42,7 +42,9 @@ void observerCaplogForwardSetIdentity(const uint8_t* pub_key, const char* device
 }
 
 void observerCaplogForwardService(uint32_t now_ms) {
-    s_fwd.service(s_host, s_port, caplogForwardLinkUp(), now_ms);
+    // #1240: meshLogIsEnabled() is the capture switch the app's caplog
+    // enable/disable and `caplog start|stop` both set.
+    s_fwd.service(s_host, s_port, caplogForwardLinkUp(), meshLogIsEnabled(), now_ms);
 }
 
 void observerCaplogForwardSetSink(const char* host, uint16_t port) {
