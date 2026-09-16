@@ -1247,6 +1247,17 @@ void UITask::loop() {
   if ((long)(millis() - _next_batt_read) >= 0) {
     _batt.feed(getBattMilliVolts());
     _next_batt_read = millis() + 1000;
+    // #1254: the same reading teaches the learner where this cell's 100% is. A value
+    // the user pinned is theirs -- auto-learn does not touch it until they clear it.
+    if (_node_prefs != NULL && !_node_prefs->batt_full_user) {
+      const uint16_t learned =
+          _full_learner.feed(millis(), _batt.value(), board.isExternalPowered());
+      if (learned != 0 && learned != _node_prefs->batt_full_mv) {
+        _node_prefs->batt_full_mv = learned;
+        the_mesh.savePrefs();
+        MESH_DEBUG_PRINTLN("BATT: learned full point %u mV", (unsigned)learned);
+      }
+    }
   }
 
 #ifdef PIN_VIBRATION
@@ -1283,6 +1294,36 @@ void UITask::loop() {
 // unseeded state, which would have drawn an empty battery for the first frame.
 uint16_t UITask::smoothedBattMilliVolts() const {
   return _batt.seeded() ? _batt.value() : getBattMilliVolts();
+}
+
+// #1254: the learned or pinned full point, or the board's compiled one while this cell
+// has taught the badge nothing.
+uint16_t UITask::battFullMilliVolts() const {
+  const uint16_t pref = (_node_prefs != NULL) ? _node_prefs->batt_full_mv : 0;
+  return pref != 0 ? pref : (uint16_t)BATT_MAX_MILLIVOLTS;
+}
+
+bool UITask::battFullIsUserSet() const {
+  return _node_prefs != NULL && _node_prefs->batt_full_user != 0;
+}
+
+void UITask::setBattFullMilliVolts(uint16_t mv) {
+  if (_node_prefs == NULL) return;
+  // A press at the wrong moment must not pin a number that makes the bar meaningless --
+  // below the empty end it would read 0% everywhere. Same band the learner uses.
+  if (!offband::FullPointLearner::plausibleFullMv(mv)) return;
+  _node_prefs->batt_full_mv = mv;
+  _node_prefs->batt_full_user = 1;
+  _full_learner.reset();          // a pending window would otherwise overwrite this
+  the_mesh.savePrefs();
+}
+
+void UITask::clearBattFullMilliVolts() {
+  if (_node_prefs == NULL) return;
+  _node_prefs->batt_full_mv = 0;
+  _node_prefs->batt_full_user = 0;
+  _full_learner.reset();          // start watching again from the next charge
+  the_mesh.savePrefs();
 }
 
 uint16_t UITask::autoOffSecs() const {

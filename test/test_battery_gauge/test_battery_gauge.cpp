@@ -10,6 +10,8 @@
 
 #include <gtest/gtest.h>
 #include <cstdlib>
+#include <tuple>
+#include <vector>
 #include "../../src/helpers/ui/BatteryGauge.h"
 
 using namespace offband;
@@ -320,6 +322,151 @@ TEST(BatteryAverageTest, ResetForgetsEverything) {
   EXPECT_FALSE(a.seeded());
   a.feed(3500);
   EXPECT_EQ(3500, a.value());
+}
+
+// ---- #1254: learning where 100% is --------------------------------------------------
+
+namespace {
+constexpr uint32_t kMin = 60UL * 1000UL;
+
+// Run the learner over a script of (minutes, mv, external) and return what it learned.
+uint16_t learn(FullPointLearner& l, const std::vector<std::tuple<int, uint16_t, bool>>& s) {
+  uint16_t got = 0;
+  uint32_t t = 0;
+  for (const auto& step : s) {
+    for (int m = 0; m < std::get<0>(step); m++) {
+      t += kMin;
+      const uint16_t r = l.feed(t, std::get<1>(step), std::get<2>(step));
+      if (r) got = r;
+    }
+  }
+  return got;
+}
+}  // namespace
+
+// The bench case: charged to full, then unplugged.
+TEST(FullPoint, AFullChargeThenUnplugTeachesTheRestedVoltage) {
+  FullPointLearner l;
+  EXPECT_EQ(4148, learn(l, {{20, 4183, true}, {10, 4148, false}}));
+}
+
+// The charger holds the cell above where it rests -- 4183 against 4148 on the owner's
+// badge. What gets learned is the battery-side value, never the charger's.
+TEST(FullPoint, TheChargersOwnVoltageIsNeverWhatIsLearned) {
+  FullPointLearner l;
+  const uint16_t got = learn(l, {{20, 4183, true}, {10, 4148, false}});
+  EXPECT_LT(got, 4183);
+  EXPECT_EQ(4148, got);
+}
+
+// Unplugged half-charged: the charge never reached a full-charge voltage, so nothing is
+// learned and the board's own default still stands.
+TEST(FullPoint, APartialChargeTeachesNothing) {
+  FullPointLearner l;
+  EXPECT_EQ(0, learn(l, {{20, 3900, true}, {10, 3880, false}}));
+}
+
+// The real unplug trace from the bench: the reading swings 20 mV with the radio. Taking
+// the maximum is what makes that harmless -- a timed sample would have caught 4086.
+TEST(FullPoint, LoadSwingsAfterUnpluggingDoNotDragItDown) {
+  FullPointLearner l;
+  uint32_t t = 0;
+  for (int m = 0; m < 20; m++) { t += kMin; l.feed(t, 4160, true); }
+  uint16_t got = 0;
+  for (uint16_t mv : {4106, 4086, 4096, 4088, 4101, 4106, 4096, 4102}) {
+    t += kMin;
+    const uint16_t r = l.feed(t, mv, false);
+    if (r) got = r;
+  }
+  EXPECT_EQ(4106, got) << "the high-water mark, not whatever the radio was doing";
+}
+
+TEST(FullPoint, NothingImplausibleIsEverLearned) {
+  FullPointLearner a, b;
+  EXPECT_EQ(0, learn(a, {{20, 4150, true}, {10, 3500, false}}));   // below the floor
+  EXPECT_EQ(0, learn(b, {{20, 4150, true}, {10, 4600, false}}));   // above the ceiling
+}
+
+// Running on battery all along, never charged: there is nothing to learn from.
+TEST(FullPoint, BatteryOnlyOperationLearnsNothing) {
+  FullPointLearner l;
+  EXPECT_EQ(0, learn(l, {{60, 4100, false}}));
+}
+
+// Plugged back in before the window closes: that charge is not finished, so it waits for
+// the next unplug rather than learning a half-window maximum.
+TEST(FullPoint, PluggingBackInAbandonsTheWindow) {
+  FullPointLearner l;
+  EXPECT_EQ(0, learn(l, {{20, 4183, true}, {2, 4148, false}, {5, 4183, true}}));
+  // and the next full unplug still works
+  EXPECT_EQ(4150, learn(l, {{10, 4150, false}}));
+}
+
+// The review read the within-window maximum as the across-life behaviour and concluded a
+// sagging cell could never be followed. It can: every charge that passes the gate starts
+// a fresh window, so the value moves down as readily as up.
+TEST(FullPoint, AnAgeingCellIsFollowedDown) {
+  FullPointLearner l;
+  EXPECT_EQ(4180, learn(l, {{20, 4200, true}, {10, 4180, false}}));   // new cell
+  EXPECT_EQ(4120, learn(l, {{20, 4190, true}, {10, 4120, false}}));   // a year later
+  EXPECT_EQ(3980, learn(l, {{20, 4150, true}, {10, 3980, false}}));   // tired
+}
+
+// A charge that stops just under the gate teaches nothing; just over it teaches.
+TEST(FullPoint, TheGateIsWhereItSays) {
+  FullPointLearner a, b;
+  EXPECT_EQ(0, learn(a, {{20, 4099, true}, {10, 4090, false}}));
+  EXPECT_EQ(4100, learn(b, {{20, 4100, true}, {10, 4100, false}}));
+}
+
+// Deadlines are compared by difference, so a window that spans a millis() wrap still ends.
+TEST(FullPoint, AWindowSurvivesAMillisWrap) {
+  FullPointLearner l;
+  uint32_t t = 0xFFFF0000UL;                       // ~4.3 s before the wrap
+  for (int m = 0; m < 5; m++) { t += 1000; l.feed(t, 4183, true); }
+  uint16_t got = 0;
+  for (int m = 0; m < 400; m++) {                  // straight through 0
+    t += 1000;
+    const uint16_t r = l.feed(t, 4148, false);
+    if (r) got = r;
+  }
+  EXPECT_EQ(4148, got);
+}
+
+// End to end, in the numbers the badge actually sees. The learner is fed the board's own
+// ADC, which reads about 22 mV below the rig's gauge at rest -- so the owner's cell, 4183
+// charging and 4148 rested on the gauge, arrives here as roughly 4161 and 4126. That
+// difference is the whole reason the badge must learn its OWN number rather than be told
+// the cell's.
+TEST(FullPoint, WhatIsLearnedIsWhatReadsAsFull) {
+  FullPointLearner l;
+  const uint16_t full = learn(l, {{20, 4161, true}, {10, 4126, false}});
+  ASSERT_EQ(4126, full);
+  EXPECT_EQ(100, batteryPercent(full, kEmpty, full));
+  EXPECT_EQ(100, batteryPercent(4140, kEmpty, full));   // and anything above it
+  EXPECT_LT(batteryPercent(4000, kEmpty, full), 100);
+  // This is the defect it fixes: against the compiled 4150 the same reading stops short.
+  EXPECT_EQ(98, batteryPercent(4126, kEmpty, 4150));
+}
+
+// A press at the wrong moment cannot pin something that breaks the bar.
+TEST(FullPoint, OnlyAPlausibleValueCanBePinned) {
+  EXPECT_TRUE(FullPointLearner::plausibleFullMv(4148));
+  EXPECT_TRUE(FullPointLearner::plausibleFullMv(3900));
+  EXPECT_TRUE(FullPointLearner::plausibleFullMv(4250));
+  EXPECT_FALSE(FullPointLearner::plausibleFullMv(3400));   // below the badge's empty
+  EXPECT_FALSE(FullPointLearner::plausibleFullMv(3899));
+  EXPECT_FALSE(FullPointLearner::plausibleFullMv(4251));
+  EXPECT_FALSE(FullPointLearner::plausibleFullMv(0));
+}
+
+TEST(FullPoint, ResetForgetsAPendingWindow) {
+  FullPointLearner l;
+  uint32_t t = 0;
+  for (int m = 0; m < 20; m++) { t += kMin; l.feed(t, 4183, true); }
+  t += kMin; l.feed(t, 4148, false);
+  l.reset();
+  for (int m = 0; m < 10; m++) { t += kMin; EXPECT_EQ(0, l.feed(t, 4148, false)); }
 }
 
 int main(int argc, char** argv) {

@@ -47,6 +47,7 @@ class UITask : public AbstractUITask {
   // not once per redraw, which is what made the number move on its own.
   offband::BatteryAverage _batt;
   unsigned long _next_batt_read = 0;
+  offband::FullPointLearner _full_learner;   // #1254: learns this cell's 100%
   int next_backlight_btn_check = 0;
   bool _always_on = false;   // #141: when true, never auto-blank the display
   uint8_t _disp_mode = 0;    // #542 B1: 0 auto, 1 always-on, 2 always-off (dark)
@@ -126,6 +127,14 @@ public:
   // rather than whatever the ADC said at the instant of a redraw. `getBattMilliVolts()`
   // is still the raw read, and is what the low-battery shutdown acts on.
   uint16_t smoothedBattMilliVolts() const;
+
+  // #1254: where 100% is on this cell -- the learned or pinned value, or the board's
+  // compiled BATT_MAX_MILLIVOLTS while nothing is known. `battFullIsUserSet` says which
+  // of the two ways it got there; clearing it hands the cell back to auto-learn.
+  uint16_t battFullMilliVolts() const;
+  bool battFullIsUserSet() const;
+  void setBattFullMilliVolts(uint16_t mv);   // the Calibrate action
+  void clearBattFullMilliVolts();            // Back to auto
 
   void gotoHomeScreen() { setCurrScreen(home); }
 #ifdef QCC_BADGE_SELFTEST
