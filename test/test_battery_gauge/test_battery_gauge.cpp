@@ -53,26 +53,120 @@ TEST(BatteryGauge, EmptyIsWhereTheBadgeWillNotStart) {
   EXPECT_EQ(0, pct(3500));
   EXPECT_EQ(0, pct(kDies));       // the reserve it keeps running on, below 0%
   EXPECT_EQ(0, pct(0));
-  EXPECT_EQ(42, batteryPercent(3500, 3000, 4200));   // what the old scale said there
+  // What the fleet's old straight line said at the same voltage -- 3000..4200, linear.
+  EXPECT_EQ(42, (int)(((3500 - 3000) * 100 + 600) / 1200));
 }
 
 // The reserve is real and deliberate: the badge runs for another 100 mV past 0%. What it
 // must never do is draw charge on a badge that cannot be turned back on.
-TEST(BatteryGauge, NothingIsShownBelowTheStartingVoltage) {
-  for (uint16_t mv = kDies; mv < kEmpty; mv += 10) {
+//
+// #1252: the bar now reads 0 up to about 3550 rather than 3500. That is the measurement,
+// not a rounding artefact — at 3550 the burn had 0.6% of its charge left, and under one
+// percent is zero on a bar. The badge still runs below it, which is the reserve above.
+//
+// ⚠ Stated as the limit it is: that 0.6% is the RC52 cell, at its age and temperature and
+// drain. The badge's cell may empty a few millivolts either side of it. One sample is
+// what we have, and it beats the straight line that was out by ten points in the middle.
+TEST(BatteryGauge, NothingIsShownWhileThereIsNothingLeft) {
+  for (uint16_t mv = kDies; mv <= 3550; mv += 10) {
     EXPECT_EQ(0, pct(mv)) << "mv " << mv;
   }
-  EXPECT_GT(pct(kEmpty + 10), 0);   // and the moment it can start again, it shows
+  EXPECT_GT(pct(3600), 0) << "and above the curve's floor the bar shows again";
 }
 
-TEST(BatteryGauge, TheMiddleIsRoundedNotTruncated) {
-  EXPECT_EQ(50, pct(3825));                  // exactly half of 3500..4150
-  EXPECT_EQ(1, pct(3505));                   // 0.77% rounds up rather than to nothing
-  EXPECT_EQ(99, pct(4145));
-  for (uint16_t mv = 3300; mv <= 4250; mv += 5) {
+TEST(BatteryGauge, NothingReachableLeavesTheRange) {
+  for (uint16_t mv = 0; mv < 5000; mv += 1) {
     const int p = pct(mv);
     EXPECT_GE(p, 0) << "mv " << mv;
     EXPECT_LE(p, 100) << "mv " << mv;
+  }
+}
+
+// #1252: the shape between the ends is the measured lithium discharge, not a straight
+// line. These are the RC52 #1004 numbers, renormalised onto the badge's 3500..4150.
+// Each one is about ten points above where a straight line put it.
+TEST(BatteryGauge, TheMiddleFollowsTheMeasuredCurve) {
+  EXPECT_NEAR(85, pct(4000), 2);    // a straight line said 77
+  EXPECT_NEAR(65, pct(3850), 2);    //                      54
+  EXPECT_NEAR(41, pct(3700), 2);    //                      31
+  EXPECT_NEAR(15, pct(3600), 2);    //                      15 -- the two converge here
+}
+
+// A cell holds most of its charge in a narrow band, so the bar must fall unevenly: barely
+// at the top, then quickly through the knee.
+TEST(BatteryGauge, TheBarFallsFasterNearTheEndThanNearTheTop) {
+  const int top = pct(4150) - pct(4050);        // the first 100 mV
+  const int knee = pct(3650) - pct(3550);       // the last 100 mV before empty
+  EXPECT_LT(top, knee) << "the curve must be steeper at the knee than at the top";
+}
+
+TEST(BatteryGauge, TheCurveNeverGoesBackwards) {
+  int prev = -1;
+  for (uint16_t mv = 3000; mv <= 4400; mv += 1) {
+    const int p = pct(mv);
+    EXPECT_GE(p, prev) << "mv " << mv << " went down as voltage went up";
+    prev = p;
+  }
+}
+
+// The table itself has to stay ordered, or the interpolation walks off it.
+TEST(BatteryGauge, TheTableDescendsInBothColumns) {
+  for (int i = 1; i < kLithiumCurvePoints; i++) {
+    EXPECT_LT(kLithiumCurve[i].mv, kLithiumCurve[i - 1].mv) << "point " << i;
+    EXPECT_LT(kLithiumCurve[i].permille, kLithiumCurve[i - 1].permille) << "point " << i;
+  }
+}
+
+// Every breakpoint reads back as itself, and the curve holds flat beyond either end.
+TEST(BatteryGauge, EveryBreakpointIsExactAndTheEndsHold) {
+  for (int i = 0; i < kLithiumCurvePoints; i++) {
+    EXPECT_EQ(kLithiumCurve[i].permille, chargeAt(kLithiumCurve[i].mv)) << "point " << i;
+  }
+  EXPECT_EQ(kLithiumCurve[0].permille, chargeAt(4400));
+  EXPECT_EQ(kLithiumCurve[kLithiumCurvePoints - 1].permille, chargeAt(3000));
+  // and halfway between two breakpoints is halfway between their values
+  EXPECT_NEAR((953 + 901) / 2, chargeAt(4075), 1);   // between 4100 and 4050
+  EXPECT_NEAR((414 + 382) / 2, chargeAt(3687), 2);   // and at the knee, where it matters
+}
+
+// #1252, the review's gap: ends that fall BETWEEN table points, where the interpolation
+// and the renormalisation both have to be right at once. Landing on a breakpoint hides
+// arithmetic that lands between them does not.
+TEST(BatteryGauge, EndsBetweenBreakpointsStillScaleCleanly) {
+  const uint16_t lo = 3735, hi = 4085;          // neither is in the table
+  EXPECT_EQ(0, batteryPercent(lo, lo, hi));
+  EXPECT_EQ(100, batteryPercent(hi, lo, hi));
+  int prev = -1;
+  for (uint16_t mv = lo; mv <= hi; mv += 1) {
+    const int p = batteryPercent(mv, lo, hi);
+    EXPECT_GE(p, prev) << "mv " << mv;
+    EXPECT_GE(p, 0);
+    EXPECT_LE(p, 100);
+    prev = p;
+  }
+}
+
+// A board whose whole range sits outside what the burn covered cannot be read off the
+// curve -- both ends clamp to the same value. It falls back to the straight line rather
+// than drawing an empty bar across everything that board can do.
+TEST(BatteryGauge, ABoardTheCurveCannotSeeFallsBackToTheLine) {
+  const uint16_t lo = 3000, hi = 3540;          // entirely below the curve's floor
+  EXPECT_EQ(0, batteryPercent(lo, lo, hi));
+  EXPECT_EQ(100, batteryPercent(hi, lo, hi));
+  EXPECT_EQ(50, batteryPercent(3270, lo, hi));  // the midpoint, linearly
+  EXPECT_GT(batteryPercent(3400, lo, hi), 0) << "the range must not read empty throughout";
+}
+
+// The curve supplies the shape; the board supplies where it starts and stops. Any board's
+// own ends still read exactly 0 and 100.
+TEST(BatteryGauge, AnyBoardsOwnEndsStillReadZeroAndFull) {
+  const uint16_t ends[][2] = {{3500, 4150}, {3400, 4200}, {3000, 4200}, {3600, 4100}};
+  for (const auto& e : ends) {
+    SCOPED_TRACE(testing::Message() << e[0] << ".." << e[1]);
+    EXPECT_EQ(0, batteryPercent(e[0], e[0], e[1]));
+    EXPECT_EQ(100, batteryPercent(e[1], e[0], e[1]));
+    EXPECT_GT(batteryPercent((uint16_t)((e[0] + e[1]) / 2), e[0], e[1]), 0);
+    EXPECT_LT(batteryPercent((uint16_t)((e[0] + e[1]) / 2), e[0], e[1]), 100);
   }
 }
 
