@@ -213,6 +213,58 @@ TEST(BadgeLayoutFace, OutOfRangeCharactersMeasureAsBlocks) {
   EXPECT_EQ(textPx(body, "ab") + body.missing, textPx(body, "a\xDB" "b"));
 }
 
+// #1238: the owner's three steps. Only the body text changes; the detail lines stay in
+// the smallest face, as the mixed layout does.
+TEST(BadgeLayoutTextSize, EachStepPicksItsBodyFace) {
+  EXPECT_EQ(fixedFace().id, bodyFaceFor(kTextLarge).id);
+  EXPECT_EQ(bodyFace().id, bodyFaceFor(kTextMedium).id);
+  EXPECT_EQ(metaFace().id, bodyFaceFor(kTextSmall).id);
+  EXPECT_EQ(metaFace().id, detailFace().id);
+  EXPECT_EQ(bodyFace().id, bodyFaceFor(99).id);   // anything unknown reads as the default
+}
+
+// Each step down fits at least as many rows and characters as the one above.
+TEST(BadgeLayoutTextSize, StepsGetSmaller) {
+  int rows = 0, width = 0;
+  for (int size = kTextLarge; size < kTextSteps; size++) {
+    const Face& f = bodyFaceFor(size);
+    EXPECT_GE(rowsFor(f), rows) << "step " << size;
+    EXPECT_GE(kScreenPx / charPx(f, 'M'), width) << "step " << size;
+    rows = rowsFor(f);
+    width = kScreenPx / charPx(f, 'M');
+  }
+  EXPECT_EQ(8, rowsFor(bodyFaceFor(kTextLarge)));
+  EXPECT_EQ(9, rowsFor(bodyFaceFor(kTextMedium)));
+  EXPECT_EQ(10, rowsFor(bodyFaceFor(kTextSmall)));
+}
+
+// Every screen draws a title and then rows under it, and the GPS screen puts its last
+// action on the final row. At each step that row has to be on the screen.
+TEST(BadgeLayoutTextSize, TheLastRowFitsAtEveryStep) {
+  for (int size = kTextLarge; size < kTextSteps; size++) {
+    const Face& f = bodyFaceFor(size);
+    const int list_rows = rowsFor(f) - 1;   // what the screens call kListRows
+    EXPECT_GE(list_rows, 7) << "step " << size;
+    EXPECT_LE((1 + list_rows - 1) * f.row_px + f.row_px, kScreenRowsPx) << "step " << size;
+  }
+}
+
+// The Status screen's title is the body face and its lines are the detail face, so the
+// lines have to fit in what the title leaves.
+TEST(BadgeLayoutTextSize, StatusLinesFitUnderEveryTitle) {
+  for (int size = kTextLarge; size < kTextSteps; size++) {
+    const int title = bodyFaceFor(size).row_px;
+    const int lines = (kScreenRowsPx - title - detailFace().row_px) / detailFace().row_px;
+    EXPECT_GE(lines, 7) << "step " << size;   // six status lines and the footer
+  }
+}
+
+TEST(BadgeLayoutTextSize, StepsAreNamed) {
+  EXPECT_STREQ("large", textSizeName(kTextLarge));
+  EXPECT_STREQ("medium", textSizeName(kTextMedium));
+  EXPECT_STREQ("small", textSizeName(kTextSmall));
+}
+
 TEST(BadgeLayoutFace, FitPxCutsToWhatFits) {
   const Face& body = bodyFace();
   EXPECT_EQ(0, fitPx(body, "Abend", 2));
