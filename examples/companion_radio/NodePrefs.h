@@ -151,6 +151,12 @@ public:
   uint8_t ui_text_size = DEFAULT_UI_TEXT_SIZE;
   // #1245: seconds before the display blanks; 0 = the board's compiled AUTO_OFF_MILLIS.
   uint16_t ui_screen_secs = DEFAULT_UI_SCREEN_SECS;
+  // #1254: where 100% is on THIS cell, in millivolts. 0 = nothing known, so the board's
+  // compiled BATT_MAX_MILLIVOLTS stands and the bar behaves exactly as it did before.
+  // Set by auto-learn after a full charge, or pinned from Settings; `batt_full_user`
+  // marks the second case, which auto-learn then leaves alone.
+  uint16_t batt_full_mv = 0;
+  uint8_t batt_full_user = 0;
 
 private:
   // ---- Offband-only prefs -------------------------------------------------
@@ -167,6 +173,8 @@ private:
       def("tz", _parent->ui_tz);                  // #1233
       def("txt", _parent->ui_text_size);          // #1238
       def("scroff", _parent->ui_screen_secs);     // #1245
+      def("bfull", _parent->batt_full_mv);        // #1254
+      def("bfuser", _parent->batt_full_user);     // #1254
       // #509 button-action matrix: 4 bytes, one per OFFBAND_UI_SEQ_*.
       def("btn", _parent->button_actions, sizeof(_parent->button_actions));
     }

@@ -170,4 +170,82 @@ private:
   bool _seeded = false;
 };
 
+// #1254: where 100% actually is, learned rather than encoded. A cell's full voltage
+// varies by cell, by age and by the board's divider, so a constant is wrong somewhere by
+// construction -- on the owner's badge the compiled 4150 sat above what his cell reads
+// full, and the bar stopped at 98%.
+//
+// The badge has two signals and no current sense: VBUS (NRF52Board::isExternalPowered)
+// and its own smoothed reading. So:
+//
+//   1. while externally powered, remember the last reading -- the charge voltage;
+//   2. when VBUS drops, gate on it. Above kChargedMv means the charger was holding the
+//      cell at a full-charge voltage, which is the part the badge cannot infer from
+//      voltage alone;
+//   3. if the gate passes, take the HIGHEST reading seen on battery over the following
+//      window as this cell's 100%.
+//
+// The maximum, not a timed sample: a load only ever pushes the reading down -- a 22 dBm
+// transmit swung it 20 mV within a minute of unplugging on the bench -- so the maximum is
+// the closest thing to a rested value obtainable without measuring current.
+//
+// The maximum is taken WITHIN one window, not across the badge's life: every charge that
+// passes the gate replaces the stored value, lower as readily as higher. So a cell whose
+// full voltage sags with age is followed down, one charge cycle at a time. The calibrate
+// row is for the cell the gate never fires on -- a charger that terminates low -- not for
+// ageing.
+class FullPointLearner {
+public:
+  // Whether a value is a plausible full point for a single lithium cell. The learner
+  // applies this to what it learns; the calibrate action applies it to what it is given,
+  // so a mis-timed press cannot pin a number that makes the bar meaningless.
+  static bool plausibleFullMv(uint16_t mv);
+
+  // A charge that ended above this was a full charge. Coarse on purpose: it decides
+  // whether to learn, not what to learn. The owner's cell sits at 4183 on the charger
+  // and 4148 rested, so it clears this comfortably.
+  static const uint16_t kChargedMv = 4100;
+  // Nothing outside this is a single lithium cell at full charge.
+  static const uint16_t kFloorMv = 3900, kCeilMv = 4250;
+  // How long after unplugging to keep watching for the high-water mark.
+  static const uint32_t kWatchMs = 5UL * 60UL * 1000UL;
+
+  // Returns a learned full point once, on the reading that completes a window; 0 means
+  // nothing to store. `mv` should be the smoothed reading, not a raw ADC sample.
+  uint16_t feed(uint32_t now_ms, uint16_t mv, bool external) {
+    if (external) {
+      _charge_mv = mv;          // the last thing seen with the charger attached
+      _watching = false;
+      _was_external = true;
+      return 0;
+    }
+    if (_was_external) {        // just unplugged: decide whether this charge counted
+      _was_external = false;
+      _watching = _charge_mv >= kChargedMv;
+      _started_ms = now_ms;
+      _best_mv = 0;
+      if (!_watching) return 0;
+    }
+    if (!_watching) return 0;
+    if (mv > _best_mv) _best_mv = mv;
+    if ((int32_t)(now_ms - _started_ms) < (int32_t)kWatchMs) return 0;
+    _watching = false;
+    return plausibleFullMv(_best_mv) ? _best_mv : 0;
+  }
+
+  void reset() {
+    _was_external = false; _watching = false;
+    _charge_mv = 0; _best_mv = 0; _started_ms = 0;
+  }
+
+private:
+  uint32_t _started_ms = 0;
+  uint16_t _charge_mv = 0, _best_mv = 0;
+  bool _was_external = false, _watching = false;
+};
+
+inline bool FullPointLearner::plausibleFullMv(uint16_t mv) {
+  return mv >= kFloorMv && mv <= kCeilMv;
+}
+
 }  // namespace offband
