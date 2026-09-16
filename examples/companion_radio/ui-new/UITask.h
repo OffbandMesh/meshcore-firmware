@@ -88,6 +88,12 @@ class UITask : public AbstractUITask {
 
   void userLedHandler();
 
+  // #1245: how long the display waits before blanking. `autoOffSecs` is the preference,
+  // or the board's compiled AUTO_OFF_MILLIS where none is set; `autoOffMillis` is what
+  // the timer adds. A board with no Screen off row never sets the preference and so
+  // keeps exactly the timeout it was compiled with.
+  unsigned long autoOffMillis() const;
+
   // Button action handlers
   char checkDisplayOn(char c);
   char handleLongPress(char c);
@@ -104,6 +110,12 @@ public:
     curr = NULL;
   }
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
+
+  // #1245: the Screen off row reads this and cycles it. Setting it applies at once --
+  // the timer already running is re-based on the new value, so picking a longer one
+  // does not leave the screen about to blank on the old.
+  uint16_t autoOffSecs() const;
+  void setAutoOffSecs(uint16_t secs);
 
   void gotoHomeScreen() { setCurrScreen(home); }
 #ifdef QCC_BADGE_SELFTEST

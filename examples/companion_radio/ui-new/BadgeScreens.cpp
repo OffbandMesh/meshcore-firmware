@@ -1098,8 +1098,12 @@ void SettingsScreen::step(int dir) {
   _sel = next;
 }
 
+// #1245: rows whose press steps a value rather than going somewhere or doing something.
+// They share one settle-then-save, so walking a row round is one write to flash.
+bool SettingsScreen::cycles(int row) { return row == TextSize || row == ScreenOff; }
+
 void SettingsScreen::act() {
-  if (_sel != TextSize) saveSizeIfPending();   // #1238: anything else may leave this screen
+  if (!cycles(_sel)) saveCycledIfPending();   // #1238: anything else may leave this screen
   switch (_sel) {
     case Bluetooth:
       if (_task->isBluetoothEnabled()) _task->disableBluetooth(); else _task->enableBluetooth();
@@ -1107,12 +1111,15 @@ void SettingsScreen::act() {
     case TextSize: {   // #1238: large, medium, small, and round again
       NodePrefs* prefs = the_mesh.getNodePrefs();
       prefs->ui_text_size = (uint8_t)((prefs->ui_text_size + 1) % kTextSteps);
-      // Saved once the cycling settles: trying the three sizes shouldn't be three
-      // writes to flash. The screen changes at once either way.
-      _size_at = millis() | 1;
+      _cycled_at = millis() | 1;
       _task->notify(UIEventType::ack);
       break;
     }
+    case ScreenOff:   // #1245: 15s, 30s, 1m, 2m, 5m, and round again
+      _task->setAutoOffSecs(nextScreenOffSecs(_task->autoOffSecs()));
+      _cycled_at = millis() | 1;
+      _task->notify(UIEventType::ack);
+      break;
     case TimeZone:
       _task->gotoZones();
       break;
@@ -1186,6 +1193,7 @@ int SettingsScreen::render(DisplayDriver& d) {
     switch (r) {
       case Bluetooth:     label = "Bluetooth"; snprintf(value, sizeof(value), "%s", _task->isBluetoothEnabled() ? "on" : "off"); break;
       case TextSize:      label = "Text size"; snprintf(value, sizeof(value), "%s", textSizeName(prefs->ui_text_size)); break;
+      case ScreenOff:     label = "Screen off"; screenOffName(_task->autoOffSecs(), value, sizeof(value)); break;
       case TimeZone:      label = "Time zone"; snprintf(value, sizeof(value), "%s", offband::tz::zone(prefs->ui_tz).name); break;
       case Gps:           label = "GPS"; GpsScreen::summary(_task, value, sizeof(value)); break;
       case AdvertZeroHop: label = "Advert zero-hop"; snprintf(value, sizeof(value), "%s", sent && _sent_row == r ? "sent" : "send"); break;
@@ -1222,20 +1230,21 @@ bool SettingsScreen::handleInput(char c) {
     case KEY_DOWN:  step(1); return true;
     case KEY_ENTER: act(); return true;
     default:
-      saveSizeIfPending();   // #1238: Esc leaves for Status, so keep the size
+      saveCycledIfPending();   // #1238: Esc leaves for Status, so keep what was cycled
       return false;
   }
 }
 
-void SettingsScreen::saveSizeIfPending() {
-  if (_size_at == 0) return;
-  _size_at = 0;
+void SettingsScreen::saveCycledIfPending() {
+  if (_cycled_at == 0) return;
+  _cycled_at = 0;
   the_mesh.savePrefs();
 }
 
 void SettingsScreen::poll() {
   if (_shutdown_pending && !_task->isButtonPressed()) _task->shutdown();
-  if (_size_at != 0 && millis() - _size_at > kSizeSettleMs) saveSizeIfPending();   // #1238
+  // #1238, #1245: once the cycling has settled, one write covers whatever was stepped.
+  if (_cycled_at != 0 && millis() - _cycled_at > kCycleSettleMs) saveCycledIfPending();
 }
 
 // ---- Time zone picker (#1233) ----------------------------------------------------------

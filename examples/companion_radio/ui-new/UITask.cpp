@@ -20,7 +20,10 @@
 #if UI_HAS_CARDKB
   #include "BadgeScreens.h"   // #1230: the inbox and thread screens
 #endif
+#include <helpers/ui/ScreenOff.h>   // #1245: the auto-off arithmetic, for every board
 
+// #1245: the compiled fallback, for a board with no screen-off preference set. The
+// badge has one; every other board keeps this, and keeps the behavior it has now.
 #ifndef AUTO_OFF_MILLIS
   #define AUTO_OFF_MILLIS     15000   // 15 seconds
 #endif
@@ -715,7 +718,7 @@ public:
 void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs) {
   _display = display;
   _sensors = sensors;
-  _auto_off = millis() + AUTO_OFF_MILLIS;
+  _auto_off = millis() + autoOffMillis();
 
 #if defined(PIN_USER_BTN)
   user_btn.begin();
@@ -880,7 +883,7 @@ void UITask::setDisplayMode(uint8_t mode) {
     if (_display->isOn()) _display->turnOff();     // always-off: dark now, stays dark
   } else {
     if (!_display->isOn()) _display->turnOn();      // auto / always-on: light it now
-    if (mode == 0) _auto_off = millis() + AUTO_OFF_MILLIS;  // fresh timeout only for auto (always-on never blanks)
+    if (mode == 0) _auto_off = millis() + autoOffMillis();  // fresh timeout only for auto (always-on never blanks)
   }
 }
 
@@ -960,7 +963,7 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
       _display->turnOn();
     }
     if (_display->isOn()) {
-    _auto_off = millis() + AUTO_OFF_MILLIS;  // extend the auto-off timer
+    _auto_off = millis() + autoOffMillis();  // extend the auto-off timer
     _next_refresh = 100;  // trigger refresh
     }
   }
@@ -1172,7 +1175,7 @@ void UITask::loop() {
 #endif
       gotoHomeScreen();
     }
-    _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
+    _auto_off = millis() + autoOffMillis();   // extend auto-off timer
     _next_refresh = 100;  // trigger refresh
   }
 
@@ -1219,12 +1222,15 @@ void UITask::loop() {
     // because OLED panels burn in quickly; only enable for LCD targets or
     // where the display is replaceable.
     if (board.isExternalPowered()) {
-      _auto_off = millis() + AUTO_OFF_MILLIS;
+      _auto_off = millis() + autoOffMillis();
     }
 #endif
     // #542 B1: mode 2 (always-off) enforces dark every loop — self-corrects any relight.
     // #141: always-on (mode 1) skips the auto-blank; auto (mode 0) blanks on timeout.
-    if (_disp_mode == 2 || (!_always_on && millis() > _auto_off)) {
+    // #1245: the deadline is compared by difference, as this file does elsewhere (the GPS
+    // update above). `millis() > _auto_off` reads false for the whole of the run after
+    // millis() wraps, which would have left the display lit for another seven weeks.
+    if (_disp_mode == 2 || (!_always_on && (long)(millis() - _auto_off) > 0)) {
       _display->turnOff();
 #if UI_HAS_CARDKB
       the_mesh.badgeStore().setOpen(-1);   // #1230: a dark thread isn't being read
@@ -1261,13 +1267,33 @@ void UITask::loop() {
 #endif
 }
 
+// #1245: the preference, or the board's compiled fallback where none is set. A board
+// compiled with AUTO_OFF_MILLIS 0 never blanks -- that is an e-ink decision made at
+// compile time (the `#if AUTO_OFF_MILLIS > 0` guards above), and a preference does not
+// get to undo it.
+uint16_t UITask::autoOffSecs() const {
+  const uint16_t pref = (_node_prefs != NULL) ? _node_prefs->ui_screen_secs : 0;
+  return offband::screenOffSecsShown(pref, (uint32_t)AUTO_OFF_MILLIS);
+}
+
+unsigned long UITask::autoOffMillis() const {
+  const uint16_t pref = (_node_prefs != NULL) ? _node_prefs->ui_screen_secs : 0;
+  return (unsigned long)offband::screenOffMillis(pref, (uint32_t)AUTO_OFF_MILLIS);
+}
+
+void UITask::setAutoOffSecs(uint16_t secs) {
+  if (_node_prefs == NULL) return;
+  _node_prefs->ui_screen_secs = secs;
+  _auto_off = millis() + autoOffMillis();   // the running timer follows the new value
+}
+
 char UITask::checkDisplayOn(char c) {
   if (_display != NULL) {
     if (!_display->isOn() && _disp_mode != 2) {   // #542 B1: button does not wake a deliberately-off screen
       _display->turnOn();   // turn display on and consume event
       c = 0;
     }
-    _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
+    _auto_off = millis() + autoOffMillis();   // extend auto-off timer
     _next_refresh = 0;  // trigger refresh
   }
   return c;

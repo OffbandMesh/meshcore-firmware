@@ -17,6 +17,13 @@
   #define DEFAULT_UI_TEXT_SIZE  0
 #endif
 
+// #1245: seconds before the display blanks. 0 means "whatever this board was compiled
+// with" -- AUTO_OFF_MILLIS -- so a board with no way to set it behaves exactly as it did.
+// The badge's env sets its own, because the badge is the one with the setting.
+#ifndef DEFAULT_UI_SCREEN_SECS
+  #define DEFAULT_UI_SCREEN_SECS  0
+#endif
+
 class NodePrefs : public ConfigSerializer {  // persisted to file
 public:
   float airtime_factor = 0;
@@ -142,6 +149,8 @@ public:
   // Named, because BadgeLayout.h has to agree and this header is shared by every
   // board: BadgeScreens.cpp static_asserts the two against each other.
   uint8_t ui_text_size = DEFAULT_UI_TEXT_SIZE;
+  // #1245: seconds before the display blanks; 0 = the board's compiled AUTO_OFF_MILLIS.
+  uint16_t ui_screen_secs = DEFAULT_UI_SCREEN_SECS;
 
 private:
   // ---- Offband-only prefs -------------------------------------------------
@@ -157,6 +166,7 @@ private:
       def("notify", _parent->notify_scope);       // #510
       def("tz", _parent->ui_tz);                  // #1233
       def("txt", _parent->ui_text_size);          // #1238
+      def("scroff", _parent->ui_screen_secs);     // #1245
       // #509 button-action matrix: 4 bytes, one per OFFBAND_UI_SEQ_*.
       def("btn", _parent->button_actions, sizeof(_parent->button_actions));
     }
