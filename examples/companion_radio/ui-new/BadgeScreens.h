@@ -138,8 +138,8 @@ public:
   void poll() override;
 
 private:
-  enum Row : uint8_t { Bluetooth, TextSize, ScreenOff, TimeZone, Gps, AdvertZeroHop,
-                       AdvertFlood, Hibernate, DevicePages, kRows };
+  enum Row : uint8_t { Bluetooth, TextSize, ScreenOff, TimeZone, Gps, Battery,
+                       AdvertZeroHop, AdvertFlood, Hibernate, DevicePages, kRows };
   UITask* _task;
   int _sel = 0;
   bool _gate = false;              // "Hibernate?" is up
@@ -157,6 +157,28 @@ private:
   void act();
   void saveCycledIfPending();   // #1238: before the screen goes, or another row acts
   int drawGate(DisplayDriver& d);
+};
+
+// #1254: the battery, in the shape the GPS screen uses (#1235) -- what it reads now,
+// where 100% is and how the badge got that, then the two things you can do about it.
+// Auto-learn sets the full point after a charge; this is for pinning it by hand, and for
+// handing it back to auto when a press was mistimed.
+class BatteryScreen : public UIScreen {
+public:
+  explicit BatteryScreen(UITask* task) : _task(task) {}
+  int render(DisplayDriver& display) override;
+  bool handleInput(char c) override;
+
+  // "98%": the title's right slot, and Settings' Battery row.
+  static void summary(UITask* task, char* out, size_t n);
+
+private:
+  enum Row : uint8_t { SetHere, BackToAuto };
+  UITask* _task;
+  int _sel = SetHere;
+
+  bool canClear() const;   // whether there is a learned or pinned value to hand back
+  void act();
 };
 
 // #1233: the time zone, as the design's option list (3a): each zone with its offset
