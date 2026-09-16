@@ -289,7 +289,7 @@ public:
     display.print(filtered_name);
 
     // battery voltage
-    renderBatteryIndicator(display, _task->getBattMilliVolts());
+    renderBatteryIndicator(display, _task->smoothedBattMilliVolts());   // #1246
 
     // curr page indicator
     if (UIColor::title_bkg == UIColor::window_bkg) {
@@ -1245,6 +1245,14 @@ void UITask::loop() {
     _was_on = false;   // #148: display off -> re-apply rotation on the next wake
   }
 
+  // #1246: one reading a second into the average, whatever the screens are doing. The
+  // badge used to take a fresh eight-sample ADC read on every redraw and show it, which
+  // is why a transmit or a noisy sample moved the number on its own.
+  if ((long)(millis() - _next_batt_read) >= 0) {
+    _batt.feed(getBattMilliVolts());
+    _next_batt_read = millis() + 1000;
+  }
+
 #ifdef PIN_VIBRATION
   vibration.loop();
 #endif
@@ -1275,6 +1283,12 @@ void UITask::loop() {
 // compiled with AUTO_OFF_MILLIS 0 never blanks -- that is an e-ink decision made at
 // compile time (the `#if AUTO_OFF_MILLIS > 0` guards above), and a preference does not
 // get to undo it.
+// #1246: the average, or the raw read until there is one. Never 0 from the average's
+// unseeded state, which would have drawn an empty battery for the first frame.
+uint16_t UITask::smoothedBattMilliVolts() const {
+  return _batt.seeded() ? _batt.value() : getBattMilliVolts();
+}
+
 uint16_t UITask::autoOffSecs() const {
   const uint16_t pref = (_node_prefs != NULL) ? _node_prefs->ui_screen_secs : 0;
   return offband::screenOffSecsShown(pref, (uint32_t)AUTO_OFF_MILLIS);
