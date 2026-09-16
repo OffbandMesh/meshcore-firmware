@@ -252,6 +252,9 @@ grep -F 'forward on: id=' /var/log/offband-caplog.log # which tag is which node
   lines that follow it. The node's ring filled before those bytes could be sent,
   usually because the link or the sink was down for a while. The count also
   shows in `caplog status` as `lost=`.
+- **When capture stops** while a forward is armed, the node sends `[caplog] capture
+  off, nothing to forward`, and `[caplog] capture on, forwarding resumed` when it
+  starts again. Silence at the sink then always has a reason in the file.
 
 rsyslog stamps its own receive time and the source host on ingest. Each line
 also carries the device's own `[millis]` prefix, so you can line up device time
@@ -296,6 +299,7 @@ It leaves the existing logfile in place; delete it by hand if you want it gone.
 | `logger` test line never lands | The firewall (UDP 514 inbound), the sink IP, `systemctl status rsyslog`. |
 | Armed, but no lines arrive | `caplog status`. `caplog: off` → `caplog start`. `sink=none` → `set syslog.host`. `link=down` → the node has no WiFi (on a repeater, `wifi on <min>`). |
 | `[caplog] forward lost N bytes` in the file | The link or the sink was down long enough for the node's ring to fill. Keep the link up, or capture at a lower level. |
+| `[caplog] capture off, nothing to forward` in the file | Capture is stopped while the forward is still armed. `caplog start <level>`, or Start capture in the app. |
 | Lines also land in `/var/log/syslog`, or caplog lines are missing from the file | An older receiver routes by facility, or the drop-in's `stop` didn't take. Re-run the setup script and restart rsyslog. |
 | Duplicate-input / bind error on restart | The host already loads `imudp`. Re-run the script (it detects this), or remove the older UDP input. |
 | Nothing from the minutes before a crash | The forward must already be running when the crash happens. Use `caplog forward on`, which stays armed across reboots. |
