@@ -754,22 +754,28 @@ bool EnvironmentSensorManager::setSettingValue(const char* name, const char* val
 }
 
 #if ENV_INCLUDE_GPS
-// Offband (#149): single ASCII formatter for the live GPS state, shared by the
-// serial status line and the companion CMD_OFFBAND_GPS query. lat/lon/alt use the
-// same integer units as the SELF_INFO wire format (1e-6 deg, cm) so no float
-// printf is needed -- newlib-nano on nRF52 omits %f, which would print garbage.
+// Offband (#149): the live GPS state as ASCII. The rendering itself is in
+// GpsStatusLine.h, free of Arduino so its text can be unit-tested; this reads the
+// state off the manager and hands it over.
+offband::GpsSnapshot EnvironmentSensorManager::gpsSnapshot() const {
+  offband::GpsSnapshot g;
+  g.detected = gps_detected;
+  g.active   = gps_active;
+  g.fix      = (_location != nullptr) && gps_active && _location->isValid();
+  g.baud     = (uint32_t)_gps_baud;
+  // 1e-6 deg, matching SELF_INFO. Checked in double space before the cast: a NaN or an
+  // out-of-range value converts to nothing believable, and 0,0 renders `pos=invalid`.
+  offband::toSanePosition(node_lat, node_lon, g.lat_ud, g.lon_ud);
+  g.alt_cm   = offband::isNonFiniteDouble(node_altitude) ? 0 : (long)(node_altitude * 100.0);
+  g.sats     = (_location != nullptr && gps_active) ? _location->satellitesCount() : 0;
+  g.epoch    = (_location != nullptr) ? _location->getTimestamp() : 0;
+  return g;
+}
+
+// The companion's CMD_OFFBAND_GPS query: a person asking their own device, over their
+// own paired link, where it is. It gets the coordinates.
 size_t EnvironmentSensorManager::getGpsStatusText(char* out, size_t cap) {
-  bool valid = (_location != nullptr) && gps_active && _location->isValid();
-  long sats  = (_location != nullptr && gps_active) ? _location->satellitesCount() : 0;
-  long epoch = (_location != nullptr) ? _location->getTimestamp() : 0;
-  long lat_ud = (long)(node_lat * 1000000.0);    // 1e-6 deg (matches SELF_INFO)
-  long lon_ud = (long)(node_lon * 1000000.0);
-  long alt_cm = (long)(node_altitude * 100.0);   // cm
-  int n = snprintf(out, cap,
-    "detected=%d active=%d fix=%d baud=%lu lat=%ld lon=%ld alt_cm=%ld sats=%ld time=%ld",
-    gps_detected ? 1 : 0, gps_active ? 1 : 0, valid ? 1 : 0,
-    (unsigned long)_gps_baud, lat_ud, lon_ud, alt_cm, sats, epoch);
-  return (n < 0) ? 0 : (size_t)n;
+  return offband::formatGpsStatus(gpsSnapshot(), true, out, cap);
 }
 
 #if defined(ESP32)
@@ -1089,21 +1095,26 @@ void EnvironmentSensorManager::loop() {
         && _gps_baud_locked
         #endif
        ) {
+    // #1247: taking a fix is worth a line, and where the fix is is not -- this reaches
+    // the same capture log and the same UART mirror the periodic [GPS] line does, which
+    // is the one place the coordinates were told to stop. The two lines each branch used
+    // to print were the same line twice, once before the altitude and once after, and on
+    // nRF52 both rendered garbage: newlib-nano omits %f.
     #ifdef RAK_WISBLOCK_GPS
     if ((i2cGPSFlag || serialGPSFlag) && _location->isValid()) {
       node_lat = ((double)_location->getLatitude())/1000000.;
       node_lon = ((double)_location->getLongitude())/1000000.;
-      MESH_DEBUG_PRINTLN("lat %f lon %f", node_lat, node_lon);
       node_altitude = ((double)_location->getAltitude()) / 1000.0;
-      MESH_DEBUG_PRINTLN("lat %f lon %f alt %f", node_lat, node_lon, node_altitude);
+      MESH_DEBUG_PRINTLN("GPS: fix taken, alt_cm=%ld sats=%d",
+                         (long)(node_altitude * 100.0), (int)_location->satellitesCount());
     }
     #else
     if (_location->isValid()) {
       node_lat = ((double)_location->getLatitude())/1000000.;
       node_lon = ((double)_location->getLongitude())/1000000.;
-      MESH_DEBUG_PRINTLN("lat %f lon %f", node_lat, node_lon);
       node_altitude = ((double)_location->getAltitude()) / 1000.0;
-      MESH_DEBUG_PRINTLN("lat %f lon %f alt %f", node_lat, node_lon, node_altitude);
+      MESH_DEBUG_PRINTLN("GPS: fix taken, alt_cm=%ld sats=%d",
+                         (long)(node_altitude * 100.0), (int)_location->satellitesCount());
     }
     #endif
     }
@@ -1114,11 +1125,16 @@ void EnvironmentSensorManager::loop() {
   // Routed through the serial-capture sink so it is captured for download AND
   // mirrored to the live console where serial is free -- all gated by the
   // client-settable caplog enable+level, never raw on a USB-serial companion line.
+  //
+  // #1247, the owner: this line carries no coordinates. It goes to the caplog and, on a
+  // diag build, out of the UART mirror -- a running diagnostic nobody asked for in the
+  // moment, unlike the client's query. `pos=valid` says the stored position is one worth
+  // believing, which is all this line ever needed to know.
   static uint32_t _gps_log_ms = 0;
   if (millis() - _gps_log_ms >= 5000) {
     _gps_log_ms = millis();
     char _gps_b[160];
-    getGpsStatusText(_gps_b, sizeof(_gps_b));
+    offband::formatGpsStatus(gpsSnapshot(), false, _gps_b, sizeof(_gps_b));
     mesh_log_line(MLOG_DEBUG, "[GPS] %s\n", _gps_b);
   }
   #endif
