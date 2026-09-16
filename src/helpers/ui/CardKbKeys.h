@@ -55,6 +55,25 @@ inline uint8_t toUiKey(uint8_t raw) {
   return (raw >= 0x20 && raw <= 0x7E) ? raw : 0;
 }
 
+// What one byte read from the keyboard does, once the display has had its say.
+struct Action {
+  bool settings;     // #1233: Fn+S opens Settings from wherever the badge is
+  uint8_t ui_key;    // what the screen receives, or 0 for nothing
+};
+
+// #1239: the owner's bench found that only the keys the UI maps woke a dark display.
+// Waking used to happen on the way to dispatching a key, so the whole Fn layer -- which
+// toUiKey() answers 0 for -- could neither wake the badge nor hold it awake. The display
+// is asked first now, and a key that woke it is spent on waking it, as a button press is.
+//
+//   woke_display  the key lit a dark screen, so it does nothing else
+//   button_acted  a button event in the same pass already claimed the screen's input
+//   on_key_test   the diag key test has to see Fn+S rather than be left by it
+inline Action actionFor(uint8_t raw, bool woke_display, bool button_acted, bool on_key_test) {
+  if (woke_display || button_acted) return Action{false, 0};
+  return Action{fnBase(raw) == 's' && !on_key_test, toUiKey(raw)};
+}
+
 // A short name for a raw code, for the diag key-test screen: "ESC", "'a'", "FN+1".
 inline void keyName(uint8_t raw, char* out, size_t n) {
   if (n == 0) return;
