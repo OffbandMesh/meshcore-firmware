@@ -3,6 +3,8 @@
 #include "DisplayDriver.h"
 #include <Wire.h>
 #include <Adafruit_GFX.h>
+#include <Fonts/Org_01.h>     // #1237: the badge's body face
+#include <Fonts/TomThumb.h>   // #1237: its status and meta face
 #define SSD1306_NO_SPLASH
 #include <Adafruit_SSD1306.h>
 #include <helpers/RefCountedDigitalPin.h>
@@ -19,6 +21,9 @@ class SSD1306Display : public DisplayDriver {
   Adafruit_SSD1306 display;
   bool _isOn;
   uint8_t _color;
+  // #1237: GFX places a custom face by its baseline, while every caller here gives the
+  // text's top-left. setCursor adds this, so a face change moves no call site.
+  int _baseline = 0;
   RefCountedDigitalPin* _peripher_power;
 
   bool i2c_probe(TwoWire& wire, uint8_t addr);
@@ -39,6 +44,7 @@ public:
   void clear() override;
   void startFrame(ColorVal bkg = UIColor::window_bkg) override;
   void setTextSize(int sz) override;
+  void setFace(int id) override;   // #1237: 0 the built-in 6x8, 1 Org_01, 2 TomThumb
   void setColor(ColorVal c) override;
   void setCursor(int x, int y) override;
   void print(const char* str) override;
