@@ -1098,20 +1098,25 @@ void UITask::loop() {
   const uint8_t kbd_raw = _kbd.poll(millis());
   if (kbd_raw != 0) {
     _last_kbd_raw = kbd_raw;   // #1207: shown by the key test, Fn-layer keys included
-    // #1233: Fn+S opens Settings from anywhere (design 3a), except the diag key test,
-    // which has to show it. A key that wakes a dark display is spent on waking it, as
-    // any other key is.
     bool key_test_up = false;
 #if defined(QCC_BADGE_SELFTEST)
     key_test_up = (curr == key_test);
 #endif
-    if (cardkb::fnBase(kbd_raw) == 's' && c == 0 && !key_test_up && checkDisplayOn(KEY_CANCEL) != 0) {
-      gotoSettings();
-    }
-    const uint8_t key = cardkb::toUiKey(kbd_raw);
-    if (key != 0 && c == 0) {
+    // #1239: every key wakes a dark display and holds the auto-off off, not only the ones
+    // the UI maps. checkDisplayOn() is both the wake and the timer, and it used to be
+    // reached on the way to dispatching a key, so the Fn layer never got there.
+    //
+    // It answers about the display rather than about the key: 0 when it woke a dark one,
+    // and the character it was handed when the screen was already lit. So ask it with a
+    // stand-in. The stand-in is never dispatched -- cardkb::actionFor() reads the answer
+    // as a yes or no and says what the real key does.
+    const char kWakeProbe = 1;
+    const cardkb::Action action =
+        cardkb::actionFor(kbd_raw, checkDisplayOn(kWakeProbe) == 0, c != 0, key_test_up);
+    if (action.settings) gotoSettings();
+    if (action.ui_key != 0) {
       _input_from_kbd = true;
-      c = checkDisplayOn((char)key);
+      c = (char)action.ui_key;
     }
   }
 #endif
