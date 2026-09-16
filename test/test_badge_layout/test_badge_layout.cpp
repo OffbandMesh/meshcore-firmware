@@ -9,6 +9,8 @@
 #include "helpers/ui/BadgeLayout.h"
 
 using namespace badgeui;
+using offband::screenOffMillis;       // #1245: shared with every ui-new board
+using offband::screenOffSecsShown;
 
 namespace {
 std::string age(uint32_t secs) {
@@ -240,6 +242,97 @@ TEST(BadgeLayoutTextSize, AnUnknownSizeReadsAsTheShippedDefault) {
     SCOPED_TRACE(size);
     EXPECT_EQ(bodyFaceFor(kDefaultTextSize).id, bodyFaceFor(size).id);
   }
+}
+
+// #1245: the Screen off setting. The owner, on the bench: fifteen seconds is too short
+// by default, and it needs a setting.
+TEST(BadgeLayoutScreenOff, TheStepsCycleAndComeBack) {
+  uint16_t secs = kScreenOffSteps[0];
+  for (int i = 1; i < kScreenOffStepCount; i++) {
+    secs = nextScreenOffSecs(secs);
+    EXPECT_EQ(kScreenOffSteps[i], secs) << "step " << i;
+  }
+  EXPECT_EQ(kScreenOffSteps[0], nextScreenOffSecs(secs));   // and round again
+}
+
+TEST(BadgeLayoutScreenOff, TheStepsOnlyGetLonger) {
+  for (int i = 1; i < kScreenOffStepCount; i++) {
+    EXPECT_GT(kScreenOffSteps[i], kScreenOffSteps[i - 1]) << "step " << i;
+  }
+  EXPECT_EQ(15, kScreenOffSteps[0]);                                   // the shortest is what it was
+  EXPECT_EQ(300, kScreenOffSteps[kScreenOffStepCount - 1]);            // five minutes
+}
+
+// A value from somewhere else -- the phone, or a build that had different steps -- is not
+// a dead end: the row cycles from the shortest step.
+TEST(BadgeLayoutScreenOff, AValueOffTheStepsLandsOnOne) {
+  for (uint16_t odd : {(uint16_t)0, (uint16_t)1, (uint16_t)45, (uint16_t)600, (uint16_t)65535}) {
+    SCOPED_TRACE(odd);
+    EXPECT_EQ(kScreenOffSteps[0], nextScreenOffSecs(odd));
+  }
+}
+
+TEST(BadgeLayoutScreenOff, TheDefaultIsAMinuteAndIsAStep) {
+  EXPECT_EQ(60, kDefaultScreenOffSecs);
+  bool found = false;
+  for (int i = 0; i < kScreenOffStepCount; i++) {
+    if (kScreenOffSteps[i] == kDefaultScreenOffSecs) found = true;
+  }
+  EXPECT_TRUE(found) << "cycling from the default would jump to the shortest step";
+}
+
+// #1245: the timeout a board actually waits. This is the arithmetic every auto-off
+// deadline is built from, and getting it wrong blanks the screen instantly or never.
+TEST(BadgeLayoutScreenOff, ThePreferenceWinsAndTheBoardIsTheFallback) {
+  EXPECT_EQ(60000u, screenOffMillis(60, 15000));       // the preference
+  EXPECT_EQ(300000u, screenOffMillis(300, 15000));
+  EXPECT_EQ(15000u, screenOffMillis(0, 15000));        // none set: the board's own
+  EXPECT_EQ(0u, screenOffMillis(0, 0));                // a board that never blanks
+  EXPECT_EQ(65535000u, screenOffMillis(65535, 15000)); // and no overflow at the top
+}
+
+// The compiled value stays in milliseconds the whole way. Dividing it into seconds first
+// would have turned a board compiled with less than a second into one that blanks on the
+// next tick, and quietly shortened one compiled between seconds.
+TEST(BadgeLayoutScreenOff, ASubSecondBoardStillWaits) {
+  EXPECT_EQ(500u, screenOffMillis(0, 500));
+  EXPECT_EQ(1u, screenOffMillis(0, 1));
+  EXPECT_EQ(15500u, screenOffMillis(0, 15500));
+}
+
+// What the row shows for the same pair: a compiled value between seconds rounds up, so
+// the row never claims a shorter wait than the display takes.
+TEST(BadgeLayoutScreenOff, TheRowNeverClaimsAShorterWaitThanTheDisplayTakes) {
+  EXPECT_EQ(60, screenOffSecsShown(60, 15000));
+  EXPECT_EQ(15, screenOffSecsShown(0, 15000));
+  EXPECT_EQ(16, screenOffSecsShown(0, 15500));   // rounds up, not down
+  EXPECT_EQ(1, screenOffSecsShown(0, 1));        // and a sub-second board reads as 1s
+  EXPECT_EQ(1, screenOffSecsShown(0, 500));
+  EXPECT_EQ(0, screenOffSecsShown(0, 0));        // a board that never blanks has no wait
+  EXPECT_EQ(65535, screenOffSecsShown(0, 0xFFFFFFFFu));   // saturates rather than wraps
+}
+
+TEST(BadgeLayoutScreenOff, EveryStepHasAShortName) {
+  char buf[16];
+  screenOffName(15, buf, sizeof buf);   EXPECT_STREQ("15s", buf);
+  screenOffName(30, buf, sizeof buf);   EXPECT_STREQ("30s", buf);
+  screenOffName(60, buf, sizeof buf);   EXPECT_STREQ("1m", buf);
+  screenOffName(120, buf, sizeof buf);  EXPECT_STREQ("2m", buf);
+  screenOffName(300, buf, sizeof buf);  EXPECT_STREQ("5m", buf);
+  screenOffName(90, buf, sizeof buf);   EXPECT_STREQ("1m30s", buf);   // a value from elsewhere
+  screenOffName(0, buf, sizeof buf);    EXPECT_STREQ("-", buf);
+}
+
+// The Settings row renders into a 16-byte field, and nothing here may overrun it.
+TEST(BadgeLayoutScreenOff, EveryNameFitsTheSettingsRow) {
+  char buf[16];
+  for (int i = 0; i < kScreenOffStepCount; i++) {
+    screenOffName(kScreenOffSteps[i], buf, sizeof buf);
+    EXPECT_LT(strlen(buf), sizeof buf);
+    EXPECT_LE(textPx(detailFace(), buf), kScreenPx - 2 * kEdgePx);
+  }
+  screenOffName(65535, buf, sizeof buf);      // the widest a uint16 can be
+  EXPECT_LT(strlen(buf), sizeof buf);
 }
 
 // Each step down fits at least as many rows and characters as the one above.
