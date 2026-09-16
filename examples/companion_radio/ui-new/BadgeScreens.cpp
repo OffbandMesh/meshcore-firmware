@@ -23,6 +23,15 @@ using offband::BadgeSend;
 
 namespace {
 
+// #1237: the badge's two faces. Body carries the lists, threads and titles; meta carries
+// the Status screen's lines, a selected message's detail and the footers, where its
+// extra room counts for more than its size costs.
+const Face& kBody = bodyFace();
+const Face& kMeta = metaFace();
+
+// The rows under a title bar, in the body face.
+const int kListRows = rowsFor(kBody) - 1;
+
 // #1233: when `t` happened, as message rows show it: today's clock time once a time
 // zone is set and the phone or GPS has set the clock (the design's "12:04"), else an age.
 void whenOf(uint32_t t, char* out, size_t n) {
@@ -41,11 +50,11 @@ bool before(uint32_t now_ms, uint32_t until_ms) { return until_ms != 0 && (int32
 // One row in the Settings grammar (design 3a): the label from the left, the value flush
 // right, the whole row lit when selected.
 void listRow(DisplayDriver& d, int row, const char* label, const char* value, bool selected) {
-  char left[24];
+  char left[28];
   snprintf(left, sizeof(left), " %s", label);
-  if (selected) fillRow(d, row);
-  textAt(d, 0, row * kRowPx, left, selected);
-  if (value[0] != 0) textAt(d, kScreenPx - 1 - textPx(value), row * kRowPx, value, selected);
+  if (selected) fillRow(d, kBody, row);
+  line(d, kBody, row, left, selected);
+  if (value[0] != 0) lineRight(d, kBody, row, value, selected);
 }
 
 // #1235: the GPS while it's on, else null. MicroNMEA keeps its last fix after the GPS
@@ -182,31 +191,34 @@ bool InboxScreen::drawItem(DisplayDriver& d, int row, const Item& item, bool sel
 
   char shown[32], left[40], count[5] = "", age[6] = "";
   d.translateUTF8ToBlocks(shown, name, sizeof(shown));
-  snprintf(left, sizeof(left), " %s%c%s", pinned ? "\x07" : "", sigil, shown);
+  // #1237: the pinned mark is drawn, not printed, so the name starts clear of it.
+  snprintf(left, sizeof(left), "%s%c%s", pinned ? "  " : " ", sigil, shown);
   if (unread > 99) snprintf(count, sizeof(count), "99+");
   else if (unread > 0) snprintf(count, sizeof(count), "%u", (unsigned)unread);
   if (muted) snprintf(age, sizeof(age), "muted");
   else if (active) whenOf(last_time, age, sizeof(age));
 
-  const int y = row * kRowPx;
+  const int y = rowY(kBody, row);
   const bool inverted = selected || (item.convo == _flash_convo && before(now_ms, _flash_until));
-  const int age_x = kScreenPx - 1 - textPx(age);
-  const int count_end = age[0] != 0 ? age_x - 3 : kScreenPx - 1;
-  const int right_x = count[0] != 0 ? count_end - textPx(count) - 1 : (age[0] != 0 ? age_x : kScreenPx);
-  if (inverted) fillRow(d, row);
+  const int age_x = kScreenPx - kEdgePx - textPx(kBody, age);
+  const int count_end = age[0] != 0 ? age_x - 3 : kScreenPx - kEdgePx;
+  const int right_x = count[0] != 0 ? count_end - textPx(kBody, count) - 2 : (age[0] != 0 ? age_x : kScreenPx);
+  if (inverted) fillRow(d, kBody, row);
 
-  if (selected && textPx(left) + kCellPx > right_x) {
+  if (selected && textPx(kBody, left) + 4 > right_x) {
     char all[64];
     snprintf(all, sizeof(all), "%s   %s%s%s", left, count, count[0] != 0 ? " new   " : "", age);
-    textAt(d, -marqueeOffset(textPx(all), kScreenPx, now_ms - _marquee_from), y, all, true);
-    return textPx(all) > kScreenPx;
+    const int width = textPx(kBody, all);
+    textAt(d, kBody, -marqueeOffset(width, kScreenPx, now_ms - _marquee_from), y, all, true);
+    if (pinned) markPin(d, 0, y);
+    return width > kScreenPx;
   }
 
-  const int room = (right_x - kCellPx) / kCellPx;   // a cell between name and count
-  if ((int)strlen(left) > room) left[room > 0 ? room : 0] = 0;
-  textAt(d, 0, y, left, inverted);
-  if (count[0] != 0) countBox(d, count_end, y, count, inverted);
-  if (age[0] != 0) textAt(d, age_x, y, age, inverted);   // a muted row says "muted" here
+  left[fitPx(kBody, left, right_x - 4)] = 0;   // a gap between name and count
+  textAt(d, kBody, 0, y, left, inverted);
+  if (pinned) markPin(d, 0, y);
+  if (count[0] != 0) countBox(d, kBody, count_end, y, count, inverted);
+  if (age[0] != 0) textAt(d, kBody, age_x, y, age, inverted);   // a muted row says "muted" here
   return false;
 }
 
@@ -229,24 +241,29 @@ int InboxScreen::render(DisplayDriver& d) {
   const bool more_below = count - top > rows;
   if (more_below) top = listTop(_sel, count, rows - 1);
 
-  char right[20];
+  char right[20] = "";
   if (crumb) {
     cycleTitle(right, sizeof(right), 0);
   } else {
-    // At most "99+ new" and two marks: 9 cells, clear of " Messages".
-    int n = 0;
     const unsigned unread = store.totalUnread();
-    if (unread > 99) n = snprintf(right, sizeof(right), "99+ new");
-    else if (unread > 0) n = snprintf(right, sizeof(right), "%u new", unread);
-    if (top > 0) right[n++] = kGlyphUp;
-    if (more_below) right[n++] = kGlyphDown;
-    right[n] = 0;
+    if (unread > 99) snprintf(right, sizeof(right), "99+ new");
+    else if (unread > 0) snprintf(right, sizeof(right), "%u new", unread);
   }
-  fillRow(d, 0);
-  textAt(d, 0, 0, " Messages", true);
-  textAt(d, kScreenPx - 15 - textPx(right), 0, right, true);
-  battery(d, kScreenPx - 13, 2, batteryPct(_task->getBattMilliVolts()));
-  if (crumb) breadcrumb(d, 1, 0);
+  fillRow(d, kBody, 0);
+  line(d, kBody, 0, " Messages", true);
+  // The battery sits at the edge, then the scroll marks, then the count.
+  int right_edge = kScreenPx - 14;
+  battery(d, kScreenPx - 12, 1, batteryPct(_task->getBattMilliVolts()));
+  if (!crumb && more_below) {
+    markDown(d, right_edge - 6, 0, true);
+    right_edge -= 7;
+  }
+  if (!crumb && top > 0) {
+    markUp(d, right_edge - 6, 0, true);
+    right_edge -= 7;
+  }
+  if (right[0] != 0) textAt(d, kBody, right_edge - textPx(kBody, right), 0, right, true);
+  if (crumb) breadcrumb(d, kBody, 1, 0);
 
   const uint32_t now_ms = millis();
   bool scrolling = false;
@@ -386,13 +403,13 @@ void ThreadScreen::selectNewer() {
 }
 
 void ThreadScreen::drawRow(DisplayDriver& d, int screen_row, const Row& r, bool channel) {
-  const int y = screen_row * kRowPx;
+  const int y = rowY(kBody, screen_row);
   const Store::Msg* m = the_mesh.badgeStore().msg(_seqs[r.msg]);
   if (m == nullptr) return;
-  if (r.caret) textAt(d, 0, y, ">");
+  if (r.caret) textAt(d, kBody, 0, y, ">");
 
   if (r.kind == RowKind::Meta) {   // design 1a "Message selected": one line of detail
-    char meta[24], age[6];
+    char meta[32], age[6];
     whenOf(m->time, age, sizeof(age));
     if (m->outgoing) {
       switch (m->status) {
@@ -403,7 +420,8 @@ void ThreadScreen::drawRow(DisplayDriver& d, int screen_row, const Row& r, bool 
         case BadgeSend::Failed:    snprintf(meta, sizeof(meta), "failed  Enter=resend"); break;
         default:                   snprintf(meta, sizeof(meta), "sent %s", age); break;
       }
-      textAt(d, kScreenPx - textPx(meta), y, meta);
+      // #1237: the detail line is the meta face, which leaves room for all of it.
+      textAt(d, kMeta, kScreenPx - kEdgePx - textPx(kMeta, meta), y + 1, meta);
     } else {
       // Radio hops, as the design counts them: 1 is heard directly. A direct-routed
       // packet (0xFF) doesn't say how many.
@@ -412,45 +430,50 @@ void ThreadScreen::drawRow(DisplayDriver& d, int screen_row, const Row& r, bool 
       else snprintf(hops, sizeof(hops), "%uhop%s", (unsigned)m->hops + 1, m->hops == 0 ? "" : "s");
       if (m->rssi != 0) snprintf(meta, sizeof(meta), "%s %s %d", age, hops, (int)m->rssi);
       else snprintf(meta, sizeof(meta), "%s %s", age, hops);
-      textAt(d, ((channel ? kIndent : 0) + 1) * kCellPx, y, meta);
+      textAt(d, kMeta, (channel ? kTagPx + kGapPx : 0) + 2, y + 1, meta);
     }
     return;
   }
 
   const MsgView& v = _views[r.msg];
-  if (r.first && !v.outgoing && channel) cell(d, r.caret ? 1 : 0, screen_row, _tag[r.msg], true);
-  char line[kCols + 1];
-  memcpy(line, v.text + r.span.start, r.span.len);
-  line[r.span.len] = 0;
-  textAt(d, r.col * kCellPx, y, line);
-  if (r.last && v.outgoing) {   // sending shows three dots; only a dead send shows X
-    const int x = kMarkCol * kCellPx;
-    const char tick[2] = {kGlyphTick, 0};
-    if (m->status == BadgeSend::Delivered) textAt(d, x, y, tick);
+  if (r.first && !v.outgoing && channel) {
+    const int x = r.caret ? charPx(kBody, '>') + 1 : 0;
+    lit(d);
+    d.fillRect(x, y, textPx(kBody, _tag[r.msg]) + 2, kBody.row_px);
+    textAt(d, kBody, x + 1, y, _tag[r.msg], true);
+  }
+  char text[64];
+  const size_t len = r.span.len < sizeof(text) - 1 ? r.span.len : sizeof(text) - 1;
+  memcpy(text, v.text + r.span.start, len);
+  text[len] = 0;
+  textAt(d, kBody, r.x_px, y, text);
+  if (r.last && v.outgoing) {   // sending shows three dots; only a dead send shows a cross
+    const int x = kScreenPx - kMarkPx;
+    if (m->status == BadgeSend::Delivered) markTick(d, x, y);
     else if (m->status == BadgeSend::Sending) sendingDots(d, x, y);
-    else if (m->status == BadgeSend::Failed) textAt(d, x, y, "X");
+    else if (m->status == BadgeSend::Failed) markCross(d, x, y);
   }
 }
 
 // The compose line under a dotted rule. The room left shows once typing starts.
 void ThreadScreen::drawCompose(DisplayDriver& d, int row) {
-  const int y = row * kRowPx;
+  const int y = rowY(kBody, row);
   dottedRule(d, y);
   if (before(millis(), _note_until)) {
-    textAt(d, 0, y + 1, _note);
+    textAt(d, kBody, 0, y + 1, _note);
     return;
   }
-  char buf[kCols + 1];
+  char buf[40];
   snprintf(buf, sizeof(buf), "> %s", _line.tail(kInlineChars));
-  textAt(d, 0, y + 1, buf);
+  textAt(d, kBody, 0, y + 1, buf);
   if ((millis() / 500) % 2 == 0) {
     lit(d);
-    d.fillRect(textPx(buf), y + 1, 1, 7);
+    d.fillRect(textPx(kBody, buf), y + 1, 1, kBody.row_px - 2);
   }
   if (_line.length() > 0) {
     char room[6];
     snprintf(room, sizeof(room), "%d", _line.remaining());
-    textAt(d, kScreenPx - textPx(room) - 1, y + 1, room);
+    textAt(d, kBody, kScreenPx - textPx(kBody, room) - kEdgePx, y + 1, room);
   }
 }
 
@@ -458,34 +481,36 @@ void ThreadScreen::drawCompose(DisplayDriver& d, int row) {
 // room left (design 1a, "Compose full").
 void ThreadScreen::drawEditor(DisplayDriver& d, const char* name) {
   const char* text = _line.text();
+  const int indent = textPx(kBody, "> ");
+  const int width = kScreenPx - kEdgePx - indent;
   Span spans[16];
-  const int n = wrap(text, kCols - 2, spans, 16);
-  const int first = n > 7 ? n - 7 : 0;
-  int cursor_x = 2 * kCellPx, cursor_y = 0;
+  const int n = wrap(kBody, text, width, spans, 16);
+  const int rows = kListRows;          // the rows above the footer
+  const int first = n > rows ? n - rows : 0;
+  int cursor_x = indent, cursor_y = 0;
   for (int i = first; i < n; i++) {
-    char buf[kCols + 1];
+    char buf[64];
     snprintf(buf, sizeof(buf), "%s%.*s", i == 0 ? "> " : "  ", (int)spans[i].len, text + spans[i].start);
-    const int y = (i - first) * kRowPx;
-    textAt(d, 0, y, buf);
+    const int y = rowY(kBody, i - first);
+    textAt(d, kBody, 0, y, buf);
     if (i == n - 1) {   // after the last character typed, trailing spaces included
-      int len = (int)strlen(text) - spans[i].start;
-      if (len > kCols - 2) len = kCols - 2;
-      cursor_x = (2 + len) * kCellPx;
+      cursor_x = indent + textPx(kBody, text + spans[i].start);
+      if (cursor_x > kScreenPx - 2) cursor_x = kScreenPx - 2;
       cursor_y = y;
     }
   }
   if ((millis() / 500) % 2 == 0) {
     lit(d);
-    d.fillRect(cursor_x, cursor_y, 1, 7);
+    d.fillRect(cursor_x, cursor_y, 1, kBody.row_px - 1);
   }
-  dottedRule(d, 7 * kRowPx);
-  char room[6], footer[24];
+  const int foot_y = rowY(kBody, rows);
+  dottedRule(d, foot_y);
+  char room[6], footer[28];
   snprintf(room, sizeof(room), "%d", _line.remaining());
   snprintf(footer, sizeof(footer), " %s", name);
-  const int max_name = (kScreenPx - textPx(room) - 2 * kCellPx) / kCellPx;
-  if ((int)strlen(footer) > max_name) footer[max_name] = 0;
-  textAt(d, 0, 7 * kRowPx + 1, footer);
-  textAt(d, kScreenPx - textPx(room) - 1, 7 * kRowPx + 1, room);
+  footer[fitPx(kBody, footer, kScreenPx - textPx(kBody, room) - 6)] = 0;
+  textAt(d, kBody, 0, foot_y + 1, footer);
+  textAt(d, kBody, kScreenPx - textPx(kBody, room) - kEdgePx, foot_y + 1, room);
 }
 
 int ThreadScreen::render(DisplayDriver& d) {
@@ -523,9 +548,9 @@ int ThreadScreen::render(DisplayDriver& d) {
   }
   if (sel < 0) _sel_seq = 0;   // it was evicted
 
-  // Seven rows of thread, newest at the bottom: under the name bar for the first 2 s,
+  // The thread's rows, newest at the bottom: under the name bar for the first 2 s,
   // then above the compose line.
-  const int nrows = layoutThread(_views, n, channel, sel, _rows, kMaxRows);
+  const int nrows = layoutThread(kBody, _views, n, channel, sel, _rows, kMaxRows);
   const int visible = kListRows;
   const int top = threadTop(_rows, nrows, visible, sel);
   const int count = nrows - top < visible ? nrows - top : visible;
@@ -535,10 +560,10 @@ int ThreadScreen::render(DisplayDriver& d) {
     char left[40], right[16] = "";
     snprintf(left, sizeof(left), " %s", name);
     if (_unread_at_entry > 0) snprintf(right, sizeof(right), "%u unread", (unsigned)_unread_at_entry);
-    bar(d, 0, left, right);
+    bar(d, kBody, 0, left, right);
   }
   for (int r = 0; r < count; r++) drawRow(d, first + r, _rows[top + r], channel);
-  if (n == 0) cell(d, 0, 3, " nothing here yet");
+  if (n == 0) line(d, kBody, 3, " nothing here yet");
   if (!entry) drawCompose(d, kListRows);
   return entry ? (int)(2000 - (now - _entered_at)) + 10 : 500;
 }
@@ -637,19 +662,23 @@ int ContactsScreen::render(DisplayDriver& d) {
   if (more_below) top = listTop(_sel, _count, rows - 1);
 
   char right[16];
-  if (crumb) {
-    cycleTitle(right, sizeof(right), 1);
-  } else {
-    int n = snprintf(right, sizeof(right), "%d", _total);
-    if (top > 0) right[n++] = kGlyphUp;
-    if (more_below) right[n++] = kGlyphDown;
-    right[n] = 0;
+  if (crumb) cycleTitle(right, sizeof(right), 1);
+  else snprintf(right, sizeof(right), "%d", _total);
+  bar(d, kBody, 0, " Contacts", "");
+  int right_edge = kScreenPx - kEdgePx;
+  if (!crumb && more_below) {
+    markDown(d, right_edge - 6, 0, true);
+    right_edge -= 7;
   }
-  bar(d, 0, " Contacts", right);
-  if (crumb) breadcrumb(d, 1, 1);
+  if (!crumb && top > 0) {
+    markUp(d, right_edge - 6, 0, true);
+    right_edge -= 7;
+  }
+  textAt(d, kBody, right_edge - textPx(kBody, right), 0, right, true);
+  if (crumb) breadcrumb(d, kBody, 1, 1);
 
   if (_count == 0) {
-    cell(d, 0, first_row + 1, " nobody heard yet");
+    line(d, kBody, first_row + 1, " nobody heard yet");
     return crumb ? 250 : 5000;
   }
   const uint32_t now = rtc_clock.getCurrentTime();
@@ -675,12 +704,11 @@ int ContactsScreen::render(DisplayDriver& d) {
     } else {
       snprintf(info, sizeof(info), "%s", age);
     }
-    const int info_x = kScreenPx - 1 - textPx(info);
-    const int room = (info_x - kCellPx) / kCellPx;
-    if ((int)strlen(left) > room) left[room > 0 ? room : 0] = 0;
-    if (selected) fillRow(d, row);
-    textAt(d, 0, row * kRowPx, left, selected);
-    textAt(d, info_x, row * kRowPx, info, selected);
+    const int info_x = kScreenPx - kEdgePx - textPx(kBody, info);
+    left[fitPx(kBody, left, info_x - 4)] = 0;
+    if (selected) fillRow(d, kBody, row);
+    textAt(d, kBody, 0, rowY(kBody, row), left, selected);
+    textAt(d, kBody, info_x, rowY(kBody, row), info, selected);
   }
   if (more_below) {
     dark(d);
@@ -822,19 +850,23 @@ int NearbyScreen::render(DisplayDriver& d) {
   if (more_below) top = listTop(_sel, count, rows - 1);
 
   char right[16];
-  if (crumb) {
-    cycleTitle(right, sizeof(right), 2);
-  } else {
-    int m = snprintf(right, sizeof(right), "%d", count);
-    if (top > 0) right[m++] = kGlyphUp;
-    if (more_below) right[m++] = kGlyphDown;
-    right[m] = 0;
+  if (crumb) cycleTitle(right, sizeof(right), 2);
+  else snprintf(right, sizeof(right), "%d", count);
+  bar(d, kBody, 0, " Nearby", "");
+  int right_edge = kScreenPx - kEdgePx;
+  if (!crumb && more_below) {
+    markDown(d, right_edge - 6, 0, true);
+    right_edge -= 7;
   }
-  bar(d, 0, " Nearby", right);
-  if (crumb) breadcrumb(d, 1, 2);
+  if (!crumb && top > 0) {
+    markUp(d, right_edge - 6, 0, true);
+    right_edge -= 7;
+  }
+  textAt(d, kBody, right_edge - textPx(kBody, right), 0, right, true);
+  if (crumb) breadcrumb(d, kBody, 1, 2);
 
   if (count == 0) {
-    cell(d, 0, first_row + 1, " nobody heard lately");
+    line(d, kBody, first_row + 1, " nobody heard lately");
     return crumb ? 250 : 5000;
   }
   const uint32_t now = rtc_clock.getCurrentTime();
@@ -849,12 +881,11 @@ int NearbyScreen::render(DisplayDriver& d) {
     // Radio hops, as everywhere on the badge: 1 is heard directly.
     if (n.hops != 0xFF) snprintf(info, sizeof(info), "%uhop %s", (unsigned)n.hops + 1, age);
     else snprintf(info, sizeof(info), "%s", age);
-    const int info_x = kScreenPx - 1 - textPx(info);
-    const int room = (info_x - kCellPx) / kCellPx;
-    if ((int)strlen(left) > room) left[room > 0 ? room : 0] = 0;
-    if (selected) fillRow(d, row);
-    textAt(d, 0, row * kRowPx, left, selected);
-    textAt(d, info_x, row * kRowPx, info, selected);
+    const int info_x = kScreenPx - kEdgePx - textPx(kBody, info);
+    left[fitPx(kBody, left, info_x - 4)] = 0;
+    if (selected) fillRow(d, kBody, row);
+    textAt(d, kBody, 0, rowY(kBody, row), left, selected);
+    textAt(d, kBody, info_x, rowY(kBody, row), info, selected);
   }
   if (more_below) {
     dark(d);
@@ -919,15 +950,21 @@ int StatusScreen::drawAs(DisplayDriver& d, const char* title, int pos) {
   // Status carries the brand (design 1a); as the empty inbox it carries the inbox's
   // battery instead.
   const bool as_status = (pos == kCycleStops - 1);
-  bar(d, 0, title, crumb ? right : (as_status ? "OFFBAND" : ""));
-  if (!crumb && !as_status) battery(d, kScreenPx - 13, 2, batteryPct(_task->getBattMilliVolts()));
-  int row = 1;
-  if (crumb) breadcrumb(d, row++, pos);
+  bar(d, kBody, 0, title, crumb ? right : (as_status ? "OFFBAND" : ""));
+  if (!crumb && !as_status) battery(d, kScreenPx - 12, 1, batteryPct(_task->getBattMilliVolts()));
+  // #1237: the lines are the meta face. They're values, and it fits them whole.
+  int y = kBody.row_px;
+  if (crumb) {
+    breadcrumb(d, kBody, 1, pos);
+    y += kBody.row_px;
+  }
+  y += 1;
 
-  char buf[40], shown[32];
+  char buf[48], shown[32];
   d.translateUTF8ToBlocks(shown, the_mesh.getNodeName(), sizeof(shown));
   snprintf(buf, sizeof(buf), " @%s", shown);
-  cell(d, 0, row++, buf);
+  textAt(d, kMeta, 0, y, buf);
+  y += kMeta.row_px;
 
   // Uptime as h:mm:ss, and as days and hours once that would not fit.
   const unsigned long up = millis() / 1000;
@@ -937,8 +974,9 @@ int StatusScreen::drawAs(DisplayDriver& d, const char* title, int pos) {
   } else {
     snprintf(buf, sizeof(buf), " node %02X%02X up %lud %luh", id[0], id[1], up / 86400, up / 3600 % 24);
   }
-  cell(d, 0, row++, buf);
-  if (!crumb) row++;   // the design's breathing room, given up to the breadcrumb
+  textAt(d, kMeta, 0, y, buf);
+  y += kMeta.row_px;
+  if (!crumb) y += 2;   // the design's breathing room, given up to the breadcrumb
 
   // Nodes heard in the last hour, and how far the farthest is in radio hops. The scan
   // copies every contact, so it runs every 10 s rather than on every redraw.
@@ -959,26 +997,31 @@ int StatusScreen::drawAs(DisplayDriver& d, const char* title, int pos) {
   if (_heard == 0) snprintf(buf, sizeof(buf), " no nodes this hour");
   else if (_farthest > 0) snprintf(buf, sizeof(buf), " %d node%s  %d hop%s", _heard, _heard == 1 ? "" : "s", _farthest, _farthest == 1 ? "" : "s");
   else snprintf(buf, sizeof(buf), " %d node%s", _heard, _heard == 1 ? "" : "s");
-  cell(d, 0, row++, buf);
+  textAt(d, kMeta, 0, y, buf);
+  y += kMeta.row_px;
 
   const NodePrefs* prefs = the_mesh.getNodePrefs();
-  snprintf(buf, sizeof(buf), " %.3fMHz SF%d", (double)prefs->freq, (int)prefs->sf);
-  cell(d, 0, row++, buf);
+  snprintf(buf, sizeof(buf), " %.3f MHz SF%d", (double)prefs->freq, (int)prefs->sf);
+  textAt(d, kMeta, 0, y, buf);
+  snprintf(buf, sizeof(buf), "BW%.1f ", (double)prefs->bw);
+  textAt(d, kMeta, kScreenPx - kEdgePx - textPx(kMeta, buf), y, buf);
+  y += kMeta.row_px;
 
   snprintf(buf, sizeof(buf), " batt %d%%", batteryPct(_task->getBattMilliVolts()));
-  cell(d, 0, row, buf);
+  textAt(d, kMeta, 0, y, buf);
   char tx_rx[20];
   counts(tx_rx, sizeof(tx_rx), radio_driver.getPacketsSent(), radio_driver.getPacketsRecv());
-  textAt(d, kScreenPx - 1 - textPx(tx_rx), row * kRowPx, tx_rx);
+  textAt(d, kMeta, kScreenPx - kEdgePx - textPx(kMeta, tx_rx), y, tx_rx);
 
   // The footer: the Bluetooth pairing PIN while a phone could pair, which used to be
   // Home's job on this board.
-  dottedRule(d, kListRows * kRowPx);
+  const int foot_y = kScreenRowsPx - kMeta.row_px;
+  dottedRule(d, foot_y - 1);
   if (_task->hasConnection()) snprintf(buf, sizeof(buf), " phone connected");
   else if (!_task->isBluetoothEnabled()) snprintf(buf, sizeof(buf), " bluetooth off");
   else if (the_mesh.getBLEPin() != 0) snprintf(buf, sizeof(buf), " BT pin %06lu", (unsigned long)the_mesh.getBLEPin());
   else snprintf(buf, sizeof(buf), " quiet on the mesh");
-  textAt(d, 0, kListRows * kRowPx + 1, buf);
+  textAt(d, kMeta, 0, foot_y, buf);
   return crumb ? 250 : 1000;
 }
 
@@ -1062,20 +1105,20 @@ void SettingsScreen::act() {
 
 // The design's gate: what happens, then Enter to go ahead or Esc to back out.
 int SettingsScreen::drawGate(DisplayDriver& d) {
-  bar(d, 0, " Hibernate", "");
-  cell(d, 0, 1, " radio and screen off");
-  cell(d, 0, 2, " until the next reset");
-  cell(d, 0, 4, " messages on the badge");
-  cell(d, 0, 5, " are cleared");
-  fillRow(d, kListRows);
-  textAt(d, 0, kListRows * kRowPx, " Enter sleep", true);
-  textAt(d, kScreenPx - 1 - textPx("Esc no"), kListRows * kRowPx, "Esc no", true);
+  bar(d, kBody, 0, " Hibernate", "");
+  line(d, kBody, 1, " radio and screen off");
+  line(d, kBody, 2, " until the next reset");
+  line(d, kBody, 4, " messages on the badge");
+  line(d, kBody, 5, " are cleared");
+  fillRow(d, kBody, kListRows);
+  line(d, kBody, kListRows, " Enter sleep", true);
+  lineRight(d, kBody, kListRows, "Esc no", true);
   return 1000;
 }
 
 int SettingsScreen::render(DisplayDriver& d) {
   if (_gate) return drawGate(d);
-  bar(d, 0, " Settings", "");
+  bar(d, kBody, 0, " Settings", "");
   const NodePrefs* prefs = the_mesh.getNodePrefs();
   const bool sent = before(millis(), _sent_until);
   int row = 1;
@@ -1143,11 +1186,13 @@ int ZonePickerScreen::render(DisplayDriver& d) {
   int top = listTop(_sel, count, kListRows);
   const bool more_below = count - top > kListRows;
   if (more_below) top = listTop(_sel, count, kListRows - 1);
-  char marks[3] = {0};
-  int m = 0;
-  if (top > 0) marks[m++] = kGlyphUp;
-  if (more_below) marks[m++] = kGlyphDown;
-  bar(d, 0, " Time zone", marks);
+  bar(d, kBody, 0, " Time zone", "");
+  int right_edge = kScreenPx - kEdgePx;
+  if (more_below) {
+    markDown(d, right_edge - 6, 0, true);
+    right_edge -= 7;
+  }
+  if (top > 0) markUp(d, right_edge - 6, 0, true);
 
   const int current = the_mesh.getNodePrefs()->ui_tz;
   const uint32_t now = rtc_clock.getCurrentTime();
@@ -1164,9 +1209,9 @@ int ZonePickerScreen::render(DisplayDriver& d) {
       const char* mark = (z == current) ? "now " : (z == _suggested ? "gps " : "");
       snprintf(right, sizeof(right), "%s%s", mark, offset);
     }
-    if (selected) fillRow(d, row);
-    textAt(d, 0, row * kRowPx, left, selected);
-    textAt(d, kScreenPx - 1 - textPx(right), row * kRowPx, right, selected);
+    if (selected) fillRow(d, kBody, row);
+    line(d, kBody, row, left, selected);
+    lineRight(d, kBody, row, right, selected);
   }
   if (more_below) {
     dark(d);
@@ -1242,25 +1287,25 @@ void GpsScreen::act() {
 int GpsScreen::render(DisplayDriver& d) {
   char buf[24], part[24];
   summary(_task, part, sizeof(part));
-  bar(d, 0, " GPS", part);
+  bar(d, kBody, 0, " GPS", part);
 
   LocationProvider* gps = liveGps(_task);
   if (gps == nullptr) {
-    cell(d, 0, 1, " GPS is off");
+    line(d, kBody, 1, " GPS is off");
   } else if (!gps->isValid()) {
     // With no module the title says "No GPS Module"; otherwise one is still looking.
-    if (gpsModuleFound()) cell(d, 0, 1, " waiting for a fix");
+    if (gpsModuleFound()) line(d, kBody, 1, " waiting for a fix");
   } else {
     formatPosition(gps->getLatitude(), gps->getLongitude(), part, sizeof(part));
     snprintf(buf, sizeof(buf), " %s", part);
-    cell(d, 0, 1, buf);
+    line(d, kBody, 1, buf);
     // The provider reports 0 for an altitude it hasn't got (no GGA yet). A real reading
     // of exactly 0.0 m hides too, which only sea level makes possible.
     const long alt_mm = gps->getAltitude();
     if (alt_mm != 0) {
       formatAltitude(alt_mm, part, sizeof(part));
       snprintf(buf, sizeof(buf), " alt %s", part);
-      cell(d, 0, 2, buf);
+      line(d, kBody, 2, buf);
     }
   }
   // The GPS's own clock, which can arrive before a position does.
@@ -1268,7 +1313,7 @@ int GpsScreen::render(DisplayDriver& d) {
   if (t > 0) {
     formatUtcTime((uint32_t)t, part, sizeof(part));
     snprintf(buf, sizeof(buf), " %s UTC", part);
-    cell(d, 0, 3, buf);
+    line(d, kBody, 3, buf);
   }
 
   // The rows sit at the foot.
