@@ -46,9 +46,12 @@ void whenOf(uint32_t t, char* out, size_t n) {
   formatWhen(the_mesh.getNodePrefs()->ui_tz, t, rtc_clock.getCurrentTime(), the_mesh.badgeClockTrusted(), out, n);
 }
 
+// #1246: the badge's own endpoints, read through the averaged voltage. Empty is the
+// voltage the badge actually shuts itself down at, so 0% means the badge is about to
+// stop rather than "a third left"; full is a voltage a charged cell holds once the
+// charger lets go, so full reads 100 and stays there.
 int batteryPct(uint16_t mv) {
-  const int pct = ((int)mv - BATT_MIN_MILLIVOLTS) * 100 / (BATT_MAX_MILLIVOLTS - BATT_MIN_MILLIVOLTS);
-  return pct < 0 ? 0 : (pct > 100 ? 100 : pct);
+  return offband::batteryPercent(mv, BATT_MIN_MILLIVOLTS, BATT_MAX_MILLIVOLTS);
 }
 
 bool printable(uint8_t key) { return key >= 32 && key < 127; }
@@ -265,7 +268,7 @@ int InboxScreen::render(DisplayDriver& d) {
   line(d, kBody, 0, " Messages", true);
   // The battery sits at the edge, then the scroll marks, then the count.
   int right_edge = kScreenPx - 14;
-  battery(d, kScreenPx - 12, 1, batteryPct(_task->getBattMilliVolts()));
+  battery(d, kScreenPx - 12, 1, batteryPct(_task->smoothedBattMilliVolts()));
   if (!crumb && more_below) {
     markDown(d, right_edge - 6, 0, true);
     right_edge -= 7;
@@ -976,7 +979,7 @@ int StatusScreen::drawAs(DisplayDriver& d, const char* title, int pos) {
   // battery instead.
   const bool as_status = (pos == kCycleStops - 1);
   bar(d, kBody, 0, title, crumb ? right : (as_status ? "OFFBAND" : ""));
-  if (!crumb && !as_status) battery(d, kScreenPx - 12, 1, batteryPct(_task->getBattMilliVolts()));
+  if (!crumb && !as_status) battery(d, kScreenPx - 12, 1, batteryPct(_task->smoothedBattMilliVolts()));
   // #1237: the lines are the meta face. They're values, and it fits them whole.
   int y = kBody.row_px;
   if (crumb) {
@@ -1032,7 +1035,7 @@ int StatusScreen::drawAs(DisplayDriver& d, const char* title, int pos) {
   textAt(d, kMeta, kScreenPx - kEdgePx - textPx(kMeta, buf), y, buf);
   y += kMeta.row_px;
 
-  snprintf(buf, sizeof(buf), " batt %d%%", batteryPct(_task->getBattMilliVolts()));
+  snprintf(buf, sizeof(buf), " batt %d%%", batteryPct(_task->smoothedBattMilliVolts()));
   textAt(d, kMeta, 0, y, buf);
   char tx_rx[20];
   counts(tx_rx, sizeof(tx_rx), radio_driver.getPacketsSent(), radio_driver.getPacketsRecv());

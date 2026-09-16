@@ -14,6 +14,21 @@ static_assert(SAFEBOOT_ADC_MULTIPLIER - qcc::kDividerRatio < 0.0005f &&
               "SAFEBOOT_ADC_MULTIPLIER must equal qcc::kDividerRatio");
 static_assert(SAFEBOOT_ADC_SAMPLE_US == qcc::kAdcSampleUs, "SafeBoot must sample like the board");
 
+// #1246: 0% on the battery bar is the voltage SafeBoot refuses to start from, not the one
+// a running badge dies at. Below SLEEP the badge will not come back; between SLEEP and
+// WAKE it starts only on a clean fresh boot; it keeps running on the reserve below 0%
+// down to AUTO_SHUTDOWN_MILLIVOLTS. One policy, three thresholds, and the bar reads the
+// one a person can act on.
+#if !defined(BATT_MIN_MILLIVOLTS) || !defined(DEFAULT_SAFE_BOOT_SLEEP_MV) || \
+    !defined(AUTO_SHUTDOWN_MILLIVOLTS) || !defined(DEFAULT_SAFE_BOOT_WAKE_MV)
+#error "QCC badge: set BATT_MIN_MILLIVOLTS with the three low-voltage thresholds"
+#endif
+static_assert(BATT_MIN_MILLIVOLTS == DEFAULT_SAFE_BOOT_SLEEP_MV,
+              "0% on the badge's battery bar must be the voltage it will not start from");
+static_assert(AUTO_SHUTDOWN_MILLIVOLTS < DEFAULT_SAFE_BOOT_SLEEP_MV &&
+              DEFAULT_SAFE_BOOT_SLEEP_MV <= DEFAULT_SAFE_BOOT_WAKE_MV,
+              "the low-voltage thresholds must stay ordered: shutdown < sleep <= wake");
+
 uint16_t QccBadgeBoard::getBattMilliVolts() {
   analogReference(AR_INTERNAL);
   analogSampleTime(qcc::kAdcSampleUs);
