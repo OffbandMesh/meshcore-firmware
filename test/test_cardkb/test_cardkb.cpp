@@ -155,6 +155,69 @@ TEST(CardKb, FnBaseNamesTheKeyUnderAnFnCode) {
   EXPECT_EQ(0, cardkb::fnBase(151));     // the map's one empty slot
 }
 
+// #1239: the owner's bench found that "not all keys" woke a dark display. These are the
+// ones that did not -- waking used to be taken from the key the UI receives, and the whole
+// Fn layer delivers none, so a key's worth of the keyboard could not wake the badge.
+TEST(CardKb, TheWholeFnLayerDeliversNoUiKey) {
+  int keys_the_ui_never_sees = 0;
+  for (int row = 0; row < 48; row++) {
+    const uint8_t fn = kM5KeyMap[row][kFnColumn];
+    if (fn == 0) continue;                              // the map's empty slot sends nothing
+    SCOPED_TRACE(testing::Message() << "row " << row << " fn " << int(fn));
+    EXPECT_EQ(0, cardkb::toUiKey(fn));                  // no UI key ...
+    EXPECT_NE(0, cardkb::fnBase(fn));                   // ... though the key under it is known
+    keys_the_ui_never_sees++;
+  }
+  EXPECT_EQ(47, keys_the_ui_never_sees);   // every key the badge has, bar the empty slot
+}
+
+// #1239: and this is the fix -- the display is asked first, and every key it woke is spent
+// on the wake, whether the UI has a use for it or not.
+TEST(CardKb, AKeyThatWokeTheDisplayDoesNothingElse) {
+  for (int row = 0; row < 48; row++) {
+    for (int col = 0; col < 7; col++) {
+      const uint8_t raw = kM5KeyMap[row][col];
+      if (raw == 0) continue;
+      SCOPED_TRACE(testing::Message() << "row " << row << " col " << col << " raw " << int(raw));
+      const cardkb::Action woke = cardkb::actionFor(raw, true, false, false);
+      EXPECT_FALSE(woke.settings);
+      EXPECT_EQ(0, woke.ui_key);
+    }
+  }
+}
+
+TEST(CardKb, AKeyOnALitScreenReachesTheUi) {
+  const cardkb::Action a = cardkb::actionFor('a', false, false, false);
+  EXPECT_FALSE(a.settings);
+  EXPECT_EQ('a', a.ui_key);
+
+  const cardkb::Action esc = cardkb::actionFor(27, false, false, false);
+  EXPECT_EQ(KEY_CANCEL, esc.ui_key);
+
+  const cardkb::Action fn1 = cardkb::actionFor(129, false, false, false);   // Fn+1
+  EXPECT_FALSE(fn1.settings);
+  EXPECT_EQ(0, fn1.ui_key);          // the Fn layer still delivers no key; it woke the badge
+}
+
+// #1233: Fn+S opens Settings from wherever the badge is -- but a dark screen takes the
+// press first, so it opens on the second one. That is what it did before #1239 too.
+TEST(CardKb, FnSOpensSettingsOnceTheScreenIsLit) {
+  EXPECT_TRUE(cardkb::actionFor(155, false, false, false).settings);
+  EXPECT_FALSE(cardkb::actionFor(155, true, false, false).settings);    // spent on the wake
+  EXPECT_FALSE(cardkb::actionFor(155, false, false, true).settings);    // the diag key test shows it
+  EXPECT_EQ(0, cardkb::actionFor(155, false, false, false).ui_key);     // and sends no key
+  EXPECT_FALSE(cardkb::actionFor('s', false, false, false).settings);   // a bare S is a letter
+  EXPECT_EQ('s', cardkb::actionFor('s', false, false, false).ui_key);
+}
+
+// #1205: a button event in the same pass wins; the key is the rarer of the two.
+TEST(CardKb, AButtonEventInTheSamePassLeavesTheKeyAlone) {
+  const cardkb::Action a = cardkb::actionFor('a', false, true, false);
+  EXPECT_EQ(0, a.ui_key);
+  const cardkb::Action fn_s = cardkb::actionFor(155, false, true, false);
+  EXPECT_FALSE(fn_s.settings);
+}
+
 TEST(CardKb, NamesFitAShortBufferAndStayTerminated) {
   char buf[6];
   cardkb::keyName(183, buf, sizeof buf);          // "RIGHT" exactly fills it
