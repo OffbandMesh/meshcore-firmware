@@ -210,10 +210,27 @@ public:
   // How long after unplugging to keep watching for the high-water mark.
   static const uint32_t kWatchMs = 5UL * 60UL * 1000UL;
 
+  // What the last feed() decided, so a caller can log it. A learn that never happens
+  // must name the step it stopped at -- on the bench one did, with nothing in the log to
+  // say whether USB was never seen, the charge fell short, or the window refused.
+  enum Event : uint8_t {
+    kNone,              // nothing changed
+    kPluggedIn,         // external power appeared
+    kGatePassed,        // unplugged after a full charge: watching
+    kGateFailed,        // unplugged, but the charge never reached kChargedMv
+    kLearned,           // the window closed on a plausible value (feed returned it)
+    kImplausible,       // the window closed outside kFloorMv..kCeilMv
+  };
+  Event event() const { return _event; }
+  uint16_t chargeMv() const { return _charge_mv; }   // last reading while external
+  uint16_t bestMv() const { return _best_mv; }       // highest in the current window
+
   // Returns a learned full point once, on the reading that completes a window; 0 means
   // nothing to store. `mv` should be the smoothed reading, not a raw ADC sample.
   uint16_t feed(uint32_t now_ms, uint16_t mv, bool external) {
+    _event = kNone;
     if (external) {
+      if (!_was_external) _event = kPluggedIn;
       _charge_mv = mv;          // the last thing seen with the charger attached
       _watching = false;
       _was_external = true;
@@ -224,24 +241,32 @@ public:
       _watching = _charge_mv >= kChargedMv;
       _started_ms = now_ms;
       _best_mv = 0;
+      _event = _watching ? kGatePassed : kGateFailed;
       if (!_watching) return 0;
     }
     if (!_watching) return 0;
     if (mv > _best_mv) _best_mv = mv;
     if ((int32_t)(now_ms - _started_ms) < (int32_t)kWatchMs) return 0;
     _watching = false;
-    return plausibleFullMv(_best_mv) ? _best_mv : 0;
+    if (plausibleFullMv(_best_mv)) {
+      _event = kLearned;
+      return _best_mv;
+    }
+    _event = kImplausible;
+    return 0;
   }
 
   void reset() {
     _was_external = false; _watching = false;
     _charge_mv = 0; _best_mv = 0; _started_ms = 0;
+    _event = kNone;
   }
 
 private:
   uint32_t _started_ms = 0;
   uint16_t _charge_mv = 0, _best_mv = 0;
   bool _was_external = false, _watching = false;
+  Event _event = kNone;
 };
 
 inline bool FullPointLearner::plausibleFullMv(uint16_t mv) {
