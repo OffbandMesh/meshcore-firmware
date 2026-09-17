@@ -1252,13 +1252,47 @@ void UITask::loop() {
     _next_batt_read = millis() + 1000;
     // #1254: the same reading teaches the learner where this cell's 100% is. A value
     // the user pinned is theirs -- auto-learn does not touch it until they clear it.
-    if (_node_prefs != NULL && !_node_prefs->batt_full_user) {
+    if (_node_prefs != NULL) {
+      // Fed even when the user has pinned a value, so the log keeps explaining itself; a
+      // pinned full point is protected by skipping the save below, not by going quiet.
+      const bool pinned = _node_prefs->batt_full_user != 0;
       const uint16_t learned =
           _full_learner.feed(millis(), _batt.value(), board.isExternalPowered());
-      if (learned != 0 && learned != _node_prefs->batt_full_mv) {
+      // Every decision goes to the log, not only a success. On the bench a learn failed
+      // with nothing to say whether USB was never seen, the charge fell short, or the
+      // window refused; each of those now names itself with its number.
+      using L = offband::FullPointLearner;
+      switch (_full_learner.event()) {
+        case L::kPluggedIn:
+          MESH_DEBUG_PRINTLN("BATT: external power on, reading %u mV%s",
+                             (unsigned)_full_learner.chargeMv(),
+                             pinned ? ", full point pinned by user" : "");
+          break;
+        case L::kGatePassed:
+          MESH_DEBUG_PRINTLN("BATT: unplugged, charge %u mV >= %u, watching %lu s",
+                             (unsigned)_full_learner.chargeMv(), (unsigned)L::kChargedMv,
+                             (unsigned long)(L::kWatchMs / 1000UL));
+          break;
+        case L::kGateFailed:
+          MESH_DEBUG_PRINTLN("BATT: unplugged, charge %u mV < %u, not a full charge",
+                             (unsigned)_full_learner.chargeMv(), (unsigned)L::kChargedMv);
+          break;
+        case L::kLearned:
+          MESH_DEBUG_PRINTLN("BATT: window closed, full point %u mV%s", (unsigned)learned,
+                             pinned ? " -- not saved, the user's pinned value stands" : "");
+          break;
+        case L::kImplausible:
+          MESH_DEBUG_PRINTLN("BATT: window closed at %u mV, outside %u..%u, nothing learned",
+                             (unsigned)_full_learner.bestMv(), (unsigned)L::kFloorMv,
+                             (unsigned)L::kCeilMv);
+          break;
+        default:
+          break;
+      }
+      if (!pinned && learned != 0 && learned != _node_prefs->batt_full_mv) {
         _node_prefs->batt_full_mv = learned;
         the_mesh.savePrefs();
-        MESH_DEBUG_PRINTLN("BATT: learned full point %u mV", (unsigned)learned);
+        MESH_DEBUG_PRINTLN("BATT: saved full point %u mV", (unsigned)learned);
       }
     }
   }

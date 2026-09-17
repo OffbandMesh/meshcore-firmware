@@ -469,6 +469,75 @@ TEST(FullPoint, TheScreenSaysWhereTheNumberCameFrom) {
   EXPECT_STREQ("set", fullPointSourceName(4126, true));
 }
 
+// The events are what a bench cycle is read by, so each must fire at the step it names
+// and nowhere else. This walks tonight's bench case: on USB at a reading below the gate,
+// then unplugged -- which must say "gate failed", with the number, and learn nothing.
+TEST(FullPoint, EachEventFiresAtTheStepItNames) {
+  FullPointLearner l;
+  uint32_t t = 0;
+  auto step = [&](uint16_t mv, bool ext) { t += kMin; return l.feed(t, mv, ext); };
+
+  step(4073, true);
+  EXPECT_EQ(FullPointLearner::kPluggedIn, l.event());   // USB seen
+  step(4073, true);
+  EXPECT_EQ(FullPointLearner::kNone, l.event());        // still USB: nothing new
+
+  step(4040, false);
+  EXPECT_EQ(FullPointLearner::kGateFailed, l.event());  // unplugged below the gate
+  EXPECT_EQ(4073, l.chargeMv());                        // and the number it failed on
+  for (int m = 0; m < 10; m++) EXPECT_EQ(0, step(4040, false));
+  EXPECT_EQ(FullPointLearner::kNone, l.event());        // not watching, so silent
+
+  // A real top-off this time.
+  step(4121, true);
+  EXPECT_EQ(FullPointLearner::kPluggedIn, l.event());
+  step(4121, false);
+  EXPECT_EQ(FullPointLearner::kGatePassed, l.event());
+  uint16_t got = 0;
+  for (int m = 0; m < 10 && !got; m++) got = step(4121, false);
+  EXPECT_EQ(4121, got);
+  EXPECT_EQ(FullPointLearner::kLearned, l.event());
+}
+
+// The window opens on the unplug and closes on the first feed at or after kWatchMs; that
+// closing feed, and only that one, reports. Fed a minute apart, the unplug is minute 0 and
+// the close is minute 5.
+TEST(FullPoint, AnImplausibleWindowReportsOnTheClosingFeedOnly) {
+  FullPointLearner l;
+  uint32_t t = 0;
+  auto step = [&](uint16_t mv, bool ext) { t += kMin; return l.feed(t, mv, ext); };
+  step(4150, true);
+  step(3500, false);
+  EXPECT_EQ(FullPointLearner::kGatePassed, l.event());
+  for (int m = 1; m < 5; m++) {
+    step(3500, false);
+    EXPECT_EQ(FullPointLearner::kNone, l.event()) << "minute " << m << " is still inside the window";
+  }
+  EXPECT_EQ(0, step(3500, false));
+  EXPECT_EQ(FullPointLearner::kImplausible, l.event()) << "minute 5 closes it";
+  EXPECT_EQ(3500, l.bestMv());
+  step(3500, false);
+  EXPECT_EQ(FullPointLearner::kNone, l.event()) << "and it says so once";
+}
+
+// What a learn reports is what it measured: bestMv at the closing feed is the value
+// returned, so the log line and the stored value cannot disagree.
+TEST(FullPoint, ALearnReportsTheValueItReturns) {
+  FullPointLearner l;
+  uint32_t t = 0;
+  auto step = [&](uint16_t mv, bool ext) { t += kMin; return l.feed(t, mv, ext); };
+  step(4161, true);
+  step(4110, false);
+  step(4126, false);
+  step(4104, false);
+  step(4119, false);
+  step(4101, false);
+  const uint16_t got = step(4100, false);
+  EXPECT_EQ(FullPointLearner::kLearned, l.event());
+  EXPECT_EQ(4126, got);
+  EXPECT_EQ(got, l.bestMv());
+}
+
 TEST(FullPoint, ResetForgetsAPendingWindow) {
   FullPointLearner l;
   uint32_t t = 0;
