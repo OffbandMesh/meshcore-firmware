@@ -1268,14 +1268,25 @@ void UITask::loop() {
                              (unsigned)_full_learner.chargeMv(),
                              pinned ? ", full point pinned by user" : "");
           break;
-        case L::kGatePassed:
-          MESH_DEBUG_PRINTLN("BATT: unplugged, charge %u mV >= %u, watching %lu s",
-                             (unsigned)_full_learner.chargeMv(), (unsigned)L::kChargedMv,
+        case L::kStillCharging:
+          MESH_DEBUG_PRINTLN("BATT: on USB, %d mV over the last %u min -- still charging",
+                             (int)_full_learner.riseMv(), (unsigned)(L::kHistorySlots - 1));
+          break;
+        case L::kChargerDone:
+          MESH_DEBUG_PRINTLN("BATT: on USB, %d mV over the last %u min -- charger done at %u mV",
+                             (int)_full_learner.riseMv(), (unsigned)(L::kHistorySlots - 1),
+                             (unsigned)_full_learner.chargeMv());
+          break;
+        case L::kWatching:
+          MESH_DEBUG_PRINTLN("BATT: unplugged at %u mV after a settled charge, watching %lu s",
+                             (unsigned)_full_learner.chargeMv(),
                              (unsigned long)(L::kWatchMs / 1000UL));
           break;
-        case L::kGateFailed:
-          MESH_DEBUG_PRINTLN("BATT: unplugged, charge %u mV < %u, not a full charge",
-                             (unsigned)_full_learner.chargeMv(), (unsigned)L::kChargedMv);
+        case L::kNotLearning:
+          MESH_DEBUG_PRINTLN("BATT: unplugged at %u mV, charger never settled (%u flat min "
+                             "needed), nothing to learn",
+                             (unsigned)_full_learner.chargeMv(),
+                             (unsigned)(L::kHistorySlots - 1));
           break;
         case L::kLearned:
           MESH_DEBUG_PRINTLN("BATT: window closed, full point %u mV%s", (unsigned)learned,

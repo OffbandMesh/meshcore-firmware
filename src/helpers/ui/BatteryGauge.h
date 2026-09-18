@@ -176,24 +176,43 @@ private:
 // full, and the bar stopped at 98%.
 //
 // The badge has two signals and no current sense: VBUS (NRF52Board::isExternalPowered)
-// and its own smoothed reading. So:
+// and its own smoothed reading. The rig capture of 2026-09-14..17 says what those are
+// worth, and it refutes the voltage gate this file used to carry:
 //
-//   1. while externally powered, remember the last reading -- the charge voltage;
-//   2. when VBUS drops, gate on it. Above kChargedMv means the charger was holding the
-//      cell at a full-charge voltage, which is the part the badge cannot infer from
-//      voltage alone;
-//   3. if the gate passes, take the HIGHEST reading seen on battery over the following
-//      window as this cell's 100%.
+//   * A full cell reads anywhere from 4071 to 4129 mV on this badge, depending only on
+//     how long ago the charger last ran. A fixed "charged above X" gate therefore tests a
+//     number that moves further than the gap it is testing for. At 4100 it rejected every
+//     unplug the owner made on 2026-09-17, on a cell he had just charged.
+//   * While the charger is working the cell climbs 11 to 27 mV every half hour (133
+//     windows across a 96-minute charge, about 0.7 mV a minute). While it sits on USB
+//     with the charger done it moves at most 5 mV in a half hour -- 8,119 windows across
+//     five stretches, one of them 28 hours long. The two populations do not overlap.
+//     Measured as the same statistic this code computes: the reading now minus the
+//     reading half an hour earlier, taken at every sample, not a peak-to-peak spread.
+//   * On battery the reading only falls from the moment of unplug: in both discharge runs
+//     the highest cell reading is the first sample after it.
 //
-// The maximum, not a timed sample: a load only ever pushes the reading down -- a 22 dBm
-// transmit swung it 20 mV within a minute of unplugging on the bench -- so the maximum is
-// the closest thing to a rested value obtainable without measuring current.
+// So the badge does not ask "is this voltage high enough", which it cannot answer. It
+// asks "has the charger stopped adding to this cell", which the voltage does answer:
 //
-// The maximum is taken WITHIN one window, not across the badge's life: every charge that
-// passes the gate replaces the stored value, lower as readily as higher. So a cell whose
-// full voltage sags with age is followed down, one charge cycle at a time. The calibrate
-// row is for the cell the gate never fires on -- a charger that terminates low -- not for
-// ageing.
+//   1. on external power, keep a reading a minute for the last half hour and compare the
+//      oldest with the newest -- a ROLLING half hour, so the answer is current at the
+//      moment of the unplug rather than at the last window boundary;
+//   2. a rise of no more than kFlatRiseMv says the charger is done with this cell;
+//   3. on unplug, if that half hour says done, watch the next kWatchMs;
+//   4. skip the first kSettleMs and kSettleReadings of it, because the average still
+//      carries the reading from USB, then take the HIGHEST reading as this cell's 100%.
+//
+// The maximum, not a timed sample: a load only ever pushes the reading down -- the rig
+// saw the load-side voltage swing 90 mV between a 12 mA and a 150 mA moment in the five
+// minutes after an unplug -- so the maximum is the closest thing to a rested value
+// obtainable without measuring current.
+//
+// The maximum is taken WITHIN one window, not across the badge's life: every unplug that
+// qualifies replaces the stored value, lower as readily as higher. So a cell whose full
+// voltage sags with age is followed down, one charge cycle at a time. The calibrate row
+// is for the badge whose charger never settles -- one left on a bench supply, or unplugged
+// before a half-hour window ever closes -- not for ageing.
 class FullPointLearner {
 public:
   // Whether a value is a plausible full point for a single lithium cell. The learner
@@ -201,53 +220,113 @@ public:
   // so a mis-timed press cannot pin a number that makes the bar meaningless.
   static bool plausibleFullMv(uint16_t mv);
 
-  // A charge that ended above this was a full charge. Coarse on purpose: it decides
-  // whether to learn, not what to learn. The owner's cell sits at 4183 on the charger
-  // and 4148 rested, so it clears this comfortably.
-  static const uint16_t kChargedMv = 4100;
-  // Nothing outside this is a single lithium cell at full charge.
+  // Nothing outside this is a single lithium cell at full charge. A sanity band, not a
+  // decision: a full cell reads 4071..4129 mV on the bench badge, and this only has to
+  // exclude nonsense.
   static const uint16_t kFloorMv = 3900, kCeilMv = 4250;
+  // The span the capture measured the two populations over, and the line between them.
+  // Charging: +11 to +27 mV per half hour. Sitting on USB with the charger done: at most
+  // +5 mV. Eight is between them, and both ends of the comparison are averaged readings,
+  // so noise arrives divided by about the square root of the average's depth.
+  //
+  // The half hour ROLLS: one sample a minute, oldest against newest. A window that only
+  // closed on the half hour would miss a charge that finished five minutes into it -- the
+  // owner would unplug a settled badge and be told the charger never settled.
+  static const uint8_t kHistorySlots = 31;                    // 31 samples span 30 minutes
+  static const uint32_t kSlotMs = 60UL * 1000UL;
+  static const int16_t kFlatRiseMv = 8;
+  // BatteryAverage closes a sixteenth of the gap per reading, so after kSettleReadings a
+  // twentieth of the step is left -- under 2 mV of the 40 mV that unplugging costs. Both
+  // the time and the reading count have to pass: the time alone would let a loop that
+  // fell behind learn the charger's voltage, and the count alone would let a fast loop
+  // learn from a second and a half of readings.
+  static const uint32_t kSettleMs = 60UL * 1000UL;
+  static const uint8_t kSettleReadings = 48;
   // How long after unplugging to keep watching for the high-water mark.
   static const uint32_t kWatchMs = 5UL * 60UL * 1000UL;
 
   // What the last feed() decided, so a caller can log it. A learn that never happens
   // must name the step it stopped at -- on the bench one did, with nothing in the log to
-  // say whether USB was never seen, the charge fell short, or the window refused.
+  // say whether USB was never seen, the charge was still running, or the window refused.
   enum Event : uint8_t {
     kNone,              // nothing changed
     kPluggedIn,         // external power appeared
-    kGatePassed,        // unplugged after a full charge: watching
-    kGateFailed,        // unplugged, but the charge never reached kChargedMv
+    kStillCharging,     // a window closed with the cell still climbing
+    kChargerDone,       // a window closed flat: the charger has stopped adding
+    kWatching,          // unplugged after a flat window: watching for the rested value
+    kNotLearning,       // unplugged without one
     kLearned,           // the window closed on a plausible value (feed returned it)
     kImplausible,       // the window closed outside kFloorMv..kCeilMv
   };
   Event event() const { return _event; }
   uint16_t chargeMv() const { return _charge_mv; }   // last reading while external
   uint16_t bestMv() const { return _best_mv; }       // highest in the current window
+  int16_t riseMv() const { return _rise_mv; }        // rise across the rolling half hour
+  bool chargerDone() const { return _flat; }         // only ever true on a full half hour
 
   // Returns a learned full point once, on the reading that completes a window; 0 means
   // nothing to store. `mv` should be the smoothed reading, not a raw ADC sample.
   uint16_t feed(uint32_t now_ms, uint16_t mv, bool external) {
     _event = kNone;
-    if (external) {
-      if (!_was_external) _event = kPluggedIn;
-      _charge_mv = mv;          // the last thing seen with the charger attached
-      _watching = false;
+    return external ? onExternal(now_ms, mv) : onBattery(now_ms, mv);
+  }
+
+  void reset() {
+    _was_external = false; _watching = false; _flat = false; _judged = false;
+    _charge_mv = 0; _best_mv = 0;
+    _started_ms = 0; _slot_ms = 0;
+    _rise_mv = 0; _slots = 0; _write_at = 0; _readings = 0;
+    _event = kNone;
+  }
+
+private:
+  uint16_t onExternal(uint32_t now_ms, uint16_t mv) {
+    if (!_was_external) {                  // a fresh plug-in proves nothing yet
       _was_external = true;
-      return 0;
+      _flat = false; _judged = false; _rise_mv = 0;
+      _slots = 1; _write_at = 1;
+      _slot_ms = now_ms;
+      _history[0] = mv;
+      _event = kPluggedIn;
+    } else if ((uint32_t)(now_ms - _slot_ms) >= kSlotMs) {
+      _slot_ms = now_ms;
+      // One write head. Once the ring is full it points at the oldest sample, which is the
+      // one this write replaces -- so after the write it points at the new oldest.
+      _history[_write_at] = mv;
+      _write_at = (uint8_t)((_write_at + 1) % kHistorySlots);
+      if (_slots < kHistorySlots) _slots++;
+      if (_slots == kHistorySlots) {       // a whole half hour to compare across
+        _rise_mv = (int16_t)((int32_t)mv - (int32_t)_history[_write_at]);
+        const bool flat = _rise_mv <= kFlatRiseMv;
+        if (!_judged || flat != _flat) _event = flat ? kChargerDone : kStillCharging;
+        _flat = flat;
+        _judged = true;
+      }
     }
-    if (_was_external) {        // just unplugged: decide whether this charge counted
+    _charge_mv = mv;                       // the last thing seen with the charger attached
+    _watching = false;
+    return 0;
+  }
+
+  uint16_t onBattery(uint32_t now_ms, uint16_t mv) {
+    if (_was_external) {                   // just unplugged: decide whether this counted
       _was_external = false;
-      _watching = _charge_mv >= kChargedMv;
+      _watching = _flat;                   // flat means the rolling half hour agrees NOW
       _started_ms = now_ms;
       _best_mv = 0;
-      _event = _watching ? kGatePassed : kGateFailed;
+      _readings = 0;
+      _event = _watching ? kWatching : kNotLearning;
       if (!_watching) return 0;
     }
     if (!_watching) return 0;
-    if (mv > _best_mv) _best_mv = mv;
-    if ((int32_t)(now_ms - _started_ms) < (int32_t)kWatchMs) return 0;
+    if (_readings < 255) _readings++;
+    const uint32_t since = (uint32_t)(now_ms - _started_ms);
+    if (since >= kSettleMs && _readings >= kSettleReadings && mv > _best_mv) _best_mv = mv;
+    if (since < kWatchMs) return 0;
     _watching = false;
+    // _best_mv is 0 when the average never settled inside the window -- a loop running far
+    // below a reading a second. That is implausible, and the log says so rather than
+    // leaving the badge watching for a window that will never close.
     if (plausibleFullMv(_best_mv)) {
       _event = kLearned;
       return _best_mv;
@@ -256,16 +335,12 @@ public:
     return 0;
   }
 
-  void reset() {
-    _was_external = false; _watching = false;
-    _charge_mv = 0; _best_mv = 0; _started_ms = 0;
-    _event = kNone;
-  }
-
-private:
-  uint32_t _started_ms = 0;
+  uint16_t _history[kHistorySlots];        // one reading a minute while on external power
+  uint32_t _started_ms = 0, _slot_ms = 0;
   uint16_t _charge_mv = 0, _best_mv = 0;
-  bool _was_external = false, _watching = false;
+  int16_t _rise_mv = 0;
+  uint8_t _slots = 0, _write_at = 0, _readings = 0;
+  bool _was_external = false, _watching = false, _flat = false, _judged = false;
   Event _event = kNone;
 };
 
