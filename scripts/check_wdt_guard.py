@@ -18,6 +18,20 @@ Escape hatch, for a call that is deliberately platform-specific:
 
     board.feedWatchdog();   // wdt-guard: allow-platform <reason>
 
+What it sees through (#1268, from adversarial review of the first version, which
+both of these defeated):
+  - a conditional split across lines with a trailing backslash. Lines are spliced
+    first, as the preprocessor does, so `#if \\` + `defined(NRF52_PLATFORM)` is
+    one directive. Findings still report the physical line of the call.
+  - a platform test hidden behind a macro DEFINED IN THE SAME FILE, followed
+    transitively: `#define ON_NRF defined(NRF52_PLATFORM)` then `#if ON_NRF`.
+
+Limits -- this is a text scanner, not a preprocessor. It does NOT see:
+  - a platform alias defined in another file (a header, or a -D build flag);
+  - a watchdog call made from inside a helper function that is itself guarded.
+Both need a real preprocessor pass over the include graph. If either pattern
+appears in a role's main.cpp, this check will stay green and must not be trusted.
+
 Usage:  python scripts/check_wdt_guard.py [--json-out FILE] [files...]
 Exit 0 clean, 1 on any finding.
 """
@@ -46,6 +60,50 @@ PLATFORM_TOKENS = re.compile(
 )
 
 DIRECTIVE = re.compile(r"^\s*#\s*(if|ifdef|ifndef|elif|else|endif)\b(.*)$")
+DEFINE = re.compile(r"^\s*#\s*define\s+([A-Za-z_]\w*)(?:\([^)]*\))?\s*(.*)$")
+CONTINUED = re.compile(r"\\\s*$")
+
+
+def logical_lines(src):
+    """Yield (first_physical_lineno, text) with backslash-newlines spliced.
+
+    Translation phase 2, which the preprocessor runs before it looks for
+    directives. Without it a conditional written as `#if \\` + `defined(X)` is
+    seen as `#if` with an empty expression and escapes the platform test. The
+    pieces are joined with a space so two tokens can never fuse into one. The
+    line number is where the logical line STARTS, so a reported call still
+    points at a line a person can find.
+    """
+    start, parts = None, []
+    for lineno, line in enumerate(src.splitlines(), 1):
+        if start is None:
+            start = lineno
+        if CONTINUED.search(line):
+            parts.append(CONTINUED.sub("", line))
+            continue
+        parts.append(line)
+        yield start, " ".join(parts)
+        start, parts = None, []
+    if parts:                       # file ends on a continuation
+        yield start, " ".join(parts)
+
+
+def platform_aliases(lines):
+    """Names #define'd IN THIS FILE whose body names a platform, transitively."""
+    bodies = {}
+    for _, text in lines:
+        m = DEFINE.match(text)
+        if m:
+            bodies[m.group(1)] = m.group(2)
+    aliases = {name for name, body in bodies.items() if PLATFORM_TOKENS.search(body)}
+    grew = True
+    while grew:                     # A -> B -> platform
+        grew = False
+        for name, body in bodies.items():
+            if name not in aliases and any(re.search(r"\b%s\b" % re.escape(a), body) for a in aliases):
+                aliases.add(name)
+                grew = True
+    return aliases
 
 
 def analyze_source(src):
@@ -56,18 +114,26 @@ def analyze_source(src):
     expression, or "#else of <expr>").
     """
     findings = []
+    lines = list(logical_lines(src))
+    aliases = platform_aliases(lines)
+
+    def is_platform(expr):
+        if PLATFORM_TOKENS.search(expr):
+            return True
+        return any(re.search(r"\b%s\b" % re.escape(a), expr) for a in aliases)
+
     # Stack entries: (is_platform_guard, description)
     stack = []
-    for lineno, line in enumerate(src.splitlines(), 1):
+    for lineno, line in lines:
         m = DIRECTIVE.match(line)
         if m:
             kind, rest = m.group(1), m.group(2).strip()
             if kind in ("if", "ifdef", "ifndef"):
-                stack.append((bool(PLATFORM_TOKENS.search(rest)), "#%s %s" % (kind, rest)))
+                stack.append((is_platform(rest), "#%s %s" % (kind, rest)))
             elif kind == "elif":
                 if stack:
                     stack.pop()
-                stack.append((bool(PLATFORM_TOKENS.search(rest)), "#elif %s" % rest))
+                stack.append((is_platform(rest), "#elif %s" % rest))
             elif kind == "else":
                 if stack:
                     was_platform, desc = stack.pop()
