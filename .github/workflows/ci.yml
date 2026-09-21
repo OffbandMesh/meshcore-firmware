@@ -100,6 +100,12 @@ jobs:
       - name: SafeBoot log-channel guard
         run: python scripts/test_safeboot_log_channels.py
 
+      # #1265: the caplog receiver's rotation policy names an owner that exists
+      # on the host, and logrotate accepts it before anything is installed. A
+      # hardcoded `syslog` failed a host's nightly rotation for weeks (#1264).
+      - name: Caplog receiver rotation-policy tests
+        run: python scripts/test_offband_caplog_receiver_setup.py
+
       # #775 (epic #774). Guards the defect class behind #764/#765: an `else if`
       # that matches a CLI key and writes nothing, or a key claimed twice in one
       # chain so the later arm is unreachable. `get radio` returned an empty reply
