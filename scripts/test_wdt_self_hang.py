@@ -61,7 +61,7 @@ def function_body(src, signature):
             depth -= 1
             if depth == 0:
                 return src[open_brace:i + 1]
-    raise AssertionError("unbalanced braces in " + name)
+    raise AssertionError("unbalanced braces in " + signature)
 
 
 # ---------------------------------------------------------------- MeshCore.h ---
@@ -104,16 +104,63 @@ def test_every_role_calls_the_tick_exactly_once():
         assert code_only(read(rel)).count(CALL) == 1, rel
 
 
+def feed_tick_pairs(src):
+    """(feed_line_indices, indices where the feed is DIRECTLY followed by the tick).
+
+    Both lines must be the call and NOTHING else once comments are stripped
+    (#1268). The first version used startswith(), which review showed accepts
+    `board.feedWatchdog(); delay(1000);` -- a stall smuggled onto the feed line --
+    and the same on the tick line. Equality is the point: the pair exists so the
+    hang starts from a freshly fed watchdog, and anything between them breaks that.
+    """
+    lines = [code_only(l).strip() for l in src.splitlines()]
+    feeds = [i for i, l in enumerate(lines) if l.startswith(FEED)]
+    adjacent = [i for i in feeds
+                if lines[i] == FEED and i + 1 < len(lines) and lines[i + 1] == CALL]
+    return feeds, adjacent
+
+
 def test_tick_sits_on_the_line_after_the_feed():
     for rel in ROLES:
-        lines = [code_only(l).strip() for l in read(rel).splitlines()]
-        feeds = [i for i, l in enumerate(lines) if l.startswith(FEED)]
+        feeds, adjacent = feed_tick_pairs(read(rel))
         assert len(feeds) >= 1, rel
         # the loop-top feed is the LAST unguarded feed in the file for the roles that
-        # also feed at sleep entry; require that at least one feed is directly followed
+        # also feed at sleep entry; require that exactly one feed is directly followed
         # by the tick, and that the tick is never anywhere else
-        adjacent = [i for i in feeds if i + 1 < len(lines) and lines[i + 1].startswith(CALL)]
         assert len(adjacent) == 1, (rel, feeds)
+
+
+def test_synthetic_clean_pair_with_comments_is_accepted():
+    src = '''
+  board.feedWatchdog();   // feed from the main loop
+  mesh::wdtTestHangTick();  // bench-only
+'''
+    assert feed_tick_pairs(src)[1] == [1]
+
+
+def test_synthetic_code_smuggled_onto_the_feed_line_is_rejected():
+    src = '''
+  board.feedWatchdog(); delay(1000);
+  mesh::wdtTestHangTick();
+'''
+    assert feed_tick_pairs(src) == ([1], [])
+
+
+def test_synthetic_code_smuggled_onto_the_tick_line_is_rejected():
+    src = '''
+  board.feedWatchdog();
+  mesh::wdtTestHangTick(); doSomethingSlow();
+'''
+    assert feed_tick_pairs(src) == ([1], [])
+
+
+def test_synthetic_gap_between_feed_and_tick_is_rejected():
+    src = '''
+  board.feedWatchdog();
+
+  mesh::wdtTestHangTick();
+'''
+    assert feed_tick_pairs(src) == ([1], [])
 
 
 # ---------------------------------------------------------- synthetic shapes ---
