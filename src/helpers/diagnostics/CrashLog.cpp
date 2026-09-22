@@ -13,6 +13,7 @@
 // #1087: meshLogMirrorEnabled() -- the single source of truth for "is this
 // console shared with the framed protocol". CrashLog and MeshLog must agree.
 #include "../../MeshLog.h"
+#include "UptimeRecord.h"   // #1074: previous-boot uptime schedule + retained record
 
 #include <cstdarg>
 #include <cstdio>
@@ -660,6 +661,14 @@ struct BootCounterState {
 
 RTC_NOINIT_ATTR static BootCounterState s_boot_state;
 
+// #1074: this boot's uptime, refreshed every second by crashLogUptimeTick() and
+// read by the next boot as "prev_boot_lasted". RTC memory survives the resets
+// that matter here -- task watchdog, panic, software, USB host (#754) -- at no
+// flash cost. Its own magic plus a check word: a record lost to power, never
+// written by older firmware, or torn by a reset mid-update fails validation and
+// the NVS copy is used instead.
+RTC_NOINIT_ATTR static uptime::RetainedUptime s_rtc_uptime;
+
 // Sub-loop visit tracking. Each sub-loop sets its bit on entry;
 // heartbeat reads + zeroes. s_hb_mux (defined once, up top) serializes.
 static volatile uint8_t s_subloop_flags = 0;
@@ -702,17 +711,29 @@ void heartbeatBegin() {
             crashLogf("[boot] WARN: NVS cw_boot 'count' write FAILED (count=%u not persisted)",
                       (unsigned)s_nvs_boot_count);
         }
-        s_boot_prefs.putUInt("last_up_s", 0);  // reset; maybeSaveUptime overwrites within 5s
+        s_boot_prefs.putUInt("last_up_s", 0);  // reset; crashLogUptimeTick() overwrites from 5 s
         s_boot_prefs.end();
     } else {
         crashLogf("[boot] WARN: NVS cw_boot namespace open failed; falling back to RTC counter");
         s_nvs_boot_count = bootCounterValue();
     }
 
-    crashLogf("[boot] nvs_count=%u rtc_count=%u prev_boot_lasted=%us reset_reason=%d (%s)",
+    // #1074: the previous boot's uptime from the RTC record when it survived
+    // (exact), else from NVS (power was lost; "+" once NVS had stopped saving,
+    // so the boot ran at least that long). Read before this boot overwrites it.
+    const uptime::Previous prev =
+        uptime::pickPrevious(s_rtc_uptime, s_nvs_boot_count, s_prev_boot_uptime_s);
+    uptime::stamp(s_rtc_uptime, s_nvs_boot_count, 0);
+
+    // #1074 (F2): rtc_count is the RTC counter itself. It used to print
+    // bootCounterValue(), which returns the NVS count whenever NVS opened, so
+    // the two fields could never differ. Now they diverge across a power loss,
+    // which clears RTC memory but not NVS.
+    crashLogf("[boot] nvs_count=%u rtc_count=%u prev_boot_lasted=%us%s prev_src=%s reset_reason=%d (%s)",
               (unsigned)s_nvs_boot_count,
-              (unsigned)bootCounterValue(),
-              (unsigned)s_prev_boot_uptime_s,
+              (unsigned)s_boot_state.counter,
+              (unsigned)prev.seconds, prev.at_least ? "+" : "",
+              prev.from_rtc ? "rtc" : "nvs",
               (int)esp_reset_reason(),
               resetReasonString((int)esp_reset_reason()));
 
@@ -729,18 +750,30 @@ uint32_t bootCounterValue() {
     return (s_boot_state.magic == kBootCounterMagic) ? s_boot_state.counter : 0;
 }
 
-// Periodically (called from heartbeatTick) save current uptime to NVS
-// so the next boot can report "previous boot lasted Ns" - critical for
-// distinguishing "long stable run then reset" from "fast crash cycle".
+// #1074: keep the record the next boot reports as "prev_boot_lasted" --
+// distinguishing "long stable run then reset" from "fast crash cycle". The RTC
+// copy is refreshed every second; the NVS copy follows the UptimeRecord.h
+// schedule and then stops, so flash writes no longer scale with uptime. Called
+// from the main loop (crashLogStandardTick() for every role, heartbeatTick()
+// on the observer, never both), so if the loop stops, the last value written
+// says when.
+static uint32_t s_last_rtc_uptime_ms = 0;
+static bool     s_rtc_uptime_updated = false;
 static uint32_t s_last_uptime_save_ms = 0;
-static void maybeSaveUptime(uint32_t now_ms) {
-    // Save every 5 seconds (matches stats cadence; balances flash wear)
-    if (now_ms - s_last_uptime_save_ms < 5000) return;
+static bool     s_uptime_saved = false;
+void crashLogUptimeTick(uint32_t now_ms) {
+    if (uptime::rtcUpdateDue(now_ms, s_last_rtc_uptime_ms, s_rtc_uptime_updated)) {
+        uptime::stamp(s_rtc_uptime, s_nvs_boot_count, now_ms / 1000);
+        s_last_rtc_uptime_ms = now_ms;
+        s_rtc_uptime_updated = true;
+    }
+    if (!uptime::nvsSaveDue(now_ms, s_last_uptime_save_ms, s_uptime_saved)) return;
     s_last_uptime_save_ms = now_ms;
-    // #181: feeds "prev boot lasted Ns" -- the crash-cycle-PERIOD evidence. Runs
-    // every 5s, so a silent failure would erase that evidence indefinitely. Log a
-    // failure ONCE and re-arm on the next success, rather than flooding the 4KB
-    // ring with a repeating warning.
+    s_uptime_saved = true;
+    // #181: feeds "prev boot lasted Ns" after a power loss -- the crash-cycle-
+    // PERIOD evidence. A silent failure would erase it, so log a failure ONCE
+    // and re-arm on the next success, rather than flooding the 4KB ring with a
+    // repeating warning.
     static bool s_uptime_save_warned = false;
     ::Preferences p;
     if (!p.begin("cw_boot", /*readOnly=*/false)) {
@@ -832,7 +865,7 @@ void heartbeatTick(uint32_t now_ms) {
 
     // Persist current uptime to NVS so next boot can report "previous
     // boot lasted Ns" -- definitive evidence of cycle period.
-    maybeSaveUptime(now_ms);
+    crashLogUptimeTick(now_ms);
 }
 
 void i2cScan(int sda_pin, int scl_pin, const char* label) {
@@ -891,6 +924,7 @@ void heartbeatBegin() {}
 void subloopMark(uint8_t) {}
 void loopIterTick() {}
 void heartbeatTick(uint32_t) {}
+void crashLogUptimeTick(uint32_t) {}   // nRF52 retained RAM does not survive a reset (#378)
 uint32_t bootCounterValue() { return 0; }
 
 #endif

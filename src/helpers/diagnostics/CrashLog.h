@@ -265,9 +265,17 @@ void loopIterTick();
 // Y/N flags reset after emit so each line covers the past 1s window.
 void heartbeatTick(uint32_t now_ms);
 
-// Boot counter value (loaded/incremented by heartbeatBegin).
-// Persists across soft resets via RTC_NOINIT; resets on power-on /
-// deep-sleep wake / esptool hard reset.
+// #1074: keep this boot's uptime for the next boot's "prev_boot_lasted" --
+// RTC-retained every second, NVS on a schedule that then stops (see
+// UptimeRecord.h). Call from the main loop only, once per role:
+// crashLogStandardTick() does it for every role but the observer, whose
+// heartbeatTick() does. A no-op on nRF52 and host builds.
+void crashLogUptimeTick(uint32_t now_ms);
+
+// Boot count loaded/incremented by heartbeatBegin(): the NVS-backed count,
+// which survives every reset including power loss, or the RTC_NOINIT count
+// when NVS could not be opened. The [boot] line prints the RTC count on its
+// own as rtc_count.
 uint32_t bootCounterValue();
 
 #ifdef OFFBAND_CRASHLOG_HOST
