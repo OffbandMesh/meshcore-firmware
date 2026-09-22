@@ -761,15 +761,12 @@ static uint32_t s_last_rtc_uptime_ms = 0;
 static bool     s_rtc_uptime_updated = false;
 static uint32_t s_last_uptime_save_ms = 0;
 static bool     s_uptime_saved = false;
-void crashLogUptimeTick(uint32_t now_ms) {
-    if (uptime::rtcUpdateDue(now_ms, s_last_rtc_uptime_ms, s_rtc_uptime_updated)) {
-        uptime::stamp(s_rtc_uptime, s_nvs_boot_count, now_ms / 1000);
-        s_last_rtc_uptime_ms = now_ms;
-        s_rtc_uptime_updated = true;
-    }
-    if (!uptime::nvsSaveDue(now_ms, s_last_uptime_save_ms, s_uptime_saved)) return;
-    s_last_uptime_save_ms = now_ms;
-    s_uptime_saved = true;
+static uint32_t s_last_attempt_ms = 0;
+static bool     s_uptime_attempted = false;
+// The NVS half, shared by the ladder and the shutdown flush. Returns whether
+// the value reached flash: a mark is spent only by a write that landed, so a
+// transient failure does not silently cost this boot its uptime record.
+static bool saveUptimeToNvs(uint32_t now_ms) {
     // #181: feeds "prev boot lasted Ns" after a power loss -- the crash-cycle-
     // PERIOD evidence. A silent failure would erase it, so log a failure ONCE
     // and re-arm on the next success, rather than flooding the 4KB ring with a
@@ -781,7 +778,7 @@ void crashLogUptimeTick(uint32_t now_ms) {
             crashLogf("[boot] WARN: uptime save -- NVS cw_boot open FAILED (suppressing repeats)");
             s_uptime_save_warned = true;
         }
-        return;
+        return false;
     }
     size_t wrote = p.putUInt("last_up_s", now_ms / 1000);
     p.end();
@@ -790,9 +787,41 @@ void crashLogUptimeTick(uint32_t now_ms) {
             crashLogf("[boot] WARN: uptime save -- NVS 'last_up_s' write FAILED (suppressing repeats)");
             s_uptime_save_warned = true;
         }
-        return;
+        return false;
     }
     s_uptime_save_warned = false;  // re-arm: a recovered write re-logs the next failure
+    s_last_uptime_save_ms = now_ms;
+    s_uptime_saved = true;
+    return true;
+}
+
+void crashLogUptimeTick(uint32_t now_ms) {
+    if (uptime::rtcUpdateDue(now_ms, s_last_rtc_uptime_ms, s_rtc_uptime_updated)) {
+        uptime::stamp(s_rtc_uptime, s_nvs_boot_count, now_ms / 1000);
+        s_last_rtc_uptime_ms = now_ms;
+        s_rtc_uptime_updated = true;
+    }
+    if (uptime::nvsSaveDue(now_ms, s_last_uptime_save_ms, s_uptime_saved)) {
+        // A failed write leaves the mark unspent, so the next tick retries --
+        // throttled, so an NVS that is failing outright cannot attempt a flash
+        // write on every pass of the main loop.
+        if (!s_uptime_attempted || now_ms - s_last_attempt_ms >= uptime::kNvsRetryMs) {
+            s_last_attempt_ms = now_ms;
+            s_uptime_attempted = true;
+            saveUptimeToNvs(now_ms);
+        }
+    }
+}
+
+// #1270: the board is going down on purpose (low battery, or a CLI power off),
+// so record the runtime while there is still power to write it. Best effort:
+// the write can still be cut short by a battery that is already collapsing,
+// in which case the next boot falls back to the last ladder mark, as it would
+// have anyway.
+void crashLogUptimeFlush() {
+    const uint32_t now_ms = millis();
+    uptime::stamp(s_rtc_uptime, s_nvs_boot_count, now_ms / 1000);
+    saveUptimeToNvs(now_ms);
 }
 
 void subloopMark(uint8_t which) {
@@ -925,6 +954,7 @@ void subloopMark(uint8_t) {}
 void loopIterTick() {}
 void heartbeatTick(uint32_t) {}
 void crashLogUptimeTick(uint32_t) {}   // nRF52 retained RAM does not survive a reset (#378)
+void crashLogUptimeFlush() {}
 uint32_t bootCounterValue() { return 0; }
 
 #endif

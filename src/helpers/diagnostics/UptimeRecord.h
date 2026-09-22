@@ -7,11 +7,15 @@
 //  - RTC-retained memory, updated every second. Exact, costs no flash wear,
 //    and survives task-watchdog, panic, software and USB-host resets (verified
 //    on the RC32, see #754). Lost on power loss.
-//  - NVS, which survives power loss, written on a schedule that front-loads
-//    resolution where crash loops live and then stops: every kNvsFastMs until
-//    kNvsFastUntilMs, every kNvsSlowMs until a save at or past
-//    kNvsStopAfterMs, then never again that boot. About 37 writes per boot,
-//    so flash wear no longer scales with uptime.
+//  - NVS, which survives power loss, written at kNvsMarks and nowhere else:
+//    1 s, 1 min, 15 min, then never again that boot (#1270). Three writes, not
+//    a periodic ladder, because the RTC copy already covers every reset that
+//    keeps power. What is left for NVS is how long a board ran before power
+//    went away, and for that these marks separate "died immediately" from
+//    "fast loop" from "slow loop" from "long run". The one power-loss case we
+//    see coming -- a deliberate shutdown -- gets the runtime itself, because
+//    the shutdown path calls crashLogUptimeFlush() (best effort: a collapsing
+//    battery can still cut the write short).
 //
 // At boot the RTC value is used when its record validates; otherwise the NVS
 // value, which is flagged "at least" once it reached the stop point.
@@ -22,10 +26,15 @@ namespace offband {
 namespace uptime {
 
 constexpr uint32_t kRtcPeriodMs    = 1000;
-constexpr uint32_t kNvsFastMs      = 5000;
-constexpr uint32_t kNvsFastUntilMs = 2u * 60u * 1000u;
-constexpr uint32_t kNvsSlowMs      = 60000;
 constexpr uint32_t kNvsStopAfterMs = 15u * 60u * 1000u;
+// A mark is spent only by a write that landed; a failed one is retried no more
+// often than this, so failing flash cannot be hammered from the main loop.
+constexpr uint32_t kNvsRetryMs     = 5000;
+
+// The only times an NVS uptime save happens, ascending. The last one is
+// kNvsStopAfterMs, the point past which a reading is reported as "at least".
+constexpr uint32_t kNvsMarks[] = {1000u, 60u * 1000u, kNvsStopAfterMs};
+constexpr size_t   kNvsMarkCount = sizeof(kNvsMarks) / sizeof(kNvsMarks[0]);
 
 // Retained across resets that keep RTC memory. `check` makes a record left by
 // power-on noise, or torn by a reset between its word writes, fail validation
@@ -66,14 +75,18 @@ inline bool rtcUpdateDue(uint32_t now_ms, uint32_t last_ms, bool updated) {
   return !updated || now_ms - last_ms >= kRtcPeriodMs;
 }
 
-// Whether an NVS save is due now. `saved` is false until the first save of
-// this boot; `last_ms` is when that last save happened. Unsigned arithmetic,
-// so a millis() wrap cannot restart the schedule once it has stopped.
+// Whether an NVS save is due now: true when a mark has been reached that the
+// last save did not already cover. `saved` is false until the first save of
+// this boot; `last_ms` is when that save happened. Reading marks rather than
+// intervals means a millis() wrap cannot restart the schedule, and a tick that
+// arrives late still saves once for the mark it passed.
 inline bool nvsSaveDue(uint32_t now_ms, uint32_t last_ms, bool saved) {
-  if (!saved) return now_ms >= kNvsFastMs;
-  if (last_ms >= kNvsStopAfterMs) return false;
-  const uint32_t interval = (now_ms < kNvsFastUntilMs) ? kNvsFastMs : kNvsSlowMs;
-  return now_ms - last_ms >= interval;
+  for (size_t i = kNvsMarkCount; i > 0; i--) {
+    const uint32_t mark = kNvsMarks[i - 1];
+    if (now_ms < mark) continue;          // not reached yet; try an earlier mark
+    return !saved || last_ms < mark;      // due unless a save already covered it
+  }
+  return false;                           // before the first mark
 }
 
 // What the boot line reports for the previous boot.

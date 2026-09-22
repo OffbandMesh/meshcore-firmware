@@ -27,41 +27,46 @@ std::vector<uint32_t> runNvs(uint32_t from, uint32_t ms) {
 
 }  // namespace
 
-TEST(UptimeNvsSchedule, FirstSaveWaitsForTheFastInterval) {
+TEST(UptimeNvsSchedule, NothingSavesBeforeTheFirstMark) {
   EXPECT_FALSE(nvsSaveDue(0, 0, false));
-  EXPECT_FALSE(nvsSaveDue(kNvsFastMs - 1, 0, false));
-  EXPECT_TRUE(nvsSaveDue(kNvsFastMs, 0, false));
+  EXPECT_FALSE(nvsSaveDue(kNvsMarks[0] - 1, 0, false));
+  EXPECT_TRUE(nvsSaveDue(kNvsMarks[0], 0, false));
 }
 
-TEST(UptimeNvsSchedule, FastThenSlowThenStops) {
+TEST(UptimeNvsSchedule, SavesExactlyAtTheMarksAndNowhereElse) {
   const std::vector<uint32_t> saves = runNvs(0, 60u * 60u * 1000u);   // one hour
-  ASSERT_FALSE(saves.empty());
-  // Fast phase: every 5 s up to 2 min.
-  EXPECT_EQ(5000u, saves[0]);
-  EXPECT_EQ(10000u, saves[1]);
-  // Nothing saved after the first save at or past 15 min.
-  const uint32_t last = saves.back();
-  EXPECT_GE(last, kNvsStopAfterMs);
-  EXPECT_LT(last, kNvsStopAfterMs + kNvsSlowMs);
-  // Slow phase spacing is 60 s.
-  EXPECT_EQ(kNvsSlowMs, saves[saves.size() - 1] - saves[saves.size() - 2]);
-}
-
-TEST(UptimeNvsSchedule, SwitchesToTheSlowIntervalAtTwoMinutes) {
-  // Last fast save at 115 s: the next is due 60 s later, not 5 s later.
-  EXPECT_FALSE(nvsSaveDue(kNvsFastUntilMs, 115000, true));
-  EXPECT_FALSE(nvsSaveDue(174999, 115000, true));
-  EXPECT_TRUE(nvsSaveDue(175000, 115000, true));
-  // Still in the fast phase just before 2 min.
-  EXPECT_TRUE(nvsSaveDue(kNvsFastUntilMs - 1, kNvsFastUntilMs - 1 - kNvsFastMs, true));
+  ASSERT_EQ(kNvsMarkCount, saves.size());
+  for (size_t i = 0; i < kNvsMarkCount; i++) EXPECT_EQ(kNvsMarks[i], saves[i]);
 }
 
 TEST(UptimeNvsSchedule, WritesPerBootAreBoundedRegardlessOfUptime) {
   const size_t one_hour = runNvs(0, 60u * 60u * 1000u).size();
   const size_t three_hours = runNvs(0, 3u * 60u * 60u * 1000u).size();
   EXPECT_EQ(one_hour, three_hours);   // stopped: uptime no longer costs writes
-  EXPECT_LE(one_hour, 40u);
-  EXPECT_GE(one_hour, 30u);
+  EXPECT_EQ(kNvsMarkCount, one_hour);
+}
+
+TEST(UptimeNvsSchedule, AFlushCountsAsTheSaveForEveryMarkItPasses) {
+  // crashLogUptimeFlush() saves at an arbitrary time (a shutdown at 5 min) and
+  // records it as the last save. No mark already passed is written again; the
+  // next one still is.
+  const uint32_t flush_at = 5u * 60u * 1000u;
+  EXPECT_FALSE(nvsSaveDue(flush_at + 1000, flush_at, true));
+  EXPECT_FALSE(nvsSaveDue(kNvsStopAfterMs - 1, flush_at, true));
+  EXPECT_TRUE(nvsSaveDue(kNvsStopAfterMs, flush_at, true));
+}
+
+TEST(UptimeNvsSchedule, AFailedWriteLeavesTheMarkUnspent) {
+  // The caller only updates last/saved when the write landed, so a mark that
+  // failed stays due and the next tick retries it.
+  EXPECT_TRUE(nvsSaveDue(kNvsMarks[0], 0, false));
+  EXPECT_TRUE(nvsSaveDue(kNvsMarks[0] + 5000, 0, false));   // still unsaved: still due
+}
+
+TEST(UptimeNvsSchedule, ALateTickStillSavesOnceForThePassedMark) {
+  // A loop that stalls past a mark saves once when it comes back, not twice.
+  EXPECT_TRUE(nvsSaveDue(90u * 1000u, 1000, true));    // 1 min mark passed
+  EXPECT_FALSE(nvsSaveDue(90u * 1000u, 61000, true));  // already covered
 }
 
 TEST(UptimeNvsSchedule, MillisWrapDoesNotRestartAStoppedSchedule) {

@@ -272,6 +272,13 @@ void heartbeatTick(uint32_t now_ms);
 // heartbeatTick() does. A no-op on nRF52 and host builds.
 void crashLogUptimeTick(uint32_t now_ms);
 
+// #1270: record the uptime now, on the way into a deliberate shutdown or deep
+// sleep, rather than leaving the next boot to read the last ladder mark.
+// Called from ESP32Board::enterDeepSleep(). Best effort -- a battery already
+// collapsing can cut the write short, and then the mark stands. A no-op on
+// nRF52 and host builds.
+void crashLogUptimeFlush();
+
 // Boot count loaded/incremented by heartbeatBegin(): the NVS-backed count,
 // which survives every reset including power loss, or the RTC_NOINIT count
 // when NVS could not be opened. The [boot] line prints the RTC count on its

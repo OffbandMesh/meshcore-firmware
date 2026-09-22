@@ -1,6 +1,7 @@
 #ifdef ESP_PLATFORM
 
 #include "ESP32Board.h"
+#include "diagnostics/CrashLog.h"   // #1270: record the exact uptime before sleeping
 #include <esp_ota_ops.h>
 #include <nvs.h>
 #include <nvs_flash.h>
@@ -688,6 +689,12 @@ void ESP32Board::powerOff() {
 }
 
 void ESP32Board::enterDeepSleep(uint32_t secs) {
+  // #1270: this is the one power-loss case we see coming -- a low-battery
+  // shutdown or a CLI power off -- so save the runtime first, while there is
+  // still power to write it. Everything below this line is teardown, and the
+  // CPU never returns from the end of this function.
+  offband::crashLogUptimeFlush();
+
   // Power off the display if any
 #ifdef DISPLAY_CLASS
   display.turnOff();
