@@ -40,6 +40,9 @@
 // the observer's provider fetches the pool itself).
 namespace offband { MqttBrokerPool& wifiObserverPool(); }
 #endif
+#if defined(OFFBAND_OBSERVER) && defined(OFFBAND_CAPLOG_FORWARD)
+#include "helpers/wifi_observer/ObserverCaplogForward.h"   // #1194: observerCaplogSetCapture
+#endif
 
 #define CMD_APP_START                 1
 #define CMD_SEND_TXT_MSG              2
@@ -1485,6 +1488,31 @@ const char *MyMesh::getNodeName() {
 NodePrefs *MyMesh::getNodePrefs() {
   return &_prefs;
 }
+
+bool MyMesh::setCaplogCapture(bool on, uint8_t level) {
+  if (on) meshLogSetLevel(level);
+  if (_caplog_streaming) {
+    // A download froze capture and restores _caplog_resume when it ends.
+    // Switching the live flag now would unfreeze it mid-stream, and the end
+    // would then undo this switch; set what the end restores instead.
+    _caplog_resume = on;
+  } else {
+    meshLogSetEnabled(on);
+  }
+  // #428: persist SYNCHRONOUSLY so an "enable then reboot" sequence can't lose
+  // the flag; MyMesh::begin() restores capture early on the next boot.
+  if (on) _prefs.caplog_level = level;
+  _prefs.caplog_enabled = on ? 1 : 0;
+  return savePrefs();
+}
+
+#if defined(OFFBAND_OBSERVER) && defined(OFFBAND_CAPLOG_FORWARD)
+// #1194 (option A): the observer CLI's `caplog start|stop`, through the same
+// switch the app's caplog enable/disable uses.
+bool offband::observerCaplogSetCapture(bool on, uint8_t level) {
+  return the_mesh.setCaplogCapture(on, level);
+}
+#endif
 uint32_t MyMesh::getBLEPin() {
   return _active_ble_pin;
 }
@@ -1799,25 +1827,17 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
     if (req == CAPLOG_REQ_ENABLE) {
       uint8_t level = (len >= 3) ? cmd_frame[2] : (uint8_t)MLOG_DEBUG;
-      meshLogSetLevel(level);
-      meshLogSetEnabled(true);
-      // #428: persist enabled+level SYNCHRONOUSLY so a client "enable then reboot"
-      // sequence can't lose the flag -- by the time the reboot fires it's on disk, and
-      // MyMesh::begin() restores capture early on the next boot. Only ENABLE/DISABLE
-      // persist; the transient DOWNLOAD freeze (below) must not touch the stored flag.
-      _prefs.caplog_enabled = 1;
-      _prefs.caplog_level = level;
-      savePrefs();
+      // #428: persisted synchronously inside. Only ENABLE/DISABLE persist; the
+      // transient DOWNLOAD freeze (below) must not touch the stored flag.
+      setCaplogCapture(true, level);
       out_frame[0] = RESP_CODE_OFFBAND_CAPLOG; out_frame[1] = CAPLOG_RESP_ACK;
       out_frame[2] = CAPLOG_REQ_ENABLE; out_frame[3] = 1;
       _serial->writeFrame(out_frame, 4);
       return;
     }
     if (req == CAPLOG_REQ_DISABLE) {
-      meshLogSetEnabled(false);
-      // #428: clear the persisted flag so capture does NOT auto-resume on the next boot.
-      _prefs.caplog_enabled = 0;
-      savePrefs();
+      // #428: clears the persisted flag so capture does NOT auto-resume on the next boot.
+      setCaplogCapture(false, _prefs.caplog_level);
       out_frame[0] = RESP_CODE_OFFBAND_CAPLOG; out_frame[1] = CAPLOG_RESP_ACK;
       out_frame[2] = CAPLOG_REQ_DISABLE; out_frame[3] = 1;
       _serial->writeFrame(out_frame, 4);

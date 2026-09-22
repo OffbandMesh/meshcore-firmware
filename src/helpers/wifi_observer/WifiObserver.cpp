@@ -9,6 +9,10 @@
 #include "WifiBootstrap.h"
 #include <helpers/diagnostics/CrashLog.h>
 #include "ObserverPipeline.h"
+#if defined(OFFBAND_CAPLOG_FORWARD)
+  #include "ObserverCaplogForward.h"   // #1061: caplog forward to the syslog sink
+  #include "../CaplogForwardCli.h"     // the forwarder's mode + caplogHostIsIpv4, for the boot line
+#endif
 
 #ifdef ARDUINO
   #include <Arduino.h>
@@ -78,6 +82,24 @@ void wifiObserverBegin() {
     crashLogf("[WifiObserver] wifiBootstrap.begin() returned; state=%d",
               (int)wifiBootstrap().state());
 
+#if defined(ARDUINO) && defined(OFFBAND_CAPLOG_FORWARD)
+    // #1061: load the syslog sink and re-arm `caplog forward on` if it was on,
+    // here in setup() so it is in place before the CLI serves a command (#1194).
+    observerCaplogForwardBegin(millis());
+    {
+        // Say at boot what the forward will do. A hostname sink is resolved by
+        // DNS on this loop, which also services the radio, so flag it.
+        const char* host = observerCaplogForwardHost();
+        const bool until_off =
+            caplogForwarder().mode(millis()) == CaplogForwardMode::UntilOff;
+        crashLogf("[WifiObserver] caplog forward: %s sink=%s:%u%s",
+                  until_off ? "on until off" : "off",
+                  host[0] ? host : "(none)", (unsigned)observerCaplogForwardPort(),
+                  (host[0] && !caplogHostIsIpv4(host))
+                      ? " -- a hostname: each DNS lookup stalls the loop; use an IP" : "");
+    }
+#endif
+
     // Plan 2 v2: pool + pipeline init deferred to first loop() tick where
     // STA is up AND wifiObserverSetMeshContext has been called by main.cpp
     // (after the_mesh.begin() so identity is populated).
@@ -102,6 +124,11 @@ void wifiObserverSetMeshContext(
     s_model            = (model            != nullptr) ? model            : "";
     s_context_set      = true;
     crashLogf("[WifiObserver] mesh context set; node=%s", s_node_name);
+#if defined(OFFBAND_CAPLOG_FORWARD)
+    // #1059/#1061: the tag is the first 16 hex of the public key, a prefix of
+    // device_id; the full device_id is announced when a forward window opens.
+    observerCaplogForwardSetIdentity(identity.pub_key, s_device_id);
+#endif
 }
 #endif
 
@@ -164,6 +191,15 @@ void wifiObserverLoop() {
     if (s_pool_started) {
         s_pool.loop(now);
     }
+
+#if defined(OFFBAND_CAPLOG_FORWARD)
+    // #1061: one bounded caplog-forward pass -- at most one 512-byte chunk, so
+    // it cannot starve the radio this loop also services. It sends only while
+    // a window is open, a sink is set and STA is up, and it never touches the
+    // link: the observer's WiFi is WifiBootstrap's, above (#1045). It waits
+    // for the mesh context, which carries the identity its tag comes from.
+    if (s_context_set) observerCaplogForwardService(now);
+#endif
 
     // #69: one-shot log the moment the wall clock becomes sane (GPS fix or SNTP
     // sync), so serial captures show exactly when TLS brokers became eligible.

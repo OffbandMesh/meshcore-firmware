@@ -19,6 +19,7 @@
 #define OFFBAND_BEACON_DEFINE_CTOR
 #include "helpers/BootBeacon.h"
 #include "helpers/CdcConsoleFlush.h"   // #1035: right-flush (ZLP) for the USB-Serial-JTAG console
+#include "helpers/ArduinoSerialInterface.h"   // #1093: emitw drives the real writeFrame()+loop() path for the v4.1 A/B
 
 
 #ifdef PIN_STATUS_LED
@@ -164,12 +165,18 @@ static uint16_t g_wifi_on_pct_last_24h_x100 = 0;  // 0-10000 = 0.00-100.00%
 // are a RUNTIME pref (syslog.host / syslog.port), seeded from WIFI_SYSLOG_HOST/
 // PORT build flags if present, so any node targets any sink without a rebuild
 // (empty host = forward off). Drains via meshLogConsume() in the MAIN LOOP so
-// the hot-path sink (mesh_log_line) is untouched.
-#ifdef ENABLE_WIFI_TELEMETRY
-  #include <WiFiUdp.h>
+// the hot-path sink (mesh_log_line) is untouched. The mechanism is the
+// role-neutral CaplogForward (#1058); this role supplies the tag, the read and
+// the link state. #1060: built only with OFFBAND_CAPLOG_FORWARD.
+#if defined(OFFBAND_CAPLOG_FORWARD) && !defined(ENABLE_WIFI_TELEMETRY)
+  #error "OFFBAND_CAPLOG_FORWARD on the repeater needs ENABLE_WIFI_TELEMETRY: the forward sends over that WiFi link"
+#endif
+#ifdef OFFBAND_CAPLOG_FORWARD
   #include "../../src/MeshLog.h"
-  static WiFiUDP  g_caplog_udp;
-  static uint32_t g_caplog_fwd_until_ms = 0;   // 0 = off; else forward-window deadline
+  #include "../../src/helpers/CaplogForwardCli.h"   // CaplogForward + the role hooks
+  #include "../../src/helpers/CaplogUdpSink.h"
+  static offband::CaplogUdpSink g_caplog_sink;
+  static offband::CaplogForward g_caplog_fwd(WIFI_TELEMETRY_NODE_ID, meshLogConsume, g_caplog_sink);
   static void wifi_telemetry_caplog_forward_service();
 #endif
 
@@ -270,6 +277,16 @@ static void wifi_telemetry_setup() {
     // the message callback with the transport. Subscription to the cmd topic
     // happens later in the publish cycle when MQTT connect is verified.
     wifi_telemetry_remote_command_setup();
+
+#ifdef OFFBAND_CAPLOG_FORWARD
+    // #1059: announce the full public key when a window opens, so the sink can
+    // match this node's short tag to its identity. #1060: `caplog forward on`
+    // survives a reboot; a timed window does not.
+    char pub_key_hex[PUB_KEY_SIZE * 2 + 1];
+    mesh::Utils::toHex(pub_key_hex, the_mesh.self_id.pub_key, PUB_KEY_SIZE);
+    g_caplog_fwd.setIdentity(pub_key_hex);
+    if (the_mesh.getNodePrefs()->caplog_fwd) g_caplog_fwd.armUntilOff(millis());
+#endif
 
     g_tel_next_publish_ms = millis();
 }
@@ -647,7 +664,7 @@ static void wifi_telemetry_loop() {
     }
 #endif
 
-#ifdef ENABLE_WIFI_TELEMETRY
+#ifdef OFFBAND_CAPLOG_FORWARD
     // #561: ship any newly-captured lines while a forward window is open + WiFi up.
     wifi_telemetry_caplog_forward_service();
 #endif
@@ -765,21 +782,6 @@ void wifi_telemetry_set_persistent(uint32_t duration_ms) {
     // collect_and_publish will skip transport.end() because persistent is set.
     g_tel_next_publish_ms = millis();
 }
-
-#ifdef ENABLE_WIFI_TELEMETRY
-// #561: arm/disarm caplog live syslog forward for `window_sec`. Opens the
-// forward window and brings WiFi up (persistent) for the same window so lines
-// stream live; capture-enable is done by the CLI verb. window_sec == 0 disarms.
-void wifi_telemetry_caplog_forward(uint32_t window_sec) {
-    if (window_sec == 0) {
-        g_caplog_fwd_until_ms = 0;
-        wifi_telemetry_set_persistent(0);
-        return;
-    }
-    g_caplog_fwd_until_ms = millis() + window_sec * 1000UL;
-    wifi_telemetry_set_persistent(window_sec * 1000UL);
-}
-#endif
 
 int wifi_telemetry_is_persistent(void) {
     return g_tel_persistent_until_ms != 0 ? 1 : 0;
@@ -1053,53 +1055,33 @@ static void wifi_telemetry_http_cmd_poll() {
 }
 #endif // CMD_TRANSPORT_HTTP
 
-#ifdef ENABLE_WIFI_TELEMETRY
+#ifdef OFFBAND_CAPLOG_FORWARD
 // #561: drain new caplog lines and ship each as a UDP syslog datagram. Called
-// each servicing pass while the forward window is open and WiFi is up. All I/O
-// here is network — meshLogConsume() already released the sink's critical
-// section, so nothing here can stall the capture hot path.
+// each servicing pass. The helper reads one bounded chunk per call and does
+// nothing unless its window is open, a sink host is set and WiFi is up. All
+// I/O here is network: meshLogConsume() has already released the sink's
+// critical section, so nothing here can stall the capture hot path.
 static void wifi_telemetry_caplog_forward_service() {
-    if (g_caplog_fwd_until_ms == 0) return;
-    if ((int32_t)(millis() - g_caplog_fwd_until_ms) >= 0) {
-        g_caplog_fwd_until_ms = 0;   // window closed; persistent-mode auto-revert (loop) drops WiFi
-        return;
-    }
-    if (WiFi.status() != WL_CONNECTED) return;
-    // #566: runtime sink from prefs. Empty host = no sink configured -> nothing
-    // to forward (the build-flag WIFI_SYSLOG_HOST only seeds the default).
+    // #566: runtime sink from prefs. Empty host = no sink configured (the
+    // build-flag WIFI_SYSLOG_HOST only seeds the default).
     NodePrefs* prefs = the_mesh.getNodePrefs();
-    if (prefs->syslog_host[0] == '\0') return;
-    static uint8_t buf[512];
-    // Bounded per call: drain ONE chunk (<=512 B, a few lines) per loop pass, NOT
-    // the whole ring. A full 16 KB ring drained in one call would be a burst of
-    // hundreds of WiFiUDP sends that can block on LwIP back-pressure and stall the
-    // main loop — starving the LoRa Dispatcher and dropping packets (fatal for a
-    // repeater). The service runs every loop pass, so the ring still drains
-    // promptly, just spread across iterations. (Gemini review #561: BLOCKER.)
-    size_t n = meshLogConsume(buf, sizeof(buf));
-    if (n > 0) {
-        // One syslog datagram per whole line (PRI 134 = local0.info). rsyslog
-        // stamps its own receive time + source host on ingest; the line already
-        // carries the device's [millis] prefix.
-        size_t start = 0;
-        for (size_t i = 0; i < n; ++i) {
-            bool eol = (buf[i] == '\n');
-            if (eol || i + 1 == n) {
-                size_t end = eol ? i : i + 1;   // exclude the trailing '\n'
-                if (end > start) {
-                    g_caplog_udp.beginPacket(prefs->syslog_host, prefs->syslog_port);
-                    // Clean RFC-3164-ish TAG so rsyslog parses programname reliably:
-                    // "caplog-<node>:" -> filter `programname startswith 'caplog-'`.
-                    g_caplog_udp.printf("<134>caplog-%s: ", WIFI_TELEMETRY_NODE_ID);
-                    g_caplog_udp.write(&buf[start], end - start);
-                    g_caplog_udp.endPacket();
-                }
-                start = i + 1;
-            }
-        }
-    }
+    // #1240: the capture switch, so a sink is told when `caplog stop` is what
+    // silenced the stream rather than a quiet node.
+    g_caplog_fwd.service(prefs->syslog_host, prefs->syslog_port,
+                         WiFi.status() == WL_CONNECTED, meshLogIsEnabled(), millis());
 }
-#endif // ENABLE_WIFI_TELEMETRY (#561 caplog forward)
+
+// #1060: what the shared `caplog forward` command needs from this role. The
+// forward opens and closes its window only; the link is the operator's, set
+// with `wifi on <min>`, and is only ever read here (#1045).
+offband::CaplogForward& offband::caplogForwarder() {
+    return g_caplog_fwd;
+}
+
+bool offband::caplogForwardLinkUp() {
+    return WiFi.status() == WL_CONNECTED;
+}
+#endif // OFFBAND_CAPLOG_FORWARD (#561 caplog forward)
 
 // Constructs the remote command handler + callbacks, registers the
 // transport-level message callback. Called once from wifi_telemetry_setup().
@@ -1364,6 +1346,67 @@ void loop() {
         for (int i = 0; i < n; i++) Serial.write((uint8_t)('0' + (i % 10)));
       }
       if (zlp) flushSerialConsole();     // #1035: emit the terminating ZLP -- proves the fix on the reproducer
+      handled_diag = true;
+    }
+    // #1093 companion writeFrame() reproducer: emit EXACTLY the on-wire pattern of
+    // ArduinoSerialInterface::writeFrame() -- a 3-byte header ('>' + len16 LE) then <len>
+    // payload bytes, as TWO Serial.write() calls (same as writeFrame), total 3+len bytes on
+    // the same HWCDC transport. Tests whether a frame whose on-wire length 3+len is a
+    // multiple of 64 holds host-side like the console reply did.
+    //   emitf <len> [delay_us] [zlp]     delay_us: busy-wait after the echo so the frame is
+    //   emitted as its own clean transfer (models the companion processing a command THEN
+    //   calling writeFrame -- the real frame path has no echo). zlp=1 => flushSerialConsole()
+    //   after, to A/B the terminator.
+    if (memcmp(command, "emitf ", 6) == 0) {
+      static uint8_t frame_buf[1024];
+      int len = atoi(command + 6);
+      const char* a2 = strchr(command + 6, ' ');
+      int delay_us = a2 ? atoi(a2 + 1) : 0;
+      const char* a3 = a2 ? strchr(a2 + 1, ' ') : nullptr;
+      int zlp = a3 ? atoi(a3 + 1) : 0;
+      if (len < 0) len = 0;
+      if (len > 1021) len = 1021;                  // keep 3+len <= 1024
+      if (delay_us < 0) delay_us = 0;
+      if (delay_us > 16000) delay_us = 16000;
+      if (delay_us > 0) delayMicroseconds(delay_us);  // let the echo drain, isolating the frame
+      uint8_t hdr[3] = { '>', (uint8_t)(len & 0xFF), (uint8_t)((len >> 8) & 0xFF) };
+      Serial.write(hdr, 3);                         // writeFrame() header write
+      for (int i = 0; i < len; i++) frame_buf[i] = (uint8_t)('0' + (i % 10));
+      Serial.write(frame_buf, len);                 // writeFrame() payload write
+      if (zlp) flushSerialConsole();                // #1093 A/B: the ZLP terminator after the frame
+      handled_diag = true;
+    }
+    // #1093 v4.1 validation: drive the REAL ArduinoSerialInterface::writeFrame() + loop()
+    // deferred-terminator path -- NOT a raw byte replay like emitf. This is the faithful
+    // hardware test of the shipped code: writeFrame() arms the deferred ZLP; loop() emits it
+    // once the TX ring has drained (availableForWrite back to the seeded ring capacity) and
+    // the FIFO is writable. No manual flushSerialConsole().
+    //   emitw <len> [delay_us] [pump]
+    //     len      payload bytes; on-wire frame is 3+len. 61 -> 64, 125 -> 128 (the 64-multiples);
+    //              126 -> 129 is the offset control. Capped at MAX_FRAME_SIZE (writeFrame refuses more).
+    //     delay_us busy-wait before the write, so the command echo drains and the frame is its own transfer.
+    //     pump=1 (default): service iface.loop() after the write -> the deferred ZLP fires -> delivered.
+    //     pump=0:           writeFrame() only, loop() NOT serviced -> ZLP never emitted -> held (control arm).
+    if (memcmp(command, "emitw ", 6) == 0) {
+      static ArduinoSerialInterface w_iface;
+      static bool w_init = false;
+      static uint8_t w_buf[MAX_FRAME_SIZE];
+      if (!w_init) { w_iface.begin(Serial); w_iface.enable(); w_init = true; }
+      int len = atoi(command + 6);
+      const char* a2 = strchr(command + 6, ' ');
+      int delay_us = a2 ? atoi(a2 + 1) : 0;
+      const char* a3 = a2 ? strchr(a2 + 1, ' ') : nullptr;
+      int pump = a3 ? atoi(a3 + 1) : 1;
+      if (len < 0) len = 0;
+      if (len > MAX_FRAME_SIZE) len = MAX_FRAME_SIZE;   // writeFrame refuses a frame larger than this
+      if (delay_us < 0) delay_us = 0;
+      if (delay_us > 16000) delay_us = 16000;
+      if (delay_us > 0) delayMicroseconds(delay_us);    // let the echo drain, isolating the frame
+      for (int i = 0; i < len; i++) w_buf[i] = (uint8_t)('0' + (i % 10));
+      w_iface.writeFrame(w_buf, (size_t)len);           // real path: '>' + len16 + payload, arms the deferred ZLP
+      if (pump) {
+        for (int k = 0; k < 400; k++) { w_iface.loop(); delayMicroseconds(50); }  // ~20 ms: ring drains, deferred ZLP fires
+      }
       handled_diag = true;
     }
 #endif

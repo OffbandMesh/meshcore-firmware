@@ -97,18 +97,24 @@ Heltec_E290_companion_usb
 #   WIFI_SSID at compile time; unblocked by #325. Same gate class as the other
 #   companion_radio_wifi envs. (Unlike those, it is not CI-built either -- no
 #   rc32 env is in ci.yml yet; tracked separately.)
-# The _diag / _diag_nocrashlog envs are diagnostic instruments, not products.
+# Diagnostic envs are instruments, not products, and are NOT released.
 #   This is the RULE, and it still stands everywhere it is not explicitly excepted.
 #
-#   TWO owner-approved EXCEPTIONS now exist, both scoped to beta hardware and
-#   neither inheritable:
-#     * RC32 _testdiag envs -- immediately below (#824), while RadioCore is
+#   Owner-approved EXCEPTIONS, all scoped to beta hardware and none inheritable:
+#     * RC32 _diag envs -- immediately below (#824), while RadioCore is
 #       unreleased hardware.
 #     * RCC6 _diag envs -- in the RCC6 section further down (#806), while RCC6
 #       is beta.
-#   They were approved separately, days apart, for the same reason: a beta tester
-#   on unproven hardware has to be able to produce evidence. Extending this to a
-#   third board is a fresh owner decision, not an inheritance from these two.
+#     * RC52 _diag envs -- in the RC52 section, same reasoning.
+#   They were approved separately for the same reason: a beta tester on unproven
+#   hardware has to be able to produce evidence. Extending this to a further
+#   board is a fresh owner decision, not an inheritance from these.
+#
+#   SUFFIX: `_diag`, fleet-wide, no variants (#935). RC32 briefly used
+#   `_testdiag` because its `_diag` names were held by three bring-up envs that
+#   diverged from the shipped image; those were retired 2026-09-10 and the names
+#   passed to these. `_testdiag` appears in the beta4/beta5/beta6 asset lists --
+#   that is accurate history, not a name still in use.
 heltec_rc32_companion_radio_ble
 heltec_rc32_companion_radio_usb
 heltec_rc32_repeater
@@ -117,11 +123,13 @@ heltec_rc32_room_server
 # RC32 TESTER DIAGNOSTIC BUILDS -- published on EVERY release while RadioCore is
 # unreleased hardware (owner decision, 2026-08-18).
 #
-# Each EXTENDS the shipped env above and adds ONLY OFFBAND_BOOT_BEACON and
-# OFFBAND_LOG_MIRROR_UART. Nothing else differs. That is deliberate: a diagnostic
-# build that diverges from the shipped build diagnoses the wrong firmware, which
-# is exactly how the GPS-on-a-strapping-pin defect (#704) survived every bench
-# session -- every result came from a build that had already worked around it.
+# Each EXTENDS the shipped env above and adds ONLY instrumentation: the shared
+# [rc32_diag] block (OFFBAND_BOOT_BEACON, OFFBAND_LOG_MIRROR_UART,
+# OFFBAND_FORCE_CAPLOG), plus OFFBAND_POWER_TELEMETRY on the two companion envs
+# (#935). Nothing else differs. That is deliberate: a diagnostic build that
+# diverges from the shipped build diagnoses the wrong firmware, which is exactly
+# how the GPS-on-a-strapping-pin defect (#704) survived every bench session --
+# every result came from a build that had already worked around it.
 #
 # Why they ship rather than being built by hand: a beta tester whose board will
 # not boot cannot reach a CLI, and hand-packaged binaries go stale the moment
@@ -130,14 +138,17 @@ heltec_rc32_room_server
 # Reading their output needs an external UART sniffer on RC32 pin 12 (U0TXD) and
 # pin 20 (GND) -- see tools/diag/rc32-tester/.
 #
-# REVISIT when RadioCore ships as released hardware, and when #763 lands its
-# level gate: the UART0 mirror is a synchronous bounded busy-wait, and combining
-# it with debug-level logging hangs setup() (2 s -> 118 s -> never). These envs
-# do not enable debug logging, so they are safe as built -- but the hazard is why
-# this is scoped to unreleased hardware rather than made a general pattern.
-heltec_rc32_companion_radio_ble_testdiag
-heltec_rc32_companion_radio_usb_testdiag
-heltec_rc32_repeater_testdiag
+# REVISIT when RadioCore ships as released hardware. The UART0 mirror is a
+# synchronous bounded busy-wait, and a debug-level firehose on it can stall
+# setup() (#763). Since #935 these envs force caplog on at DEBUG level -- the
+# same pairing the RCC6 and RC52 diag envs already ship -- so MESH_DEBUG lines
+# reach the wire. On RC32 that pairing is build-verified only until the #773
+# epic verification runs on hardware; #1069's per-sink level ceiling is the
+# structural guard. The hazard is why this is scoped to unreleased hardware
+# rather than made a general pattern.
+heltec_rc32_companion_radio_ble_diag
+heltec_rc32_companion_radio_usb_diag
+heltec_rc32_repeater_diag
 
 # Heltec RadioCore RCC6-L62 (ESP32-C6 + HT-RA62A LoRa) -- #806 / #624
 # Board 2 of 4 of the RadioCore beta set. L62 (LoRa) carrier only.

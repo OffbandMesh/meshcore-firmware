@@ -64,7 +64,10 @@ indistinguishable from the #702 bug it is meant to diagnose.
 ## What shipped instead
 
 The raw-UART0 beacon (`src/helpers/BootBeacon.h`, env
-`heltec_rc32_companion_radio_usb_diag`). It answers the load-bearing question on
+`heltec_rc32_companion_radio_usb_diag`; since #935 that name is the
+shipped-derived tester diag build, which carries the same beacon, and the bench
+env this was written against is retired, see `../README.md`). It answers the
+load-bearing question on
 its own: if `APP:CTOR` appears after an RST, the bootloader and IDF startup both
 completed; if it never appears, the fault is at or below them and the verbose
 bootloader becomes worth this fight.

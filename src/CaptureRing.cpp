@@ -5,11 +5,25 @@ static inline size_t ring_wrap(size_t i, size_t cap) {
   return i >= cap ? i - cap : i;
 }
 
+// How many bytes to hand back from `limit` bytes starting at buf[start]: through
+// the last '\n' that fits, so only whole lines go out. If no '\n' fits (a line
+// longer than the caller's buffer, or an unterminated trailing line), all of
+// `limit`, so a reader always progresses. Shared by consume() and readFrom().
+static size_t whole_line_take(const uint8_t* buf, size_t cap, size_t start, size_t limit) {
+  size_t last_nl = 0;
+  bool found = false;
+  for (size_t i = 0; i < limit; ++i) {
+    if (buf[ring_wrap(start + i, cap)] == '\n') { last_nl = i + 1; found = true; }
+  }
+  return found ? last_nl : limit;
+}
+
 CaptureRing::CaptureRing(uint8_t* storage, size_t capacity)
-    : _buf(storage), _cap(capacity), _tail(0), _count(0) {}
+    : _buf(storage), _cap(capacity), _tail(0), _count(0), _total(0) {}
 
 void CaptureRing::append(const uint8_t* data, size_t len) {
   if (len == 0 || _cap == 0) return;
+  _total += len;
 
   // A single chunk larger than the whole ring cannot be kept intact; retain
   // only its most-recent tail (linearized to the start of the buffer).
@@ -66,20 +80,39 @@ size_t CaptureRing::snapshot(uint8_t* out, size_t out_cap, size_t offset) const 
 size_t CaptureRing::consume(uint8_t* out, size_t out_cap) {
   if (_count == 0 || out_cap == 0) return 0;
   size_t limit = _count < out_cap ? _count : out_cap;
-  // Take through the last '\n' that fits in out_cap so we hand back only whole
-  // lines. If no '\n' fits (a line longer than out_cap, or an unterminated
-  // trailing line), take `limit` bytes anyway so the drain always progresses.
-  size_t last_nl = 0;
-  bool found = false;
-  for (size_t i = 0; i < limit; ++i) {
-    if (_buf[ring_wrap(_tail + i, _cap)] == '\n') { last_nl = i + 1; found = true; }
-  }
-  size_t take = found ? last_nl : limit;
+  size_t take = whole_line_take(_buf, _cap, _tail, limit);
   for (size_t i = 0; i < take; ++i) {
     out[i] = _buf[ring_wrap(_tail + i, _cap)];
   }
   _tail = ring_wrap(_tail + take, _cap);
   _count -= take;
+  return take;
+}
+
+uint64_t CaptureRing::totalAppended() const { return _total; }
+
+uint64_t CaptureRing::oldestPosition() const { return _total - _count; }
+
+size_t CaptureRing::readFrom(uint64_t* cursor, uint8_t* out, size_t out_cap, uint64_t* lost) const {
+  const uint64_t oldest = _total - _count;
+  if (*cursor < oldest) {
+    // Eviction or clear() got there first. Eviction drops whole lines where it
+    // can, so this normally lands on a line start.
+    if (lost) *lost += oldest - *cursor;
+    *cursor = oldest;
+  } else if (*cursor > _total) {
+    *cursor = _total;  // past the end can only be a caller's mistake; hold at the end
+  }
+  const size_t offset = (size_t)(*cursor - oldest);
+  if (offset >= _count || out_cap == 0) return 0;
+  const size_t avail = _count - offset;
+  const size_t limit = avail < out_cap ? avail : out_cap;
+  const size_t start = ring_wrap(_tail + offset, _cap);
+  const size_t take = whole_line_take(_buf, _cap, start, limit);
+  for (size_t i = 0; i < take; ++i) {
+    out[i] = _buf[ring_wrap(start + i, _cap)];
+  }
+  *cursor += take;
   return take;
 }
 

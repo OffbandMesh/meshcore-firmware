@@ -101,6 +101,15 @@ size_t meshLogConsume(uint8_t* out, size_t out_cap) {
   return n;
 }
 
+size_t meshLogReadFrom(uint64_t* cursor, uint8_t* out, size_t out_cap, uint64_t* lost) {
+  // #1193: copy under the lock and remove nothing (short critical section: a
+  // memory copy, no I/O). The caller ships `out` off-device outside the lock.
+  MLOG_ENTER();
+  size_t n = g_ring.readFrom(cursor, out, out_cap, lost);
+  MLOG_EXIT();
+  return n;
+}
+
 void meshLogDumpSerial() {
   // Read in small chunks, each under a brief lock, writing to Serial between
   // locks so the critical section stays short (Serial writes can block).
@@ -227,4 +236,30 @@ void mesh_log_line(uint8_t level, const char* fmt, ...) {
 #if defined(OFFBAND_LOG_MIRROR_UART) && OFFBAND_LOG_MIRROR_UART
   if (wire) offband_log_mirror_write(line, total);
 #endif
+}
+
+void mesh_log_print(uint8_t level, const char* fmt, ...) {
+  char text[MLOG_LINE_MAX];
+  va_list args;
+  va_start(args, fmt);
+  const int m = vsnprintf(text, sizeof(text), fmt, args);
+  va_end(args);
+  if (m < 0) return;
+
+  // mesh_log_line() echoes a line to the console only while capture is on, the
+  // echo is live and the level passes. Otherwise the console gets its copy here,
+  // raw and unprefixed, the way these lines have always printed. A flag flipped
+  // between this check and the call can add or drop one copy: the same tolerance
+  // as every MeshLog line (see g_max_level above). The capture decision comes
+  // from meshLogRoute(), the same one mesh_log_line() makes, so the two cannot
+  // drift apart.
+  const bool echoed =
+      meshLogRoute(level, g_max_level, g_meshLogEnabled, kMeshLogUart0).capture &&
+      g_meshLogMirror;
+  mesh_log_line(level, "%s", text);
+  if (!echoed) Serial.write(reinterpret_cast<const uint8_t*>(text), strlen(text));
+}
+
+void meshLogDrainUart() {
+  offband_log_mirror_flush();
 }

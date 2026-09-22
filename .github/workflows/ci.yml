@@ -73,6 +73,33 @@ jobs:
       - name: Font generator self-test
         run: python scripts/test_gen_jbm_font.py
 
+      # #1172: the QCC badge guards. The pin-map guard fails if a badge output, Serial1,
+      # a default bus or the diag log mirror lands on the wrong GPIO -- the ProMicro
+      # Serial1 default would drive the badge's buzzer and LED. The splash-art test fails
+      # if the committed header drifts from its generator.
+      - name: QCC badge pin-map guard
+        run: python scripts/test_qcc_variant_pins.py
+
+      - name: QCC splash-art generator self-test
+        run: python scripts/test_gen_qcc_splash.py
+
+      # #1199: the WROOM sniffer sketch is a copy of the Feather one, because Arduino
+      # builds a sketch from its own folder only. This fails if the two drift apart
+      # outside their marked VARIANT blocks.
+      - name: Sniffer WROOM-copy drift guard
+        run: python scripts/test_sniffer_wroom_copy.py
+
+      # #1199: capture.py on a CP2102/CH340 rig. --no-dtr must keep GPIO0 high, and
+      # --reset must reboot the rig from flash once, never again on a reconnect.
+      - name: Sniffer capture bridge-flag tests
+        run: python scripts/test_capture_bridge_flags.py
+
+      # #1211: SafeBoot's battery lines go through MeshLog, so a bench rig reading
+      # the raw UART log mirror sees them, and the low-battery path lets the
+      # mirror finish its line before the board sleeps.
+      - name: SafeBoot log-channel guard
+        run: python scripts/test_safeboot_log_channels.py
+
       # #775 (epic #774). Guards the defect class behind #764/#765: an `else if`
       # that matches a CLI key and writes nothing, or a key claimed twice in one
       # chain so the later arm is unreachable. `get radio` returned an empty reply
@@ -99,6 +126,15 @@ jobs:
         with:
           name: cli-dispatch
           path: ${{ runner.temp }}/cli-dispatch.json
+
+      # #1048 (epic #1045). A log forwarder may depend on a WiFi link, but it must
+      # never bring one up, tear one down, or move its deadline. The first caplog
+      # forward did both, overriding the link the operator had set. The self-test
+      # also runs the guard over the tree. Advisory, like the dispatch guard above:
+      # whether it blocks merges is decided separately.
+      - name: Caplog forward never controls the WiFi link (advisory)
+        continue-on-error: true
+        run: python scripts/test_caplog_link_guard.py
 
       # ADVISORY until #648 (the capability inventory) validates what this asserts.
       # ci-green is a hard merge gate for every PR in the repo (#477), so a check
@@ -293,6 +329,38 @@ jobs:
           - heltec_rc52_companion_radio_ble_diag
           - heltec_rc52_companion_radio_usb_diag
           - heltec_rc52_repeater_diag
+          # #877 (epic #773): Heltec RadioCore RC32 (ESP32-S3) and RCC6 (ESP32-C6).
+          # Same rule as the RC52 block above: anything in the release matrix is
+          # built here. Before #877 not one of these 15 shipped envs was compiled by
+          # CI, so a change that broke them merged green and surfaced only when a
+          # release tag was cut -- and since #1016 one failed env blocks the whole
+          # release. Every shipped _diag env is listed next to its base env (RC32
+          # room_server ships with no _diag twin): a _diag env extends its shipped env
+          # and adds build flags, so a green base build does not prove the diag
+          # variant compiles.
+          # RC32 -- shipped envs (.github/release-envs.txt)
+          - heltec_rc32_companion_radio_ble
+          - heltec_rc32_companion_radio_usb
+          - heltec_rc32_repeater
+          - heltec_rc32_room_server
+          - heltec_rc32_companion_radio_ble_diag
+          - heltec_rc32_companion_radio_usb_diag
+          - heltec_rc32_repeater_diag
+          # RCC6 -- shipped envs (.github/release-envs.txt)
+          - heltec_rcc6_companion_radio_ble
+          - heltec_rcc6_companion_radio_usb
+          - heltec_rcc6_repeater_display
+          - heltec_rcc6_companion_observer_wifi
+          - heltec_rcc6_companion_radio_ble_diag
+          - heltec_rcc6_companion_radio_usb_diag
+          - heltec_rcc6_repeater_display_diag
+          - heltec_rcc6_companion_observer_wifi_diag
+          # #1172 (epic #1173): Queen City Con 0x4 badge -- ProMicro nRF52840 + SX1262,
+          # 128x64 OLED, event splash. Owner-approved matrix add (D3, 2026-09-12).
+          # The _diag twin is the bench bring-up image; a green base build does not
+          # prove it compiles (owner decision 2026-09-12, #1196).
+          - QCC_Badge_companion_radio_ble
+          - QCC_Badge_companion_radio_ble_diag
     steps:
       - uses: actions/checkout@v5
 

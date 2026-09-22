@@ -44,6 +44,26 @@ public:
   // drain loop never stalls.
   size_t consume(uint8_t* out, size_t out_cap);
 
+  // #1193: bytes ever appended, including any since evicted, consumed or
+  // cleared. 64-bit, so it never wraps. The absolute positions below count
+  // from the first byte this ring ever took.
+  uint64_t totalAppended() const;
+
+  // #1193: absolute position of the oldest byte held
+  // (totalAppended() - bytesUsed()).
+  uint64_t oldestPosition() const;
+
+  // #1193: the non-destructive twin of consume(), for a forwarder that must
+  // leave the capture intact. Copies whole lines from absolute position
+  // *cursor into out, advances *cursor past them, and removes nothing. Like
+  // consume() it always makes progress: if no '\n' fits within out_cap it
+  // takes out_cap bytes.
+  //
+  // If eviction or clear() has overtaken *cursor, it first moves *cursor to
+  // the oldest byte held and adds the skipped bytes to *lost. With lost ==
+  // nullptr it makes the same move without counting it. Returns bytes copied.
+  size_t readFrom(uint64_t* cursor, uint8_t* out, size_t out_cap, uint64_t* lost) const;
+
   // Drop all contents.
   void clear();
 
@@ -52,4 +72,5 @@ private:
   size_t   _cap;
   size_t   _tail;   // index of oldest byte
   size_t   _count;  // bytes currently held
+  uint64_t _total;  // bytes ever appended (#1193)
 };

@@ -37,6 +37,22 @@
   #endif
 #endif
 
+// USB Full-Speed bulk max packet size. A CDC transfer whose on-wire length is an exact
+// multiple of this is emitted as full packets with NO terminating short packet, so the
+// host holds the final packet until the next write -- the #1035/#1093 hold. Named so the
+// framing math that decides "does this frame need a terminator?" is not a bare 64.
+static constexpr size_t USB_FS_BULK_MAX_PACKET = 64;
+
+// HWCDC's default TX ring size: arduino-esp32 HWCDC::begin() calls setTxBufferSize(256) and
+// the companion never overrides it, so 256 IS the ring capacity. ArduinoSerialInterface
+// seeds its "fully drained" reference with this so the reference can never be under-learned
+// under sustained load (a boot banner dirties the ring before the interface can measure it
+// empty, so it cannot be read live at init -- see the #1093 review). If a future board did
+// configure a LARGER ring, the running max in writeFrame() raises the reference to match; a
+// SMALLER ring would leave the reference too high, which merely no-ops the terminator (a
+// stale host-side hold, never a truncation) -- fail-safe, not fail-corrupt.
+static constexpr int HWCDC_DEFAULT_TX_RING = 256;
+
 // Drain the console TX and emit the terminating zero-length packet so a reply whose
 // length is a multiple of 64 is delivered immediately instead of held host-side (#1035).
 static inline void flushSerialConsole() {
@@ -53,5 +69,37 @@ static inline void flushSerialConsole() {
   usb_serial_jtag_ll_txfifo_flush();            // zero-length packet ends the USB transfer
 #else
   Serial.flush();
+#endif
+}
+
+// Non-blocking deferred terminator for the framed-protocol hot path (#1093).
+//
+// flushSerialConsole() is fit for the console-reply boundary but NOT for writeFrame(): its
+// Serial.flush() + up-to-2 ms busy-wait would reintroduce a stall on a path that #149
+// deliberately keeps non-blocking (a stalled USB host must never wedge the loop and starve
+// BLE/radio). This variant NEVER waits: it emits the terminating zero-length packet iff the
+// TX FIFO is already writable -- i.e. the host has accepted the last real packet -- and
+// otherwise does nothing so the caller retries on the next loop pass. Returns true iff the
+// ZLP was emitted (or there is nothing to terminate off USB-Serial-JTAG), so the caller can
+// clear its pending flag.
+//
+// PRECONDITION (enforced by the caller, ArduinoSerialInterface::loop): the TX ring has
+// fully drained -- availableForWrite() is back to the ring capacity. Only then is the FIFO's
+// last packet the frame's own tail, so the ZLP terminates the FINAL packet rather than an
+// early chunk; this is what makes the single writable() check sufficient and correct even
+// for several 64-multiple frames written back to back. With the ring empty the HWCDC ISR is
+// in its empty-ring path, which does NOT touch this flush register (it only disables its own
+// interrupt), so there is no cross-core race and no critical section is needed. Detecting
+// drain from the ring (a cross-core-safe, framework-stable signal) rather than from the
+// ISR's interrupt-enable side effects is deliberate -- see the #1093 review history.
+static inline bool emitConsoleZlpIfReady() {
+#if defined(OFFBAND_USJ_CONSOLE)
+  if (usb_serial_jtag_ll_txfifo_writable()) {
+    usb_serial_jtag_ll_txfifo_flush();          // zero-length packet ends the USB transfer
+    return true;
+  }
+  return false;                                 // FIFO not writable yet -- retry next pass
+#else
+  return true;                                  // no USB-Serial-JTAG => nothing to terminate
 #endif
 }

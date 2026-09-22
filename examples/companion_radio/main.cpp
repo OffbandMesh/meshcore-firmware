@@ -8,6 +8,10 @@
 #define OFFBAND_BEACON_DEFINE_CTOR
 #include "helpers/BootBeacon.h"
 
+#if defined(OFFBAND_PAD_BEACON)
+  #include "helpers/PadBeacon.h"   // #1210: diag ID line on each spare pad
+#endif
+
 #ifdef OFFBAND_OBSERVER
   #include "helpers/wifi_observer/WifiObserver.h"
   #include "helpers/diagnostics/CrashLog.h"
@@ -777,6 +781,10 @@ static void emitRadioStatusLine() {
 void loop() {
 #if !defined(OFFBAND_OBSERVER)
   offband::crashLogStandardTick(millis());  // #472: deferred previous-boot re-dump (all non-observer companions)
+#endif
+
+#if defined(OFFBAND_PAD_BEACON)
+  offband::padBeaconTick(millis());         // #1210: one ID line per spare pad, once a second
 #endif
 
 #if defined(OFFBAND_POWER_TELEMETRY)

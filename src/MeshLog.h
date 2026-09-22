@@ -120,6 +120,12 @@ size_t meshLogSnapshot(uint8_t* out, size_t out_cap, size_t offset = 0);
 // lines and ship them off-device (syslog/UDP) without offset-tracking across
 // eviction. Network I/O by the caller happens OUTSIDE this lock.
 size_t meshLogConsume(uint8_t* out, size_t out_cap);
+// #1193: the non-destructive twin of meshLogConsume(), for a forwarder that must
+// leave the capture intact so the app's download still has every line. Copies
+// whole lines from the absolute position *cursor and advances it; removes
+// nothing. If eviction has overtaken *cursor it skips to the oldest byte held
+// and adds the gap to *lost (nullptr: skip without counting). Same short lock.
+size_t meshLogReadFrom(uint64_t* cursor, uint8_t* out, size_t out_cap, uint64_t* lost);
 // Stream the captured buffer to Serial in chunks (local-console `caplog dump`).
 // Best-effort: stop capture first for a clean dump. Framed remote download is #396.
 void   meshLogDumpSerial();
@@ -128,3 +134,18 @@ void   meshLogDumpSerial();
 // early-out) when capture is disabled or the level is filtered out.
 void mesh_log_line(uint8_t level, const char* fmt, ...)
     __attribute__((format(printf, 2, 3)));
+
+// #1211: for a line that has always gone to the serial console, such as
+// SafeBoot's battery reading. It still goes there, and now also goes through
+// mesh_log_line(): into the capture ring while capture is on, and onto the raw
+// UART mirror where one is built, which is the wire the bench rig reads. When
+// the capture echo is live, the echo is the console's copy, so the console gets
+// the line once either way. Like Serial.print, it writes to the console even
+// where the console carries the framed protocol, so use it only for lines that
+// already did.
+void mesh_log_print(uint8_t level, const char* fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+
+// Waits until the raw UART mirror has sent everything written so far, so a
+// line logged just before a sleep or reset isn't cut off. No-op without it.
+void meshLogDrainUart();

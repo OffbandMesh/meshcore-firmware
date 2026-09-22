@@ -107,6 +107,17 @@ static const GateCase kGateCases[] = {
     {"display rotate 0",             true},   // #148: rotate command
     {"display rotate 180",           true},   // #148
     {"display flip",                 true},   // #148: flip toggle
+    {"caplog",                       true},   // #1194: bare caplog is status
+    {"caplog status",                true},   // #1194
+    {"caplog forward on",            true},   // #1194: until off
+    {"caplog forward 300",           true},   // #1194: bounded
+    {"caplog forward off",           true},   // #1194
+    {"caplog start",                 true},   // #1194 option A: capture on (debug)
+    {"caplog start packet",          true},   // #1194 option A
+    {"caplog stop",                  true},   // #1194 option A: capture off
+    {"caplogx",                      false},  // #1194: a longer word is not the verb
+    {"set syslog.host sink.example.net", true},  // #1194: sink (set is already allowed)
+    {"get syslog.port",              true},   // #1194
 };
 
 // End-to-end cases: exercise cliPassthroughExecute, which must trim
@@ -126,6 +137,7 @@ static const ExecCase kExecCases[] = {
     {"  set mqtt.iata CMH", offband::CliResult::Ok},  // I1 regression
     {"get mqtt.iata",       offband::CliResult::Ok},  // baseline
     {"  Wifi status",       offband::CliResult::Ok},  // #45: trim+lowercase+allow (screenshot)
+    {"Caplog forward on",   offband::CliResult::Ok},  // #1194: phone-capitalized verb still allowed
 };
 
 static const char* resultName(offband::CliResult r) {
@@ -298,7 +310,7 @@ def main() -> int:
         out = (r.stdout or "").rstrip()
         # Echo full per-case output for visibility.
         print(out)
-        if r.returncode == 0 and "OK: 28 cases pass." in out:   # #141/#148: +6 display gate cases
+        if r.returncode == 0 and "OK: 40 cases pass." in out:   # #141/#148: +6 display; #1194: +11 caplog/syslog gate, +1 exec
             return 0
         print(f"FAIL (rc={r.returncode})")
         if r.stderr:

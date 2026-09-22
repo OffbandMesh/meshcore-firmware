@@ -50,28 +50,36 @@ class String {
     std::string s_;
 };
 
+// The ESP32 Preferences type tags, in the library's order. #899's prefStr()
+// reads a string only when getType() says PT_STR, so the mock records the type
+// each put* stored.
+enum PreferenceType { PT_I8, PT_U8, PT_I16, PT_U16, PT_I32, PT_U32, PT_I64, PT_U64, PT_STR, PT_BLOB, PT_INVALID };
+
 class Preferences {
  public:
     bool begin(const char* ns, bool /*ro*/) { ns_ = ns; return true; }
     void end() {}
-    bool clear() { kvs_[ns_].clear(); return true; }
-    bool remove(const char* k) { return kvs_[ns_].erase(k) > 0; }  // #182: erase key (no-blank writes)
-    bool   putBool   (const char* k, bool v)        { kvs_[ns_][k] = v ? "1":"0"; return true; }
+    bool clear() { kvs_[ns_].clear(); types_[ns_].clear(); return true; }
+    bool remove(const char* k) { types_[ns_].erase(k); return kvs_[ns_].erase(k) > 0; }  // #182: erase key (no-blank writes)
+    PreferenceType getType(const char* k) { auto& m = types_[ns_]; auto it=m.find(k); return it==m.end() ? PT_INVALID : it->second; }
+    bool   isKey     (const char* k)                { return getType(k) != PT_INVALID; }
+    bool   putBool   (const char* k, bool v)        { types_[ns_][k] = PT_U8;  kvs_[ns_][k] = v ? "1":"0"; return true; }
     bool   getBool   (const char* k, bool def)      { auto& m = kvs_[ns_]; auto it=m.find(k); return it==m.end()?def:(it->second=="1"); }
-    size_t putString (const char* k, const char* v) { kvs_[ns_][k] = v; return strlen(v); }
+    size_t putString (const char* k, const char* v) { types_[ns_][k] = PT_STR; kvs_[ns_][k] = v; return strlen(v); }
     String getString (const char* k, const char* def) { auto& m = kvs_[ns_]; auto it=m.find(k); return String(it==m.end()?def:it->second.c_str()); }
-    size_t putUShort (const char* k, uint16_t v)    { kvs_[ns_][k] = std::to_string(v); return 2; }
+    size_t putUShort (const char* k, uint16_t v)    { types_[ns_][k] = PT_U16; kvs_[ns_][k] = std::to_string(v); return 2; }
     uint16_t getUShort(const char* k, uint16_t def) { auto& m = kvs_[ns_]; auto it=m.find(k); return it==m.end()?def:(uint16_t)std::stoi(it->second); }
-    size_t putUChar  (const char* k, uint8_t v)     { kvs_[ns_][k] = std::to_string(v); return 1; }
+    size_t putUChar  (const char* k, uint8_t v)     { types_[ns_][k] = PT_U8;  kvs_[ns_][k] = std::to_string(v); return 1; }
     uint8_t getUChar (const char* k, uint8_t def)   { auto& m = kvs_[ns_]; auto it=m.find(k); return it==m.end()?def:(uint8_t)std::stoi(it->second); }
-    size_t putULong  (const char* k, uint32_t v)    { kvs_[ns_][k] = std::to_string(v); return 4; }
+    size_t putULong  (const char* k, uint32_t v)    { types_[ns_][k] = PT_U32; kvs_[ns_][k] = std::to_string(v); return 4; }
     uint32_t getULong(const char* k, uint32_t def)  { auto& m = kvs_[ns_]; auto it=m.find(k); return it==m.end()?def:(uint32_t)std::stoul(it->second); }
     // #181: blob accessors for the single versioned broker-config blob.
-    size_t putBytes  (const char* k, const void* v, size_t len) { kvs_[ns_][k] = std::string((const char*)v, len); return len; }
+    size_t putBytes  (const char* k, const void* v, size_t len) { types_[ns_][k] = PT_BLOB; kvs_[ns_][k] = std::string((const char*)v, len); return len; }
     size_t getBytes  (const char* k, void* out, size_t len)     { auto& m = kvs_[ns_]; auto it=m.find(k); if (it==m.end()) return 0; size_t n = it->second.size() < len ? it->second.size() : len; memcpy(out, it->second.data(), n); return n; }
     size_t getBytesLength(const char* k)                        { auto& m = kvs_[ns_]; auto it=m.find(k); return it==m.end() ? 0 : it->second.size(); }
  private:
     static inline std::map<std::string, std::map<std::string,std::string>> kvs_;
+    static inline std::map<std::string, std::map<std::string,PreferenceType>> types_;
     std::string ns_;
 };
 """
@@ -146,13 +154,33 @@ int main() {
         return 1;
     }
 
+    // #1194: caplog forward sink + until-off. A miss reads "no sink, 514, off".
+    {
+        char host[kSyslogHostMax + 1] = {'x'};
+        if (readSyslogHost(host, sizeof(host)) || host[0] != '\0') { puts("FAIL syslog.host miss"); return 1; }
+        if (readSyslogPort() != kDefaultSyslogPort) { printf("FAIL syslog.port miss: %u\n", readSyslogPort()); return 1; }
+        if (readCaplogForwardUntilOff()) { puts("FAIL caplog_fwd miss"); return 1; }
+
+        if (!writeSyslogHost("sink.example.net") || !readSyslogHost(host, sizeof(host)) ||
+            strcmp(host, "sink.example.net") != 0) { printf("FAIL syslog.host: '%s'\n", host); return 1; }
+        if (!writeSyslogPort(5514) || readSyslogPort() != 5514) { puts("FAIL syslog.port"); return 1; }
+        if (writeSyslogPort(0) || readSyslogPort() != 5514) { puts("FAIL syslog.port 0 must be refused"); return 1; }
+        if (!writeCaplogForwardUntilOff(true) || !readCaplogForwardUntilOff()) { puts("FAIL caplog_fwd on"); return 1; }
+        if (!writeCaplogForwardUntilOff(false) || readCaplogForwardUntilOff()) { puts("FAIL caplog_fwd off"); return 1; }
+        // Clearing the sink removes the key, so it reads back as "no sink".
+        if (!writeSyslogHost("") || readSyslogHost(host, sizeof(host)) || host[0] != '\0') {
+            puts("FAIL syslog.host clear"); return 1;
+        }
+        puts("PASS #1194 caplog forward sink + until-off round-trip");
+    }
+
     // -----------------------------------------------------------------------
     // populateDefaultBrokers — Plan 2 v2 Task 3 Step 5
     // -----------------------------------------------------------------------
     // Slot 2 was just written above with a custom URL ("mqtt.example.org").
-    // Slots 0 + 1 + 3 are still virgin. populateDefaultBrokers should (#592):
-    //   - fill slot 0 with OKIMesh mqtt1 (wss/anon, letsencrypt CA, disabled)
-    //   - fill slot 1 with OKIMesh mqtt2 (wss/anon, letsencrypt CA, disabled)
+    // Slots 0 + 1 + 3 are still virgin. populateDefaultBrokers should:
+    //   - fill slot 0 with OKIMesh mqtt1 (tcp/anon on 1883, no CA, disabled -- #707)
+    //   - fill slot 1 with OKIMesh mqtt2 (wss/anon, letsencrypt CA, disabled -- #592)
     //   - fill slot 3 with CoreComms.net (wss/jwt, disabled, gts-r4 CA -- #677)
     //   - LEAVE slot 2 alone (already has user-set URL -- would otherwise be
     //     MeshMapper under the #317 layout)
@@ -166,23 +194,23 @@ int main() {
     if (!readBrokerConfig(3, slot3)) { puts("FAIL read slot 3"); return 1; }
     if (!readBrokerConfig(4, slot4)) { puts("FAIL read slot 4"); return 1; }
 
-    // Slot 0 = OKIMesh mqtt1 (#592): wss + anonymous over TLS ("letsencrypt" CA).
-    // Auth stays None -- TLS secures the transport, no MQTT credential. Ships
-    // DISABLED (#262 -- a fresh flash must not auto-publish anywhere).
-    if (strcmp(slot0.url, "wss://mqtt1.okimesh.org:9002/mqtt") != 0) {  // #592: was mqtt://:1883
+    // Slot 0 = OKIMesh mqtt1, plain tcp + anonymous on 1883 since #707 (the seed
+    // table in ConfigSchema.cpp says why); #592 had it on wss. No CA, no MQTT
+    // credential. Ships DISABLED (#262 -- a fresh flash must not auto-publish).
+    if (strcmp(slot0.url, "mqtt://mqtt1.okimesh.org:1883") != 0) {
         printf("FAIL slot 0 url after populate: '%s'\n", slot0.url);
         return 1;
     }
-    if (slot0.transport != BrokerTransport::Wss) {
-        printf("FAIL slot 0 transport: %d\n", (int)slot0.transport);
+    if (slot0.transport != BrokerTransport::Tcp || slot0.port != 1883) {
+        printf("FAIL slot 0 transport/port: %d/%u\n", (int)slot0.transport, (unsigned)slot0.port);
         return 1;
     }
     if (slot0.auth_type != BrokerAuthType::None) {
         printf("FAIL slot 0 auth_type: %d\n", (int)slot0.auth_type);
         return 1;
     }
-    if (strcmp(slot0.ca_cert_name, "letsencrypt") != 0) {
-        printf("FAIL slot 0 ca_cert_name: '%s'\n", slot0.ca_cert_name);
+    if (slot0.ca_cert_name[0] != '\0') {
+        printf("FAIL slot 0 ca_cert_name should be empty (tcp): '%s'\n", slot0.ca_cert_name);
         return 1;
     }
     if (slot0.jwt_audience[0] != '\0') {

@@ -17,6 +17,7 @@
  */
 
 #include "SafeBoot.h"
+#include "MeshLog.h"
 
 #include <Arduino.h>
 #include <stdint.h>
@@ -99,6 +100,7 @@ namespace
 bool g_settled = false;
 bool g_wokeFromSafeBoot = false;
 bool g_lastResetUnclean = false;
+uint16_t g_bootBattMv = 0;
 } // namespace
 
 // ===========================================================================
@@ -381,10 +383,24 @@ uint16_t readVbatMillivoltsLight()
 #else
     analogReference(AR_INTERNAL); // BSP default; SafeBoot's math uses SAFEBOOT_AREF_VOLTAGE
 #endif
+#ifdef SAFEBOOT_ADC_SAMPLE_US
+    // A high-impedance divider needs a longer SAADC acquisition than the core's 3 us
+    // default, or it under-reads. The core silently keeps 3 us for any value it
+    // doesn't list, so reject those at compile time.
+    static_assert(SAFEBOOT_ADC_SAMPLE_US == 3 || SAFEBOOT_ADC_SAMPLE_US == 5 ||
+                  SAFEBOOT_ADC_SAMPLE_US == 10 || SAFEBOOT_ADC_SAMPLE_US == 15 ||
+                  SAFEBOOT_ADC_SAMPLE_US == 20 || SAFEBOOT_ADC_SAMPLE_US == 40,
+                  "SAFEBOOT_ADC_SAMPLE_US must be 3, 5, 10, 15, 20 or 40");
+    analogSampleTime(SAFEBOOT_ADC_SAMPLE_US);
+#endif
     analogReadResolution(kBatteryResolutionBits);
     uint32_t raw_sum = 0;
     for (int i = 0; i < kSamples; i++)
         raw_sum += analogRead(SAFEBOOT_PIN_VBAT_READ);
+#ifdef SAFEBOOT_ADC_SAMPLE_US
+    // SafeBoot runs before any other SAADC user, so the core default is what it found.
+    analogSampleTime(3);
+#endif
     uint32_t raw = raw_sum / kSamples;
     float vbat = ((float)SAFEBOOT_ADC_MULTIPLIER) * ((1000.0f * (float)SAFEBOOT_AREF_VOLTAGE) / (float)(1 << kBatteryResolutionBits)) * (float)raw;
 #else
@@ -645,8 +661,12 @@ void SafeBoot::checkAndMaybeSleep()
         clear.flags = 0;
         storePersisted(clear);
         g_settled = true;
-        Serial.printf("[SafeBoot] Vbat=%u mV stable -- continuing boot (attempts=%u, unclean=%d)\r\n", (unsigned)mv,
-                      (unsigned)st.attempts, (int)g_lastResetUnclean);
+        g_bootBattMv = mv;
+        // Through MeshLog, so the reading also reaches the raw UART log mirror a
+        // bench rig reads. On a native-USB board nothing is listening on USB
+        // this early in boot (#1211).
+        mesh_log_print(MLOG_BOOT, "[SafeBoot] Vbat=%u mV stable -- continuing boot (attempts=%u, unclean=%d)\r\n",
+                       (unsigned)mv, (unsigned)st.attempts, (int)g_lastResetUnclean);
         return;
     }
 
@@ -668,11 +688,13 @@ void SafeBoot::checkAndMaybeSleep()
     next.flags = (uint16_t)(g_lastResetUnclean ? 1u : 0u);
     storePersisted(next);
 
-    Serial.printf("[SafeBoot] Vbat=%u mV below safe threshold (wake=%u sleep=%u). "
-                  "Sleep %us, attempt #%u, unclean=%d.\r\n",
-                  (unsigned)mv, (unsigned)DEFAULT_SAFE_BOOT_WAKE_MV, (unsigned)DEFAULT_SAFE_BOOT_SLEEP_MV, (unsigned)sleep_secs,
-                  (unsigned)next.attempts, (int)g_lastResetUnclean);
+    mesh_log_print(MLOG_BOOT,
+                   "[SafeBoot] Vbat=%u mV below safe threshold (wake=%u sleep=%u). "
+                   "Sleep %us, attempt #%u, unclean=%d.\r\n",
+                   (unsigned)mv, (unsigned)DEFAULT_SAFE_BOOT_WAKE_MV, (unsigned)DEFAULT_SAFE_BOOT_SLEEP_MV,
+                   (unsigned)sleep_secs, (unsigned)next.attempts, (int)g_lastResetUnclean);
     Serial.flush();
+    meshLogDrainUart();   // the sleep would cut the mirror's copy off mid-line
 
     enterSafeBootSleep(sleep_secs);
 }
@@ -699,4 +721,9 @@ bool SafeBoot::wokeFromSafeBoot()
 bool SafeBoot::lastResetWasUnclean()
 {
     return g_lastResetUnclean;
+}
+
+uint16_t SafeBoot::bootBattMilliVolts()
+{
+    return g_bootBattMv;
 }

@@ -1,0 +1,1131 @@
+// ==== VARIANT BEGIN: banner ====
+// RadioCore UART0 sniffer + remote reset -- ESP32-WROOM boards, classic ESP32 or
+// ESP32-S3. A copy of rc_uart_sniffer_v3, the Feather build (#1199): the two differ
+// only inside the VARIANT blocks, and scripts/test_sniffer_wroom_copy.py fails CI if
+// they drift. Change both, or neither. "Feather" in shared comments means this board.
+// ==== VARIANT END: banner ====
+// BUILD ID: SNIFFER-v8                            (#740, #702, #938, #1085, #1199)
+//
+// v2 was listen-only. v3 adds a command surface so a host can assert the RC32's
+// RST and BOOT lines without a human pressing buttons, which is what unblocks
+// unattended reset cycles. v4 listens on BOTH header positions at once with a
+// byte counter per pad, so the rig never has to be told which board it faces
+// (#1085, implementing what #938 specified). v5 reads the INA whether or not a
+// fuel gauge answered, asks again for a gauge that was missing at boot, and takes
+// per-board pad labels and optional edge counters from the PIN MAP (#1199). v6 can
+// sweep the I2C bus once at boot, per board, to find a device that does not answer
+// where it should (#1199). v7 can decode two more pads through the RMT and tag every
+// line with the pin it arrived on, so one board reads four pads continuously (#1199).
+// v8 fixes the [xchk] hint: what the gauge-vs-INA difference should be depends on
+// where the INA reads VBUS (#1199).
+//
+// FLASH WITH ARDUINO IDE, NOT PLATFORMIO. Two prior PlatformIO attempts put
+// `Serial` on the TinyUSB CDC peripheral while the enumerated port was
+// USB-Serial-JTAG: the sketch flashed and verified but printed nothing. The
+// Arduino IDE handles the Feather's USB config correctly out of the box.
+// (#704 handoff.)
+
+#define SNIFF_BUILD_ID "SNIFFER-v8"   // the banner, every heartbeat and PING print it
+
+// ==== VARIANT BEGIN: wiring ====
+// ---------------------------------------------------------------------------
+// WIRING -- ESP32-WROOM boards
+// ---------------------------------------------------------------------------
+//                                  classic ESP32    ESP32-S3
+//   target UART TX (pad A)       -> GPIO18           GPIO18
+//   second listen pad (pad B)    -> GPIO19           GPIO15
+//   edge counters C / D          -> GPIO4 / GPIO5    GPIO4 / GPIO5
+//   header pin 20 (GND)          -> GND              GND
+//   header pin 18 (RST)          -> GPIO17           GPIO17     open-drain
+//   header pin  5 (BOOT / USER)  -> GPIO16           GPIO16     open-drain
+//   gauge + INA I2C (Wire1)      -> SDA 21, SCL 22   SDA 8, SCL 9
+//
+//   QCC 0x4 badge rig (#1172, #1199). Its WROOM boards are CLASSIC ESP32 DevKits,
+//   so build it as "ESP32 Dev Module". DevKit silkscreen in brackets:
+//     badge GPIO33 pad (P1.01)                            -> pad A  [D18]
+//     badge GPIO38 pad (P1.06, the diag log mirror)       -> pad B  [D19]
+//     badge GPIO34 pad (P1.02)                            -> edge C [D4]
+//     badge GPIO39 pad (P1.07)                            -> edge D [D5]
+//     INA228 + MAX17048                                   -> SDA [D21], SCL [D22]
+//     badge GND -> GND. Never the badge's 3v3 pad.
+//
+// The #defines in the PIN MAP block are what runs, and the boot banner prints them.
+// ==== VARIANT END: wiring ====
+//
+// !! WHICH PAD THE UART WIRE GOES TO DEPENDS ON THE TARGET. Heltec REVERSED the
+// !! UART header positions between board revisions:
+// !!
+// !!     RC32 / RCC6    header pin 11 = board RX    pin 12 = board TX
+// !!     RC52           header pin 11 = board TX    pin 12 = board RX
+// !!
+// !! so a rig soldered for one lands RX-to-RX on the other and receives
+// !! NOTHING -- which looks exactly like a dead board, and is the failure this
+// !! sketch's #938 change exists to prevent.
+// !!
+// !! #1085 -- THE RIG NO LONGER CHOOSES. Both pads are wired and both are
+// !! listened on, RX-only, and each has its own byte counter in the heartbeat:
+// !!
+// !!     pad A (RX pad)  <- RC32 / RCC6 board TX      counter rx_a
+// !!     pad B (TX pad)  <- RC52 board TX             counter rx_b
+// !!
+// !! Whichever board is attached, one pad receives and the other rests on that
+// !! board's RX, which transmits nothing. So there is no mode to set and no way
+// !! to have it set wrong. `SNIFFER_RC52` is retired.
+// !!
+// !! This is why: the build-time switch shipped hardcoded to RC52 and a rig
+// !! pointed at an RC32 read rx_bytes=0 for 13.3 hours. A single counter cannot
+// !! separate "wrong pad" from "dead wire" from "silent board" -- all read 0.
+// !!
+// !! Using the pad LABELLED TX as an input is deliberate and safe: the ESP32-S3
+// !! routes UART signals through the GPIO matrix, direction follows the argument
+// !! begin() receives, and Serial1 is opened with TX = -1 so nothing is ever
+// !! driven. The pad it meets on the idle side is the target's RX -- an input.
+// !! Two inputs on one net have nothing to fight.
+// !!
+// !! BUT `TX` AND `RX` ARE VARIANT-DEPENDENT ALIASES, NOT PIN NUMBERS. On the
+// !! plain Feather ESP32-S3 (and _nopsram, _reversetft) they are GPIO39 and
+// !! GPIO38; on adafruit_feather_esp32s3_TFT they are GPIO1 and GPIO2. Selecting
+// !! the wrong board in the IDE silently moves the pin. THE BANNER PRINTS THE
+// !! RESOLVED GPIO AT BOOT -- that line is the ground truth, not this comment.
+//
+// GND is not optional and is not a formality: without a common reference the
+// UART sees garbage or nothing at all, which reads exactly like a dead board.
+//
+// ---------------------------------------------------------------------------
+// OPEN-DRAIN ONLY -- THIS IS NOT OPTIONAL
+// ---------------------------------------------------------------------------
+// Both RC32 lines already have 10K pull-ups to 3V3 (RST: R31 + C32 1uF to
+// CHIP_PU; BOOT: 10K + 100nF). We therefore ONLY ever pull them LOW and
+// otherwise sit high-impedance. We never drive either line HIGH -- doing so
+// would fight the pull-up and put two drivers on one net.
+//
+// Consequences that matter:
+//   * Pins are initialised to INPUT (high-Z) as the FIRST thing in setup(), so
+//     a Feather reboot or reflash can never hold the RC32 in reset.
+//   * If the Feather is unpowered its pins are high-Z, so an unpowered or
+//     disconnected sniffer has no effect on the RC32 whatsoever.
+//   * Releasing is `pinMode(pin, INPUT)`, never `digitalWrite(pin, HIGH)`.
+//
+// ---------------------------------------------------------------------------
+// COMMANDS (newline-terminated, on the Feather's USB serial)
+// ---------------------------------------------------------------------------
+//   RST      pulse RST low -> normal reset
+//   BOOT     pulse BOOT low on its own (rarely useful alone)
+//   BOOTRST  BOOT low, pulse RST, hold BOOT past the strap sample -> ROM
+//            download mode
+//   PING     liveness check
+//   HELP     list commands
+//
+// Every action stamps a ">>>" line into the same stream as the RC32 data, so a
+// captured log self-documents the stimulus immediately above the resulting ROM
+// banner. That removes the "what caused this boot?" ambiguity that has dogged
+// every capture on this board so far.
+
+#define SNIFF_BAUD   115200   // ESP32-S3 ROM bootloader default
+#define HB_FAST_MS   1000     // heartbeat cadence for the first 30 s
+#define HB_FAST_FOR  30000    // then slow down so it cannot drown real data
+#define HB_SLOW_MS   10000
+
+// ==== VARIANT BEGIN: board-pins ====
+// ---------------------------------------------------------------------------
+// PIN MAP -- ESP32-WROOM: classic ESP32 (WROOM-32) or ESP32-S3 (WROOM-1)
+// ---------------------------------------------------------------------------
+// Explicit GPIO numbers, picked for the chip at compile time. The Feather's
+// symbolic names do not carry over: on a classic ESP32 `RX` is GPIO3, UART0 on the
+// USB bridge, and the core defines no A1/A2; on an S3 DevKitC `RX` is GPIO44, the
+// same bridge. Sniffing on either puts two drivers on the console UART.
+//
+// Avoided on the ESP32-S3:
+//   GPIO0/3/45/46  strapping pins       GPIO19/20  native USB D-/D+
+//   GPIO26..32     SPI flash            GPIO33..37 octal PSRAM (N8R8 / N16R8)
+//   GPIO43/44      UART0 / USB bridge   GPIO48     onboard RGB LED
+// Avoided on the classic ESP32:
+//   GPIO0/2/5/12/15  strapping pins     GPIO1/3    UART0 / USB bridge
+//   GPIO6..11        SPI flash          GPIO34..39 input-only, no pull-up for pad B
+// GPIO16/17 are free on WROOM modules only. On a WROVER they belong to the PSRAM.
+//
+// #1085: TWO listen pins, both opened RX-only, both drained every loop. Whichever
+// board is attached, one pad carries its TX and the other sits on that board's RX,
+// so the rig never has to be told which board it is looking at. Pad A is the
+// RC32 / RCC6 position, pad B the RC52 position.
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+  #define PIN_SNIFF_RX_A 18
+  #define PIN_SNIFF_RX_B 15
+#elif defined(CONFIG_IDF_TARGET_ESP32)
+  #define PIN_SNIFF_RX_A 18
+  #define PIN_SNIFF_RX_B 19
+#else
+  #error "rc_uart_sniffer_v3_wroom: select ESP32 Dev Module or ESP32S3 Dev Module"
+#endif
+#define PIN_RC32_RST   17
+#define PIN_RC32_BOOT  16
+
+// Names the banner and the >>> source marker print for each listen pad (#1199).
+#define SNIFF_TITLE "QCC badge UART SNIFFER (WROOM)"
+#define PAD_A_NAME  "A (badge GPIO33)"
+#define PAD_B_NAME  "B (badge GPIO38)"
+
+// #1199: all four badge pads are read continuously. Pads C and D have no UART left,
+// so the RMT decodes them. Every received line is tagged with the pin it came in on.
+// Inputs with pull-up, never driven. Free on both chips: GPIO4 is no strap on either,
+// and GPIO5 straps only SDIO-slave timing on the classic ESP32, which nothing here uses.
+#define SNIFF_TAG_LINES 1
+#define SNIFF_RMT_PADS  1
+#define PIN_RMT_C 4
+#define PIN_RMT_D 5
+#define PAD_C_NAME "C (badge GPIO34)"
+#define PAD_D_NAME "D (badge GPIO39)"
+// Tags use the DevKit silkscreen names; the S3 build has no such labels.
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+  #define TAG_A "GPIO18"
+  #define TAG_B "GPIO15"
+  #define TAG_C "GPIO4"
+  #define TAG_D "GPIO5"
+#else
+  #define TAG_A "D18"
+  #define TAG_B "D19"
+  #define TAG_C "D4"
+  #define TAG_D "D5"
+#endif
+// ==== VARIANT END: board-pins ====
+
+// IDLE-PAD PULL-UP -- DEFAULT ON.
+//
+// ⚠ DELIBERATE DEVIATION FROM #938, which specified this opt-in and default-OFF.
+// Its stated reason was "default-off keeps today's working behaviour" -- and that
+// was correct WHEN THERE WAS ONE LISTEN PIN AND NO IDLE PAD. #1085 creates a
+// permanently idle pad, so the premise that justified the default is gone.
+//
+// Why ON matters here: UART idle is HIGH. A floating CMOS input oscillates, the
+// UART frames the noise as start bits, and the idle pad's counter climbs. That
+// would defeat the entire point of splitting the counters -- the operator would
+// see traffic on both pads and be unable to tell which one is the real target.
+// A tool whose default state produces misleading output is worse than no tool.
+//
+// In the wired rig the idle pad rests on the target's RX, which is probably held
+// high already -- [hypothesis: untested] -- but "probably" does not cover an
+// absent or unpowered target, which is exactly when this instrument gets used.
+// A redundant pull-up costs nothing; a missing one costs a wrong diagnosis.
+//
+// This can never drive either pad: it sets a pull, not an output direction.
+// Set to 0 to restore #938's original default.
+#ifndef SNIFF_IDLE_PULLUP
+  #define SNIFF_IDLE_PULLUP 1
+#endif
+
+// #1199: tagged lines and the RMT-decoded pads live in a header beside the WROOM
+// sketch. Arduino puts its generated prototypes above the first function here, where
+// types declared further down are not visible yet; a header is not scanned.
+#if SNIFF_RMT_PADS && !SNIFF_TAG_LINES
+  #error "SNIFF_RMT_PADS prints through the tagged-line output: set SNIFF_TAG_LINES 1."
+#endif
+#if SNIFF_TAG_LINES
+  #include "sniffer_pads.h"
+#endif
+
+// ---------------------------------------------------------------------------
+// MAX17048 FUEL GAUGE ON Wire1  (#780 / Heltec beta Q01)
+// ---------------------------------------------------------------------------
+// WHY. The RC32 reports battery VOLTAGE only, and turning voltage into charge
+// requires a discharge curve we do not have for this cell -- the estimator in
+// scripts/battery_runtime.py has to guess with a nominal table, and its two
+// methods disagreed by seven hours on the first run. A MAX17048 reports modelled
+// charge directly, which is the quantity we were failing to infer.
+//
+// TOPOLOGY. The gauge sits between the battery and the RC32: the cell feeds the
+// gauge, the gauge passes power through to the RC32, and the SNIFFER reads it
+// over I2C. The device under test is not modified and does not know it is being
+// measured.
+//
+// Do NOT use the Feather's ONBOARD MAX17048 for this. It measures whatever is on
+// the Feather's own battery JST, and connecting the RC32's cell there would let
+// the USB-powered Feather CHARGE it -- which does not merely perturb a discharge
+// test, it prevents one from ever finishing.
+//
+// WHY Wire1, AND WHY IT MUST BE Wire1.
+//   * House convention: Wire is onboard devices, Wire1 is anything plugged in.
+//   * It is also forced here. The MAX1704x has NO address-select pin -- it is
+//     hard-wired to 0x36 -- and the Feather already carries one onboard at 0x36
+//     on Wire. Two devices, one address, one bus is unresolvable.
+//
+// CONSEQUENCE FOR WIRING: the STEMMA QT connector is physically on Wire. Plugging
+// the external gauge into it lands it on the SAME bus as the onboard one and
+// collides. The external gauge must be hand-wired to the Wire1 pins below.
+//
+// BRING-UP ORDER IS NOT OPTIONAL. On ESP32 the pins are arguments to begin();
+// on nRF52 they must be set BEFORE begin(). Getting it the wrong way round does
+// not warn, it simply fails to come up -- the same class of failure as
+// "HSPI Does not have default pins on ESP32S3". Pattern copied from
+// src/helpers/sensors/EnvironmentSensorManager.cpp:637, which is the canonical
+// version in this project.
+#define SNIFF_GAUGE 1
+
+// ==== VARIANT BEGIN: gauge-pins ====
+// The chip's standard I2C pins, clear of the sniff and control lines above. A WROOM
+// board has no onboard gauge, but Wire1 stays the bus for anything plugged in, as
+// on the Feather. Change these to match however you actually wire it.
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+  #ifndef PIN_GAUGE_SDA
+    #define PIN_GAUGE_SDA 8
+  #endif
+  #ifndef PIN_GAUGE_SCL
+    #define PIN_GAUGE_SCL 9
+  #endif
+#else
+  #ifndef PIN_GAUGE_SDA
+    #define PIN_GAUGE_SDA 21
+  #endif
+  #ifndef PIN_GAUGE_SCL
+    #define PIN_GAUGE_SCL 22
+  #endif
+#endif
+// One-time I2C sweep at boot, the owner-approved exception to the no-scan rule on
+// this rig (#1199): its MAX17048 did not answer at 0x36.
+#define SNIFF_BUS_SWEEP 1
+// ==== VARIANT END: gauge-pins ====
+
+// INA219 REGISTERS -- #938. [verified: TI INA219 datasheet (sbos448), fetched
+// 2026-08-22]
+//
+//   0x00 Config (reset 0x399F)   0x01 Shunt V   0x02 Bus V
+//   0x03 Power                   0x04 Current   0x05 Calibration
+//
+// !! ONE DECODE DETAIL THE DATASHEET SUMMARY GOT WRONG, AND WHY WE DO NOT
+// !! FOLLOW IT. A summary of the datasheet reported the SHUNT register as
+// !! "bits 15-3", the same shift as the bus register. That cannot be right at
+// !! the default configuration, and the config register proves it:
+// !!
+// !!     reset value 0x399F = 0011 1001 1001 1111
+// !!                            ^^  PG = 0b11 -> PGA /8 -> +/-320 mV range
+// !!
+// !! At 10 uV per LSB, +/-320 mV needs +/-32000 counts. A 13-bit field (bits
+// !! 15-3) holds only +/-4096 counts = +/-40.96 mV, which is the PGA /1 range,
+// !! not the default. So the shunt register is a FULL signed 16-bit value and
+// !! must NOT be shifted. Computed from the mechanism rather than read off the
+// !! annotation -- shifting it would have quietly reported 1/8th of the real
+// !! current, a plausible number that no sanity check would catch.
+//
+// The BUS register genuinely is bits 15-3, with CNVR at bit 1 and OVF at bit 0.
+// Config register and its power-on reset value, used to identify an INA219
+// POSITIVELY rather than by absence of a TI ID. [verified: TI INA219 datasheet
+// (sbos448), fetched 2026-08-22 -- reset value 0x399F]
+#define INA219_REG_CONFIG  0x00
+#define INA219_CONFIG_RESET 0x399F
+
+#define INA219_REG_SHUNT   0x01
+#define INA219_REG_BUS     0x02
+
+// Bench shunt, owner-confirmed from the silkscreen: R100 = 0.100 ohm.
+// Shunt LSB 10 uV / 0.1 ohm  ->  exactly 100 uA per count. Range +/-3.2 A.
+// Blind to single-digit-uA sleep current; that is a property of the shunt, not
+// the chip, and no averaging setting recovers it.
+#define INA219_SHUNT_MILLIOHM  100
+
+// ---------------------------------------------------------------------------
+// INA228 (#991). Different part, different register map, DIFFERENT SHUNT.
+//
+// THE SHUNT IS A PROPERTY OF THE FITTED PART, NOT OF THE RIG. The INA219 bench
+// module carries R100 = 0.100 ohm; the Adafruit INA228 breakout carries
+// R015 = 0.015 ohm [verified: owner photo of the fitted board, 2026-08-26].
+// Reusing the INA219 constant here would under-report by 100/15 = 6.67x and look
+// entirely plausible doing it.
+//
+// NO CALIBRATION WRITE, deliberately -- same reasoning as the INA219 path above.
+// SHUNT_CAL only feeds the CURRENT/POWER/ENERGY/CHARGE registers. Reading VSHUNT
+// and dividing by a known resistance on the host needs no magic constant, cannot
+// be half-configured, and survives a part reset that would silently invalidate a
+// written calibration.
+//
+// VSHUNT and VBUS are 24-bit registers holding 20-bit data LEFT-ALIGNED in bits
+// 23:4, so both are >>4 before scaling. VSHUNT is SIGNED (two's complement over
+// 20 bits); VBUS is unsigned.
+//
+// The VSHUNT scale depends on ADCRANGE (CONFIG bit 4), so it is READ rather than
+// assumed -- if anything ever configures this part, the decode follows instead of
+// silently scaling by 4x:
+//     ADCRANGE=0   312.5   nV/LSB  ->  +/-163.84 mV  ->  +/-10.9 A at 15 mohm
+//     ADCRANGE=1    78.125 nV/LSB  ->  +/- 40.96 mV  ->  +/- 2.73 A at 15 mohm
+// At R015 that is 20.83 uA or 5.21 uA per count. A LoRa node's draw sits well
+// inside either range, so resolution is the only thing at stake.
+// ---------------------------------------------------------------------------
+#define INA228_SHUNT_MILLIOHM  15
+
+#define INA228_REG_CONFIG   0x00
+#define INA228_REG_VSHUNT   0x04
+#define INA228_REG_VBUS     0x05
+#define INA228_CONFIG_ADCRANGE  0x0010
+
+// Scales in nV per LSB, x1000 so the integer maths keeps a fractional digit.
+#define INA228_VSHUNT_NV_X1000_R0   312500UL   // 312.5   nV
+#define INA228_VSHUNT_NV_X1000_R1    78125UL   //  78.125 nV
+#define INA228_VBUS_NV_X1000       195312500UL // 195.3125 uV = 195312.5 nV
+
+#define MAX1704X_ADDR    0x36
+#define MAX1704X_VCELL   0x02
+#define MAX1704X_SOC     0x04
+#define MAX1704X_VERSION 0x08
+
+// Sampling cadence. Matches the RC32's own [pwr] line so the two series line up
+// in the capture without interpolation.
+#define GAUGE_PERIOD_MS 30000
+
+// RST: R31 10K + C32 1uF gives a ~10 ms RC on CHIP_PU. 100 ms is comfortably
+// past it. (Holding RST for 1 s was tested by the owner and changes nothing --
+// the C32 short-press theory is refuted, #702.)
+#define RST_ASSERT_MS      100
+// Time to hold BOOT low after RST is released, so the ROM samples the strap
+// with BOOT still asserted.
+#define BOOT_HOLD_AFTER_MS 100
+
+static uint32_t hb_next = 0, hb_n = 0;
+// #1085: one counter per listen pad. A single total could not distinguish "wrong
+// pad" from "dead wire" from "silent board" -- all three read 0. Per-pad counts
+// say which header position the attached board actually transmits on.
+static uint32_t rx_bytes_a = 0;   // pad A -- RC32 / RCC6 position
+static uint32_t rx_bytes_b = 0;   // pad B -- RC52 position
+static char cmd_buf[32];
+static uint8_t cmd_len = 0;
+
+#if SNIFF_GAUGE
+#include <Wire.h>
+static bool     gauge_present = false;
+static uint32_t gauge_next    = 0;
+
+// Read one 16-bit big-endian register. Returns false on any bus error rather
+// than handing back a plausible-looking zero -- a fuel gauge that silently
+// reports 0% would be worse than one that reports nothing.
+static bool gaugeRead16At(uint8_t addr, uint8_t reg, uint16_t* out) {
+  Wire1.beginTransmission(addr);
+  Wire1.write(reg);
+  if (Wire1.endTransmission(false) != 0) return false;
+  if (Wire1.requestFrom(addr, (uint8_t)2) != 2) return false;
+  // TwoWire::read() returns int and yields -1 when the buffer is empty, which an
+  // implicit uint8_t cast turns into 0xFF -- a plausible value, silently wrong.
+  // A successful requestFrom() should guarantee the bytes, so this is defensive
+  // against a non-standard Wire, but "no silent failures" is cheap here.
+  const int hi = Wire1.read(), lo = Wire1.read();
+  if (hi < 0 || lo < 0) return false;
+  *out = ((uint16_t)hi << 8) | (uint8_t)lo;
+  return true;
+}
+
+static bool gaugeRead16(uint8_t reg, uint16_t* out) {
+  return gaugeRead16At(MAX1704X_ADDR, reg, out);
+}
+
+// INA228's measurement registers are 24 bits, not 16. Same transaction shape as
+// gaugeRead16At, three bytes instead of two. Returned right-aligned; the caller
+// does the >>4 and sign-extension, because the field width differs per register.
+static bool gaugeRead24At(uint8_t addr, uint8_t reg, uint32_t* out) {
+  Wire1.beginTransmission(addr);
+  Wire1.write(reg);
+  if (Wire1.endTransmission(false) != 0) return false;
+  if (Wire1.requestFrom(addr, (uint8_t)3) != 3) return false;
+  // Same -1-becomes-0xFF trap as gaugeRead16At. It matters MORE here: an all-0xFF
+  // VBUS decodes to ~204.8 V, which is nonsense a reader would notice, but an
+  // all-0xFF VSHUNT sign-extends to -1 LSB and reads as a harmless -0.02 mA --
+  // wrong in a way nobody would ever question. (#991 review finding 1.)
+  const int b2 = Wire1.read(), b1 = Wire1.read(), b0 = Wire1.read();
+  if (b2 < 0 || b1 < 0 || b0 < 0) return false;
+  *out = ((uint32_t)(uint8_t)b2 << 16) | ((uint32_t)(uint8_t)b1 << 8) | (uint8_t)b0;
+  return true;
+}
+
+// Forward declaration: gaugeBegin() calls this, and it is defined below.
+// Arduino's automatic prototype generation is unreliable for `static` functions,
+// so it is declared explicitly rather than relying on the preprocessor.
+// Which INA is actually on the bus (#938). Detection is printed today and the
+// read path will switch on it tomorrow -- the parts do NOT share a register map,
+// so "read the INA" is a different routine per family:
+//
+//   INA219      current/power read ZERO until the calibration register is
+//               written; shunt (0x01) and bus (0x02) voltage read raw. With the
+//               0.1 ohm shunt on the bench module, shunt LSB 10 uV -> 100 uA
+//               per count, +/-3.2 A full scale. Simplest correct path is to
+//               skip calibration entirely and compute I = Vshunt / R on the
+//               host -- no magic constant to get wrong.
+//   INA228      different map, 20-bit, and a hardware CHARGE accumulator, which
+//               is the feature that makes a runtime figure honest when the load
+//               is bursty (a LoRa node's draw is dominated by short TX bursts,
+//               and host-side sampling misses them between reads).
+//
+// Register maps to be confirmed against the TI datasheets before any of that is
+// written -- the notes above are working knowledge, not a citation.
+enum InaKind {
+  INA_NONE = 0,
+  INA_219_CLASS,     // ACKs, but exposes no TI manufacturer ID
+  INA_226, INA_260, INA_3221,
+  INA_228, INA_237, INA_238,
+  INA_TI_UNKNOWN     // TI mfg ID present, part ID not one we know
+};
+static InaKind ina_kind = INA_NONE;
+static uint8_t ina_addr = 0;
+
+static void inaProbe();
+
+// #1199: probe the gauge and report what happened. The register read alone can
+// only say "failed": on ESP32, endTransmission(false) sends nothing, it only arms a
+// repeated start (arduino-esp32 3.3.11 Wire.cpp:456-475). A bare address write is a
+// real transaction, so it separates "nothing answered at 0x36" from a bus fault,
+// and the VERSION read then checks that what answered is readable. Returns 0 when
+// found, else the address probe's Wire error, or GAUGE_READ_FAILED when the address
+// answered but the read did not.
+#define GAUGE_READ_FAILED 0xFF
+static uint8_t gauge_last_probe = 0;
+
+static uint8_t gaugeProbe(uint16_t* ver) {
+  Wire1.beginTransmission(MAX1704X_ADDR);
+  const uint8_t err = Wire1.endTransmission();
+  if (err != 0) return err;
+  return gaugeRead16(MAX1704X_VERSION, ver) ? 0 : GAUGE_READ_FAILED;
+}
+
+// endTransmission() codes, from the same source: 2 = NACK, 5 = timeout, 4 = other.
+static const char* gaugeProbeMeaning(uint8_t err) {
+  switch (err) {
+    case 2:                 return "no ACK: nothing answered at 0x36";
+    case 5:                 return "bus timeout";
+    case GAUGE_READ_FAILED: return "0x36 ACKed, but the VERSION read failed";
+    default:                return "other bus error";
+  }
+}
+
+#if SNIFF_BUS_SWEEP
+// #1199: a one-time sweep of the whole bus at boot, enabled per board, to find a
+// device that does not answer where it should. It breaks the no-scan rule above on
+// purpose; the #294 hang was on an ESP32-C6. It announces itself before it starts,
+// so a hang would show where it stopped, and it gives up after three bus timeouts
+// in a row.
+static void busSweep() {
+  Serial.println("=== I2C sweep on Wire1, 0x08..0x77, once at boot:");
+  Serial.print("===   answered:");
+  uint8_t found = 0, errors = 0, timeouts_in_row = 0;
+  for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+    Wire1.beginTransmission(addr);
+    const uint8_t err = Wire1.endTransmission();
+    if (err == 0) {
+      Serial.printf(" 0x%02X", addr);
+      found++;
+      timeouts_in_row = 0;
+    } else if (err == 2) {
+      timeouts_in_row = 0;                  // no ACK: nothing at this address
+    } else {
+      errors++;
+      timeouts_in_row = (err == 5) ? (uint8_t)(timeouts_in_row + 1) : 0;
+      if (timeouts_in_row >= 3) {
+        Serial.printf(" -- stopped at 0x%02X after 3 bus timeouts in a row", addr);
+        break;
+      }
+    }
+  }
+  if (!found) Serial.print(" none");
+  Serial.println();
+  if (errors) Serial.printf("===   bus errors other than no-ACK: %u\n", (unsigned)errors);
+}
+#endif
+
+static void gaugeBegin() {
+  // ESP32 takes the pins as arguments to begin(). nRF52 needs setPins() FIRST.
+  // See the header comment -- this order is the whole trap.
+#if defined(NRF52_PLATFORM) || defined(ARDUINO_ARCH_NRF52)
+  Wire1.setPins(PIN_GAUGE_SDA, PIN_GAUGE_SCL);
+  Wire1.setClock(100000);
+  Wire1.begin();
+#else
+  Wire1.begin(PIN_GAUGE_SDA, PIN_GAUGE_SCL, 100000);
+#endif
+
+#if SNIFF_BUS_SWEEP
+  busSweep();
+#endif
+
+  // Targeted probe, NOT a bus scan. A blind scan is what wedges the I2C
+  // peripheral on the C6 (#294 -- hangs at 0x0d and never returns, so setup()
+  // never reaches loop()). We know the address; there is no reason to sweep.
+  uint16_t ver = 0;
+  gauge_last_probe = gaugeProbe(&ver);
+  gauge_present = (gauge_last_probe == 0);
+
+  Serial.print("=== fuel gauge on Wire1 (SDA=");
+  Serial.print((int)PIN_GAUGE_SDA);
+  Serial.print(" SCL=");
+  Serial.print((int)PIN_GAUGE_SCL);
+  Serial.print("): ");
+  if (gauge_present) {
+    Serial.print("FOUND at 0x36, VERSION=0x");
+    Serial.println(ver, HEX);
+  } else {
+    Serial.printf ("NOT FOUND -- probe error %u (%s)\n",
+                   (unsigned)gauge_last_probe, gaugeProbeMeaning(gauge_last_probe));
+    Serial.println("    On a Feather it must NOT be in the STEMMA port: that is Wire, where");
+    Serial.println("    the onboard gauge already sits at 0x36.");
+    Serial.printf ("    Asked again every %d s.\n", GAUGE_PERIOD_MS / 1000);
+  }
+
+  inaProbe();
+}
+
+// ---------------------------------------------------------------------------
+// INA CURRENT MONITOR -- IDENTIFICATION ONLY (for now)
+// ---------------------------------------------------------------------------
+// The MAX17048 answers "how full is the cell". An INA answers "how much is it
+// drawing right now". Together they close the loop: measured charge, measured
+// current, measured time -- no nominal tables and no bracketed range.
+//
+// This probes the four parts the Offband firmware already supports, because
+// which one is present changes how current is decoded and guessing wrong
+// produces confident nonsense rather than an error:
+//
+//   INA219  0x40  12-bit, external shunt, current needs a calibration write
+//   INA260  0x41  16-bit + INTEGRATED 2 mOhm shunt, current readable directly
+//   INA3221 0x42  3-channel, lower precision
+//   INA226  0x44  16-bit, external shunt, current needs calibration
+//
+// Identification is positive, not inferred from address alone: TI parts carry a
+// Manufacturer ID at 0xFE (0x5449, "TI") and a Die ID at 0xFF. Address tells you
+// where something answered; the die ID tells you WHAT answered, and on a bus
+// where addresses are configurable by strap those are different questions.
+//
+// Targeted probe of four known addresses -- NOT a bus scan. Blind scanning is
+// what wedges the C6 I2C peripheral (#294).
+//
+// Deliberately identification-only: the current decode is written once the part
+// is known, rather than shipping three decoders that never run and cannot be
+// tested.
+static void inaProbe() {
+  // Address sweep is deliberately narrow: 0x40..0x4F is the INA family's
+  // strap-selectable range. Still a bounded, known range, not a blind bus scan
+  // (#294 -- a blind scan wedges the C6 I2C peripheral and never returns).
+  bool any = false;
+  for (uint8_t addr = 0x40; addr <= 0x4F; addr++) {
+    Wire1.beginTransmission(addr);
+    if (Wire1.endTransmission() != 0) continue;
+    if (addr == MAX1704X_ADDR) continue;   // not an INA
+    any = true;
+    // ina_addr is NOT set here. It is set only where a part is positively
+    // identified, below -- latching the first address that merely ACKs would
+    // pin us to a device we never identified, and inaTick() would then read
+    // registers 0x01/0x02 from something unrelated. Gemini review, #938.
+
+    // TWO ID register locations, because the families disagree:
+    //   INA226 / INA260 / INA3221 -> MFG 0xFE, DIE 0xFF
+    //   INA228 / INA237 / INA238  -> MFG 0x3E, DEVICE 0x3F
+    // Probing only 0xFE/0xFF would find an INA228 at 0x40, get nothing back,
+    // and misreport it as an INA219 (which genuinely has no ID registers).
+    // Same address, wrong chip, wrong decode, plausible-looking output.
+    uint16_t mfg_hi = 0, die_hi = 0, mfg_lo = 0, dev_lo = 0, cfg = 0;
+    bool have_hi = gaugeRead16At(addr, 0xFE, &mfg_hi) && gaugeRead16At(addr, 0xFF, &die_hi);
+    bool have_lo = gaugeRead16At(addr, 0x3E, &mfg_lo) && gaugeRead16At(addr, 0x3F, &dev_lo);
+
+    Serial.print("=== INA candidate at 0x");
+    Serial.print(addr, HEX);
+
+    const char* id = "";
+    if (have_lo && mfg_lo == 0x5449) {
+      // DEVICE_ID is [15:4] part, [3:0] revision -- mask the revision off.
+      uint16_t part = (uint16_t)(dev_lo >> 4);
+      ina_addr = addr;
+      ina_kind = (part == 0x228) ? INA_228
+               : (part == 0x237) ? INA_237
+               : (part == 0x238) ? INA_238
+               : INA_TI_UNKNOWN;
+      id = (part == 0x228) ? " -> INA228"
+         : (part == 0x237) ? " -> INA237"
+         : (part == 0x238) ? " -> INA238"
+         : " -> TI part, unrecognised DEVICE_ID";
+      Serial.print("  mfg=0x"); Serial.print(mfg_lo, HEX);
+      Serial.print(" dev=0x");  Serial.print(dev_lo, HEX);
+    } else if (have_hi && mfg_hi == 0x5449) {
+      ina_addr = addr;
+      ina_kind = (die_hi == 0x2260) ? INA_226
+               : (die_hi == 0x2270) ? INA_260
+               : (die_hi == 0x3220) ? INA_3221
+               : INA_TI_UNKNOWN;
+      id = (die_hi == 0x2260) ? " -> INA226"
+         : (die_hi == 0x2270) ? " -> INA260"
+         : (die_hi == 0x3220) ? " -> INA3221"
+         : " -> TI part, unrecognised DIE_ID";
+      Serial.print("  mfg=0x"); Serial.print(mfg_hi, HEX);
+      Serial.print(" die=0x");  Serial.print(die_hi, HEX);
+    } else if (gaugeRead16At(addr, INA219_REG_CONFIG, &cfg) &&
+               cfg == INA219_CONFIG_RESET) {
+      // POSITIVE identification: the config register reads its documented
+      // power-on value, 0x399F. The INA219 has no ID registers, so this is the
+      // only affirmative evidence the part offers.
+      //
+      // WHY NOT JUST "no TI ID -> must be an INA219". Two reasons, both real:
+      //
+      //  1. The INA219 ALIASES invalid register pointers instead of NAKing, so
+      //     reads of 0xFE/0xFF SUCCEED and return garbage. Observed here on the
+      //     bench, 2026-08-22:  mfg=0x5959 die=0x2719, all four ID addresses
+      //     returning the same two values because only the low nibble decodes.
+      //     A successful read proves nothing; only the VALUE 0x5449 ("TI") does.
+      //  2. Absence of a TI ID is not presence of an INA219. Any unrelated I2C
+      //     peripheral parked at 0x40-0x4F would have been bucketed here and
+      //     then read as a current monitor, decoding ITS registers 0x01/0x02 as
+      //     shunt and bus voltage -- confident, entirely fictitious current.
+      //
+      // LIMIT, stated rather than hidden: this identifies an INA219 that is at
+      // its reset configuration. We never write the config register, so that
+      // holds -- but an INA219 reconfigured by some other master would be
+      // reported UNIDENTIFIED and not read. That is the safe direction to fail:
+      // refusing to read beats reading the wrong thing confidently.
+      ina_kind = INA_219_CLASS;
+      ina_addr = addr;
+      id = " -> INA219 (config reads its reset value)";
+      Serial.print("  cfg=0x"); Serial.print(cfg, HEX);
+    } else {
+      // ACKed at an INA address, but is NOT a TI INA and does NOT present the
+      // INA219's config reset value. Do NOT guess.
+      //
+      // The previous revision bucketed everything here as INA219-class, which
+      // is a negative inference: ANY unrelated I2C peripheral sitting at
+      // 0x40-0x4F would have been read as a current monitor, and registers
+      // 0x01/0x02 of some other chip decoded as shunt and bus voltage. That
+      // produces confident, entirely fictitious current. Gemini review, #938.
+      ina_kind = INA_NONE;
+      id = " -> UNIDENTIFIED -- not read";
+      Serial.print("  raw 0xFE=0x"); Serial.print(mfg_hi, HEX);
+      Serial.print(" 0xFF=0x");      Serial.print(die_hi, HEX);
+      Serial.print(" 0x3E=0x");      Serial.print(mfg_lo, HEX);
+      Serial.print(" 0x3F=0x");      Serial.print(dev_lo, HEX);
+      Serial.print(" 0x00=0x");      Serial.print(cfg, HEX);
+    }
+    Serial.println(id);
+  }
+  if (!any) Serial.println("=== no INA found on Wire1 (swept 0x40..0x4F)");
+}
+
+// Read the INA219 and print current + bus voltage. Returns the bus millivolts
+// (0 if unread) so the caller can cross-check it against the fuel gauge.
+//
+// NO CALIBRATION REGISTER IS WRITTEN, deliberately. The calibration register
+// exists so the chip can do the I = V/R division for you, and getting its value
+// wrong is the classic INA219 failure -- current and power silently read ZERO
+// until it is right. Reading the raw shunt voltage and dividing on the host
+// needs no magic constant and cannot be half-configured.
+// INA228 read path (#991). Emits the SAME [ina] line shape as the INA219 path so
+// existing captures, greps and parsers keep working -- bus_mv, ma, shunt_uv, then
+// the raw registers. Raw values are printed for the same reason the gauge prints
+// raw_vcell: if a scale is ever wrong, a captured log stays correctable after the
+// fact instead of being silently wrong for hours.
+static uint32_t ina228Tick() {
+  uint32_t rs = 0, rb = 0;
+  uint16_t cfg = 0;
+  if (!gaugeRead24At(ina_addr, INA228_REG_VSHUNT, &rs) ||
+      !gaugeRead24At(ina_addr, INA228_REG_VBUS,   &rb)) {
+    Serial.println("[ina] read FAILED (INA228)");
+    return 0;
+  }
+
+  // ADCRANGE is read, not assumed -- see the constants block. A failed CONFIG
+  // read falls back to the part's own reset default (ADCRANGE=0), which is the
+  // wider, coarser range: it under-resolves rather than over-reporting.
+  const bool have_cfg = gaugeRead16At(ina_addr, INA228_REG_CONFIG, &cfg);
+  const bool adcrange1 = have_cfg && (cfg & INA228_CONFIG_ADCRANGE);
+  const uint32_t nv_x1000 = adcrange1 ? INA228_VSHUNT_NV_X1000_R1
+                                      : INA228_VSHUNT_NV_X1000_R0;
+
+  // 20-bit signed, left-aligned in bits 23:4. Shift first, THEN sign-extend from
+  // bit 19 -- sign-extending the unshifted value would carry the low nibble in.
+  int32_t sh = (int32_t)(rs >> 4);
+  if (sh & 0x00080000L) sh -= 0x00100000L;
+
+  // nV then uV. int64 because 524287 * 312500 overflows int32 by a wide margin.
+  const int64_t shunt_nv = (int64_t)sh * (int64_t)nv_x1000 / 1000;
+  const int32_t shunt_uv = (int32_t)(shunt_nv / 1000);
+
+  // I(uA) = V(nV) / R(ohm) / 1000 = shunt_nv / milliohm  (the 1e3/1e3 cancels)
+  const int64_t ua = shunt_nv / (int64_t)INA228_SHUNT_MILLIOHM;
+  const int32_t ma_x10 = (int32_t)(ua / 100);
+
+  // VBUS: 20-bit unsigned, left-aligned, 195.3125 uV/LSB.
+  const uint32_t bus_mv =
+      (uint32_t)(((uint64_t)(rb >> 4) * INA228_VBUS_NV_X1000) / 1000000000ULL);
+
+  Serial.print("[ina] bus_mv=");
+  Serial.print(bus_mv);
+  Serial.print(" ma=");
+  // Negate into an UNSIGNED accumulator: `x = -x` is undefined for INT32_MIN.
+  // Unreachable at 20 bits, but the pattern is wrong and costs nothing to write
+  // correctly -- same fix as the INA219 path took in the #938 Gemini review.
+  uint32_t mag = (ma_x10 < 0) ? (uint32_t)-(int64_t)ma_x10 : (uint32_t)ma_x10;
+  if (ma_x10 < 0) Serial.print('-');
+  Serial.print(mag / 10); Serial.print('.'); Serial.print(mag % 10);
+  Serial.print("  shunt_uv=");
+  Serial.print(shunt_uv);
+  Serial.print("  raw_shunt=0x"); Serial.print(rs, HEX);
+  Serial.print(" raw_bus=0x");    Serial.print(rb, HEX);
+  Serial.print(adcrange1 ? "  adcrange=1" : "  adcrange=0");
+  if (!have_cfg) Serial.print(" (CONFIG read failed, assumed)");
+  Serial.println();
+  return bus_mv;
+}
+
+static uint32_t inaTick() {
+  if (ina_addr == 0) return 0;
+  if (ina_kind == INA_228) return ina228Tick();
+  if (ina_kind != INA_219_CLASS) return 0;
+
+  uint16_t rs = 0, rb = 0;
+  if (!gaugeRead16At(ina_addr, INA219_REG_SHUNT, &rs) ||
+      !gaugeRead16At(ina_addr, INA219_REG_BUS,   &rb)) {
+    Serial.println("[ina] read FAILED");
+    return 0;
+  }
+
+  // Shunt: full signed 16-bit, 10 uV/LSB (see the register block above).
+  int32_t shunt_uv = (int32_t)(int16_t)rs * 10;
+  // I(uA) = V(uV) / R(ohm) = shunt_uv * 1000 / milliohm
+  int32_t ua = (shunt_uv * 1000L) / (int32_t)INA219_SHUNT_MILLIOHM;
+
+  // Bus: bits 15-3, 4 mV/LSB. Bit 1 CNVR, bit 0 OVF.
+  uint32_t bus_mv = (uint32_t)(rb >> 3) * 4UL;
+  bool ovf = (rb & 0x0001) != 0;
+
+  int32_t ma_x10 = ua / 100;          // tenths of a mA
+  Serial.print("[ina] bus_mv=");
+  Serial.print(bus_mv);
+  Serial.print(" ma=");
+  // Negate into an UNSIGNED accumulator. `x = -x` is undefined for INT32_MIN --
+  // its magnitude has no int32_t representation. Unreachable with a 16-bit
+  // shunt register (range is +/-32767 tenths), but the pattern is wrong and
+  // costs nothing to write correctly. Gemini review, #938.
+  uint32_t mag = (ma_x10 < 0) ? (uint32_t)-(int64_t)ma_x10 : (uint32_t)ma_x10;
+  if (ma_x10 < 0) Serial.print('-');
+  Serial.print(mag / 10); Serial.print('.'); Serial.print(mag % 10);
+  Serial.print("  shunt_uv=");
+  Serial.print(shunt_uv);
+  // Raw values printed alongside the decode for the same reason the gauge does
+  // it: if the decode is ever wrong, the raw number is what lets a captured log
+  // be corrected after the fact instead of being silently wrong for hours.
+  Serial.print("  raw_shunt=0x"); Serial.print(rs, HEX);
+  Serial.print(" raw_bus=0x");    Serial.print(rb, HEX);
+  if (ovf) Serial.print("  !OVF");
+  Serial.println();
+  return bus_mv;
+}
+
+static void gaugeTick(uint32_t now) {
+  if ((int32_t)(now - gauge_next) < 0) return;
+  gauge_next = now + GAUGE_PERIOD_MS;
+
+  // #1199: ask again for a gauge that did not answer at boot: one targeted probe at
+  // its fixed address, never a scan (#294). The probe error prints only when it
+  // changes, so a fault that moves shows up without flooding the log.
+  if (!gauge_present) {
+    uint16_t ver = 0;
+    const uint8_t probe = gaugeProbe(&ver);
+    gauge_present = (probe == 0);
+    if (gauge_present) {
+      Serial.print("=== fuel gauge on Wire1: FOUND at 0x36 after boot, VERSION=0x");
+      Serial.println(ver, HEX);
+    } else if (probe != gauge_last_probe) {
+      Serial.printf("=== fuel gauge still NOT FOUND -- probe error %u (%s)\n",
+                    (unsigned)probe, gaugeProbeMeaning(probe));
+    }
+    gauge_last_probe = probe;
+  }
+
+  // #1199: v4 returned early when no gauge answered, which silenced a found INA as
+  // well. Each instrument is read on its own now; only the cross-check needs both.
+  uint32_t mv = 0;
+  if (gauge_present) {
+    uint16_t vcell = 0, soc = 0;
+    if (!gaugeRead16(MAX1704X_VCELL, &vcell) || !gaugeRead16(MAX1704X_SOC, &soc)) {
+      Serial.println("[gauge] read FAILED");
+    } else {
+      // MAX17048: VCELL LSB = 78.125 uV, charge = SOC / 256 %.
+      // Raw values are printed alongside the decode deliberately. If this turns
+      // out to be a MAX17043 the scaling differs (12-bit VCELL, 1.25 mV/LSB) and
+      // the raw number is what lets that be corrected after the fact instead of
+      // silently logging a wrong voltage for hours.
+      mv = ((uint32_t)vcell * 78125UL) / 1000000UL;
+      const uint32_t pct_x10 = ((uint32_t)soc * 10UL) / 256UL;
+
+      Serial.print("[gauge] mv=");
+      Serial.print(mv);
+      Serial.print(" charge=");
+      Serial.print(pct_x10 / 10);
+      Serial.print('.');
+      Serial.print(pct_x10 % 10);
+      Serial.print("%  raw_vcell=0x");
+      Serial.print(vcell, HEX);
+      Serial.print(" raw_soc=0x");
+      Serial.println(soc, HEX);
+    }
+  }
+
+  // TWO INSTRUMENTS, ONE TRUTH. The gauge senses UPSTREAM of the shunt. What the
+  // difference should be depends on where the INA reads its bus voltage:
+  //
+  //   at VIN- (load side), as an INA219 always does: the difference IS the
+  //   shunt drop, and must agree with the current we just computed,
+  //       gauge_mv - bus_mv  ~=  I * R
+  //
+  //   at VIN+ (battery side), as an INA226/228 does when its VBUS pin is tied
+  //   there (the Adafruit INA228's VBUS jumper, as on the QCC WROOM rig): both
+  //   read the same node, so the difference is ~0 at any current.
+  //
+  // The sketch knows the chip but not the VBUS wiring, so the hint says which
+  // case applies or names both. Printed rather than asserted. If it stops
+  // agreeing, one of the gauge, the shunt value or the decode is wrong, and this
+  // line says so before a wrong number gets baked into a runtime figure (#833's
+  // "both instruments must agree" rule, now with a second independent quantity
+  // behind it).
+  uint32_t bus_mv = inaTick();
+  if (bus_mv > 0 && mv > 0) {
+    Serial.print("[xchk] gauge_mv-bus_mv=");
+    Serial.print((int32_t)mv - (int32_t)bus_mv);
+    if (ina_kind == INA_219_CLASS)
+      Serial.println(" mV  (INA219 reads VIN-: expect ~ shunt_uv/1000)");
+    else
+      Serial.println(" mV  (expect ~0 if VBUS is on VIN+, ~ shunt_uv/1000 if on VIN-)");
+  }
+}
+#endif  // SNIFF_GAUGE
+
+// Dead-man release. If this sketch ever hangs or crashes between od_assert()
+// and od_release(), the RC32 would be held in reset (or download mode)
+// indefinitely and would need the FEATHER power-cycled to recover -- a failure
+// mode that looks exactly like the dead board we are investigating.
+// loop() force-releases both lines if an assertion has been outstanding too
+// long. (Gemini review, #740.)
+#define OD_DEADMAN_MS 2000
+static uint32_t od_deadline = 0;   // 0 = nothing asserted
+
+// --- open-drain primitives -------------------------------------------------
+static inline void od_assert(uint8_t pin) {   // pull LOW
+  pinMode(pin, OUTPUT);
+  digitalWrite(pin, LOW);
+  od_deadline = millis() + OD_DEADMAN_MS;
+}
+static inline void od_release(uint8_t pin) {  // back to high-Z; pull-up restores HIGH
+  pinMode(pin, INPUT);
+}
+
+static void stamp(const char* s) {
+  Serial.print(">>> ");
+  Serial.print(s);
+  Serial.print("  @up=");
+  Serial.print(millis() / 1000);
+  Serial.println("s");
+}
+
+// #1085: announce which listen pad is transmitting, but ONLY when it changes.
+// Normal operation prints this once, at the first byte, and it answers "which
+// header position is this board actually using" without anyone inferring it.
+// Repeated markers mean both pads are live -- corruption that announces itself.
+// Uses the same ">>>" prefix as stamp(), which the banner already documents as
+// "any line without [hb] or >>> is target data", so capture tooling and readers
+// need no new rule.
+#if !SNIFF_TAG_LINES
+static char relay_last_src = 0;
+static void relay_mark_source(char src) {
+  if (src == relay_last_src) return;
+  relay_last_src = src;
+  Serial.println();
+  Serial.print(">>> [src:");
+  Serial.print(src);
+  Serial.print("] now receiving on pad ");
+  Serial.print(src == 'A' ? PAD_A_NAME : PAD_B_NAME);
+  Serial.print("  @up=");
+  Serial.print(millis() / 1000);
+  Serial.println("s");
+}
+#endif
+
+static void do_reset(bool with_boot) {
+  if (with_boot) {
+    stamp("BOOT asserted (download-mode entry)");
+    od_assert(PIN_RC32_BOOT);
+    delay(10);
+  }
+  stamp(with_boot ? "RST asserted (BOOT+RST)" : "RST asserted");
+  od_assert(PIN_RC32_RST);
+  delay(RST_ASSERT_MS);
+  od_release(PIN_RC32_RST);
+  stamp("RST released -- RC32 booting");
+
+  if (with_boot) {
+    delay(BOOT_HOLD_AFTER_MS);
+    od_release(PIN_RC32_BOOT);
+    stamp("BOOT released -- expect ROM download mode");
+  }
+  od_deadline = 0;   // sequence completed cleanly; dead-man stands down
+}
+
+static void handle_cmd(const char* c) {
+  if      (!strcasecmp(c, "RST"))     do_reset(false);
+  else if (!strcasecmp(c, "BOOTRST")) do_reset(true);
+  else if (!strcasecmp(c, "BOOT"))  {
+    stamp("BOOT pulsed alone");
+    od_assert(PIN_RC32_BOOT); delay(RST_ASSERT_MS); od_release(PIN_RC32_BOOT);
+  }
+  else if (!strcasecmp(c, "PING"))    stamp("PONG " SNIFF_BUILD_ID);
+  else if (!strcasecmp(c, "HELP"))    stamp("cmds: RST BOOTRST BOOT PING HELP");
+  else if (c[0])                      stamp("unknown cmd (try HELP)");
+}
+
+void setup() {
+  // FIRST: park both control lines high-Z before anything else can run, so a
+  // Feather reboot cannot hold the RC32 in reset.
+  od_release(PIN_RC32_RST);
+  od_release(PIN_RC32_BOOT);
+
+  Serial.begin(115200);
+  while (!Serial && millis() < 3000) { }
+
+  // A STALLED I2C DEVICE MUST NOT COST CAPTURED BYTES. The loop drains the
+  // UART before servicing I2C, but that alone is not protection: the default
+  // 256-byte RX buffer fills in ~22 ms at 115200, while a Wire timeout on a
+  // wedged device is 100 ms or more. The relay would return to find the buffer
+  // overflowed and the bytes this instrument exists to capture already gone,
+  // silently. Enlarging the buffer converts that into a survivable stall.
+  // Must be called BEFORE begin(). Gemini review, #938.
+  // ⚠ BOTH UARTs MUST PASS TX = -1. Giving either pad a real TX role would drive
+  // into the attached target's TX output on one of the two board pinouts. This is
+  // a one-character mistake with hardware consequences (#938).
+  Serial1.setRxBufferSize(4096);
+  Serial1.begin(SNIFF_BAUD, SERIAL_8N1, PIN_SNIFF_RX_A, -1);   // RX only -- TX is -1
+  Serial2.setRxBufferSize(4096);
+  Serial2.begin(SNIFF_BAUD, SERIAL_8N1, PIN_SNIFF_RX_B, -1);   // RX only -- TX is -1
+
+#if SNIFF_IDLE_PULLUP
+  // gpio_pullup_en(), NOT pinMode(pin, INPUT_PULLUP). Gemini review, #1085:
+  // pinMode() re-configures the pad at the GPIO level after begin() has attached
+  // it to the UART. Whether the peripheral keeps precedence is poorly documented
+  // and has varied across core versions, so the failure mode is a pad silently
+  // detached from its UART -- a deaf sniffer that still prints a heartbeat, which
+  // is precisely the class of silent-wrong-answer this whole change exists to
+  // remove. gpio_pullup_en() touches only the pull, never the direction or mux.
+  gpio_pullup_en((gpio_num_t)PIN_SNIFF_RX_A);
+  gpio_pullup_en((gpio_num_t)PIN_SNIFF_RX_B);
+#endif
+
+  Serial.println();
+  Serial.println("================================================");
+  Serial.println("=== " SNIFF_TITLE "  BUILD ID: " SNIFF_BUILD_ID " ===");
+  // The RESOLVED GPIO numbers are the ground truth, not any comment: TX/RX are
+  // variant-dependent aliases and selecting the wrong board silently moves them.
+  Serial.printf ("=== pad %s GPIO%d   pad %s GPIO%d   %d 8N1\n",
+                 PAD_A_NAME, (int)PIN_SNIFF_RX_A, PAD_B_NAME, (int)PIN_SNIFF_RX_B,
+                 SNIFF_BAUD);
+  Serial.println("=== both listened RX-only; heartbeat counts each separately");
+#if SNIFF_RMT_PADS
+  rmtPadBegin(rmt_c, PAD_C_NAME);
+  rmtPadBegin(rmt_d, PAD_D_NAME);
+#endif
+  Serial.println("=== heartbeat 1/s for 30s, then 1/10s");
+#if SNIFF_TAG_LINES
+  Serial.println("=== target data prints as [pin] line, e.g. [" TAG_A "] ...");
+#else
+  Serial.println("=== any line without [hb] or >>> is target data");
+#endif
+  Serial.printf ("=== RST->GPIO%d  BOOT->GPIO%d  (open-drain, pull-low only)\n",
+                 (int)PIN_RC32_RST, (int)PIN_RC32_BOOT);
+  Serial.println("=== cmds: RST BOOTRST BOOT PING HELP");
+  Serial.println("================================================");
+
+#if SNIFF_GAUGE
+  gaugeBegin();
+#endif
+}
+
+void loop() {
+  // Relay first so real data is never delayed behind a heartbeat.
+  //
+  // Both pads drain into ONE stream. In the designed rig only one carries data --
+  // the other rests on the attached board's RX, an input that transmits nothing.
+  //
+  // STREAM INTEGRITY (Gemini review, #1085). The reviewer wanted every byte
+  // prefixed with its source. Rejected: this relay is a transparent passthrough,
+  // and per-byte tags would render "[BEACON] APP:CTOR" as interleaved tag noise,
+  // breaking every existing capture and every human reading a boot log.
+  //
+  // Instead the marker is emitted only when the ACTIVE PAD CHANGES. In normal
+  // operation that is one line, once, at the first byte -- and it usefully states
+  // which header position the target is really transmitting on. If both pads ever
+  // go live the markers appear repeatedly and the corruption is self-announcing
+  // rather than silent, which was the reviewer's actual concern.
+#if SNIFF_TAG_LINES
+  // #1199: this build tags per LINE instead, which the review above did not weigh:
+  // the rig's whole question is which pin each line arrives on, and whole tagged
+  // lines stay readable where per-byte tags would not.
+  {
+    const uint32_t t = millis();
+    while (Serial1.available()) { tagByte(tag_a, (uint8_t)Serial1.read(), t); rx_bytes_a++; }
+    while (Serial2.available()) { tagByte(tag_b, (uint8_t)Serial2.read(), t); rx_bytes_b++; }
+    tagIdle(tag_a, t);
+    tagIdle(tag_b, t);
+  #if SNIFF_RMT_PADS
+    rmtPadService(rmt_c, t);
+    rmtPadService(rmt_d, t);
+  #endif
+  }
+#else
+  if (Serial1.available()) {
+    relay_mark_source('A');
+    while (Serial1.available()) { Serial.write(Serial1.read()); rx_bytes_a++; }
+  }
+  if (Serial2.available()) {
+    relay_mark_source('B');
+    while (Serial2.available()) { Serial.write(Serial2.read()); rx_bytes_b++; }
+  }
+#endif
+
+#if SNIFF_GAUGE
+  // After the relay, never before it. An I2C transaction takes a few hundred
+  // microseconds and the RC32's UART has no flow control -- servicing the gauge
+  // ahead of the relay would risk dropping the bytes this whole instrument
+  // exists to capture.
+  gaugeTick(millis());
+#endif
+
+  // Host commands.
+  while (Serial.available()) {
+    char ch = (char)Serial.read();
+    if (ch == '\n' || ch == '\r') {
+      cmd_buf[cmd_len] = '\0';
+      if (cmd_len) handle_cmd(cmd_buf);
+      cmd_len = 0;
+    } else if (cmd_len < sizeof(cmd_buf) - 1) {
+      cmd_buf[cmd_len++] = ch;
+    }
+  }
+
+  uint32_t now = millis();
+
+  // Dead-man: never leave the target held. Loud, never silent.
+  if (od_deadline && (int32_t)(now - od_deadline) >= 0) {
+    od_release(PIN_RC32_RST);
+    od_release(PIN_RC32_BOOT);
+    od_deadline = 0;
+    stamp("DEAD-MAN RELEASE -- lines were held too long; both released");
+  }
+
+  if ((int32_t)(now - hb_next) >= 0) {
+    hb_next = now + (now < HB_FAST_FOR ? HB_FAST_MS : HB_SLOW_MS);
+    // The per-pad counts are the payoff: a rising count proves that WIRE carries
+    // data, independently of whether the data is decodable at this baud, and says
+    // WHICH header position is live. Both at 0 now means no target is
+    // transmitting -- it can no longer mean the rig is watching the wrong pad.
+    Serial.printf("[hb] " SNIFF_BUILD_ID " alive  n=%lu  up=%lus  rx_a=%lu  rx_b=%lu",
+                  (unsigned long)++hb_n,
+                  (unsigned long)(now / 1000),
+                  (unsigned long)rx_bytes_a,
+                  (unsigned long)rx_bytes_b);
+#if SNIFF_RMT_PADS
+    // Decoded bytes and framing errors per RMT pad. Errors with no bytes mean the pad
+    // is moving, but not as 115200 8N1. full_* counts captures that overflowed.
+    Serial.printf("  rx_c=%lu  rx_d=%lu  bad_c=%lu  bad_d=%lu",
+                  (unsigned long)rmt_c.bytes, (unsigned long)rmt_d.bytes,
+                  (unsigned long)rmt_c.bad, (unsigned long)rmt_d.bad);
+    if (rmt_c.full || rmt_d.full) {
+      Serial.printf("  full_c=%lu  full_d=%lu", (unsigned long)rmt_c.full,
+                    (unsigned long)rmt_d.full);
+    }
+#endif
+    Serial.println();
+  }
+}

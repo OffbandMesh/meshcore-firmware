@@ -125,6 +125,94 @@ bool writeStatusIntervalSec(uint16_t seconds) {
     return true;
 }
 
+// #1194: caplog forward sink + until-off state ("observer" namespace). The
+// readers follow the read-miss contract above: no sink, default port, off.
+
+bool readSyslogHost(char* out, size_t out_len) {
+    if (out == nullptr || out_len == 0) return false;
+    Preferences p;
+    p.begin(kNvsObserver, /*readOnly=*/true);
+    String v = prefStr(p, kKeySyslogHost);
+    p.end();
+    if (v.isEmpty()) {
+        out[0] = '\0';
+        return false;
+    }
+    strncpy(out, v.c_str(), out_len);
+    out[out_len - 1] = '\0';
+    return true;
+}
+
+bool writeSyslogHost(const char* host) {
+    if (host == nullptr) host = "";
+    Preferences p;
+    if (!p.begin(kNvsObserver, /*readOnly=*/false)) {
+        logCfgWriteFailure("writeSyslogHost.begin", kNvsObserver);
+        return false;
+    }
+    if (host[0] == '\0') {
+        // #98: an empty putString does not reliably clear an NVS key; an absent
+        // key reads back as "no sink", which is what clearing means.
+        p.remove(kKeySyslogHost);
+        p.end();
+        return true;
+    }
+    size_t wrote = p.putString(kKeySyslogHost, host);
+    p.end();
+    if (wrote == 0) {
+        logCfgWriteFailure("writeSyslogHost.putString", kNvsObserver);
+        return false;
+    }
+    return true;
+}
+
+uint16_t readSyslogPort() {
+    Preferences p;
+    p.begin(kNvsObserver, /*readOnly=*/true);
+    uint16_t v = p.getUShort(kKeySyslogPort, kDefaultSyslogPort);
+    p.end();
+    return v == 0 ? kDefaultSyslogPort : v;
+}
+
+bool writeSyslogPort(uint16_t port) {
+    if (port == 0) return false;
+    Preferences p;
+    if (!p.begin(kNvsObserver, /*readOnly=*/false)) {
+        logCfgWriteFailure("writeSyslogPort.begin", kNvsObserver);
+        return false;
+    }
+    size_t wrote = p.putUShort(kKeySyslogPort, port);
+    p.end();
+    if (wrote != sizeof(uint16_t)) {
+        logCfgWriteFailure("writeSyslogPort.putUShort", kNvsObserver);
+        return false;
+    }
+    return true;
+}
+
+bool readCaplogForwardUntilOff() {
+    Preferences p;
+    p.begin(kNvsObserver, /*readOnly=*/true);
+    uint8_t v = p.getUChar(kKeyCaplogFwd, 0);
+    p.end();
+    return v != 0;
+}
+
+bool writeCaplogForwardUntilOff(bool on) {
+    Preferences p;
+    if (!p.begin(kNvsObserver, /*readOnly=*/false)) {
+        logCfgWriteFailure("writeCaplogForwardUntilOff.begin", kNvsObserver);
+        return false;
+    }
+    size_t wrote = p.putUChar(kKeyCaplogFwd, on ? 1 : 0);
+    p.end();
+    if (wrote != 1) {
+        logCfgWriteFailure("writeCaplogForwardUntilOff.putUChar", kNvsObserver);
+        return false;
+    }
+    return true;
+}
+
 // #370: the display.* NVS accessors (getDisplayAlwaysOn / setDisplayAlwaysOn /
 // getDisplayRotation / setDisplayRotation) moved to
 // src/helpers/config/DisplayConfigProvider.cpp. They were role-neutral
