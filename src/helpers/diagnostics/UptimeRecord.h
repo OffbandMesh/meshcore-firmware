@@ -89,18 +89,63 @@ inline bool nvsSaveDue(uint32_t now_ms, uint32_t last_ms, bool saved) {
   return false;                           // before the first mark
 }
 
+// #1272: the NVS record carries WHERE its value came from, in the top bit of
+// the value itself. Two writers reach the same key and they mean different
+// things:
+//   - the ladder writes at a mark, so the boot ran AT LEAST that long;
+//   - the shutdown flush (#1270) writes the runtime EXACTLY, because the board
+//     is going down on purpose and there is still power to record it.
+// The bit rides in the value so one putUInt carries both: a separate flag key
+// could be torn from its value by a reset landing between the two writes.
+// Seconds use the low 31 bits, which runs out after 68 years of uptime.
+//
+// A record written before this bit existed reads as a floor, which is the safe
+// reading for a value whose provenance is unknown.
+constexpr uint32_t kNvsExactBit = 0x80000000u;
+
+struct NvsUptime {
+  uint32_t seconds;
+  bool     exact;
+};
+
+inline uint32_t encodeNvs(uint32_t seconds, bool exact) {
+  return (seconds & ~kNvsExactBit) | (exact ? kNvsExactBit : 0u);
+}
+
+// Unlike the RTC record, the stored value carries no magic and no check word,
+// so plausibility is its only integrity test. Without one a garbled read is
+// decoded into a confident figure: 0xDEADBEEF has its top bit set and would
+// report "exactly 1.6 billion seconds". Past this bound there is no record.
+constexpr uint32_t kMaxPlausibleUptimeS = 10u * 365u * 24u * 3600u;   // 10 years
+
+inline NvsUptime decodeNvs(uint32_t raw) {
+  const uint32_t seconds = raw & ~kNvsExactBit;
+  if (seconds > kMaxPlausibleUptimeS) return NvsUptime{0, false};
+  return NvsUptime{seconds, (raw & kNvsExactBit) != 0u};
+}
+
 // What the boot line reports for the previous boot.
 struct Previous {
   uint32_t seconds;
   bool     from_rtc;   // false: from NVS
-  bool     at_least;   // true: NVS had stopped saving, so it ran longer
+  bool     at_least;   // true: a floor -- it ran at least this long (prints "+")
 };
 
 // `this_boot` is the current boot's count; the RTC record counts only if the
 // immediately previous boot wrote it.
-inline Previous pickPrevious(const RetainedUptime& rtc, uint32_t this_boot, uint32_t nvs_s) {
-  if (valid(rtc) && rtc.boot + 1u == this_boot) return Previous{rtc.uptime_s, true, false};
-  return Previous{nvs_s, false, nvs_s >= kNvsStopAfterMs / 1000u};
+inline Previous pickPrevious(const RetainedUptime& rtc, uint32_t this_boot, NvsUptime nvs) {
+  // The boot counter resets to 1 when its own magic fails, and UINT32_MAX + 1
+  // is 1, so a record stamped at the very top of the range would be accepted by
+  // a counter that had just restarted. Refuse the wrap rather than trust it.
+  const bool immediately_previous =
+      rtc.boot != 0xFFFFFFFFu && rtc.boot + 1u == this_boot;
+  if (valid(rtc) && immediately_previous) return Previous{rtc.uptime_s, true, false};
+  // A ladder value is a floor: the schedule writes only at marks, so a boot
+  // that ended between two of them left the earlier mark behind. This used to
+  // flag only values past the LAST mark, so a 734 s boot reported a bare "60s"
+  // and read as a fast crash cycle (#1076 Run A). Zero is not a floor -- it
+  // means nothing was ever written.
+  return Previous{nvs.seconds, false, nvs.seconds > 0 && !nvs.exact};
 }
 
 }  // namespace uptime

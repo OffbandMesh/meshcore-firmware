@@ -734,7 +734,7 @@ static uint32_t s_last_hb_ms = 0;
 // brown-out reset class that BLE radio current spikes can trigger.
 
 static uint32_t s_nvs_boot_count = 0;
-static uint32_t s_prev_boot_uptime_s = 0;
+static uptime::NvsUptime s_prev_boot_uptime{0, false};
 static ::Preferences s_boot_prefs;  // explicit global namespace to avoid any future conflicts
 
 void heartbeatBegin() {
@@ -750,7 +750,15 @@ void heartbeatBegin() {
     bool ok = s_boot_prefs.begin("cw_boot", /*readOnly=*/false);
     if (ok) {
         s_nvs_boot_count       = s_boot_prefs.getUInt("count", 0) + 1;
-        s_prev_boot_uptime_s   = s_boot_prefs.getUInt("last_up_s", 0);
+        const uint32_t raw_up   = s_boot_prefs.getUInt("last_up_s", 0);
+        s_prev_boot_uptime      = uptime::decodeNvs(raw_up);
+        // #1272: a record too large to be a runtime is dropped, so corruption
+        // cannot print as a confident figure. Say so -- discarding it silently
+        // would make a garbled record look like a board that never recorded one.
+        if (raw_up != 0 && s_prev_boot_uptime.seconds == 0) {
+            crashLogf("[boot] WARN: stored uptime 0x%08X is not a plausible runtime; ignored",
+                      (unsigned)raw_up);
+        }
         // #181: the boot counter IS crash-cycle evidence -- a silent put failure
         // would freeze the count and mask a reboot loop. Surface it.
         if (s_boot_prefs.putUInt("count", s_nvs_boot_count) == 0) {
@@ -765,11 +773,22 @@ void heartbeatBegin() {
     }
 
     // #1074: the previous boot's uptime from the RTC record when it survived
-    // (exact), else from NVS (power was lost; "+" once NVS had stopped saving,
-    // so the boot ran at least that long). Read before this boot overwrites it.
+    // (exact), else from NVS -- where a ladder mark prints "+" because the boot
+    // ran at least that long, and a shutdown flush prints bare because it knows
+    // the runtime (#1272). Read before this boot overwrites it.
+    //
+    // The record is bound to the RTC counter, not the NVS one, because both
+    // sides of that comparison must live in the same power domain. An NVS
+    // 'count' write that fails leaves the stored count frozen, so the next boot
+    // computes the SAME number, "previous boot + 1" never matches, and a
+    // perfectly good exact record is thrown away in favour of a stale NVS value
+    // from an older boot -- which can overstate the previous runtime and hide a
+    // crash cycle, the opposite of what this line is for. The RTC counter
+    // advances whenever the RTC record itself survived, which is exactly the
+    // condition being tested.
     const uptime::Previous prev =
-        uptime::pickPrevious(s_rtc_uptime, s_nvs_boot_count, s_prev_boot_uptime_s);
-    uptime::stamp(s_rtc_uptime, s_nvs_boot_count, 0);
+        uptime::pickPrevious(s_rtc_uptime, s_boot_state.counter, s_prev_boot_uptime);
+    uptime::stamp(s_rtc_uptime, s_boot_state.counter, 0);
 
     // #1074 (F2): rtc_count is the RTC counter itself. It used to print
     // bootCounterValue(), which returns the NVS count whenever NVS opened, so
@@ -814,7 +833,10 @@ static bool     s_uptime_attempted = false;
 // The NVS half, shared by the ladder and the shutdown flush. Returns whether
 // the value reached flash: a mark is spent only by a write that landed, so a
 // transient failure does not silently cost this boot its uptime record.
-static bool saveUptimeToNvs(uint32_t now_ms) {
+// `exact` is false for a ladder mark (the boot ran at least this long) and true
+// for the shutdown flush, which knows the runtime precisely. It rides in the
+// stored value's top bit (#1272), so the next boot can tell them apart.
+static bool saveUptimeToNvs(uint32_t now_ms, bool exact) {
     // #181: feeds "prev boot lasted Ns" after a power loss -- the crash-cycle-
     // PERIOD evidence. A silent failure would erase it, so log a failure ONCE
     // and re-arm on the next success, rather than flooding the 4KB ring with a
@@ -828,7 +850,7 @@ static bool saveUptimeToNvs(uint32_t now_ms) {
         }
         return false;
     }
-    size_t wrote = p.putUInt("last_up_s", now_ms / 1000);
+    size_t wrote = p.putUInt("last_up_s", uptime::encodeNvs(now_ms / 1000, exact));
     p.end();
     if (wrote == 0) {
         if (!s_uptime_save_warned) {
@@ -845,7 +867,7 @@ static bool saveUptimeToNvs(uint32_t now_ms) {
 
 void crashLogUptimeTick(uint32_t now_ms) {
     if (uptime::rtcUpdateDue(now_ms, s_last_rtc_uptime_ms, s_rtc_uptime_updated)) {
-        uptime::stamp(s_rtc_uptime, s_nvs_boot_count, now_ms / 1000);
+        uptime::stamp(s_rtc_uptime, s_boot_state.counter, now_ms / 1000);
         s_last_rtc_uptime_ms = now_ms;
         s_rtc_uptime_updated = true;
     }
@@ -856,7 +878,7 @@ void crashLogUptimeTick(uint32_t now_ms) {
         if (!s_uptime_attempted || now_ms - s_last_attempt_ms >= uptime::kNvsRetryMs) {
             s_last_attempt_ms = now_ms;
             s_uptime_attempted = true;
-            saveUptimeToNvs(now_ms);
+            saveUptimeToNvs(now_ms, /*exact=*/false);
         }
     }
 }
@@ -868,8 +890,8 @@ void crashLogUptimeTick(uint32_t now_ms) {
 // have anyway.
 void crashLogUptimeFlush() {
     const uint32_t now_ms = millis();
-    uptime::stamp(s_rtc_uptime, s_nvs_boot_count, now_ms / 1000);
-    saveUptimeToNvs(now_ms);
+    uptime::stamp(s_rtc_uptime, s_boot_state.counter, now_ms / 1000);
+    saveUptimeToNvs(now_ms, /*exact=*/true);
 }
 
 void subloopMark(uint8_t which) {
