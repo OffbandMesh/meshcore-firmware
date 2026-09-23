@@ -104,11 +104,35 @@ void crashLogSetResetReasonHook(ResetReasonHook hook);
 // ---------------------------------------------------------------------------
 // Reset-reason string mapping (Stage A)
 // ---------------------------------------------------------------------------
-// Returns a short human-readable name for the given esp_reset_reason()
-// enum value. Safe to call before crashLogBegin(); no buffer access.
-// Returns "UNKNOWN" for unrecognized values rather than nullptr so
-// printf-style callers don't need a null check.
+// Returns a short name for the given esp_reset_reason() value, from the shared
+// table in ResetReason.h. Safe to call before crashLogBegin(); no buffer
+// access. Never nullptr, so printf-style callers need no null check.
+//
+// #1075: when the IDF layer answers ESP_RST_UNKNOWN -- which is all IDF 4.4
+// can say about a USB-host reset -- the ROM's own code is appended, as
+// "UNKNOWN(rom:USB_UART_CHIP_RESET)".
 const char* resetReasonString(int reason);
+
+// #1075: the same description written into the caller's buffer, so nothing
+// shares a static. Prefer this wherever a buffer can be held.
+void resetReasonInto(int reason, char* out, size_t cap);
+
+// #1075: the chip's own ROM reset code, and whether this build can read one.
+// Exposed so the board's decoder says the same thing without a second table.
+uint32_t romResetReasonCode();
+bool     romResetReasonAvailable();
+
+// #1075: one line on the way into a deliberate shutdown, naming why and the
+// battery reading that drove it, e.g.
+//   [shutdown] cause=low-battery mv=3380 up=7920s
+// A tester capture otherwise ends mid-sentence with no reason. `cause` is a
+// short token: low-battery, user, ota, unknown.
+void crashLogShutdown(const char* cause, uint32_t millivolts);
+
+// #1075: the same line with cause=unknown, but only if nothing named a cause
+// already this boot. ESP32Board::enterDeepSleep() calls it, so a path that
+// powers the board down without saying why still leaves a record.
+void crashLogShutdownIfSilent(uint32_t millivolts);
 
 // ---------------------------------------------------------------------------
 // Ring buffer lifecycle (Stage B)

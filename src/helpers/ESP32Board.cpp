@@ -1,7 +1,8 @@
 #ifdef ESP_PLATFORM
 
 #include "ESP32Board.h"
-#include "diagnostics/CrashLog.h"   // #1270: record the exact uptime before sleeping
+#include "diagnostics/CrashLog.h"     // #1270: record the uptime before sleeping
+#include "diagnostics/ResetReason.h"  // #1075: the shared reset-reason table
 #include <esp_ota_ops.h>
 #include <nvs.h>
 #include <nvs_flash.h>
@@ -684,6 +685,20 @@ void ESP32Board::getPartitionsInfo(char* buf, size_t buflen) {
   }
 }
 
+// #1075: one table for both decoders (diagnostics/ResetReason.h). When the IDF
+// layer cannot name the reset -- all IDF 4.4 can say about a USB-host reset,
+// which is what the RC32 reports -- the ROM's own code is named instead of
+// printing "Unknown reset reason (0)".
+const char* ESP32Board::getResetReasonString(uint32_t reason) {
+  // Static because the MainBoard interface returns a bare pointer. The string
+  // is built fresh on each call and consumed immediately by the caller.
+  static char buf[80];
+  offband::reset::formatPhrase(reason, offband::romResetReasonCode(),
+                               offband::romResetReasonAvailable(),
+                               buf, sizeof(buf));
+  return buf;
+}
+
 void ESP32Board::powerOff() {
   enterDeepSleep(0); // Do not wakeup
 }
@@ -693,7 +708,8 @@ void ESP32Board::enterDeepSleep(uint32_t secs) {
   // shutdown or a CLI power off -- so save the runtime first, while there is
   // still power to write it. Everything below this line is teardown, and the
   // CPU never returns from the end of this function.
-  offband::crashLogUptimeFlush();
+  // #1075: and say why, unless the caller already did.
+  offband::crashLogShutdownIfSilent(getBattMilliVolts());
 
   // Power off the display if any
 #ifdef DISPLAY_CLASS

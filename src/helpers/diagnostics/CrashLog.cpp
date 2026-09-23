@@ -14,6 +14,7 @@
 // console shared with the framed protocol". CrashLog and MeshLog must agree.
 #include "../../MeshLog.h"
 #include "UptimeRecord.h"   // #1074: previous-boot uptime schedule + retained record
+#include "ResetReason.h"    // #1075: the shared reset-reason tables
 
 #include <cstdarg>
 #include <cstdio>
@@ -25,6 +26,7 @@
   #include <Preferences.h>   // NVS-backed boot counter
   #include <esp_attr.h>      // RTC_NOINIT_ATTR
   #include <esp_system.h>    // esp_reset_reason(), esp_register_shutdown_handler()
+  #include <rom/rtc.h>       // #1075: rtc_get_reset_reason(), the chip's own code
   #include <esp_log.h>       // esp_log_set_vprintf()
   #include <freertos/FreeRTOS.h>
   #include <freertos/portmacro.h>  // portENTER_CRITICAL
@@ -42,22 +44,39 @@ void crashLogSetResetReasonHook(ResetReasonHook hook) { s_reset_reason_hook = ho
 // ---------------------------------------------------------------------------
 // Reset-reason mapping
 // ---------------------------------------------------------------------------
+#if defined(OFFBAND_CRASHLOG_ESP32)
+// #1075: the chip's own reset code, from the RTC registers the ROM sets. It is
+// the only witness on IDF 4.4, whose esp_reset_reason() stops at ESP_RST_SDIO
+// and answers ESP_RST_UNKNOWN for a USB-host reset -- exactly what the RC32
+// capture in #1053 shows.
+uint32_t romResetReasonCode() { return (uint32_t)rtc_get_reset_reason(0); }
+bool romResetReasonAvailable() { return true; }
+#else
+uint32_t romResetReasonCode() { return 0; }
+bool romResetReasonAvailable() { return false; }
+#endif
+
+void resetReasonInto(int reason, char* out, size_t cap) {
+#if defined(OFFBAND_CRASHLOG_ESP32)
+    reset::formatToken((uint32_t)reason, romResetReasonCode(), true, out, cap);
+#elif defined(OFFBAND_CRASHLOG_NRF52)
+    // No esp_reset_reason enum here; the board's decoder is the only source.
+    (void)reason;
+    snprintf(out, cap, "%s", s_reset_reason_hook ? s_reset_reason_hook() : "n/a");
+#else
+    (void)reason;
+    snprintf(out, cap, "HOST_BUILD");
+#endif
+}
+
 const char* resetReasonString(int reason) {
 #if defined(OFFBAND_CRASHLOG_ESP32)
-    switch ((esp_reset_reason_t)reason) {
-        case ESP_RST_UNKNOWN:    return "UNKNOWN";
-        case ESP_RST_POWERON:    return "POWERON";
-        case ESP_RST_EXT:        return "EXT_PIN";
-        case ESP_RST_SW:         return "SW_RESET";
-        case ESP_RST_PANIC:      return "PANIC";
-        case ESP_RST_INT_WDT:    return "INT_WDT";
-        case ESP_RST_TASK_WDT:   return "TASK_WDT";
-        case ESP_RST_WDT:        return "OTHER_WDT";
-        case ESP_RST_DEEPSLEEP:  return "DEEPSLEEP";
-        case ESP_RST_BROWNOUT:   return "BROWNOUT";
-        case ESP_RST_SDIO:       return "SDIO";
-        default:                 return "UNKNOWN";
-    }
+    // The buffer is static because this returns a bare pointer, which the
+    // MainBoard hook signature fixes. Callers that can hold their own buffer
+    // should use resetReasonInto() instead; the ones in this file do.
+    static char buf[72];
+    resetReasonInto(reason, buf, sizeof(buf));
+    return buf;
 #elif defined(OFFBAND_CRASHLOG_NRF52)
     // No esp_reset_reason enum on nRF52. Delegate to the board's decoder if it
     // registered one (#376 decision 2); otherwise say so honestly.
@@ -68,6 +87,31 @@ const char* resetReasonString(int reason) {
     return "HOST_BUILD";
 #endif
 }
+
+// #1075: a board that shuts itself down used to leave a capture ending
+// mid-sentence, with the reason painted on a display nobody was watching.
+// This says why, with the reading that drove it, and takes the runtime with it
+// so the next boot reports the real number rather than a ladder mark.
+#ifndef OFFBAND_CRASHLOG_HOST
+static bool s_shutdown_noted = false;
+
+void crashLogShutdown(const char* cause, uint32_t millivolts) {
+    s_shutdown_noted = true;
+    crashLogf("[shutdown] cause=%s mv=%u up=%us",
+              cause ? cause : "unknown",
+              (unsigned)millivolts,
+              (unsigned)(millis() / 1000UL));
+    crashLogUptimeFlush();
+}
+
+void crashLogShutdownIfSilent(uint32_t millivolts) {
+    if (s_shutdown_noted) return;   // a caller already named the cause
+    crashLogShutdown("unknown", millivolts);
+}
+#else
+void crashLogShutdown(const char*, uint32_t) {}
+void crashLogShutdownIfSilent(uint32_t) {}
+#endif
 
 // ---------------------------------------------------------------------------
 // Ring buffer storage (RTC_NOINIT memory)
@@ -332,8 +376,10 @@ static bool emitPreviousBootDump(const char* why) {
     crashLogSerialLine("=========================================================");
     snprintf(hdr, sizeof(hdr), "=== CRASH LOG FROM PREVIOUS BOOT (%s) ===", why);
     crashLogSerialLine(hdr);
+    char reason_buf[72];
+    resetReasonInto(currentResetReasonCode(), reason_buf, sizeof(reason_buf));
     snprintf(hdr, sizeof(hdr), "=== reset_reason=%d (%s) ===",
-             currentResetReasonCode(), resetReasonString(currentResetReasonCode()));
+             currentResetReasonCode(), reason_buf);
     crashLogSerialLine(hdr);
     crashLogSerialLine("=========================================================");
 
@@ -729,13 +775,15 @@ void heartbeatBegin() {
     // bootCounterValue(), which returns the NVS count whenever NVS opened, so
     // the two fields could never differ. Now they diverge across a power loss,
     // which clears RTC memory but not NVS.
+    char reason_buf[72];
+    resetReasonInto((int)esp_reset_reason(), reason_buf, sizeof(reason_buf));
     crashLogf("[boot] nvs_count=%u rtc_count=%u prev_boot_lasted=%us%s prev_src=%s reset_reason=%d (%s)",
               (unsigned)s_nvs_boot_count,
               (unsigned)s_boot_state.counter,
               (unsigned)prev.seconds, prev.at_least ? "+" : "",
               prev.from_rtc ? "rtc" : "nvs",
               (int)esp_reset_reason(),
-              resetReasonString((int)esp_reset_reason()));
+              reason_buf);
 
     s_last_hb_ms = 0;
     portENTER_CRITICAL(&s_hb_mux);
