@@ -835,7 +835,8 @@ void heartbeatTick(uint32_t now_ms) {
     maybeSaveUptime(now_ms);
 }
 
-void i2cScan(int sda_pin, int scl_pin, const char* label) {
+uint8_t i2cScan(int sda_pin, int scl_pin, const char* label,
+                uint8_t* found, uint8_t max_found) {
     // Re-init Wire on the specified pins if provided (must be done from
     // a task safe context). Don't disturb existing setup if pins are -1.
     if (sda_pin >= 0 && scl_pin >= 0) {
@@ -852,11 +853,21 @@ void i2cScan(int sda_pin, int scl_pin, const char* label) {
         uint8_t err = Wire.endTransmission();
         if (err == 0) {
             crashLogf("[i2cscan:%s] FOUND device at 0x%02X", label ? label : "?", addr);
+            // #1055: report to the caller too. Keep counting past max_found so
+            // the caller can tell a full list from a truncated one.
+            if (found != nullptr && found_count < max_found) {
+                found[found_count] = addr;
+            }
             found_count++;
         }
     }
     crashLogf("[i2cscan:%s] scan complete; %u device(s) responded",
               label ? label : "?", found_count);
+    return found_count;
+}
+
+void i2cScan(int sda_pin, int scl_pin, const char* label) {
+    (void)i2cScan(sda_pin, scl_pin, label, nullptr, 0);
 }
 
 void crashLogHeapStats(const char* tag) {
@@ -887,6 +898,7 @@ void crashLogInstallShutdownHandler() {}
 void crashLogHeapStats(const char*) {}
 void loopPhaseSet(volatile const char**, volatile uint32_t*) {}
 void i2cScan(int, int, const char*) {}
+uint8_t i2cScan(int, int, const char*, uint8_t*, uint8_t) { return 0; }   // #1055
 void heartbeatBegin() {}
 void subloopMark(uint8_t) {}
 void loopIterTick() {}

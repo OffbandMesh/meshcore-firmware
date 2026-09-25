@@ -231,6 +231,14 @@ void loopPhaseSet(volatile const char** phase_ptr, volatile uint32_t* iter_ptr);
 // label is a short string included in log lines ("board", "env", etc.).
 void i2cScan(int sda_pin, int scl_pin, const char* label);
 
+// #1055: same scan, but ALSO hands the ACKing addresses back to the caller so a
+// CLI verb can put them in its reply instead of only in the log. Fills up to
+// max_found entries of found[]; the return value is the TOTAL number that
+// ACKed, so a return larger than max_found means the list was truncated.
+// found may be nullptr (then max_found is ignored).
+uint8_t i2cScan(int sda_pin, int scl_pin, const char* label,
+                uint8_t* found, uint8_t max_found);
+
 // ---------------------------------------------------------------------------
 // Heartbeat + boot counter (CrashLog v6: positive-evidence health proof)
 // ---------------------------------------------------------------------------
