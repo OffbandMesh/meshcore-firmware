@@ -1144,6 +1144,27 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
     } else if (sender_timestamp == 0 && memcmp(command, "caplog dump", 11) == 0 && (command[11] == 0 || command[11] == ' ')) {
       meshLogDumpSerial();
       strcpy(reply, "   EOF");
+#if defined(WDT_TEST_HANG)
+    } else if (sender_timestamp == 0 && memcmp(command, "wdt hang", 8) == 0 && (command[8] == 0 || command[8] == ' ')) {
+      // #1159: prove the runtime watchdog on hardware. Console-only AND diag-only
+      // (-D WDT_TEST_HANG): this is a deliberate hang, never reachable over the
+      // mesh and never in a release image. The reply goes straight to the console
+      // because handleCommand's caller prints `reply` only after we return, and
+      // we do not return. No feed, no yield, no delay() -- delay() yields.
+      Serial.printf("wdt: hanging the main loop -- expect a TASK_WDT reset in %u s\n",
+                    (unsigned)WDT_TIMEOUT_SECS);
+      Serial.flush();
+      for (;;) { }
+#endif
+    } else if ((memcmp(command, "wdt", 3) == 0 && command[3] == 0)
+               || (memcmp(command, "wdt status", 10) == 0 && (command[10] == 0 || command[10] == ' '))) {
+      // #1159: the board's answer, not the build flag's (#1083: a watchdog that is
+      // configured but never armed looks exactly like one that never had to fire).
+      if (_board->isWatchdogArmed()) {
+        snprintf(reply, 160, "wdt: armed, timeout %u s, fed from loop()", (unsigned)WDT_TIMEOUT_SECS);
+      } else {
+        strcpy(reply, "wdt: NOT armed on this board");
+      }
     } else if ((memcmp(command, "caplog status", 13) == 0 && (command[13] == 0 || command[13] == ' '))
                || (memcmp(command, "caplog", 6) == 0 && command[6] == 0)) {
 #if defined(OFFBAND_CAPLOG_FORWARD)

@@ -140,10 +140,17 @@ void setup() {
 #endif
 
   board.onBootComplete();
+
+  // #1083: arm the runtime watchdog after boot/init so a hung loop auto-reboots
+  // instead of wedging an unattended room server. Fed from the top of loop();
+  // a no-op on platforms without a runtime watchdog.
+  board.startWatchdog(WDT_TIMEOUT_SECS);
 }
 
 void loop() {
   offband::crashLogStandardTick(millis());  // #472: deferred previous-boot re-dump for late serial connect
+  board.feedWatchdog();                     // #1083: feed from the MAIN LOOP only -> a hung loop trips the WDT
+  mesh::wdtTestHangTick();                  // bench-only (WDT_TEST_HANG_AFTER_MS); compiles to nothing otherwise
 
   int len = strlen(command);
   while (Serial.available() && len < sizeof(command)-1) {

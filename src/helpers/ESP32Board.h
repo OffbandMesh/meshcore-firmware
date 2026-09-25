@@ -131,6 +131,8 @@ public:
     if (_wdt_started) esp_task_wdt_reset();
   }
 
+  bool isWatchdogArmed() const override { return _wdt_started; }   // #1159
+
   void sleep(uint32_t secs) override {
     // #446: feed on the way into (light) sleep so a long sleep window is not
     // mistaken for a hung loop.
