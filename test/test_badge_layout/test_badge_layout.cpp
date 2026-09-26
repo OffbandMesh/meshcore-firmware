@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <climits>
+#include <cstring>
 #include <string>
 #include <vector>
 #include "helpers/ui/BadgeLayout.h"
@@ -87,8 +88,12 @@ std::string position(long lat_e6, long lon_e6) {
   formatPosition(lat_e6, lon_e6, buf, sizeof(buf));
   return buf;
 }
+// #1297: sized for whichever `long` the host has, so the extreme-value assertion below
+// means the same thing on both. `long` is 32-bit on the badge and on MinGW -- its widest
+// altitude is "-2147484m", nine characters into the badge's own sixteen-byte buffers --
+// and 64-bit on the Linux runner, where LONG_MIN needs eighteen.
 std::string altitude(long mm) {
-  char buf[16];
+  char buf[32];
   formatAltitude(mm, buf, sizeof(buf));
   return buf;
 }
@@ -122,6 +127,15 @@ TEST(BadgeLayoutGps, AltitudeInWholeMeters) {
   const std::string lowest = altitude(LONG_MIN);
   EXPECT_EQ('-', lowest[0]);
   EXPECT_EQ(std::to_string((0UL - (unsigned long)LONG_MIN + 500) / 1000) + "m", lowest.substr(1));
+
+  // #1297: too small a buffer truncates and stays terminated -- it never overruns. This
+  // is what the helper's old sixteen bytes were accidentally exercising on a 64-bit host,
+  // asserted deliberately here instead. The badge cannot reach it: nine characters of
+  // output into sixteen bytes.
+  char tight[8];
+  formatAltitude(LONG_MIN, tight, sizeof(tight));
+  EXPECT_EQ(sizeof(tight) - 1, strlen(tight));
+  EXPECT_EQ('-', tight[0]);
 }
 
 namespace {
