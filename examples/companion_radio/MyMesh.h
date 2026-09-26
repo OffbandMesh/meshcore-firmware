@@ -138,17 +138,19 @@ public:
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
 
-#ifdef OFFBAND_OBSERVER
-  // #31 Task C: live Dispatcher stats for the /status snapshot. Observer-only,
-  // so guarded to keep this shared-lineage header's diff minimal against
-  // upstream MeshCore (the only callers are observer-gated in main.cpp).
+#if defined(OFFBAND_OBSERVER) || defined(OFFBAND_POWER_TELEMETRY)
+  // #31 Task C: live Dispatcher stats for the /status snapshot, and (#1071)
+  // the [radio] telemetry line. Guarded to the builds that call them, to keep
+  // this shared-lineage header's diff minimal against upstream MeshCore.
   // _err_flags and _mgr are protected on Dispatcher; MyMesh can read them
   // directly as a subclass. _mgr is initialised from a reference in the
   // Dispatcher constructor and is guaranteed non-null for the lifetime of
   // the mesh object.
   uint16_t getErrFlags()         const { return _err_flags; }
   int      getOutboundQueueLen() const { return _mgr->getOutboundTotal(); }
+#endif
 
+#ifdef OFFBAND_OBSERVER
   // Epic F (#161): Offband config command handler (CMD_OFFBAND_CONFIG). Observer-
   // only -- the backend (configSet/configGet, ConfigSchema) compiles only under
   // OFFBAND_OBSERVER. Wire contract: OffbandConfigProtocol.h.

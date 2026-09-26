@@ -1,6 +1,10 @@
 
 #define RADIOLIB_STATIC_ONLY 1
 #include "RadioLibWrappers.h"
+#include "NoiseFloorLog.h"
+
+using offband::noisefloor::shouldLog;
+namespace noisefloor = offband::noisefloor;
 
 #define STATE_IDLE       0
 #define STATE_RX         1
@@ -37,6 +41,7 @@ void RadioLibWrapper::begin() {
   _noise_floor = 0;
   _threshold = 0;
   _cad_enabled = false;
+  resetNoiseFloorLog();    // #1275: first converged floor of a boot always logs
 
   // start average out some samples
   _num_floor_samples = 0;
@@ -79,9 +84,16 @@ void RadioLibWrapper::resetAGC() {
   // Without this, a stuck _noise_floor of -120 makes the sampling threshold
   // too low (-106) to accept normal samples (~-105), self-reinforcing the
   // stuck value even after the receiver has recovered.
+  // #1275: say that this happened. Without it a capture shows a run of -120,
+  // then a gap, then a plausible floor, and a reader cannot tell a recovery
+  // from a heartbeat or an RF shift. The reconverged value follows immediately
+  // because resetNoiseFloorLog() re-arms the first-line rule.
+  MESH_DEBUG_PRINTLN("RadioLibWrapper: AGC reset, noise floor reconverging (was %d)",
+                     (int)_noise_floor);
   _noise_floor = 0;
   _num_floor_samples = 0;
   _floor_sample_sum = 0;
+  resetNoiseFloorLog();
 }
 
 void RadioLibWrapper::loop() {
@@ -100,7 +112,17 @@ void RadioLibWrapper::loop() {
     }
     _floor_sample_sum = 0;
 
-    MESH_DEBUG_PRINTLN("RadioLibWrapper: noise_floor = %d", (int)_noise_floor);
+    // #1275: the sampler completes about twice a second and this used to log
+    // every set, which made ~90% of a tester's capture one line. Report a move
+    // immediately, otherwise no faster than the [pwr]/[radio] tick.
+    const uint32_t now_ms = millis();
+    if (noisefloor::shouldLog(_noise_floor, _last_logged_floor, now_ms,
+                              _last_floor_log_ms, _floor_logged)) {
+      _last_logged_floor = _noise_floor;
+      _last_floor_log_ms = now_ms;
+      _floor_logged = true;
+      MESH_DEBUG_PRINTLN("RadioLibWrapper: noise_floor = %d", (int)_noise_floor);
+    }
   }
 }
 

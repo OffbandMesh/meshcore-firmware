@@ -16,6 +16,15 @@ class SerialBLEInterface : public BaseSerialInterface {
   uint16_t _conn_handle;
   unsigned long _last_health_check;
   unsigned long _last_retry_attempt;
+  // #1070: a full queue drops every frame until it drains, so it is logged
+  // ONCE per connection (reset in onConnect), not once per dropped frame.
+  // volatile: set on the main loop / BLE task, reset on the BLE task. A race
+  // costs at most one extra or missed line, never a dropped frame.
+  volatile bool _recv_full_logged;
+  volatile bool _send_full_logged;
+  // #1070: peer address suffix captured at connect, so the disconnect line
+  // never depends on Bluefruit's connection object still being alive.
+  char _peer[12];
 
   struct Frame {
     uint8_t len;
@@ -50,6 +59,8 @@ public:
     _conn_handle = BLE_CONN_HANDLE_INVALID;
     _last_health_check = 0;
     _last_retry_attempt = 0;
+    _recv_full_logged = _send_full_logged = false;
+    _peer[0] = '\0';
     send_queue_len = 0;
     recv_queue_len = 0;
   }

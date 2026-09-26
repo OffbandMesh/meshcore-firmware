@@ -13,6 +13,8 @@
 // #1087: meshLogMirrorEnabled() -- the single source of truth for "is this
 // console shared with the framed protocol". CrashLog and MeshLog must agree.
 #include "../../MeshLog.h"
+#include "UptimeRecord.h"   // #1074: previous-boot uptime schedule + retained record
+#include "ResetReason.h"    // #1075: the shared reset-reason tables
 
 #include <cstdarg>
 #include <cstdio>
@@ -24,6 +26,7 @@
   #include <Preferences.h>   // NVS-backed boot counter
   #include <esp_attr.h>      // RTC_NOINIT_ATTR
   #include <esp_system.h>    // esp_reset_reason(), esp_register_shutdown_handler()
+  #include <rom/rtc.h>       // #1075: rtc_get_reset_reason(), the chip's own code
   #include <esp_log.h>       // esp_log_set_vprintf()
   #include <freertos/FreeRTOS.h>
   #include <freertos/portmacro.h>  // portENTER_CRITICAL
@@ -41,22 +44,39 @@ void crashLogSetResetReasonHook(ResetReasonHook hook) { s_reset_reason_hook = ho
 // ---------------------------------------------------------------------------
 // Reset-reason mapping
 // ---------------------------------------------------------------------------
+#if defined(OFFBAND_CRASHLOG_ESP32)
+// #1075: the chip's own reset code, from the RTC registers the ROM sets. It is
+// the only witness on IDF 4.4, whose esp_reset_reason() stops at ESP_RST_SDIO
+// and answers ESP_RST_UNKNOWN for a USB-host reset -- exactly what the RC32
+// capture in #1053 shows.
+uint32_t romResetReasonCode() { return (uint32_t)rtc_get_reset_reason(0); }
+bool romResetReasonAvailable() { return true; }
+#else
+uint32_t romResetReasonCode() { return 0; }
+bool romResetReasonAvailable() { return false; }
+#endif
+
+void resetReasonInto(int reason, char* out, size_t cap) {
+#if defined(OFFBAND_CRASHLOG_ESP32)
+    reset::formatToken((uint32_t)reason, romResetReasonCode(), true, out, cap);
+#elif defined(OFFBAND_CRASHLOG_NRF52)
+    // No esp_reset_reason enum here; the board's decoder is the only source.
+    (void)reason;
+    snprintf(out, cap, "%s", s_reset_reason_hook ? s_reset_reason_hook() : "n/a");
+#else
+    (void)reason;
+    snprintf(out, cap, "HOST_BUILD");
+#endif
+}
+
 const char* resetReasonString(int reason) {
 #if defined(OFFBAND_CRASHLOG_ESP32)
-    switch ((esp_reset_reason_t)reason) {
-        case ESP_RST_UNKNOWN:    return "UNKNOWN";
-        case ESP_RST_POWERON:    return "POWERON";
-        case ESP_RST_EXT:        return "EXT_PIN";
-        case ESP_RST_SW:         return "SW_RESET";
-        case ESP_RST_PANIC:      return "PANIC";
-        case ESP_RST_INT_WDT:    return "INT_WDT";
-        case ESP_RST_TASK_WDT:   return "TASK_WDT";
-        case ESP_RST_WDT:        return "OTHER_WDT";
-        case ESP_RST_DEEPSLEEP:  return "DEEPSLEEP";
-        case ESP_RST_BROWNOUT:   return "BROWNOUT";
-        case ESP_RST_SDIO:       return "SDIO";
-        default:                 return "UNKNOWN";
-    }
+    // The buffer is static because this returns a bare pointer, which the
+    // MainBoard hook signature fixes. Callers that can hold their own buffer
+    // should use resetReasonInto() instead; the ones in this file do.
+    static char buf[72];
+    resetReasonInto(reason, buf, sizeof(buf));
+    return buf;
 #elif defined(OFFBAND_CRASHLOG_NRF52)
     // No esp_reset_reason enum on nRF52. Delegate to the board's decoder if it
     // registered one (#376 decision 2); otherwise say so honestly.
@@ -67,6 +87,31 @@ const char* resetReasonString(int reason) {
     return "HOST_BUILD";
 #endif
 }
+
+// #1075: a board that shuts itself down used to leave a capture ending
+// mid-sentence, with the reason painted on a display nobody was watching.
+// This says why, with the reading that drove it, and takes the runtime with it
+// so the next boot reports the real number rather than a ladder mark.
+#ifndef OFFBAND_CRASHLOG_HOST
+static bool s_shutdown_noted = false;
+
+void crashLogShutdown(const char* cause, uint32_t millivolts) {
+    s_shutdown_noted = true;
+    crashLogf("[shutdown] cause=%s mv=%u up=%us",
+              cause ? cause : "unknown",
+              (unsigned)millivolts,
+              (unsigned)(millis() / 1000UL));
+    crashLogUptimeFlush();
+}
+
+void crashLogShutdownIfSilent(uint32_t millivolts) {
+    if (s_shutdown_noted) return;   // a caller already named the cause
+    crashLogShutdown("unknown", millivolts);
+}
+#else
+void crashLogShutdown(const char*, uint32_t) {}
+void crashLogShutdownIfSilent(uint32_t) {}
+#endif
 
 // ---------------------------------------------------------------------------
 // Ring buffer storage (RTC_NOINIT memory)
@@ -331,8 +376,10 @@ static bool emitPreviousBootDump(const char* why) {
     crashLogSerialLine("=========================================================");
     snprintf(hdr, sizeof(hdr), "=== CRASH LOG FROM PREVIOUS BOOT (%s) ===", why);
     crashLogSerialLine(hdr);
+    char reason_buf[72];
+    resetReasonInto(currentResetReasonCode(), reason_buf, sizeof(reason_buf));
     snprintf(hdr, sizeof(hdr), "=== reset_reason=%d (%s) ===",
-             currentResetReasonCode(), resetReasonString(currentResetReasonCode()));
+             currentResetReasonCode(), reason_buf);
     crashLogSerialLine(hdr);
     crashLogSerialLine("=========================================================");
 
@@ -660,6 +707,14 @@ struct BootCounterState {
 
 RTC_NOINIT_ATTR static BootCounterState s_boot_state;
 
+// #1074: this boot's uptime, refreshed every second by crashLogUptimeTick() and
+// read by the next boot as "prev_boot_lasted". RTC memory survives the resets
+// that matter here -- task watchdog, panic, software, USB host (#754) -- at no
+// flash cost. Its own magic plus a check word: a record lost to power, never
+// written by older firmware, or torn by a reset mid-update fails validation and
+// the NVS copy is used instead.
+RTC_NOINIT_ATTR static uptime::RetainedUptime s_rtc_uptime;
+
 // Sub-loop visit tracking. Each sub-loop sets its bit on entry;
 // heartbeat reads + zeroes. s_hb_mux (defined once, up top) serializes.
 static volatile uint8_t s_subloop_flags = 0;
@@ -679,7 +734,7 @@ static uint32_t s_last_hb_ms = 0;
 // brown-out reset class that BLE radio current spikes can trigger.
 
 static uint32_t s_nvs_boot_count = 0;
-static uint32_t s_prev_boot_uptime_s = 0;
+static uptime::NvsUptime s_prev_boot_uptime{0, false};
 static ::Preferences s_boot_prefs;  // explicit global namespace to avoid any future conflicts
 
 void heartbeatBegin() {
@@ -695,26 +750,59 @@ void heartbeatBegin() {
     bool ok = s_boot_prefs.begin("cw_boot", /*readOnly=*/false);
     if (ok) {
         s_nvs_boot_count       = s_boot_prefs.getUInt("count", 0) + 1;
-        s_prev_boot_uptime_s   = s_boot_prefs.getUInt("last_up_s", 0);
+        const uint32_t raw_up   = s_boot_prefs.getUInt("last_up_s", 0);
+        s_prev_boot_uptime      = uptime::decodeNvs(raw_up);
+        // #1272: a record too large to be a runtime is dropped, so corruption
+        // cannot print as a confident figure. Say so -- discarding it silently
+        // would make a garbled record look like a board that never recorded one.
+        if (raw_up != 0 && s_prev_boot_uptime.seconds == 0) {
+            crashLogf("[boot] WARN: stored uptime 0x%08X is not a plausible runtime; ignored",
+                      (unsigned)raw_up);
+        }
         // #181: the boot counter IS crash-cycle evidence -- a silent put failure
         // would freeze the count and mask a reboot loop. Surface it.
         if (s_boot_prefs.putUInt("count", s_nvs_boot_count) == 0) {
             crashLogf("[boot] WARN: NVS cw_boot 'count' write FAILED (count=%u not persisted)",
                       (unsigned)s_nvs_boot_count);
         }
-        s_boot_prefs.putUInt("last_up_s", 0);  // reset; maybeSaveUptime overwrites within 5s
+        s_boot_prefs.putUInt("last_up_s", 0);  // reset; crashLogUptimeTick() overwrites from 5 s
         s_boot_prefs.end();
     } else {
         crashLogf("[boot] WARN: NVS cw_boot namespace open failed; falling back to RTC counter");
         s_nvs_boot_count = bootCounterValue();
     }
 
-    crashLogf("[boot] nvs_count=%u rtc_count=%u prev_boot_lasted=%us reset_reason=%d (%s)",
+    // #1074: the previous boot's uptime from the RTC record when it survived
+    // (exact), else from NVS -- where a ladder mark prints "+" because the boot
+    // ran at least that long, and a shutdown flush prints bare because it knows
+    // the runtime (#1272). Read before this boot overwrites it.
+    //
+    // The record is bound to the RTC counter, not the NVS one, because both
+    // sides of that comparison must live in the same power domain. An NVS
+    // 'count' write that fails leaves the stored count frozen, so the next boot
+    // computes the SAME number, "previous boot + 1" never matches, and a
+    // perfectly good exact record is thrown away in favour of a stale NVS value
+    // from an older boot -- which can overstate the previous runtime and hide a
+    // crash cycle, the opposite of what this line is for. The RTC counter
+    // advances whenever the RTC record itself survived, which is exactly the
+    // condition being tested.
+    const uptime::Previous prev =
+        uptime::pickPrevious(s_rtc_uptime, s_boot_state.counter, s_prev_boot_uptime);
+    uptime::stamp(s_rtc_uptime, s_boot_state.counter, 0);
+
+    // #1074 (F2): rtc_count is the RTC counter itself. It used to print
+    // bootCounterValue(), which returns the NVS count whenever NVS opened, so
+    // the two fields could never differ. Now they diverge across a power loss,
+    // which clears RTC memory but not NVS.
+    char reason_buf[72];
+    resetReasonInto((int)esp_reset_reason(), reason_buf, sizeof(reason_buf));
+    crashLogf("[boot] nvs_count=%u rtc_count=%u prev_boot_lasted=%us%s prev_src=%s reset_reason=%d (%s)",
               (unsigned)s_nvs_boot_count,
-              (unsigned)bootCounterValue(),
-              (unsigned)s_prev_boot_uptime_s,
+              (unsigned)s_boot_state.counter,
+              (unsigned)prev.seconds, prev.at_least ? "+" : "",
+              prev.from_rtc ? "rtc" : "nvs",
               (int)esp_reset_reason(),
-              resetReasonString((int)esp_reset_reason()));
+              reason_buf);
 
     s_last_hb_ms = 0;
     portENTER_CRITICAL(&s_hb_mux);
@@ -729,18 +817,30 @@ uint32_t bootCounterValue() {
     return (s_boot_state.magic == kBootCounterMagic) ? s_boot_state.counter : 0;
 }
 
-// Periodically (called from heartbeatTick) save current uptime to NVS
-// so the next boot can report "previous boot lasted Ns" - critical for
-// distinguishing "long stable run then reset" from "fast crash cycle".
+// #1074: keep the record the next boot reports as "prev_boot_lasted" --
+// distinguishing "long stable run then reset" from "fast crash cycle". The RTC
+// copy is refreshed every second; the NVS copy follows the UptimeRecord.h
+// schedule and then stops, so flash writes no longer scale with uptime. Called
+// from the main loop (crashLogStandardTick() for every role, heartbeatTick()
+// on the observer, never both), so if the loop stops, the last value written
+// says when.
+static uint32_t s_last_rtc_uptime_ms = 0;
+static bool     s_rtc_uptime_updated = false;
 static uint32_t s_last_uptime_save_ms = 0;
-static void maybeSaveUptime(uint32_t now_ms) {
-    // Save every 5 seconds (matches stats cadence; balances flash wear)
-    if (now_ms - s_last_uptime_save_ms < 5000) return;
-    s_last_uptime_save_ms = now_ms;
-    // #181: feeds "prev boot lasted Ns" -- the crash-cycle-PERIOD evidence. Runs
-    // every 5s, so a silent failure would erase that evidence indefinitely. Log a
-    // failure ONCE and re-arm on the next success, rather than flooding the 4KB
-    // ring with a repeating warning.
+static bool     s_uptime_saved = false;
+static uint32_t s_last_attempt_ms = 0;
+static bool     s_uptime_attempted = false;
+// The NVS half, shared by the ladder and the shutdown flush. Returns whether
+// the value reached flash: a mark is spent only by a write that landed, so a
+// transient failure does not silently cost this boot its uptime record.
+// `exact` is false for a ladder mark (the boot ran at least this long) and true
+// for the shutdown flush, which knows the runtime precisely. It rides in the
+// stored value's top bit (#1272), so the next boot can tell them apart.
+static bool saveUptimeToNvs(uint32_t now_ms, bool exact) {
+    // #181: feeds "prev boot lasted Ns" after a power loss -- the crash-cycle-
+    // PERIOD evidence. A silent failure would erase it, so log a failure ONCE
+    // and re-arm on the next success, rather than flooding the 4KB ring with a
+    // repeating warning.
     static bool s_uptime_save_warned = false;
     ::Preferences p;
     if (!p.begin("cw_boot", /*readOnly=*/false)) {
@@ -748,18 +848,50 @@ static void maybeSaveUptime(uint32_t now_ms) {
             crashLogf("[boot] WARN: uptime save -- NVS cw_boot open FAILED (suppressing repeats)");
             s_uptime_save_warned = true;
         }
-        return;
+        return false;
     }
-    size_t wrote = p.putUInt("last_up_s", now_ms / 1000);
+    size_t wrote = p.putUInt("last_up_s", uptime::encodeNvs(now_ms / 1000, exact));
     p.end();
     if (wrote == 0) {
         if (!s_uptime_save_warned) {
             crashLogf("[boot] WARN: uptime save -- NVS 'last_up_s' write FAILED (suppressing repeats)");
             s_uptime_save_warned = true;
         }
-        return;
+        return false;
     }
     s_uptime_save_warned = false;  // re-arm: a recovered write re-logs the next failure
+    s_last_uptime_save_ms = now_ms;
+    s_uptime_saved = true;
+    return true;
+}
+
+void crashLogUptimeTick(uint32_t now_ms) {
+    if (uptime::rtcUpdateDue(now_ms, s_last_rtc_uptime_ms, s_rtc_uptime_updated)) {
+        uptime::stamp(s_rtc_uptime, s_boot_state.counter, now_ms / 1000);
+        s_last_rtc_uptime_ms = now_ms;
+        s_rtc_uptime_updated = true;
+    }
+    if (uptime::nvsSaveDue(now_ms, s_last_uptime_save_ms, s_uptime_saved)) {
+        // A failed write leaves the mark unspent, so the next tick retries --
+        // throttled, so an NVS that is failing outright cannot attempt a flash
+        // write on every pass of the main loop.
+        if (!s_uptime_attempted || now_ms - s_last_attempt_ms >= uptime::kNvsRetryMs) {
+            s_last_attempt_ms = now_ms;
+            s_uptime_attempted = true;
+            saveUptimeToNvs(now_ms, /*exact=*/false);
+        }
+    }
+}
+
+// #1270: the board is going down on purpose (low battery, or a CLI power off),
+// so record the runtime while there is still power to write it. Best effort:
+// the write can still be cut short by a battery that is already collapsing,
+// in which case the next boot falls back to the last ladder mark, as it would
+// have anyway.
+void crashLogUptimeFlush() {
+    const uint32_t now_ms = millis();
+    uptime::stamp(s_rtc_uptime, s_boot_state.counter, now_ms / 1000);
+    saveUptimeToNvs(now_ms, /*exact=*/true);
 }
 
 void subloopMark(uint8_t which) {
@@ -832,7 +964,7 @@ void heartbeatTick(uint32_t now_ms) {
 
     // Persist current uptime to NVS so next boot can report "previous
     // boot lasted Ns" -- definitive evidence of cycle period.
-    maybeSaveUptime(now_ms);
+    crashLogUptimeTick(now_ms);
 }
 
 void i2cScan(int sda_pin, int scl_pin, const char* label) {
@@ -891,6 +1023,8 @@ void heartbeatBegin() {}
 void subloopMark(uint8_t) {}
 void loopIterTick() {}
 void heartbeatTick(uint32_t) {}
+void crashLogUptimeTick(uint32_t) {}   // nRF52 retained RAM does not survive a reset (#378)
+void crashLogUptimeFlush() {}
 uint32_t bootCounterValue() { return 0; }
 
 #endif
