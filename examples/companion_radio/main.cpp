@@ -583,13 +583,13 @@ void setup() {
 #endif
   board.onBootComplete();
 
-#if defined(NRF52_PLATFORM)
-  // #257: start the hardware watchdog AFTER all boot init (incl. flash/contacts
+  // #257/#1083: arm the runtime watchdog AFTER all boot init (incl. flash/contacts
   // load), so a slow boot can't false-trip it. From here, any main-loop hang
-  // auto-reboots within the timeout (RESETREAS=DOG, "Watchdog") instead of
-  // wedging until a physical power-cycle. Fed at loop top + sleep entry.
-  // Fleet-wide for nRF52 companions; no-op on platforms without nrf_wdt.h.
-  board.startWatchdog(30);
+  // auto-reboots within the timeout (nRF52 RESETREAS=DOG, ESP32 ESP_RST_TASK_WDT)
+  // instead of wedging until a physical power-cycle. Fed at loop top + sleep entry.
+  // Armed on every platform with a runtime watchdog.
+  board.startWatchdog(WDT_TIMEOUT_SECS);
+#if defined(NRF52_PLATFORM)
   // #275 (P0): start the true, ungated green-LED heartbeat + its ~10 Hz loop-wake
   // timer. The heartbeat is loop-driven (heartbeatTick below), NOT gated by UI /
   // display / connection / traffic / the power-save nap -- it is the liveness signal.
@@ -752,8 +752,9 @@ void loop() {
     }
   }
 #endif
+  board.feedWatchdog();  // #257/#1083: feed from the MAIN LOOP only -> a hung loop trips the WDT
+  mesh::wdtTestHangTick();  // bench-only (WDT_TEST_HANG_AFTER_MS); compiles to nothing otherwise
 #if defined(NRF52_PLATFORM)
-  board.feedWatchdog();  // #257: feed from the MAIN LOOP only -> a hung loop trips the WDT
   board.heartbeatTick(); // #275: loop-driven green-LED heartbeat (freezes if the loop hangs)
   #if !defined(OFFBAND_OBSERVER)
   {

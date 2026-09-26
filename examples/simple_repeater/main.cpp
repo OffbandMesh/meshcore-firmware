@@ -1248,12 +1248,13 @@ void setup() {
 
   board.onBootComplete();
 
+  // #266/#1083: arm the runtime watchdog after boot/init so a hung loop auto-reboots
+  // (nRF52 RESETREAS=DOG, ESP32 ESP_RST_TASK_WDT) instead of wedging an unattended
+  // repeater. Fed from loop() only. Armed on every platform with a runtime watchdog;
+  // the bridge builds' network work runs in its own task, so loop() never blocks
+  // long enough to matter.
+  board.startWatchdog(WDT_TIMEOUT_SECS);
 #if defined(NRF52_PLATFORM)
-  // #266: start the hardware watchdog after boot/init so a hung loop auto-reboots
-  // (RESETREAS=DOG, "Watchdog") instead of wedging an unattended repeater. The
-  // NRF52_PLATFORM guard excludes the ESP32 WiFi/MQTT-bridge repeaters, whose
-  // network calls can legitimately block >30 s. Fed from loop() only.
-  board.startWatchdog(30);
   // #275 (P0): true, ungated green-LED heartbeat + ~10 Hz loop-wake timer. Replaces
   // the nap-suppressed in-loop blip below on nRF52 -- the wake makes the heartbeat
   // (and the loop-fed watchdog) fire even when the repeater is in RF silence.
@@ -1267,8 +1268,9 @@ void setup() {
 
 void loop() {
   offband::crashLogStandardTick(millis());  // #472: deferred previous-boot re-dump for late serial connect
+  board.feedWatchdog();  // #266/#1083: feed from the MAIN LOOP only -> a hung loop trips the WDT
+  mesh::wdtTestHangTick();  // bench-only (WDT_TEST_HANG_AFTER_MS); compiles to nothing otherwise
 #if defined(NRF52_PLATFORM)
-  board.feedWatchdog();  // #266: feed from the MAIN LOOP only -> a hung loop trips the WDT
   board.heartbeatTick(); // #275: loop-driven, ungated green-LED heartbeat (freezes on hang)
 #endif
 // #275 (P0): the old in-loop blip below is nap-suppressed on nRF52 (only blips on a
