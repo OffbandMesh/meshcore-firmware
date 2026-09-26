@@ -2,6 +2,14 @@
 #include "../MeshLog.h"
 #include "CdcConsoleFlush.h"   // #1093: ZLP terminator for 64-multiple frames on the HWCDC console
 
+#if defined(OFFBAND_WRITEFRAME_REFUSAL_TRACE) && OFFBAND_WRITEFRAME_REFUSAL_TRACE
+// #1299 step 3 (DIAGNOSE ONLY -- never ships). Read-only observation of the refusal
+// condition: nothing here changes what writeFrame() decides or when.
+static uint32_t s_wf_last_ok_ms = 0;   // millis() of the last ACCEPTED frame
+static uint16_t s_wf_consec = 0;       // refusals in an unbroken run
+static uint16_t s_wf_seq = 0;          // refusals this boot
+#endif
+
 #define RECV_STATE_IDLE        0
 #define RECV_STATE_HDR_FOUND   1
 #define RECV_STATE_LEN1_FOUND  2
@@ -66,6 +74,22 @@ size_t ArduinoSerialInterface::writeFrame(const uint8_t src[], size_t len) {
   const size_t frame_len = 3 + len;
   const int writable = _serial->availableForWrite();
   if (writable >= 0 && (size_t)writable < frame_len) {
+#if defined(OFFBAND_WRITEFRAME_REFUSAL_TRACE) && OFFBAND_WRITEFRAME_REFUSAL_TRACE
+    // #1299 step 3: measure WHY the FIFO is short of room. `avail` and `need` say
+    // whether it is starved or merely a hair short; `since_ok` separates a producer
+    // that outran the endpoint (~0 ms) from a host that stalled (tens of ms);
+    // `consec` says whether refusals burst or scatter.
+    //
+    // Safe to log here: on a USB companion g_meshLogMirror is false, so
+    // mesh_log_line() reaches the capture ring ONLY and never this FIFO. Confirmed
+    // empirically -- a flat-out host reader saw zero stray bytes between frames.
+    s_wf_seq++;
+    s_wf_consec++;
+    mesh_log_line(MLOG_BOOT,
+                  "[wf] refuse#%u avail=%d need=%u since_ok=%lums consec=%u\n",
+                  (unsigned)s_wf_seq, writable, (unsigned)frame_len,
+                  (unsigned long)(millis() - s_wf_last_ok_ms), (unsigned)s_wf_consec);
+#endif
     return 0;   // caller MUST NOT treat this as sent
   }
 
@@ -107,6 +131,10 @@ size_t ArduinoSerialInterface::writeFrame(const uint8_t src[], size_t len) {
   } else {
     _zlp_pending = false;
   }
+#endif
+#if defined(OFFBAND_WRITEFRAME_REFUSAL_TRACE) && OFFBAND_WRITEFRAME_REFUSAL_TRACE
+  s_wf_last_ok_ms = millis();   // #1299: the clock `since_ok` is measured against
+  s_wf_consec = 0;
 #endif
   return n;
 }
