@@ -69,6 +69,10 @@
 #ifndef MAX_LORA_TX_POWER
 #define MAX_LORA_TX_POWER LORA_TX_POWER
 #endif
+// #1236: whether the GPS starts on when no settings are saved yet (a first boot).
+#ifndef DEFAULT_GPS_ENABLED
+#define DEFAULT_GPS_ENABLED 0
+#endif
 
 #ifndef MAX_CONTACTS
 #define MAX_CONTACTS 100
@@ -88,6 +92,12 @@
 // (OFFBAND_PKTHASH_RING_SLOTS) rather than a duplicated literal. Safe to include
 // here -- this header pulls only <stdint.h> and defines no types of its own.
 #include "OffbandConfigProtocol.h"
+#if UI_HAS_CARDKB
+#include <helpers/BadgeSendTracker.h>   // #1227: DMs typed on the badge
+#include <helpers/BadgeStore.h>         // #1229: the badge's inbox and threads
+#include <helpers/HeardRepeats.h>       // #1232: a tick when a repeater passes ours on
+#include <helpers/ClockJump.h>          // #1233: the clock set under stored messages
+#endif
 
 /* -------------------------------------------------------------------------------------- */
 
@@ -135,6 +145,45 @@ public:
   void handleCmdFrame(size_t len);
   bool advert();
   void enterCLIRescue();
+
+#if UI_HAS_CARDKB
+  // #1227: messages typed on the badge, sent with the same mesh calls as the phone path.
+  // A DM gets up to kBadgeDmAttempts attempts; uiSendStatus() reports how it ended.
+  static constexpr int kBadgeDmSlots = 4;
+  static constexpr int kBadgeDmAttempts = 3;
+  static constexpr uint32_t kBadgeRepeatWaitSecs = 30;   // #1232: a channel send's wait for a repeat
+  bool uiSendChannel(int channel_idx, const char* text);
+  uint16_t uiSendDirect(const ContactInfo& contact, const char* text);
+  offband::BadgeSend uiSendStatus(uint16_t handle) const { return _badge_dms.status(handle); }
+
+  // #1229: the badge's own copy of recent messages, for its inbox and threads. Filled
+  // on receive and on every badge send.
+  static constexpr int kBadgeConvos = 24;
+  static constexpr int kBadgeMsgs = 32;
+  using BadgeMsgStore = offband::BadgeStore<kBadgeConvos, kBadgeMsgs, MAX_TEXT_LEN, PUB_KEY_SIZE>;
+  BadgeMsgStore& badgeStore() { return _badge_store; }
+  // #1233: whether the phone or the GPS has set the clock since boot. Until then it runs
+  // from the newest contact's last-heard time (bootstrapRTCfromContacts), which can be
+  // hours or days behind, so the badge shows ages rather than clock times.
+  bool badgeClockTrusted() const;
+
+  // #1230: sends to conversation c of the badge store. Its channel is found by its
+  // secret and its contact by its whole key, so the send goes where the thread says.
+  enum class UiSend : uint8_t { Sent, Gone, NotSent, Busy };
+  UiSend uiSendTo(int convo, const char* text);
+  // #1230: a failed DM, sent again. The new one replaces it in the thread.
+  bool uiResend(uint32_t seq);
+  // #1233: the badge's own advert, zero-hop or flood, as the phone's command sends it.
+  bool uiAdvert(bool flood);
+  // #1234: each node in the advert table (the last few heard, contacts or not), in
+  // place. Sized by sizeof: the table's macro is defined further down.
+  template <class Visit>
+  void uiEachHeard(Visit visit) const {
+    for (size_t i = 0; i < sizeof(advert_paths) / sizeof(advert_paths[0]); i++) {
+      if (advert_paths[i].recv_timestamp != 0) visit(advert_paths[i]);
+    }
+  }
+#endif
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
 
@@ -197,8 +246,9 @@ protected:
   void sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis=0) override;
 
   void logRxRaw(float snr, float rssi, const uint8_t raw[], int len) override;
-#ifdef OFFBAND_OBSERVER
-  void logRx(mesh::Packet* pkt, int len, float score) override;   // Strycher/LoRa#335: /packets path
+#if defined(OFFBAND_OBSERVER) || UI_HAS_CARDKB
+  // Strycher/LoRa#335: the observer's /packets path. #1232: the badge's heard repeats.
+  void logRx(mesh::Packet* pkt, int len, float score) override;
 #endif
   bool isAutoAddEnabled() const override;
   bool shouldAutoAddContactType(uint8_t type) const override;
@@ -389,6 +439,20 @@ private:
   #define EXPECTED_ACK_TABLE_SIZE 8
   AckTableEntry expected_ack_table[EXPECTED_ACK_TABLE_SIZE]; // circular table
   int next_ack_idx;
+
+#if UI_HAS_CARDKB
+  // #1227: DMs typed on the badge. Their ACKs are kept apart from expected_ack_table so
+  // the phone is never told about a message it didn't send.
+  offband::BadgeSendTracker<kBadgeDmSlots, kBadgeDmAttempts, MAX_TEXT_LEN, PUB_KEY_SIZE> _badge_dms;
+  void badgeSendTick();
+  BadgeMsgStore _badge_store;   // #1229
+  offband::HeardRepeats<16, MAX_HASH_SIZE> _badge_repeats;   // #1232: recent channel sends
+  // #1233: notices the clock being set under this run's stamps (messages, contacts heard,
+  // the advert table), and moves them with it.
+  void badgeClockCheck();
+  offband::ClockJump _badge_clock;
+  bool _badge_clock_set_by_phone = false;
+#endif
 
   #define ADVERT_PATH_TABLE_SIZE   16
   AdvertPath advert_paths[ADVERT_PATH_TABLE_SIZE]; // circular table

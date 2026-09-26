@@ -417,22 +417,39 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 #endif
 }
 
-#ifdef OFFBAND_OBSERVER
-// Strycher/LoRa#335: tee every PARSED RX packet into the observer pipeline's
-// /packets path. Dispatcher::checkRecv calls logRx (Dispatcher.cpp:237) for
-// every successfully-parsed packet BEFORE routing, so it is promiscuous (sees
-// all heard traffic) and -- unlike logRxRaw -- hands us the parsed mesh::Packet,
-// which the /packets JSON needs for route/payload_type/path + the dedupe hash
-// CoreScope keys on. RSSI/SNR/airtime are still valid here: same checkRecv
-// iteration, no new RX between the radio read and this call. Score is scaled to
-// MeshCore's milli convention (matches the serial RX log + processRecvPacket).
+#if defined(OFFBAND_OBSERVER) || UI_HAS_CARDKB
+// Dispatcher::checkRecv calls logRx (Dispatcher.cpp:237) for every successfully-parsed
+// packet BEFORE routing and before the duplicate filter, so it sees all heard traffic,
+// repeats of our own packets included.
 void MyMesh::logRx(mesh::Packet* pkt, int len, float score) {
   if (pkt == nullptr) return;
+#if UI_HAS_CARDKB
+  // #1232: a repeater passing one of the badge's channel sends on. The repeat carries
+  // the send's payload unchanged, so it has the send's packet hash.
+  const uint32_t now_ms = _ms->getMillis();
+  if (pkt->getPayloadType() == PAYLOAD_TYPE_GRP_TXT && _badge_repeats.watching(now_ms)) {
+    uint8_t hash[MAX_HASH_SIZE];
+    pkt->calculatePacketHash(hash);
+    const uint32_t seq = _badge_repeats.heard(hash, now_ms);
+    if (seq != 0) _badge_store.setStatus(seq, offband::BadgeSend::Delivered);
+  }
+#endif
+#ifdef OFFBAND_OBSERVER
+  // Strycher/LoRa#335: tee every parsed RX packet into the observer pipeline's
+  // /packets path. Unlike logRxRaw this hands us the parsed mesh::Packet, which the
+  // /packets JSON needs for route/payload_type/path + the dedupe hash CoreScope keys
+  // on. RSSI/SNR/airtime are still valid here: same checkRecv iteration, no new RX
+  // between the radio read and this call. Score is scaled to MeshCore's milli
+  // convention (matches the serial RX log + processRecvPacket).
   int   rssi        = (int)_radio->getLastRSSI();
   float snr         = _radio->getLastSNR();
   int   score_milli = (int)(score * 1000.0f);
   int   duration    = (int)_radio->getEstAirtimeFor(len);
   offband::observerLogRxParsedTrampoline(*pkt, rssi, snr, score_milli, duration);
+#else
+  (void)len;
+  (void)score;
+#endif
 }
 #endif
 
@@ -555,6 +572,18 @@ void MyMesh::onContactPathUpdated(const ContactInfo &contact) {
 }
 
 ContactInfo*  MyMesh::processAck(const uint8_t *data) {
+#if UI_HAS_CARDKB
+  // #1227: an ACK for a DM typed on the badge. Checked first and kept from the phone,
+  // which never sent it. Returning the recipient lets BaseChatMesh treat it as ours.
+  uint32_t ack_crc;
+  memcpy(&ack_crc, data, 4);
+  const uint16_t badge_dm = _badge_dms.ack(ack_crc);
+  if (badge_dm != 0) {
+    _badge_store.setStatusForHandle(badge_dm, offband::BadgeSend::Delivered);   // #1229, late ones too
+    const auto* dm = _badge_dms.find(badge_dm);
+    return dm != NULL ? lookupContactByPubKey(dm->key, sizeof(dm->key)) : NULL;
+  }
+#endif
   // see if matches any in a table
   for (int i = 0; i < EXPECTED_ACK_TABLE_SIZE; i++) {
     if (memcmp(data, &expected_ack_table[i].ack, 4) == 0) { // got an ACK from recipient
@@ -625,6 +654,19 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
     frame[0] = PUSH_CODE_MSG_WAITING; // send push 'tickle'
     _serial->writeFrame(frame, 1);
   }
+
+#if UI_HAS_CARDKB
+  // #1229: the badge's inbox keeps its own copy of each DM, before the UI hears of it.
+  if (txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN) {
+    const int c = _badge_store.convo(BadgeMsgStore::Contact, from.id.pub_key, from.name);
+    if (c >= 0) {
+      badgeClockCheck();   // #1233
+      _badge_store.addIncoming(c, getRTCClock()->getCurrentTime(), "", text,
+                               pkt->isRouteFlood() ? pkt->getPathHashCount() : 0xFF,
+                               rssiToInt8(_radio->getLastRSSI()));
+    }
+  }
+#endif
 
 #ifdef DISPLAY_CLASS
   // we only want to show text messages on display, not cli data
@@ -908,6 +950,21 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
     frame[0] = PUSH_CODE_MSG_WAITING; // send push 'tickle'
     _serial->writeFrame(frame, 1);
   }
+#if UI_HAS_CARDKB
+  // #1229: and the badge's inbox keeps its own copy, filed by the channel's secret.
+  ChannelDetails badge_channel;
+  if (getChannel(channel_idx, badge_channel)) {
+    char sender[BadgeMsgStore::kSenderLen];
+    const char* body = offband::splitSender(text, sender, sizeof(sender));
+    const int c = _badge_store.convo(BadgeMsgStore::Channel, badge_channel.channel.secret, badge_channel.name);
+    if (c >= 0) {
+      badgeClockCheck();   // #1233
+      _badge_store.addIncoming(c, getRTCClock()->getCurrentTime(), sender, body,
+                               pkt->isRouteFlood() ? pkt->getPathHashCount() : 0xFF,
+                               rssiToInt8(_radio->getLastRSSI()));
+    }
+  }
+#endif
 #ifdef DISPLAY_CLASS
   // #510: the notification scope decides whether this sounds -- NOT the client
   // connection state.
@@ -1261,6 +1318,145 @@ uint32_t MyMesh::calcDirectTimeoutMillisFor(uint32_t pkt_airtime_millis, uint8_t
 
 void MyMesh::onSendTimeout() {}
 
+#if UI_HAS_CARDKB
+// #1227: a channel message typed on the badge. The same call and bookkeeping as the
+// phone path (CMD_SEND_CHANNEL_TXT_MSG); channels have no delivery receipt.
+bool MyMesh::uiSendChannel(int channel_idx, const char* text) {
+  if (text == NULL || text[0] == 0) return false;
+  // sendGroupMessage sends "<name>: <text>" and silently cuts it at MAX_TEXT_LEN. Refuse
+  // text that won't fit rather than send it truncated; the compose screen stops typing
+  // at the same limit.
+  if (strlen(_prefs.node_name) + 2 + strlen(text) > MAX_TEXT_LEN) return false;
+  ChannelDetails channel;
+  if (!getChannel(channel_idx, channel)) return false;
+  badgeClockCheck();   // #1233: the GPS may have set the clock since the last loop
+  const uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
+  uint8_t sent_hash[MAX_HASH_SIZE];
+  if (!sendGroupMessage(timestamp, channel.channel, _prefs.node_name, text, strlen(text), sent_hash)) {
+    return false;
+  }
+  recordSentPktHash(timestamp, (uint8_t)channel_idx, sent_hash);
+  // #1229: into the channel's thread. A channel send has no receipt; #1232 watches for
+  // a repeater passing it on instead, which ticks it.
+  const int c = _badge_store.convo(BadgeMsgStore::Channel, channel.channel.secret, channel.name);
+  if (c >= 0) {
+    const uint32_t seq = _badge_store.addOutgoing(c, timestamp, text, 0, offband::BadgeSend::Sending);
+    _badge_repeats.watch(sent_hash, seq, _ms->getMillis());
+  }
+  return true;
+}
+
+// #1227: a DM typed on the badge. Returns a handle for uiSendStatus(), or 0 when the text
+// is empty or kBadgeDmSlots DMs are still waiting. A first attempt the mesh can't send
+// still returns a handle, which reports Failed.
+uint16_t MyMesh::uiSendDirect(const ContactInfo& contact, const char* text) {
+  if (text == NULL || text[0] == 0) return 0;
+  badgeClockCheck();   // #1233: the GPS may have set the clock since the last loop
+  const uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
+  const uint16_t handle = _badge_dms.begin(contact.id.pub_key, timestamp, text);
+  if (handle == 0) return 0;
+  uint32_t expected_ack = 0, est_timeout = 0;
+  if (sendMessage(contact, timestamp, 0, text, expected_ack, est_timeout) == MSG_SEND_FAILED) {
+    _badge_dms.sendFailed(handle);
+  } else {
+    _badge_dms.sent(handle, expected_ack, _ms->getMillis(), est_timeout);
+  }
+  // #1229: into the contact's thread, still sending or already failed.
+  const int c = _badge_store.convo(BadgeMsgStore::Contact, contact.id.pub_key, contact.name);
+  if (c >= 0) _badge_store.addOutgoing(c, timestamp, text, handle, _badge_dms.status(handle));
+  return handle;
+}
+
+MyMesh::UiSend MyMesh::uiSendTo(int convo, const char* text) {
+  const auto* v = _badge_store.convoAt(convo);
+  if (v == NULL) return UiSend::Gone;
+  if (v->kind == BadgeMsgStore::Channel) {
+    for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+      ChannelDetails ch;
+      if (getChannel(i, ch) && memcmp(ch.channel.secret, v->key, PUB_KEY_SIZE) == 0) {
+        return uiSendChannel(i, text) ? UiSend::Sent : UiSend::NotSent;
+      }
+    }
+    return UiSend::Gone;
+  }
+  ContactInfo* contact = lookupContactByPubKey(v->key, PUB_KEY_SIZE);
+  if (contact == NULL) return UiSend::Gone;
+  return uiSendDirect(*contact, text) != 0 ? UiSend::Sent : UiSend::Busy;
+}
+
+bool MyMesh::uiAdvert(bool flood) {
+  if (!flood) return advert();
+  mesh::Packet* pkt = (_prefs.advert_loc_policy == ADVERT_LOC_NONE)
+                          ? createSelfAdvert(_prefs.node_name)
+                          : createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
+  if (pkt == NULL) return false;
+  TransportKey default_scope;   // as CMD_SEND_SELF_ADVERT floods it
+  memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
+  sendFloodScoped(default_scope, pkt, 0);
+  return true;
+}
+
+bool MyMesh::uiResend(uint32_t seq) {
+  const auto* m = _badge_store.msg(seq);
+  if (m == NULL || !m->outgoing || m->status != offband::BadgeSend::Failed) return false;
+  // Copied first: the send can evict the old message to make room for the new one.
+  char text[MAX_TEXT_LEN + 1];
+  memcpy(text, m->text, sizeof(text));
+  const int convo = m->convo;
+  if (uiSendTo(convo, text) != UiSend::Sent) return false;
+  _badge_store.remove(seq);
+  return true;
+}
+
+// #1227: the next attempt for any badge DM whose ACK didn't come in time. Each pass
+// sends an attempt or fails the DM, so at most kBadgeDmSlots handles come back.
+// #1233: the phone, the GPS or the CLI can set the clock under the badge's stored
+// messages, and under the contacts and advert-table entries its Contacts and Nearby
+// screens age. A jump the elapsed time doesn't account for moves this run's stamps by
+// the same amount, so a message or a contact from a minute ago doesn't read as 19
+// hours old once the phone corrects a clock that started from a stale contact time.
+// Runs every loop and before each message is stored, so none gets stamped on the far
+// side of an unapplied jump.
+void MyMesh::badgeClockCheck() {
+  const offband::ClockJump::Jump j = _badge_clock.check(getRTCClock()->getCurrentTime(), (uint32_t)_ms->getMillis());
+  if (j.by == 0) return;
+  _badge_store.shiftTimes(j.by);   // it only holds this run's messages
+  // Saved contacts are older than this run's window only when the clock started from
+  // them, which MeshCore does when their newest time is plausible. Started from its
+  // fallback instead (May 2024), saved times from an earlier such run could fall inside
+  // the window, so the contacts stay as they are.
+  if (offband::plausibleEpoch(j.from)) shiftContactTimes(j.from, j.to, j.by);
+  for (AdvertPath& a : advert_paths) {   // RAM only: every entry is this run's
+    if (j.covers(a.recv_timestamp)) a.recv_timestamp = offband::ClockJump::moved(a.recv_timestamp, j.by);
+  }
+}
+
+bool MyMesh::badgeClockTrusted() const {
+  return _badge_clock_set_by_phone || sensors.getGpsClockSyncTime() != 0;
+}
+
+void MyMesh::badgeSendTick() {
+  badgeClockCheck();   // #1233: before anything reads the stored times
+  // #1229: a DM the tracker has finished with shows its outcome in the thread.
+  _badge_store.refreshSending([this](uint16_t h) { return _badge_dms.status(h); });
+  // #1232: a channel send stops waiting for a repeat after 30 s.
+  _badge_store.expireChannelSends(getRTCClock()->getCurrentTime(), kBadgeRepeatWaitSecs);
+  for (int i = 0; i < kBadgeDmSlots; i++) {
+    const uint16_t handle = _badge_dms.due(_ms->getMillis());
+    if (handle == 0) return;
+    const auto* dm = _badge_dms.find(handle);
+    ContactInfo* contact = (dm != NULL) ? lookupContactByPubKey(dm->key, sizeof(dm->key)) : NULL;
+    uint32_t expected_ack = 0, est_timeout = 0;
+    if (contact == NULL ||
+        sendMessage(*contact, dm->timestamp, dm->attempts, dm->text, expected_ack, est_timeout) == MSG_SEND_FAILED) {
+      _badge_dms.sendFailed(handle);
+    } else {
+      _badge_dms.sent(handle, expected_ack, _ms->getMillis(), est_timeout);
+    }
+  }
+}
+#endif
+
 MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui)
     : BaseChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(16), tables),
       _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store), _ui(ui), _iter(0) {
@@ -1308,7 +1504,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _prefs.bw = LORA_BW;
   _prefs.cr = LORA_CR;
   _prefs.tx_power_dbm = LORA_TX_POWER;
-  _prefs.gps_enabled = 0;       // GPS disabled by default
+  _prefs.gps_enabled = DEFAULT_GPS_ENABLED;   // off unless the board says otherwise (#1236)
   _prefs.gps_interval = 0;      // No automatic GPS updates by default
   //_prefs.rx_delay_base = 10.0f;  enable once new algo fixed
   _prefs.setRepeatEn(false);
@@ -2578,6 +2774,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint32_t curr = getRTCClock()->getCurrentTime();
     getRTCClock()->setCurrentTime(secs);
     offband::logClockSet("client-set-time", curr, secs);
+#if UI_HAS_CARDKB
+    _badge_clock_set_by_phone = true;   // #1233: the badge can show clock times now
+#endif
     writeOKFrame();
   } else if (cmd_frame[0] == CMD_SEND_SELF_ADVERT) {
     mesh::Packet* pkt;
@@ -3758,6 +3957,9 @@ void MyMesh::checkObserverSerialCli() {
 
 void MyMesh::loop() {
   BaseChatMesh::loop();
+#if UI_HAS_CARDKB
+  badgeSendTick();   // #1227
+#endif
 
   if (_cli_rescue) {
     checkCLIRescueCmd();

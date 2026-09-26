@@ -1,5 +1,6 @@
 #include "UITask.h"
 #include "helpers/ui/OffbandSplash.h"
+#include <helpers/ui/KeyNav.h>
 #include <helpers/TxtDataHelpers.h>
 #include "../MyMesh.h"
 #include "target.h"
@@ -13,7 +14,16 @@
   #include <SafeBoot.h>
   #include "QccSelfTest.h"
 #endif
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+  #include <helpers/ui/LineEdit.h>
+#endif
+#if UI_HAS_CARDKB
+  #include "BadgeScreens.h"   // #1230: the inbox and thread screens
+#endif
+#include <helpers/ui/ScreenOff.h>   // #1245: the auto-off arithmetic, for every board
 
+// #1245: the compiled fallback, for a board with no screen-off preference set. The
+// badge has one; every other board keeps this, and keeps the behavior it has now.
 #ifndef AUTO_OFF_MILLIS
   #define AUTO_OFF_MILLIS     15000   // 15 seconds
 #endif
@@ -97,11 +107,66 @@ public:
     char safeboot[qcc::kSelfTestLineChars + 1];
     qcc::formatSafeBootLine(safeboot, sizeof(safeboot), SafeBoot::bootBattMilliVolts());
     display.drawTextLeftAlign(0, 40, safeboot);
+#if UI_HAS_CARDKB
+    char kbd[qcc::kSelfTestLineChars + 1];
+    qcc::formatKeyboardLine(kbd, sizeof(kbd), _task->hasKeyboard());
+    display.drawTextLeftAlign(0, 52, kbd);
+#endif
     return 500;
   }
 
   void poll() override {
     if (millis() >= _dismiss_after) _task->gotoHomeScreen();
+  }
+};
+#endif
+
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+// Diag key test (#1207): the bench instrument for the keyboard and SW1. It shows the
+// last key as its name and raw code (Fn-layer keys included, which the UI otherwise
+// ignores), SW1's last gesture, and a typed line. Esc leaves, and so does a long SW1
+// press, so a keyboard that fails mid-test cannot strand the screen. TAB on Home opens it.
+class KeyTestScreen : public UIScreen {
+  UITask* _task;
+  LineEdit<40> _line;
+
+public:
+  explicit KeyTestScreen(UITask* task) : _task(task) {}
+  void reset() { _line.clear(); }
+
+  int render(DisplayDriver& display) override {
+    char name[12], row[qcc::kSelfTestLineChars + 1];
+    display.setTextSize(1);
+    display.setColor(UIColor::primary_txt);
+    display.drawTextLeftAlign(0, 0, "KEY TEST  ESC=exit");
+    const uint8_t raw = _task->lastKeyboardRaw();
+    if (raw == 0) {
+      snprintf(row, sizeof(row), "KB  -");
+    } else {
+      cardkb::keyName(raw, name, sizeof(name));
+      snprintf(row, sizeof(row), "KB  %s 0x%02X", name, (unsigned)raw);
+    }
+    display.drawTextLeftAlign(0, 16, row);
+    snprintf(row, sizeof(row), "SW1 %s", buttonEventName(_task->lastButtonEvent()));
+    display.drawTextLeftAlign(0, 28, row);
+    snprintf(row, sizeof(row), ">%s_", _line.tail(qcc::kSelfTestLineChars - 2));
+    display.drawTextLeftAlign(0, 44, row);
+    return 200;   // Fn keys and triple-clicks change the screen without a dispatch
+  }
+
+  bool handleInput(char c) override {
+    const uint8_t key = (uint8_t)c;
+    if (!_task->inputFromKeyboard()) {
+      if (key == KEY_ENTER) _task->gotoHomeScreen();   // SW1 long press leaves
+      return true;                                     // other gestures are only shown
+    }
+    if (key == KEY_CANCEL) return false;   // Esc: UITask backs out to Home
+    if (key == KEY_ENTER) {
+      _line.clear();
+      return true;
+    }
+    _line.apply(key);
+    return true;   // arrows and the rest are shown on the KB line and do nothing else
   }
 };
 #endif
@@ -223,7 +288,7 @@ public:
     display.print(filtered_name);
 
     // battery voltage
-    renderBatteryIndicator(display, _task->getBattMilliVolts());
+    renderBatteryIndicator(display, _task->smoothedBattMilliVolts());   // #1246
 
     // curr page indicator
     if (UIColor::title_bkg == UIColor::window_bkg) {
@@ -242,6 +307,16 @@ public:
     }
 
     if (_page == HomePage::FIRST) {
+#if UI_HAS_CARDKB
+      // #1231: on the badge these pages are tools, opened from Status, which now holds
+      // the message count and the pairing PIN.
+      display.setColor(UIColor::primary_txt);
+      display.setTextSize(2);
+      display.drawTextCentered(display.width() / 2, 22, "Tools");
+      display.setTextSize(1);
+      display.drawTextCentered(display.width() / 2, 44, "Enter: back");
+      return 5000;
+#endif
       display.setColor(UIColor::primary_txt);
       display.setTextSize(2);
       sprintf(tmp, "MSG: %d", _task->getMsgCount());
@@ -489,17 +564,28 @@ public:
   }
 
   bool handleInput(char c) override {
-    if (c == KEY_LEFT || c == KEY_PREV) {
-      _page = (_page + HomePage::Count - 1) % HomePage::Count;
-      return true;
-    }
-    if (c == KEY_NEXT || c == KEY_RIGHT) {
-      _page = (_page + 1) % HomePage::Count;
-      if (_page == HomePage::RECENT) {
+    // #1205: the arrows move pages too, Up and Down included, the same way the
+    // button's click and double-click do.
+    const keynav::Step step = keynav::pageStep((uint8_t)c);
+    if (step != keynav::Step::None) {
+      _page = keynav::stepPage(_page, HomePage::Count, step);
+      if (step == keynav::Step::Next && _page == HomePage::RECENT) {
         _task->showAlert("Recent adverts", 800);
       }
       return true;
     }
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+    if ((uint8_t)c == KEY_TAB && _task->hasKeyboard()) {   // #1207: diag key test
+      _task->gotoKeyTest();
+      return true;
+    }
+#endif
+#if UI_HAS_CARDKB
+    if (c == KEY_ENTER && _page == HomePage::FIRST) {   // #1233: back to Settings, which opened them
+      _task->gotoSettings();
+      return true;
+    }
+#endif
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
       if (_task->isBluetoothEnabled()) {  // toggle Bluetooth on/off
         _task->disableBluetooth();
@@ -632,13 +718,19 @@ public:
 void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs) {
   _display = display;
   _sensors = sensors;
-  _auto_off = millis() + AUTO_OFF_MILLIS;
+  _auto_off = millis() + autoOffMillis();
 
 #if defined(PIN_USER_BTN)
   user_btn.begin();
 #endif
 #if defined(PIN_USER_BTN_ANA)
   analog_btn.begin();
+#endif
+#if UI_HAS_CARDKB
+  // #1205: optional. Without it the badge stays button-driven. Wire is already up
+  // from board.begin().
+  const bool kbd_found = _kbd.begin(Wire);
+  MESH_DEBUG_PRINTLN("UITask: CardKB keyboard %s", kbd_found ? "found" : "not found");
 #endif
 
   _node_prefs = node_prefs;
@@ -668,10 +760,31 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   _alert_expiry = 0;
 
   splash = new SplashScreen(this);
+#if UI_HAS_CARDKB
+  // #1230: the Messages inbox is Home (owner: "I want the Unread/messages screen to
+  // become the Home screen instead of the PIN screen"). The pages Home held stay
+  // reachable as tools. A message arriving flashes its row in the inbox instead of
+  // opening the preview popup, so the popup's queue isn't allocated.
+  home = new InboxScreen(this);
+  thread = new ThreadScreen(this);
+  tools = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
+  contacts = new ContactsScreen(this);   // #1231
+  nearby = new NearbyScreen(this);       // #1234
+  status = new StatusScreen(this);       // #1231
+  settings = new SettingsScreen(this);   // #1233
+  zones = new ZonePickerScreen(this);    // #1233
+  gps = new GpsScreen(this);             // #1235
+  battery = new BatteryScreen(this);     // #1254
+  msg_preview = NULL;
+#else
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
   msg_preview = new MsgPreviewScreen(this, &rtc_clock);
+#endif
 #ifdef QCC_BADGE_SELFTEST
   self_test = new SelfTestScreen(this);
+#endif
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+  key_test = new KeyTestScreen(this);
 #endif
   setCurrScreen(splash);
 }
@@ -694,6 +807,74 @@ void UITask::gotoSelfTest() {
 }
 #endif
 
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+void UITask::gotoKeyTest() {
+  ((KeyTestScreen*)key_test)->reset();
+  setCurrScreen(key_test);
+}
+#endif
+
+#if UI_HAS_CARDKB
+void UITask::gotoThread(int convo, char first_key) {
+  ((ThreadScreen*)thread)->begin(convo);
+  setCurrScreen(thread);
+  the_mesh.badgeStore().setOpen(convo);   // setCurrScreen closed it
+  if (first_key != 0) thread->handleInput(first_key);
+}
+
+void UITask::gotoTools() {
+  setCurrScreen(tools);
+}
+
+void UITask::gotoStatus() {
+  setCurrScreen(status);
+}
+
+void UITask::gotoSettings() {
+  ((SettingsScreen*)settings)->begin();
+  setCurrScreen(settings);
+}
+
+void UITask::gotoZones() {
+  ((ZonePickerScreen*)zones)->begin();
+  setCurrScreen(zones);
+}
+
+void UITask::gotoGps() {
+  ((GpsScreen*)gps)->begin();
+  setCurrScreen(gps);
+}
+
+void UITask::gotoBattery() { setCurrScreen(battery); }   // #1254
+
+int UITask::renderStatusAs(DisplayDriver& d, const char* title, int pos) {
+  return ((StatusScreen*)status)->drawAs(d, title, pos);
+}
+
+int UITask::cyclePos() const {
+  if (curr == contacts) return 1;
+  if (curr == nearby) return 2;
+  if (curr == status) return 3;
+  return 0;   // Messages, and anything reached from it
+}
+
+void UITask::cycle(int step) {
+  const int pos = (cyclePos() + step + badgeui::kCycleStops) % badgeui::kCycleStops;
+  if (pos == 1) {
+    ((ContactsScreen*)contacts)->reload();
+    setCurrScreen(contacts);
+  } else if (pos == 2) {
+    ((NearbyScreen*)nearby)->reload();
+    setCurrScreen(nearby);
+  } else if (pos == 3) {
+    setCurrScreen(status);
+  } else {
+    setCurrScreen(home);
+  }
+  _cycle_at = millis();
+}
+#endif
+
 // #542 B1: OLED mode. 0 auto (on, blanks after timeout), 1 always-on, 2 always-off (dark).
 // Applied live; the loop's blank decision honours _disp_mode. Reused by the observer
 // #141 applier (via setAlwaysOn above) and the 0xC5 display SET sub-code.
@@ -705,7 +886,7 @@ void UITask::setDisplayMode(uint8_t mode) {
     if (_display->isOn()) _display->turnOff();     // always-off: dark now, stays dark
   } else {
     if (!_display->isOn()) _display->turnOn();      // auto / always-on: light it now
-    if (mode == 0) _auto_off = millis() + AUTO_OFF_MILLIS;  // fresh timeout only for auto (always-on never blanks)
+    if (mode == 0) _auto_off = millis() + autoOffMillis();  // fresh timeout only for auto (always-on never blanks)
   }
 }
 
@@ -757,16 +938,25 @@ switch(t){
 
 void UITask::msgRead(int msgcount) {
   _msgcount = msgcount;
+#if !UI_HAS_CARDKB
+  // #1230: on the badge the phone catching up is no reason to leave what's on screen.
   if (msgcount == 0) {
     gotoHomeScreen();
   }
+#endif
 }
 
 void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) {
   _msgcount = msgcount;
 
+#if UI_HAS_CARDKB
+  // #1230: the message is already in the badge store. Its row jumps to the top of the
+  // inbox and flashes; nothing takes the screen away (design 1a, "no lost keystrokes").
+  ((InboxScreen*)home)->flash();
+#else
   ((MsgPreviewScreen *) msg_preview)->addPreview(path_len, from_name, text);
   setCurrScreen(msg_preview);
+#endif
 
   if (_display != NULL) {
     if (!_display->isOn() && !hasConnection() && _disp_mode != 2) {  // #542 B1: not in always-off
@@ -776,7 +966,7 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
       _display->turnOn();
     }
     if (_display->isOn()) {
-    _auto_off = millis() + AUTO_OFF_MILLIS;  // extend the auto-off timer
+    _auto_off = millis() + autoOffMillis();  // extend the auto-off timer
     _next_refresh = 100;  // trigger refresh
     }
   }
@@ -823,6 +1013,10 @@ void UITask::setCurrScreen(UIScreen* c) {
   else if (c == msg_preview)    to   = "MSG_PREVIEW";
   else if (c == nullptr)        to   = "NULL";
   offband::crashLogf("[ui] setCurrScreen %s -> %s", from, to);
+#endif
+#if UI_HAS_CARDKB
+  // #1230: a thread off screen isn't being read. It marks itself open when it draws.
+  the_mesh.badgeStore().setOpen(-1);
 #endif
   curr = c;
   _next_refresh = 100;
@@ -889,6 +1083,9 @@ void UITask::loop() {
   }
 #elif defined(PIN_USER_BTN)
   int ev = user_btn.check();
+#if UI_HAS_CARDKB
+  if (ev != BUTTON_EVENT_NONE) _last_btn_event = ev;   // #1207: before a handler consumes it
+#endif
   if (ev == BUTTON_EVENT_CLICK) {
     c = checkDisplayOn(KEY_NEXT);
   } else if (ev == BUTTON_EVENT_LONG_PRESS) {
@@ -897,6 +1094,36 @@ void UITask::loop() {
     c = handleDoubleClick(KEY_PREV);
   } else if (ev == BUTTON_EVENT_TRIPLE_CLICK) {
     c = handleTripleClick(KEY_SELECT);
+  }
+#endif
+#if UI_HAS_CARDKB
+  // #1205: one key per poll. Like a button event it wakes a dark display first, but it
+  // never goes through handleLongPress(), so typing can never enter CLI rescue. A
+  // button event in the same pass wins; the key is the rarer of the two.
+  _input_from_kbd = false;
+  const uint8_t kbd_raw = _kbd.poll(millis());
+  if (kbd_raw != 0) {
+    _last_kbd_raw = kbd_raw;   // #1207: shown by the key test, Fn-layer keys included
+    bool key_test_up = false;
+#if defined(QCC_BADGE_SELFTEST)
+    key_test_up = (curr == key_test);
+#endif
+    // #1239: every key wakes a dark display and holds the auto-off off, not only the ones
+    // the UI maps. checkDisplayOn() is both the wake and the timer, and it used to be
+    // reached on the way to dispatching a key, so the Fn layer never got there.
+    //
+    // It answers about the display rather than about the key: 0 when it woke a dark one,
+    // and the character it was handed when the screen was already lit. So ask it with a
+    // stand-in. The stand-in is never dispatched -- cardkb::actionFor() reads the answer
+    // as a yes or no and says what the real key does.
+    const char kWakeProbe = 1;
+    const cardkb::Action action =
+        cardkb::actionFor(kbd_raw, checkDisplayOn(kWakeProbe) == 0, c != 0, key_test_up);
+    if (action.settings) gotoSettings();
+    if (action.ui_key != 0) {
+      _input_from_kbd = true;
+      c = (char)action.ui_key;
+    }
   }
 #endif
 #if defined(UI_HAS_ROTARY_INPUT)
@@ -940,8 +1167,18 @@ void UITask::loop() {
 #ifdef OFFBAND_OBSERVER
     offband::crashLogf("[ui] button event c=0x%x dispatched to curr screen", (int)c);
 #endif
-    curr->handleInput(c);
-    _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
+    // #1205: Esc backs out to Home from any screen that does not take it. On the badge
+    // it goes up one level instead: the device pages, the zone picker (#1233) and the
+    // GPS (#1235) to Settings, and Settings to Status, where it was opened.
+    if (!curr->handleInput(c) && keynav::backsOut((uint8_t)c) && curr != home) {
+#if UI_HAS_CARDKB
+      if (curr == tools || curr == zones || curr == gps || curr == battery) gotoSettings();
+      else if (curr == settings) gotoStatus();
+      else
+#endif
+      gotoHomeScreen();
+    }
+    _auto_off = millis() + autoOffMillis();   // extend auto-off timer
     _next_refresh = 100;  // trigger refresh
   }
 
@@ -988,17 +1225,87 @@ void UITask::loop() {
     // because OLED panels burn in quickly; only enable for LCD targets or
     // where the display is replaceable.
     if (board.isExternalPowered()) {
-      _auto_off = millis() + AUTO_OFF_MILLIS;
+      _auto_off = millis() + autoOffMillis();
     }
 #endif
     // #542 B1: mode 2 (always-off) enforces dark every loop — self-corrects any relight.
     // #141: always-on (mode 1) skips the auto-blank; auto (mode 0) blanks on timeout.
-    if (_disp_mode == 2 || (!_always_on && millis() > _auto_off)) {
+    // #1245: the deadline is compared by difference, as this file does elsewhere (the GPS
+    // update above). `millis() > _auto_off` reads false for the whole of the run after
+    // millis() wraps, which would have left the display lit for another seven weeks.
+    if (_disp_mode == 2 || (!_always_on && (long)(millis() - _auto_off) > 0)) {
       _display->turnOff();
+#if UI_HAS_CARDKB
+      the_mesh.badgeStore().setOpen(-1);   // #1230: a dark thread isn't being read
+#endif
     }
 #endif
   } else if (_display != NULL) {
     _was_on = false;   // #148: display off -> re-apply rotation on the next wake
+  }
+
+  // #1246: one reading a second into the average, whatever the screens are doing. The
+  // badge used to take a fresh eight-sample ADC read on every redraw and show it, which
+  // is why a transmit or a noisy sample moved the number on its own.
+  if ((long)(millis() - _next_batt_read) >= 0) {
+    _batt.feed(getBattMilliVolts());
+    _next_batt_read = millis() + 1000;
+    // #1254: the same reading teaches the learner where this cell's 100% is. A value
+    // the user pinned is theirs -- auto-learn does not touch it until they clear it.
+    if (_node_prefs != NULL) {
+      // Fed even when the user has pinned a value, so the log keeps explaining itself; a
+      // pinned full point is protected by skipping the save below, not by going quiet.
+      const bool pinned = _node_prefs->batt_full_user != 0;
+      const uint16_t learned =
+          _full_learner.feed(millis(), _batt.value(), board.isExternalPowered());
+      // Every decision goes to the log, not only a success. On the bench a learn failed
+      // with nothing to say whether USB was never seen, the charge fell short, or the
+      // window refused; each of those now names itself with its number.
+      using L = offband::FullPointLearner;
+      switch (_full_learner.event()) {
+        case L::kPluggedIn:
+          MESH_DEBUG_PRINTLN("BATT: external power on, reading %u mV%s",
+                             (unsigned)_full_learner.chargeMv(),
+                             pinned ? ", full point pinned by user" : "");
+          break;
+        case L::kStillCharging:
+          MESH_DEBUG_PRINTLN("BATT: on USB, %d mV over the last %u min -- still charging",
+                             (int)_full_learner.riseMv(), (unsigned)(L::kHistorySlots - 1));
+          break;
+        case L::kChargerDone:
+          MESH_DEBUG_PRINTLN("BATT: on USB, %d mV over the last %u min -- charger done at %u mV",
+                             (int)_full_learner.riseMv(), (unsigned)(L::kHistorySlots - 1),
+                             (unsigned)_full_learner.chargeMv());
+          break;
+        case L::kWatching:
+          MESH_DEBUG_PRINTLN("BATT: unplugged at %u mV after a settled charge, watching %lu s",
+                             (unsigned)_full_learner.chargeMv(),
+                             (unsigned long)(L::kWatchMs / 1000UL));
+          break;
+        case L::kNotLearning:
+          MESH_DEBUG_PRINTLN("BATT: unplugged at %u mV, charger never settled (%u flat min "
+                             "needed), nothing to learn",
+                             (unsigned)_full_learner.chargeMv(),
+                             (unsigned)(L::kHistorySlots - 1));
+          break;
+        case L::kLearned:
+          MESH_DEBUG_PRINTLN("BATT: window closed, full point %u mV%s", (unsigned)learned,
+                             pinned ? " -- not saved, the user's pinned value stands" : "");
+          break;
+        case L::kImplausible:
+          MESH_DEBUG_PRINTLN("BATT: window closed at %u mV, outside %u..%u, nothing learned",
+                             (unsigned)_full_learner.bestMv(), (unsigned)L::kFloorMv,
+                             (unsigned)L::kCeilMv);
+          break;
+        default:
+          break;
+      }
+      if (!pinned && learned != 0 && learned != _node_prefs->batt_full_mv) {
+        _node_prefs->batt_full_mv = learned;
+        the_mesh.savePrefs();
+        MESH_DEBUG_PRINTLN("BATT: saved full point %u mV", (unsigned)learned);
+      }
+    }
   }
 
 #ifdef PIN_VIBRATION
@@ -1027,13 +1334,71 @@ void UITask::loop() {
 #endif
 }
 
+// #1245: the preference, or the board's compiled fallback where none is set. A board
+// compiled with AUTO_OFF_MILLIS 0 never blanks -- that is an e-ink decision made at
+// compile time (the `#if AUTO_OFF_MILLIS > 0` guards above), and a preference does not
+// get to undo it.
+// #1246: the average, or the raw read until there is one. Never 0 from the average's
+// unseeded state, which would have drawn an empty battery for the first frame.
+uint16_t UITask::smoothedBattMilliVolts() const {
+  return _batt.seeded() ? _batt.value() : getBattMilliVolts();
+}
+
+// #1254: the learned or pinned full point, or the board's compiled one while this cell
+// has taught the badge nothing.
+uint16_t UITask::battFullMilliVolts() const {
+  const uint16_t pref = (_node_prefs != NULL) ? _node_prefs->batt_full_mv : 0;
+  return pref != 0 ? pref : (uint16_t)BATT_MAX_MILLIVOLTS;
+}
+
+bool UITask::battFullIsUserSet() const {
+  return _node_prefs != NULL && _node_prefs->batt_full_user != 0;
+}
+
+bool UITask::setBattFullMilliVolts(uint16_t mv) {
+  if (_node_prefs == NULL) return false;
+  // A press at the wrong moment must not pin a number that makes the bar meaningless --
+  // below the empty end it would read 0% everywhere. Same band the learner uses. The
+  // answer goes back to the caller so the screen can say which way it was wrong.
+  if (!offband::FullPointLearner::plausibleFullMv(mv)) return false;
+  _node_prefs->batt_full_mv = mv;
+  _node_prefs->batt_full_user = 1;
+  _full_learner.reset();          // a pending window would otherwise overwrite this
+  the_mesh.savePrefs();
+  return true;
+}
+
+void UITask::clearBattFullMilliVolts() {
+  if (_node_prefs == NULL) return;
+  _node_prefs->batt_full_mv = 0;
+  _node_prefs->batt_full_user = 0;
+  _full_learner.reset();          // start watching again from the next charge
+  the_mesh.savePrefs();
+}
+
+uint16_t UITask::autoOffSecs() const {
+  const uint16_t pref = (_node_prefs != NULL) ? _node_prefs->ui_screen_secs : 0;
+  return offband::screenOffSecsShown(pref, (uint32_t)AUTO_OFF_MILLIS);
+}
+
+unsigned long UITask::autoOffMillis() const {
+  const uint16_t pref = (_node_prefs != NULL) ? _node_prefs->ui_screen_secs : 0;
+  return (unsigned long)offband::screenOffMillis(pref, (uint32_t)AUTO_OFF_MILLIS);
+}
+
+void UITask::setAutoOffSecs(uint16_t secs) {
+  if (_node_prefs == NULL) return;
+  _node_prefs->ui_screen_secs = secs;
+  _auto_off = millis() + autoOffMillis();   // the running timer follows the new value
+}
+
 char UITask::checkDisplayOn(char c) {
   if (_display != NULL) {
     if (!_display->isOn() && _disp_mode != 2) {   // #542 B1: button does not wake a deliberately-off screen
       _display->turnOn();   // turn display on and consume event
       c = 0;
     }
-    _auto_off = millis() + AUTO_OFF_MILLIS;   // extend auto-off timer
+    _auto_off = millis() + autoOffMillis();   // extend auto-off timer
     _next_refresh = 0;  // trigger refresh
   }
   return c;

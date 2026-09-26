@@ -20,4 +20,10 @@ inline void formatSafeBootLine(char* out, size_t n, uint16_t mv) {
   }
 }
 
+// Whether the CardKB-compatible keyboard answered at boot (#1207). TAB on Home opens the
+// key-test screen when it did.
+inline void formatKeyboardLine(char* out, size_t n, bool found) {
+  snprintf(out, n, found ? "KB: found  TAB=keys" : "KB: none");
+}
+
 }  // namespace qcc

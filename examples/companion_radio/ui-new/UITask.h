@@ -1,6 +1,7 @@
 #pragma once
 
 #include <MeshCore.h>
+#include <helpers/ui/BatteryGauge.h>   // #1246
 #include <helpers/ui/DisplayDriver.h>
 #include <helpers/ui/UIScreen.h>
 #include <helpers/SensorManager.h>
@@ -22,6 +23,11 @@
 #include "../AbstractUITask.h"
 #include "../NodePrefs.h"
 
+#if UI_HAS_CARDKB
+  #include <helpers/ui/CardKbInput.h>
+  #include <helpers/ui/MsgCompose.h>   // #1228
+#endif
+
 class UITask : public AbstractUITask {
   DisplayDriver* _display;
   SensorManager* _sensors;
@@ -37,6 +43,11 @@ class UITask : public AbstractUITask {
   unsigned long _alert_expiry;
   int _msgcount;
   unsigned long ui_started_at, next_batt_chck;
+  // #1246: the battery the screens show, averaged over readings taken on a cadence --
+  // not once per redraw, which is what made the number move on its own.
+  offband::BatteryAverage _batt;
+  unsigned long _next_batt_read = 0;
+  offband::FullPointLearner _full_learner;   // #1254: learns this cell's 100%
   int next_backlight_btn_check = 0;
   bool _always_on = false;   // #141: when true, never auto-blank the display
   uint8_t _disp_mode = 0;    // #542 B1: 0 auto, 1 always-on, 2 always-off (dark)
@@ -52,6 +63,12 @@ class UITask : public AbstractUITask {
 #ifdef PIN_USER_BTN_ANA
   unsigned long _analogue_pin_read_millis = millis();
 #endif
+#if UI_HAS_CARDKB
+  CardKbInput _kbd;   // #1205: an optional CardKB-compatible keyboard on Wire
+  uint8_t _last_kbd_raw = 0;      // #1207: the keyboard's last byte, for the key test
+  int  _last_btn_event = 0;       // #1207: SW1's last gesture, recorded before any handler
+  bool _input_from_kbd = false;   // #1207: whether the key being dispatched is a keyboard key
+#endif
 
   UIScreen* splash;
   UIScreen* home;
@@ -59,9 +76,30 @@ class UITask : public AbstractUITask {
 #ifdef QCC_BADGE_SELFTEST
   UIScreen* self_test;
 #endif
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+  UIScreen* key_test;
+#endif
+#if UI_HAS_CARDKB
+  UIScreen* thread;     // #1230: one conversation, with compose
+  UIScreen* tools;      // #1230: the device pages Home used to hold
+  UIScreen* contacts;   // #1231
+  UIScreen* nearby;     // #1234
+  UIScreen* status;     // #1231
+  UIScreen* settings;   // #1233
+  UIScreen* zones;      // #1233: the time zone picker
+  UIScreen* gps;        // #1235
+  UIScreen* battery;    // #1254
+  uint32_t _cycle_at = 0;   // #1231: when SW1 last moved along the cycle
+#endif
   UIScreen* curr;
 
   void userLedHandler();
+
+  // #1245: how long the display waits before blanking. `autoOffSecs` is the preference,
+  // or the board's compiled AUTO_OFF_MILLIS where none is set; `autoOffMillis` is what
+  // the timer adds. A board with no Screen off row never sets the preference and so
+  // keeps exactly the timeout it was compiled with.
+  unsigned long autoOffMillis() const;
 
   // Button action handlers
   char checkDisplayOn(char c);
@@ -80,9 +118,55 @@ public:
   }
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
 
+  // #1245: the Screen off row reads this and cycles it. Setting it applies at once --
+  // the timer already running is re-based on the new value, so picking a longer one
+  // does not leave the screen about to blank on the old.
+  uint16_t autoOffSecs() const;
+  void setAutoOffSecs(uint16_t secs);
+
+  // #1246: the battery as the screens should show it -- an average across readings
+  // rather than whatever the ADC said at the instant of a redraw. `getBattMilliVolts()`
+  // is still the raw read, and is what the low-battery shutdown acts on.
+  uint16_t smoothedBattMilliVolts() const;
+
+  // #1254: where 100% is on this cell -- the learned or pinned value, or the board's
+  // compiled BATT_MAX_MILLIVOLTS while nothing is known. `battFullIsUserSet` says which
+  // of the two ways it got there; clearing it hands the cell back to auto-learn.
+  uint16_t battFullMilliVolts() const;
+  bool battFullIsUserSet() const;
+  // The Calibrate action. False when the reading is not a plausible full cell -- the
+  // caller says so rather than the value being dropped quietly.
+  bool setBattFullMilliVolts(uint16_t mv);
+  void clearBattFullMilliVolts();            // Back to auto
+
   void gotoHomeScreen() { setCurrScreen(home); }
 #ifdef QCC_BADGE_SELFTEST
   void gotoSelfTest();
+#endif
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+  void gotoKeyTest();
+#endif
+#if UI_HAS_CARDKB
+  // #1230: a conversation's thread; `first_key` is typed into its compose line.
+  void gotoThread(int convo, char first_key = 0);
+  void gotoTools();   // #1230
+  // #1231: SW1's tap moves Messages -> Contacts -> Nearby (#1234) -> Status and round;
+  // `step` is 1 or -1. A breadcrumb shows where you are for 2 s after each move
+  // (design 1f).
+  void cycle(int step);
+  int cyclePos() const;   // 0 Messages, 1 Contacts, 2 Nearby, 3 Status
+  bool breadcrumbShown() const { return _cycle_at != 0 && millis() - _cycle_at < 2000; }
+  void gotoStatus();
+  void gotoSettings();   // #1233: from Status, or Fn+S from anywhere (design 3a)
+  void gotoZones();      // #1233
+  void gotoGps();        // #1235: from Settings' GPS row
+  void gotoBattery();    // #1254: from Settings' Battery row
+  // The Status screen under another title, as cycle position `pos`: the inbox's empty state.
+  int renderStatusAs(DisplayDriver& d, const char* title, int pos);
+  bool hasKeyboard() const { return _kbd.isPresent(); }
+  uint8_t lastKeyboardRaw() const { return _last_kbd_raw; }
+  int lastButtonEvent() const { return _last_btn_event; }
+  bool inputFromKeyboard() const { return _input_from_kbd; }
 #endif
   void showAlert(const char* text, int duration_millis);
   int  getMsgCount() const { return _msgcount; }

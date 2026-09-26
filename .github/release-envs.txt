@@ -1,9 +1,11 @@
 # Curated release env set for release.yml (epic #14 / T3 / #17).
 # One PlatformIO env per line. Lines starting with # and blank lines are ignored.
-# 99 active envs; verified against variants/*/platformio.ini. GATED (CI-built,
-# not released): heltec_v4_repeater_telemetry (#20, runtime-config secrets), the
-# three companion_radio_wifi envs (#325, runtime WiFi provisioning) -- all bake
-# placeholder creds at compile time. Uncomment when their gate issue lands.
+# Every name here is verified against variants/*/platformio.ini. There is no count
+# in this comment: it said 99 while the file held 108, and release.yml already
+# prints the real one ("Selected N env(s) for release") from the file itself (#1241).
+# GATED (CI-built, not released): heltec_v4_repeater_telemetry (#20, runtime-config
+# secrets), the three companion_radio_wifi envs (#325, runtime WiFi provisioning) --
+# all bake placeholder creds at compile time. Uncomment when their gate issue lands.
 
 # RAK4631 (nRF52)
 RAK_4631_companion_radio_ble
@@ -307,3 +309,38 @@ LilyGo_T-Echo_room_server
 LilyGo_TDeck_companion_radio_ble
 LilyGo_TDeck_companion_radio_usb
 LilyGo_TDeck_repeater
+
+# Queen City Con 0x4 badge (ProMicro nRF52840 + Ra-01SH + SSD1306 + CardKB) -- #1188
+# One env, not the three or four the other nRF52 sections carry, and that is the
+# design, not a gap: "One Feature. BLE companion only", with repeater and room-server
+# roles on badges named as non-goals
+# (docs/architecture/2026-09-12-qcc-0x4-badge-design.md). A second prod env, the
+# con-radio-defaults flavor, joins it when the con's config is known.
+# build.sh already emits the .uf2 and the DFU .zip an nRF52 board takes (#1241).
+QCC_Badge_companion_radio_ble
+#
+# THE FOURTH DIAG EXCEPTION -- owner decision 2026-09-15 (#1243), and the first one
+# that is not about evidence. RC32, RCC6 and RC52 ship diag builds because a beta
+# tester on unproven hardware has to be able to produce a log. The badge ships one
+# because the people it is going to want it: the conference is a hacker con, and the
+# diag build is a thing they may enjoy having. It is a product here, not an instrument.
+#
+# Do NOT read this as the beta reasoning extended to a fourth board, and do NOT cite
+# it for a fifth. The rule above still stands wherever it is not excepted, and each
+# exception has been the owner's to make.
+#
+# WHAT THE BUILD DOES, stated so nobody has to infer it, as the RCC6 block states its
+# own. On top of the prod env it adds: the boot beacon; caplog forced on at DEBUG and
+# un-silenceable, `caplog stop` included; the log mirrored to the spare pad P1.06 at
+# 115200; a once-a-second ID line on each spare pad; and the diag self-test screens.
+# It does not log message contents -- the chat paths log lengths and types only.
+#
+# POSITION: the log carries none. The periodic GPS line reports `pos=valid` or
+# `pos=invalid` -- whether the stored coordinates are believable -- and never lat or
+# lon (#1247, the owner). Coordinates go only to the paired client that asks for them
+# by CMD_OFFBAND_GPS, which is a person asking their own device where it is.
+#
+# The pad itself is a wire to the sniffer: reading it takes a probe physically
+# attached, not a receiver. That is the owner's assessment and it is why this is a
+# tidying of a diagnostic line rather than a hole being closed.
+QCC_Badge_companion_radio_ble_diag
