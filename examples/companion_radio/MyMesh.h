@@ -541,7 +541,9 @@ private:
   void writeOKFrame();
   void writeErrFrame(uint8_t err_code);
   void writeDisabledFrame();
-  void writeContactRespFrame(uint8_t code, const ContactInfo &contact);
+  // Returns whether the whole frame reached the transport. Behavior-neutral today --
+  // every caller ignores it (see the definition; acting on it is the #1283 fix).
+  bool writeContactRespFrame(uint8_t code, const ContactInfo &contact);
   void updateContactFromFrame(ContactInfo &contact, uint32_t& last_mod, const uint8_t *frame, int len);
   void addToOfflineQueue(const uint8_t frame[], int len);
   int getFromOfflineQueue(uint8_t frame[]);
@@ -584,6 +586,26 @@ private:
   uint32_t _most_recent_lastmod;
   uint32_t _active_ble_pin;
   bool _iter_started;
+
+#if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
+  // #1299 DIAGNOSE instrumentation. COUNTERS ONLY -- this changes no behavior, and
+  // must not: the run exists to characterize the SHIPPED defect in #1283, so a build
+  // that also fixes something measures nothing. Compiled out of every other image.
+  //
+  // The point is to DISCRIMINATE, not to confirm the refusal theory. yielded vs
+  // declared isolates the iterator; filtered isolates the `since` path; refused
+  // isolates the write. If all of them balance and the client still sees fewer
+  // contacts, the cause is below writeFrame() or in the client, and the reading on
+  // #1299 is the wrong tree.
+  uint32_t _cs_declared;      // the count promised at CONTACTS_START
+  uint32_t _cs_yielded;       // _iter.hasNext() returned true
+  uint32_t _cs_filtered;      // yielded, but lastmod <= _iter_filter_since
+  uint32_t _cs_attempted;     // writeContactRespFrame called for the stream
+  uint32_t _cs_refused;       // ...and writeFrame() returned 0
+  uint32_t _cs_end_refused;   // the END_OF_CONTACTS frame was refused
+  void csReset(uint32_t declared);
+  void csReport();
+#endif
   bool _cli_rescue;
   bool send_unscoped;   // force un-scoped flood (instead of using send_scope)
   char cli_command[80];

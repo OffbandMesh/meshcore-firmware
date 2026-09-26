@@ -345,7 +345,13 @@ void MyMesh::writeDisabledFrame() {
   _serial->writeFrame(buf, 1);
 }
 
-void MyMesh::writeContactRespFrame(uint8_t code, const ContactInfo &contact) {
+// Returns whether the transport took the whole frame. All three callers currently
+// ignore it, so this is behavior-neutral -- it exists so #1299's instrumentation does
+// not need a shared flag between this function and its caller (two of the three callers
+// are not the contact stream, so a shared flag could be clobbered between the write and
+// the read). Acting on this value would be the #1283 fix and is deliberately NOT done
+// here: a build that repairs the defect cannot characterize it.
+bool MyMesh::writeContactRespFrame(uint8_t code, const ContactInfo &contact) {
   int i = 0;
   out_frame[i++] = code;
   memcpy(&out_frame[i], contact.id.pub_key, PUB_KEY_SIZE);
@@ -365,8 +371,32 @@ void MyMesh::writeContactRespFrame(uint8_t code, const ContactInfo &contact) {
   i += 4;
   memcpy(&out_frame[i], &contact.lastmod, 4);
   i += 4;
-  _serial->writeFrame(out_frame, i);
+  // Comparing against the exact length, not against 0: on this transport a short write
+  // already returns 0 (`ArduinoSerialInterface.cpp:40-83`, every short path is explicit),
+  // but a transport that ever returned a partial count would otherwise read as success.
+  return _serial->writeFrame(out_frame, i) == (size_t)i;
 }
+
+#if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
+void MyMesh::csReset(uint32_t declared) {
+  _cs_declared = declared;
+  _cs_yielded = _cs_filtered = _cs_attempted = _cs_refused = _cs_end_refused = 0;
+}
+
+// One line per completed stream, into the capture ring. It cannot go to Serial on a
+// USB companion -- that IS the companion protocol stream, and writing text into it is
+// #1087. The ring is read afterwards with the 0xC4 caplog download, and the ring is
+// plain RAM, so it must be downloaded before the next reboot or the run is lost.
+void MyMesh::csReport() {
+  mesh_log_line(MLOG_BOOT,
+                "[contacts] declared=%u yielded=%u filtered=%u attempted=%u "
+                "refused=%u end_refused=%u sent=%u\n",
+                (unsigned)_cs_declared, (unsigned)_cs_yielded, (unsigned)_cs_filtered,
+                (unsigned)_cs_attempted, (unsigned)_cs_refused,
+                (unsigned)_cs_end_refused,
+                (unsigned)(_cs_attempted - _cs_refused));
+}
+#endif
 
 void MyMesh::updateContactFromFrame(ContactInfo &contact, uint32_t& last_mod, const uint8_t *frame, int len) {
   int i = 0;
@@ -3111,6 +3141,9 @@ void MyMesh::handleCmdFrame(size_t len) {
       _iter = startContactsIterator();
       _iter_started = true;
       _most_recent_lastmod = 0;
+#if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
+      csReset(count);   // #1299: `count` is exactly what the START frame promised
+#endif
     }
   } else if (cmd_frame[0] == CMD_SET_ADVERT_NAME && len >= 2) {
     int nlen = len - 1;
@@ -4198,8 +4231,18 @@ void MyMesh::checkSerialInterface() {
   ) {
     ContactInfo contact;
     if (_iter.hasNext(this, contact)) {
+#if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
+      _cs_yielded++;                                        // #1299
+      if (!(contact.lastmod > _iter_filter_since)) _cs_filtered++;
+#endif
       if (contact.lastmod > _iter_filter_since) { // apply the 'since' filter
+#if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
+        const bool sent_ok = writeContactRespFrame(RESP_CODE_CONTACT, contact);  // #1299
+        _cs_attempted++;
+        if (!sent_ok) _cs_refused++;
+#else
         writeContactRespFrame(RESP_CODE_CONTACT, contact);
+#endif
         if (contact.lastmod > _most_recent_lastmod) {
           _most_recent_lastmod = contact.lastmod; // save for the RESP_CODE_END_OF_CONTACTS frame
         }
@@ -4208,7 +4251,14 @@ void MyMesh::checkSerialInterface() {
       out_frame[0] = RESP_CODE_END_OF_CONTACTS;
       memcpy(&out_frame[1], &_most_recent_lastmod,
              4); // include the most recent lastmod, so app can update their 'since'
+#if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
+      // #1299: record whether the terminator landed, then report. Deliberately does
+      // NOT retry -- that would be the fix, and this build must reproduce the defect.
+      if (_serial->writeFrame(out_frame, 5) == 0) _cs_end_refused++;
+      csReport();
+#else
       _serial->writeFrame(out_frame, 5);
+#endif
       _iter_started = false;
     }
   //} else if (!_serial->isWriteBusy()) {
