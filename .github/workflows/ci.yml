@@ -123,6 +123,16 @@ jobs:
       - name: Watchdog CI wiring self-test
         run: python scripts/test_ci_wdt_steps.py
 
+      # #1294. release.yml stripped `-beta*` off the tag before looking up a
+      # CHANGELOG heading, so every beta published the base version's section:
+      # beta6's page opened with "### Fixed (beta2)" while `## [1.5.0-beta6]`
+      # sat unread in the file. Nothing failed -- a release page with the wrong
+      # notes looks like a release page. This runs release.yml's own extraction
+      # against fixtures, so the notes a tag publishes cannot silently go stale
+      # again. BLOCKING: the tree is clean, and the failure mode is invisible.
+      - name: Release notes come from the tagged version's section
+        run: python scripts/test_release_notes_section.py
+
       # #775 (epic #774). Guards the defect class behind #764/#765: an `else if`
       # that matches a CLI key and writes nothing, or a key claimed twice in one
       # chain so the later arm is unreachable. `get radio` returned an empty reply
