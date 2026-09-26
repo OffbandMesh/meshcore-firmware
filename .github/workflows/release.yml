@@ -152,13 +152,29 @@ jobs:
       - name: Extract CHANGELOG section for release body
         run: |
           ver="${GITHUB_REF_NAME#offband-}"; ver="${ver#crosswire-}"   # e.g. v1.1.0-rc1
-          num="${ver#v}"                         # e.g. 1.1.0-rc1
-          num="${num%-rc*}"; num="${num%-beta*}" # rc/beta share the base version's CHANGELOG section: 1.2.0-beta1 -> 1.2.0
-          awk -v v="$num" '
-            $0 ~ "^## \\[" v "\\]" { grab=1; next }
-            grab && /^## \[/ { grab=0 }
-            grab { print }
-          ' CHANGELOG.md > body.md || true
+          exact="${ver#v}"                         # the version as tagged: 1.5.0-beta7
+          base="${exact%-rc*}"; base="${base%-beta*}"  # the base version:   1.5.0
+          # #1294: the tagged version's OWN section wins when the file has one, so a
+          # beta's page describes that beta. Stripping the suffix unconditionally meant
+          # every beta published the base version's section -- beta6's page opened with
+          # "### Fixed (beta2)" while `## [1.5.0-beta6]` sat unread in the file. The
+          # fallback keeps the old behavior where it was deliberate: an -rc IS its base
+          # version, and a beta without its own section still gets the base notes.
+          # Matched as a literal heading prefix, so the dots in a version cannot act as
+          # regex wildcards.
+          names="$exact"; [ "$base" = "$exact" ] || names="$exact $base"
+          for want in $names; do
+            awk -v v="$want" '
+              BEGIN { head = "## [" v "]" }
+              substr($0, 1, length(head)) == head { grab=1; next }
+              grab && /^## \[/ { grab=0 }
+              grab { print }
+            ' CHANGELOG.md > body.md || true
+            # An if, not `&& break`: this is the last command in the loop body, and the
+            # step runs under `bash -e`. A plain test that finds nothing would hand the
+            # loop a non-zero status.
+            if [ -s body.md ]; then break; fi
+          done
           if [ ! -s body.md ]; then
             echo "(No CHANGELOG entry for ${ver}.)" > body.md
           fi
