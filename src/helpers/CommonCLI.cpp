@@ -10,6 +10,7 @@
 #include "TxtDataHelpers.h"
 #include <RTClib.h>
 #include "MeshLog.h"   // serial-capture sink control (#395 caplog verbs)
+#include <helpers/diagnostics/CrashLog.h>   // #1055: offband::i2cScan() for the i2cscan verb
 // #1060: `caplog forward` and the forward fields of `caplog status`, shared with
 // the observer. With OFFBAND_CAPLOG_FORWARD the role provides caplogForwarder()
 // and caplogForwardLinkUp(); nothing else of its WiFi stack is needed here.
@@ -1141,6 +1142,32 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
     } else if (sender_timestamp == 0 && memcmp(command, "caplog dump", 11) == 0 && (command[11] == 0 || command[11] == ' ')) {
       meshLogDumpSerial();
       strcpy(reply, "   EOF");
+    } else if (sender_timestamp == 0 && memcmp(command, "i2cscan", 7) == 0 && (command[7] == 0 || command[7] == ' ')) {
+      // #1055: ask the board what is actually on its primary I2C bus. Serial-only,
+      // same gate as `caplog dump`: on a wedged bus (the #294 failure) the walk is
+      // up to 112 x 50 ms of stall, which an operator at the console can see and
+      // a remote caller cannot. Scans the bus AS ALREADY CONFIGURED (-1, -1 = no
+      // Wire re-init), so the answer is about the bus the firmware is using.
+      // Every ACK also goes through crashLogf, so the full list is in the caplog
+      // ring even when the 160-byte reply has to truncate it.
+#if defined(OFFBAND_CRASHLOG_ESP32)
+      uint8_t found[16];
+      uint8_t n = offband::i2cScan(-1, -1, "cli", found, (uint8_t)sizeof(found));
+      if (n == 0) {
+        strcpy(reply, "i2cscan: no device responded (0x08-0x77)");
+      } else {
+        uint8_t shown = (n < sizeof(found)) ? n : (uint8_t)sizeof(found);
+        int pos = snprintf(reply, 160, "i2cscan: %u found:", (unsigned)n);
+        for (uint8_t i = 0; i < shown && pos > 0 && pos < 140; i++) {
+          pos += snprintf(reply + pos, 160 - pos, " 0x%02X", found[i]);
+        }
+        if (n > shown && pos > 0 && pos < 140) {
+          snprintf(reply + pos, 160 - pos, " +%u more (caplog)", (unsigned)(n - shown));
+        }
+      }
+#else
+      strcpy(reply, "i2cscan: not available on this platform");
+#endif
 #if defined(WDT_TEST_HANG)
     } else if (sender_timestamp == 0 && memcmp(command, "wdt hang", 8) == 0 && (command[8] == 0 || command[8] == ' ')) {
       // #1159: prove the runtime watchdog on hardware. Console-only AND diag-only
