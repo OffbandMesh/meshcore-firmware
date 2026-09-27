@@ -18,6 +18,15 @@ static uint16_t s_wf_seq = 0;          // refusals this boot
 void ArduinoSerialInterface::enable() {
   _isEnabled = true;
   _state = RECV_STATE_IDLE;
+  // #1283 (D2): sample the capacity now, while nothing has been queued yet. Learning
+  // it only from writeFrame() would leave a window where the gate is unarmed, and a
+  // transport kept backlogged from boot might never open it at all -- the fix would
+  // then silently do nothing. writeFrame() still raises this if a larger free level
+  // is ever observed.
+  {
+    const int writable = _serial->availableForWrite();
+    if (writable > _max_writable_seen) _max_writable_seen = writable;
+  }
 #if defined(OFFBAND_USJ_CONSOLE)
   // #1093: seed the "fully drained" reference with the known HWCDC ring capacity BEFORE any
   // frame is written, so it can never be under-learned under sustained load (writeFrame's
@@ -42,7 +51,33 @@ bool ArduinoSerialInterface::isConnected() const {
 }
 
 bool ArduinoSerialInterface::isWriteBusy() const {
-  return false;
+  // #1283 (D2). This returned false unconditionally, which made every pacing gate in
+  // MyMesh::checkSerialInterface() inert on USB -- including the one whose comment
+  // reads "don't spam the Serial Interface too quickly!". The contact stream
+  // therefore emitted one frame per main-loop pass regardless of what the endpoint
+  // could ship, and #1299 measured the result: the TX FIFO falling 2-5 bytes short
+  // of a 151-byte frame, over and over, at ~2000 frames/s.
+  //
+  // The threshold is a MAX frame, not the frame in hand: this predicate has no
+  // length argument, and a gate that let through a frame it turns out cannot fit
+  // would be no gate at all.
+  const int writable = _serial->availableForWrite();
+  if (writable < 0) return false;   // transport cannot say; writeFrame's own check stands
+
+  // Read-only: the capacity is learned in enable() and writeFrame(), which are
+  // non-const and already read this value. Keeping the predicate pure avoids a
+  // read-modify-write on a const path shared by four stream gates.
+  //
+  // Gate ONLY once this transport has demonstrated it can reach the threshold.
+  // ArduinoSerialInterface also backs plain UART bridges, where the TX buffer is
+  // commonly 64 or 128 bytes -- smaller than a max frame. Gating unconditionally
+  // there would report busy forever and stall every stream permanently, trading
+  // dropped contacts for a dead companion. Those transports keep the old behavior,
+  // which D1 (#1301) already makes safe by retrying rather than discarding.
+  const int need = (int)MAX_FRAME_SIZE + 3;
+  if (_max_writable_seen < need) return false;
+
+  return writable < need;
 }
 
 size_t ArduinoSerialInterface::writeFrame(const uint8_t src[], size_t len) {
@@ -73,6 +108,10 @@ size_t ArduinoSerialInterface::writeFrame(const uint8_t src[], size_t len) {
   // is non-blocking in exactly the way #149 requires.
   const size_t frame_len = 3 + len;
   const int writable = _serial->availableForWrite();
+  // #1283 (D2): raise the learned empty-buffer capacity that isWriteBusy() gates on.
+  // Here rather than in the predicate: this path is non-const and already has the
+  // value in hand.
+  if (writable > _max_writable_seen) _max_writable_seen = writable;
   if (writable >= 0 && (size_t)writable < frame_len) {
 #if defined(OFFBAND_WRITEFRAME_REFUSAL_TRACE) && OFFBAND_WRITEFRAME_REFUSAL_TRACE
     // #1299 step 3: measure WHY the FIFO is short of room. `avail` and `need` say

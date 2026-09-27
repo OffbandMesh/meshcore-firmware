@@ -28,11 +28,26 @@ class ArduinoSerialInterface : public BaseSerialInterface {
   bool _zlp_pending;
   int  _zlp_ring_capacity;
 
-public:
-  ArduinoSerialInterface() { _isEnabled = false; _state = 0; _zlp_pending = false; _zlp_ring_capacity = 0; }
+  // #1283 (D2): the largest free space this transport has ever reported, i.e. its
+  // empty-buffer capacity. isWriteBusy() gates on a max-frame threshold ONLY once
+  // this shows the threshold is reachable -- a UART bridge whose TX buffer is 64 or
+  // 128 bytes could never satisfy it, and gating unconditionally would stall every
+  // stream on those builds forever. Same learned-capacity idea as
+  // _zlp_ring_capacity above (#1093).
+  //
+  // Learned in enable() and writeFrame(), which are non-const and already read
+  // availableForWrite(); isWriteBusy() only READS it, so the predicate stays pure and
+  // there is no read-modify-write on a const path. RESET in begin(), because that
+  // rebinds the Stream -- carrying a 256-byte USB capacity onto a 64-byte UART would
+  // gate it shut forever.
+  int _max_writable_seen;
 
-  void begin(Stream& serial) { 
-    _serial = &serial; 
+public:
+  ArduinoSerialInterface() { _isEnabled = false; _state = 0; _zlp_pending = false; _zlp_ring_capacity = 0; _max_writable_seen = 0; }
+
+  void begin(Stream& serial) {
+    _serial = &serial;
+    _max_writable_seen = 0;   // #1283 (D2): a new transport, so forget the old one's capacity
   #ifdef RAK_4631
     pinMode(WB_IO2, OUTPUT);
   #endif  
