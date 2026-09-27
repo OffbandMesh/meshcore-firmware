@@ -63,8 +63,23 @@ bool handleSetWifiField(char* reply, size_t reply_size,
                  "ERROR: cannot open NVS namespace 'wifi'\n");
         return true;
     }
-    p.putString(field, value);
+    // #697: the write result MUST be checked. Without it a failed NVS write
+    // still returned the success ACK below, so the operator was told the SSID
+    // or PSK was stored while it was silently lost on the next boot -- a
+    // SAFELANE §6 silent failure, on the one path a remote user cannot inspect.
+    //
+    // Unlike remove() in handleClearWifi (#696), there is no absent-key
+    // ambiguity to work around: putString returns strlen(value) on success and
+    // 0 only on failure, and an empty value is rejected above -- so a zero
+    // return here is unambiguously a failed write.
+    const size_t written = p.putString(field, value);
     p.end();
+    if (written == 0) {
+        // Never name the value: on the pwd path that would echo the PSK.
+        snprintf(reply, reply_size,
+                 "ERROR: could not save wifi.%s (NVS write failed)\n", field);
+        return true;
+    }
 #endif
     if (config::strEq(field, "pwd")) {
         // Never echo the PSK in any code path.
@@ -125,6 +140,17 @@ bool handleClearWifi(char* reply, size_t reply_size, const char* what) {
     const bool pwd_erase_failed  = p.isKey("pwd")  && !p.remove("pwd");
     const bool ssid_erase_failed = clear_ssid && p.isKey("ssid") && !p.remove("ssid");
     p.end();
+    // Report BOTH keys when both fail. The original ternary named only "pwd"
+    // in the dual-failure case, so an operator running `wifi clear all` on a
+    // failing NVS could reasonably conclude the SSID had been cleared and be
+    // surprised when the node kept reconnecting to the old network after a
+    // reboot. Naming exactly what survived is the whole point of this reply.
+    if (pwd_erase_failed && ssid_erase_failed) {
+        snprintf(reply, reply_size,
+                 "ERROR: could not clear wifi.pwd or wifi.ssid "
+                 "(NVS erase failed)\n");
+        return true;
+    }
     if (pwd_erase_failed || ssid_erase_failed) {
         snprintf(reply, reply_size,
                  "ERROR: could not clear wifi.%s (NVS erase failed)\n",
@@ -266,8 +292,18 @@ bool handleSetWifiEnabled(char* reply, size_t reply_size, bool enabled) {
         snprintf(reply, reply_size, "ERROR: cannot open NVS namespace 'wifi'\n");
         return true;
     }
-    p.putBool("enabled", enabled);
+    // #697: same checked-write rule as handleSetWifiField. putBool delegates to
+    // putUChar, which returns 1 on success and 0 on failure -- unambiguous.
+    // A silently-dropped write here is worse than it looks: the operator is
+    // told WiFi is disabled, the node re-enables STA on the next boot, and the
+    // reason is invisible.
+    const size_t written = p.putBool("enabled", enabled);
     p.end();
+    if (written == 0) {
+        snprintf(reply, reply_size,
+                 "ERROR: could not save wifi.enabled (NVS write failed)\n");
+        return true;
+    }
 #endif
     snprintf(reply, reply_size, "wifi.enabled = %d (reboot to apply)\n",
              enabled ? 1 : 0);
