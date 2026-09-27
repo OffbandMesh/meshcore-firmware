@@ -110,6 +110,39 @@ TEST(WifiClearDispatch, WifiDotClearRoutesToClearNotTheFieldSetter) {
   EXPECT_EQ(0, strncmp(reply, "ERROR:", 6)) << "reply was: " << reply;
 }
 
+// ---------------------------------------------------------------------------
+// #697 -- the setters' success replies, guarded against the checked-write change
+//
+// Scope, stated honestly: the new failure branches live inside #ifdef ARDUINO,
+// so a host build cannot reach them and no test here proves a failed NVS write
+// is reported. What these DO prove is that adding the checks did not disturb
+// the success path -- the ACK strings a user actually sees, including the
+// PSK-redacting one. Fault injection on the failure branch needs hardware.
+// ---------------------------------------------------------------------------
+
+TEST(WifiSetAck, SsidSuccessReplyUnchanged) {
+  char reply[160];
+  ASSERT_TRUE(offband::handleSetWifiField(reply, sizeof(reply), "ssid", "MyNet"));
+  EXPECT_NE(nullptr, strstr(reply, "wifi.ssid = MyNet"));
+  EXPECT_EQ(nullptr, strstr(reply, "ERROR"));
+}
+
+TEST(WifiSetAck, PwdSuccessReplyReportsLengthAndNeverThePsk) {
+  char reply[160];
+  ASSERT_TRUE(offband::handleSetWifiField(reply, sizeof(reply), "pwd", "hunter2"));
+  EXPECT_NE(nullptr, strstr(reply, "7 chars entered"));
+  // The PSK must never appear in any reply, success or failure.
+  EXPECT_EQ(nullptr, strstr(reply, "hunter2"));
+  EXPECT_EQ(nullptr, strstr(reply, "ERROR"));
+}
+
+TEST(WifiSetAck, EnabledSuccessReplyUnchanged) {
+  char reply[160];
+  ASSERT_TRUE(offband::handleSetWifiEnabled(reply, sizeof(reply), false));
+  EXPECT_NE(nullptr, strstr(reply, "wifi.enabled = 0"));
+  EXPECT_EQ(nullptr, strstr(reply, "ERROR"));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
