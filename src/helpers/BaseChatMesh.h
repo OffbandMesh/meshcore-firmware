@@ -106,6 +106,9 @@ protected:
   }
 
   void bootstrapRTCfromContacts();
+  // Offband (#1233): the clock was set under the contacts table. Contacts stamped on the
+  // old clock (lastmod in [from, to]) move by `by`, so their ages stay true.
+  void shiftContactTimes(uint32_t from, uint32_t to, int64_t by);
 
   void resetContacts() {
     memset(contacts, 0, sizeof(contacts[0])*MAX_ANON_CONTACTS);   // set all to have type = ADV_TYPE_NONE(0)

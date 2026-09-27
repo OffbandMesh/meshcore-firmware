@@ -106,5 +106,7 @@ public:
   void applyBuzzerMute(bool quiet) override;
   void loop() override;
 
-  void shutdown(bool restart = false);
+  // #1075: `cause` names why on the [shutdown] line, so a capture that ends
+  // here says what happened: user, low-battery.
+  void shutdown(bool restart = false, const char* cause = "user");
 };

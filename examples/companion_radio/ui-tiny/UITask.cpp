@@ -1,4 +1,5 @@
 #include "UITask.h"
+#include "helpers/diagnostics/CrashLog.h"   // #1075: the [shutdown] line
 #include "helpers/ui/OffbandSplash.h"
 #include <helpers/TxtDataHelpers.h>
 #include "../MyMesh.h"
@@ -538,7 +539,10 @@ void UITask::setCurrScreen(UIScreen* c) {
 /*
   hardware-agnostic pre-shutdown activity should be done here
 */
-void UITask::shutdown(bool restart){
+void UITask::shutdown(bool restart, const char* cause){
+  // #1075: say why, before the display message and the teardown. A capture
+  // used to end here with nothing, and the reason only ever reached a screen.
+  if (!restart) offband::crashLogShutdown(cause, board.getBattMilliVolts());
 
   #ifdef PIN_BUZZER
   /* note: we have a choice here -
@@ -726,7 +730,7 @@ void UITask::loop() {
         _display->endFrame();
         if (_display->isEink() == false) { delay(3000); }
         }
-        shutdown();
+        shutdown(false, "low-battery");
       }
     }
     next_batt_chck = millis() + 8000;

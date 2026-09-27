@@ -1,4 +1,5 @@
 #include "ArduinoSerialInterface.h"
+#include "../MeshLog.h"
 #include "CdcConsoleFlush.h"   // #1093: ZLP terminator for 64-multiple frames on the HWCDC console
 
 #define RECV_STATE_IDLE        0
@@ -134,6 +135,7 @@ void ArduinoSerialInterface::loop() {
 }
 
 size_t ArduinoSerialInterface::checkRecvFrame(uint8_t dest[]) {
+  pollUsbLifecycle();
   while (_serial->available()) {
     int c = _serial->read();
     if (c < 0) break;
@@ -162,9 +164,65 @@ size_t ArduinoSerialInterface::checkRecvFrame(uint8_t dest[]) {
           if (_frame_len > MAX_FRAME_SIZE) _frame_len = MAX_FRAME_SIZE;    // truncate
           memcpy(dest, rx_buf, _frame_len);
           _state = RECV_STATE_IDLE;  // reset state, for next frame
+          if (!_first_frame_logged && isConsoleSharedWithProtocol()) {
+            // #1072: the client's first request reached us. A connect that
+            // fails without this line never delivered a command at all.
+            _first_frame_logged = true;
+            mesh_log_line(MLOG_BOOT, "[usb] first-frame cmd=0x%02X len=%u\n",
+                          (unsigned)dest[0], (unsigned)_frame_len);
+          }
           return _frame_len;
         }
     }
   }
   return 0;
+}
+
+// #1072: USB link lifecycle for the companion whose framed protocol runs on
+// Serial itself, so a failed connect can be told apart: the host never
+// attached, it attached and sent nothing, or it sent a first command. Lines go
+// through mesh_log_line, which a USB companion keeps off Serial (#1087): they
+// reach the ring and UART0 only.
+//
+// This runs on every loop pass against the live protocol port, so it uses
+// only side-effect-free reads, and what "up" means depends on the port:
+//  - ESP32 USB-Serial-JTAG (HWCDC: RC32, RCC6). The peripheral exposes no DTR.
+//    HWCDC::isPlugged() is its SOF-based bus state: a host is enumerating the
+//    port. (bool)Serial is deliberately not used: while the host is idle it
+//    flushes the TX FIFO as a probe, i.e. it would act on the protocol stream.
+//  - nRF52 TinyUSB CDC. Serial.dtr() is the host's DTR: the port is open.
+//    (bool)Serial is not used: it yields whenever the host is closed.
+//  - Anything else: no attach state is readable; only the first-frame line.
+//
+// Readings are debounced, with flaps counted rather than hidden, by
+// UsbLinkTracker (see its header).
+#if defined(ESP32) && ARDUINO_USB_MODE && ARDUINO_USB_CDC_ON_BOOT
+  #define USB_LINK_UP()    HWCDC::isPlugged()
+  #define USB_LINK_UP_TXT  "bus attached"
+  #define USB_LINK_DN_TXT  "bus detached"
+#elif defined(NRF52_PLATFORM) && defined(USE_TINYUSB)
+  #define USB_LINK_UP()    (Serial.dtr() != 0)
+  #define USB_LINK_UP_TXT  "host open"
+  #define USB_LINK_DN_TXT  "host close"
+#endif
+
+void ArduinoSerialInterface::pollUsbLifecycle() {
+#if defined(USB_LINK_UP)
+  if (!isConsoleSharedWithProtocol()) return;   // a UART bridge has no USB state
+  uint16_t flaps = 0;
+  const UsbLinkTracker::Event ev = _usb_link.update(USB_LINK_UP(), millis(), &flaps);
+  if (ev == UsbLinkTracker::NONE) return;
+  // Re-arm the first-frame line whenever the link went down, including inside
+  // a blip -- never on a clean UP: a client can send its first frame within
+  // the settle time, before the attach is confirmed.
+  if (ev != UsbLinkTracker::UP) _first_frame_logged = false;
+  switch (ev) {
+    case UsbLinkTracker::UP:        mesh_log_line(MLOG_BOOT, "[usb] " USB_LINK_UP_TXT " flaps=%u\n", (unsigned)flaps); break;
+    case UsbLinkTracker::DOWN:      mesh_log_line(MLOG_BOOT, "[usb] " USB_LINK_DN_TXT " flaps=%u\n", (unsigned)flaps); break;
+    case UsbLinkTracker::BLIP_UP:   mesh_log_line(MLOG_BOOT, "[usb] " USB_LINK_UP_TXT " (blip) flaps=%u\n", (unsigned)flaps); break;
+    case UsbLinkTracker::BLIP_DOWN: mesh_log_line(MLOG_BOOT, "[usb] " USB_LINK_DN_TXT " (blip) flaps=%u\n", (unsigned)flaps); break;
+    case UsbLinkTracker::UNSTABLE:  mesh_log_line(MLOG_BOOT, "[usb] link unstable flaps=%u\n", (unsigned)flaps); break;
+    default: break;
+  }
+#endif
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BaseSerialInterface.h"
+#include "UsbLinkTracker.h"
 #include <Arduino.h>
 
 class ArduinoSerialInterface : public BaseSerialInterface {
@@ -71,4 +72,10 @@ public:
   bool isConsoleSharedWithProtocol() const override {
     return _serial == static_cast<Stream*>(&Serial);
   }
+
+private:
+  // #1072: USB link lifecycle on the log channel; see pollUsbLifecycle().
+  void pollUsbLifecycle();
+  UsbLinkTracker _usb_link;
+  bool _first_frame_logged = false;  // re-armed whenever the link went down
 };

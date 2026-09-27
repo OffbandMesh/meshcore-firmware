@@ -27,6 +27,10 @@ void crashLogStandardInit(mesh::MainBoard& board, const char* role_tag) {
 
 void crashLogStandardTick(uint32_t now_ms) {
   crashLogTick(now_ms);
+  // #1074 (F1): every role that ticks here keeps its uptime for the next boot.
+  // Before this only the observer did (from heartbeatTick()), so every other
+  // role's prev_boot_lasted read 0 by construction.
+  crashLogUptimeTick(now_ms);
 }
 
 #else  // host build or explicit per-board opt-out -> no-ops

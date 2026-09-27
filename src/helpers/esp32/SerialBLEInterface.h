@@ -21,6 +21,12 @@ class SerialBLEInterface : public BaseSerialInterface, NimBLEServerCallbacks, Ni
   uint32_t _pin_code;
   unsigned long _last_write;
   unsigned long adv_restart_time;
+  // #1070: a full queue drops every frame until it drains, so it is logged
+  // ONCE per connection (reset in onConnect), not once per dropped frame.
+  // volatile: set on the main loop / NimBLE task, reset on the NimBLE task. A
+  // race costs at most one extra or missed line, never a dropped frame.
+  volatile bool _recv_full_logged;
+  volatile bool _send_full_logged;
 
   struct Frame {
     uint8_t len;
@@ -83,6 +89,7 @@ public:
     _isEnabled = false;
     _last_write = 0;
     last_conn_id = 0;
+    _recv_full_logged = _send_full_logged = false;
     _att_mtu = 23;   // #453: BLE minimum until negotiation (onMTUChange) bumps it
     send_queue_len = recv_queue_len = 0;
   }

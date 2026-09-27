@@ -59,9 +59,12 @@ Ordered — each item unblocks the next.
       fixed before the mirror spreads. Options recorded on the issue: give the mirror its own
       level ceiling, or make it drop rather than wait when the FIFO is full (matching #447).
 
-- [ ] **#754 — CrashLog boot telemetry is a tautology.**
-      `rtc_count` is compared against `nvs_count` but sourced from the same place, so the
-      check always passes and reports health it never verified. Open, unresolved.
+- [x] **#754 — CrashLog boot telemetry is a tautology.**
+      `rtc_count` printed the NVS count, so it always matched `nvs_count`. Fixed by #1074:
+      it now prints the RTC counter, which diverges from `nvs_count` across a power loss.
+      `prev_boot_lasted` now comes from RTC-retained uptime (exact, after watchdog, panic
+      or software resets) or NVS (after power loss), tagged `prev_src=rtc|nvs`. Still open
+      on #754: whether RTC memory survives the rig's RST (CHIP_PU).
 
 - [ ] **Commit the diagnostic tooling.** Uncommitted in the primary clone on `firmware-base`;
       needs its own branch + issue:

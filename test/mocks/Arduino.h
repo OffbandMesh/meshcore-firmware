@@ -26,6 +26,22 @@ inline void delay(uint32_t ms) {
 inline void noInterrupts() {}
 inline void interrupts() {}
 
+// --- Pin I/O for host tests of button logic (#1206) ---------------------------
+// Tests set g_mock_pin_level[] to what the pin reads, and can check the mode the
+// code under test set. Values match the Arduino cores' own constants.
+#define LOW            0x0
+#define HIGH           0x1
+#define INPUT          0x0
+#define OUTPUT         0x1
+#define INPUT_PULLUP   0x2
+#define INPUT_PULLDOWN 0x3
+inline int g_mock_pin_level[64] = {};
+inline int g_mock_pin_mode[64] = {};
+inline int g_mock_analog[64] = {};
+inline void pinMode(uint8_t pin, uint8_t mode) { if (pin < 64) g_mock_pin_mode[pin] = mode; }
+inline int digitalRead(uint8_t pin) { return pin < 64 ? g_mock_pin_level[pin] : LOW; }
+inline int analogRead(uint8_t pin) { return pin < 64 ? g_mock_analog[pin] : 0; }
+
 // Sink for MeshLog's console mirror. Discards output unless a test sets `record`,
 // in which case everything written lands in `captured` (#1211: the console must
 // see a mesh_log_print line exactly once). Off by default, so every other test

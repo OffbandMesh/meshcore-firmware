@@ -21,6 +21,22 @@ protected:
   uint16_t _num_floor_samples;
   int32_t _floor_sample_sum;
   uint8_t _preamble_sf;
+  // #1275: rate-limit state for the noise-floor line. Members rather than
+  // statics so two radios could not share one budget. Reset only through
+  // resetNoiseFloorLog(), so the two callers cannot drift apart.
+  int16_t _last_logged_floor;
+  uint32_t _last_floor_log_ms;
+  bool _floor_logged;
+
+  // Puts the next converged floor on the wire immediately. Called wherever the
+  // floor itself is reset, because the value it reconverges on is the line a
+  // reader needs -- at startup, and after the AGC recovery that exists because
+  // the floor got stuck.
+  void resetNoiseFloorLog() {
+    _last_logged_floor = 0;
+    _last_floor_log_ms = 0;
+    _floor_logged = false;
+  }
 
   void idle();
   void startRecv();

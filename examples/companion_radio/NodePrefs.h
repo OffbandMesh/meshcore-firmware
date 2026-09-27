@@ -9,6 +9,21 @@
 #define ADVERT_LOC_NONE       0
 #define ADVERT_LOC_SHARE      1
 
+// #1244: the text size a badge boots into. It is badgeui::kTextLarge, and the badge's
+// own BadgeScreens.cpp static_asserts these two against each other -- this header is
+// shared by every board, so it cannot include the badge's layout to say so directly.
+// Boards without the badge UI carry the value and never read it.
+#ifndef DEFAULT_UI_TEXT_SIZE
+  #define DEFAULT_UI_TEXT_SIZE  0
+#endif
+
+// #1245: seconds before the display blanks. 0 means "whatever this board was compiled
+// with" -- AUTO_OFF_MILLIS -- so a board with no way to set it behaves exactly as it did.
+// The badge's env sets its own, because the badge is the one with the setting.
+#ifndef DEFAULT_UI_SCREEN_SECS
+  #define DEFAULT_UI_SCREEN_SECS  0
+#endif
+
 class NodePrefs : public ConfigSerializer {  // persisted to file
 public:
   float airtime_factor = 0;
@@ -129,6 +144,19 @@ public:
   uint8_t button_actions[4] = {0, 0, 0, 0};  // #509
   uint8_t ui_led_enabled = 1;     // #542 B1
   uint8_t ui_display_mode = 0;    // #542 B1
+  uint8_t ui_tz = 0;              // #1233: a TimeZones.h index; 0 = not set (show ages)
+  // #1238: 0 large, 1 medium (Org_01), 2 small. #1244: the owner asked for large.
+  // Named, because BadgeLayout.h has to agree and this header is shared by every
+  // board: BadgeScreens.cpp static_asserts the two against each other.
+  uint8_t ui_text_size = DEFAULT_UI_TEXT_SIZE;
+  // #1245: seconds before the display blanks; 0 = the board's compiled AUTO_OFF_MILLIS.
+  uint16_t ui_screen_secs = DEFAULT_UI_SCREEN_SECS;
+  // #1254: where 100% is on THIS cell, in millivolts. 0 = nothing known, so the board's
+  // compiled BATT_MAX_MILLIVOLTS stands and the bar behaves exactly as it did before.
+  // Set by auto-learn after a full charge, or pinned from Settings; `batt_full_user`
+  // marks the second case, which auto-learn then leaves alone.
+  uint16_t batt_full_mv = 0;
+  uint8_t batt_full_user = 0;
 
 private:
   // ---- Offband-only prefs -------------------------------------------------
@@ -142,6 +170,11 @@ private:
       def("led", _parent->ui_led_enabled);        // #542 B1
       def("disp", _parent->ui_display_mode);      // #542 B1
       def("notify", _parent->notify_scope);       // #510
+      def("tz", _parent->ui_tz);                  // #1233
+      def("txt", _parent->ui_text_size);          // #1238
+      def("scroff", _parent->ui_screen_secs);     // #1245
+      def("bfull", _parent->batt_full_mv);        // #1254
+      def("bfuser", _parent->batt_full_user);     // #1254
       // #509 button-action matrix: 4 bytes, one per OFFBAND_UI_SEQ_*.
       def("btn", _parent->button_actions, sizeof(_parent->button_actions));
     }

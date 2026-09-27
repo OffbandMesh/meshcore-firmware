@@ -278,27 +278,11 @@ public:
     return esp_reset_reason();
   }
 
-  // Map esp_reset_reason_t enum to a human-readable string. Does NOT touch any
-  // radio or hardware state — pure switch on the cached reason enum.
-  const char* getResetReasonString(uint32_t reason) override {
-    switch (reason) {
-    case ESP_RST_UNKNOWN:   return "Unknown or first boot";
-    case ESP_RST_POWERON:   return "Power-on reset";
-    case ESP_RST_EXT:       return "External reset";
-    case ESP_RST_SW:        return "Software reset";
-    case ESP_RST_PANIC:     return "Panic / exception reset";
-    case ESP_RST_INT_WDT:   return "Interrupt watchdog reset";
-    case ESP_RST_TASK_WDT:  return "Task watchdog reset";
-    case ESP_RST_WDT:       return "Other watchdog reset";
-    case ESP_RST_DEEPSLEEP: return "Wake from deep sleep";
-    case ESP_RST_BROWNOUT:  return "Brownout (low voltage)";
-    case ESP_RST_SDIO:      return "SDIO reset";
-    default:
-      static char buf[40];
-      snprintf(buf, sizeof(buf), "Unknown reset reason (%lu)", (unsigned long)reason);
-      return buf;
-    }
-  }
+  // #1075: defined in ESP32Board.cpp, from the shared table in
+  // diagnostics/ResetReason.h. It used to be a second switch that stopped at
+  // ESP_RST_SDIO, so a code this table names printed "Unknown reset reason"
+  // here while the CrashLog line named it correctly.
+  const char* getResetReasonString(uint32_t reason) override;
 };
 
 class ESP32RTCClock : public mesh::RTCClock {

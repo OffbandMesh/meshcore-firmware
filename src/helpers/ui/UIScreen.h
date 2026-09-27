@@ -6,6 +6,8 @@
 #define KEY_UP             0xB5
 #define KEY_DOWN           0xB6
 #define KEY_RIGHT          0xB7
+#define KEY_BACKSPACE         8
+#define KEY_TAB               9
 #define KEY_SELECT           10
 #define KEY_ENTER            13
 #define KEY_CANCEL           27   // Esc

@@ -3,6 +3,14 @@
 #include <string.h>
 #include "ble_gap.h"
 #include "ble_hci.h"
+#include "../BleReasonStrings.h"   // #1070: shared disconnect-reason decode
+#include "../../MeshLog.h"
+
+// #1070: selective BLE diagnostics, the same event-level `[ble]` lines as the
+// ESP32 interface (see its header comment): connect, secured, pairing result,
+// disconnect with a decoded reason, advertising state, once-per-connection
+// queue-full. MLOG_BOOT via mesh_log_line, so they survive any caplog level.
+// The Bluefruit callbacks run in task context, where mesh_log_line is safe.
 
 // Magic numbers came from actual testing
 #define BLE_HEALTH_CHECK_INTERVAL  10000  // Advertising watchdog check every 10 seconds
@@ -30,11 +38,36 @@ void SerialBLEInterface::onConnect(uint16_t connection_handle) {
     instance->_conn_handle = connection_handle;
     instance->_isDeviceConnected = false;
     instance->clearBuffers();
+    instance->_recv_full_logged = instance->_send_full_logged = false;
+    BLEConnection* conn = Bluefruit.Connection(connection_handle);
+    if (conn != nullptr) {
+      ble_gap_addr_t addr = conn->getPeerAddr();
+      ble_reason::peerSuffix(addr.addr, instance->_peer, sizeof(instance->_peer));
+    } else {
+      ble_reason::peerSuffix(nullptr, instance->_peer, sizeof(instance->_peer));
+    }
+    mesh_log_line(MLOG_BOOT, "[ble] connect peer=%s handle=%u\n",
+                  instance->_peer, (unsigned)connection_handle);
   }
 }
 
 void SerialBLEInterface::onDisconnect(uint16_t connection_handle, uint8_t reason) {
   BLE_DEBUG_PRINTLN("SerialBLEInterface: disconnected handle=0x%04X reason=%u", connection_handle, reason);
+  {
+    // SoftDevice hands us the raw HCI code. Logged even for a handle that is
+    // not ours: a stale-connection drop is itself worth seeing.
+    const char* peer = (instance && instance->_conn_handle == connection_handle)
+                           ? instance->_peer : "..??:??";
+    ble_reason::Decoded d = ble_reason::fromHci(reason);
+    // stack_free_min: this callback task's stack low-water mark, in bytes
+    // (FreeRTOS reports words here; scaled by sizeof(StackType_t)). Measured
+    // on the bench rather than assumed, as on ESP32.
+    mesh_log_line(MLOG_BOOT,
+                  "[ble] disconnect peer=%s handle=%u reason=0x%02X (%s) by=%s stack_free_min=%u\n",
+                  peer, (unsigned)connection_handle, (unsigned)reason, d.name,
+                  ble_reason::byName(d.by),
+                  (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
+  }
   if (instance) {
     if (instance->_conn_handle == connection_handle) {
       instance->_conn_handle = BLE_CONN_HANDLE_INVALID;
@@ -49,7 +82,15 @@ void SerialBLEInterface::onSecured(uint16_t connection_handle) {
   if (instance) {
     if (instance->isValidConnection(connection_handle, true)) {
       instance->_isDeviceConnected = true;
-      
+      {
+        // Fires on every encrypted link, including a bonded reconnect where no
+        // pairing happens (so no pairing-complete line) -- this is that case.
+        BLEConnection* conn = Bluefruit.Connection(connection_handle);
+        mesh_log_line(MLOG_BOOT, "[ble] secured peer=%s handle=%u bonded=%d mtu=%u\n",
+                      instance->_peer, (unsigned)connection_handle,
+                      conn ? (int)conn->bonded() : -1, conn ? (unsigned)conn->getMtu() : 0u);
+      }
+
       // Connection interval units: 1.25ms, supervision timeout units: 10ms
       // Apple: "The product will not read or use the parameters in the Peripheral Preferred Connection Parameters characteristic."
       // So we explicitly set it here to make Android & Apple match
@@ -86,10 +127,16 @@ void SerialBLEInterface::onPairingComplete(uint16_t connection_handle, uint8_t a
   BLE_DEBUG_PRINTLN("SerialBLEInterface: pairing complete handle=0x%04X status=%u", connection_handle, auth_status);
   if (instance) {
     if (instance->isValidConnection(connection_handle)) {
-      if (auth_status == BLE_GAP_SEC_STATUS_SUCCESS) {
+      const bool ok = (auth_status == BLE_GAP_SEC_STATUS_SUCCESS);
+      mesh_log_line(MLOG_BOOT, "[ble] auth peer=%s result=%s status=0x%02X\n",
+                    instance->_peer, ok ? "ok" : "fail", (unsigned)auth_status);
+      if (ok) {
         BLE_DEBUG_PRINTLN("SerialBLEInterface: pairing successful");
       } else {
         BLE_DEBUG_PRINTLN("SerialBLEInterface: pairing failed, disconnecting");
+        // #1070: explains the local-host-terminated (0x16) on the next line.
+        mesh_log_line(MLOG_BOOT, "[ble] local-disconnect cause=pairing-failed handle=%u\n",
+                      (unsigned)connection_handle);
         instance->disconnect();
       }
     } else {
@@ -254,7 +301,8 @@ void SerialBLEInterface::enable() {
   _last_health_check = millis();
 
   Bluefruit.Advertising.restartOnDisconnect(true);
-  Bluefruit.Advertising.start(0);
+  bool adv_ok = Bluefruit.Advertising.start(0);
+  mesh_log_line(MLOG_BOOT, "[ble] adv start cause=enable ok=%d\n", (int)adv_ok);
 }
 
 void SerialBLEInterface::disconnect() {
@@ -269,6 +317,12 @@ void SerialBLEInterface::disable() {
 
   Bluefruit.Advertising.restartOnDisconnect(false);
   Bluefruit.Advertising.stop();
+  mesh_log_line(MLOG_BOOT, "[ble] adv stop cause=disable\n");
+  if (_conn_handle != BLE_CONN_HANDLE_INVALID) {
+    // #1070: explains the local-host-terminated (0x16) that follows.
+    mesh_log_line(MLOG_BOOT, "[ble] local-disconnect cause=disabled handle=%u\n",
+                  (unsigned)_conn_handle);
+  }
   disconnect();
   _last_health_check = 0;
 }
@@ -313,6 +367,11 @@ size_t SerialBLEInterface::writeFrame(const uint8_t src[], size_t len) {
   if (connected && len > 0) {
     if (send_queue_len >= FRAME_QUEUE_SIZE) {
       BLE_DEBUG_PRINTLN("writeFrame(), send_queue is full!");
+      if (!_send_full_logged) {
+        _send_full_logged = true;
+        mesh_log_line(MLOG_BOOT, "[ble] queue-full send depth=%d (once per connection)\n",
+                      (int)FRAME_QUEUE_SIZE);
+      }
       return 0;
     }
 
@@ -379,7 +438,10 @@ size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
       
       if (!isAdvertising()) {
         BLE_DEBUG_PRINTLN("SerialBLEInterface: advertising watchdog - advertising stopped, restarting");
-        Bluefruit.Advertising.start(0);
+        bool adv_ok = Bluefruit.Advertising.start(0);
+        // Rare by design (every 10 s at most, only when advertising died), and
+        // exactly the "board went invisible" case a tester cannot report.
+        mesh_log_line(MLOG_BOOT, "[ble] adv restart cause=watchdog ok=%d\n", (int)adv_ok);
       }
     }
   }
@@ -405,6 +467,11 @@ void SerialBLEInterface::onBleUartRX(uint16_t conn_handle) {
         instance->bleuart.read();
       }
       BLE_DEBUG_PRINTLN("onBleUartRX: recv queue full, dropping data");
+      if (!instance->_recv_full_logged) {
+        instance->_recv_full_logged = true;
+        mesh_log_line(MLOG_BOOT, "[ble] queue-full recv depth=%d (once per connection)\n",
+                      (int)FRAME_QUEUE_SIZE);
+      }
       break;
     }
     

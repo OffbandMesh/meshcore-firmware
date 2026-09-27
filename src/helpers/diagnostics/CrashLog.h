@@ -104,11 +104,35 @@ void crashLogSetResetReasonHook(ResetReasonHook hook);
 // ---------------------------------------------------------------------------
 // Reset-reason string mapping (Stage A)
 // ---------------------------------------------------------------------------
-// Returns a short human-readable name for the given esp_reset_reason()
-// enum value. Safe to call before crashLogBegin(); no buffer access.
-// Returns "UNKNOWN" for unrecognized values rather than nullptr so
-// printf-style callers don't need a null check.
+// Returns a short name for the given esp_reset_reason() value, from the shared
+// table in ResetReason.h. Safe to call before crashLogBegin(); no buffer
+// access. Never nullptr, so printf-style callers need no null check.
+//
+// #1075: when the IDF layer answers ESP_RST_UNKNOWN -- which is all IDF 4.4
+// can say about a USB-host reset -- the ROM's own code is appended, as
+// "UNKNOWN(rom:USB_UART_CHIP_RESET)".
 const char* resetReasonString(int reason);
+
+// #1075: the same description written into the caller's buffer, so nothing
+// shares a static. Prefer this wherever a buffer can be held.
+void resetReasonInto(int reason, char* out, size_t cap);
+
+// #1075: the chip's own ROM reset code, and whether this build can read one.
+// Exposed so the board's decoder says the same thing without a second table.
+uint32_t romResetReasonCode();
+bool     romResetReasonAvailable();
+
+// #1075: one line on the way into a deliberate shutdown, naming why and the
+// battery reading that drove it, e.g.
+//   [shutdown] cause=low-battery mv=3380 up=7920s
+// A tester capture otherwise ends mid-sentence with no reason. `cause` is a
+// short token: low-battery, user, ota, unknown.
+void crashLogShutdown(const char* cause, uint32_t millivolts);
+
+// #1075: the same line with cause=unknown, but only if nothing named a cause
+// already this boot. ESP32Board::enterDeepSleep() calls it, so a path that
+// powers the board down without saying why still leaves a record.
+void crashLogShutdownIfSilent(uint32_t millivolts);
 
 // ---------------------------------------------------------------------------
 // Ring buffer lifecycle (Stage B)
@@ -265,9 +289,24 @@ void loopIterTick();
 // Y/N flags reset after emit so each line covers the past 1s window.
 void heartbeatTick(uint32_t now_ms);
 
-// Boot counter value (loaded/incremented by heartbeatBegin).
-// Persists across soft resets via RTC_NOINIT; resets on power-on /
-// deep-sleep wake / esptool hard reset.
+// #1074: keep this boot's uptime for the next boot's "prev_boot_lasted" --
+// RTC-retained every second, NVS on a schedule that then stops (see
+// UptimeRecord.h). Call from the main loop only, once per role:
+// crashLogStandardTick() does it for every role but the observer, whose
+// heartbeatTick() does. A no-op on nRF52 and host builds.
+void crashLogUptimeTick(uint32_t now_ms);
+
+// #1270: record the uptime now, on the way into a deliberate shutdown or deep
+// sleep, rather than leaving the next boot to read the last ladder mark.
+// Called from ESP32Board::enterDeepSleep(). Best effort -- a battery already
+// collapsing can cut the write short, and then the mark stands. A no-op on
+// nRF52 and host builds.
+void crashLogUptimeFlush();
+
+// Boot count loaded/incremented by heartbeatBegin(): the NVS-backed count,
+// which survives every reset including power loss, or the RTC_NOINIT count
+// when NVS could not be opened. The [boot] line prints the RTC count on its
+// own as rtc_count.
 uint32_t bootCounterValue();
 
 #ifdef OFFBAND_CRASHLOG_HOST

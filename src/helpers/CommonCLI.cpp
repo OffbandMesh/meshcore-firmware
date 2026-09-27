@@ -5,6 +5,7 @@
   #include <Preferences.h>   // #627: cw_boot marker probe
 #endif
 #include "ClockSanity.h"  // #607
+#include "diagnostics/CrashLog.h"   // #1075: the [shutdown] line
 #include "TxtDataHelpers.h"
 #include "AdvertDataHelpers.h"
 #include "TxtDataHelpers.h"
@@ -597,6 +598,8 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
     }
 #endif
     if (memcmp(command, "poweroff", 8) == 0 || memcmp(command, "shutdown", 8) == 0) {
+      // #1075: name the operator as the cause before the board goes down.
+      offband::crashLogShutdown("user", _board->getBattMilliVolts());
       _board->powerOff();  // doesn't return
     } else if (memcmp(command, "reboot", 6) == 0) {
       _board->reboot();  // doesn't return

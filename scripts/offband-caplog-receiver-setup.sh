@@ -135,6 +135,48 @@ write_file() {  # write_file <path> <<<content-on-stdin
   log "wrote $path"
 }
 
+# #1265: the owner logrotate re-creates the log with. It has to name a user and
+# a group that exist on THIS host, or logrotate rejects the whole policy, fails
+# its nightly run, and the log never rotates (#1264). Debian's packaging runs
+# rsyslog as `syslog`; Raspberry Pi OS runs it as root. So ask the host: the
+# user rsyslogd actually runs as, by uid so a long name can't come back
+# truncated, else root; the group adm where it exists, else root.
+#
+# Every probe may fail, and failing means "fall back": procps `ps -C` exits 1
+# when nothing matches, busybox `ps` has no -C at all, and getent exits 2 for
+# an unknown uid. `|| true` keeps pipefail from turning any of those into an
+# abort, wherever this function is called from.
+resolve_log_owner() {
+  local ps_out uid user group
+  ps_out="$(ps -o uid= -C rsyslogd 2>/dev/null || true)"
+  uid="$(printf '%s\n' "$ps_out" | head -n1 | tr -d '[:space:]')"
+  user=""
+  if [ -n "$uid" ]; then
+    user="$(getent passwd "$uid" 2>/dev/null | cut -d: -f1 || true)"
+  fi
+  user="${user:-root}"
+  if getent group adm >/dev/null 2>&1; then group="adm"; else group="root"; fi
+  printf '%s %s\n' "$user" "$group"
+}
+
+# #1265: logrotate's own verdict on a policy, before anything relies on it. A
+# private state file keeps the check from reading or moving the host's
+# rotation state.
+check_logrotate_policy() {  # check_logrotate_policy <policy-file>
+  local policy="$1" state out rc
+  if ! command -v logrotate >/dev/null 2>&1; then
+    note "logrotate is not installed, so the rotation policy was not checked."
+    return 0
+  fi
+  state="$(mktemp)"
+  out="$(logrotate --debug --state "$state" "$policy" 2>&1)" && rc=0 || rc=$?
+  rm -f "$state"
+  if [ "$rc" -ne 0 ] || printf '%s\n' "$out" | grep -q '^error:'; then
+    die "logrotate rejects the rotation policy for $LOG_PATH, so nothing was changed: $(printf '%s\n' "$out" | grep -m1 '^error:' || echo "logrotate exited $rc")"
+  fi
+  log "logrotate accepts the rotation policy"
+}
+
 if [ "$ACTION" = "uninstall" ]; then
   log "Removing Offband caplog receiver..."
   for f in "$RSYSLOG_CONF" "$LOGROTATE_CONF"; do
@@ -152,6 +194,29 @@ fi
 
 # ---- install --------------------------------------------------------------
 log "Installing Offband caplog receiver (port $PORT -> $LOG_PATH, keep ${RETAIN_WEEKS}w)..."
+
+# #1265: the rotation policy is built and checked first, so a policy logrotate
+# would reject stops the install before any file on the host has changed.
+read -r LOG_OWNER LOG_GROUP <<<"$(resolve_log_owner)"
+log "rotated logs will be created as $LOG_OWNER:$LOG_GROUP"
+POLICY_TMP="$(mktemp)"
+trap 'rm -f "$POLICY_TMP"' EXIT
+cat > "$POLICY_TMP" <<EOF
+# Offband caplog logfile rotation (#569).
+$LOG_PATH {
+    weekly
+    rotate $RETAIN_WEEKS
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 $LOG_OWNER $LOG_GROUP
+    postrotate
+        /usr/lib/rsyslog/rsyslog-rotate 2>/dev/null || true
+    endscript
+}
+EOF
+check_logrotate_policy "$POLICY_TMP"
 
 # Is imudp already loaded anywhere BUT our own drop-in? rsyslog hard-errors on a
 # duplicate module load, so if the host already listens on UDP we must NOT load
@@ -195,21 +260,7 @@ if (\$programname startswith "caplog-") then {
 EOF
 fi
 
-write_file "$LOGROTATE_CONF" <<EOF
-# Offband caplog logfile rotation (#569).
-$LOG_PATH {
-    weekly
-    rotate $RETAIN_WEEKS
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 syslog adm
-    postrotate
-        /usr/lib/rsyslog/rsyslog-rotate 2>/dev/null || true
-    endscript
-}
-EOF
+write_file "$LOGROTATE_CONF" < "$POLICY_TMP"
 
 restart_rsyslog
 

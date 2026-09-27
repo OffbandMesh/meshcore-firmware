@@ -146,6 +146,26 @@ def test_pad_beacon_is_diag_only():
     assert len(re.findall(r"-D\s+OFFBAND_PAD_BEACON\b", ini)) == 1, "only the diag env may"
 
 
+def test_sw1_is_the_active_low_user_button():
+    # SW1 is P1.00, pulled up to VCC by 10 k and switched to GND (badge schematic), so
+    # it reads LOW while pressed. The UI's button must be built active-low with the
+    # pull-up on; otherwise every idle read would look like a press (#1206).
+    assert ini_flag("PIN_USER_BTN") == 6
+    assert pin_map(QCC / "variant.cpp")[6] == 32   # P1.00
+    # Anchored to a line start, so a commented-out copy of the line cannot satisfy it.
+    target = (QCC / "target.cpp").read_text()
+    assert re.search(r"^\s*MomentaryButton\s+user_btn\(\s*PIN_USER_BTN\s*,\s*\d+\s*,\s*true\s*,\s*true\s*\)",
+                     target, re.MULTILINE), "user_btn must be (PIN_USER_BTN, <long-press ms>, true, true)"
+
+
+def test_badge_env_enables_the_keyboard():
+    # The badge's CardKB-compatible keyboard (#1204/#1205): the UI only polls it when the
+    # flag is set, and the driver must be compiled into the env for that to link.
+    ini = (QCC / "platformio.ini").read_text()
+    assert re.search(r"-D\s+UI_HAS_CARDKB=1\b", ini)
+    assert "+<helpers/ui/CardKbInput.cpp>" in ini
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

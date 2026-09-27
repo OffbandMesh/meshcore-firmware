@@ -1,5 +1,23 @@
 #include "SerialBLEInterface.h"
 #include "esp_mac.h"
+#include "../BleReasonStrings.h"   // #1070: shared disconnect-reason decode
+#include "../../MeshLog.h"
+
+// #1070: selective BLE diagnostics. Event-level lines only -- connect, MTU,
+// auth, disconnect with a decoded reason, advertising state, and a once-per-
+// connection queue-full -- so a tester log answers "which device tried, what
+// happened, and who dropped whom". Not a frame trace: the per-frame lines stay
+// BLE_DEBUG_PRINTLN (compile-gated, Serial only).
+//
+// MLOG_BOOT so they survive any caplog level, and via mesh_log_line so they
+// reach the UART0 wire (#763) even with capture off: the connect that fails is
+// exactly the one nobody turned logging on for. These callbacks run on the
+// NimBLE host task; mesh_log_line is safe from task context and bounded.
+static void blePeer(const NimBLEConnInfo& connInfo, char* out, size_t cap) {
+  // Identity address, so a bonded phone keeps the same suffix across its
+  // rotating private addresses.
+  ble_reason::peerSuffix(connInfo.getIdAddress().getVal(), out, cap);
+}
 
 // See the following for generating UUIDs:
 // https://www.uuidgenerator.net/
@@ -114,18 +132,39 @@ void SerialBLEInterface::setEffectiveMtu(uint16_t reported) {
   BLE_DEBUG_PRINTLN("setEffectiveMtu(): reported=%d local=%d -> effective=%d (deliverable frame=%d)",
                     (int)reported, (int)local, (int)_att_mtu,
                     (int)ble_frame::deliverableFrame(_att_mtu, MAX_FRAME_SIZE));
+  mesh_log_line(MLOG_BOOT, "[ble] mtu reported=%u local=%u effective=%u frame=%u\n",
+                (unsigned)reported, (unsigned)local, (unsigned)_att_mtu,
+                (unsigned)ble_frame::deliverableFrame(_att_mtu, MAX_FRAME_SIZE));
 }
 
 void SerialBLEInterface::onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) {
   uint16_t conn_id = connInfo.getConnHandle();
   uint16_t mtu = pServer->getPeerMTU(conn_id);
   BLE_DEBUG_PRINTLN("onConnect(), conn_id=%d, mtu=%d", conn_id, mtu);
+  char peer[12];
+  blePeer(connInfo, peer, sizeof(peer));
+  mesh_log_line(MLOG_BOOT, "[ble] connect peer=%s handle=%u\n", peer, (unsigned)conn_id);
   last_conn_id = conn_id;
+  _recv_full_logged = _send_full_logged = false;   // #1070: once per connection
   setEffectiveMtu(mtu);            // #711: clamp to our own configured MTU, never the peer's alone
 }
 
 void SerialBLEInterface::onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
   BLE_DEBUG_PRINTLN("onDisconnect(), reason=%d", reason);
+  {
+    char peer[12];
+    blePeer(connInfo, peer, sizeof(peer));
+    ble_reason::Decoded d = ble_reason::fromNimble(reason);
+    // stack_free_min: the NimBLE host task's stack low-water mark, in bytes.
+    // These lines format on that task (4096-byte stack, nimconfig.h), so the
+    // headroom is measured on the bench rather than assumed. It is a lifetime
+    // minimum, so the last callback of a cycle captures the whole cycle.
+    mesh_log_line(MLOG_BOOT,
+                  "[ble] disconnect peer=%s handle=%u reason=0x%03X (%s) by=%s stack_free_min=%u\n",
+                  peer, (unsigned)connInfo.getConnHandle(), (unsigned)reason, d.name,
+                  ble_reason::byName(d.by),
+                  (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
+  }
   _att_mtu = 23;   // #453: drop stale MTU; next connection re-negotiates
   if (_isEnabled) {
     adv_restart_time = millis() + ADVERT_RESTART_DELAY;
@@ -168,11 +207,24 @@ void SerialBLEInterface::onConfirmPassKey(NimBLEConnInfo& connInfo, uint32_t pin
 }
 
 void SerialBLEInterface::onAuthenticationComplete(NimBLEConnInfo& connInfo) {
-  if (connInfo.isEncrypted() && connInfo.isAuthenticated()) {
+  const bool ok = connInfo.isEncrypted() && connInfo.isAuthenticated();
+  {
+    char peer[12];
+    blePeer(connInfo, peer, sizeof(peer));
+    mesh_log_line(MLOG_BOOT,
+                  "[ble] auth peer=%s result=%s encrypted=%d authenticated=%d bonded=%d key_size=%u\n",
+                  peer, ok ? "ok" : "fail", (int)connInfo.isEncrypted(),
+                  (int)connInfo.isAuthenticated(), (int)connInfo.isBonded(),
+                  (unsigned)connInfo.getSecKeySize());
+  }
+  if (ok) {
     BLE_DEBUG_PRINTLN(" - SecurityCallback - Authentication Success");
     deviceConnected = true;
   } else {
     BLE_DEBUG_PRINTLN(" - SecurityCallback - Authentication Failure*");
+    // #1070: explains the local-host-terminated (0x216) on the next line.
+    mesh_log_line(MLOG_BOOT, "[ble] local-disconnect cause=auth-failed handle=%u\n",
+                  (unsigned)connInfo.getConnHandle());
     pServer->disconnect(connInfo.getConnHandle());
     adv_restart_time = millis() + ADVERT_RESTART_DELAY;
   }
@@ -194,6 +246,11 @@ void SerialBLEInterface::onWrite(NimBLECharacteristic* pCharacteristic, NimBLECo
     BLE_DEBUG_PRINTLN("ERROR: onWrite(), frame too big, len=%d", (int)len);
   } else if (recv_queue_len >= FRAME_QUEUE_SIZE) {
     BLE_DEBUG_PRINTLN("ERROR: onWrite(), recv_queue is full!");
+    if (!_recv_full_logged) {
+      _recv_full_logged = true;
+      mesh_log_line(MLOG_BOOT, "[ble] queue-full recv depth=%d (once per connection)\n",
+                    (int)FRAME_QUEUE_SIZE);
+    }
   } else {
     recv_queue[recv_queue_len].len = (uint8_t)len;
     memcpy(recv_queue[recv_queue_len].buf, rxValue, len);
@@ -217,7 +274,8 @@ void SerialBLEInterface::enable() {
   //NimBLEDevice::getAdvertising()->setMinInterval(500);
   //NimBLEDevice::getAdvertising()->setMaxInterval(1000);
 
-  NimBLEDevice::getAdvertising()->start();
+  bool adv_ok = NimBLEDevice::getAdvertising()->start();
+  mesh_log_line(MLOG_BOOT, "[ble] adv start cause=enable ok=%d\n", (int)adv_ok);
   adv_restart_time = 0;
 }
 
@@ -227,6 +285,12 @@ void SerialBLEInterface::disable() {
   BLE_DEBUG_PRINTLN("SerialBLEInterface::disable");
 
   NimBLEDevice::getAdvertising()->stop();
+  mesh_log_line(MLOG_BOOT, "[ble] adv stop cause=disable\n");
+  if (pServer->getConnectedCount() > 0) {
+    // #1070: explains the local-host-terminated (0x216) that follows.
+    mesh_log_line(MLOG_BOOT, "[ble] local-disconnect cause=disabled handle=%u\n",
+                  (unsigned)last_conn_id);
+  }
   pServer->disconnect(last_conn_id);
   // pService->stop() removed: NimBLE-Arduino v2.x has no NimBLEService::stop().
   // Services live for the BLE stack's lifetime; stop-advertising +
@@ -245,6 +309,11 @@ size_t SerialBLEInterface::writeFrame(const uint8_t src[], size_t len) {
   if (deviceConnected && len > 0) {
     if (send_queue_len >= FRAME_QUEUE_SIZE) {
       BLE_DEBUG_PRINTLN("writeFrame(), send_queue is full!");
+      if (!_send_full_logged) {
+        _send_full_logged = true;
+        mesh_log_line(MLOG_BOOT, "[ble] queue-full send depth=%d (once per connection)\n",
+                      (int)FRAME_QUEUE_SIZE);
+      }
       return 0;
     }
 
@@ -310,6 +379,7 @@ size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
       // connecting
       // do stuff here on connecting
       NimBLEDevice::getAdvertising()->stop();
+      mesh_log_line(MLOG_BOOT, "[ble] adv stop cause=connected\n");
       adv_restart_time = 0;
     }
     oldDeviceConnected = deviceConnected;
@@ -318,7 +388,8 @@ size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
   if (adv_restart_time && millis() >= adv_restart_time) {
     if (pServer->getConnectedCount() == 0) {
       BLE_DEBUG_PRINTLN("SerialBLEInterface -> re-starting advertising");
-      NimBLEDevice::getAdvertising()->start();  // re-Start advertising
+      bool adv_ok = NimBLEDevice::getAdvertising()->start();  // re-Start advertising
+      mesh_log_line(MLOG_BOOT, "[ble] adv restart cause=disconnect ok=%d\n", (int)adv_ok);
     }
     adv_restart_time = 0;
   }
