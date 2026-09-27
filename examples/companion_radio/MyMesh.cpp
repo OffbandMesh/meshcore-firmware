@@ -180,6 +180,13 @@ namespace offband { MqttBrokerPool& wifiObserverPool(); }
 // trips it. Shorter than the client's 30 s downloadCaplog timeout so the device frees
 // its own state first and the client sees a clean stop rather than a wedged radio.
 #define CAPLOG_STALL_ABORT_MS         15000UL
+// #1283 (D1): the same bound for every OTHER streamed response, and for the same
+// reason -- once a refused frame is retried instead of dropped, a host that never
+// drains would hold the stream open forever, and each stream's in-flight flag
+// (_iter_started, _blk_listing, _ob_stream) rejects a fresh request while set.
+// Measured from the last ACCEPTED frame, so a slow-but-advancing stream is never
+// aborted. Trading silent data loss for a wedged stream would be no bargain.
+#define STREAM_STALL_ABORT_MS         15000UL
 
 // Stats sub-types for CMD_GET_STATS
 #define STATS_TYPE_CORE               0
@@ -2200,6 +2207,7 @@ void MyMesh::handleOffbandConfigCmd(size_t len) {
     _serial->writeFrame(hdr, 2);
     _ob_off = 0;
     _ob_stream = OB_STREAM_VIEW;
+    _ob_last_progress = millis();   // #1283 (D1): the stall abort's clock
     return;
   }
 
@@ -2217,6 +2225,7 @@ void MyMesh::handleOffbandConfigCmd(size_t len) {
     _ob_buf[0] = '\0';        // empty -> drain renders the next slot before emitting
     _ob_off    = 0;
     _ob_stream = OB_STREAM_BROKERS;
+    _ob_last_progress = millis();   // #1283 (D1): the stall abort's clock
     return;
   }
 
@@ -2231,7 +2240,15 @@ void MyMesh::offbandStreamDrain() {
   if (_ob_stream == OB_STREAM_VIEW) {
     if (_ob_buf[_ob_off] == '\0') {                  // text exhausted -> END, done
       uint8_t hdr[2] = { offband::RESP_CODE_OFFBAND_CONFIG, offband::OCFG_R_VIEW_END };
-      _serial->writeFrame(hdr, 2);
+      // #1283 (D1): retry a refused terminator rather than close the stream on it.
+      if (_serial->writeFrame(hdr, 2) == 0) {
+        if (millis() - _ob_last_progress > STREAM_STALL_ABORT_MS) {
+          _ob_stream = OB_STREAM_NONE;
+          MESH_DEBUG_PRINTLN("obconfig: transport stalled %lums, view terminator abandoned (#1283)",
+                             (unsigned long)STREAM_STALL_ABORT_MS);
+        }
+        return;
+      }
       _ob_stream = OB_STREAM_NONE;
       return;
     }
@@ -2242,7 +2259,18 @@ void MyMesh::offbandStreamDrain() {
     out_frame[1] = offband::OCFG_R_VIEW_CHUNK;
     memcpy(&out_frame[2], &_ob_buf[_ob_off], take);
     out_frame[2 + take] = 0;
-    _serial->writeFrame(out_frame, 2 + take + 1);
+    // #1283 (D1): advance the read offset ONLY on a sent frame. Advancing on a
+    // refusal silently truncates the config text the client asked for -- the
+    // contacts defect, in a third stream. Not advancing re-offers the same chunk.
+    if (_serial->writeFrame(out_frame, 2 + take + 1) == 0) {
+      if (millis() - _ob_last_progress > STREAM_STALL_ABORT_MS) {
+        _ob_stream = OB_STREAM_NONE;
+        MESH_DEBUG_PRINTLN("obconfig: transport stalled %lums, view aborted (#1283)",
+                           (unsigned long)STREAM_STALL_ABORT_MS);
+      }
+      return;
+    }
+    _ob_last_progress = millis();
     _ob_off += take;
     return;
   }
@@ -2255,7 +2283,15 @@ void MyMesh::offbandStreamDrain() {
       while (s < maxSlots && !offband::configBrokerSlotPopulated((uint8_t)s)) s++;
       if (s >= maxSlots) {                           // all populated slots streamed -> END
         uint8_t hdr[2] = { offband::RESP_CODE_OFFBAND_CONFIG, offband::OCFG_R_BROKERS_END };
-        _serial->writeFrame(hdr, 2);
+        // #1283 (D1): retry a refused terminator rather than close the stream on it.
+        if (_serial->writeFrame(hdr, 2) == 0) {
+          if (millis() - _ob_last_progress > STREAM_STALL_ABORT_MS) {
+            _ob_stream = OB_STREAM_NONE;
+            MESH_DEBUG_PRINTLN("obconfig: transport stalled %lums, brokers terminator abandoned (#1283)",
+                               (unsigned long)STREAM_STALL_ABORT_MS);
+          }
+          return;
+        }
         _ob_stream = OB_STREAM_NONE;
         return;
       }
@@ -2287,7 +2323,17 @@ void MyMesh::offbandStreamDrain() {
       out_frame[2] = (uint8_t)_ob_slot;
       memcpy(&out_frame[3], line, linelen);
       out_frame[3 + linelen] = 0;
-      _serial->writeFrame(out_frame, 3 + linelen + 1);
+      // #1283 (D1): hold the line on refusal -- advancing _ob_off past it drops a
+      // broker row out of a dump the client was told the count of.
+      if (_serial->writeFrame(out_frame, 3 + linelen + 1) == 0) {
+        if (millis() - _ob_last_progress > STREAM_STALL_ABORT_MS) {
+          _ob_stream = OB_STREAM_NONE;
+          MESH_DEBUG_PRINTLN("obconfig: transport stalled %lums, brokers aborted (#1283)",
+                             (unsigned long)STREAM_STALL_ABORT_MS);
+        }
+        return;
+      }
+      _ob_last_progress = millis();
     }
     _ob_off += nl ? (size_t)(nl - line) + 1 : strlen(line);
     return;
@@ -2428,6 +2474,7 @@ void MyMesh::handleCmdFrame(size_t len) {
       _serial->writeFrame(out_frame, 4);
       _blk_list_i = 0;
       _blk_listing = true;
+      _blk_last_progress = millis();   // #1283 (D1): the stall abort's clock
     } else {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     }
@@ -3141,6 +3188,8 @@ void MyMesh::handleCmdFrame(size_t len) {
       _iter = startContactsIterator();
       _iter_started = true;
       _most_recent_lastmod = 0;
+      _has_pending_contact = false;          // #1283 (D1): no carry-over between syncs
+      _contacts_last_progress = millis();    // the clock the stall abort measures from
 #if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
       csReset(count);   // #1299: `count` is exactly what the START frame promised
 #endif
@@ -3974,7 +4023,16 @@ void MyMesh::blockListDrain() {
     out_frame[0] = offband::RESP_CODE_OFFBAND_BLOCK;
     out_frame[1] = offband::OFFBAND_BLOCK_LIST;
     out_frame[2] = 0xFE;                             // END
-    _serial->writeFrame(out_frame, 3);
+    // #1283 (D1): a refused terminator used to be dropped AND the stream closed,
+    // leaving the client waiting for an END never re-sent. Retry it instead.
+    if (_serial->writeFrame(out_frame, 3) == 0) {
+      if (millis() - _blk_last_progress > STREAM_STALL_ABORT_MS) {
+        _blk_listing = false;
+        MESH_DEBUG_PRINTLN("blocklist: transport stalled %lums, terminator abandoned (#1283)",
+                           (unsigned long)STREAM_STALL_ABORT_MS);
+      }
+      return;
+    }
     _blk_listing = false;
     return;
   }
@@ -3982,7 +4040,19 @@ void MyMesh::blockListDrain() {
   out_frame[1] = offband::OFFBAND_BLOCK_LIST;
   out_frame[2] = _blk_list_i;                        // 0..MAX_BLOCKED_KEYS-1 (never 0xFE/0xFF)
   memcpy(&out_frame[3], _blocks.keyAt(_blk_list_i), PUB_KEY_SIZE);
-  _serial->writeFrame(out_frame, 3 + PUB_KEY_SIZE);
+  // #1283 (D1): advance ONLY on a sent frame. Advancing on a refusal is how a key
+  // vanished from a list the client was told the length of -- the contacts defect,
+  // in a second stream. The index is the read cursor, so simply not advancing
+  // re-offers the same key next pass.
+  if (_serial->writeFrame(out_frame, 3 + PUB_KEY_SIZE) == 0) {
+    if (millis() - _blk_last_progress > STREAM_STALL_ABORT_MS) {
+      _blk_listing = false;
+      MESH_DEBUG_PRINTLN("blocklist: transport stalled %lums, list aborted (#1283)",
+                         (unsigned long)STREAM_STALL_ABORT_MS);
+    }
+    return;
+  }
+  _blk_last_progress = millis();
   _blk_list_i++;
 }
 
@@ -4229,35 +4299,81 @@ void MyMesh::checkSerialInterface() {
   } else if (_iter_started              // check if our ContactsIterator is 'running'
              && !_serial->isWriteBusy() // don't spam the Serial Interface too quickly!
   ) {
+    // #1283 (D1): retry a held contact before pulling a new one. hasNext() advances
+    // the iterator, so asking it again would skip the one that was refused.
     ContactInfo contact;
-    if (_iter.hasNext(this, contact)) {
+    bool have_contact;
+    if (_has_pending_contact) {
+      contact = _pending_contact;
+      have_contact = true;
+    } else {
+      have_contact = _iter.hasNext(this, contact);
 #if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
-      _cs_yielded++;                                        // #1299
-      if (!(contact.lastmod > _iter_filter_since)) _cs_filtered++;
+      if (have_contact) {                                   // #1299: count each contact once
+        _cs_yielded++;
+        if (!(contact.lastmod > _iter_filter_since)) _cs_filtered++;
+      }
 #endif
+    }
+    if (have_contact) {
       if (contact.lastmod > _iter_filter_since) { // apply the 'since' filter
+        const bool sent_ok = writeContactRespFrame(RESP_CODE_CONTACT, contact);
 #if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
-        const bool sent_ok = writeContactRespFrame(RESP_CODE_CONTACT, contact);  // #1299
-        _cs_attempted++;
+        _cs_attempted++;                                    // #1299
         if (!sent_ok) _cs_refused++;
-#else
-        writeContactRespFrame(RESP_CODE_CONTACT, contact);
 #endif
+        if (!sent_ok) {
+          // The transport had no room. Hold this contact and re-offer it next pass
+          // rather than let the advanced iterator drop it -- the #1283 defect.
+          _pending_contact = contact;
+          _has_pending_contact = true;
+          // ...but a host that never drains would otherwise hold the stream open
+          // forever, and _iter_started rejects a fresh CMD_GET_CONTACTS with
+          // ERR_CODE_BAD_STATE. Abort on a STALL, measured from the last ACCEPTED
+          // frame, so a slow-but-advancing sync is safe. Mirrors caplogDrain (#718).
+          if (millis() - _contacts_last_progress > STREAM_STALL_ABORT_MS) {
+            _has_pending_contact = false;
+            // Best effort: end the stream rather than abandon the client waiting for
+            // a terminator that will never come. If this write is refused too the
+            // transport is genuinely gone, and the client's own timeout is the
+            // backstop -- but a silent abort would guarantee the hang.
+            out_frame[0] = RESP_CODE_END_OF_CONTACTS;
+            memcpy(&out_frame[1], &_most_recent_lastmod, 4);
+            _serial->writeFrame(out_frame, 5);
+            _iter_started = false;
+            MESH_DEBUG_PRINTLN("contacts: transport stalled %lums, sync aborted (#1283)",
+                               (unsigned long)STREAM_STALL_ABORT_MS);
+          }
+          return;   // nothing else this pass; the same contact is retried next one
+        }
+        _has_pending_contact = false;
+        _contacts_last_progress = millis();
         if (contact.lastmod > _most_recent_lastmod) {
           _most_recent_lastmod = contact.lastmod; // save for the RESP_CODE_END_OF_CONTACTS frame
         }
+      } else {
+        _has_pending_contact = false;   // filtered out: consumed, never sent, not held
       }
     } else { // EOF
       out_frame[0] = RESP_CODE_END_OF_CONTACTS;
       memcpy(&out_frame[1], &_most_recent_lastmod,
              4); // include the most recent lastmod, so app can update their 'since'
+      // #1283 (D1): a refused terminator used to be dropped AND the stream closed,
+      // leaving the client waiting for an END that would never be re-sent. Stay
+      // streaming and retry it, exactly as caplogDrain does (#718).
+      if (_serial->writeFrame(out_frame, 5) == 0) {
 #if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
-      // #1299: record whether the terminator landed, then report. Deliberately does
-      // NOT retry -- that would be the fix, and this build must reproduce the defect.
-      if (_serial->writeFrame(out_frame, 5) == 0) _cs_end_refused++;
-      csReport();
-#else
-      _serial->writeFrame(out_frame, 5);
+        _cs_end_refused++;                                  // #1299
+#endif
+        if (millis() - _contacts_last_progress > STREAM_STALL_ABORT_MS) {
+          _iter_started = false;
+          MESH_DEBUG_PRINTLN("contacts: transport stalled %lums, terminator abandoned (#1283)",
+                             (unsigned long)STREAM_STALL_ABORT_MS);
+        }
+        return;   // retry the terminator next pass
+      }
+#if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
+      csReport();                                           // #1299
 #endif
       _iter_started = false;
     }

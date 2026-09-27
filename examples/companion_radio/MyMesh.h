@@ -587,6 +587,25 @@ private:
   uint32_t _active_ble_pin;
   bool _iter_started;
 
+  // #1283 (D1): a refused contact must be re-offered, not skipped. The iterator
+  // cannot rewind -- hasNext() has already advanced by the time the write fails --
+  // so the contact is held here and retried on the next idle pass. caplogDrain()
+  // solves the same problem by not advancing its read offset (#718); an iterator
+  // needs this instead.
+  //
+  // #1299 measured why it works: the refusal clears in under a millisecond
+  // (avail=146-149 against need=151, since_ok=0-1ms, consec=1), so the very next
+  // pass succeeds. The data was never gone -- it was being thrown away.
+  // The held copy can be one pass (~1 ms) stale if a CMD_ that edits the contact
+  // store lands in between. That is the SAME eventual-consistency the streams
+  // already document and accept -- blockListDrain's comment says a concurrent
+  // REMOVE mid-stream shifts indices and "the app re-syncs if it matters", and
+  // hasNext() hands out a by-value snapshot regardless. This extends that window by
+  // one pass; it does not introduce it.
+  ContactInfo _pending_contact;
+  bool _has_pending_contact;          // a held contact has ALREADY passed the filter
+  uint32_t _contacts_last_progress;   // millis() of the last ACCEPTED contact frame
+
 #if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
   // #1299 DIAGNOSE instrumentation. COUNTERS ONLY -- this changes no behavior, and
   // must not: the run exists to characterize the SHIPPED defect in #1283, so a build
@@ -600,6 +619,10 @@ private:
   uint32_t _cs_declared;      // the count promised at CONTACTS_START
   uint32_t _cs_yielded;       // _iter.hasNext() returned true
   uint32_t _cs_filtered;      // yielded, but lastmod <= _iter_filter_since
+  // NOTE, since D1: `attempted` counts send ATTEMPTS, so a retried contact counts
+  // more than once and `attempted >= yielded`. Before D1 they were equal and
+  // `declared - sent == refused` held exactly; now `refused` is a retry count, not
+  // a loss count, and a healthy stream should end with sent == declared.
   uint32_t _cs_attempted;     // writeContactRespFrame called for the stream
   uint32_t _cs_refused;       // ...and writeFrame() returned 0
   uint32_t _cs_end_refused;   // the END_OF_CONTACTS frame was refused
@@ -623,6 +646,7 @@ private:
   uint8_t _ob_stream;     // OB_STREAM_* ; constructor-init to NONE
   int     _ob_slot;       // BROKERS: slot whose rendered lines are in _ob_buf
   size_t  _ob_off;        // next line (BROKERS) / chunk (VIEW) offset into _ob_buf
+  uint32_t _ob_last_progress;  // #1283 (D1): last ACCEPTED frame, for the stall abort
   char    _ob_buf[1024];  // current slot's "key=value\n" lines, or the VIEW text
 #endif
   // #241: in-flight block-LIST streaming (ALWAYS compiled, unlike the observer
@@ -631,6 +655,7 @@ private:
   // #169). Framing: START=[..,0xFF,count] -> [..,idx,key]* -> END=[..,0xFE].
   bool    _blk_listing;
   uint8_t _blk_list_i;
+  uint32_t _blk_last_progress;   // #1283 (D1): last ACCEPTED frame, for the stall abort
   // #396: in-flight serial-capture (caplog) download. Capture is frozen (auto-
   // stopped) at START so the ring is stable; caplogDrain() streams one CHUNK
   // frame per idle pass from _caplog_off until the buffer is exhausted.
