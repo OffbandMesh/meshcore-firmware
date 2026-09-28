@@ -13,8 +13,12 @@ RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BU
 
 WRAPPER_CLASS radio_driver(radio, board);
 
-ESP32RTCClock fallback_clock;
-AutoDiscoverRTCClock rtc_clock(fallback_clock);
+// #1054: declared, not discovered. This board has no RTC chip -- the only I2C
+// device on it is the MAX17048 fuel gauge (0x36) -- so the four-address probe
+// AutoDiscoverRTCClock walked at boot could only ever fail, or worse, ACK a
+// non-RTC part and serve garbage as the time (lilygo_techo_card, 0x68). The
+// ESP32 system clock is what every getCurrentTime() was already returning.
+ESP32RTCClock rtc_clock;
 
 #if ENV_INCLUDE_GPS
   #ifndef GPS_SERIAL
@@ -33,8 +37,7 @@ AutoDiscoverRTCClock rtc_clock(fallback_clock);
 #endif
 
 bool radio_init() {
-  fallback_clock.begin();
-  rtc_clock.begin(Wire);
+  rtc_clock.begin();   // #1054: no bus probe -- see declaration above
 
   spi.begin(P_LORA_SCLK, P_LORA_MISO, P_LORA_MOSI);
   return radio.std_init(&spi);
