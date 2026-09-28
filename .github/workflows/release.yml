@@ -149,11 +149,30 @@ jobs:
           done < existing_assets.txt
           echo "Purged $purged stale asset(s)."
 
-      - name: Extract CHANGELOG section for release body
+      - name: Extract release body
         run: |
           ver="${GITHUB_REF_NAME#offband-}"; ver="${ver#crosswire-}"   # e.g. v1.1.0-rc1
           exact="${ver#v}"                         # the version as tagged: 1.5.0-beta7
           base="${exact%-rc*}"; base="${base%-beta*}"  # the base version:   1.5.0
+          # #1306: prose wins. `release-notes/<version as tagged>.md` is the owner's
+          # written release notes; a CHANGELOG section is a changelog, not prose, and
+          # publishing one as the page's body is what this file used to do for want of
+          # anywhere else to look. The filename carries the FULL tagged version --
+          # unlike discord/, which strips the pre-release suffix -- because release
+          # notes are per-tag and permanent, so beta7 and 1.5.0 must not collide.
+          # No prose file means every behavior below is exactly as it was.
+          prose="release-notes/${exact}.md"
+          if [ -f "$prose" ]; then
+            # An empty notes file is a mistake, not a choice: somebody created it and
+            # never wrote it. Falling through to the changelog here would publish a
+            # body nobody reviewed, which is exactly the silent failure this file is
+            # supposed to have stopped doing. Fail the release and name the file.
+            if [ ! -s "$prose" ]; then
+              echo "::error::${prose} exists but is empty -- write the notes or delete the file" >&2
+              exit 1
+            fi
+            cp "$prose" body.md
+          else
           # #1294: the tagged version's OWN section wins when the file has one, so a
           # beta's page describes that beta. Stripping the suffix unconditionally meant
           # every beta published the base version's section -- beta6's page opened with
@@ -162,8 +181,12 @@ jobs:
           # version, and a beta without its own section still gets the base notes.
           # Matched as a literal heading prefix, so the dots in a version cannot act as
           # regex wildcards.
-          names="$exact"; [ "$base" = "$exact" ] || names="$exact $base"
-          for want in $names; do
+          # An array, not word-splitting: `for want in $names` would subject a version
+          # to globbing and word-splitting. Git rejects `*`, spaces and `..` in a tag
+          # name, so no such tag can reach GITHUB_REF_NAME -- this is hardening, not a
+          # reachable hole (#1306 review).
+          names=("$exact"); [ "$base" = "$exact" ] || names+=("$base")
+          for want in "${names[@]}"; do
             awk -v v="$want" '
               BEGIN { head = "## [" v "]" }
               substr($0, 1, length(head)) == head { grab=1; next }
@@ -175,6 +198,7 @@ jobs:
             # loop a non-zero status.
             if [ -s body.md ]; then break; fi
           done
+          fi
           if [ ! -s body.md ]; then
             echo "(No CHANGELOG entry for ${ver}.)" > body.md
           fi
