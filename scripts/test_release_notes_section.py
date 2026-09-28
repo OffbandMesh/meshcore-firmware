@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""A release page's description comes from the tagged version's own CHANGELOG section (#1294).
+"""A release page's description: prose when there is any (#1306), else the tagged
+version's own CHANGELOG section (#1294).
 
 Pure, no network, no hardware. Run: python scripts/test_release_notes_section.py
 
@@ -19,6 +20,18 @@ pins four behaviors:
   * neither present leaves the "(No CHANGELOG entry...)" body.
 
 It also pins that release-footer.md is appended, since the same step does it.
+
+#1306 added a higher-priority source above all of that: `release-notes/<version as
+tagged>.md`, the owner's prose. A CHANGELOG section is a changelog, and publishing
+one as the page body was only ever done for want of anywhere else to look. Pinned
+here too:
+
+  * prose outranks the tagged version's own section;
+  * prose outranks the base-version fallback;
+  * an `-rc` takes its OWN prose and never the base version's -- the suffix strip
+    governs CHANGELOG lookup only, because notes are per-tag and permanent;
+  * a prose file named for another version is never published;
+  * with no prose present, every behavior above is exactly as it was.
 """
 import os
 import re
@@ -28,7 +41,7 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RELEASE_YML = os.path.join(ROOT, ".github", "workflows", "release.yml")
-STEP_NAME = "Extract CHANGELOG section for release body"
+STEP_NAME = "Extract release body"
 
 FIXTURE_BOTH = """\
 # Changelog
@@ -86,11 +99,22 @@ def extraction_block() -> str:
     return "\n".join(out) + "\n"
 
 
-def run(block: str, tag: str, changelog: str, footer: str | None = FOOTER) -> str:
-    """Run the extraction in a throwaway tree and return the body it produced."""
+def run(block: str, tag: str, changelog: str, footer: str | None = FOOTER,
+        prose: dict[str, str] | None = None, expect_fail: bool = False) -> str:
+    """Run the extraction in a throwaway tree and return the body it produced.
+
+    `prose` maps a release-notes basename (the version as tagged, no extension) to
+    its content, e.g. {"1.5.0-beta7": "PROSE LINE\\n"} (#1306).
+    """
     with tempfile.TemporaryDirectory() as tmp:
         with open(os.path.join(tmp, "CHANGELOG.md"), "w", encoding="utf-8") as fh:
             fh.write(changelog)
+        if prose:
+            os.mkdir(os.path.join(tmp, "release-notes"))
+            for name, text in prose.items():
+                with open(os.path.join(tmp, "release-notes", f"{name}.md"), "w",
+                          encoding="utf-8") as fh:
+                    fh.write(text)
         if footer is not None:
             os.mkdir(os.path.join(tmp, ".github"))
             with open(os.path.join(tmp, ".github", "release-footer.md"), "w",
@@ -107,8 +131,15 @@ def run(block: str, tag: str, changelog: str, footer: str | None = FOOTER) -> st
             fail("bash is required to run the workflow's own extraction step")
             return ""
         if proc.returncode != 0:
+            if expect_fail:
+                return ""
             fail(f"the extraction exited {proc.returncode} for {tag}: {proc.stderr.strip()}")
-        with open(os.path.join(tmp, "body.md"), encoding="utf-8") as fh:
+        elif expect_fail:
+            fail(f"the extraction was expected to fail for {tag} and exited 0")
+        body = os.path.join(tmp, "body.md")
+        if not os.path.exists(body):
+            return ""
+        with open(body, encoding="utf-8") as fh:
             return fh.read()
 
 
@@ -168,10 +199,65 @@ def main() -> int:
     check("BETA7 LINE" in body, "an absent release-footer.md must not cost the notes")
     check("FOOTER LINE" not in body, "no footer file, no footer text")
 
+    # ---- #1306: release-notes/<version as tagged>.md is prose and outranks the changelog.
+
+    prose = {"1.5.0-beta7": "PROSE LINE\n"}
+
+    body = run(block, "offband-v1.5.0-beta7", FIXTURE_BOTH, prose=prose)
+    check("PROSE LINE" in body, "a prose file must supply the body")
+    check("BETA7 LINE" not in body,
+          "prose must outrank the tagged version's own CHANGELOG section")
+    check("BASE LINE" not in body, "prose must not be joined by the base version's notes")
+    check("FOOTER LINE" in body, "the footer must still be appended on the prose path")
+
+    # Prose also beats the base-version fallback -- the case where the changelog has no
+    # section for this tag at all, so the old code would have published 1.5.0's notes.
+    body = run(block, "offband-v1.5.0-beta7", FIXTURE_BASE_ONLY, prose=prose)
+    check("PROSE LINE" in body, "prose must win when the tag has no section of its own")
+    check("BASE LINE" not in body, "prose must outrank the base-version fallback")
+
+    # An -rc takes its own prose file. The suffix strip governs CHANGELOG lookup only;
+    # release notes are per-tag, so an -rc is not served its base version's prose.
+    body = run(block, "offband-v1.5.0-rc1", FIXTURE_BOTH,
+               prose={"1.5.0-rc1": "RC PROSE\n", "1.5.0": "STABLE PROSE\n"})
+    check("RC PROSE" in body, "an -rc must take its own prose file")
+    check("STABLE PROSE" not in body,
+          "an -rc must NOT fall back to the base version's prose -- notes are per-tag")
+
+    # A prose file for a DIFFERENT version is not a match, and must not be published.
+    body = run(block, "offband-v1.5.0-beta7", FIXTURE_BOTH, prose={"1.5.0": "WRONG PROSE\n"})
+    check("WRONG PROSE" not in body,
+          "a prose file named for another version must never be published")
+    check("BETA7 LINE" in body,
+          "with no prose for this tag, the CHANGELOG chain must behave exactly as before")
+
+    # No prose directory at all: every pre-#1306 behavior is untouched. This is the
+    # regression guard for the change itself.
+    body = run(block, "offband-v1.6.0", FIXTURE_BOTH)
+    check("(No CHANGELOG entry for v1.6.0.)" in body,
+          "with no prose and no section, the placeholder must still be the body")
+
+    # An EMPTY prose file is a mistake, and must fail the release rather than quietly
+    # publishing the changelog instead. The first cut of #1306 used `cp` then tested
+    # `-s`, so a zero-byte notes file fell through to the changelog and shipped a body
+    # nobody had reviewed -- this case is what catches that.
+    run(block, "offband-v1.5.0-beta7", FIXTURE_BOTH, prose={"1.5.0-beta7": ""},
+        expect_fail=True)
+
+    # Hardening, not a reachable hole: git rejects `*`, spaces and `..` in a tag name,
+    # so GITHUB_REF_NAME cannot carry a glob. Pinned anyway, because the version is
+    # interpolated into both a path and a loop.
+    body = run(block, "offband-v*", FIXTURE_BOTH)
+    check("BETA7 LINE" not in body and "BASE LINE" not in body,
+          "a glob in the version must not expand into a section match")
+    check("(No CHANGELOG entry for v*.)" in body,
+          "a glob version must fall through to the placeholder, named literally")
+
     if FAILURES:
         print(f"\n{len(FAILURES)} failure(s).")
         return 1
-    print("OK: release notes come from the tagged version's section (#1294).")
+    print("OK: release body is prose when present (#1306), else the tagged "
+          "version's section (#1294).")
     return 0
 
 
