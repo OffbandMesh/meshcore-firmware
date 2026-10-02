@@ -3,6 +3,13 @@
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
 #include <MeshLog.h>  // #396: serial-capture buffer access for the caplog download
+// #1316: crashLogf() for stream-abandonment reports. Chosen over mesh_log_line because
+// capture is OFF by default on a shipping build (#428), so mesh_log_line reaches nothing
+// on the images testers actually run -- while the crashlog ring is always present and
+// survives a reset. Safe on a USB companion: since #1087 crashLogSerialWrite suppresses
+// its Serial echo when the console carries the framed protocol.
+#include "helpers/diagnostics/CrashLog.h"
+#include "helpers/StreamAbandonReport.h"   // #1316: the rate limit + wording, unit-tested
 #include <helpers/ClockSanity.h>  // #607: owner-path clock sets + audit log
 #include "helpers/CdcConsoleFlush.h"   // #1035: right-flush (ZLP) for the USB-Serial-JTAG console
 #include "helpers/OffbandVersion.h"   // #1391: shared OB-first <ob>-<stock> version string (CLI == device-info)
@@ -404,6 +411,25 @@ void MyMesh::csReport() {
                 (unsigned)(_cs_attempted - _cs_refused));
 }
 #endif
+
+void MyMesh::reportStreamAbandoned(const char* stream, const char* phase, uint32_t stalled_ms,
+                                   uint32_t progress, const char* unit, uint32_t total) {
+  // Per-stream window plus a per-boot cap; abandonTake() owns and clears the suppressed
+  // count. See StreamAbandonReport.h for why both limits exist and why the window is NOT
+  // global across streams.
+  const offband::AbandonDecision d =
+      offband::abandonTake(_abandon_limiter, stream, millis());
+  if (!d.emit) return;
+
+  char line[176];
+  offband::abandonFormat(line, sizeof(line), stream, phase, stalled_ms, progress, unit,
+                         total, d.suppressed);
+
+  // "%s" rather than passing `line` as the format: the rendered text holds no format
+  // specifiers today, but handing a runtime string to a printf-family format parameter is
+  // how that stops being true later.
+  offband::crashLogf("%s", line);
+}
 
 void MyMesh::updateContactFromFrame(ContactInfo &contact, uint32_t& last_mod, const uint8_t *frame, int len) {
   int i = 0;
@@ -2244,8 +2270,8 @@ void MyMesh::offbandStreamDrain() {
       if (_serial->writeFrame(hdr, 2) == 0) {
         if (millis() - _ob_last_progress > STREAM_STALL_ABORT_MS) {
           _ob_stream = OB_STREAM_NONE;
-          MESH_DEBUG_PRINTLN("obconfig: transport stalled %lums, view terminator abandoned (#1283)",
-                             (unsigned long)STREAM_STALL_ABORT_MS);
+          reportStreamAbandoned("obconfig", "view-terminator", STREAM_STALL_ABORT_MS,
+                                _ob_off, " bytes", 0);
         }
         return;
       }
@@ -2265,8 +2291,8 @@ void MyMesh::offbandStreamDrain() {
     if (_serial->writeFrame(out_frame, 2 + take + 1) == 0) {
       if (millis() - _ob_last_progress > STREAM_STALL_ABORT_MS) {
         _ob_stream = OB_STREAM_NONE;
-        MESH_DEBUG_PRINTLN("obconfig: transport stalled %lums, view aborted (#1283)",
-                           (unsigned long)STREAM_STALL_ABORT_MS);
+        reportStreamAbandoned("obconfig", "view", STREAM_STALL_ABORT_MS, _ob_off,
+                              " bytes", 0);
       }
       return;
     }
@@ -2287,8 +2313,8 @@ void MyMesh::offbandStreamDrain() {
         if (_serial->writeFrame(hdr, 2) == 0) {
           if (millis() - _ob_last_progress > STREAM_STALL_ABORT_MS) {
             _ob_stream = OB_STREAM_NONE;
-            MESH_DEBUG_PRINTLN("obconfig: transport stalled %lums, brokers terminator abandoned (#1283)",
-                               (unsigned long)STREAM_STALL_ABORT_MS);
+            reportStreamAbandoned("obconfig", "brokers-terminator", STREAM_STALL_ABORT_MS,
+                                  _ob_off, " bytes", 0);
           }
           return;
         }
@@ -2328,8 +2354,8 @@ void MyMesh::offbandStreamDrain() {
       if (_serial->writeFrame(out_frame, 3 + linelen + 1) == 0) {
         if (millis() - _ob_last_progress > STREAM_STALL_ABORT_MS) {
           _ob_stream = OB_STREAM_NONE;
-          MESH_DEBUG_PRINTLN("obconfig: transport stalled %lums, brokers aborted (#1283)",
-                             (unsigned long)STREAM_STALL_ABORT_MS);
+          reportStreamAbandoned("obconfig", "brokers", STREAM_STALL_ABORT_MS, _ob_off,
+                                " bytes", 0);
         }
         return;
       }
@@ -3190,6 +3216,11 @@ void MyMesh::handleCmdFrame(size_t len) {
       _most_recent_lastmod = 0;
       _has_pending_contact = false;          // #1283 (D1): no carry-over between syncs
       _contacts_last_progress = millis();    // the clock the stall abort measures from
+      // #1316: always compiled, so an abandonment report on a STOCK build can say how
+      // far the sync actually got. `count` is exactly what the START frame promised.
+      _contacts_declared = count;
+      _contacts_sent = 0;
+      _contacts_filtered = 0;
 #if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
       csReset(count);   // #1299: `count` is exactly what the START frame promised
 #endif
@@ -4028,8 +4059,8 @@ void MyMesh::blockListDrain() {
     if (_serial->writeFrame(out_frame, 3) == 0) {
       if (millis() - _blk_last_progress > STREAM_STALL_ABORT_MS) {
         _blk_listing = false;
-        MESH_DEBUG_PRINTLN("blocklist: transport stalled %lums, terminator abandoned (#1283)",
-                           (unsigned long)STREAM_STALL_ABORT_MS);
+        reportStreamAbandoned("blocklist", "terminator", STREAM_STALL_ABORT_MS,
+                              _blk_list_i, " slot", 0);
       }
       return;
     }
@@ -4047,8 +4078,8 @@ void MyMesh::blockListDrain() {
   if (_serial->writeFrame(out_frame, 3 + PUB_KEY_SIZE) == 0) {
     if (millis() - _blk_last_progress > STREAM_STALL_ABORT_MS) {
       _blk_listing = false;
-      MESH_DEBUG_PRINTLN("blocklist: transport stalled %lums, list aborted (#1283)",
-                         (unsigned long)STREAM_STALL_ABORT_MS);
+      reportStreamAbandoned("blocklist", "list", STREAM_STALL_ABORT_MS, _blk_list_i,
+                            " slot", 0);
     }
     return;
   }
@@ -4094,8 +4125,8 @@ void MyMesh::caplogDrain() {
     if (millis() - _caplog_last_progress > CAPLOG_STALL_ABORT_MS) {
       _caplog_streaming = false;
       meshLogSetEnabled(_caplog_resume);
-      MESH_DEBUG_PRINTLN("caplog: transport stalled %lums, download aborted (#718)",
-                         (unsigned long)CAPLOG_STALL_ABORT_MS);
+      reportStreamAbandoned("caplog", "download", CAPLOG_STALL_ABORT_MS, _caplog_off,
+                            " bytes", 0);
     }
     return;
   }
@@ -4341,18 +4372,20 @@ void MyMesh::checkSerialInterface() {
             memcpy(&out_frame[1], &_most_recent_lastmod, 4);
             _serial->writeFrame(out_frame, 5);
             _iter_started = false;
-            MESH_DEBUG_PRINTLN("contacts: transport stalled %lums, sync aborted (#1283)",
-                               (unsigned long)STREAM_STALL_ABORT_MS);
+            reportStreamAbandoned("contacts", "sync", STREAM_STALL_ABORT_MS,
+                                  _contacts_sent, " contacts", contactsEligible());
           }
           return;   // nothing else this pass; the same contact is retried next one
         }
         _has_pending_contact = false;
         _contacts_last_progress = millis();
+        _contacts_sent++;   // #1316: ACCEPTED by the transport, not merely attempted
         if (contact.lastmod > _most_recent_lastmod) {
           _most_recent_lastmod = contact.lastmod; // save for the RESP_CODE_END_OF_CONTACTS frame
         }
       } else {
         _has_pending_contact = false;   // filtered out: consumed, never sent, not held
+        _contacts_filtered++;           // #1316: so `declared` can be reduced to eligible
       }
     } else { // EOF
       out_frame[0] = RESP_CODE_END_OF_CONTACTS;
@@ -4367,8 +4400,8 @@ void MyMesh::checkSerialInterface() {
 #endif
         if (millis() - _contacts_last_progress > STREAM_STALL_ABORT_MS) {
           _iter_started = false;
-          MESH_DEBUG_PRINTLN("contacts: transport stalled %lums, terminator abandoned (#1283)",
-                             (unsigned long)STREAM_STALL_ABORT_MS);
+          reportStreamAbandoned("contacts", "terminator", STREAM_STALL_ABORT_MS,
+                                _contacts_sent, " contacts", contactsEligible());
         }
         return;   // retry the terminator next pass
       }

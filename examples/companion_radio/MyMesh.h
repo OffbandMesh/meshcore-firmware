@@ -14,6 +14,7 @@
   #include <helpers/gui/GuiViews.h>
 #endif
 #include "AbstractUITask.h"
+#include <helpers/StreamAbandonReport.h>   // #1316: AbandonLimiter, held as a member below
 
 /*------------ Frame Protocol --------------*/
 // FIRMWARE_VER_CODE is a MERGE-ORDERED monotonic contract number, not per-feature:
@@ -606,6 +607,39 @@ private:
   bool _has_pending_contact;          // a held contact has ALREADY passed the filter
   uint32_t _contacts_last_progress;   // millis() of the last ACCEPTED contact frame
 
+  // #1316: ALWAYS compiled, unlike the #1299 counters below. An abandonment report that
+  // says only "stalled 15000ms" cannot tell us whether the client died one contact in or
+  // three hundred, which is the difference between a client bug and a transport bug. The
+  // diag counters answer that but are compiled out of every shipping image, and this
+  // report has to work on a STOCK build -- that is the whole point of the task. Eight
+  // bytes to make the one line we get from a tester's device actually diagnostic.
+  // Initialized here, not only at CONTACTS_START: an abort can only fire inside a stream
+  // that started, so reaching the report with these unset should be impossible -- and
+  // "should be impossible" is not a reason to let a diagnostic print uninitialized memory.
+  uint32_t _contacts_sent = 0;        // contact frames ACCEPTED by the transport this stream
+  uint32_t _contacts_declared = 0;    // the count promised in the CONTACTS_START frame
+  // ...and the ones deliberately skipped. Without this, a `since`-filtered sync that
+  // succeeded COMPLETELY reports delivered=330/350 and reads as a partial failure, because
+  // `declared` is getNumContacts() -- the total -- while a filtered sync only ever sends the
+  // changed ones. Adversarial review found that false-failure pair. The three numbers now
+  // reconcile: delivered + filtered should equal declared on a healthy stream.
+  uint32_t _contacts_filtered = 0;
+
+  // The denominator an abandonment report should use: what this sync was ever going to
+  // send. `_contacts_declared` is getNumContacts(), the whole address book, which is what
+  // the START frame promises the client -- but a `since`-filtered sync only sends the
+  // changed ones, so comparing against it makes a COMPLETE sync look like a partial one.
+  uint32_t contactsEligible() const {
+    return _contacts_declared >= _contacts_filtered ? _contacts_declared - _contacts_filtered
+                                                    : 0;
+  }
+
+  // #1316: rate-limit state for the abandonment report. A MEMBER, not a function-local
+  // static: a static is one shared instance across every MyMesh that might ever exist, so
+  // two instances would silence each other's reports. Nothing creates two today; that is a
+  // reason to make it cheap to keep correct, not a reason to rely on it.
+  offband::AbandonLimiter _abandon_limiter;
+
 #if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
   // #1299 DIAGNOSE instrumentation. COUNTERS ONLY -- this changes no behavior, and
   // must not: the run exists to characterize the SHIPPED defect in #1283, so a build
@@ -629,6 +663,27 @@ private:
   void csReset(uint32_t declared);
   void csReport();
 #endif
+
+  // #1316: the single report for "a stream gave up and data was lost". ALWAYS compiled.
+  //
+  // Every stall-abort used to report through MESH_DEBUG_PRINTLN, which tests
+  // g_meshLogEnabled first -- and capture is OFF by default on a shipping build (#428).
+  // So on every image a tester actually runs, abandoning a stream was SILENT. That
+  // silence is why #1283 survived six observed occurrences across two diagnosis rounds:
+  // the firmware dropped contacts and said nothing, and the owner found it by counting
+  // what arrived on the host.
+  //
+  // Goes to crashLogf, which reaches the retained ring (survives a reset, present on a
+  // stock build) and the UART mirror where one is built -- and which, since #1087,
+  // suppresses its own Serial echo when the console carries the framed protocol, so it
+  // cannot corrupt the stream it is reporting on.
+  //
+  // `unit` names what `progress` counts (" items", " bytes", " slot"); the four streams
+  // measure different things and a bare number sends the reader back to the source.
+  // `total` of 0 means "no meaningful total for this stream"; it is then omitted rather
+  // than printed as a guess.
+  void reportStreamAbandoned(const char* stream, const char* phase, uint32_t stalled_ms,
+                             uint32_t progress, const char* unit, uint32_t total);
   bool _cli_rescue;
   bool send_unscoped;   // force un-scoped flood (instead of using send_scope)
   char cli_command[80];
