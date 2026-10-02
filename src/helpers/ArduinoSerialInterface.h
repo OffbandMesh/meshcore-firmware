@@ -42,6 +42,16 @@ class ArduinoSerialInterface : public BaseSerialInterface {
   // gate it shut forever.
   int _max_writable_seen;
 
+  // #1315: frames that were COMMITTED (header on the wire) but did not go out whole.
+  // writeFrame has to return `len` for these, because a retry would write a second frame
+  // behind a partial one -- so the return value cannot carry the loss. Adversarial review
+  // fairly objected that this makes the transport hide a data-integrity failure from the
+  // layer above. This counter is the answer that does not require changing a virtual with
+  // six implementations: the loss is still reported, and a caller or diagnostic that cares
+  // can see it. Monotonic, never reset -- a consumer samples it around an operation and
+  // compares. Read it with committedLossCount().
+  uint32_t _committed_loss_count = 0;
+
 public:
   ArduinoSerialInterface() { _isEnabled = false; _state = 0; _zlp_pending = false; _zlp_ring_capacity = 0; _max_writable_seen = 0; }
 
@@ -50,7 +60,7 @@ public:
     _max_writable_seen = 0;   // #1283 (D2): a new transport, so forget the old one's capacity
   #ifdef RAK_4631
     pinMode(WB_IO2, OUTPUT);
-  #endif  
+  #endif
   }
 
   // BaseSerialInterface methods
@@ -61,13 +71,23 @@ public:
   bool isConnected() const override;
 
   bool isWriteBusy() const override;
-  // #718 CONTRACT: returns `len` on success, or 0 meaning THE FRAME WAS NOT SENT and
-  // nothing was written to the wire. It never returns a short count -- a partial frame
-  // would desync the length-prefixed protocol for every frame that follows.
+  // #718 CONTRACT, corrected by #1315: returns `len` when the frame is off the caller's
+  // hands, or 0 meaning THE FRAME WAS NOT SENT and NOTHING reached the wire. It never
+  // returns a short count -- a partial frame would desync the length-prefixed protocol
+  // for every frame that follows.
   //
-  // A caller that needs delivery MUST retry the same frame; a caller that fires and
-  // forgets now silently drops the frame under back-pressure instead of corrupting the
-  // stream, which is the better of the two failures but IS a behaviour change.
+  // 0 means retryable, and ONLY the pre-commit refusal returns it. Once the 3-byte header
+  // has reached the wire the frame is COMMITTED: the receiver is already counting toward
+  // the length it declared, so writeFrame finishes the frame within a bounded window and
+  // pads the tail if it must, then returns `len`. A committed frame therefore reports
+  // success even when its payload is partly filler -- the loss is reported through the
+  // log, not through the return value, because a caller that retried it would write a
+  // second frame behind a partial one. That is the corruption #1315 removed; the previous
+  // code returned 0 from those branches under a comment claiming nothing had been written.
+  //
+  // A caller that needs delivery MUST retry on 0; a caller that fires and forgets drops
+  // the frame under back-pressure instead of corrupting the stream, which is the better
+  // of the two failures but IS a behaviour change.
   //
   // REQUIRES the underlying Stream to implement availableForWrite() meaningfully.
   // The base Stream returns 0, which this reads as "no room" and would refuse forever;
@@ -75,6 +95,11 @@ public:
   // CDC) implements it. Do not bind a Stream that does not.
   size_t writeFrame(const uint8_t src[], size_t len) override;
   size_t checkRecvFrame(uint8_t dest[]) override;
+
+  // #1315: how many committed frames have gone out incomplete. Monotonic. Sample it
+  // around a stream to find out whether what you sent is what the client received --
+  // writeFrame's return value cannot tell you, by design (see its contract above).
+  uint32_t committedLossCount() const { return _committed_loss_count; }
 
   // #1093: per-main-loop service (driven by MultiSerialInterface::loop). Emits the deferred
   // USB-Serial-JTAG terminator armed by writeFrame(), non-blocking. No-op on every other
@@ -89,6 +114,18 @@ public:
   }
 
 private:
+  // #1315: finishing a COMMITTED frame -- one whose header has already reached the wire,
+  // so it can no longer be refused or retried. All three are bounded by a deadline the
+  // caller computes ONCE for the whole frame, so a committed frame costs at most one
+  // COMMITTED_COMPLETE_MS window however many calls it takes.
+  //
+  // pushBounded: keep writing `p[0..len)` until it is gone or the deadline passes.
+  // padBounded: write `count` filler bytes, to honor a length the header already declared.
+  // reportCommittedLoss: say a frame left malformed; refuses to log into _serial itself.
+  size_t pushBounded(const uint8_t* p, size_t len, uint32_t deadline);
+  size_t padBounded(size_t count, uint32_t deadline);
+  void   reportCommittedLoss(const char* where, size_t on_wire, size_t declared);
+
   // #1072: USB link lifecycle on the log channel; see pollUsbLifecycle().
   void pollUsbLifecycle();
   UsbLinkTracker _usb_link;
