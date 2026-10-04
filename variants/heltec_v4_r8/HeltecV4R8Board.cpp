@@ -30,6 +30,7 @@ void HeltecV4R8Board::begin() {
 }
 
 void HeltecV4R8Board::onBeforeTransmit(void) {
+  _tx_active = true;
   digitalWrite(P_LORA_TX_LED, HIGH);
   loRaFEMControl.setTxModeEnable();
 }
@@ -37,6 +38,7 @@ void HeltecV4R8Board::onBeforeTransmit(void) {
 void HeltecV4R8Board::onAfterTransmit(void) {
   digitalWrite(P_LORA_TX_LED, LOW);
   loRaFEMControl.setRxModeEnable();
+  _tx_active = false;
 }
 
 void HeltecV4R8Board::enterDeepSleep(uint32_t secs, int pin_wake_btn) {
@@ -75,6 +77,27 @@ uint16_t HeltecV4R8Board::getBattMilliVolts() {
   raw = raw / 8;
 
   return (adc_mult * raw);
+}
+
+// #1339: the R8's FEM is always a KCT8103L, whose CTX line (GPIO5) selects
+// LNA-in or LNA-bypass in RX while the chip stays enabled, so the LNA is always
+// controllable. setRxModeEnable() applies the new setting at once instead of
+// waiting for the next TX->RX turnaround -- except during a transmission, which
+// is asynchronous (the loop keeps running while the packet is on air), so a
+// command can arrive mid-TX. Writing the RX-mode CTX level then would take the
+// FEM out of its TX state; the stored setting is applied by onAfterTransmit().
+bool HeltecV4R8Board::setLoRaFemLnaEnabled(bool enable) {
+  loRaFEMControl.setLNAEnable(enable);
+  if (!_tx_active) loRaFEMControl.setRxModeEnable();
+  return true;
+}
+
+bool HeltecV4R8Board::canControlLoRaFemLna() const {
+  return loRaFEMControl.isLnaCanControl();
+}
+
+bool HeltecV4R8Board::isLoRaFemLnaEnabled() const {
+  return loRaFEMControl.isLNAEnabled();
 }
 
 const char* HeltecV4R8Board::getManufacturerName() const {

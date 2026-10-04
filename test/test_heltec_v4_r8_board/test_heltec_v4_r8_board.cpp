@@ -71,6 +71,18 @@ TEST_F(R8Board, TransmitThenReceiveRestoresTheLnaSetting) {
   EXPECT_EQ(LOW, g_mock_pin_out[P_LORA_KCT8103L_PA_CTX]);
 }
 
+// TX is asynchronous, so a `fem` command can land mid-packet. The FEM must stay
+// in its TX state; the new setting takes effect at the TX->RX turnaround.
+TEST_F(R8Board, LnaChangeDuringTransmitWaitsForReceive) {
+  board.setLoRaFemLnaEnabled(false);
+  board.onBeforeTransmit();
+  EXPECT_TRUE(board.setLoRaFemLnaEnabled(true));
+  EXPECT_TRUE(board.isLoRaFemLnaEnabled());
+  EXPECT_EQ(HIGH, g_mock_pin_out[P_LORA_KCT8103L_PA_CTX]);
+  board.onAfterTransmit();
+  EXPECT_EQ(LOW, g_mock_pin_out[P_LORA_KCT8103L_PA_CTX]);
+}
+
 // --- TX LED control, #542 parity (#1340) ---
 
 TEST_F(R8Board, ReportsLedControl) {
