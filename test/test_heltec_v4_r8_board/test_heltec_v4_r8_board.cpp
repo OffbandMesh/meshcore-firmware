@@ -113,6 +113,13 @@ TEST_F(R8Board, PowerOffCutsAndHoldsFemPower) {
   EXPECT_TRUE(g_mock_rtc_hold[P_LORA_PA_POWER]);
 }
 
+// begin() claims Vext for the board; powerOff() must give that claim back so the
+// OLED and antenna boost rail are switched off (GPIO40 HIGH = inactive).
+TEST_F(R8Board, PowerOffReleasesVext) {
+  board.powerOff();
+  EXPECT_EQ(HIGH, g_mock_pin_out[PIN_VEXT_EN]);
+}
+
 TEST_F(R8Board, PowerOffDoesNotArmLoRaWake) {
   board.powerOff();
   EXPECT_EQ(0u, g_mock_ext1_wake_mask);
