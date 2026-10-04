@@ -63,8 +63,23 @@ void HeltecV4R8Board::enterDeepSleep(uint32_t secs, int pin_wake_btn) {
   esp_deep_sleep_start();
 }
 
+// #1341: a power-off is off. Cut the FEM LDO and hold it low through deep
+// sleep, then take the base path, which records the shutdown, turns the display
+// and radio off and sleeps with no wake source -- as HeltecV4Board does. This
+// used to call this class's enterDeepSleep(0), which skipped all of that, kept
+// the FEM powered in RX and armed LoRa-packet wake: an auto-shutdown woke on
+// the next packet and kept draining the battery.
+//
+// The board's own Vext claim from begin() is released here too; the display
+// releases its claim when the base path turns it off, so Vext (GPIO40) ends
+// inactive before sleep instead of keeping the OLED and the antenna boost rail
+// powered.
 void HeltecV4R8Board::powerOff() {
-  enterDeepSleep(0);
+  digitalWrite(P_LORA_PA_POWER, LOW);
+  rtc_gpio_hold_en((gpio_num_t)P_LORA_PA_POWER);
+  periph_power.release();
+
+  ESP32Board::powerOff();
 }
 
 uint16_t HeltecV4R8Board::getBattMilliVolts() {
