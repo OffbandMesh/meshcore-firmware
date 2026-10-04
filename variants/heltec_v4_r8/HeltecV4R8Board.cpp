@@ -31,12 +31,12 @@ void HeltecV4R8Board::begin() {
 
 void HeltecV4R8Board::onBeforeTransmit(void) {
   _tx_active = true;
-  digitalWrite(P_LORA_TX_LED, HIGH);
+  if (_led_enabled) digitalWrite(P_LORA_TX_LED, HIGH);
   loRaFEMControl.setTxModeEnable();
 }
 
 void HeltecV4R8Board::onAfterTransmit(void) {
-  digitalWrite(P_LORA_TX_LED, LOW);
+  if (_led_enabled) digitalWrite(P_LORA_TX_LED, LOW);
   loRaFEMControl.setRxModeEnable();
   _tx_active = false;
 }
@@ -99,6 +99,18 @@ bool HeltecV4R8Board::canControlLoRaFemLna() const {
 bool HeltecV4R8Board::isLoRaFemLnaEnabled() const {
   return loRaFEMControl.isLNAEnabled();
 }
+
+// #1340 (#542): the TX LED is a plain GPIO (46), always controllable. Disabled
+// forces it LOW and the transmit hooks stop driving it.
+bool HeltecV4R8Board::setLedEnabled(bool on) {
+  _led_enabled = on;
+  if (!on) digitalWrite(P_LORA_TX_LED, LOW);
+  return true;
+}
+
+bool HeltecV4R8Board::canControlLed() const { return true; }
+
+bool HeltecV4R8Board::isLedEnabled() const { return _led_enabled; }
 
 const char* HeltecV4R8Board::getManufacturerName() const {
 #ifdef HELTEC_V4_R8_TFT
