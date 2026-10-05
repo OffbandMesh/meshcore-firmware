@@ -166,6 +166,88 @@ def test_badge_env_enables_the_keyboard():
     assert "+<helpers/ui/CardKbInput.cpp>" in ini
 
 
+def ini_value(name):
+    """A -D flag's value as a float. ini_flag() only matches integers; the radio
+    parameters are decimal, so a float-aware reader is needed."""
+    m = re.search(r"-D\s+%s=([\d.]+)" % name, (QCC / "platformio.ini").read_text())
+    assert m, f"-D {name}=<value> missing from variants/qcc_badge/platformio.ini"
+    return float(m.group(1))
+
+
+def test_badge_radio_defaults_are_the_qcc_conference_channel():
+    # #1363: the badge ships on its own frequency for the conference; attendees retune
+    # afterwards. 919.5 and 500.0 are both exactly representable in binary32, so they
+    # survive the float round-trip through prefs and the CLI.
+    assert ini_value("LORA_FREQ") == 919.5
+    assert ini_value("LORA_BW") == 500.0
+    assert ini_value("LORA_SF") == 7
+    assert ini_value("LORA_CR") == 5        # CR 4:5
+
+
+def test_badge_bandwidth_survives_the_prefs_sanitiser():
+    # MyMesh clamps a loaded bw into a fixed range. If someone tightens that ceiling
+    # below the badge's bandwidth, the badge would come up on a bandwidth this file does
+    # not declare -- silently, because constrain() clamps rather than rejecting. Read the
+    # real bound out of the source instead of assuming it.
+    mymesh = (ROOT / "examples" / "companion_radio" / "MyMesh.cpp").read_text()
+    m = re.search(r"_prefs\.bw\s*=\s*constrain\(_prefs\.bw,\s*([\d.]+)f,\s*([\d.]+)f\)", mymesh)
+    assert m, "MyMesh.cpp must clamp _prefs.bw with constrain(_prefs.bw, lo, hi)"
+    lo, hi = float(m.group(1)), float(m.group(2))
+    assert lo <= ini_value("LORA_BW") <= hi, f"LORA_BW is outside the prefs clamp [{lo}, {hi}]"
+
+
+def test_compiled_radio_defaults_are_first_boot_seeds_only():
+    # Owner constraint (#1363): "it should only be a first-flash default." The compiled
+    # LORA_* values are seeds -- MyMesh assigns them to _prefs, and loadPrefs() runs
+    # AFTERWARDS, so a stored prefs file wins and DFU preserves that file. A badge that
+    # already has a frequency therefore keeps it across a flash.
+    #
+    # A lexical ordering check alone is weak (adversarial review, #1363): index() finds
+    # only the FIRST occurrence, so a second call site could configure the radio from the
+    # seeds before loadPrefs ever runs, and an #ifdef could compile loadPrefs out for one
+    # build while the source text still reads in the right order. So this asserts four
+    # things, not one: the landmarks are unique, every radio-apply site is after the load,
+    # none of them is nested in conditional compilation relative to the others, and
+    # nothing returns between the seed and the load.
+    src = (ROOT / "examples" / "companion_radio" / "MyMesh.cpp").read_text()
+    SEED, LOAD, APPLY = ("_prefs.freq = LORA_FREQ", "_store->loadPrefs(_prefs)",
+                         "radio_driver.setParams(_prefs.freq")
+
+    # 1. unique landmarks -- a duplicate seed or load would make index() meaningless
+    assert src.count(SEED) == 1, "LORA_* must be seeded in exactly one place"
+    assert src.count(LOAD) == 1, "loadPrefs must be called in exactly one place"
+
+    seed, load = src.index(SEED), src.index(LOAD)
+    assert seed < load, ("LORA_* must be seeded BEFORE loadPrefs(), or a flash would "
+                         "overwrite a configured badge's radio settings")
+
+    # 2. EVERY apply site, not just the first, must read post-load prefs
+    applies = [i for i in range(len(src)) if src.startswith(APPLY, i)]
+    assert applies, "MyMesh.cpp must configure the radio from _prefs"
+    assert min(applies) > load, ("the radio is configured from the seeds before "
+                                 "loadPrefs() runs -- a flash would retune the badge")
+
+    # 3. none of the landmarks may sit at a different #if nesting depth from the others,
+    #    which is what would let a build variant drop loadPrefs and keep the seeds
+    def if_depth(upto):
+        d = 0
+        for line in src[:upto].splitlines():
+            s = line.strip()
+            if s.startswith("#if"):
+                d += 1
+            elif s.startswith("#endif"):
+                d -= 1
+        return d
+
+    depths = {if_depth(seed), if_depth(load)} | {if_depth(a) for a in applies}
+    assert depths == {0}, (f"seed/load/apply must all be unconditional; #if depths {depths}")
+
+    # 4. no early exit between the seed and the load
+    between = src[seed:load]
+    for word in ("return", "goto"):
+        assert word not in between, f"'{word}' between the seed and loadPrefs() could skip the load"
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
