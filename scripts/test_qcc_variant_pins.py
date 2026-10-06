@@ -189,6 +189,22 @@ def badge_screens():
     return (ROOT / "examples" / "companion_radio" / "ui-new" / "BadgeScreens.cpp").read_text()
 
 
+def badge_screens_code():
+    """BadgeScreens.cpp with `//` comments stripped.
+
+    Checks that look for a call by substring must not match prose: a comment saying a
+    screen "must not go through uiListRows()" is documentation, not a call site, and
+    tripping on it is a false positive that teaches people to reword comments to appease
+    a test. Block comments are left alone -- nothing here needs them stripped, and a
+    naive strip would break a `/* */` inside a string literal.
+    """
+    out = []
+    for line in badge_screens().splitlines():
+        i = line.find("//")
+        out.append(line if i < 0 else line[:i])
+    return "\n".join(out)
+
+
 def node_prefs():
     return (ROOT / "examples" / "companion_radio" / "NodePrefs.h").read_text()
 
@@ -303,6 +319,71 @@ def test_the_body_face_inventory_is_exactly_what_was_agreed():
     assert not both, f"these read BOTH faces: {sorted(both)}"
 
 
+# Draw helpers in BadgeUi.h, and which argument carries the row or the y.
+#   (d, face, row, ...)        -> index 2
+#   textAt(d, face, x, y, ...) -> index 3
+_ROW_ARG = {"line": 2, "lineRight": 2, "fillRow": 2, "bar": 2, "textAt": 3, "breadcrumb": 3}
+
+
+def _split_args(text, start):
+    """Split the argument list of a call whose '(' is at `text[start]`."""
+    depth, arg, args = 0, [], []
+    for ch in text[start:]:
+        if ch in "([":
+            depth += 1
+            if depth == 1:
+                continue
+        elif ch in ")]":
+            depth -= 1
+            if depth == 0:
+                args.append("".join(arg).strip())
+                return args
+        if depth == 1 and ch == ",":
+            args.append("".join(arg).strip())
+            arg = []
+        else:
+            arg.append(ch)
+    return None
+
+
+def title_row_draws(src):
+    """Every draw on row/y 0 inside a message screen, as (function, helper, face)."""
+    found = []
+    current = "(file scope)"
+    MESSAGE_SCREENS = ("InboxScreen", "ThreadScreen")
+    for line in src.splitlines():
+        m = _SIG.match(line)
+        if m:
+            current = m.group(1)
+            continue
+        if not current.startswith(MESSAGE_SCREENS):
+            continue
+        for helper, idx in _ROW_ARG.items():
+            for m2 in re.finditer(r"\b%s\s*\(" % helper, line):
+                args = _split_args(line, m2.end() - 1)
+                if not args or len(args) <= idx or len(args) < 2:
+                    continue
+                if args[idx] == "0":          # the title row
+                    found.append((current, helper, args[1]))
+    return found
+
+
+def test_everything_on_the_title_row_uses_the_pinned_title_face():
+    # #1370: the title bar is chrome, so EVERYTHING in it is chrome -- the title text, the
+    # unread count, the breadcrumb. This exists because the first cut of the change drew
+    # " Messages" in the pinned face and the unread count in the message face, two fonts in
+    # one bar, with textPx measuring the wrong one so the right edge moved too. The
+    # arithmetic tests all passed; nothing looked at the screens. Adversarial review found
+    # it, so it is a test now.
+    draws = title_row_draws(badge_screens_code())
+    assert draws, "no title-row draws found on the message screens; recheck this test"
+    ALLOWED = {"kTitle", "uiTitleFace()"}
+    for fn, helper, face in draws:
+        assert face in ALLOWED, (
+            f"{fn} draws on the title row via {helper}() with `{face}` -- the title bar is "
+            f"chrome and must use the pinned title face ({' or '.join(sorted(ALLOWED))})")
+
+
 def test_message_screens_are_message_screens():
     # The classification itself, stated independently of the pinned list above, so that
     # updating the inventory cannot quietly also change what "message screen" means.
@@ -366,7 +447,7 @@ def test_list_rows_cannot_silently_pick_the_wrong_face():
     # overload, so a screen cannot size its rows with one face and draw them with the
     # other. Restoring a no-arg version would make that mistake possible again and
     # compile cleanly, which is why this is a test and not a comment.
-    src = badge_screens()
+    src = badge_screens_code()   # comments stripped: prose must not trip a call check
     assert re.search(r"int\s+uiListRows\(const\s+Face&\s*\w*\)", src), \
         "uiListRows must take the body face"
     assert not re.search(r"int\s+uiListRows\(\s*\)", src), \

@@ -51,13 +51,24 @@ const Face& uiNavBody() { return bodyFaceFor(the_mesh.getNodePrefs()->ui_text_si
 const Face& uiMsgBody() { return bodyFaceFor(the_mesh.getNodePrefs()->ui_msg_text_size); }
 const Face& uiMeta() { return detailFace(); }
 
+// #1370: the title bar is chrome and is pinned to the navigation face on every screen --
+// the owner's point, that chrome changing size between surfaces reads as instability
+// while content changing size is the feature.
+const Face& uiTitleFace() { return titleFaceFor(the_mesh.getNodePrefs()->ui_text_size); }
+
+// y of a content row on a screen that has a title bar. Only differs from the face's own
+// pitch when the title is a different face, i.e. on the message screens -- a navigation
+// screen's title IS its body face, so this reproduces the old arithmetic exactly there.
+// Screens with no title bar (the full-screen compose editor) keep using rowY().
+int uiRowY(const Face& body, int row) { return rowYUnderTitle(uiTitleFace(), body, row); }
+
 // The rows under a title bar, in the given body face.
 //
 // #1362: this takes the face rather than reading the pref itself, and there is
 // deliberately no no-argument overload. Every caller has to name which surface it is,
 // so a screen cannot silently size its rows with one face and draw them with the other
 // -- the compiler enumerates the call sites instead of leaving it to review.
-int uiListRows(const Face& body) { return rowsFor(body) - 1; }
+int uiListRows(const Face& body) { return rowsUnderTitle(uiTitleFace(), body); }
 
 // #1233: when `t` happened, as message rows show it: today's clock time once a time
 // zone is set and the phone or GPS has set the clock (the design's "12:04"), else an age.
@@ -232,12 +243,12 @@ bool InboxScreen::drawItem(DisplayDriver& d, int row, const Item& item, bool sel
   if (muted) snprintf(age, sizeof(age), "muted");
   else if (active) whenOf(last_time, age, sizeof(age));
 
-  const int y = rowY(kBody, row);
+  const int y = uiRowY(kBody, row);   // #1370: under a pinned title bar
   const bool inverted = selected || (item.convo == _flash_convo && before(now_ms, _flash_until));
   const int age_x = kScreenPx - kEdgePx - textPx(kBody, age);
   const int count_end = age[0] != 0 ? age_x - 3 : kScreenPx - kEdgePx;
   const int right_x = count[0] != 0 ? count_end - textPx(kBody, count) - 2 : (age[0] != 0 ? age_x : kScreenPx);
-  if (inverted) fillRow(d, kBody, row);
+  if (inverted) fillRowAtY(d, kBody, y);   // #1370: the row's real y, not the face pitch
 
   if (selected && textPx(kBody, left) + 4 > right_x) {
     char all[64];
@@ -285,8 +296,10 @@ int InboxScreen::render(DisplayDriver& d) {
     if (unread > 99) snprintf(right, sizeof(right), "99+ new");
     else if (unread > 0) snprintf(right, sizeof(right), "%u new", unread);
   }
-  fillRow(d, kBody, 0);
-  line(d, kBody, 0, " Messages", true);
+  // #1370: the title bar is chrome -- the navigation face, whatever the body uses.
+  const Face& kTitle = uiTitleFace();
+  fillRow(d, kTitle, 0);
+  line(d, kTitle, 0, " Messages", true);
   // The battery sits at the edge, then the scroll marks, then the count.
   int right_edge = kScreenPx - 14;
   battery(d, kScreenPx - 12, 1, batteryPct(_task->smoothedBattMilliVolts(), _task->battFullMilliVolts()));
@@ -298,8 +311,12 @@ int InboxScreen::render(DisplayDriver& d) {
     markUp(d, right_edge - 6, 0, true);
     right_edge -= 7;
   }
-  if (right[0] != 0) textAt(d, kBody, right_edge - textPx(kBody, right), 0, right, true);
-  if (crumb) breadcrumb(d, kBody, 1, 0);
+  // #1370: the count and the breadcrumb sit IN the title bar, so they are chrome too.
+  // Drawn in kBody they rendered in the message face beside a title in the navigation
+  // face -- two fonts in one bar, and `textPx` measured the wrong face, so the right
+  // edge was misplaced as well (adversarial review, #1370).
+  if (right[0] != 0) textAt(d, kTitle, right_edge - textPx(kTitle, right), 0, right, true);
+  if (crumb) breadcrumb(d, kTitle, 1, 0);
 
   const uint32_t now_ms = millis();
   bool scrolling = false;
@@ -441,7 +458,7 @@ void ThreadScreen::selectNewer() {
 void ThreadScreen::drawRow(DisplayDriver& d, int screen_row, const Row& r, bool channel) {
   const Face& kBody = uiMsgBody();   // #1362: a message surface
   const Face& kMeta = uiMeta();
-  const int y = rowY(kBody, screen_row);
+  const int y = uiRowY(kBody, screen_row);   // #1370: under a pinned title bar
   const Store::Msg* m = the_mesh.badgeStore().msg(_seqs[r.msg]);
   if (m == nullptr) return;
   if (r.caret) textAt(d, kBody, 0, y, ">");
@@ -496,7 +513,7 @@ void ThreadScreen::drawRow(DisplayDriver& d, int screen_row, const Row& r, bool 
 // The compose line under a dotted rule. The room left shows once typing starts.
 void ThreadScreen::drawCompose(DisplayDriver& d, int row) {
   const Face& kBody = uiMsgBody();   // #1362: a message surface
-  const int y = rowY(kBody, row);
+  const int y = uiRowY(kBody, row);   // #1370: under a pinned title bar
   dottedRule(d, y);
   if (before(millis(), _note_until)) {
     textAt(d, kBody, 0, y + 1, _note);
@@ -520,7 +537,10 @@ void ThreadScreen::drawCompose(DisplayDriver& d, int row) {
 // room left (design 1a, "Compose full").
 void ThreadScreen::drawEditor(DisplayDriver& d, const char* name) {
   const Face& kBody = uiMsgBody();   // #1362: a message surface
-  const int kListRows = uiListRows(kBody);
+  // #1370: the editor is full screen with NO title bar -- its row 0 really is content,
+  // and its "-1" is the footer, not a title. So it keeps the face's own pitch and must
+  // not go through uiListRows()/uiRowY(), which both assume a title bar above.
+  const int kListRows = rowsFor(kBody) - 1;
   const char* text = _line.text();
   const int indent = textPx(kBody, "> ");
   const int width = kScreenPx - kEdgePx - indent;
@@ -603,10 +623,10 @@ int ThreadScreen::render(DisplayDriver& d) {
     char left[40], right[16] = "";
     snprintf(left, sizeof(left), " %s", name);
     if (_unread_at_entry > 0) snprintf(right, sizeof(right), "%u unread", (unsigned)_unread_at_entry);
-    bar(d, kBody, 0, left, right);
+    bar(d, uiTitleFace(), 0, left, right);   // #1370: chrome, pinned to the nav face
   }
   for (int r = 0; r < count; r++) drawRow(d, first + r, _rows[top + r], channel);
-  if (n == 0) line(d, kBody, 3, " nothing here yet");
+  if (n == 0) textAt(d, kBody, 0, uiRowY(kBody, 3), " nothing here yet");   // #1370
   if (!entry) drawCompose(d, kListRows);
   return entry ? (int)(2000 - (now - _entered_at)) + 10 : 500;
 }
