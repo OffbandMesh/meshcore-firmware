@@ -18,6 +18,13 @@ using offband::BadgeSend;
 // is the only place that sees both, so it is where they are held together.
 static_assert(DEFAULT_UI_TEXT_SIZE == badgeui::kDefaultTextSize,
               "NodePrefs ships a different text size than BadgeLayout's default names");
+// #1362: the message size is a build flag, so unlike the navigation default it has no
+// named constant to agree with -- but it still indexes the same three faces, and
+// bodyFaceFor() silently answers "large" for anything out of range. A variant that sets
+// it to 3 would ship a badge whose Settings row says "medium" while the screen draws
+// large, so the value is pinned to the enum here, at compile time, for every variant.
+static_assert(DEFAULT_UI_MSG_TEXT_SIZE < badgeui::kTextSteps,
+              "DEFAULT_UI_MSG_TEXT_SIZE must be one of BadgeLayout's TextSize steps");
 
 #ifndef BATT_MIN_MILLIVOLTS
   #define BATT_MIN_MILLIVOLTS 3000
@@ -34,11 +41,23 @@ namespace {
 // extra room counts for more than its size costs.
 //
 // Each screen takes them at the top of its draw, so a change shows on the next frame.
-const Face& uiBody() { return bodyFaceFor(the_mesh.getNodePrefs()->ui_text_size); }
+//
+// #1362: the body face splits by surface. Navigation screens -- Contacts, Nearby,
+// Status, Settings, Battery, Zone picker, GPS, and the shared settings row -- read the
+// navigation size. The message screens, Inbox and Thread, read their own, because large
+// reads well as a menu row and badly as a message, where characters per line is what
+// matters on a 128x64 panel.
+const Face& uiNavBody() { return bodyFaceFor(the_mesh.getNodePrefs()->ui_text_size); }
+const Face& uiMsgBody() { return bodyFaceFor(the_mesh.getNodePrefs()->ui_msg_text_size); }
 const Face& uiMeta() { return detailFace(); }
 
-// The rows under a title bar, in the body face.
-int uiListRows() { return rowsFor(uiBody()) - 1; }
+// The rows under a title bar, in the given body face.
+//
+// #1362: this takes the face rather than reading the pref itself, and there is
+// deliberately no no-argument overload. Every caller has to name which surface it is,
+// so a screen cannot silently size its rows with one face and draw them with the other
+// -- the compiler enumerates the call sites instead of leaving it to review.
+int uiListRows(const Face& body) { return rowsFor(body) - 1; }
 
 // #1233: when `t` happened, as message rows show it: today's clock time once a time
 // zone is set and the phone or GPS has set the clock (the design's "12:04"), else an age.
@@ -63,7 +82,7 @@ bool before(uint32_t now_ms, uint32_t until_ms) { return until_ms != 0 && (int32
 // One row in the Settings grammar (design 3a): the label from the left, the value flush
 // right, the whole row lit when selected.
 void listRow(DisplayDriver& d, int row, const char* label, const char* value, bool selected) {
-  const Face& kBody = uiBody();
+  const Face& kBody = uiNavBody();
   char left[28];
   snprintf(left, sizeof(left), " %s", label);
   if (selected) fillRow(d, kBody, row);
@@ -182,7 +201,7 @@ void InboxScreen::flash() {
 // 1c). Selected or flashing, it inverts. A selected row too long to show whole
 // becomes one string that scrolls (design 2a). Returns whether it is scrolling.
 bool InboxScreen::drawItem(DisplayDriver& d, int row, const Item& item, bool selected, uint32_t now_ms) {
-  const Face& kBody = uiBody();
+  const Face& kBody = uiMsgBody();   // #1362: a message surface
   Store& store = the_mesh.badgeStore();
   const char* name = "";
   char sigil = '#';
@@ -238,8 +257,8 @@ bool InboxScreen::drawItem(DisplayDriver& d, int row, const Item& item, bool sel
 }
 
 int InboxScreen::render(DisplayDriver& d) {
-  const Face& kBody = uiBody();
-  const int kListRows = uiListRows();
+  const Face& kBody = uiMsgBody();   // #1362: a message surface
+  const int kListRows = uiListRows(kBody);
   Store& store = the_mesh.badgeStore();
   Item list[kMaxItems];
   const int count = items(list, kMaxItems);
@@ -420,7 +439,7 @@ void ThreadScreen::selectNewer() {
 }
 
 void ThreadScreen::drawRow(DisplayDriver& d, int screen_row, const Row& r, bool channel) {
-  const Face& kBody = uiBody();
+  const Face& kBody = uiMsgBody();   // #1362: a message surface
   const Face& kMeta = uiMeta();
   const int y = rowY(kBody, screen_row);
   const Store::Msg* m = the_mesh.badgeStore().msg(_seqs[r.msg]);
@@ -476,7 +495,7 @@ void ThreadScreen::drawRow(DisplayDriver& d, int screen_row, const Row& r, bool 
 
 // The compose line under a dotted rule. The room left shows once typing starts.
 void ThreadScreen::drawCompose(DisplayDriver& d, int row) {
-  const Face& kBody = uiBody();
+  const Face& kBody = uiMsgBody();   // #1362: a message surface
   const int y = rowY(kBody, row);
   dottedRule(d, y);
   if (before(millis(), _note_until)) {
@@ -500,8 +519,8 @@ void ThreadScreen::drawCompose(DisplayDriver& d, int row) {
 // Past one line the editor takes the screen; its footer keeps the destination and the
 // room left (design 1a, "Compose full").
 void ThreadScreen::drawEditor(DisplayDriver& d, const char* name) {
-  const Face& kBody = uiBody();
-  const int kListRows = uiListRows();
+  const Face& kBody = uiMsgBody();   // #1362: a message surface
+  const int kListRows = uiListRows(kBody);
   const char* text = _line.text();
   const int indent = textPx(kBody, "> ");
   const int width = kScreenPx - kEdgePx - indent;
@@ -536,8 +555,8 @@ void ThreadScreen::drawEditor(DisplayDriver& d, const char* name) {
 }
 
 int ThreadScreen::render(DisplayDriver& d) {
-  const Face& kBody = uiBody();
-  const int kListRows = uiListRows();
+  const Face& kBody = uiMsgBody();   // #1362: a message surface
+  const int kListRows = uiListRows(kBody);
   Store& store = the_mesh.badgeStore();
   const Store::Convo* v = store.convoAt(_convo);
   if (v == nullptr) {
@@ -677,8 +696,8 @@ void ContactsScreen::open(char first_key) {
 }
 
 int ContactsScreen::render(DisplayDriver& d) {
-  const Face& kBody = uiBody();
-  const int kListRows = uiListRows();
+  const Face& kBody = uiNavBody();
+  const int kListRows = uiListRows(kBody);
   if (millis() - _loaded_at > 5000) reload();
   const bool crumb = _task->breadcrumbShown();
   const int first_row = crumb ? 2 : 1;
@@ -866,8 +885,8 @@ void NearbyScreen::open(char first_key) {
 }
 
 int NearbyScreen::render(DisplayDriver& d) {
-  const Face& kBody = uiBody();
-  const int kListRows = uiListRows();
+  const Face& kBody = uiNavBody();
+  const int kListRows = uiListRows(kBody);
   if (millis() - _loaded_at > 5000) reload();
   const int count = _list.count();
   const bool crumb = _task->breadcrumbShown();
@@ -972,7 +991,7 @@ void counts(char* out, size_t n, uint32_t tx, uint32_t rx) {
 }  // namespace
 
 int StatusScreen::drawAs(DisplayDriver& d, const char* title, int pos) {
-  const Face& kBody = uiBody();
+  const Face& kBody = uiNavBody();
   const Face& kMeta = uiMeta();
   const bool crumb = _task->breadcrumbShown() && _task->cyclePos() == pos;
   char right[8];
@@ -1105,7 +1124,9 @@ void SettingsScreen::step(int dir) {
 
 // #1245: rows whose press steps a value rather than going somewhere or doing something.
 // They share one settle-then-save, so walking a row round is one write to flash.
-bool SettingsScreen::cycles(int row) { return row == TextSize || row == ScreenOff; }
+bool SettingsScreen::cycles(int row) {
+  return row == NavTextSize || row == MsgTextSize || row == ScreenOff;
+}
 
 void SettingsScreen::act() {
   if (!cycles(_sel)) saveCycledIfPending();   // #1238: anything else may leave this screen
@@ -1113,9 +1134,16 @@ void SettingsScreen::act() {
     case Bluetooth:
       if (_task->isBluetoothEnabled()) _task->disableBluetooth(); else _task->enableBluetooth();
       break;
-    case TextSize: {   // #1238: large, medium, small, and round again
+    case NavTextSize: {   // #1238: large, medium, small, and round again
       NodePrefs* prefs = the_mesh.getNodePrefs();
       prefs->ui_text_size = (uint8_t)((prefs->ui_text_size + 1) % kTextSteps);
+      _cycled_at = millis() | 1;
+      _task->notify(UIEventType::ack);
+      break;
+    }
+    case MsgTextSize: {   // #1362: the same three steps, for the message screens
+      NodePrefs* prefs = the_mesh.getNodePrefs();
+      prefs->ui_msg_text_size = (uint8_t)((prefs->ui_msg_text_size + 1) % kTextSteps);
       _cycled_at = millis() | 1;
       _task->notify(UIEventType::ack);
       break;
@@ -1155,8 +1183,8 @@ void SettingsScreen::act() {
 
 // The design's gate: what happens, then Enter to go ahead or Esc to back out.
 int SettingsScreen::drawGate(DisplayDriver& d) {
-  const Face& kBody = uiBody();
-  const int kListRows = uiListRows();
+  const Face& kBody = uiNavBody();
+  const int kListRows = uiListRows(kBody);
   bar(d, kBody, 0, " Hibernate", "");
   line(d, kBody, 1, " radio and screen off");
   line(d, kBody, 2, " until the next reset");
@@ -1170,8 +1198,8 @@ int SettingsScreen::drawGate(DisplayDriver& d) {
 
 int SettingsScreen::render(DisplayDriver& d) {
   if (_gate) return drawGate(d);
-  const Face& kBody = uiBody();
-  const int kListRows = uiListRows();
+  const Face& kBody = uiNavBody();
+  const int kListRows = uiListRows(kBody);
   // #1238: the rows that show, so the list can scroll. At the large text size there are
   // more of them than the screen holds.
   uint8_t list[kRows];
@@ -1200,7 +1228,8 @@ int SettingsScreen::render(DisplayDriver& d) {
     char value[16] = "";   // "No GPS Module" is the longest
     switch (r) {
       case Bluetooth:     label = "Bluetooth"; snprintf(value, sizeof(value), "%s", _task->isBluetoothEnabled() ? "on" : "off"); break;
-      case TextSize:      label = "Text size"; snprintf(value, sizeof(value), "%s", textSizeName(prefs->ui_text_size)); break;
+      case NavTextSize:   label = "Nav text"; snprintf(value, sizeof(value), "%s", textSizeName(prefs->ui_text_size)); break;
+      case MsgTextSize:   label = "Message text"; snprintf(value, sizeof(value), "%s", textSizeName(prefs->ui_msg_text_size)); break;
       case ScreenOff:     label = "Screen off"; screenOffName(_task->autoOffSecs(), value, sizeof(value)); break;
       case TimeZone:      label = "Time zone"; snprintf(value, sizeof(value), "%s", offband::tz::zone(prefs->ui_tz).name); break;
       case Gps:           label = "GPS"; GpsScreen::summary(_task, value, sizeof(value)); break;
@@ -1264,8 +1293,8 @@ void BatteryScreen::summary(UITask* task, char* out, size_t n) {
 }
 
 int BatteryScreen::render(DisplayDriver& d) {
-  const Face& kBody = uiBody();
-  const int kListRows = uiListRows();
+  const Face& kBody = uiNavBody();
+  const int kListRows = uiListRows(kBody);
   char buf[24], part[16];
   summary(_task, part, sizeof(part));
   bar(d, kBody, 0, " Battery", part);
@@ -1342,8 +1371,8 @@ void ZonePickerScreen::begin() {
 }
 
 int ZonePickerScreen::render(DisplayDriver& d) {
-  const Face& kBody = uiBody();
-  const int kListRows = uiListRows();
+  const Face& kBody = uiNavBody();
+  const int kListRows = uiListRows(kBody);
   namespace tz = offband::tz;
   const int count = tz::kZoneCount;
   int top = listTop(_sel, count, kListRows);
@@ -1448,8 +1477,8 @@ void GpsScreen::act() {
 }
 
 int GpsScreen::render(DisplayDriver& d) {
-  const Face& kBody = uiBody();
-  const int kListRows = uiListRows();
+  const Face& kBody = uiNavBody();
+  const int kListRows = uiListRows(kBody);
   char buf[24], part[24];
   summary(_task, part, sizeof(part));
   bar(d, kBody, 0, " GPS", part);

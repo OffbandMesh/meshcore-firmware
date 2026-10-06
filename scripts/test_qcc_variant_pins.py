@@ -8,6 +8,7 @@ Run: python scripts/test_qcc_variant_pins.py
 """
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -182,6 +183,214 @@ def test_badge_radio_defaults_are_the_qcc_conference_channel():
     assert ini_value("LORA_BW") == 500.0
     assert ini_value("LORA_SF") == 7
     assert ini_value("LORA_CR") == 5        # CR 4:5
+
+
+def badge_screens():
+    return (ROOT / "examples" / "companion_radio" / "ui-new" / "BadgeScreens.cpp").read_text()
+
+
+def node_prefs():
+    return (ROOT / "examples" / "companion_radio" / "NodePrefs.h").read_text()
+
+
+def test_badge_text_sizes_are_nav_large_and_messages_medium():
+    # #1362: Jeremy's ask -- large reads well as a menu row and badly as a message, where
+    # characters per line is what matters on a 128x64 panel. Navigation keeps the shipped
+    # large (BadgeLayout's kDefaultTextSize, which has its own static_assert); the badge's
+    # env sets messages to medium. The enum is 0 large / 1 medium / 2 small.
+    assert ini_flag("DEFAULT_UI_MSG_TEXT_SIZE") == 1, "the badge's message text must default to medium"
+    # Navigation is NOT overridden in the badge env, so it takes NodePrefs' fallback.
+    ini = (QCC / "platformio.ini").read_text()
+    assert not re.search(r"-D\s+DEFAULT_UI_TEXT_SIZE=", ini), (
+        "the badge does not override the navigation size; it keeps the shipped large default")
+    m = re.search(r"#define\s+DEFAULT_UI_TEXT_SIZE\s+(\d+)", node_prefs())
+    assert m and int(m.group(1)) == 0, "the navigation fallback must stay large"
+
+
+def test_the_message_size_default_is_scoped_to_the_badge():
+    # Sixty-one variants compile these screens and only the badge was asked to change, so
+    # the fallback has to leave every other board exactly as it was. If someone replaces
+    # this with a literal, 60 boards silently get a new message font -- the #973 class of
+    # blast radius.
+    m = re.search(r"#define\s+DEFAULT_UI_MSG_TEXT_SIZE\s+(\S+)", node_prefs())
+    assert m, "NodePrefs.h must provide a DEFAULT_UI_MSG_TEXT_SIZE fallback"
+    assert m.group(1) == "DEFAULT_UI_TEXT_SIZE", (
+        "the message-size fallback must follow the navigation default, so boards that were "
+        f"not asked to change do not; found {m.group(1)!r}")
+
+
+def test_both_text_sizes_persist_under_distinct_keys():
+    # Two prefs serialized through one key, or one pref serialized twice, would lose a
+    # setting silently on reboot -- and a copy-paste of the def() line is exactly how that
+    # happens. Keys are also load-bearing: /prefs.json is keyed, so renaming one orphans
+    # every badge's saved choice.
+    prefs = node_prefs()
+    for field, key in (("ui_text_size", "txt"), ("ui_msg_text_size", "mtxt")):
+        assert re.search(r"uint8_t\s+%s\s*=" % field, prefs), f"{field} must be a NodePrefs field"
+        assert re.search(r'def\("%s",\s*_parent->%s\)' % (key, field), prefs), \
+            f'{field} must be serialized as def("{key}", ...)'
+    # distinct fields, distinct keys -- no aliasing in either direction
+    assert prefs.count('def("txt"') == 1 and prefs.count('def("mtxt"') == 1
+    assert prefs.count("_parent->ui_text_size)") == 1
+    assert prefs.count("_parent->ui_msg_text_size)") == 1
+
+
+_SIG = re.compile(r'^[A-Za-z_][\w:<>,&*\s]*?\b(\w+::\w+|\w+)\s*\([^;]*\)\s*\{')
+
+
+def face_sites(src):
+    """Every body-face read, attributed to the function it sits in.
+
+    Returns {"nav": [fn, ...], "msg": [fn, ...]}. The accessor definitions themselves
+    are excluded; everything else is a call site.
+    """
+    out = {"nav": [], "msg": []}
+    current = "(file scope)"
+    for line in src.splitlines():
+        m = _SIG.match(line)
+        if m:
+            current = m.group(1)
+        for key, fn_name in (("nav", "uiNavBody"), ("msg", "uiMsgBody")):
+            if f"{fn_name}()" in line and f"const Face& {fn_name}" not in line:
+                out[key].append(current)
+    return out
+
+
+# #1362: the routing IS the feature, so the inventory is pinned rather than inferred.
+# An adversarial review called a pattern-matching version of this test "theatre" -- a
+# regex cannot follow indirection. Pinning the exact set answers that differently: a new
+# screen, a removed one, or a rerouted one all fail here until someone states which
+# surface it belongs to. The test cannot be fooled by drift; it can only be updated
+# deliberately.
+# Counts, not just names: a SECOND call site inside a function that is already on the
+# list would leave a set unchanged, so the inventory would miss exactly the drift it
+# exists to catch. Each function takes its face once, at the top of its draw.
+EXPECTED_NAV_SITES = {
+    "listRow": 1,                   # the shared settings-style row
+    "ContactsScreen::render": 1,
+    "NearbyScreen::render": 1,
+    "StatusScreen::drawAs": 1,
+    "SettingsScreen::drawGate": 1,
+    "SettingsScreen::render": 1,
+    "BatteryScreen::render": 1,
+    "ZonePickerScreen::render": 1,
+    "GpsScreen::render": 1,
+}
+EXPECTED_MSG_SITES = {
+    "InboxScreen::drawItem": 1,
+    "InboxScreen::render": 1,
+    "ThreadScreen::drawRow": 1,
+    "ThreadScreen::drawCompose": 1,
+    "ThreadScreen::drawEditor": 1,
+    "ThreadScreen::render": 1,
+}
+
+
+def test_the_body_face_inventory_is_exactly_what_was_agreed():
+    sites = face_sites(badge_screens())
+    nav, msg = Counter(sites["nav"]), Counter(sites["msg"])
+    for label, got, want in (("MESSAGE", msg, EXPECTED_MSG_SITES),
+                             ("NAVIGATION", nav, EXPECTED_NAV_SITES)):
+        if dict(got) != want:
+            extra = {k: v for k, v in got.items() if want.get(k) != v}
+            missing = {k: v for k, v in want.items() if got.get(k) != v}
+            raise AssertionError(
+                f"the {label}-face inventory changed; classify the difference "
+                f"deliberately.\n  unexpected/changed: {sorted(extra.items())}\n"
+                f"  missing/changed:    {sorted(missing.items())}")
+    # No function may read both faces -- that is a screen drawing itself two sizes.
+    both = set(nav) & set(msg)
+    assert not both, f"these read BOTH faces: {sorted(both)}"
+
+
+def test_message_screens_are_message_screens():
+    # The classification itself, stated independently of the pinned list above, so that
+    # updating the inventory cannot quietly also change what "message screen" means.
+    sites = face_sites(badge_screens())
+    MESSAGE_SCREENS = ("InboxScreen", "ThreadScreen")
+    for fn in sites["msg"]:
+        assert fn.startswith(MESSAGE_SCREENS), \
+            f"{fn} reads the MESSAGE face but is not an Inbox or Thread screen"
+    for fn in sites["nav"]:
+        assert not fn.startswith(MESSAGE_SCREENS), \
+            f"{fn} is a message screen but reads the NAVIGATION face"
+
+
+def test_a_face_is_only_ever_taken_at_the_top_of_a_draw():
+    # Closes the indirection hole the review named: the accessors are usable only as
+    # `const Face& kBody = ui*Body();`. Any other use -- an inline call inside an
+    # expression, a face stashed in a member, a helper that reads the pref for itself --
+    # would put a face somewhere the inventory above cannot see.
+    for line in badge_screens().splitlines():
+        for fn_name in ("uiNavBody", "uiMsgBody"):
+            if f"{fn_name}()" not in line or f"const Face& {fn_name}" in line:
+                continue
+            assert re.match(r"^\s*const Face& kBody = %s\(\);" % fn_name, line), \
+                f"a body face must be taken as `const Face& kBody = {fn_name}();` -- got: {line.strip()}"
+
+
+def test_helpers_that_read_a_face_are_called_only_from_that_surface():
+    # listRow reads the navigation face internally, so calling it from a message screen
+    # would draw a nav-sized row on a message surface -- the one real way to defeat the
+    # inventory above. Any future helper that reads a face gets the same treatment,
+    # because the helper list is derived from the source rather than hardcoded.
+    src = badge_screens()
+    sites = face_sites(src)
+    helpers = {fn: "nav" for fn in sites["nav"] if "::" not in fn and fn != "(file scope)"}
+    helpers.update({fn: "msg" for fn in sites["msg"] if "::" not in fn and fn != "(file scope)"})
+    assert "listRow" in helpers, "listRow should still be a face-reading helper; recheck this test"
+
+    MESSAGE_SCREENS = ("InboxScreen", "ThreadScreen")
+    current = "(file scope)"
+    for line in src.splitlines():
+        m = _SIG.match(line)
+        if m:
+            current = m.group(1)
+            continue
+        for helper, surface in helpers.items():
+            if not re.search(r"\b%s\s*\(" % helper, line):
+                continue
+            caller_is_msg = current.startswith(MESSAGE_SCREENS)
+            if surface == "nav":
+                assert not caller_is_msg, (
+                    f"{current} is a message screen but calls {helper}(), which reads the "
+                    "navigation face")
+            else:
+                assert caller_is_msg, (
+                    f"{current} is not a message screen but calls {helper}(), which reads "
+                    "the message face")
+
+
+def test_list_rows_cannot_silently_pick_the_wrong_face():
+    # uiListRows takes the face rather than reading the pref, and has NO no-argument
+    # overload, so a screen cannot size its rows with one face and draw them with the
+    # other. Restoring a no-arg version would make that mistake possible again and
+    # compile cleanly, which is why this is a test and not a comment.
+    src = badge_screens()
+    assert re.search(r"int\s+uiListRows\(const\s+Face&\s*\w*\)", src), \
+        "uiListRows must take the body face"
+    assert not re.search(r"int\s+uiListRows\(\s*\)", src), \
+        "uiListRows must NOT have a no-argument overload"
+    assert "uiListRows()" not in src, "every uiListRows call must name its face"
+    assert not re.search(r"\buiBody\(\)", src), \
+        "uiBody() is gone; call sites must say uiNavBody() or uiMsgBody()"
+
+
+def test_both_text_size_rows_exist_and_cycle():
+    # The settings screen is the only way to change these on a badge (a companion has no
+    # CLI), so a row that exists but does not cycle, or cycles without being listed, is a
+    # setting the owner cannot reach.
+    hdr = (ROOT / "examples" / "companion_radio" / "ui-new" / "BadgeScreens.h").read_text()
+    assert re.search(r"NavTextSize\s*,\s*MsgTextSize", hdr), \
+        "both rows must exist, adjacent, in the Row enum"
+    assert "TextSize," not in hdr.replace("NavTextSize,", "").replace("MsgTextSize,", ""), \
+        "the old single TextSize row must be gone"
+    src = badge_screens()
+    for row in ("NavTextSize", "MsgTextSize"):
+        assert re.search(r"case %s:" % row, src), f"{row} must be handled in act()"
+        assert re.search(r"row == %s" % row, src), f"{row} must be registered in cycles()"
+    assert 'label = "Nav text"' in src and 'label = "Message text"' in src, \
+        "both rows must be labelled in the settings list"
 
 
 def test_badge_bandwidth_survives_the_prefs_sanitiser():
