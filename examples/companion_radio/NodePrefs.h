@@ -17,6 +17,14 @@
   #define DEFAULT_UI_TEXT_SIZE  0
 #endif
 
+// #1362: the text size MESSAGE screens boot into, split from the navigation one above.
+// It defaults to whatever navigation uses, so the sixty-one variants that compile these
+// screens keep exactly the behavior they have today; the badge's env sets medium,
+// because the badge is the board the split was asked for.
+#ifndef DEFAULT_UI_MSG_TEXT_SIZE
+  #define DEFAULT_UI_MSG_TEXT_SIZE  DEFAULT_UI_TEXT_SIZE
+#endif
+
 // #1245: seconds before the display blanks. 0 means "whatever this board was compiled
 // with" -- AUTO_OFF_MILLIS -- so a board with no way to set it behaves exactly as it did.
 // The badge's env sets its own, because the badge is the one with the setting.
@@ -148,7 +156,14 @@ public:
   // #1238: 0 large, 1 medium (Org_01), 2 small. #1244: the owner asked for large.
   // Named, because BadgeLayout.h has to agree and this header is shared by every
   // board: BadgeScreens.cpp static_asserts the two against each other.
+  // #1362: this one now governs NAVIGATION screens only.
   uint8_t ui_text_size = DEFAULT_UI_TEXT_SIZE;
+  // #1362: the same three steps, for message screens (Inbox and Thread). Separate
+  // because the two surfaces want different answers -- large reads well as a menu row
+  // and badly as a message, where characters per line is what matters. A badge that
+  // already has prefs keeps its `txt` as the navigation size and takes the compiled
+  // default for this one, because the keyed /prefs.json simply has no `mtxt` in it yet.
+  uint8_t ui_msg_text_size = DEFAULT_UI_MSG_TEXT_SIZE;
   // #1245: seconds before the display blanks; 0 = the board's compiled AUTO_OFF_MILLIS.
   uint16_t ui_screen_secs = DEFAULT_UI_SCREEN_SECS;
   // #1254: where 100% is on THIS cell, in millivolts. 0 = nothing known, so the board's
@@ -171,7 +186,8 @@ private:
       def("disp", _parent->ui_display_mode);      // #542 B1
       def("notify", _parent->notify_scope);       // #510
       def("tz", _parent->ui_tz);                  // #1233
-      def("txt", _parent->ui_text_size);          // #1238
+      def("txt", _parent->ui_text_size);          // #1238, #1362: navigation screens
+      def("mtxt", _parent->ui_msg_text_size);     // #1362: message screens
       def("scroff", _parent->ui_screen_secs);     // #1245
       def("bfull", _parent->batt_full_mv);        // #1254
       def("bfuser", _parent->batt_full_user);     // #1254

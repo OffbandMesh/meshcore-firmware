@@ -138,8 +138,14 @@ public:
   void poll() override;
 
 private:
-  enum Row : uint8_t { Bluetooth, TextSize, ScreenOff, TimeZone, Gps, Battery,
-                       AdvertZeroHop, AdvertFlood, Hibernate, DevicePages, kRows };
+  // #1362: the one Text size row became two, navigation and messages, kept adjacent so
+  // they read as a pair. Both cycle in place, like the single row did. The adjacency is
+  // asserted rather than asked for: the enum order IS the on-screen order, so a later
+  // insertion would separate the pair silently.
+  enum Row : uint8_t { Bluetooth, NavTextSize, MsgTextSize, ScreenOff, TimeZone, Gps,
+                       Battery, AdvertZeroHop, AdvertFlood, Hibernate, DevicePages, kRows };
+  static_assert(MsgTextSize == NavTextSize + 1,
+                "the two text-size rows must stay adjacent -- the enum order is the row order");
   UITask* _task;
   int _sel = 0;
   bool _gate = false;              // "Hibernate?" is up

@@ -37,6 +37,12 @@ enum TextSize : uint8_t { kTextLarge = 0, kTextMedium = 1, kTextSmall = 2, kText
 // #1244: what a badge boots into before anyone changes it -- the owner asked for the
 // large size. NodePrefs ships this as a raw byte, so the enum's order is load-bearing:
 // reorder it and a badge flashed from empty comes up in a different face.
+//
+// #1362: this is now the NAVIGATION default. Message screens carry their own setting,
+// defaulting to medium on the badge, because large is right for a menu row read at a
+// glance and wrong for a message, where it costs too many characters per line on a
+// 128x64 panel. The message default is a build flag rather than a constant here:
+// sixty-one variants compile these screens, and only the badge was asked to change.
 constexpr uint8_t kDefaultTextSize = kTextLarge;
 
 // #1244: a size we never wrote -- a corrupt or pre-#1238 preference -- reads as the
