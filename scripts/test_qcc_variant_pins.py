@@ -6,6 +6,8 @@ buzzer on. This test fails if a badge role, or Serial1, lands on the wrong GPIO.
 Run: python scripts/test_qcc_variant_pins.py
   or python -m pytest scripts/test_qcc_variant_pins.py -q
 """
+import base64
+import hashlib
 import re
 import sys
 from collections import Counter
@@ -187,6 +189,33 @@ def test_badge_radio_defaults_are_the_qcc_conference_channel():
 
 def badge_screens():
     return (ROOT / "examples" / "companion_radio" / "ui-new" / "BadgeScreens.cpp").read_text()
+
+
+def strip_c_comments(text):
+    """`text` with // and /* */ comments blanked, newlines preserved.
+
+    Any check that looks for code by substring or counts braces has to run on code: a
+    comment reading `/*}*/`, or prose naming the thing being checked for, otherwise
+    satisfies or defeats the check. Newlines are kept so positions stay comparable and
+    error messages still point at the right place.
+    """
+    out, i, n = [], 0, len(text)
+    while i < n:
+        if text.startswith("//", i):
+            j = text.find("\n", i)
+            if j < 0:
+                break
+            out.append(" " * (j - i))
+            i = j
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append("".join("\n" if c == "\n" else " " for c in text[i:j]))
+            i = j
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
 
 
 def badge_screens_code():
@@ -472,6 +501,122 @@ def test_both_text_size_rows_exist_and_cycle():
         assert re.search(r"row == %s" % row, src), f"{row} must be registered in cycles()"
     assert 'label = "Nav text"' in src and 'label = "Message text"' in src, \
         "both rows must be labelled in the settings list"
+
+
+# ---- #1364: the channels a fresh badge ships holding -------------------------------
+
+EXPECTED_PREFLASH_CHANNELS = ["#queencitycon", "#okimesh", "#test", "#echo", "#offband"]
+
+
+def preflash_table():
+    """[(name, psk_base64), ...] as QccChannels.h declares them, in order."""
+    src = (QCC / "QccChannels.h").read_text()
+    body = src[src.index("kQccPreflashChannels"):]
+    body = body[body.index("{") + 1: body.index("};")]
+    return re.findall(r'\{\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\}', body)
+
+
+def test_the_preflashed_channels_are_the_five_agreed():
+    names = [n for n, _ in preflash_table()]
+    assert names == EXPECTED_PREFLASH_CHANNELS, (
+        f"the pre-flashed channel list changed.\n  got:      {names}\n"
+        f"  expected: {EXPECTED_PREFLASH_CHANNELS}")
+    # Stored with the '#', as the client stores them -- the '#' is part of the name AND
+    # part of what the key is derived from, so dropping it changes both.
+    for n in names:
+        assert n.startswith("#"), f"{n} must be stored with its leading '#'"
+
+
+def test_every_preflashed_key_is_the_derived_hashtag_psk():
+    # The point of this test: derive each key HERE, independently, rather than comparing
+    # the header against a copy of itself. A transcribed or stale key would give a badge a
+    # channel with the right name and the wrong secret -- it would look configured, join
+    # nothing, and the failure would show up as "the badge cannot hear #queencitycon".
+    #
+    # Derivation, from the client as source of record (lib/models/channel.dart,
+    # derivePskFromHashtag): the first 16 bytes of SHA-256 over the name INCLUDING '#'.
+    for name, psk_b64 in preflash_table():
+        want = base64.b64encode(hashlib.sha256(name.encode()).digest()[:16]).decode()
+        assert psk_b64 == want, (
+            f"{name}: key does not match its derivation\n  in header: {psk_b64}\n"
+            f"  derived:   {want}")
+        # addChannel() decodes and requires 16 or 32 bytes.
+        assert len(base64.b64decode(psk_b64)) == 16, f"{name}: key must decode to 16 bytes"
+
+
+def test_public_is_not_in_the_preflash_table():
+    # Public is added for every board from PUBLIC_GROUP_PSK. Repeating it here would give a
+    # fresh badge two Publics, and with a different key the second would be a dead channel
+    # that looks real.
+    names = [n.lower() for n, _ in preflash_table()]
+    assert not any("public" in n for n in names), "Public is added by MyMesh, not seeded here"
+
+
+def test_preflashed_channels_are_seeded_on_a_fresh_badge_only():
+    # The guard is correctness, not caution. loadChannels() writes slots through
+    # setChannel() and never advances `num_channels`, so on a configured node seeding
+    # before the load leaves seeds in the slots past the stored ones (a list that grows at
+    # every flash), and seeding after it appends at a stale `num_channels` of 1, on top of
+    # a user's channel. Both orderings corrupt; only the guard is safe.
+    # Comments stripped before anything is located or counted. The brace check below is
+    # defeated by a comment containing a brace -- `/*}*/` -- which the review pointed out,
+    # and prose about the guard would otherwise count as the guard.
+    src = strip_c_comments((ROOT / "examples" / "companion_radio" / "MyMesh.cpp").read_text())
+
+    # Presence is asserted before anything is located. str.index() raises ValueError, not
+    # AssertionError, so a landmark that has been removed -- which is exactly the
+    # regression this test exists to catch -- would abort the run with a traceback instead
+    # of naming the problem, and take the rest of the suite with it.
+    LANDMARKS = {
+        "probe": "_store->hasChannels()",
+        "load": "_store->loadChannels(this)",
+        "guard": "if (!had_stored_channels)",
+        "seed": "kQccPreflashChannels",
+    }
+    for what, needle in LANDMARKS.items():
+        assert needle in src, (
+            f"MyMesh.cpp no longer contains the {what} (`{needle}`) -- pre-flashed channels "
+            "must be seeded on a fresh badge only, and that guard is gone")
+    at = {what: src.index(needle) for what, needle in LANDMARKS.items()}
+
+    assert at["probe"] < at["load"], (
+        "hasChannels() must be read BEFORE loadChannels(), or it reports the state the "
+        "load just created rather than the state the badge arrived in")
+    assert at["seed"] > at["load"], \
+        "channels must be seeded after the load, into the real slot count"
+    assert at["guard"] < at["seed"], \
+        "the seeding must be inside the `!had_stored_channels` guard"
+    tail = src[at["guard"]:at["seed"]]
+    assert "}" not in tail.split("{", 1)[-1], (
+        "the guard's block closes before the seeding -- the seeding is not actually guarded")
+    seed = at["seed"]
+
+    # And it persists what it added, or the next boot does it all again.
+    assert "saveChannels();" in src[seed:seed + 1200], \
+        "seeded channels must be saved, or they are re-seeded on every boot"
+
+
+def test_the_preflash_table_is_badge_scoped():
+    # Sixty other variants build this companion role. The table reaches them only if the
+    # flag does, so the flag must be set by the badge's env and nowhere else.
+    assert ini_flag("OFFBAND_PREFLASH_CHANNELS") == 1, (
+        "the badge env must set -D OFFBAND_PREFLASH_CHANNELS=1; without it a fresh badge "
+        "ships with Public alone and the conference channels are silently absent")
+    root_ini = (ROOT / "platformio.ini").read_text()
+    assert "OFFBAND_PREFLASH_CHANNELS" not in root_ini, \
+        "the flag must not be set globally -- it would reach every variant"
+    others = [p for p in (ROOT / "variants").glob("*/platformio.ini")
+              if p.parent.name != "qcc_badge"
+              and "OFFBAND_PREFLASH_CHANNELS" in p.read_text()]
+    assert not others, f"only the badge may set the flag; also set by: {[p.parent.name for p in others]}"
+    # And the include is guarded, so a board without the flag does not even compile it in.
+    mymesh = (ROOT / "examples" / "companion_radio" / "MyMesh.cpp").read_text()
+    inc = mymesh.index('#include "QccChannels.h"')
+    before = mymesh[:inc]
+    assert before.rstrip().endswith("#endif") is False, "sanity: expected a guard directly above"
+    assert "#ifdef OFFBAND_PREFLASH_CHANNELS" in before, "the include must be flag-guarded"
+    assert before.rindex("#ifdef OFFBAND_PREFLASH_CHANNELS") > before.rindex("#include \"OffbandConfigProtocol.h\""), \
+        "the guard must be the one immediately governing the QccChannels include"
 
 
 def test_badge_bandwidth_survives_the_prefs_sanitiser():

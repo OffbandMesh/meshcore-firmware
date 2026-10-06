@@ -39,6 +39,14 @@ public:
   void saveContacts(DataStoreHost* host, bool (*filter)(const ContactInfo& c) = NULL);
   void loadChannels(DataStoreHost* host);
   void saveChannels(DataStoreHost* host);
+  // #1364: whether this node has a stored channel set at all, i.e. whether loadChannels()
+  // would restore anything. A caller that wants to seed channels on a FRESH node only has
+  // no other way to ask: loadChannels() returns void, and `num_channels` counts what
+  // addChannel() put there rather than what came off the filesystem, because the load
+  // path writes slots through setChannel() and never touches that counter. Seeding without
+  // this check corrupts a configured node -- seeds left in the slots past the stored ones,
+  // or an addChannel() landing on top of a user's channel.
+  bool hasChannels() const;
   void migrateToSecondaryFS();
   uint8_t getBlobByKey(const uint8_t key[], int key_len, uint8_t dest_buf[]);
   bool putBlobByKey(const uint8_t key[], int key_len, const uint8_t src_buf[], uint8_t len);

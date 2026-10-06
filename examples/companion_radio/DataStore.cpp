@@ -414,6 +414,31 @@ void DataStore::saveContacts(DataStoreHost* host, bool (*filter)(const ContactIn
   }
 }
 
+// #1364: does this node have a stored channel set? Asked by a board that seeds channels
+// on a fresh node only. Deliberately opens the same file loadChannels() reads, through
+// the same accessor, rather than testing exists(): a file that is present but cannot be
+// opened restores nothing, and for this question "nothing restored" is what matters.
+bool DataStore::hasChannels() const {
+    FILESYSTEM* fs = _getContactsChannelsFS();
+    if (fs == NULL) return false;
+#if defined(RP2040_PLATFORM)
+    File file = fs->open("/channels2", "r");
+#else
+    File file = fs->open("/channels2");
+#endif
+    if (!file) return false;
+    // "Has channels" has to mean "loadChannels() would restore at least one", not merely
+    // "a file is there". A runt shorter than one record restores nothing -- the loader's
+    // first read falls short and it breaks out -- so a non-empty check would answer yes
+    // while the node came up with no channels and, for a board that seeds on a fresh
+    // node, nothing to recover it (adversarial review, #1364). One record is the loader's
+    // own three reads: 4 unused + 32 name + 32 secret.
+    const size_t kChannelRecord = 4 + 32 + 32;
+    const bool any = file.size() >= kChannelRecord;
+    file.close();
+    return any;
+}
+
 void DataStore::loadChannels(DataStoreHost* host) {
     File file = openRead(_getContactsChannelsFS(), "/channels2");
     if (file) {
