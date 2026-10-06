@@ -1,4 +1,10 @@
 #include "UITask.h"
+#ifdef PIN_QCC_ACTIVITY_LED
+  // #1367: the dispatcher -> UI traffic seam. Up here, not beside the scheduler further
+  // down: the sink is registered in begin(), which comes first in this file, so an
+  // include placed with the implementation would arrive after its own use.
+  #include "helpers/ui/LedActivity.h"
+#endif
 #include "helpers/diagnostics/CrashLog.h"   // #1075: the [shutdown] line
 #include "helpers/ui/OffbandSplash.h"
 #include <helpers/ui/KeyNav.h>
@@ -721,6 +727,18 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   _sensors = sensors;
   _auto_off = millis() + autoOffMillis();
 
+#ifdef PIN_QCC_ACTIVITY_LED
+  // #1367: own the activity LED and start it dark, then let the dispatcher tell us about
+  // decoded traffic. Registered here rather than in a constructor so the sink only goes
+  // live once there is a UI to receive it -- the dispatcher starts receiving early.
+  pinMode(PIN_QCC_ACTIVITY_LED, OUTPUT);
+  _activity_lit = true;          // force setActivityLed() past its no-change guard
+  setActivityLed(false);
+  _attention_phase = millis();
+  _activity_owner = this;
+  offband::setLedActivitySink(&UITask::onTrafficDecoded);
+#endif
+
 #if defined(PIN_USER_BTN)
   user_btn.begin();
 #endif
@@ -973,6 +991,89 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   }
 }
 
+#ifdef PIN_QCC_ACTIVITY_LED
+
+UITask* UITask::_activity_owner = nullptr;
+
+// Wrap-safe "is a before b". millis() wraps every 49.7 days and a badge is meant to run
+// for a conference, so a plain `<` would park the LED on or off for the rest of the
+// event at the wrap. The subtraction is the usual idiom: the difference stays correct
+// across the wrap, and the sign is what is being asked about. Named locally because the
+// only `before` in the tree is a BadgeStore private taking ints, which is both
+// unreachable here and narrower than millis().
+static inline bool activityBefore(uint32_t a, uint32_t b) {
+  return (int32_t)(a - b) < 0;
+}
+
+// Called from the dispatcher's receive path (#1367). Does nothing but record the airtime
+// of the packet that just decoded: the receive path is not the place to reason about
+// patterns, and the UI tick will pick this up within a few milliseconds. A second packet
+// arriving before the tick overwrites the first rather than queueing -- the LED can only
+// show one flash at a time, so a queue would only build latency between what the radio
+// is doing and what the badge is showing.
+void UITask::onTrafficDecoded(uint32_t airtime_ms) {
+  UITask* self = _activity_owner;
+  if (self != nullptr) self->_traffic_pending_ms = airtime_ms;
+}
+
+void UITask::setActivityLed(bool on) {
+  if (on == _activity_lit) return;   // only touch the pin on a change
+  _activity_lit = on;
+  // Active HIGH, and that is proven rather than assumed: P0.08 drives a 2N7000 gate with
+  // the LED's anode at VCC through R8, so a high gate sinks the cathode and lights it
+  // (badge schematic). This is deliberately NOT LED_STATE_ON, which describes the
+  // module's LED on P0.15 -- a different part whose polarity is a separate question.
+  digitalWrite(PIN_QCC_ACTIVITY_LED, on ? HIGH : LOW);
+}
+
+void UITask::activityLedHandler() {
+  const uint32_t now = millis();
+
+  // #542: the existing LED preference gates the whole indicator. No new setting was
+  // added for this -- `ui_led_enabled` already exists and already persists; until now
+  // nothing read it.
+  if (_node_prefs != nullptr && _node_prefs->ui_led_enabled == 0) {
+    setActivityLed(false);
+    return;
+  }
+
+  // A packet decoded since the last tick: start a flash, unless the forced gap after the
+  // previous one has not elapsed. Dropping the flash rather than deferring it is
+  // deliberate -- under load, deferring would chain flashes end to end and the LED would
+  // read as solid, which is the one thing it must never do.
+  const uint32_t pending = _traffic_pending_ms;
+  if (pending != 0) {
+    _traffic_pending_ms = 0;
+    if (!activityBefore(now, _traffic_gap_until)) {
+      uint32_t on_ms = pending;
+      if (on_ms < kTrafficMinMs) on_ms = kTrafficMinMs;
+      if (on_ms > kTrafficMaxMs) on_ms = kTrafficMaxMs;
+      _traffic_until = now + on_ms;
+      _traffic_gap_until = _traffic_until + kTrafficGapMs;
+    }
+  }
+
+  // Priority: traffic outranks attention, so a badge that is both busy and holding
+  // unread shows the busier signal. Attention reasserts itself the moment traffic stops.
+  if (activityBefore(now, _traffic_until)) {
+    setActivityLed(true);
+    return;
+  }
+
+  // Attention: a short blink at the top of each period while something wants looking at.
+  // `_msgcount` is the unread the phone or the badge store reports.
+  const bool wants_attention = (_msgcount > 0);
+  if (!wants_attention) {
+    _attention_phase = now;   // keep the phase fresh so the next blink is immediate
+    setActivityLed(false);
+    return;
+  }
+  if (!activityBefore(now, _attention_phase + kAttentionPeriodMs)) _attention_phase = now;
+  setActivityLed(activityBefore(now, _attention_phase + kAttentionOnMs));
+}
+
+#endif   // PIN_QCC_ACTIVITY_LED
+
 void UITask::userLedHandler() {
 // #275 (P0): on nRF52 the green LED is the ungated heartbeat, driven from the main
 // loop by NRF52Board::heartbeatTick(). UITask must NOT also write PIN_STATUS_LED or
@@ -1187,6 +1288,9 @@ void UITask::loop() {
   }
 
   userLedHandler();
+#ifdef PIN_QCC_ACTIVITY_LED
+  activityLedHandler();   // #1367: traffic over attention over dark, on the same tick
+#endif
 
 #ifdef PIN_BUZZER
   if (buzzer.isPlaying())  buzzer.loop();
