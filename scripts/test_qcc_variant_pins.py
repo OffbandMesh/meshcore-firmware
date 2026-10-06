@@ -123,6 +123,121 @@ def test_the_heartbeat_is_on_the_module_led_not_the_badge_one():
     assert gpio("PIN_QCC_MODULE_LED") == 15, "the module LED is P0.15"
 
 
+def test_the_activity_led_is_the_one_beside_the_display():
+    # #1367: the LED the heartbeat vacated. Named separately from PIN_QCC_MSG_LED so the
+    # scheduler's pin and the schematic's part are visibly the same thing.
+    assert ini_flag("PIN_QCC_ACTIVITY_LED") == define("PIN_QCC_MSG_LED"), (
+        "the activity LED must be the badge's MSG_LED (P0.08) -- the one beside the "
+        "display, which #1366 freed by moving the heartbeat to the module's LED")
+    assert ini_flag("OFFBAND_LED_ACTIVITY") == 1, (
+        "the badge env must set -D OFFBAND_LED_ACTIVITY=1, or the dispatcher never "
+        "reports decoded traffic and the LED only ever shows unread")
+
+
+def test_the_traffic_hook_only_fires_on_packets_that_parsed():
+    # #1367: the dispatcher hook must sit INSIDE the tryParsePacket() success branch.
+    # Outside it, noise that failed to decode would light the LED, and the indicator stops
+    # meaning "the mesh is reaching us" -- which is the only reason it is worth having.
+    #
+    # Checked by brace depth from the `if (tryParsePacket(` line rather than by proximity:
+    # a call a few lines below it can still be outside the branch.
+    src = strip_c_comments((ROOT / "src" / "Dispatcher.cpp").read_text())
+    assert "offband::onPacketDecoded(" in src, \
+        "the dispatcher must report decoded packets through the LedActivity seam"
+    start = src.index("if (tryParsePacket(")
+    call = src.index("offband::onPacketDecoded(")
+    assert call > start, "the hook must come after the parse check, not before it"
+
+    # Net brace depth is NOT enough, and an injected regression proved it: closing the
+    # parse branch and immediately opening another block leaves the final depth unchanged
+    # while the call has genuinely escaped. What matters is whether the branch ever
+    # CLOSES between the check and the call, so track whether depth returns to zero once
+    # it has been entered.
+    depth, entered = 0, False
+    for ch in src[start:call]:
+        if ch == "{":
+            depth += 1
+            entered = True
+        elif ch == "}":
+            depth -= 1
+            if entered and depth <= 0:
+                raise AssertionError(
+                    "offband::onPacketDecoded() is outside the tryParsePacket() success "
+                    "branch -- the branch closes before the call, so the LED would light "
+                    "for noise that never decoded")
+    assert entered and depth >= 1, (
+        "offband::onPacketDecoded() is not inside the tryParsePacket() success branch")
+
+
+def test_the_traffic_hook_is_compiled_out_for_everyone_else():
+    # src/Dispatcher.cpp is built by every role on every board. The seam reaches it only
+    # through the flag, and the flag is the badge's alone.
+    src = strip_c_comments((ROOT / "src" / "Dispatcher.cpp").read_text())
+
+    # Checking that the string appears SOMEWHERE is not enough, and an injected
+    # regression proved it: unguarding the call site while leaving the include's #ifdef
+    # intact still satisfied a substring test. So this asks whether the call itself sits
+    # inside the guard, by walking the preprocessor directives above it.
+    call_line = src[:src.index("offband::onPacketDecoded(")].count("\n")
+    guard = 0
+    for i, line in enumerate(src.splitlines()):
+        if i >= call_line:
+            break
+        s = line.strip()
+        if s.startswith("#ifdef OFFBAND_LED_ACTIVITY") or s.startswith("#if defined(OFFBAND_LED_ACTIVITY"):
+            guard += 1
+        elif s.startswith("#if") and guard:
+            guard += 1          # nested conditional inside the guard
+        elif s.startswith("#endif") and guard:
+            guard -= 1
+    assert guard >= 1, (
+        "the dispatcher's call to offband::onPacketDecoded() is not inside an "
+        "OFFBAND_LED_ACTIVITY guard -- Dispatcher.cpp is built by every role on every "
+        "board, and an unguarded call would reach all of them")
+
+    root_ini = (ROOT / "platformio.ini").read_text()
+    assert "OFFBAND_LED_ACTIVITY" not in root_ini, "the flag must not be global"
+    others = [p for p in (ROOT / "variants").glob("*/platformio.ini")
+              if p.parent.name != "qcc_badge" and "OFFBAND_LED_ACTIVITY" in p.read_text()]
+    assert not others, f"only the badge may set the flag; also set by: {[p.parent.name for p in others]}"
+
+
+def test_the_activity_led_does_not_borrow_the_module_leds_polarity():
+    # The two LEDs are different parts. P0.08 is schematic-proven active HIGH (2N7000
+    # gate, anode at VCC through R8); the module LED's polarity on P0.15 is unverified.
+    # Driving the activity LED through LED_STATE_ON would make a proven pin depend on an
+    # unproven one, so that a later correction to the module LED silently inverts this one.
+    src = strip_c_comments(
+        (ROOT / "examples" / "companion_radio" / "ui-new" / "UITask.cpp").read_text())
+    i = src.index("void UITask::setActivityLed(")
+    body = src[i:i + 600]
+    assert "digitalWrite(PIN_QCC_ACTIVITY_LED" in body, "setActivityLed must drive its own pin"
+    assert "LED_STATE_ON" not in body, (
+        "the activity LED must not use LED_STATE_ON -- that constant describes the module "
+        "LED on P0.15, a different part with a different (and unverified) polarity")
+
+
+def test_the_traffic_flash_is_bounded_at_both_ends():
+    # The clamp is the whole design: a floor because a 20 ms packet at the conference
+    # preset is too short to see, a ceiling because a slow preset would otherwise read as
+    # solid-on, and a gap so consecutive packets stay legible as separate blinks. Values
+    # may be tuned on the bench; the ORDERING is what must not break.
+    src = strip_c_comments(
+        (ROOT / "examples" / "companion_radio" / "ui-new" / "UITask.h").read_text())
+    vals = {}
+    for name in ("kTrafficMinMs", "kTrafficMaxMs", "kTrafficGapMs",
+                 "kAttentionOnMs", "kAttentionPeriodMs"):
+        m = re.search(r"%s\s*=\s*(\d+)" % name, src)
+        assert m, f"{name} must be defined for the activity LED"
+        vals[name] = int(m.group(1))
+    assert vals["kTrafficMinMs"] < vals["kTrafficMaxMs"], \
+        "the traffic floor must be below the ceiling"
+    assert vals["kTrafficGapMs"] > 0, \
+        "without a forced gap, back-to-back packets merge into a solid-on LED"
+    assert vals["kAttentionOnMs"] < vals["kAttentionPeriodMs"], \
+        "the attention blink must be shorter than its period, or it is solid-on"
+
+
 def test_the_message_led_is_left_for_the_scheduler():
     # P0.08 must still be mapped and must still be a badge output -- freeing it means
     # nothing else claims it, not that it stops existing.

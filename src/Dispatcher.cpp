@@ -6,6 +6,13 @@
 
 #include <math.h>
 
+#ifdef OFFBAND_LED_ACTIVITY
+// #1367: a one-way seam so a board with an activity indicator can hear about decoded
+// traffic. Flag-guarded: without it this header is not included, the call below does not
+// exist, and the translation unit is unchanged for every other board.
+#include "helpers/ui/LedActivity.h"
+#endif
+
 namespace mesh {
 
 #define MAX_RX_DELAY_MILLIS        32000  // 32 seconds
@@ -207,6 +214,16 @@ void Dispatcher::checkRecv() {
           score = _radio->packetScore(_radio->getLastSNR(), len);
           air_time = _radio->getEstAirtimeFor(len);
           rx_air_time += air_time;
+#ifdef OFFBAND_LED_ACTIVITY
+          // #1367: a board with an activity indicator hears about decoded traffic here,
+          // the one place that sees every packet that parsed. Deliberately inside the
+          // tryParsePacket() branch: noise that fails to parse is not traffic, and an
+          // indicator that lights for it stops meaning the mesh is reaching us. The
+          // airtime is the one already computed above for duty-cycle accounting, so the
+          // signal is free. The call is a null check and a function pointer; all the
+          // pattern work happens on the UI tick, not in the receive path.
+          offband::onPacketDecoded(air_time);
+#endif
         } else {
           _mgr->free(pkt);  // put back into pool
           pkt = NULL;
