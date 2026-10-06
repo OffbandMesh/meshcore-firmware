@@ -24,10 +24,24 @@ def pin_map(path):
     return [int(t) for t in re.findall(r"\d+", body)]
 
 
-def define(name):
-    m = re.search(r"#define\s+%s\s+\((\d+)\)" % name, (QCC / "variant.h").read_text())
-    assert m, f"{name} must be defined as (N) in variant.h"
-    return int(m.group(1))
+def define(name, _seen=None):
+    """A pin number from variant.h, following a single alias if the name is one.
+
+    #1366 added `PIN_QCC_MODULE_LED`, which names the ProMicro's own LED and is an alias
+    of `PIN_LED` rather than a second literal. Writing the number twice would be a magic
+    number that can drift from the one it is supposed to equal, so the helper resolves the
+    alias instead. Aliases are followed to a literal and a cycle is reported rather than
+    hung on.
+    """
+    src = (QCC / "variant.h").read_text()
+    _seen = _seen or []
+    assert name not in _seen, f"#define alias cycle in variant.h: {' -> '.join(_seen + [name])}"
+    m = re.search(r"#define\s+%s\s+\((\d+)\)" % name, src)
+    if m:
+        return int(m.group(1))
+    alias = re.search(r"#define\s+%s\s+([A-Za-z_]\w*)\b" % name, src)
+    assert alias, f"{name} must be defined as (N), or as an alias of one, in variant.h"
+    return define(alias.group(1), _seen + [name])
 
 
 def gpio(name):
@@ -88,9 +102,54 @@ def ini_flag(name):
 
 def test_env_pin_flags_name_the_badge_pins():
     # Shared code reads these as bare numbers; they must equal the variant's names.
-    assert ini_flag("PIN_STATUS_LED") == define("PIN_QCC_MSG_LED")
     assert ini_flag("PIN_BUZZER") == define("PIN_QCC_BUZZER")
     assert ini_flag("PIN_GPS_EN") == define("PIN_QCC_GPS_POWER")
+
+
+def test_the_heartbeat_is_on_the_module_led_not_the_badge_one():
+    # #1366: the owner's split -- the module's LED is the heartbeat, the badge's LED
+    # beside the display is traffic and notifications. Until this, PIN_STATUS_LED pointed
+    # at the MSG_LED, so a liveness blink consumed the one user-visible notification LED
+    # while the module's own LED did nothing.
+    #
+    # On nRF52 the heartbeat comes straight off this flag, in NRF52Board::heartbeatTick(),
+    # so this single number decides which LED blinks. Both directions are asserted: it IS
+    # the module LED, and it is NOT the MSG_LED -- the second matters because reverting
+    # the first by itself would silently hand the heartbeat back to the badge LED.
+    assert ini_flag("PIN_STATUS_LED") == define("PIN_QCC_MODULE_LED"), \
+        "the heartbeat must be on the module LED"
+    assert ini_flag("PIN_STATUS_LED") != define("PIN_QCC_MSG_LED"), \
+        "the heartbeat must NOT be on the badge's MSG_LED -- that LED is for traffic (#1367)"
+    assert gpio("PIN_QCC_MODULE_LED") == 15, "the module LED is P0.15"
+
+
+def test_the_message_led_is_left_for_the_scheduler():
+    # P0.08 must still be mapped and must still be a badge output -- freeing it means
+    # nothing else claims it, not that it stops existing.
+    assert gpio("PIN_QCC_MSG_LED") == 8
+    ini = (QCC / "platformio.ini").read_text()
+    # Nothing in the env may point a shared single-LED flag at it any more.
+    for flag in ("PIN_STATUS_LED", "PIN_LED", "LED_BUILTIN"):
+        m = re.search(r"-D\s+%s=(\d+)" % flag, ini)
+        if m:
+            assert int(m.group(1)) != define("PIN_QCC_MSG_LED"), \
+                f"-D {flag} points at the MSG_LED, which belongs to the scheduler (#1367)"
+
+
+def test_one_polarity_constant_now_describes_one_led():
+    # LED_STATE_ON is a single global, and before #1366 it had to serve two parts: the
+    # P0.08 MOSFET gate and the P0.15 module LED. Every reader of it pairs it with
+    # PIN_STATUS_LED, so once the heartbeat moved it describes the module LED alone and
+    # the conflict is gone. If some future env points PIN_STATUS_LED back at a second
+    # part, that ambiguity returns -- which is what the test above prevents.
+    #
+    # The value itself is deliberately NOT asserted: the polarity of this module's LED is
+    # unverified (see variant.h), and pinning an unverified number would turn a guess into
+    # a rule. What is asserted is that the constant exists and is a plain 0 or 1, so
+    # flipping it after one bench observation stays a one-line change.
+    src = (QCC / "variant.h").read_text()
+    m = re.search(r"#define\s+LED_STATE_ON\s+([01])\b", src)
+    assert m, "LED_STATE_ON must be a literal 0 or 1 in the badge variant"
 
 
 def test_safeboot_and_board_share_one_divider_ratio():

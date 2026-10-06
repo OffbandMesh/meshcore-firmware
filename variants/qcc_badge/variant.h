@@ -86,6 +86,28 @@
 #define LED_PIN              PIN_LED
 #define LED_BLUE             PIN_LED
 #define LED_BUILTIN          PIN_LED
+
+// #1366: the LED on the ProMicro module itself, P0.15. Named, because the badge has two
+// LEDs and "the LED" is ambiguous: this one is on the module, the other (PIN_QCC_MSG_LED,
+// P0.08) is the one beside the display. The owner's split: this is the heartbeat, that
+// one is traffic and notifications.
+//
+// LED_BLUE above is inherited from the ProMicro variant and is wrong about the colour --
+// the part on this module is red. Left alone because shared code keys off the name.
+#define PIN_QCC_MODULE_LED   PIN_LED   // P0.15, the module's own LED
+
+// ⚠ UNVERIFIED POLARITY. Zephyr and RIOT both place LED0 on P0.15 for this board and
+// both decline to say which way round it is, because the clones differ; the badge
+// schematic cannot settle it either, since the ProMicro is drawn as a module symbol and
+// this LED is internal to it. No variant in this tree has ever driven P0.15, so the `1`
+// here is inherited boilerplate rather than a tested fact.
+//
+// It is one glance to settle: the heartbeat is a ~1 Hz blip, on 90 ms and off 890 ms. If
+// the module LED is instead lit about nine tenths of the time, the polarity is inverted
+// and this constant becomes 0. Nothing else needs to change -- every reader of
+// LED_STATE_ON pairs it with PIN_STATUS_LED, and on this board that is now this LED
+// alone (the MSG_LED carries its own polarity, which the schematic does prove: P0.08
+// drives a 2N7000 gate with the LED anode at VCC, so it is active HIGH).
 #define LED_STATE_ON         1
 
 ////////////////////////////////////////////////////////////////////////////////
