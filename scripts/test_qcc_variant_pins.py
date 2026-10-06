@@ -217,6 +217,67 @@ def test_the_activity_led_does_not_borrow_the_module_leds_polarity():
         "LED on P0.15, a different part with a different (and unverified) polarity")
 
 
+def function_body(src, signature):
+    """The body of `signature`, by brace matching.
+
+    Reading a fixed number of characters after the signature is what an earlier version
+    of these tests did, and it broke the moment the function grew: the thing being looked
+    for slid past the window and the test failed while the code was correct. Matching
+    braces means the window is the function, whatever its length.
+    """
+    i = src.index(signature)
+    open_at = src.index("{", i)
+    depth = 0
+    for j in range(open_at, len(src)):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[open_at:j + 1]
+    raise AssertionError(f"unbalanced braces after {signature!r}")
+
+
+def resolve_const(src, name, _seen=None):
+    """A `static const uint32_t NAME = ...;` value, following simple arithmetic.
+
+    The traffic floor is deliberately DERIVED from the flicker rate rather than written
+    as a number, so that it cannot drift away from the thing it is expressed in. A test
+    that demanded a literal would punish exactly the structure it should be protecting.
+    """
+    _seen = _seen or []
+    assert name not in _seen, f"constant cycle: {' -> '.join(_seen + [name])}"
+    m = re.search(r"\b%s\s*=\s*([^;]+);" % name, src)
+    assert m, f"{name} must be defined for the activity LED"
+    expr = m.group(1).strip()
+    for ident in sorted(set(re.findall(r"[A-Za-z_]\w*", expr)), key=len, reverse=True):
+        expr = expr.replace(ident, str(resolve_const(src, ident, _seen + [name])))
+    assert re.fullmatch(r"[\d\s()+*/-]+", expr), f"{name} is not simple arithmetic: {expr}"
+    return int(eval(expr))    # arithmetic only, validated above
+
+
+def test_the_attention_blink_reads_the_badges_own_unread():
+    # Found on hardware: the blink would not stop after reading the message on the badge.
+    # `_msgcount` is `offline_queue_len` -- the queue of messages waiting for a PHONE to
+    # collect over BLE -- and it is cleared by UITask::msgRead() when the client drains
+    # that queue. Reading on the badge never touches it, and on a badge with no phone
+    # paired nothing ever will, so the LED blinked forever.
+    #
+    # BadgeMsgStore::totalUnread() is the count the Inbox already shows as "N new": a
+    # message counts as unread only while its conversation is closed, and opening the
+    # conversation zeroes it. The two are easy to confuse and sit one scroll apart, so
+    # the choice is pinned here rather than left to a comment.
+    src = strip_c_comments(
+        (ROOT / "examples" / "companion_radio" / "ui-new" / "UITask.cpp").read_text())
+    body = function_body(src, "void UITask::activityLedHandler(")
+    assert "totalUnread()" in body, (
+        "the attention blink must read the badge's own unread count "
+        "(BadgeMsgStore::totalUnread), which clears when a conversation is opened")
+    assert "_msgcount" not in body, (
+        "the attention blink must NOT read _msgcount -- that is the client's offline "
+        "queue length, which reading on the badge cannot clear")
+
+
 def test_the_traffic_flash_is_bounded_at_both_ends():
     # The clamp is the whole design: a floor because a 20 ms packet at the conference
     # preset is too short to see, a ceiling because a slow preset would otherwise read as
@@ -224,18 +285,33 @@ def test_the_traffic_flash_is_bounded_at_both_ends():
     # may be tuned on the bench; the ORDERING is what must not break.
     src = strip_c_comments(
         (ROOT / "examples" / "companion_radio" / "ui-new" / "UITask.h").read_text())
-    vals = {}
-    for name in ("kTrafficMinMs", "kTrafficMaxMs", "kTrafficGapMs",
-                 "kAttentionOnMs", "kAttentionPeriodMs"):
-        m = re.search(r"%s\s*=\s*(\d+)" % name, src)
-        assert m, f"{name} must be defined for the activity LED"
-        vals[name] = int(m.group(1))
+    vals = {n: resolve_const(src, n) for n in
+            ("kTrafficMinMs", "kTrafficMaxMs", "kTrafficGapMs",
+             "kAttentionOnMs", "kAttentionPeriodMs",
+             "kFlickerOnMs", "kFlickerOffMs", "kFlickerMinCycles", "kFlickerJitterMs")}
     assert vals["kTrafficMinMs"] < vals["kTrafficMaxMs"], \
         "the traffic floor must be below the ceiling"
     assert vals["kTrafficGapMs"] > 0, \
         "without a forced gap, back-to-back packets merge into a solid-on LED"
     assert vals["kAttentionOnMs"] < vals["kAttentionPeriodMs"], \
         "the attention blink must be shorter than its period, or it is solid-on"
+
+    # The owner's constraint: the shortest flash is still worth five flickers. Checked as
+    # a relationship rather than a number, so tuning the flicker rate cannot quietly make
+    # the floor mean something else.
+    cycle = vals["kFlickerOnMs"] + vals["kFlickerOffMs"]
+    assert vals["kTrafficMinMs"] >= vals["kFlickerMinCycles"] * cycle, (
+        f"the traffic floor ({vals['kTrafficMinMs']} ms) is worth fewer than "
+        f"{vals['kFlickerMinCycles']} flickers at {cycle} ms per cycle")
+
+    # And the flicker must stay slow enough to READ as flicker. Jitter shortens some
+    # cycles, so the fastest one is what matters: much above 40 Hz the eye fuses it into
+    # a dim steady light, which is the thing chopping exists to avoid.
+    fastest = cycle - 2 * vals["kFlickerJitterMs"]
+    assert fastest > 0, "jitter cannot exceed the half-cycle it varies"
+    assert 1000.0 / fastest <= 45.0, (
+        f"the fastest flicker cycle is {fastest} ms ({1000.0/fastest:.0f} Hz) -- fast "
+        "enough to fuse into a steady light rather than read as flutter")
 
 
 def test_the_message_led_is_left_for_the_scheduler():

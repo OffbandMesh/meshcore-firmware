@@ -94,9 +94,39 @@ class UITask : public AbstractUITask {
   // 0.2-0.5 mA (NRF52Board::startHeartbeat), so the idle case here -- 60 ms every 2500 ms,
   // 2.4%, about 150 uA -- is cheaper than something already accepted. It is the saturated
   // case that needed bounding.
-  static const uint32_t kTrafficMinMs = 60;     // below this a flash is too short to see
-  static const uint32_t kTrafficMaxMs = 400;    // above this it stops reading as a blink
+  // The flash is CHOPPED, not held solid. A single decoded packet held solid reads as a
+  // brief steady light, not as activity -- an Ethernet LED flutters because many small
+  // packets arrive back to back, which LoRa never does: its packets are rare and long, so
+  // one packet is one long blink by construction. Chopping inside the window gives the
+  // flutter while keeping the honest part, that total on-time tracks airtime.
+  //
+  // 25 Hz, not faster. At 15/15 ms (33 Hz) the eye starts fusing the flicker into a dim
+  // steady light, which is the thing being avoided; 20/20 is comfortably below that and
+  // still reads as rapid.
+  // And jittered. A fixed 25 Hz chop reads as a metronome -- obviously a timer, not
+  // traffic. Varying each half-cycle makes it look like data arriving, which is what an
+  // Ethernet LED's appeal actually is: its irregularity, not its rate. The jitter is
+  // bounded so the floor below stays meaningful; worst case each cycle is
+  // (on+off) +/- 2*kFlickerJitterMs.
+  static const uint32_t kFlickerOnMs = 20;
+  static const uint32_t kFlickerOffMs = 20;
+  static const uint32_t kFlickerJitterMs = 8;    // +/- per half-cycle
+  static const uint32_t kFlickerMinCycles = 5;   // owner: the floor is worth 5 flickers
+
+  uint32_t _flicker_next = 0;    // when the current half-cycle ends
+  uint32_t _flicker_rng = 0;     // local PRNG state, so nothing else's stream is disturbed
+
+  // The floor is DERIVED, so it cannot drift away from the flicker rate it is expressed
+  // in. A literal here would silently stop being five flickers the moment either half of
+  // the cycle changed.
+  static const uint32_t kTrafficMinMs = kFlickerMinCycles * (kFlickerOnMs + kFlickerOffMs);
+  static const uint32_t kTrafficMaxMs = 400;    // above this it stops reading as one event
   static const uint32_t kTrafficGapMs = 190;    // forced dark; caps the saturated duty cycle
+
+  static_assert(kTrafficMinMs < kTrafficMaxMs,
+                "the traffic floor must leave room below the ceiling");
+  static_assert(kTrafficMinMs >= kFlickerMinCycles * (kFlickerOnMs + kFlickerOffMs),
+                "the shortest flash must still be worth kFlickerMinCycles flickers");
   static const uint32_t kAttentionOnMs = 60;    // the "you have mail" blink
   static const uint32_t kAttentionPeriodMs = 2500;
 
