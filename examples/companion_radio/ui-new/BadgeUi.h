@@ -73,10 +73,16 @@ inline void lineRight(DisplayDriver& d, const Face& f, int row, const char* s, b
   textAt(d, f, kScreenPx - kEdgePx - textPx(f, s), rowY(f, row), s, on_lit);
 }
 
+// A whole row lit at an explicit y, for a selection on a screen whose rows do not sit on
+// the face's own pitch (#1370: content under a title bar of a different face).
+inline void fillRowAtY(DisplayDriver& d, const Face& f, int y) {
+  lit(d);
+  d.fillRect(0, y, kScreenPx, f.row_px);
+}
+
 // A whole row lit, for a title bar, a selection or a flash.
 inline void fillRow(DisplayDriver& d, const Face& f, int row) {
-  lit(d);
-  d.fillRect(0, rowY(f, row), kScreenPx, f.row_px);
+  fillRowAtY(d, f, rowY(f, row));
 }
 
 // An inverted bar across a row: `left` from the left edge, `right` flush right.

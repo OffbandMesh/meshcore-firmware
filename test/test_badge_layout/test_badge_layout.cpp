@@ -349,6 +349,92 @@ TEST(BadgeLayoutScreenOff, EveryNameFitsTheSettingsRow) {
   EXPECT_LT(strlen(buf), sizeof buf);
 }
 
+// #1370: the title bar is pinned to the navigation face while a body keeps its own, so
+// the layout is now two-faced. These run every combination -- 3 navigation sizes x 3
+// message sizes -- because the failure is a one or two pixel overlap that no single
+// combination reveals: with nav and body equal, the old arithmetic and the new agree
+// exactly, so a test that only exercised matching faces would pass while the mixed cases
+// drew the title over the first row.
+
+TEST(BadgeLayoutTitleChrome, NoCombinationOverlapsTheTitle) {
+  for (int nav = kTextLarge; nav < kTextSteps; nav++) {
+    for (int msg = kTextLarge; msg < kTextSteps; msg++) {
+      const Face& title = titleFaceFor(nav);
+      const Face& body = bodyFaceFor(msg);
+      // The first content row must begin at or after the bottom of the title bar.
+      EXPECT_GE(rowYUnderTitle(title, body, 1), title.row_px)
+          << "nav " << nav << " msg " << msg << ": content starts inside the title";
+      // And the title itself still starts at the top.
+      EXPECT_EQ(0, rowYUnderTitle(title, body, 0)) << "nav " << nav << " msg " << msg;
+    }
+  }
+}
+
+TEST(BadgeLayoutTitleChrome, TheLastContentRowFitsInEveryCombination) {
+  for (int nav = kTextLarge; nav < kTextSteps; nav++) {
+    for (int msg = kTextLarge; msg < kTextSteps; msg++) {
+      const Face& title = titleFaceFor(nav);
+      const Face& body = bodyFaceFor(msg);
+      const int rows = rowsUnderTitle(title, body);
+      EXPECT_GT(rows, 0) << "nav " << nav << " msg " << msg;
+      const int bottom = rowYUnderTitle(title, body, rows) + body.row_px;
+      EXPECT_LE(bottom, kScreenRowsPx)
+          << "nav " << nav << " msg " << msg << ": last row runs off the screen";
+    }
+  }
+}
+
+TEST(BadgeLayoutTitleChrome, RowsAreContiguousWithNoGapUnderTheTitle) {
+  // Every content row sits exactly one body row after the previous one, and the first
+  // sits flush under the title -- no gap, no overlap, at any combination.
+  for (int nav = kTextLarge; nav < kTextSteps; nav++) {
+    for (int msg = kTextLarge; msg < kTextSteps; msg++) {
+      const Face& title = titleFaceFor(nav);
+      const Face& body = bodyFaceFor(msg);
+      EXPECT_EQ(title.row_px, rowYUnderTitle(title, body, 1)) << "nav " << nav << " msg " << msg;
+      for (int r = 2; r <= rowsUnderTitle(title, body); r++) {
+        EXPECT_EQ(body.row_px,
+                  rowYUnderTitle(title, body, r) - rowYUnderTitle(title, body, r - 1))
+            << "nav " << nav << " msg " << msg << " row " << r;
+      }
+    }
+  }
+}
+
+TEST(BadgeLayoutTitleChrome, NavigationScreensAreUnchanged) {
+  // Where the title and the body are the same face -- every navigation screen, and every
+  // other variant, which never sets a separate message size -- the new arithmetic must
+  // reproduce the old exactly: same row count, same positions. This is what makes the
+  // change safe for the sixty variants that were not asked to change.
+  for (int size = kTextLarge; size < kTextSteps; size++) {
+    const Face& f = bodyFaceFor(size);
+    EXPECT_EQ(rowsFor(f) - 1, rowsUnderTitle(f, f)) << "step " << size;
+    for (int r = 0; r <= rowsFor(f) - 1; r++) {
+      // The old arithmetic, written out rather than called: BadgeUi.h's rowY() is
+      // `row * f.row_px` and lives in the badge UI, which this native test does not
+      // include. Pinning the formula here is the stronger check anyway -- it would still
+      // catch a change made to rowY() itself.
+      EXPECT_EQ(r * f.row_px, rowYUnderTitle(f, f, r)) << "step " << size << " row " << r;
+    }
+  }
+}
+
+TEST(BadgeLayoutTitleChrome, TheRowCountDoesNotChangeForAnyCombination) {
+  // A happy accident worth pinning rather than relying on silently: on this 64 px screen,
+  // with these three faces, the rows that fit under a title of one face equal the rows
+  // the old single-face arithmetic gave. So pinning the title moves content down by a
+  // pixel or two but never costs a row -- and if a future face breaks that, this says so
+  // instead of a screen quietly losing its last line.
+  for (int nav = kTextLarge; nav < kTextSteps; nav++) {
+    for (int msg = kTextLarge; msg < kTextSteps; msg++) {
+      const Face& title = titleFaceFor(nav);
+      const Face& body = bodyFaceFor(msg);
+      EXPECT_EQ(rowsFor(body) - 1, rowsUnderTitle(title, body))
+          << "nav " << nav << " msg " << msg;
+    }
+  }
+}
+
 // Each step down fits at least as many rows and characters as the one above.
 
 TEST(BadgeLayoutTextSize, StepsGetSmaller) {

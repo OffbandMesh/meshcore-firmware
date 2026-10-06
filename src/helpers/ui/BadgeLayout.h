@@ -58,6 +58,29 @@ static_assert(kDefaultTextSize == kTextLarge,
 
 inline const Face& detailFace() { return metaFace(); }
 
+// #1370: the title bar is chrome, not content. The owner: pinning the titles to the same
+// size between surfaces shows consistency. So a title is always drawn in the NAVIGATION
+// face, whatever face the surface below it uses for its body.
+//
+// That makes the row arithmetic two-faced. `rowY(f, row) = row * f.row_px` was right only
+// while a title's height WAS a body row's height on every screen; with a large title over
+// a medium body, content row 1 would start at 7 px while the title occupies 0..7 -- a one
+// pixel overlap, two at the small face. Content rows therefore start below the TITLE's
+// height and advance by the BODY's.
+inline const Face& titleFaceFor(int nav_size) { return bodyFaceFor(nav_size); }
+
+// y of a row on a screen with a title bar: row 0 is the title itself, rows 1.. are the
+// content beneath it. Screens with no title bar -- the full-screen compose editor -- keep
+// using rowY(), because for them row 0 really is content.
+inline int rowYUnderTitle(const Face& title, const Face& body, int row) {
+  return row <= 0 ? 0 : title.row_px + (row - 1) * body.row_px;
+}
+
+// How many content rows fit under the title bar.
+inline int rowsUnderTitle(const Face& title, const Face& body) {
+  return (kScreenRowsPx - title.row_px) / body.row_px;
+}
+
 inline const char* textSizeName(int size) {
   if (size == kTextLarge) return "large";
   if (size == kTextSmall) return "small";
