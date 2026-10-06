@@ -130,5 +130,9 @@ seeds**: `MyMesh` seeds `_prefs` from them, `loadPrefs()` then overwrites from
 - **Mixed fleet (2026-10-05, owner):** acceptable for now — there are no other QCC badges to
   message with yet, so existing badges stay on the local mesh. To be revisited before the
   conference.
-- **Spreading factor:** open. SF7 is what is committed in #1363 as originally specified;
-  this document recommends SF10, pending the owner's and Jeremy's input.
+- **Spreading factor (2026-10-05, owner): SF7 stands.** Jeremy's values are the decision —
+  `919.5 / 500 / SF7 / CR 4:5`, as committed in #1363. The SF10 analysis above is retained
+  as the reasoning behind the trade, not as a pending change: it records what the ~9 dB
+  costs and what SF10 or SF11 would recover, so if range proves short in the hall the
+  options and their airtime prices are already worked out. **Do not "fix" the default to
+  SF10 on the strength of this document.**
