@@ -1050,19 +1050,48 @@ void UITask::activityLedHandler() {
       if (on_ms > kTrafficMaxMs) on_ms = kTrafficMaxMs;
       _traffic_until = now + on_ms;
       _traffic_gap_until = _traffic_until + kTrafficGapMs;
+      // Start the burst lit, on its own half-cycle, so the first flicker is immediate
+      // rather than waiting out a dark period the viewer never asked for.
+      _flicker_next = now;
+      if (_flicker_rng == 0) _flicker_rng = now | 1;   // xorshift must never be seeded 0
     }
   }
 
   // Priority: traffic outranks attention, so a badge that is both busy and holding
   // unread shows the busier signal. Attention reasserts itself the moment traffic stops.
   if (activityBefore(now, _traffic_until)) {
-    setActivityLed(true);
+    // Chopped, not solid, and jittered. Held solid a single packet reads as a brief
+    // steady light; an Ethernet LED's appeal is its irregularity, so each half-cycle is
+    // varied rather than run at a fixed rate.
+    if (!activityBefore(now, _flicker_next)) {
+      // xorshift32, local: the Arduino RNG is shared, and perturbing its stream from an
+      // indicator would be an unpleasant thing to debug somewhere else.
+      _flicker_rng ^= _flicker_rng << 13;
+      _flicker_rng ^= _flicker_rng >> 17;
+      _flicker_rng ^= _flicker_rng << 5;
+      const uint32_t span = 2 * kFlickerJitterMs + 1;
+      const int32_t jitter = (int32_t)(_flicker_rng % span) - (int32_t)kFlickerJitterMs;
+      const uint32_t base = _activity_lit ? kFlickerOffMs : kFlickerOnMs;  // next half
+      _flicker_next = now + (uint32_t)((int32_t)base + jitter);
+      setActivityLed(!_activity_lit);
+    }
     return;
   }
 
   // Attention: a short blink at the top of each period while something wants looking at.
-  // `_msgcount` is the unread the phone or the badge store reports.
-  const bool wants_attention = (_msgcount > 0);
+  //
+  // The source is the BADGE's own unread, not `_msgcount`. That distinction is the whole
+  // of bug #1367-a, found on hardware: `_msgcount` is `offline_queue_len`, the queue of
+  // messages waiting for a PHONE to collect over BLE, and it is cleared by
+  // `UITask::msgRead()` when the client drains that queue. Reading a conversation on the
+  // badge does not touch it, and on a badge with no phone paired nothing ever will -- so
+  // the LED blinked forever and going to the conversation could not stop it.
+  //
+  // `BadgeMsgStore::totalUnread()` is the count the Inbox title already shows as "N new".
+  // An arriving message counts as unread only if its conversation is NOT open, and
+  // opening a conversation zeroes it, which is exactly the behaviour the LED should
+  // follow.
+  const bool wants_attention = (the_mesh.badgeStore().totalUnread() > 0);
   if (!wants_attention) {
     _attention_phase = now;   // keep the phase fresh so the next blink is immediate
     setActivityLed(false);
