@@ -20,6 +20,13 @@
 #include "helpers/wifi_observer/SystemChannelCli.h"
 #endif
 
+#ifdef OFFBAND_PREFLASH_CHANNELS
+// #1364: the channels a fresh board ships holding, beyond Public. The table lives with
+// the variant that wants them, so this translation unit is unchanged for every board that
+// does not set the flag.
+#include "QccChannels.h"
+#endif
+
 #ifdef OFFBAND_OBSERVER
 // Strycher/LoRa#325: the observer config CLI must be reachable over
 // ANY connection type, not just the BLE _sys channel. cliPassthrough
@@ -1635,7 +1642,33 @@ void MyMesh::begin(bool has_display) {
   loadBlocks();   // #241: restore the persisted block list at boot
   bootstrapRTCfromContacts();
   addChannel("Public", PUBLIC_GROUP_PSK); // pre-configure Andy's public channel
+  const bool had_stored_channels = _store->hasChannels();   // #1364: asked BEFORE the load
   _store->loadChannels(this);
+
+#ifdef OFFBAND_PREFLASH_CHANNELS
+  // #1364: a board may ship holding extra channels. FIRST BOOT ONLY -- only when this node
+  // has no stored channel set at all.
+  //
+  // The guard is not caution, it is correctness. loadChannels() writes its slots through
+  // setChannel() and never advances `num_channels`, which counts what addChannel() put
+  // there. So on a configured node BOTH orderings corrupt the list: seed before the load
+  // and the seeds survive in the slots past the stored ones, giving a list that grows at
+  // every flash; seed after it and addChannel() appends at a stale `num_channels` -- 1,
+  // just Public -- landing on top of a user's channel.
+  if (!had_stored_channels) {
+    bool added = false;
+    for (int i = 0; i < offband::kQccPreflashChannelCount; i++) {
+      const auto& c = offband::kQccPreflashChannels[i];
+      if (addChannel(c.name, c.psk_base64) != NULL) {
+        added = true;
+      } else {
+        // Out of slots, or a key that is not 16 or 32 bytes once decoded.
+        MESH_DEBUG_PRINTLN("preflash channel rejected: %s", c.name);
+      }
+    }
+    if (added) saveChannels();
+  }
+#endif
 
 #ifdef OFFBAND_OBSERVER_BLE_COMPANION
   // Plan 3 Task 10 (Strycher/LoRa#272): provision the locked
