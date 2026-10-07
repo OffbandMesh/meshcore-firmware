@@ -11,6 +11,7 @@
 #include "TxtDataHelpers.h"
 #include <RTClib.h>
 #include "MeshLog.h"   // serial-capture sink control (#395 caplog verbs)
+#include "OffbandVersion.h"   // #1391: shared OB-first <ob>-<stock> version string (ver == version)
 // #1060: `caplog forward` and the forward fields of `caplog status`, shared with
 // the observer. With OFFBAND_CAPLOG_FORWARD the role provides caplogForwarder()
 // and caplogForwardLinkUp(); nothing else of its WiFi stack is needed here.
@@ -648,13 +649,11 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
               _board->getShutdownReasonString(sr), (unsigned)sr);
 #endif
     } else if (memcmp(command, "version", 7) == 0 && (command[7] == 0 || command[7] == ' ')) {
-      // Offband identity (FF3 / #180). Reports both upstream MeshCore version
-      // (via callback into example's MyMesh which #defines FIRMWARE_VERSION) and
-      // the Offband-injected build identity from scripts/inject_offband_version.py
-      // (FF2 / #179). See VERSIONING.md for the dual-version scheme rationale.
-      sprintf(reply, "Upstream MeshCore: %s (%s)\nOffband fork: %s (sha %s, %s, built %s)",
-              _callbacks->getFirmwareVer(), _callbacks->getBuildDate(),
-              OFFBAND_VERSION, OFFBAND_GIT_SHA, OFFBAND_BRANCH, OFFBAND_BUILD_DATE);
+      // #1391: `version` and `ver` return the SAME canonical Offband string
+      // (OB-first <ob>-<stock>, SHA when tagless), matching the companion device-info
+      // field the client displays. The full sha/branch/build-date remain on the serial
+      // boot banner (main.cpp) for deep diagnostics.
+      snprintf(reply, 160, "%s", offbandVersionString(_callbacks->getFirmwareVer()));  // reply[160] CLI contract
       // #213: the in-handler keepalive moved to a file-scope constructor
       // (_xwire_keepalive_ctor near top of this file). The constructor
       // approach works on every platform; the in-handler line was
@@ -748,7 +747,7 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
       bool s = _callbacks->formatFileSystem();
       sprintf(reply, "File system erase: %s", s ? "OK" : "Err");
     } else if (memcmp(command, "ver", 3) == 0) {
-      sprintf(reply, "%s (Build: %s)", _callbacks->getFirmwareVer(), _callbacks->getBuildDate());
+      snprintf(reply, 160, "%s", offbandVersionString(_callbacks->getFirmwareVer()));  // #1391: identical to 'version'
     } else if (memcmp(command, "board", 5) == 0) {
       sprintf(reply, "%s", _board->getManufacturerName());
     } else if (memcmp(command, "sensor get ", 11) == 0) {
