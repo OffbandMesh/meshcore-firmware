@@ -5,6 +5,7 @@
 #include <MeshLog.h>  // #396: serial-capture buffer access for the caplog download
 #include <helpers/ClockSanity.h>  // #607: owner-path clock sets + audit log
 #include "helpers/CdcConsoleFlush.h"   // #1035: right-flush (ZLP) for the USB-Serial-JTAG console
+#include "helpers/OffbandVersion.h"   // #1391: shared OB-first <ob>-<stock> version string (CLI == device-info)
 
 // Offband fork-only companion-API frame codes (config 0xC0 / GPS 0xC1 / block 0xC2)
 // + shared enums. Self-contained (only <stdint.h>); included unconditionally so the
@@ -1785,54 +1786,14 @@ void MyMesh::startInterface(BaseSerialInterface &serial) {
 #endif
 }
 
-// #154: companion-API firmware-version string. The standard MeshCore app shows
-// this field, so surface Offband over the base: "<offband>-<meshcore>" (e.g.
-// "1.0.0-1.16.0"). <offband> is the offband-v* tag core; <meshcore> the upstream
-// FIRMWARE_VERSION core (a leading 'v' and any -rc/-dev suffix trimmed). Fits the
-// 20-char device-info field. Falls back to bare FIRMWARE_VERSION when no Offband
-// tag is available (an untagged build, or a non-Offband upstream build).
+// #154/#1391: companion-API firmware-version string the client shows in its "Firmware"
+// row. Delegates to the shared offbandVersionString() so this device-info field and the
+// CLI (`ver`/`version`) report IDENTICALLY: OB-first "<offband>-<meshcore>" (e.g.
+// "1.5.0-1.17.0"); the short git SHA stands in for the tag on a tagless build, so it
+// never silently collapses to a bare stock version (owner directive #1391). The #222
+// OFFBAND_BUILD_TAG suffix is preserved inside the shared helper.
 static const char* offbandClientVersion() {
-  static char buf[20];
-  // MeshCore base core: strip a leading 'v', then take up to the first '-'.
-  const char* mc = FIRMWARE_VERSION;
-  if (*mc == 'v' || *mc == 'V') mc++;
-  char mc_core[12];
-  size_t m = 0;
-  while (mc[m] && mc[m] != '-' && m < sizeof(mc_core) - 1) { mc_core[m] = mc[m]; m++; }
-  mc_core[m] = '\0';
-#ifdef OFFBAND_VERSION
-  // Offband core: chars after "offband-v" up to the first '-' (drops the
-  // git-describe -N-g<sha>/-dirty suffix and any -rc tag suffix).
-  const char* ob = strstr(OFFBAND_VERSION, "offband-v");
-  if (ob != nullptr) {
-    ob += 9;  // strlen("offband-v")
-    char ob_core[12];
-    size_t n = 0;
-    while (ob[n] && ob[n] != '-' && n < sizeof(ob_core) - 1) { ob_core[n] = ob[n]; n++; }
-    ob_core[n] = '\0';
-    if (n > 0) {
-      char vers[20];
-      snprintf(vers, sizeof(vers), "%s-%s", ob_core, mc_core);
-#ifdef OFFBAND_BUILD_TAG
-      // #222: a settable build tag lets flag-only variants (same git commit,
-      // different compile flags) self-identify in the 20-char app device-info
-      // field. Reserve room so the TAG (the variant discriminator) always
-      // survives; the version cores truncate first if the field is tight.
-      if (OFFBAND_BUILD_TAG[0] != '\0') {
-        int tagroom = (int)strlen(OFFBAND_BUILD_TAG) + 1;   // "-<tag>"
-        int vmax = (int)sizeof(buf) - 1 - tagroom;
-        if (vmax < 0) vmax = 0;
-        snprintf(buf, sizeof(buf), "%.*s-%s", vmax, vers, OFFBAND_BUILD_TAG);
-        return buf;
-      }
-#endif
-      StrHelper::strzcpy(buf, vers, sizeof(buf));
-      return buf;
-    }
-  }
-#endif
-  StrHelper::strzcpy(buf, FIRMWARE_VERSION, sizeof(buf));
-  return buf;
+  return offbandVersionString(FIRMWARE_VERSION);
 }
 
 #ifdef OFFBAND_OBSERVER
