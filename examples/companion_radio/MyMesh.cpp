@@ -3601,7 +3601,18 @@ static bool save_filter(const ContactInfo& c) {
 }
 
 void MyMesh::saveContacts() {
+#if defined(OFFBAND_MEM_TELEMETRY)
+  // #1326: every save rewrites the whole contacts file, so the save rate and
+  // its duration set both the flash wear and the stall a GUI would see.
+  static uint32_t s_saves = 0;
+  uint32_t t0 = millis();
+#endif
   _store->saveContacts(this, save_filter);
+#if defined(OFFBAND_MEM_TELEMETRY)
+  mesh_log_line(MLOG_BOOT, "[mem] contacts_save n=%lu contacts=%d ms=%lu\n",
+                (unsigned long)++s_saves, getNumContacts(),
+                (unsigned long)(millis() - t0));
+#endif
 }
 
 // #241: block-list persistence. Flat file "/blocks": [count:1][key:32]*count.

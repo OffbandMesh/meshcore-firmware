@@ -778,6 +778,33 @@ static void emitRadioStatusLine() {
 }
 #endif
 
+#if defined(OFFBAND_MEM_TELEMETRY) && defined(ESP32)
+// #1326: memory budget for the on-device GUI. Internal RAM and PSRAM are
+// reported separately because ESP.getFreeHeap() folds PSRAM into one figure and
+// hides the internal headroom that BLE and LVGL actually draw on. min_* is the
+// low-water mark since boot; largest_* bounds the biggest single allocation.
+#include <esp_heap_caps.h>
+#ifndef OFFBAND_MEM_TELEMETRY_MS
+  #define OFFBAND_MEM_TELEMETRY_MS 30000
+#endif
+
+static void emitMemStatusLine() {
+  mesh_log_line(MLOG_BOOT,
+                "[mem] up=%lus link=%d int free=%u min=%u largest=%u "
+                "psram free=%u min=%u largest=%u fs used=%luK total=%luK\n",
+                (unsigned long)(millis() / 1000UL),
+                (int)interface_manager.isConnected(),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+                (unsigned long)store.getStorageUsedKb(),
+                (unsigned long)store.getStorageTotalKb());
+}
+#endif
+
 void loop() {
 #if !defined(OFFBAND_OBSERVER)
   offband::crashLogStandardTick(millis());  // #472: deferred previous-boot re-dump (all non-observer companions)
@@ -785,6 +812,17 @@ void loop() {
 
 #if defined(OFFBAND_PAD_BEACON)
   offband::padBeaconTick(millis());         // #1210: one ID line per spare pad, once a second
+#endif
+
+#if defined(OFFBAND_MEM_TELEMETRY) && defined(ESP32)
+  {
+    static uint32_t s_mem_ms = 0;
+    uint32_t now_ms = millis();
+    if (s_mem_ms == 0 || now_ms - s_mem_ms >= (uint32_t)OFFBAND_MEM_TELEMETRY_MS) {
+      s_mem_ms = now_ms;
+      emitMemStatusLine();
+    }
+  }
 #endif
 
 #if defined(OFFBAND_POWER_TELEMETRY)
