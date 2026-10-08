@@ -13,6 +13,11 @@
   #define LED_STATE_ON 1
 #endif
 
+#ifdef PIN_QCC_ACTIVITY_LED
+  // #1367: the dispatcher -> UI traffic seam, needed here for the destructor's detach.
+  #include <helpers/ui/LedActivity.h>
+#endif
+
 #ifdef PIN_BUZZER
   #include <helpers/ui/buzzer.h>
 #endif
@@ -58,6 +63,83 @@ class UITask : public AbstractUITask {
   int led_state = 0;
   int next_led_change = 0;
   int last_led_increment = 0;
+#endif
+
+#ifdef PIN_QCC_ACTIVITY_LED
+  // #1367: the activity LED -- the one beside the display, which #1366 freed by moving
+  // the heartbeat to the module's own LED. One LED says one thing at a time, so the
+  // classes are a priority stack, highest first:
+  //
+  //   traffic    a packet decoded. Lit for as long as that packet occupied the air, so
+  //              the indicator reports something real rather than a chosen duration.
+  //   attention  unread messages, or a send that failed and has not been seen. A slow
+  //              blink, because the screen sleeps and this is the only thing that can
+  //              say "the badge wants you" while it is dark.
+  //   idle       dark. Never solid-on, at any traffic level.
+  //
+  // Airtime is clamped because raw duration fails at both ends. At the conference preset
+  // (500 kHz, SF7) a packet is about 20 ms, barely perceptible, so short packets get a
+  // floor. On a slow preset a packet runs hundreds of milliseconds, and with no ceiling
+  // a busy mesh would read as solid-on. The forced gap keeps consecutive packets legible
+  // as separate blinks rather than merging into one.
+  // The gap is sized by duty cycle, not by taste. The LED draws roughly 5-8 mA lit, so
+  // the worst case is what matters: a saturated mesh where a flash starts the instant the
+  // gap expires. At 60 ms on and a 40 ms gap that is a 100 ms period -- a 10 Hz strobe at
+  // 60% duty, about 3.6-4.8 mA continuous, which is both a real drain on a badge's cell
+  // and no longer informative, since the LED has stopped tracking the packet rate and is
+  // simply saturated (adversarial review, #1367). At 190 ms the period is 250 ms: still
+  // an obvious four-flashes-a-second "busy", at 24% duty and roughly 1.4 mA.
+  //
+  // For scale, the heartbeat this project already ships runs ~10% duty and is costed at
+  // 0.2-0.5 mA (NRF52Board::startHeartbeat), so the idle case here -- 60 ms every 2500 ms,
+  // 2.4%, about 150 uA -- is cheaper than something already accepted. It is the saturated
+  // case that needed bounding.
+  // The flash is CHOPPED, not held solid. A single decoded packet held solid reads as a
+  // brief steady light, not as activity -- an Ethernet LED flutters because many small
+  // packets arrive back to back, which LoRa never does: its packets are rare and long, so
+  // one packet is one long blink by construction. Chopping inside the window gives the
+  // flutter while keeping the honest part, that total on-time tracks airtime.
+  //
+  // 25 Hz, not faster. At 15/15 ms (33 Hz) the eye starts fusing the flicker into a dim
+  // steady light, which is the thing being avoided; 20/20 is comfortably below that and
+  // still reads as rapid.
+  // And jittered. A fixed 25 Hz chop reads as a metronome -- obviously a timer, not
+  // traffic. Varying each half-cycle makes it look like data arriving, which is what an
+  // Ethernet LED's appeal actually is: its irregularity, not its rate. The jitter is
+  // bounded so the floor below stays meaningful; worst case each cycle is
+  // (on+off) +/- 2*kFlickerJitterMs.
+  static const uint32_t kFlickerOnMs = 20;
+  static const uint32_t kFlickerOffMs = 20;
+  static const uint32_t kFlickerJitterMs = 8;    // +/- per half-cycle
+  static const uint32_t kFlickerMinCycles = 5;   // owner: the floor is worth 5 flickers
+
+  uint32_t _flicker_next = 0;    // when the current half-cycle ends
+  uint32_t _flicker_rng = 0;     // local PRNG state, so nothing else's stream is disturbed
+
+  // The floor is DERIVED, so it cannot drift away from the flicker rate it is expressed
+  // in. A literal here would silently stop being five flickers the moment either half of
+  // the cycle changed.
+  static const uint32_t kTrafficMinMs = kFlickerMinCycles * (kFlickerOnMs + kFlickerOffMs);
+  static const uint32_t kTrafficMaxMs = 400;    // above this it stops reading as one event
+  static const uint32_t kTrafficGapMs = 190;    // forced dark; caps the saturated duty cycle
+
+  static_assert(kTrafficMinMs < kTrafficMaxMs,
+                "the traffic floor must leave room below the ceiling");
+  static_assert(kTrafficMinMs >= kFlickerMinCycles * (kFlickerOnMs + kFlickerOffMs),
+                "the shortest flash must still be worth kFlickerMinCycles flickers");
+  static const uint32_t kAttentionOnMs = 60;    // the "you have mail" blink
+  static const uint32_t kAttentionPeriodMs = 2500;
+
+  volatile uint32_t _traffic_pending_ms = 0;    // set from the dispatcher, read on the tick
+  uint32_t _traffic_until = 0;                  // when the current traffic flash ends
+  uint32_t _traffic_gap_until = 0;              // earliest the next flash may start
+  uint32_t _attention_phase = 0;                // start of the current attention period
+  bool _activity_lit = false;                   // what the pin is currently driven to
+
+  void activityLedHandler();
+  void setActivityLed(bool on);
+  static void onTrafficDecoded(uint32_t airtime_ms);   // the registered sink
+  static UITask* _activity_owner;                      // the instance the sink feeds
 #endif
 
 #ifdef PIN_USER_BTN_ANA
@@ -116,6 +198,20 @@ public:
     ui_started_at = 0;
     curr = NULL;
   }
+#ifdef PIN_QCC_ACTIVITY_LED
+  // #1367: detach before going away. The dispatcher holds a function pointer that reaches
+  // this instance through `_activity_owner`; left dangling, the next decoded packet would
+  // call through freed memory. Today this UI is a singleton that outlives everything, so
+  // the destructor should never run -- which is exactly why leaving the hazard in place
+  // would be the kind of thing nobody notices until a board does construct one twice.
+  // Guarded on identity so a second instance's teardown cannot unhook a live first one.
+  ~UITask() {
+    if (_activity_owner == this) {
+      offband::setLedActivitySink(nullptr);
+      _activity_owner = nullptr;
+    }
+  }
+#endif
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
 
   // #1245: the Screen off row reads this and cycles it. Setting it applies at once --
