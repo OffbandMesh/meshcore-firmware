@@ -24,10 +24,24 @@ def pin_map(path):
     return [int(t) for t in re.findall(r"\d+", body)]
 
 
-def define(name):
-    m = re.search(r"#define\s+%s\s+\((\d+)\)" % name, (QCC / "variant.h").read_text())
-    assert m, f"{name} must be defined as (N) in variant.h"
-    return int(m.group(1))
+def define(name, _seen=None):
+    """A pin number from variant.h, following a single alias if the name is one.
+
+    #1366 added `PIN_QCC_MODULE_LED`, which names the ProMicro's own LED and is an alias
+    of `PIN_LED` rather than a second literal. Writing the number twice would be a magic
+    number that can drift from the one it is supposed to equal, so the helper resolves the
+    alias instead. Aliases are followed to a literal and a cycle is reported rather than
+    hung on.
+    """
+    src = (QCC / "variant.h").read_text()
+    _seen = _seen or []
+    assert name not in _seen, f"#define alias cycle in variant.h: {' -> '.join(_seen + [name])}"
+    m = re.search(r"#define\s+%s\s+\((\d+)\)" % name, src)
+    if m:
+        return int(m.group(1))
+    alias = re.search(r"#define\s+%s\s+([A-Za-z_]\w*)\b" % name, src)
+    assert alias, f"{name} must be defined as (N), or as an alias of one, in variant.h"
+    return define(alias.group(1), _seen + [name])
 
 
 def gpio(name):
@@ -88,9 +102,245 @@ def ini_flag(name):
 
 def test_env_pin_flags_name_the_badge_pins():
     # Shared code reads these as bare numbers; they must equal the variant's names.
-    assert ini_flag("PIN_STATUS_LED") == define("PIN_QCC_MSG_LED")
     assert ini_flag("PIN_BUZZER") == define("PIN_QCC_BUZZER")
     assert ini_flag("PIN_GPS_EN") == define("PIN_QCC_GPS_POWER")
+
+
+def test_the_heartbeat_is_on_the_module_led_not_the_badge_one():
+    # #1366: the owner's split -- the module's LED is the heartbeat, the badge's LED
+    # beside the display is traffic and notifications. Until this, PIN_STATUS_LED pointed
+    # at the MSG_LED, so a liveness blink consumed the one user-visible notification LED
+    # while the module's own LED did nothing.
+    #
+    # On nRF52 the heartbeat comes straight off this flag, in NRF52Board::heartbeatTick(),
+    # so this single number decides which LED blinks. Both directions are asserted: it IS
+    # the module LED, and it is NOT the MSG_LED -- the second matters because reverting
+    # the first by itself would silently hand the heartbeat back to the badge LED.
+    assert ini_flag("PIN_STATUS_LED") == define("PIN_QCC_MODULE_LED"), \
+        "the heartbeat must be on the module LED"
+    assert ini_flag("PIN_STATUS_LED") != define("PIN_QCC_MSG_LED"), \
+        "the heartbeat must NOT be on the badge's MSG_LED -- that LED is for traffic (#1367)"
+    assert gpio("PIN_QCC_MODULE_LED") == 15, "the module LED is P0.15"
+
+
+def test_the_activity_led_is_the_one_beside_the_display():
+    # #1367: the LED the heartbeat vacated. Named separately from PIN_QCC_MSG_LED so the
+    # scheduler's pin and the schematic's part are visibly the same thing.
+    assert ini_flag("PIN_QCC_ACTIVITY_LED") == define("PIN_QCC_MSG_LED"), (
+        "the activity LED must be the badge's MSG_LED (P0.08) -- the one beside the "
+        "display, which #1366 freed by moving the heartbeat to the module's LED")
+    assert ini_flag("OFFBAND_LED_ACTIVITY") == 1, (
+        "the badge env must set -D OFFBAND_LED_ACTIVITY=1, or the dispatcher never "
+        "reports decoded traffic and the LED only ever shows unread")
+
+
+def test_the_traffic_hook_only_fires_on_packets_that_parsed():
+    # #1367: the dispatcher hook must sit INSIDE the tryParsePacket() success branch.
+    # Outside it, noise that failed to decode would light the LED, and the indicator stops
+    # meaning "the mesh is reaching us" -- which is the only reason it is worth having.
+    #
+    # Checked by brace depth from the `if (tryParsePacket(` line rather than by proximity:
+    # a call a few lines below it can still be outside the branch.
+    src = strip_c_comments((ROOT / "src" / "Dispatcher.cpp").read_text())
+    assert "offband::onPacketDecoded(" in src, \
+        "the dispatcher must report decoded packets through the LedActivity seam"
+    start = src.index("if (tryParsePacket(")
+    call = src.index("offband::onPacketDecoded(")
+    assert call > start, "the hook must come after the parse check, not before it"
+
+    # Net brace depth is NOT enough, and an injected regression proved it: closing the
+    # parse branch and immediately opening another block leaves the final depth unchanged
+    # while the call has genuinely escaped. What matters is whether the branch ever
+    # CLOSES between the check and the call, so track whether depth returns to zero once
+    # it has been entered.
+    depth, entered = 0, False
+    for ch in src[start:call]:
+        if ch == "{":
+            depth += 1
+            entered = True
+        elif ch == "}":
+            depth -= 1
+            if entered and depth <= 0:
+                raise AssertionError(
+                    "offband::onPacketDecoded() is outside the tryParsePacket() success "
+                    "branch -- the branch closes before the call, so the LED would light "
+                    "for noise that never decoded")
+    assert entered and depth >= 1, (
+        "offband::onPacketDecoded() is not inside the tryParsePacket() success branch")
+
+
+def test_the_traffic_hook_is_compiled_out_for_everyone_else():
+    # src/Dispatcher.cpp is built by every role on every board. The seam reaches it only
+    # through the flag, and the flag is the badge's alone.
+    src = strip_c_comments((ROOT / "src" / "Dispatcher.cpp").read_text())
+
+    # Checking that the string appears SOMEWHERE is not enough, and an injected
+    # regression proved it: unguarding the call site while leaving the include's #ifdef
+    # intact still satisfied a substring test. So this asks whether the call itself sits
+    # inside the guard, by walking the preprocessor directives above it.
+    call_line = src[:src.index("offband::onPacketDecoded(")].count("\n")
+    guard = 0
+    for i, line in enumerate(src.splitlines()):
+        if i >= call_line:
+            break
+        s = line.strip()
+        if s.startswith("#ifdef OFFBAND_LED_ACTIVITY") or s.startswith("#if defined(OFFBAND_LED_ACTIVITY"):
+            guard += 1
+        elif s.startswith("#if") and guard:
+            guard += 1          # nested conditional inside the guard
+        elif s.startswith("#endif") and guard:
+            guard -= 1
+    assert guard >= 1, (
+        "the dispatcher's call to offband::onPacketDecoded() is not inside an "
+        "OFFBAND_LED_ACTIVITY guard -- Dispatcher.cpp is built by every role on every "
+        "board, and an unguarded call would reach all of them")
+
+    root_ini = (ROOT / "platformio.ini").read_text()
+    assert "OFFBAND_LED_ACTIVITY" not in root_ini, "the flag must not be global"
+    others = [p for p in (ROOT / "variants").glob("*/platformio.ini")
+              if p.parent.name != "qcc_badge" and "OFFBAND_LED_ACTIVITY" in p.read_text()]
+    assert not others, f"only the badge may set the flag; also set by: {[p.parent.name for p in others]}"
+
+
+def test_the_activity_led_does_not_borrow_the_module_leds_polarity():
+    # The two LEDs are different parts. P0.08 is schematic-proven active HIGH (2N7000
+    # gate, anode at VCC through R8); the module LED's polarity on P0.15 is unverified.
+    # Driving the activity LED through LED_STATE_ON would make a proven pin depend on an
+    # unproven one, so that a later correction to the module LED silently inverts this one.
+    src = strip_c_comments(
+        (ROOT / "examples" / "companion_radio" / "ui-new" / "UITask.cpp").read_text())
+    i = src.index("void UITask::setActivityLed(")
+    body = src[i:i + 600]
+    assert "digitalWrite(PIN_QCC_ACTIVITY_LED" in body, "setActivityLed must drive its own pin"
+    assert "LED_STATE_ON" not in body, (
+        "the activity LED must not use LED_STATE_ON -- that constant describes the module "
+        "LED on P0.15, a different part with a different (and unverified) polarity")
+
+
+def function_body(src, signature):
+    """The body of `signature`, by brace matching.
+
+    Reading a fixed number of characters after the signature is what an earlier version
+    of these tests did, and it broke the moment the function grew: the thing being looked
+    for slid past the window and the test failed while the code was correct. Matching
+    braces means the window is the function, whatever its length.
+    """
+    i = src.index(signature)
+    open_at = src.index("{", i)
+    depth = 0
+    for j in range(open_at, len(src)):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[open_at:j + 1]
+    raise AssertionError(f"unbalanced braces after {signature!r}")
+
+
+def resolve_const(src, name, _seen=None):
+    """A `static const uint32_t NAME = ...;` value, following simple arithmetic.
+
+    The traffic floor is deliberately DERIVED from the flicker rate rather than written
+    as a number, so that it cannot drift away from the thing it is expressed in. A test
+    that demanded a literal would punish exactly the structure it should be protecting.
+    """
+    _seen = _seen or []
+    assert name not in _seen, f"constant cycle: {' -> '.join(_seen + [name])}"
+    m = re.search(r"\b%s\s*=\s*([^;]+);" % name, src)
+    assert m, f"{name} must be defined for the activity LED"
+    expr = m.group(1).strip()
+    for ident in sorted(set(re.findall(r"[A-Za-z_]\w*", expr)), key=len, reverse=True):
+        expr = expr.replace(ident, str(resolve_const(src, ident, _seen + [name])))
+    assert re.fullmatch(r"[\d\s()+*/-]+", expr), f"{name} is not simple arithmetic: {expr}"
+    return int(eval(expr))    # arithmetic only, validated above
+
+
+def test_the_attention_blink_reads_the_badges_own_unread():
+    # Found on hardware: the blink would not stop after reading the message on the badge.
+    # `_msgcount` is `offline_queue_len` -- the queue of messages waiting for a PHONE to
+    # collect over BLE -- and it is cleared by UITask::msgRead() when the client drains
+    # that queue. Reading on the badge never touches it, and on a badge with no phone
+    # paired nothing ever will, so the LED blinked forever.
+    #
+    # BadgeMsgStore::totalUnread() is the count the Inbox already shows as "N new": a
+    # message counts as unread only while its conversation is closed, and opening the
+    # conversation zeroes it. The two are easy to confuse and sit one scroll apart, so
+    # the choice is pinned here rather than left to a comment.
+    src = strip_c_comments(
+        (ROOT / "examples" / "companion_radio" / "ui-new" / "UITask.cpp").read_text())
+    body = function_body(src, "void UITask::activityLedHandler(")
+    assert "totalUnread()" in body, (
+        "the attention blink must read the badge's own unread count "
+        "(BadgeMsgStore::totalUnread), which clears when a conversation is opened")
+    assert "_msgcount" not in body, (
+        "the attention blink must NOT read _msgcount -- that is the client's offline "
+        "queue length, which reading on the badge cannot clear")
+
+
+def test_the_traffic_flash_is_bounded_at_both_ends():
+    # The clamp is the whole design: a floor because a 20 ms packet at the conference
+    # preset is too short to see, a ceiling because a slow preset would otherwise read as
+    # solid-on, and a gap so consecutive packets stay legible as separate blinks. Values
+    # may be tuned on the bench; the ORDERING is what must not break.
+    src = strip_c_comments(
+        (ROOT / "examples" / "companion_radio" / "ui-new" / "UITask.h").read_text())
+    vals = {n: resolve_const(src, n) for n in
+            ("kTrafficMinMs", "kTrafficMaxMs", "kTrafficGapMs",
+             "kAttentionOnMs", "kAttentionPeriodMs",
+             "kFlickerOnMs", "kFlickerOffMs", "kFlickerMinCycles", "kFlickerJitterMs")}
+    assert vals["kTrafficMinMs"] < vals["kTrafficMaxMs"], \
+        "the traffic floor must be below the ceiling"
+    assert vals["kTrafficGapMs"] > 0, \
+        "without a forced gap, back-to-back packets merge into a solid-on LED"
+    assert vals["kAttentionOnMs"] < vals["kAttentionPeriodMs"], \
+        "the attention blink must be shorter than its period, or it is solid-on"
+
+    # The owner's constraint: the shortest flash is still worth five flickers. Checked as
+    # a relationship rather than a number, so tuning the flicker rate cannot quietly make
+    # the floor mean something else.
+    cycle = vals["kFlickerOnMs"] + vals["kFlickerOffMs"]
+    assert vals["kTrafficMinMs"] >= vals["kFlickerMinCycles"] * cycle, (
+        f"the traffic floor ({vals['kTrafficMinMs']} ms) is worth fewer than "
+        f"{vals['kFlickerMinCycles']} flickers at {cycle} ms per cycle")
+
+    # And the flicker must stay slow enough to READ as flicker. Jitter shortens some
+    # cycles, so the fastest one is what matters: much above 40 Hz the eye fuses it into
+    # a dim steady light, which is the thing chopping exists to avoid.
+    fastest = cycle - 2 * vals["kFlickerJitterMs"]
+    assert fastest > 0, "jitter cannot exceed the half-cycle it varies"
+    assert 1000.0 / fastest <= 45.0, (
+        f"the fastest flicker cycle is {fastest} ms ({1000.0/fastest:.0f} Hz) -- fast "
+        "enough to fuse into a steady light rather than read as flutter")
+
+
+def test_the_message_led_is_left_for_the_scheduler():
+    # P0.08 must still be mapped and must still be a badge output -- freeing it means
+    # nothing else claims it, not that it stops existing.
+    assert gpio("PIN_QCC_MSG_LED") == 8
+    ini = (QCC / "platformio.ini").read_text()
+    # Nothing in the env may point a shared single-LED flag at it any more.
+    for flag in ("PIN_STATUS_LED", "PIN_LED", "LED_BUILTIN"):
+        m = re.search(r"-D\s+%s=(\d+)" % flag, ini)
+        if m:
+            assert int(m.group(1)) != define("PIN_QCC_MSG_LED"), \
+                f"-D {flag} points at the MSG_LED, which belongs to the scheduler (#1367)"
+
+
+def test_one_polarity_constant_now_describes_one_led():
+    # LED_STATE_ON is a single global, and before #1366 it had to serve two parts: the
+    # P0.08 MOSFET gate and the P0.15 module LED. Every reader of it pairs it with
+    # PIN_STATUS_LED, so once the heartbeat moved it describes the module LED alone and
+    # the conflict is gone. If some future env points PIN_STATUS_LED back at a second
+    # part, that ambiguity returns -- which is what the test above prevents.
+    #
+    # The value itself is deliberately NOT asserted: the polarity of this module's LED is
+    # unverified (see variant.h), and pinning an unverified number would turn a guess into
+    # a rule. What is asserted is that the constant exists and is a plain 0 or 1, so
+    # flipping it after one bench observation stays a one-line change.
+    src = (QCC / "variant.h").read_text()
+    m = re.search(r"#define\s+LED_STATE_ON\s+([01])\b", src)
+    assert m, "LED_STATE_ON must be a literal 0 or 1 in the badge variant"
 
 
 def test_safeboot_and_board_share_one_divider_ratio():
