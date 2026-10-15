@@ -205,6 +205,19 @@ MsgRecord* MsgStore::ref(uint32_t seq) const {
 
 const MsgRecord* MsgStore::msg(uint32_t seq) const { return ref(seq); }
 
+uint32_t MsgStore::findOwn(int t, const char* text, size_t len) const {
+  if (!live(t) || !text) return 0;
+  const size_t n = offband::utf8Fit(text, len, kMsgTextMax);
+  uint32_t best = 0;
+  for (uint16_t i = 0; i < _cap; i++) {
+    const MsgRecord& m = _msgs[i];
+    if (m.seq == 0 || !m.own || m.thread != t || m.text_len != n) continue;
+    if (m.delivery == uint8_t(Delivery::Delivered)) continue;   // a resend is of one not yet delivered
+    if (memcmp(m.text, text, n) == 0 && m.seq > best) best = m.seq;
+  }
+  return best;
+}
+
 bool MsgStore::setDelivery(uint32_t seq, Delivery d) {
   MsgRecord* m = ref(seq);
   if (!m || !m->own) return false;

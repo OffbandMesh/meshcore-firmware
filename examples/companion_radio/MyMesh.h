@@ -107,6 +107,9 @@
 #include <helpers/HeardRepeats.h>       // #1232: a tick when a repeater passes ours on
 #include <helpers/ClockJump.h>          // #1233: the clock set under stored messages
 #endif
+#if defined(OFFBAND_GUI) && !UI_HAS_CARDKB
+#include <helpers/HeardRepeats.h>       // #1464: "heard xN" on the GUI's own channel sends
+#endif
 
 /* -------------------------------------------------------------------------------------- */
 
@@ -512,6 +515,14 @@ private:
   #define EXPECTED_ACK_TABLE_SIZE 8
   AckTableEntry expected_ack_table[EXPECTED_ACK_TABLE_SIZE]; // circular table
   int next_ack_idx;
+#ifdef OFFBAND_GUI
+  // #1464: the stored own message each expected ACK belongs to, slot for slot.
+  uint32_t _gui_ack_seq[EXPECTED_ACK_TABLE_SIZE] = {};
+  // #1464: own channel sends, watched for repeats ("heard xN").
+  offband::HeardRepeats<16, MAX_HASH_SIZE> _gui_repeats;
+  int guiThreadFor(const ContactInfo& contact);
+  int guiThreadForChannel(uint8_t idx);
+#endif
 
 #if UI_HAS_CARDKB
   // #1227: DMs typed on the badge. Their ACKs are kept apart from expected_ack_table so
