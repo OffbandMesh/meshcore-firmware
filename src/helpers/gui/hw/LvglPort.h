@@ -6,10 +6,21 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "../TouchFrame.h"
+
 class GuiPanel;
+class Chsc6xTouch;
 
 namespace offband {
 namespace gui {
+
+// Registers the touch controller as LVGL's pointer input. Call after
+// lvglBegin(). The last touched point is kept so a release lands where the
+// finger left.
+void lvglAttachTouch(Chsc6xTouch& touch, const TouchMapping& mapping);
+
+// The last mapped touch point, for the test screen's calibration readout.
+bool lvglLastTouch(uint16_t* x, uint16_t* y);
 
 // 1/10 of the 320-row portrait screen per buffer (PLAN.md A3).
 constexpr uint16_t kDrawBufLines = 32;
