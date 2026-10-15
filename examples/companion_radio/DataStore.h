@@ -59,6 +59,23 @@ public:
   uint32_t getStorageUsedKb() const;
   uint32_t getStorageTotalKb() const;
 
+#ifdef OFFBAND_GUI
+  // Chunked contacts save (#1458): a few records per loop tick into a temp
+  // file that replaces /contacts3 only once complete, so a GUI frame never
+  // waits out the whole rewrite.
+  bool beginContactsSave();
+  // Appends contacts [from, to) that pass `filter`; false on a write error.
+  bool saveContactsSlice(DataStoreHost* host, bool (*filter)(const ContactInfo& c), uint32_t from,
+                         uint32_t to);
+  // Closes the temp file and swaps it in when `commit`, else discards it.
+  bool finishContactsSave(bool commit);
+  bool contactsSaveOpen() const { return _contacts_tmp_open; }
+#endif
+
 private:
   FILESYSTEM* _getContactsChannelsFS() const { if (_fsExtra) return _fsExtra; return _fs;};
+#ifdef OFFBAND_GUI
+  File _contacts_tmp;
+  bool _contacts_tmp_open = false;
+#endif
 };
