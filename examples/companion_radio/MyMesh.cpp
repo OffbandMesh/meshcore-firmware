@@ -2630,30 +2630,15 @@ void MyMesh::handleCmdFrame(size_t len) {
     if (recipient && (txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_CLI_DATA)) {
       char *text = (char *)&cmd_frame[i];
       int tlen = len - i;
-      uint32_t est_timeout;
       text[tlen] = 0; // ensure null
-      int result;
-      uint32_t expected_ack;
-      if (txt_type == TXT_TYPE_CLI_DATA) {
-        msg_timestamp = getRTCClock()->getCurrentTimeUnique(); // Use node's RTC instead of app timestamp to avoid tripping replay protection
-        result = sendCommandData(*recipient, msg_timestamp, attempt, text, est_timeout);
-        expected_ack = 0; // no Ack expected
-      } else {
-        result = sendMessage(*recipient, msg_timestamp, attempt, text, expected_ack, est_timeout);
-      }
-      // TODO: add expected ACK to table
-      if (result == MSG_SEND_FAILED) {
+      bool flood = false;
+      uint32_t expected_ack = 0, est_timeout = 0;
+      if (cmdSendDirect(*recipient, msg_timestamp, attempt, text, txt_type == TXT_TYPE_CLI_DATA, &flood,
+                        &expected_ack, &est_timeout) != offband::gui::CmdResult::Ok) {
         writeErrFrame(ERR_CODE_TABLE_FULL);
       } else {
-        if (expected_ack) {
-          expected_ack_table[next_ack_idx].msg_sent = _ms->getMillis(); // add to circular table
-          expected_ack_table[next_ack_idx].ack = expected_ack;
-          expected_ack_table[next_ack_idx].contact = recipient;
-          next_ack_idx = (next_ack_idx + 1) % EXPECTED_ACK_TABLE_SIZE;
-        }
-
         out_frame[0] = RESP_CODE_SENT;
-        out_frame[1] = (result == MSG_SEND_SENT_FLOOD) ? 1 : 0;
+        out_frame[1] = flood ? 1 : 0;
         memcpy(&out_frame[2], &expected_ack, 4);
         memcpy(&out_frame[6], &est_timeout, 4);
         _serial->writeFrame(out_frame, 10);
@@ -2693,14 +2678,8 @@ void MyMesh::handleCmdFrame(size_t len) {
     if (txt_type != TXT_TYPE_PLAIN) {
       writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
     } else {
-      ChannelDetails channel;
-      bool success = getChannel(channel_idx, channel);
-      // #611: capture the on-air packet hash so a capable client can correlate this
-      // send with an observer sighting via the 0xC6 query. The reply below stays a
-      // bare writeOKFrame() -- unchanged for stock/alternate clients.
-      uint8_t sent_hash[MAX_HASH_SIZE];
-      if (success && sendGroupMessage(msg_timestamp, channel.channel, _prefs.node_name, text, len - i, sent_hash)) {
-        recordSentPktHash(msg_timestamp, channel_idx, sent_hash);
+      // The reply stays a bare writeOKFrame(), unchanged for stock/alternate clients.
+      if (cmdSendChannel(channel_idx, msg_timestamp, text, len - i) == offband::gui::CmdResult::Ok) {
         writeOKFrame();
       } else {
         writeErrFrame(ERR_CODE_NOT_FOUND); // bad channel_idx
@@ -2798,35 +2777,11 @@ void MyMesh::handleCmdFrame(size_t len) {
   } else if (cmd_frame[0] == CMD_SET_DEVICE_TIME && len >= 5) {
     uint32_t secs;
     memcpy(&secs, &cmd_frame[1], 4);
-    // #607 OWNER DECISION: this is an authenticated owner path (PIN-paired
-    // BLE / USB session) -- accepted in BOTH directions, no plausibility
-    // gate. The old `secs >= curr` refusal made a future-poisoned clock
-    // permanently uncorrectable from the client. Direction is never a
-    // reason to reject an owner set; every set is logged for the audit
-    // trail (caplog tees the serial stream).
-    uint32_t curr = getRTCClock()->getCurrentTime();
-    getRTCClock()->setCurrentTime(secs);
-    offband::logClockSet("client-set-time", curr, secs);
-#if UI_HAS_CARDKB
-    _badge_clock_set_by_phone = true;   // #1233: the badge can show clock times now
-#endif
+    cmdSetTime(secs);
     writeOKFrame();
   } else if (cmd_frame[0] == CMD_SEND_SELF_ADVERT) {
-    mesh::Packet* pkt;
-    if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
-      pkt = createSelfAdvert(_prefs.node_name);
-    } else {
-      pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
-    }
-    if (pkt) {
-      if (len >= 2 && cmd_frame[1] == 1) { // optional param (1 = flood, 0 = zero hop)
-        unsigned long delay_millis = 0;
-        TransportKey default_scope;
-        memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
-        sendFloodScoped(default_scope, pkt, delay_millis);
-      } else {
-        sendZeroHop(pkt);
-      }
+    // optional param (1 = flood, 0 = zero hop)
+    if (cmdSendAdvert(len >= 2 && cmd_frame[1] == 1) == offband::gui::CmdResult::Ok) {
       writeOKFrame();
     } else {
       writeErrFrame(ERR_CODE_TABLE_FULL);
@@ -2835,9 +2790,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint8_t *pub_key = &cmd_frame[1];
     ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
     if (recipient) {
-      recipient->out_path_len = OUT_PATH_UNKNOWN;
-      // recipient->lastmod = ??   shouldn't be needed, app already has this version of contact
-      dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
+      cmdResetPath(*recipient);
       writeOKFrame();
     } else {
       writeErrFrame(ERR_CODE_NOT_FOUND); // unknown contact
@@ -2877,7 +2830,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint8_t *pub_key = &cmd_frame[1];
     ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
     if (recipient) {
-      if (shareContactZeroHop(*recipient)) {
+      if (cmdShareContact(*recipient) == offband::gui::CmdResult::Ok) {
         writeOKFrame();
       } else {
         writeErrFrame(ERR_CODE_TABLE_FULL); // unable to send
@@ -2955,21 +2908,9 @@ void MyMesh::handleCmdFrame(size_t len) {
       repeat = cmd_frame[i++];   // FIRMWARE_VER_CODE  9+
     }
 
-    if (repeat && !isValidClientRepeatFreq(freq)) {
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    } else if (freq >= 150000 && freq <= 2500000 && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8 && bw >= 7000 &&
-        bw <= 500000) {
-      _prefs.sf = sf;
-      _prefs.cr = cr;
-      _prefs.freq = (float)freq / 1000.0;
-      _prefs.bw = (float)bw / 1000.0;
-      _prefs.setRepeatEn(repeat != 0);
-      savePrefs();
-
-      radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
+    if (cmdSetRadio(freq, bw, sf, cr, repeat != 0) == offband::gui::CmdResult::Ok) {
       MESH_DEBUG_PRINTLN("OK: CMD_SET_RADIO_PARAMS: f=%d, bw=%d, sf=%d, cr=%d", freq, bw, (uint32_t)sf,
                          (uint32_t)cr);
-
       writeOKFrame();
     } else {
       MESH_DEBUG_PRINTLN("Error: CMD_SET_RADIO_PARAMS: f=%d, bw=%d, sf=%d, cr=%d", freq, bw, (uint32_t)sf,
@@ -3029,10 +2970,7 @@ void MyMesh::handleCmdFrame(size_t len) {
       writeOKFrame();
     }
   } else if (cmd_frame[0] == CMD_REBOOT && memcmp(&cmd_frame[1], "reboot", 6) == 0) {
-    if (dirty_contacts_expiry) { // is there are pending dirty contacts write needed?
-      saveContacts();
-    }
-    board.reboot();
+    cmdReboot();
   } else if (cmd_frame[0] == CMD_GET_BATT_AND_STORAGE) {
     uint8_t reply[11];
     int i = 0;
@@ -3302,12 +3240,8 @@ void MyMesh::handleCmdFrame(size_t len) {
       return;
     }
 #endif
-    ChannelDetails channel;
-    StrHelper::strncpy(channel.name, (char *)&cmd_frame[2], 32);
-    memset(channel.channel.secret, 0, sizeof(channel.channel.secret));
-    memcpy(channel.channel.secret, &cmd_frame[2 + 32], 16); // NOTE: only 128-bit supported
-    if (setChannel(channel_idx, channel)) {
-      saveChannels();
+    // NOTE: only 128-bit secrets supported
+    if (cmdSetChannel(channel_idx, (const char *)&cmd_frame[2], &cmd_frame[2 + 32]) == offband::gui::CmdResult::Ok) {
       writeOKFrame();
     } else {
       writeErrFrame(ERR_CODE_NOT_FOUND); // bad channel_idx
@@ -4050,6 +3984,120 @@ bool MyMesh::advert() {
   } else {
     return false;
   }
+}
+
+// ---- Command API (#1453) ----------------------------------------------------
+// Moved out of handleCmdFrame unchanged: the phone and the on-device GUI call
+// the same code.
+
+using offband::gui::CmdResult;
+
+CmdResult MyMesh::cmdSendDirect(ContactInfo& to, uint32_t timestamp, uint8_t attempt, const char* text,
+                                bool cli_data, bool* flood, uint32_t* expected_ack, uint32_t* est_timeout) {
+  uint32_t ack = 0, timeout = 0;
+  int result;
+  if (cli_data) {
+    // The node's RTC, not the caller's timestamp, so replay protection isn't tripped.
+    timestamp = getRTCClock()->getCurrentTimeUnique();
+    result = sendCommandData(to, timestamp, attempt, text, timeout);
+  } else {
+    result = sendMessage(to, timestamp, attempt, text, ack, timeout);
+  }
+  if (result == MSG_SEND_FAILED) return CmdResult::Busy;
+  if (ack) {
+    expected_ack_table[next_ack_idx].msg_sent = _ms->getMillis();  // add to circular table
+    expected_ack_table[next_ack_idx].ack = ack;
+    expected_ack_table[next_ack_idx].contact = &to;
+    next_ack_idx = (next_ack_idx + 1) % EXPECTED_ACK_TABLE_SIZE;
+  }
+  if (flood) *flood = result == MSG_SEND_SENT_FLOOD;
+  if (expected_ack) *expected_ack = ack;
+  if (est_timeout) *est_timeout = timeout;
+  return CmdResult::Ok;
+}
+
+CmdResult MyMesh::cmdSendChannel(uint8_t idx, uint32_t timestamp, const char* text, size_t len) {
+  ChannelDetails channel;
+  if (!getChannel(idx, channel)) return CmdResult::NotFound;
+  // #611: keep the on-air packet hash so a capable client can correlate this
+  // send with an observer sighting via the 0xC6 query.
+  uint8_t sent_hash[MAX_HASH_SIZE];
+  if (!sendGroupMessage(timestamp, channel.channel, _prefs.node_name, text, len, sent_hash)) {
+    return CmdResult::Failed;
+  }
+  recordSentPktHash(timestamp, idx, sent_hash);
+  return CmdResult::Ok;
+}
+
+CmdResult MyMesh::cmdSendAdvert(bool flood) {
+  mesh::Packet* pkt;
+  if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
+    pkt = createSelfAdvert(_prefs.node_name);
+  } else {
+    pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
+  }
+  if (!pkt) return CmdResult::Busy;
+  if (flood) {
+    TransportKey default_scope;
+    memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
+    sendFloodScoped(default_scope, pkt, 0);
+  } else {
+    sendZeroHop(pkt);
+  }
+  return CmdResult::Ok;
+}
+
+CmdResult MyMesh::cmdSetChannel(uint8_t idx, const char* name, const uint8_t secret[16]) {
+  ChannelDetails channel;
+  StrHelper::strncpy(channel.name, name, 32);
+  memset(channel.channel.secret, 0, sizeof(channel.channel.secret));
+  memcpy(channel.channel.secret, secret, 16);  // only 128-bit secrets are supported
+  if (!setChannel(idx, channel)) return CmdResult::NotFound;
+  saveChannels();
+  return CmdResult::Ok;
+}
+
+CmdResult MyMesh::cmdSetRadio(uint32_t freq_khz, uint32_t bw_hz, uint8_t sf, uint8_t cr, bool repeat) {
+  if (repeat && !isValidClientRepeatFreq(freq_khz)) return CmdResult::BadArgs;
+  if (offband::gui::checkRadioParams(freq_khz, bw_hz, sf, cr) != CmdResult::Ok) return CmdResult::BadArgs;
+  _prefs.sf = sf;
+  _prefs.cr = cr;
+  _prefs.freq = (float)freq_khz / 1000.0;
+  _prefs.bw = (float)bw_hz / 1000.0;
+  _prefs.setRepeatEn(repeat);
+  savePrefs();
+  // Applied live; the radio doesn't restart.
+  radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
+  return CmdResult::Ok;
+}
+
+CmdResult MyMesh::cmdResetPath(ContactInfo& contact) {
+  contact.out_path_len = OUT_PATH_UNKNOWN;
+  dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
+  return CmdResult::Ok;
+}
+
+CmdResult MyMesh::cmdShareContact(ContactInfo& contact) {
+  return shareContactZeroHop(contact) ? CmdResult::Ok : CmdResult::Busy;
+}
+
+void MyMesh::cmdSetTime(uint32_t secs) {
+  // #607 OWNER DECISION: an authenticated owner path (PIN-paired BLE / USB
+  // session, or the device's own GUI) -- accepted in BOTH directions, no
+  // plausibility gate. The old `secs >= curr` refusal made a future-poisoned
+  // clock permanently uncorrectable. Every set is logged for the audit trail
+  // (caplog tees the serial stream).
+  uint32_t curr = getRTCClock()->getCurrentTime();
+  getRTCClock()->setCurrentTime(secs);
+  offband::logClockSet("client-set-time", curr, secs);
+#if UI_HAS_CARDKB
+  _badge_clock_set_by_phone = true;   // #1233: the badge can show clock times now
+#endif
+}
+
+void MyMesh::cmdReboot() {
+  if (dirty_contacts_expiry) saveContacts();  // a contacts write is still pending
+  board.reboot();
 }
 
 // To check if there is pending work

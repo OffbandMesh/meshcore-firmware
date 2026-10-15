@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Mesh.h>
+#include <helpers/gui/GuiCommands.h>
 #include "AbstractUITask.h"
 
 /*------------ Frame Protocol --------------*/
@@ -145,6 +146,21 @@ public:
   void handleCmdFrame(size_t len);
   bool advert();
   void enterCLIRescue();
+
+  // Command API (#1453): the actions behind the phone's command frames, so
+  // the on-device GUI and the phone do exactly the same thing. The phone
+  // handlers turn each result into the reply code they have always sent.
+  offband::gui::CmdResult cmdSendDirect(ContactInfo& to, uint32_t timestamp, uint8_t attempt,
+                                        const char* text, bool cli_data, bool* flood,
+                                        uint32_t* expected_ack, uint32_t* est_timeout);
+  offband::gui::CmdResult cmdSendChannel(uint8_t idx, uint32_t timestamp, const char* text, size_t len);
+  offband::gui::CmdResult cmdSendAdvert(bool flood);
+  offband::gui::CmdResult cmdSetChannel(uint8_t idx, const char* name, const uint8_t secret[16]);
+  offband::gui::CmdResult cmdSetRadio(uint32_t freq_khz, uint32_t bw_hz, uint8_t sf, uint8_t cr, bool repeat);
+  offband::gui::CmdResult cmdResetPath(ContactInfo& contact);
+  offband::gui::CmdResult cmdShareContact(ContactInfo& contact);
+  void cmdSetTime(uint32_t secs);
+  void cmdReboot();
 
 #if UI_HAS_CARDKB
   // #1227: messages typed on the badge, sent with the same mesh calls as the phone path.
