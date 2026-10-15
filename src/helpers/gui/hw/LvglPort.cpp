@@ -45,6 +45,28 @@ static void flushCb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* px) {
 // LVGL calls this while it waits for a buffer to come back.
 static void waitCb(lv_disp_drv_t* drv) { ackFlush(drv); }
 
+static uint32_t s_frames = 0;
+static uint32_t s_frame_ms_total = 0;
+static uint32_t s_frame_ms_max = 0;
+
+// Called by LVGL after each refresh with how long it took.
+static void monitorCb(lv_disp_drv_t* drv, uint32_t time_ms, uint32_t px) {
+  (void)drv;
+  (void)px;
+  s_frames++;
+  s_frame_ms_total += time_ms;
+  if (time_ms > s_frame_ms_max) s_frame_ms_max = time_ms;
+}
+
+void lvglTakeFrameStats(uint32_t* frames, uint32_t* avg_ms, uint32_t* max_ms) {
+  *frames = s_frames;
+  *avg_ms = s_frames ? s_frame_ms_total / s_frames : 0;
+  *max_ms = s_frame_ms_max;
+  s_frames = 0;
+  s_frame_ms_total = 0;
+  s_frame_ms_max = 0;
+}
+
 bool lvglBegin(GuiPanel& panel) {
   s_panel = &panel;
   const uint32_t px = uint32_t(panel.width()) * kDrawBufLines;
@@ -71,6 +93,7 @@ bool lvglBegin(GuiPanel& panel) {
   s_disp_drv.ver_res = panel.height();
   s_disp_drv.flush_cb = flushCb;
   s_disp_drv.wait_cb = waitCb;
+  s_disp_drv.monitor_cb = monitorCb;
   s_disp_drv.draw_buf = &s_draw_buf;
   panel.panel().setDoneCallback(onTransferDone, nullptr);
   lv_disp_drv_register(&s_disp_drv);

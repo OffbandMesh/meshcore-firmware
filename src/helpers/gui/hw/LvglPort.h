@@ -35,5 +35,10 @@ void lvglLoop();
 // Bytes held by the two draw buffers, for the memory telemetry.
 size_t lvglDrawBufBytes();
 
+// Screen refreshes since the last call, with their average and longest
+// duration in ms (render plus transfer), then resets. For the frame-rate
+// check on the bench (#1441).
+void lvglTakeFrameStats(uint32_t* frames, uint32_t* avg_ms, uint32_t* max_ms);
+
 }  // namespace gui
 }  // namespace offband
