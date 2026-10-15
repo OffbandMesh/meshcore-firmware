@@ -126,12 +126,18 @@ public:
   LoadResult loadRing(ByteSource& in);
 
 private:
+  bool live(int t) const;
+  MsgRecord* slotForNew();
+  MsgRecord* add(int t, uint32_t time, const char* text, size_t len);
+  MsgRecord* ref(uint32_t seq) const;
+
   MsgRecord* _msgs = nullptr;
   Thread* _threads = nullptr;
+  uint16_t* _per_thread = nullptr;   // scratch: message count per thread, for eviction
+  uint16_t* _order = nullptr;        // scratch: slots in seq order, for saveRing
   uint16_t _cap = 0;
   uint16_t _max_threads = 0;
   uint16_t _count = 0;
-  uint16_t _head = 0;      // the slot the next message goes in
   uint32_t _seq = 0;
 };
 
