@@ -1,0 +1,139 @@
+#pragma once
+
+// The on-device message store (#1427, PLAN.md §3 Epic C): every message the
+// node sends or receives, kept on the device so the phone download no longer
+// means the device forgets.
+//
+// Threads are channels, DMs and rooms, each identified by a key that doesn't
+// change when the phone renames or re-sorts things (a contact's public key, a
+// channel's secret), as in BadgeStore. Messages live in one table of fixed
+// 192-byte records, in PSRAM. When it's full (owner, 2026-10-15): the oldest
+// message of the busiest channel or room goes; a DM goes only when no channel
+// or room messages are left, and then from the busiest DM thread. Unread
+// counts live with the thread and outlive evicted messages.
+//
+// Persistence goes through ByteSink / ByteSource, so the flash (C3) and SD
+// (I4) backends only open files; the format lives here. Each file starts with
+// a versioned header. A file with a bad header is reported, never trusted: the
+// caller keeps it aside and starts empty (PLAN.md §8).
+//
+// Pure: no Arduino and no mesh. The caller passes times in.
+
+#include <stddef.h>
+#include <stdint.h>
+
+namespace offband {
+namespace gui {
+
+constexpr size_t kMsgTextMax = 160;    // D5 decision 11
+constexpr size_t kMsgSenderLen = 16;   // a channel message's sender, with terminator
+constexpr size_t kThreadKeyLen = 32;   // a public key; a channel secret is zero-padded
+constexpr size_t kThreadNameLen = 32;
+constexpr uint16_t kMsgStoreVersion = 1;
+
+enum class ThreadKind : uint8_t { Empty = 0, Channel, Direct, Room };
+enum class Delivery : uint8_t { None = 0, Sending, Delivered, Failed };
+
+// One message. Fixed size so the ring can be written record by record.
+struct MsgRecord {
+  uint32_t seq;      // 0: a free slot. Later messages have larger numbers.
+  uint32_t time;     // RTC seconds when it came or went
+  uint16_t thread;   // index into the thread table
+  uint8_t own;       // 1: sent by this node
+  uint8_t delivery;  // Delivery, own messages only
+  uint8_t hops;      // 0xFF: direct or not known
+  uint8_t echoes;    // own channel sends: repeats heard ("heard xN")
+  int8_t snr_q4;     // SNR x 4 when received; 0 when not known
+  uint8_t text_len;  // bytes in text, at most kMsgTextMax
+  char sender[kMsgSenderLen];  // a channel message's sender, NUL-terminated
+  char text[kMsgTextMax];      // not NUL-terminated; text_len says how much
+};
+static_assert(sizeof(MsgRecord) == 192, "the on-disk record is 192 bytes");
+
+struct Thread {
+  uint8_t kind;      // ThreadKind
+  uint8_t muted;
+  uint16_t unread;
+  uint32_t last_seq;   // newest message's seq; 0 before any
+  uint32_t last_time;
+  uint8_t key[kThreadKeyLen];
+  char name[kThreadNameLen];   // NUL-terminated
+  uint8_t reserved[4];         // zero; room for per-thread flags without a version bump
+};
+static_assert(sizeof(Thread) == 80, "the on-disk thread entry is 80 bytes");
+
+// Where persistence writes to and reads from: a file in practice, memory in
+// tests.
+class ByteSink {
+public:
+  virtual bool write(const void* data, size_t len) = 0;
+  virtual ~ByteSink() {}
+};
+class ByteSource {
+public:
+  // Bytes read, which is less than len only at the end.
+  virtual size_t read(void* data, size_t len) = 0;
+  virtual ~ByteSource() {}
+};
+
+enum class LoadResult : uint8_t {
+  Ok,
+  Empty,           // nothing to read (no file yet)
+  BadHeader,       // not a store file, or cut short, or sizes that don't match
+  UnknownVersion,  // a store file from a newer or older layout
+};
+
+class MsgStore {
+public:
+  // Room for `capacity` messages (1,000 on the V4, PLAN.md §9) and
+  // `max_threads` threads. Allocated once; false if it doesn't fit, and the
+  // store then holds nothing (PLAN.md §8: history shows as unavailable).
+  bool begin(uint16_t capacity, uint16_t max_threads);
+  bool ready() const { return _msgs != nullptr; }
+  ~MsgStore();
+
+  // The thread for this kind and key, made if new; its name is refreshed
+  // either way. -1 when the table is full.
+  int thread(ThreadKind kind, const uint8_t* key, size_t key_len, const char* name);
+  int find(ThreadKind kind, const uint8_t* key, size_t key_len) const;
+  const Thread* threadAt(int t) const;
+  uint16_t threadCount() const;
+
+  // A message that arrived; counts as unread. Text over kMsgTextMax is cut at
+  // a UTF-8 character boundary. Returns its seq, 0 if not stored.
+  uint32_t addIncoming(int t, uint32_t time, const char* sender, const char* text, size_t len,
+                       uint8_t hops, int8_t snr_q4);
+  // A message this node sent; never unread.
+  uint32_t addOwn(int t, uint32_t time, const char* text, size_t len, Delivery d);
+
+  const MsgRecord* msg(uint32_t seq) const;
+  bool setDelivery(uint32_t seq, Delivery d);
+  bool addEcho(uint32_t seq);   // an own channel send heard repeated; stops at 255
+
+  // Thread t's messages, oldest first; the newest `max` when there are more.
+  // Returns how many seqs went into `out`.
+  size_t threadMessages(int t, uint32_t* out, size_t max) const;
+
+  void markRead(int t);
+  uint32_t totalUnread() const;
+  uint16_t count() const { return _count; }   // messages held
+  uint16_t capacity() const { return _cap; }
+
+  // Persistence: the thread index (small, written often) and the ring.
+  bool saveIndex(ByteSink& out) const;
+  LoadResult loadIndex(ByteSource& in);
+  bool saveRing(ByteSink& out) const;
+  LoadResult loadRing(ByteSource& in);
+
+private:
+  MsgRecord* _msgs = nullptr;
+  Thread* _threads = nullptr;
+  uint16_t _cap = 0;
+  uint16_t _max_threads = 0;
+  uint16_t _count = 0;
+  uint16_t _head = 0;      // the slot the next message goes in
+  uint32_t _seq = 0;
+};
+
+}  // namespace gui
+}  // namespace offband
