@@ -180,6 +180,45 @@ TEST(ToneEvents, AnEventWithNoSlotIsSilent) {
   EXPECT_EQ(kTuneSilent, defaultTuneFor((ToneEvent)200));
 }
 
+// ------------------------------------------------- stored choice vs default
+
+// The distinction the whole prefs design turns on: Silent is a CHOICE with an id, so
+// "nothing chosen" needs its own value. If unset were 0, an un-configured badge would
+// be permanently silent and indistinguishable from one deliberately silenced.
+TEST(StoredTune, UnsetIsNotSilent) {
+  EXPECT_NE(kTuneUnset, kTuneSilent);
+  EXPECT_GE(kTuneUnset, kBuiltinCount) << "the sentinel must not name a real tune";
+  EXPECT_EQ(nullptr, tuneRtttl(kTuneUnset)) << "and must never resolve to a melody";
+}
+
+// Unset falls through to this board's compiled default -- which is what lets a later
+// firmware improve a default rather than being frozen out by prefs written once.
+TEST(StoredTune, UnsetTakesTheCompiledDefault) {
+  for (uint8_t i = 0; i < (uint8_t)ToneEvent::Count; i++) {
+    const ToneEvent e = (ToneEvent)i;
+    EXPECT_EQ(defaultTuneFor(e), resolveTune(kTuneUnset, e)) << "event " << (int)i;
+  }
+}
+
+// A stored choice wins, including a stored Silent. This is the case a zero-filled blob
+// could not express, and the reason the prefs are six keys instead of one array.
+TEST(StoredTune, AStoredChoiceWinsIncludingSilence) {
+  EXPECT_EQ(kTuneSilent, resolveTune(kTuneSilent, ToneEvent::ContactMessage));
+  EXPECT_EQ(nullptr, tuneRtttl(resolveTune(kTuneSilent, ToneEvent::ContactMessage)));
+  EXPECT_EQ(kTuneKerplop, resolveTune(kTuneKerplop, ToneEvent::Ack));
+  EXPECT_EQ(kTuneChime, resolveTune(kTuneChime, ToneEvent::Sent));
+}
+
+// A stored id from a longer table -- a badge given a tune then rolled back -- passes
+// through and becomes silence at playback rather than indexing the array. #1413 will
+// resolve ids in this range as custom slots instead.
+TEST(StoredTune, AnIdPastTheTablePassesThroughAndPlaysNothing) {
+  const uint8_t beyond = kBuiltinCount;
+  EXPECT_EQ(beyond, resolveTune(beyond, ToneEvent::ContactMessage));
+  EXPECT_EQ(nullptr, tuneRtttl(resolveTune(beyond, ToneEvent::ContactMessage)));
+  EXPECT_FALSE(isBuiltinTune(beyond));
+}
+
 // ------------------------------------------------------------ the validator
 
 TEST(RtttlValidator, AcceptsTheRealThing) {
