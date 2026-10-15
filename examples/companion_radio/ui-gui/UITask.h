@@ -37,6 +37,7 @@ private:
   SensorManager* _sensors = nullptr;
   NodePrefs* _prefs = nullptr;
   bool _gui_ok = false;
+  bool _touch_ok = false;
   bool _always_on = false;
   uint32_t _shown_pin = 0;
   int _unread = 0;

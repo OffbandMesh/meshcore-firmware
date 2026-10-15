@@ -4,6 +4,7 @@
 #include <esp_heap_caps.h>
 #include <lvgl.h>
 
+#include "Chsc6xTouch.h"
 #include "GuiPanel.h"
 
 namespace offband {
@@ -73,6 +74,55 @@ bool lvglBegin(GuiPanel& panel) {
   s_disp_drv.draw_buf = &s_draw_buf;
   panel.panel().setDoneCallback(onTransferDone, nullptr);
   lv_disp_drv_register(&s_disp_drv);
+  return true;
+}
+
+static lv_indev_drv_t s_indev_drv;
+static Chsc6xTouch* s_touch = nullptr;
+static TouchMapping s_mapping = {};
+static lv_point_t s_last = {0, 0};
+static bool s_pressed = false;
+static bool s_any_touch = false;
+
+// Consecutive failed reads before a held press is reported released: one
+// glitch frame must not drop a drag, but a bus that stays down must not leave
+// a press stuck. 3 reads at LVGL's 30 ms input period is about 90 ms.
+static constexpr uint8_t kReleaseAfterFailedReads = 3;
+static uint8_t s_failed_reads = 0;
+
+static void touchReadCb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
+  (void)drv;
+  TouchPoint p{};
+  if (s_touch && s_touch->read(&p)) {
+    s_failed_reads = 0;
+    s_pressed = p.pressed;
+    if (p.pressed) {
+      uint16_t x = p.x, y = p.y;
+      mapTouch(s_mapping, &x, &y);
+      s_last.x = lv_coord_t(x);
+      s_last.y = lv_coord_t(y);
+      s_any_touch = true;
+    }
+  } else if (s_failed_reads < kReleaseAfterFailedReads && ++s_failed_reads == kReleaseAfterFailedReads) {
+    s_pressed = false;
+  }
+  data->point = s_last;
+  data->state = s_pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+
+void lvglAttachTouch(Chsc6xTouch& touch, const TouchMapping& mapping) {
+  s_touch = &touch;
+  s_mapping = mapping;
+  lv_indev_drv_init(&s_indev_drv);
+  s_indev_drv.type = LV_INDEV_TYPE_POINTER;
+  s_indev_drv.read_cb = touchReadCb;
+  lv_indev_drv_register(&s_indev_drv);
+}
+
+bool lvglLastTouch(uint16_t* x, uint16_t* y) {
+  if (!s_any_touch) return false;
+  *x = uint16_t(s_last.x);
+  *y = uint16_t(s_last.y);
   return true;
 }
 

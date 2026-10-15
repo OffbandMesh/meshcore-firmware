@@ -5,8 +5,24 @@
 #include <esp_heap_caps.h>
 #include <lvgl.h>
 
+#include <helpers/gui/hw/Chsc6xTouch.h>
 #include <helpers/gui/hw/GuiPanel.h>
 #include <helpers/gui/hw/LvglPort.h>
+
+// Touch axes relative to the panel's portrait orientation. Confirmed on the
+// bench with the test screen's touch readout (A7).
+#ifndef GUI_TOUCH_SWAP_XY
+  #define GUI_TOUCH_SWAP_XY 0
+#endif
+#ifndef GUI_TOUCH_MIRROR_X
+  #define GUI_TOUCH_MIRROR_X 0
+#endif
+#ifndef GUI_TOUCH_MIRROR_Y
+  #define GUI_TOUCH_MIRROR_Y 0
+#endif
+#ifndef PIN_TOUCH_RST
+  #define PIN_TOUCH_RST -1
+#endif
 
 #include "../MyMesh.h"
 
@@ -24,6 +40,8 @@ constexpr uint32_t kSig = 0x7BEFA8;
 lv_obj_t* s_name = nullptr;
 lv_obj_t* s_pin = nullptr;
 lv_obj_t* s_unread = nullptr;
+lv_obj_t* s_touch_label = nullptr;
+Chsc6xTouch s_touch;
 
 }  // namespace
 
@@ -40,6 +58,18 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
   if (!_gui_ok) return;
+
+#if defined(PIN_TOUCH_SDA) && defined(PIN_TOUCH_SCL)
+  _touch_ok = s_touch.begin(PIN_TOUCH_SDA, PIN_TOUCH_SCL, PIN_TOUCH_RST);
+  if (_touch_ok) {
+    offband::gui::TouchMapping m = {GUI_TOUCH_SWAP_XY != 0, GUI_TOUCH_MIRROR_X != 0,
+                                    GUI_TOUCH_MIRROR_Y != 0, uint16_t(display->width()),
+                                    uint16_t(display->height())};
+    offband::gui::lvglAttachTouch(s_touch, m);
+  }
+  // No answer from the controller: the GUI runs on buttons only (PLAN.md §6).
+  mesh_log_line(MLOG_BOOT, "[gui] touch %s\n", _touch_ok ? "chsc6x ok" : "none (buttons only)");
+#endif
 
   buildTestScreen();
   refreshTestScreen();
@@ -68,6 +98,10 @@ void UITask::buildTestScreen() {
   lv_obj_set_style_text_color(s_unread, lv_color_hex(kDim), 0);
   lv_obj_align(s_unread, LV_ALIGN_CENTER, 0, 40);
 
+  s_touch_label = lv_label_create(scr);
+  lv_obj_set_style_text_color(s_touch_label, lv_color_hex(kDim), 0);
+  lv_obj_align(s_touch_label, LV_ALIGN_CENTER, 0, 70);
+
   lv_obj_t* note = lv_label_create(scr);
   lv_obj_set_style_text_color(note, lv_color_hex(kDim), 0);
   lv_label_set_text(note, "GUI foundation test screen");
@@ -86,6 +120,11 @@ void UITask::refreshTestScreen() {
   }
   lv_label_set_text_fmt(s_unread, "%s  -  unread %d", hasConnection() ? "phone connected" : "no phone",
                         _unread);
+
+  uint16_t tx = 0, ty = 0;
+  if (!_touch_ok) lv_label_set_text(s_touch_label, "touch: none (buttons only)");
+  else if (offband::gui::lvglLastTouch(&tx, &ty)) lv_label_set_text_fmt(s_touch_label, "touch %u, %u", tx, ty);
+  else lv_label_set_text(s_touch_label, "touch: tap anywhere");
 }
 
 void UITask::msgRead(int msgcount) { _unread = msgcount; }
