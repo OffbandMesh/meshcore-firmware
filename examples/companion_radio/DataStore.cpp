@@ -45,6 +45,11 @@ static File openWrite(FILESYSTEM* fs, const char* filename) {
 #endif
 }
 
+#ifdef OFFBAND_GUI
+// #1458: the chunked contacts save writes here, then renames it over /contacts3.
+static const char* const kContactsTmp = "/contacts3.tmp";
+#endif
+
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   static uint32_t _ContactsChannelsTotalBlocks = 0;
 #endif
@@ -345,6 +350,14 @@ bool DataStore::savePrefs(NodePrefs& _prefs) {
 }
 
 void DataStore::loadContacts(DataStoreHost* host) {
+#ifdef OFFBAND_GUI
+  // #1458: a chunked save cut off between removing the old file and renaming
+  // the new one leaves only the complete temp file.
+  {
+    FILESYSTEM* fs = _getContactsChannelsFS();
+    if (!fs->exists("/contacts3") && fs->exists(kContactsTmp)) fs->rename(kContactsTmp, "/contacts3");
+  }
+#endif
 File file = openRead(_getContactsChannelsFS(), "/contacts3");
     if (file) {
       bool full = false;
@@ -381,38 +394,78 @@ File file = openRead(_getContactsChannelsFS(), "/contacts3");
     }
 }
 
+// One /contacts3 record (152 bytes). False if the write failed.
+static bool writeContactRecord(File& file, const ContactInfo& c) {
+  uint8_t unused = 0;
+  bool success = (file.write(c.id.pub_key, 32) == 32);
+  success = success && (file.write((uint8_t *)&c.name, 32) == 32);
+  success = success && (file.write(&c.type, 1) == 1);
+  success = success && (file.write(&c.flags, 1) == 1);
+  success = success && (file.write(&unused, 1) == 1);
+  success = success && (file.write((uint8_t *)&c.sync_since, 4) == 4);
+  success = success && (file.write((uint8_t *)&c.out_path_len, 1) == 1);
+  success = success && (file.write((uint8_t *)&c.last_advert_timestamp, 4) == 4);
+  success = success && (file.write(c.out_path, 64) == 64);
+  success = success && (file.write((uint8_t *)&c.lastmod, 4) == 4);
+  success = success && (file.write((uint8_t *)&c.gps_lat, 4) == 4);
+  success = success && (file.write((uint8_t *)&c.gps_lon, 4) == 4);
+  return success;
+}
+
 void DataStore::saveContacts(DataStoreHost* host, bool (*filter)(const ContactInfo& c)) {
   File file = openWrite(_getContactsChannelsFS(), "/contacts3");
   if (file) {
     uint32_t idx = 0;
     ContactInfo c;
-    uint8_t unused = 0;
 
     while (host->getContactForSave(idx, c)) {
       if (filter && !filter(c)) {
         idx++;  // advance to next contact
         continue;
       }
-      bool success = (file.write(c.id.pub_key, 32) == 32);
-      success = success && (file.write((uint8_t *)&c.name, 32) == 32);
-      success = success && (file.write(&c.type, 1) == 1);
-      success = success && (file.write(&c.flags, 1) == 1);
-      success = success && (file.write(&unused, 1) == 1);
-      success = success && (file.write((uint8_t *)&c.sync_since, 4) == 4);
-      success = success && (file.write((uint8_t *)&c.out_path_len, 1) == 1);
-      success = success && (file.write((uint8_t *)&c.last_advert_timestamp, 4) == 4);
-      success = success && (file.write(c.out_path, 64) == 64);
-      success = success && (file.write((uint8_t *)&c.lastmod, 4) == 4);
-      success = success && (file.write((uint8_t *)&c.gps_lat, 4) == 4);
-      success = success && (file.write((uint8_t *)&c.gps_lon, 4) == 4);
-
-      if (!success) break; // write failed
+      if (!writeContactRecord(file, c)) break; // write failed
 
       idx++;  // advance to next contact
     }
     file.close();
   }
 }
+
+#ifdef OFFBAND_GUI
+bool DataStore::beginContactsSave() {
+  if (_contacts_tmp_open) _contacts_tmp.close();
+  _contacts_tmp = openWrite(_getContactsChannelsFS(), kContactsTmp);  // truncates a stale one
+  _contacts_tmp_open = (bool)_contacts_tmp;
+  return _contacts_tmp_open;
+}
+
+bool DataStore::saveContactsSlice(DataStoreHost* host, bool (*filter)(const ContactInfo& c), uint32_t from,
+                                  uint32_t to) {
+  if (!_contacts_tmp_open) return false;
+  ContactInfo c;
+  for (uint32_t idx = from; idx < to && host->getContactForSave(idx, c); idx++) {
+    if (filter && !filter(c)) continue;
+    if (!writeContactRecord(_contacts_tmp, c)) return false;
+  }
+  return true;
+}
+
+bool DataStore::finishContactsSave(bool commit) {
+  if (!_contacts_tmp_open) return false;
+  _contacts_tmp.close();
+  _contacts_tmp_open = false;
+  FILESYSTEM* fs = _getContactsChannelsFS();
+  if (!commit) {
+    fs->remove(kContactsTmp);
+    return false;
+  }
+  // SPIFFS rename won't replace an existing file, so the old one goes first.
+  // A power cut between the two leaves only the complete temp file, which
+  // loadContacts() picks up.
+  fs->remove("/contacts3");
+  return fs->rename(kContactsTmp, "/contacts3");
+}
+#endif
 
 // #1364: does this node have a stored channel set? Asked by a board that seeds channels
 // on a fresh node only. Deliberately opens the same file loadChannels() reads, through

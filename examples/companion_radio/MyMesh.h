@@ -4,6 +4,7 @@
 #include <Mesh.h>
 #include <helpers/gui/GuiCommands.h>
 #ifdef OFFBAND_GUI
+  #include <helpers/gui/ChunkedSave.h>
   #include <helpers/gui/GuiGps.h>
   #include <helpers/gui/GuiMetrics.h>
   #include <helpers/gui/GuiReplies.h>
@@ -373,6 +374,13 @@ private:
   offband::gui::ReplyBox _gui_replies;
   offband::gui::MetricsHub _gui_metrics;
   offband::gui::FixTracker _gui_fix;
+
+  // #1458: the contact list is saved a slice per loop tick, not in one pass.
+  void contactsSaveTick();
+  offband::gui::ChunkedSave _contacts_save;
+  int _contacts_save_count = 0;      // contacts when the save began
+  uint32_t _contacts_save_t0 = 0;
+  uint32_t _contacts_slice_max_ms = 0;
 #endif
 
   // #611: retained hashes of recent outgoing channel messages, for the 0xC6 query.

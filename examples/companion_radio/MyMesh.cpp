@@ -2866,6 +2866,13 @@ void MyMesh::handleCmdFrame(size_t len) {
       _store->deleteBlobByKey(pub_key, PUB_KEY_SIZE);
 #ifdef OFFBAND_GUI
       _gui_metrics.contacts.forget(pub_key);
+      // The removal shifted every later record; an add in the same save
+      // window would hide that from the count check (#1458).
+      if (_contacts_save.active()) {
+        _contacts_save_count = getNumContacts();
+        _store->beginContactsSave();
+        _contacts_save.restart(_contacts_save_count);
+      }
 #endif
       dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
       writeOKFrame();
@@ -3559,6 +3566,13 @@ static bool save_filter(const ContactInfo& c) {
 }
 
 void MyMesh::saveContacts() {
+#ifdef OFFBAND_GUI
+  // A full save replaces any slice-by-slice one in progress.
+  if (_contacts_save.active() || _store->contactsSaveOpen()) {
+    _contacts_save.cancel();
+    _store->finishContactsSave(false);
+  }
+#endif
 #if defined(OFFBAND_MEM_TELEMETRY)
   // #1326: every save rewrites the whole contacts file, so the save rate and
   // its duration set both the flash wear and the stall a GUI would see.
@@ -3987,11 +4001,15 @@ void MyMesh::loop() {
   offband::systemChannelDrain();
 #endif
 
+#ifdef OFFBAND_GUI
+  contactsSaveTick();   // #1458: a slice per tick, so the GUI keeps drawing
+#else
   // is there are pending dirty contacts write needed?
   if (dirty_contacts_expiry && millisHasNowPassed(dirty_contacts_expiry)) {
     saveContacts();
     dirty_contacts_expiry = 0;
   }
+#endif
 
 #ifdef DISPLAY_CLASS
   if (_ui) _ui->setHasConnection(_serial->isConnected());
@@ -4143,9 +4161,69 @@ void MyMesh::cmdSetTime(uint32_t secs) {
 }
 
 void MyMesh::cmdReboot() {
-  if (dirty_contacts_expiry) saveContacts();  // a contacts write is still pending
+  bool pending = dirty_contacts_expiry != 0;  // a contacts write is still pending
+#ifdef OFFBAND_GUI
+  pending = pending || _contacts_save.active();   // or one is half-written
+#endif
+  if (pending) saveContacts();
   board.reboot();
 }
+
+#ifdef OFFBAND_GUI
+#ifndef GUI_CONTACTS_PER_SLICE
+  // ~5 ms a record on the V4 (1.8 s for 350 in one pass, #1326), so a slice
+  // stays near 20 ms. The B8 bench checks frame time during a save.
+  #define GUI_CONTACTS_PER_SLICE 4
+#endif
+
+void MyMesh::contactsSaveTick() {
+  if (!_contacts_save.active()) {
+    if (!dirty_contacts_expiry || !millisHasNowPassed(dirty_contacts_expiry)) return;
+    dirty_contacts_expiry = 0;   // a change during the save arms the next one
+    if (!_store->beginContactsSave()) {
+      saveContacts();            // can't open the temp file: one pass, as before
+      return;
+    }
+    _contacts_save_count = getNumContacts();
+    _contacts_save.begin(_contacts_save_count, GUI_CONTACTS_PER_SLICE);
+    _contacts_save_t0 = millis();
+    _contacts_slice_max_ms = 0;
+    return;                      // first slice next tick
+  }
+
+  // An add appends a record: start over so the file holds a single snapshot.
+  // A delete restarts at the removal itself; an overwrite-oldest replaces a
+  // record in place, and an edit re-arms the next save.
+  if (getNumContacts() != _contacts_save_count) {
+    _contacts_save_count = getNumContacts();
+    _store->beginContactsSave();
+    _contacts_save.restart(_contacts_save_count);
+  }
+
+  size_t from, to;
+  if (_contacts_save.next(&from, &to)) {
+    const uint32_t t = millis();
+    if (!_store->saveContactsSlice(this, save_filter, from, to)) {
+      _contacts_save.cancel();
+      _store->finishContactsSave(false);
+      dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);  // try again later
+      return;
+    }
+    const uint32_t ms = millis() - t;
+    if (ms > _contacts_slice_max_ms) _contacts_slice_max_ms = ms;
+    return;
+  }
+
+  const bool ok = _store->finishContactsSave(true);
+  if (!ok) dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
+#if defined(OFFBAND_MEM_TELEMETRY)
+  static uint32_t s_saves = 0;
+  mesh_log_line(MLOG_BOOT, "[mem] contacts_save n=%lu contacts=%d ms=%lu slice_max_ms=%lu ok=%d\n",
+                (unsigned long)++s_saves, _contacts_save_count, (unsigned long)(millis() - _contacts_save_t0),
+                (unsigned long)_contacts_slice_max_ms, ok ? 1 : 0);
+#endif
+}
+#endif
 
 CmdResult MyMesh::cmdLogin(ContactInfo& to, const char* password, bool* flood, uint32_t* tag,
                            uint32_t* est_timeout) {
@@ -4231,5 +4309,8 @@ void MyMesh::postGuiReply(GuiReply kind, const uint8_t* pub_key, uint32_t tag, b
 
 // To check if there is pending work
 bool MyMesh::hasPendingWork() const {
+#ifdef OFFBAND_GUI
+  if (_contacts_save.active()) return true;   // #1458: a save is half-written
+#endif
   return _mgr->getOutboundTotal() > 0 || dirty_contacts_expiry != 0;
 }

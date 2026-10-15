@@ -21,6 +21,8 @@ public:
   // The list changed under a save in progress (an add or delete shifts the
   // records): the save starts over from record 0 with the new total.
   void restart(size_t total);
+  // Abandons the save (a full one-pass save is about to replace it).
+  void cancel() { _active = false; }
 
 private:
   size_t _total = 0;
