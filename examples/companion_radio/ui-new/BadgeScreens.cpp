@@ -1614,6 +1614,7 @@ bool TonePickerScreen::handleInput(char c) {
         _note_until = millis() + 1200;
         break;
       case offband::TonePlay::Played:
+      case offband::TonePlay::NotFound:   // previewTune folds this into Played
         break;
     }
     return true;

@@ -66,6 +66,17 @@ constexpr Tune kBuiltinTunes[] = {
     {"Drop", "Drop:d=16,o=6,b=180:c7,g,e"},
     // Two of the same pitch with a gap between them. 0.21 s.
     {"Knock", "Knock:d=32,o=6,b=140:a,16p,a"},
+    // #1422: THE UN-LISTED ONE. A null name keeps it out of the picker, so it exists
+    // only for something that names it by id -- which is the remote trigger designed
+    // under epic #1191, parked. Nothing in the UI can reach or select it.
+    //
+    // The melody here is a PLACEHOLDER and ours: a rising flourish, deliberately longer
+    // and more insistent than a notification chime so a hall of badges firing at once is
+    // obviously an event rather than six people getting messages. The owner has accepted
+    // the risk of shipping a recognizable tune here (#1447 discussion), so this line is
+    // his to replace -- or, once typed custom slots land (#1413), the trigger can name a
+    // slot he filled in himself and the repo never carries the payload at all.
+    {nullptr, "Trigger:d=8,o=5,b=160:c,e,g,c6,e6,g6,2c7"},
 };
 
 constexpr uint8_t kBuiltinCount = (uint8_t)(sizeof(kBuiltinTunes) / sizeof(kBuiltinTunes[0]));
@@ -79,11 +90,18 @@ constexpr uint8_t kTuneTick = 3;     // the old ack literal
 constexpr uint8_t kTuneBloop = 4;    // #1447
 constexpr uint8_t kTuneDrop = 5;
 constexpr uint8_t kTuneKnock = 6;
+// #1422: the un-listed entry the remote trigger names. Reachable by id, invisible in
+// the picker. Named here so #1191 refers to it by meaning rather than by position.
+constexpr uint8_t kTuneTrigger = 7;
 
 static_assert(kBuiltinCount > 0, "the table needs an entry");
 static_assert(kBuiltinCount < 255, "tune ids are 8-bit and 255 is kept free");
 static_assert(kBuiltinTunes[kTuneSilent].rtttl == nullptr, "id 0 is silence");
-static_assert(kTuneKnock < kBuiltinCount, "the named ids must be in the table");
+static_assert(kTuneTrigger < kBuiltinCount, "the named ids must be in the table");
+static_assert(kBuiltinTunes[kTuneTrigger].name == nullptr,
+              "the trigger entry must stay out of the picker");
+static_assert(kBuiltinTunes[kTuneTrigger].rtttl != nullptr,
+              "a trigger that plays nothing is not a trigger");
 static_assert(kBuiltinTunes[kTuneChime].rtttl != nullptr, "Chime needs a melody");
 static_assert(kBuiltinTunes[kTuneKerplop].rtttl != nullptr, "Kerplop needs a melody");
 static_assert(kBuiltinTunes[kTuneTick].rtttl != nullptr, "Tick needs a melody");

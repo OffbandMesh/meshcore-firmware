@@ -879,13 +879,19 @@ void UITask::gotoTonePicker(offband::ToneEvent e) {
   setCurrScreen(tone_picker);
 }
 
-offband::TonePlay UITask::previewTune(uint8_t id) {
+offband::TonePlay UITask::playTuneById(uint8_t id, offband::TonePriority priority) {
+  // Silent is a CHOICE: it sounds like nothing and that is success.
+  if (id == offband::kTuneSilent) return offband::TonePlay::Played;
   const char* melody = offband::tuneRtttl(id);
-  // Silence is a legitimate choice, so auditioning it is a no-op rather than an error:
-  // the picker shows it selected and plays nothing, which IS what it sounds like.
-  if (melody == nullptr) return offband::TonePlay::Played;
-  return buzzer.play(melody, offband::TonePriority::Preview);
+  // Anything else with no melody is an id this build cannot resolve -- past the table
+  // after a downgrade, or a custom slot (#1413). A remote trigger needs to tell that
+  // apart from "played", because for it the badge making no noise is a failure it may
+  // want to report. The picker does not care, so previewTune() folds it back.
+  if (melody == nullptr) return offband::TonePlay::NotFound;
+  return buzzer.play(melody, priority);
 }
+
+void UITask::stopTune() { buzzer.stop(); }
 #endif
 
 int UITask::renderStatusAs(DisplayDriver& d, const char* title, int pos) {
