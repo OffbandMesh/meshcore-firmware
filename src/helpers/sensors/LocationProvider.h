@@ -13,6 +13,9 @@ public:
     virtual long getLatitude() = 0;
     virtual long getLongitude() = 0;
     virtual long getAltitude() = 0;
+    // #1456: the receiver's fix mode, 1 = none, 2 = 2D, 3 = 3D; 0 when the
+    // provider can't tell (its fixes then show as 2D).
+    virtual unsigned char fixMode() { return 0; }
     virtual long satellitesCount() = 0;
     virtual bool isValid() = 0;
     virtual long getTimestamp() = 0;

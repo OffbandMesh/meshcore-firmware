@@ -5,6 +5,7 @@
 #include <RTClib.h>
 #include <helpers/RefCountedDigitalPin.h>
 #include <MeshLog.h>  // #411: [GPSPARSE] routed through the serial-capture sink
+#include "NmeaGsa.h"
 
 #ifndef GPS_EN
     #ifdef PIN_GPS_EN
@@ -61,9 +62,27 @@ private :
     unsigned long _last_time_sync = 0;
     static const unsigned long TIME_SYNC_INTERVAL = 1800000; // Re-sync every 30 minutes
 
+    // #1456: the GSA fix mode. MicroNMEA's sentence hook is a plain function
+    // with no context; there is one GPS per board, so the state is static.
+    static const unsigned long kGsaFreshMs = 5000;
+    static unsigned char& gsaMode() { static unsigned char m = 0; return m; }
+    static unsigned long& gsaAtMs() { static unsigned long t = 0; return t; }
+    static void onUnknownSentence(MicroNMEA& n) {
+        if (strcmp(n.getMessageID(), "GSA") != 0) return;
+        const unsigned char m = offband::parseGsaMode(n.getSentence());
+        if (m) {
+            gsaMode() = m;
+            gsaAtMs() = millis();
+        }
+    }
+
 public :
     MicroNMEALocationProvider(Stream& ser, mesh::RTCClock* clock = NULL, int pin_reset = GPS_RESET, int pin_en = GPS_EN,RefCountedDigitalPin* peripher_power=NULL) :
     nmea(_nmeaBuffer, sizeof(_nmeaBuffer)), _clock(clock), _gps_serial(&ser), _peripher_power(peripher_power), _pin_reset(pin_reset), _pin_en(pin_en) {
+#ifdef OFFBAND_GUI
+        // Only the GUI reads fixMode(); other builds skip the parsing.
+        nmea.setUnknownSentenceHandler(onUnknownSentence);
+#endif
         if (_pin_reset != -1) {
             pinMode(_pin_reset, OUTPUT);
             digitalWrite(_pin_reset, GPS_RESET_ACTIVE);
@@ -126,10 +145,16 @@ public :
     void syncTime() override { nmea.clear(); LocationProvider::syncTime(); }
     long getLatitude() override { return nmea.getLatitude(); }
     long getLongitude() override { return nmea.getLongitude(); }
-    long getAltitude() override { 
+    long getAltitude() override {
         long alt = 0;
         nmea.getAltitude(alt);
         return alt;
+    }
+    // #1456: from the latest GSA sentence; 0 if none arrived in kGsaFreshMs
+    // (the receiver may not send GSA, or has stopped).
+    unsigned char fixMode() override {
+        if (gsaMode() == 0 || millis() - gsaAtMs() > kGsaFreshMs) return 0;
+        return gsaMode();
     }
     long satellitesCount() override { return nmea.getNumSatellites(); }
     bool isValid() override { return nmea.isValid(); }

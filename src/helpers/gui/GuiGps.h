@@ -1,8 +1,9 @@
 #pragma once
 
 // GPS fix type and time since the fix was lost (#1456, PLAN.md §3 B5).
-// MicroNMEA reports whether the altitude is valid; getAltitude() in the
-// location provider throws that away today, so 2D and 3D look the same.
+// 3D comes from the receiver's GSA fix mode (LocationProvider::fixMode()).
+// The plan named MicroNMEA's altitude-valid flag, but that flag turns true on
+// the first GGA sentence and never clears, and GGA can't tell 2D from 3D.
 
 #include <stdint.h>
 
@@ -11,8 +12,8 @@ namespace gui {
 
 enum class FixType : uint8_t { None, Fix2D, Fix3D };
 
-// A position fix with a valid altitude is 3D; without one, 2D.
-FixType fixType(bool position_valid, bool altitude_valid);
+// A position fix the receiver reports as 3D is 3D; any other fix is 2D.
+FixType fixType(bool position_valid, bool three_d);
 
 // Tracks fix/no-fix over time.
 class FixTracker {

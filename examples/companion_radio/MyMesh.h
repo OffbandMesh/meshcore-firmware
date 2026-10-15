@@ -4,6 +4,7 @@
 #include <Mesh.h>
 #include <helpers/gui/GuiCommands.h>
 #ifdef OFFBAND_GUI
+  #include <helpers/gui/GuiGps.h>
   #include <helpers/gui/GuiMetrics.h>
   #include <helpers/gui/GuiReplies.h>
 #endif
@@ -179,6 +180,9 @@ public:
   offband::gui::ReplyBox& guiReplies() { return _gui_replies; }
   // Radio and contact metrics (#1455); the GUI calls contacts.markRead().
   offband::gui::MetricsHub& guiMetrics() { return _gui_metrics; }
+  // GPS fix: None, 2D or 3D, and how long ago it was lost (#1456).
+  offband::gui::FixType guiFixType();
+  const offband::gui::FixTracker& guiFix() const { return _gui_fix; }
 #endif
 
 #if UI_HAS_CARDKB
@@ -368,6 +372,7 @@ private:
 #ifdef OFFBAND_GUI
   offband::gui::ReplyBox _gui_replies;
   offband::gui::MetricsHub _gui_metrics;
+  offband::gui::FixTracker _gui_fix;
 #endif
 
   // #611: retained hashes of recent outgoing channel messages, for the 0xC6 query.
