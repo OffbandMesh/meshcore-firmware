@@ -1130,11 +1130,14 @@ void SettingsScreen::begin() {
 }
 
 bool SettingsScreen::shown(int row) {
-#if ENV_INCLUDE_GPS == 1
-  return row >= 0 && row < kRows;
-#else
-  return row >= 0 && row < kRows && row != Gps;
+  if (row < 0 || row >= kRows) return false;
+#if ENV_INCLUDE_GPS != 1
+  if (row == Gps) return false;
 #endif
+#ifndef PIN_BUZZER
+  if (row == Tones) return false;   // #1421: nothing to choose without a buzzer
+#endif
+  return true;
 }
 
 void SettingsScreen::step(int dir) {
@@ -1176,6 +1179,11 @@ void SettingsScreen::act() {
       _cycled_at = millis() | 1;
       _task->notify(UIEventType::ack);
       break;
+#ifdef PIN_BUZZER
+    case Tones:   // #1421
+      _task->gotoTones();
+      break;
+#endif
     case TimeZone:
       _task->gotoZones();
       break;
@@ -1254,6 +1262,11 @@ int SettingsScreen::render(DisplayDriver& d) {
       case NavTextSize:   label = "Nav text"; snprintf(value, sizeof(value), "%s", textSizeName(prefs->ui_text_size)); break;
       case MsgTextSize:   label = "Message text"; snprintf(value, sizeof(value), "%s", textSizeName(prefs->ui_msg_text_size)); break;
       case ScreenOff:     label = "Screen off"; screenOffName(_task->autoOffSecs(), value, sizeof(value)); break;
+#ifdef PIN_BUZZER
+      case Tones:         label = "Tones"; TonesScreen::summary(_task, value, sizeof(value)); break;
+#else
+      case Tones:         break;   // hidden by shown(); never reached
+#endif
       case TimeZone:      label = "Time zone"; snprintf(value, sizeof(value), "%s", offband::tz::zone(prefs->ui_tz).name); break;
       case Gps:           label = "GPS"; GpsScreen::summary(_task, value, sizeof(value)); break;
       case Battery:       label = "Battery"; BatteryScreen::summary(_task, value, sizeof(value)); break;
@@ -1459,6 +1472,169 @@ bool ZonePickerScreen::handleInput(char c) {
   }
   return false;   // Esc: back to Settings, unchanged
 }
+
+// ---- Tones (#1421) ---------------------------------------------------------------------
+
+#ifdef PIN_BUZZER
+
+// Settings' own row shows the DM tune: the owner's call, over a count, because a count
+// is not something you would act on.
+void TonesScreen::summary(UITask* task, char* out, size_t n) {
+  (void)task;
+  const uint8_t id = offband::effectiveTone(the_mesh.getNodePrefs(),
+                                            offband::ToneEvent::ContactMessage);
+  const char* name = offband::tuneName(id);
+  // A name is absent only for an id this build cannot resolve -- a custom slot (#1413)
+  // or a tune from a longer table after a downgrade. Say so rather than showing blank.
+  snprintf(out, n, "%s", name != nullptr ? name : "custom");
+}
+
+int TonesScreen::render(DisplayDriver& d) {
+  const Face& kBody = uiNavBody();
+  const int kListRows = uiListRows(kBody);
+  const int count = offband::kToneEventRowCount;
+  int top = listTop(_sel, count, kListRows);
+  const bool more_below = count - top > kListRows;
+  if (more_below) top = listTop(_sel, count, kListRows - 1);
+
+  bar(d, kBody, 0, " Tones", "");
+  int right_edge = kScreenPx - kEdgePx;
+  if (more_below) {
+    markDown(d, right_edge - 6, 0, true);
+    right_edge -= 7;
+  }
+  if (top > 0) markUp(d, right_edge - 6, 0, true);
+
+  const NodePrefs* prefs = the_mesh.getNodePrefs();
+  for (int r = 0; r < kListRows && top + r < count; r++) {
+    const int i = top + r;
+    const offband::ToneEventRow& row = offband::kToneEventRows[i];
+    const uint8_t id = offband::effectiveTone(prefs, row.event);
+    const char* name = offband::tuneName(id);
+    listRow(d, 1 + r, row.label, name != nullptr ? name : "custom", i == _sel);
+  }
+  return 1000;
+}
+
+bool TonesScreen::handleInput(char c) {
+  const uint8_t key = (uint8_t)c;
+  const int count = offband::kToneEventRowCount;
+  const bool from_button = !_task->inputFromKeyboard();
+  if ((from_button && key == KEY_NEXT) || key == KEY_DOWN) {
+    _sel = (_sel + 1) % count;
+    return true;
+  }
+  if ((from_button && key == KEY_PREV) || key == KEY_UP) {
+    _sel = (_sel + count - 1) % count;
+    return true;
+  }
+  if (key == KEY_ENTER) {
+    _task->gotoTonePicker(offband::kToneEventRows[_sel].event);
+    return true;
+  }
+  return false;   // Esc: back to Settings
+}
+
+// The picker. ZonePickerScreen's shape -- the owner's "fixed option list" archetype --
+// with a preview as the selection moves.
+void TonePickerScreen::begin() {
+  const uint8_t id = offband::effectiveTone(the_mesh.getNodePrefs(), _task->tonePickerEvent());
+  // Open on the tune in use. An unresolvable id (a custom slot, or one from a longer
+  // table) has no row here, so start at the top rather than off the end.
+  _sel = offband::isBuiltinTune(id) ? (int)id : 0;
+  _note = "";
+  _note_until = 0;
+}
+
+int TonePickerScreen::render(DisplayDriver& d) {
+  const Face& kBody = uiNavBody();
+  const int kListRows = uiListRows(kBody);
+  const int count = (int)offband::kBuiltinCount;
+  int top = listTop(_sel, count, kListRows);
+  const bool more_below = count - top > kListRows;
+  if (more_below) top = listTop(_sel, count, kListRows - 1);
+
+  // The title names the event being edited, so three levels deep still says where it is.
+  // 24 rather than the 19 the longest current label needs: test_tone_slots caps a label
+  // at 12 characters, so " <label> tone" cannot exceed 19 without that test failing
+  // first. The headroom is so a reader does not have to know that to trust the buffer.
+  char title[24];
+  snprintf(title, sizeof(title), " %s tone",
+           offband::kToneEventRows[(size_t)_task->tonePickerEvent()].label);
+  const bool noting = _note[0] != 0 && millis() < _note_until;
+  bar(d, kBody, 0, title, noting ? _note : "");
+  if (!noting) {
+    int right_edge = kScreenPx - kEdgePx;
+    if (more_below) {
+      markDown(d, right_edge - 6, 0, true);
+      right_edge -= 7;
+    }
+    if (top > 0) markUp(d, right_edge - 6, 0, true);
+  }
+
+  const uint8_t current = offband::effectiveTone(the_mesh.getNodePrefs(),
+                                                 _task->tonePickerEvent());
+  for (int r = 0; r < kListRows && top + r < count; r++) {
+    const uint8_t id = (uint8_t)(top + r);
+    const char* name = offband::tuneName(id);
+    if (name == nullptr) continue;   // an un-listed tune (#1422) stays out of the menu
+    listRow(d, 1 + r, name, id == current ? "now" : "", id == _sel);
+  }
+  return noting ? 250 : 1000;
+}
+
+bool TonePickerScreen::handleInput(char c) {
+  const uint8_t key = (uint8_t)c;
+  const int count = (int)offband::kBuiltinCount;
+  const bool from_button = !_task->inputFromKeyboard();
+
+  const bool down = (from_button && key == KEY_NEXT) || key == KEY_DOWN;
+  const bool up = (from_button && key == KEY_PREV) || key == KEY_UP;
+  if (down || up) {
+    // Step over anything the menu does not list, so an un-listed tune cannot be
+    // selected by walking onto it.
+    const int dir = down ? 1 : -1;
+    for (int tries = 0; tries < count; tries++) {
+      _sel = (_sel + dir + count) % count;
+      if (offband::tuneName((uint8_t)_sel) != nullptr) break;
+    }
+    // Audition it. Preview priority, so a message arriving mid-audition wins -- and
+    // BOTH refusals get words, because a silent picker with no explanation reads as
+    // broken. Distinguishing them is the entire reason play() returns a reason rather
+    // than a bool (#1417).
+    switch (_task->previewTune((uint8_t)_sel)) {
+      case offband::TonePlay::RefusedQuiet:
+        _note = "Buzzer: OFF";
+        _note_until = millis() + 1200;
+        break;
+      case offband::TonePlay::RefusedBusy:
+        // A real notification is sounding. The selection still moves; only the audition
+        // is skipped, which is the trade the priority rule exists to make.
+        _note = "busy";
+        _note_until = millis() + 1200;
+        break;
+      case offband::TonePlay::Played:
+        break;
+    }
+    return true;
+  }
+  if (key == KEY_ENTER) {
+    NodePrefs* prefs = the_mesh.getNodePrefs();
+    // A flash write only for a change, as the zone picker does. Note this compares the
+    // STORED value, not the effective one: choosing the tune that is already playing by
+    // default is a real change, because it pins it against a later firmware's default.
+    if (offband::storedTone(prefs, _task->tonePickerEvent()) != (uint8_t)_sel) {
+      if (offband::setStoredTone(prefs, _task->tonePickerEvent(), (uint8_t)_sel)) {
+        the_mesh.savePrefs();
+      }
+    }
+    _task->gotoTones();
+    return true;
+  }
+  return false;   // Esc: back to Tones, unchanged
+}
+
+#endif  // PIN_BUZZER
 
 // ---- GPS (#1235) -----------------------------------------------------------------------
 

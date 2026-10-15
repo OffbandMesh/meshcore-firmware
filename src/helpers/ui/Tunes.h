@@ -76,14 +76,20 @@ constexpr uint8_t kBuiltinCount = (uint8_t)(sizeof(kBuiltinTunes) / sizeof(kBuil
 constexpr uint8_t kTuneChime = 1;    // the old contactMessage literal
 constexpr uint8_t kTuneKerplop = 2;  // the old channelMessage literal
 constexpr uint8_t kTuneTick = 3;     // the old ack literal
+constexpr uint8_t kTuneBloop = 4;    // #1447
+constexpr uint8_t kTuneDrop = 5;
+constexpr uint8_t kTuneKnock = 6;
 
 static_assert(kBuiltinCount > 0, "the table needs an entry");
 static_assert(kBuiltinCount < 255, "tune ids are 8-bit and 255 is kept free");
 static_assert(kBuiltinTunes[kTuneSilent].rtttl == nullptr, "id 0 is silence");
-static_assert(kTuneTick < kBuiltinCount, "the named ids must be in the table");
+static_assert(kTuneKnock < kBuiltinCount, "the named ids must be in the table");
 static_assert(kBuiltinTunes[kTuneChime].rtttl != nullptr, "Chime needs a melody");
 static_assert(kBuiltinTunes[kTuneKerplop].rtttl != nullptr, "Kerplop needs a melody");
 static_assert(kBuiltinTunes[kTuneTick].rtttl != nullptr, "Tick needs a melody");
+static_assert(kBuiltinTunes[kTuneBloop].rtttl != nullptr, "Bloop needs a melody");
+static_assert(kBuiltinTunes[kTuneDrop].rtttl != nullptr, "Drop needs a melody");
+static_assert(kBuiltinTunes[kTuneKnock].rtttl != nullptr, "Knock needs a melody");
 
 // ---------------------------------------------------------------------------------
 // Which tune each event gets.

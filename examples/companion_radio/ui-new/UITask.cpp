@@ -794,6 +794,10 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   zones = new ZonePickerScreen(this);    // #1233
   gps = new GpsScreen(this);             // #1235
   battery = new BatteryScreen(this);     // #1254
+#ifdef PIN_BUZZER
+  tones = new TonesScreen(this);              // #1421
+  tone_picker = new TonePickerScreen(this);   // #1421
+#endif
   msg_preview = NULL;
 #else
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
@@ -865,6 +869,24 @@ void UITask::gotoGps() {
 }
 
 void UITask::gotoBattery() { setCurrScreen(battery); }   // #1254
+
+#if UI_HAS_CARDKB && defined(PIN_BUZZER)
+void UITask::gotoTones() { setCurrScreen(tones); }   // #1421
+
+void UITask::gotoTonePicker(offband::ToneEvent e) {
+  _tone_picking = e;
+  ((TonePickerScreen*)tone_picker)->begin();
+  setCurrScreen(tone_picker);
+}
+
+offband::TonePlay UITask::previewTune(uint8_t id) {
+  const char* melody = offband::tuneRtttl(id);
+  // Silence is a legitimate choice, so auditioning it is a no-op rather than an error:
+  // the picker shows it selected and plays nothing, which IS what it sounds like.
+  if (melody == nullptr) return offband::TonePlay::Played;
+  return buzzer.play(melody, offband::TonePriority::Preview);
+}
+#endif
 
 int UITask::renderStatusAs(DisplayDriver& d, const char* title, int pos) {
   return ((StatusScreen*)status)->drawAs(d, title, pos);
@@ -947,32 +969,6 @@ static bool toneEventFor(UIEventType t, offband::ToneEvent& out) {
 // is also the answer when prefs are not available yet. Unset means "use this board's
 // compiled default", so a missing pref and an un-loaded prefs object both land on the
 // same safe behavior rather than on silence.
-// A slot per event, IN ENUM ORDER, rather than a switch. The static_assert then makes a
-// forgotten event a compile error, which a switch cannot do here: `arduino_base` builds
-// with `-w`, so -Wswitch would never be seen. The cost of the array shape is that this
-// order has to match ToneEvent's; the benefit is that it cannot silently fall short.
-static uint8_t storedToneFor(const NodePrefs* p, offband::ToneEvent e) {
-  // Null prefs means "nothing stored", which resolves to this board's compiled default
-  // -- exactly what the firmware played before prefs existed. The same guard appears
-  // three times elsewhere in this file for the same pointer, so this is the file's
-  // established handling and not a new assumption.
-  if (p == nullptr) return offband::kTuneUnset;
-
-  const uint8_t* const slots[] = {
-      &p->ui_tone_dm,          // ContactMessage
-      &p->ui_tone_channel,     // ChannelMessage
-      &p->ui_tone_room,        // RoomMessage
-      &p->ui_tone_newcontact,  // NewContact
-      &p->ui_tone_ack,         // Ack
-      &p->ui_tone_sent,        // Sent
-  };
-  constexpr size_t kSlots = sizeof(slots) / sizeof(slots[0]);
-  static_assert(kSlots == (size_t)offband::ToneEvent::Count,
-                "every ToneEvent needs a pref slot, in enum order");
-
-  const size_t i = (size_t)e;
-  return i < kSlots ? *slots[i] : offband::kTuneUnset;
-}
 #endif
 
 void UITask::notify(UIEventType t) {
@@ -983,7 +979,7 @@ void UITask::notify(UIEventType t) {
   // silenced event stays silent.
   offband::ToneEvent ev;
   if (toneEventFor(t, ev)) {
-    const uint8_t id = offband::resolveTune(storedToneFor(_node_prefs, ev), ev);
+    const uint8_t id = offband::effectiveTone(_node_prefs, ev);
     // nullptr covers both silence and a custom-slot id this build cannot resolve yet
     // (#1413). Either way nothing plays, which is the safe answer.
     if (const char* melody = offband::tuneRtttl(id)) {
@@ -1359,7 +1355,18 @@ void UITask::loop() {
     // GPS (#1235) to Settings, and Settings to Status, where it was opened.
     if (!curr->handleInput(c) && keynav::backsOut((uint8_t)c) && curr != home) {
 #if UI_HAS_CARDKB
-      if (curr == tools || curr == zones || curr == gps || curr == battery) gotoSettings();
+#ifdef PIN_BUZZER
+      // #1421: the picker is one level deeper than the rest, so Esc from it goes to
+      // Tones rather than all the way out. Without this it would land on Home, because
+      // the fallback below is the default for any screen not named here.
+      if (curr == tone_picker) gotoTones();
+      else
+#endif
+      if (curr == tools || curr == zones || curr == gps || curr == battery
+#ifdef PIN_BUZZER
+          || curr == tones
+#endif
+         ) gotoSettings();
       else if (curr == settings) gotoStatus();
       else
 #endif

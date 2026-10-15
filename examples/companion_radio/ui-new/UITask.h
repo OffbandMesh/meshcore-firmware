@@ -21,6 +21,7 @@
 #ifdef PIN_BUZZER
   #include <helpers/ui/buzzer.h>
   #include <helpers/ui/Tunes.h>   // #1418/#1419: the tone for an event is looked up
+  #include "ToneSlots.h"          // #1421: the one event-to-pref slot table
 #endif
 #ifdef PIN_VIBRATION
   #include <helpers/ui/GenericVibration.h>
@@ -174,6 +175,17 @@ class UITask : public AbstractUITask {
   UIScreen* battery;    // #1254
   uint32_t _cycle_at = 0;   // #1231: when SW1 last moved along the cycle
 #endif
+#if UI_HAS_CARDKB && defined(PIN_BUZZER)
+  // #1421: Settings -> Tones -> a tune. Both guards, because the screens need the
+  // keyboard to navigate AND a buzzer to be about anything. Today only the badge sets
+  // UI_HAS_CARDKB and it has a buzzer, so this is belt and braces rather than a live
+  // case -- but a keyboard board without a piezo should not fail to compile.
+  UIScreen* tones;        // the six events
+  UIScreen* tone_picker;  // the tunes, for one event
+  // Which event the picker is editing. Held here rather than passed into the screen so
+  // the picker can be a plain UIScreen like the others.
+  offband::ToneEvent _tone_picking = offband::ToneEvent::ContactMessage;
+#endif
   UIScreen* curr;
 
   void userLedHandler();
@@ -258,6 +270,15 @@ public:
   void gotoZones();      // #1233
   void gotoGps();        // #1235: from Settings' GPS row
   void gotoBattery();    // #1254: from Settings' Battery row
+#if UI_HAS_CARDKB && defined(PIN_BUZZER)
+  void gotoTones();                                   // #1421: from Settings' Tones row
+  void gotoTonePicker(offband::ToneEvent e);          // #1421: from a Tones row
+  offband::ToneEvent tonePickerEvent() const { return _tone_picking; }
+  // Auditions a tune. Low priority, so it can never cut off a real notification, and
+  // the result says WHY nothing played so the screen can show it rather than appearing
+  // to do nothing.
+  offband::TonePlay previewTune(uint8_t id);
+#endif
   // The Status screen under another title, as cycle position `pos`: the inbox's empty state.
   int renderStatusAs(DisplayDriver& d, const char* title, int pos);
   bool hasKeyboard() const { return _kbd.isPresent(); }
