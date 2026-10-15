@@ -720,6 +720,23 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
   }
 #endif
 
+#ifdef OFFBAND_GUI
+  // #1465: the on-device store keeps it too, alongside the phone's queue, so
+  // the phone's download no longer means the device forgets.
+  if (txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN) {
+    const int t = guiThreadFor(from);
+    if (t >= 0) {
+      // A room server's message carries its author's key prefix: show who wrote it.
+      const ContactInfo* author = NULL;
+      if (txt_type == TXT_TYPE_SIGNED_PLAIN && extra_len >= 4) author = lookupContactByPubKey(extra, 4);
+      _gui_store.addIncoming(t, getRTCClock()->getCurrentTime(), author ? author->name : "", text,
+                             strlen(text), pkt->isRouteFlood() ? pkt->getPathHashCount() : 0xFF,
+                             (int8_t)(pkt->getSNR() * 4));
+      _gui_store_flash.ringChanged(_ms->getMillis());
+    }
+  }
+#endif
+
 #ifdef DISPLAY_CLASS
   // we only want to show text messages on display, not cli data
   bool should_display = txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN;
@@ -1014,6 +1031,20 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
       _badge_store.addIncoming(c, getRTCClock()->getCurrentTime(), sender, body,
                                pkt->isRouteFlood() ? pkt->getPathHashCount() : 0xFF,
                                rssiToInt8(_radio->getLastRSSI()));
+    }
+  }
+#endif
+#ifdef OFFBAND_GUI
+  // #1465: the on-device store keeps it too, filed by the channel's secret.
+  {
+    const int t = guiThreadForChannel(channel_idx);
+    if (t >= 0) {
+      char sender[offband::gui::kMsgSenderLen];
+      const char* body = offband::splitSender(text, sender, sizeof(sender));
+      _gui_store.addIncoming(t, getRTCClock()->getCurrentTime(), sender, body, strlen(body),
+                             pkt->isRouteFlood() ? pkt->getPathHashCount() : 0xFF,
+                             (int8_t)(pkt->getSNR() * 4));
+      _gui_store_flash.ringChanged(_ms->getMillis());
     }
   }
 #endif
