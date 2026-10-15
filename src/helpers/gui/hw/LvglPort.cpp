@@ -1,5 +1,7 @@
 #include "LvglPort.h"
 
+#include <Arduino.h>
+#include <MeshLog.h>
 #include <esp_attr.h>
 #include <esp_heap_caps.h>
 #include <lvgl.h>
@@ -15,19 +17,15 @@ static lv_disp_drv_t s_disp_drv;
 static GuiPanel* s_panel = nullptr;
 static size_t s_buf_bytes = 0;
 
-// Set by the SPI interrupt when a pixel transfer ends. The interrupt must not
-// call into LVGL: LVGL lives in flash, and the interrupt can fire while a
-// SPIFFS write has the flash cache disabled. LVGL is told from task context.
-static volatile bool s_flush_done = false;
+static bool s_flush_inflight = false;
 
-static void IRAM_ATTR onTransferDone(void* arg) {
-  (void)arg;
-  s_flush_done = true;
-}
-
+// A flush is finished when the SPI driver says the pixel write is done. It's
+// asked from task context (LVGL's wait callback and the UI loop), never from
+// the SPI interrupt: LVGL lives in flash, and the interrupt can fire while a
+// SPIFFS write has the flash cache disabled.
 static void ackFlush(lv_disp_drv_t* drv) {
-  if (s_flush_done) {
-    s_flush_done = false;
+  if (s_flush_inflight && s_panel->panel().pollDone()) {
+    s_flush_inflight = false;
     lv_disp_flush_ready(drv);
   }
 }
@@ -37,13 +35,39 @@ static void flushCb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* px) {
                      sizeof(lv_color_t);
   St7789Dma& panel = s_panel->panel();
   panel.setWindow(area->x1, area->y1, area->x2, area->y2);
-  if (!panel.writePixelsAsync(reinterpret_cast<const uint8_t*>(px), len)) {
+  if (panel.writePixelsAsync(reinterpret_cast<const uint8_t*>(px), len)) {
+    s_flush_inflight = true;
+  } else {
     lv_disp_flush_ready(drv);  // nothing went out; don't stall LVGL on it
   }
 }
 
+#ifdef OFFBAND_GUI_PERF
+// Diag builds: a pixel write that never finishes hangs the refresh until the
+// task watchdog fires. Say so once, so the log names the cause (#1445).
+static uint32_t s_wait_since = 0;
+static bool s_stall_reported = false;
+
+static void noteWait(bool still_waiting) {
+  if (!still_waiting) {
+    s_wait_since = 0;
+    return;
+  }
+  if (!s_wait_since) s_wait_since = millis();
+  if (!s_stall_reported && millis() - s_wait_since > 2000) {
+    s_stall_reported = true;
+    mesh_log_line(MLOG_BOOT, "[gui] STALL: panel pixel write not finished after 2 s\n");
+  }
+}
+#endif
+
 // LVGL calls this while it waits for a buffer to come back.
-static void waitCb(lv_disp_drv_t* drv) { ackFlush(drv); }
+static void waitCb(lv_disp_drv_t* drv) {
+  ackFlush(drv);
+#ifdef OFFBAND_GUI_PERF
+  noteWait(s_flush_inflight);
+#endif
+}
 
 static uint32_t s_frames = 0;
 static uint32_t s_frame_ms_total = 0;
@@ -95,7 +119,6 @@ bool lvglBegin(GuiPanel& panel) {
   s_disp_drv.wait_cb = waitCb;
   s_disp_drv.monitor_cb = monitorCb;
   s_disp_drv.draw_buf = &s_draw_buf;
-  panel.panel().setDoneCallback(onTransferDone, nullptr);
   lv_disp_drv_register(&s_disp_drv);
   return true;
 }

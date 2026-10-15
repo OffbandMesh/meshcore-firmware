@@ -6,10 +6,8 @@
 
 St7789Dma* St7789Dma::s_instance = nullptr;
 
-// Transaction `user` field: bit 0 is the DC level (0 command, 1 data), bit 1
-// asks postTransfer to signal the done callback.
+// Transaction `user` field: the DC level (0 command, 1 data).
 static constexpr uintptr_t kUserData = 1;
-static constexpr uintptr_t kUserNotify = 2;
 
 // ST7789 commands (datasheet section 9).
 static constexpr uint8_t CMD_SWRESET = 0x01;
@@ -28,11 +26,6 @@ static constexpr uint8_t CMD_COLMOD = 0x3A;
 void IRAM_ATTR St7789Dma::preTransfer(spi_transaction_t* t) {
   uintptr_t u = reinterpret_cast<uintptr_t>(t->user);
   gpio_set_level(static_cast<gpio_num_t>(s_instance->_dc), (u & kUserData) ? 1 : 0);
-}
-
-void IRAM_ATTR St7789Dma::postTransfer(spi_transaction_t* t) {
-  uintptr_t u = reinterpret_cast<uintptr_t>(t->user);
-  if ((u & kUserNotify) && s_instance->_done) s_instance->_done(s_instance->_done_arg);
 }
 
 bool St7789Dma::begin(spi_host_device_t host, const Pins& pins, uint32_t hz, uint8_t madctl,
@@ -64,7 +57,6 @@ bool St7789Dma::begin(spi_host_device_t host, const Pins& pins, uint32_t hz, uin
   dev.spics_io_num = pins.cs;
   dev.queue_size = 2;
   dev.pre_cb = preTransfer;
-  dev.post_cb = postTransfer;
   if (spi_bus_add_device(host, &dev, &_dev) != ESP_OK) return false;
 
   command(CMD_SWRESET);
@@ -118,9 +110,17 @@ bool St7789Dma::writePixelsAsync(const uint8_t* data, size_t len) {
   memset(&_pixel_trans, 0, sizeof(_pixel_trans));
   _pixel_trans.length = len * 8;
   _pixel_trans.tx_buffer = data;
-  _pixel_trans.user = reinterpret_cast<void*>(kUserData | kUserNotify);
+  _pixel_trans.user = reinterpret_cast<void*>(kUserData);
   if (spi_device_queue_trans(_dev, &_pixel_trans, portMAX_DELAY) != ESP_OK) return false;
   _pending = true;
+  return true;
+}
+
+bool St7789Dma::pollDone() {
+  if (!_pending) return true;
+  spi_transaction_t* done = nullptr;
+  if (spi_device_get_trans_result(_dev, &done, 0) != ESP_OK) return false;
+  _pending = false;
   return true;
 }
 

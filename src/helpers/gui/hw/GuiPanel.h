@@ -17,11 +17,10 @@
 #ifndef GUI_PANEL_HEIGHT
   #define GUI_PANEL_HEIGHT 320
 #endif
-// MADCTL for portrait: MX|MY with RGB order, the same register value the
-// Adafruit driver uses for rotation 0 on this panel. Which way is "up" in the
-// enclosure is confirmed on the bench (A7).
+// MADCTL for portrait, RGB order, no mirroring. The bench (A7) found MX|MY
+// (0xC0) drew upside down in the enclosure.
 #ifndef GUI_PANEL_MADCTL
-  #define GUI_PANEL_MADCTL 0xC0
+  #define GUI_PANEL_MADCTL 0x00
 #endif
 // The SPI clock the existing TFT driver runs at (ST7789LCDDisplay::begin).
 #ifndef GUI_PANEL_SPI_HZ

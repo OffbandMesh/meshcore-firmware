@@ -12,7 +12,8 @@ static void backlightBegin() {
 #if defined(PIN_TFT_LEDA_CTL) && PIN_TFT_LEDA_CTL >= 0
   ledcSetup(kBacklightChannel, kBacklightHz, kBacklightBits);
   ledcAttachPin(PIN_TFT_LEDA_CTL, kBacklightChannel);
-  ledcWrite(kBacklightChannel, 255);
+  // Dark until the first frame is drawn: the panel's RAM powers up as noise.
+  ledcWrite(kBacklightChannel, 0);
 #endif
 }
 
@@ -37,8 +38,12 @@ bool GuiPanel::begin(size_t max_transfer) {
   pins.cs = PIN_TFT_CS;
   pins.dc = PIN_TFT_DC;
   pins.rst = PIN_TFT_RST;
-  // SPI3: the radio owns SPI2 (target.cpp's default SPIClass).
-  _ready = _panel.begin(SPI3_HOST, pins, GUI_PANEL_SPI_HZ, GUI_PANEL_MADCTL, max_transfer);
+  // SPI2: the radio owns SPI3. target.cpp's SPIClass defaults to HSPI, which
+  // is SPI3 on the S3, and Arduino's SPI driver writes that peripheral's
+  // registers directly, wiping the interrupt setup the IDF driver relies on.
+  // SPI2 is also Arduino's global `SPI` (FSPI), so nothing in a GUI build may
+  // call SPI.begin().
+  _ready = _panel.begin(SPI2_HOST, pins, GUI_PANEL_SPI_HZ, GUI_PANEL_MADCTL, max_transfer);
   _on = _ready;
   return _ready;
 }
