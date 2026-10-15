@@ -1479,6 +1479,9 @@ bool ZonePickerScreen::handleInput(char c) {
 
 // Settings' own row shows the DM tune: the owner's call, over a count, because a count
 // is not something you would act on.
+// The six event rows plus the scope row above them (#1468).
+static constexpr int kTonesRowCount = offband::kToneEventRowCount + 1;
+
 void TonesScreen::summary(UITask* task, char* out, size_t n) {
   (void)task;
   const uint8_t id = offband::effectiveTone(the_mesh.getNodePrefs(),
@@ -1492,7 +1495,7 @@ void TonesScreen::summary(UITask* task, char* out, size_t n) {
 int TonesScreen::render(DisplayDriver& d) {
   const Face& kBody = uiNavBody();
   const int kListRows = uiListRows(kBody);
-  const int count = offband::kToneEventRowCount;
+  const int count = kTonesRowCount;
   int top = listTop(_sel, count, kListRows);
   const bool more_below = count - top > kListRows;
   if (more_below) top = listTop(_sel, count, kListRows - 1);
@@ -1508,7 +1511,14 @@ int TonesScreen::render(DisplayDriver& d) {
   const NodePrefs* prefs = the_mesh.getNodePrefs();
   for (int r = 0; r < kListRows && top + r < count; r++) {
     const int i = top + r;
-    const offband::ToneEventRow& row = offband::kToneEventRows[i];
+    if (i == kScopeRow) {
+      // #1468: the gate above all six, and the only on-device way to reach it. It sits
+      // first because the six rows below it cannot make a sound while it says Off.
+      listRow(d, 1 + r, "Sound", offband::notifyScopeLabel(prefs->notify_scope),
+              i == _sel);
+      continue;
+    }
+    const offband::ToneEventRow& row = offband::kToneEventRows[i - 1];
     const uint8_t id = offband::effectiveTone(prefs, row.event);
     const char* name = offband::tuneName(id);
     listRow(d, 1 + r, row.label, name != nullptr ? name : "custom", i == _sel);
@@ -1518,7 +1528,7 @@ int TonesScreen::render(DisplayDriver& d) {
 
 bool TonesScreen::handleInput(char c) {
   const uint8_t key = (uint8_t)c;
-  const int count = offband::kToneEventRowCount;
+  const int count = kTonesRowCount;
   const bool from_button = !_task->inputFromKeyboard();
   if ((from_button && key == KEY_NEXT) || key == KEY_DOWN) {
     _sel = (_sel + 1) % count;
@@ -1529,10 +1539,51 @@ bool TonesScreen::handleInput(char c) {
     return true;
   }
   if (key == KEY_ENTER) {
-    _task->gotoTonePicker(offband::kToneEventRows[_sel].event);
+    if (_sel == kScopeRow) {
+      cycleScope();
+      return true;
+    }
+    _task->gotoTonePicker(offband::kToneEventRows[_sel - 1].event);
     return true;
   }
   return false;   // Esc: back to Settings
+}
+
+// #1468. Three things have to move together, which is why this is not three lines at the
+// call site: the gate, the driver, and the pref that survives a reboot. The 0xC5 handler
+// already did exactly this on the way in; nothing did it on the way out, and that is what
+// stranded a badge -- a client that set Off also muted the buzzer, and no gesture on the
+// device could un-mute it.
+void TonesScreen::cycleScope() {
+  NodePrefs* prefs = the_mesh.getNodePrefs();
+  const uint8_t want = offband::nextNotifyScope(prefs->notify_scope);
+  const uint8_t quiet = offband::quietForScope(want);
+  prefs->notify_scope = want;
+  prefs->buzzer_quiet = quiet;
+  const bool saved = the_mesh.savePrefs();   // #1194: false when the store could not write
+  // The DRIVER, not just the pref -- the #510 lesson, logged in applyBuzzerMute's own
+  // comment: recording the value and leaving the hardware muted until the next reboot is
+  // the bug this call exists to prevent. Applied even when the save failed, so what the
+  // badge DOES matches the value it is showing.
+  _task->applyBuzzerMute(quiet != 0);
+  if (!saved) {
+    // Do not claim success. The scope is live for this session but will not survive a
+    // reboot, and a user who was just stranded silent deserves to know that rather than
+    // discover it the next time the badge comes up.
+    _task->showAlert("Sound not saved", 1500);
+    return;
+  }
+  // Audible proof the buzzer is back, on any scope that can sound. Coming off Off is
+  // exactly the moment a user needs to know the badge works rather than take it on trust.
+  //
+  // A FIXED tune, not the user's Ack tune. Silent is a real choice someone makes -- two
+  // events ship defaulting to it -- and confirming "sound is on" with a tune that may be
+  // silence would read as the control having done nothing, which is the very failure this
+  // whole issue is about. kTuneTick is the shortest entry in the table and test_tunes
+  // pins that every listed tune but Silent has a melody.
+  if (quiet == 0) {
+    _task->previewTune(offband::kTuneTick);
+  }
 }
 
 // The picker. ZonePickerScreen's shape -- the owner's "fixed option list" archetype --
