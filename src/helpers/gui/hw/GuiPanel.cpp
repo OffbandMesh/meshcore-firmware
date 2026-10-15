@@ -2,14 +2,34 @@
 
 #include <Arduino.h>
 
+// Backlight PWM. Nothing else in the firmware uses LEDC, and the V4 envs
+// define no buzzer; channel 3 keeps clear of channel 0, Arduino's default.
+static constexpr uint8_t kBacklightChannel = 3;
+static constexpr uint32_t kBacklightHz = 5000;
+static constexpr uint8_t kBacklightBits = 8;
+
+static void backlightBegin() {
+#if defined(PIN_TFT_LEDA_CTL) && PIN_TFT_LEDA_CTL >= 0
+  ledcSetup(kBacklightChannel, kBacklightHz, kBacklightBits);
+  ledcAttachPin(PIN_TFT_LEDA_CTL, kBacklightChannel);
+  ledcWrite(kBacklightChannel, 255);
+#endif
+}
+
+void GuiPanel::setBrightness(uint8_t pct) {
+#if defined(PIN_TFT_LEDA_CTL) && PIN_TFT_LEDA_CTL >= 0
+  if (pct > 100) pct = 100;
+  ledcWrite(kBacklightChannel, uint32_t(pct) * 255 / 100);
+#else
+  (void)pct;
+#endif
+}
+
 bool GuiPanel::begin(size_t max_transfer) {
   if (_ready) return true;
   if (_peripher_power) _peripher_power->claim();
 
-#if defined(PIN_TFT_LEDA_CTL) && PIN_TFT_LEDA_CTL >= 0
-  pinMode(PIN_TFT_LEDA_CTL, OUTPUT);
-  digitalWrite(PIN_TFT_LEDA_CTL, HIGH);
-#endif
+  backlightBegin();
 
   St7789Dma::Pins pins;
   pins.sck = PIN_TFT_SCL;
@@ -27,17 +47,13 @@ void GuiPanel::turnOn() {
   if (!_ready || _on) return;
   _panel.sleep(false);
   _panel.displayOn(true);
-#if defined(PIN_TFT_LEDA_CTL) && PIN_TFT_LEDA_CTL >= 0
-  digitalWrite(PIN_TFT_LEDA_CTL, HIGH);
-#endif
+  setBrightness(100);
   _on = true;
 }
 
 void GuiPanel::turnOff() {
   if (!_ready || !_on) return;
-#if defined(PIN_TFT_LEDA_CTL) && PIN_TFT_LEDA_CTL >= 0
-  digitalWrite(PIN_TFT_LEDA_CTL, LOW);
-#endif
+  setBrightness(0);
   _panel.displayOn(false);
   _panel.sleep(true);
   _on = false;

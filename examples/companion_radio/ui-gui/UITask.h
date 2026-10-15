@@ -4,11 +4,13 @@
 // of ui-new/UITask, with the same surface main.cpp drives, so main.cpp needs
 // no GUI-specific code.
 //
-// Epic A brings up the panel, LVGL, input and themes; the screens come in
-// Epics D-H. Until then this shows a test screen with the BLE pairing PIN,
+// Epic A brings up the panel, LVGL, input, power and themes; the screens come
+// in Epics D-H. Until then this shows a test screen with the BLE pairing PIN,
 // which a phone needs to pair.
 
 #include <helpers/SensorManager.h>
+#include <helpers/gui/InputMap.h>
+#include <helpers/gui/InputTiming.h>
 #include <helpers/ui/DisplayDriver.h>
 
 #include "../AbstractUITask.h"
@@ -32,6 +34,10 @@ public:
 private:
   void buildTestScreen();
   void refreshTestScreen();
+  void pollButtons(uint32_t now);
+  void handle(offband::gui::InputEvent ev, uint32_t now);
+  void applyScreen(offband::gui::ScreenState s);
+  uint32_t idleMs(uint32_t now) const;
 
   DisplayDriver* _display = nullptr;
   SensorManager* _sensors = nullptr;
@@ -39,7 +45,14 @@ private:
   bool _gui_ok = false;
   bool _touch_ok = false;
   bool _always_on = false;
+  bool _manual_off = false;  // PRG long hold: stays off until the next input
   uint32_t _shown_pin = 0;
   int _unread = 0;
   unsigned long _next_refresh = 0;
+
+  offband::gui::ButtonTracker _prg;
+  offband::gui::ButtonTracker _user;
+  uint32_t _last_input = 0;
+  offband::gui::ScreenState _screen = offband::gui::ScreenState::On;
+  offband::gui::Action _last_action = offband::gui::Action::None;
 };
