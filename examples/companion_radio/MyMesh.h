@@ -4,6 +4,7 @@
 #include <Mesh.h>
 #include <helpers/gui/GuiCommands.h>
 #ifdef OFFBAND_GUI
+  #include <helpers/gui/GuiMetrics.h>
   #include <helpers/gui/GuiReplies.h>
 #endif
 #include "AbstractUITask.h"
@@ -176,6 +177,8 @@ public:
 #ifdef OFFBAND_GUI
   // Every login, status, trace and path reply, phone connected or not.
   offband::gui::ReplyBox& guiReplies() { return _gui_replies; }
+  // Radio and contact metrics (#1455); the GUI calls contacts.markRead().
+  offband::gui::MetricsHub& guiMetrics() { return _gui_metrics; }
 #endif
 
 #if UI_HAS_CARDKB
@@ -280,8 +283,12 @@ protected:
   void sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis=0) override;
 
   void logRxRaw(float snr, float rssi, const uint8_t raw[], int len) override;
-#if defined(OFFBAND_OBSERVER) || UI_HAS_CARDKB
+#ifdef OFFBAND_GUI
+  void logTx(mesh::Packet* packet, int len) override;  // TX airtime for the GUI (#1455)
+#endif
+#if defined(OFFBAND_OBSERVER) || UI_HAS_CARDKB || defined(OFFBAND_GUI)
   // Strycher/LoRa#335: the observer's /packets path. #1232: the badge's heard repeats.
+  // #1455: the GUI's heard counts by type.
   void logRx(mesh::Packet* pkt, int len, float score) override;
 #endif
   bool isAutoAddEnabled() const override;
@@ -360,6 +367,7 @@ private:
                     size_t len);
 #ifdef OFFBAND_GUI
   offband::gui::ReplyBox _gui_replies;
+  offband::gui::MetricsHub _gui_metrics;
 #endif
 
   // #611: retained hashes of recent outgoing channel messages, for the 0xC6 query.

@@ -95,5 +95,14 @@ private:
   size_t _n = 0;
 };
 
+// Everything above, as MyMesh keeps it for the GUI.
+struct MetricsHub {
+  SnrMedian snr;          // every packet received
+  AirtimeWindow airtime;  // every packet sent
+  HeardCounts heard;      // every packet received, by payload type
+  LastAdvert advert;      // our own adverts
+  ContactStats contacts;  // allocated in MyMesh::begin
+};
+
 }  // namespace gui
 }  // namespace offband

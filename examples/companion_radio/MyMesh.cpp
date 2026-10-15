@@ -416,6 +416,10 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
     _serial->writeFrame(out_frame, i);
   }
 
+#ifdef OFFBAND_GUI
+  _gui_metrics.snr.add(snr);
+#endif
+
 #ifdef OFFBAND_OBSERVER
   // Plan 2 v2 Task 9: tee every raw RX into the observer pipeline.
   // Non-blocking: trampoline -> ring-buffer copy + pool.publishRaw.
@@ -424,12 +428,15 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 #endif
 }
 
-#if defined(OFFBAND_OBSERVER) || UI_HAS_CARDKB
+#if defined(OFFBAND_OBSERVER) || UI_HAS_CARDKB || defined(OFFBAND_GUI)
 // Dispatcher::checkRecv calls logRx (Dispatcher.cpp:237) for every successfully-parsed
 // packet BEFORE routing and before the duplicate filter, so it sees all heard traffic,
 // repeats of our own packets included.
 void MyMesh::logRx(mesh::Packet* pkt, int len, float score) {
   if (pkt == nullptr) return;
+#ifdef OFFBAND_GUI
+  _gui_metrics.heard.add(pkt->getPayloadType());
+#endif
 #if UI_HAS_CARDKB
   // #1232: a repeater passing one of the badge's channel sends on. The repeat carries
   // the send's payload unchanged, so it has the send's packet hash.
@@ -498,8 +505,20 @@ uint8_t MyMesh::getAutoAddMaxHops() const {
   return _prefs.autoadd_max_hops;
 }
 
+#ifdef OFFBAND_GUI
+// Estimated from the packet length: Dispatcher measures the real airtime but
+// doesn't pass it to logTx.
+void MyMesh::logTx(mesh::Packet* packet, int len) {
+  (void)packet;
+  _gui_metrics.airtime.addTx(_ms->getMillis(), _radio->getEstAirtimeFor(len));
+}
+#endif
+
 void MyMesh::onContactOverwrite(const uint8_t* pub_key) {
     _store->deleteBlobByKey(pub_key, PUB_KEY_SIZE); // delete from storage
+#ifdef OFFBAND_GUI
+  _gui_metrics.contacts.forget(pub_key);
+#endif
   // _serial is NULL during boot-time loadContacts (transport not set up yet);
   // guard it so the overwrite-oldest path during a populated-store load -- e.g.
   // after MAX_CONTACTS is reduced (#42) -- does not NULL-deref.
@@ -518,6 +537,10 @@ void MyMesh::onContactsFull() {
 }
 
 void MyMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) {
+#ifdef OFFBAND_GUI
+  // The advert just received: the contact's last signal.
+  _gui_metrics.contacts.onHeard(contact.id.pub_key, _radio->getLastSNR(), (int16_t)_radio->getLastRSSI());
+#endif
   if (_serial->isConnected()) {
     if (is_new) {
       writeContactRespFrame(PUSH_CODE_NEW_ADVERT, contact);
@@ -628,6 +651,11 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
   // channels are all untouched (contract §11). We only suppress local delivery to
   // the phone, so interoperability with stock MeshCore is unchanged.
   if (_blocks.contains(from.id.pub_key)) return;
+
+#ifdef OFFBAND_GUI
+  _gui_metrics.contacts.onHeard(from.id.pub_key, pkt->getSNR(), (int16_t)_radio->getLastRSSI());
+  if (txt_type != TXT_TYPE_CLI_DATA) _gui_metrics.contacts.onDirectMessage(from.id.pub_key);
+#endif
 
   int i = 0;
   if (app_target_ver >= 3) {
@@ -1563,6 +1591,13 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
 
 void MyMesh::begin(bool has_display) {
   BaseChatMesh::begin();
+#ifdef OFFBAND_GUI
+  // Before contacts load, so an overwrite during the load can forget its entry.
+  // ~7 KB at 350 contacts; large allocations go to PSRAM where there is one.
+  if (!_gui_metrics.contacts.begin(MAX_CONTACTS)) {
+    MESH_DEBUG_PRINTLN("GUI contact stats: allocation failed, per-contact signal and unread off");
+  }
+#endif
 
   if (!_store->loadMainIdentity(self_id)) {
     self_id = radio_new_identity(); // create new random identity
@@ -2826,6 +2861,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
     if (recipient && removeContact(*recipient)) {
       _store->deleteBlobByKey(pub_key, PUB_KEY_SIZE);
+#ifdef OFFBAND_GUI
+      _gui_metrics.contacts.forget(pub_key);
+#endif
       dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
       writeOKFrame();
     } else {
@@ -3963,6 +4001,9 @@ bool MyMesh::advert() {
   }
   if (pkt) {
     sendZeroHop(pkt);
+#ifdef OFFBAND_GUI
+    _gui_metrics.advert.record(_ms->getMillis(), false);
+#endif
     return true;
   } else {
     return false;
@@ -4027,6 +4068,9 @@ CmdResult MyMesh::cmdSendAdvert(bool flood) {
   } else {
     sendZeroHop(pkt);
   }
+#ifdef OFFBAND_GUI
+  _gui_metrics.advert.record(_ms->getMillis(), flood);
+#endif
   return CmdResult::Ok;
 }
 
