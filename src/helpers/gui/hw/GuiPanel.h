@@ -45,6 +45,9 @@ public:
   void turnOn() override;
   void turnOff() override;
 
+  // Backlight level, 0-100 %, by PWM. Used for the dim step (#1443).
+  void setBrightness(uint8_t pct);
+
   void clear() override {}
   void startFrame(ColorVal bkg = UIColor::window_bkg) override { (void)bkg; }
   void setTextSize(int sz) override { (void)sz; }
