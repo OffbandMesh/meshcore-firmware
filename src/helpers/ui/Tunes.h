@@ -53,9 +53,82 @@ constexpr Tune kBuiltinTunes[] = {
 
 constexpr uint8_t kBuiltinCount = (uint8_t)(sizeof(kBuiltinTunes) / sizeof(kBuiltinTunes[0]));
 
+// Names for the three ids the event defaults below point at, so a default is written as
+// a name rather than a position. Append-only applies to these too: they are the ids a
+// shipped badge already has in its prefs.
+constexpr uint8_t kTuneChime = 1;    // the old contactMessage literal
+constexpr uint8_t kTuneKerplop = 2;  // the old channelMessage literal
+constexpr uint8_t kTuneTick = 3;     // the old ack literal
+
 static_assert(kBuiltinCount > 0, "the table needs an entry");
 static_assert(kBuiltinCount < 255, "tune ids are 8-bit and 255 is kept free");
 static_assert(kBuiltinTunes[kTuneSilent].rtttl == nullptr, "id 0 is silence");
+static_assert(kTuneTick < kBuiltinCount, "the named ids must be in the table");
+static_assert(kBuiltinTunes[kTuneChime].rtttl != nullptr, "Chime needs a melody");
+static_assert(kBuiltinTunes[kTuneKerplop].rtttl != nullptr, "Kerplop needs a melody");
+static_assert(kBuiltinTunes[kTuneTick].rtttl != nullptr, "Tick needs a melody");
+
+// ---------------------------------------------------------------------------------
+// Which tune each event gets.
+//
+// The UI's own event enum lives beside the UI task, which a pure header cannot reach,
+// so the events are named again here and the UI translates. That keeps the mapping and
+// its defaults testable on the host, which is where "does every event have a slot" and
+// "do the defaults reproduce today's behavior" get answered.
+//
+// #1420 replaces `defaultTuneFor` as the SOURCE of the id with a stored pref. These
+// stay as the value a badge takes when it has no pref yet, which is why they are
+// per-event overridable: a board sets its own starting point without touching code.
+// ---------------------------------------------------------------------------------
+
+enum class ToneEvent : uint8_t {
+  ContactMessage = 0,
+  ChannelMessage,
+  RoomMessage,
+  NewContact,
+  Ack,
+  Sent,
+  Count,
+};
+
+// Defaults reproduce EXACTLY what the firmware does today, which is why room and
+// new-contact messages are silent: their cases fall through the UI's switch with no
+// sound, and giving them one here would be a behavior change on every board that
+// compiles this UI rather than a new setting.
+#ifndef DEFAULT_TONE_CONTACT
+  #define DEFAULT_TONE_CONTACT  offband::kTuneChime
+#endif
+#ifndef DEFAULT_TONE_CHANNEL
+  #define DEFAULT_TONE_CHANNEL  offband::kTuneKerplop
+#endif
+#ifndef DEFAULT_TONE_ROOM
+  #define DEFAULT_TONE_ROOM     offband::kTuneSilent
+#endif
+#ifndef DEFAULT_TONE_NEWCONTACT
+  #define DEFAULT_TONE_NEWCONTACT  offband::kTuneSilent
+#endif
+#ifndef DEFAULT_TONE_ACK
+  #define DEFAULT_TONE_ACK      offband::kTuneTick
+#endif
+// Silent fleet-wide: no board plays anything on send today. The badge env turns it on,
+// because the badge is the board the owner asked for a send confirmation on, and the
+// badge is also the only board that can fire this event at all.
+#ifndef DEFAULT_TONE_SENT
+  #define DEFAULT_TONE_SENT     offband::kTuneSilent
+#endif
+
+inline uint8_t defaultTuneFor(ToneEvent e) {
+  switch (e) {
+    case ToneEvent::ContactMessage: return DEFAULT_TONE_CONTACT;
+    case ToneEvent::ChannelMessage: return DEFAULT_TONE_CHANNEL;
+    case ToneEvent::RoomMessage:    return DEFAULT_TONE_ROOM;
+    case ToneEvent::NewContact:     return DEFAULT_TONE_NEWCONTACT;
+    case ToneEvent::Ack:            return DEFAULT_TONE_ACK;
+    case ToneEvent::Sent:           return DEFAULT_TONE_SENT;
+    case ToneEvent::Count:          break;
+  }
+  return kTuneSilent;  // an event with no slot is silent, never an arbitrary tune
+}
 
 // The RTTTL a builtin id names, or nullptr for silence, for an id past the table, or
 // for an entry with no melody. A caller never indexes the table itself.
