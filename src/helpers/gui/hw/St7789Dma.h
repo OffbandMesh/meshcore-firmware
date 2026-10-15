@@ -21,22 +21,21 @@ public:
     int sck, mosi, cs, dc, rst;
   };
 
-  // Called from the SPI interrupt when an async pixel write has finished.
-  typedef void (*DoneFn)(void* arg);
-
   // `max_transfer` is the largest pixel write in bytes (one draw buffer).
   bool begin(spi_host_device_t host, const Pins& pins, uint32_t hz, uint8_t madctl,
              size_t max_transfer);
-
-  void setDoneCallback(DoneFn fn, void* arg) { _done = fn; _done_arg = arg; }
 
   // Address window, inclusive. Waits for any pixel write still in flight.
   void setWindow(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2);
 
   // Starts an asynchronous write of `len` bytes of RGB565 (big-endian) pixel
-  // data into the current window. `data` must stay valid until the done
-  // callback runs. Returns false if the write could not be queued.
+  // data into the current window. `data` must stay valid until pollDone()
+  // returns true. Returns false if the write could not be queued.
   bool writePixelsAsync(const uint8_t* data, size_t len);
+
+  // True once the last async pixel write has finished (or none is in
+  // flight). Asks the SPI driver without blocking.
+  bool pollDone();
 
   void sleep(bool on);
   void displayOn(bool on);
@@ -46,14 +45,11 @@ private:
   void waitPending();
 
   static void IRAM_ATTR preTransfer(spi_transaction_t* t);
-  static void IRAM_ATTR postTransfer(spi_transaction_t* t);
 
   spi_device_handle_t _dev = nullptr;
   spi_transaction_t _pixel_trans = {};
   bool _pending = false;
   int _dc = -1;
-  DoneFn _done = nullptr;
-  void* _done_arg = nullptr;
 
   static St7789Dma* s_instance;
 };
