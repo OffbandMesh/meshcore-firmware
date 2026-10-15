@@ -212,35 +212,69 @@ TEST(GuiLook, ClassicIsSquareWithOutlinedOwnMessages) {
 
 // ------------------------------------------------------------------ input map
 
+// The USR button keeps stock MeshCore's 1.2 s long press (ui-new
+// LONG_PRESS_MILLIS). The multi-click gap is 400 ms: stock's 280 ms was too
+// tight on the bench (#1445).
 TEST(InputMap, PressHoldAndLongHoldTiming) {
   EXPECT_EQ(classifyPress(0), PressKind::Press);
-  EXPECT_EQ(classifyPress(599), PressKind::Press);
-  EXPECT_EQ(classifyPress(600), PressKind::Hold);
+  EXPECT_EQ(classifyPress(1199), PressKind::Press);
+  EXPECT_EQ(classifyPress(1200), PressKind::Hold);
   EXPECT_EQ(classifyPress(2999), PressKind::Hold);
   EXPECT_EQ(classifyPress(3000), PressKind::LongHold);
+  EXPECT_EQ(kMultiClickMs, 400u);
 }
 
-TEST(InputMap, ScreenOnMapsEveryInputToItsAction) {
-  EXPECT_EQ(mapInput(InputEvent::UserPress, true), Action::NextFocus);
-  EXPECT_EQ(mapInput(InputEvent::KeyTab, true), Action::NextFocus);
-  EXPECT_EQ(mapInput(InputEvent::PrgPress, true), Action::Open);
-  EXPECT_EQ(mapInput(InputEvent::TouchTap, true), Action::Open);
-  EXPECT_EQ(mapInput(InputEvent::KeyEnter, true), Action::Open);
-  EXPECT_EQ(mapInput(InputEvent::PrgHold, true), Action::Back);
-  EXPECT_EQ(mapInput(InputEvent::TouchSwipeRight, true), Action::Back);
-  EXPECT_EQ(mapInput(InputEvent::KeyEsc, true), Action::Back);
-  EXPECT_EQ(mapInput(InputEvent::UserHold, true), Action::Canned);
-  EXPECT_EQ(mapInput(InputEvent::KeyAltDigit, true), Action::Canned);
-  EXPECT_EQ(mapInput(InputEvent::PrgLongHold, true), Action::Sleep);
-  EXPECT_EQ(mapInput(InputEvent::KeyOther, true), Action::None);
+namespace {
+const InputEvent kAllEvents[] = {
+    InputEvent::UsrClick,  InputEvent::UsrDoubleClick, InputEvent::UsrTripleClick,
+    InputEvent::UsrHold,   InputEvent::UsrLongHold,    InputEvent::AuxPress,
+    InputEvent::AuxHold,   InputEvent::AuxLongHold,    InputEvent::TouchTap,
+    InputEvent::TouchSwipeRight, InputEvent::KeyTab,   InputEvent::KeyEnter,
+    InputEvent::KeyEsc,    InputEvent::KeyAltDigit,    InputEvent::KeyOther,
+};
+bool isUsr(InputEvent ev) {
+  return ev == InputEvent::UsrClick || ev == InputEvent::UsrDoubleClick ||
+         ev == InputEvent::UsrTripleClick || ev == InputEvent::UsrHold ||
+         ev == InputEvent::UsrLongHold;
+}
+}  // namespace
+
+TEST(InputMap, UsrWorksLikeStockMeshCore) {
+  EXPECT_EQ(mapInput(InputEvent::UsrClick, true, false), Action::Next);
+  EXPECT_EQ(mapInput(InputEvent::UsrDoubleClick, true, false), Action::Prev);
+  EXPECT_EQ(mapInput(InputEvent::UsrHold, true, false), Action::Open);
+  EXPECT_EQ(mapInput(InputEvent::UsrTripleClick, true, false), Action::ToggleBuzzer);
+  EXPECT_EQ(mapInput(InputEvent::UsrLongHold, true, false), Action::PocketLock);
+}
+
+TEST(InputMap, AuxScrollsUpAndGoesBack) {
+  EXPECT_EQ(mapInput(InputEvent::AuxPress, true, false), Action::Prev);
+  EXPECT_EQ(mapInput(InputEvent::AuxHold, true, false), Action::Back);
+  EXPECT_EQ(mapInput(InputEvent::AuxLongHold, true, false), Action::Back);
+}
+
+TEST(InputMap, TouchAndKeyboard) {
+  EXPECT_EQ(mapInput(InputEvent::TouchTap, true, false), Action::Open);
+  EXPECT_EQ(mapInput(InputEvent::TouchSwipeRight, true, false), Action::Back);
+  EXPECT_EQ(mapInput(InputEvent::KeyTab, true, false), Action::Next);
+  EXPECT_EQ(mapInput(InputEvent::KeyEnter, true, false), Action::Open);
+  EXPECT_EQ(mapInput(InputEvent::KeyEsc, true, false), Action::Back);
+  EXPECT_EQ(mapInput(InputEvent::KeyAltDigit, true, false), Action::Canned);
+  EXPECT_EQ(mapInput(InputEvent::KeyOther, true, false), Action::None);
 }
 
 TEST(InputMap, ScreenOffAnyInputOnlyWakes) {
-  for (InputEvent ev : {InputEvent::PrgPress, InputEvent::PrgHold, InputEvent::PrgLongHold,
-                        InputEvent::UserPress, InputEvent::UserHold, InputEvent::TouchTap,
-                        InputEvent::TouchSwipeRight, InputEvent::KeyTab, InputEvent::KeyEnter,
-                        InputEvent::KeyEsc, InputEvent::KeyAltDigit, InputEvent::KeyOther}) {
-    EXPECT_EQ(mapInput(ev, false), Action::Wake) << "event " << int(ev);
+  for (InputEvent ev : kAllEvents) {
+    EXPECT_EQ(mapInput(ev, false, false), Action::Wake) << "event " << int(ev);
+  }
+}
+
+// Pocket lock: in a pocket, touch and the second button get pressed by
+// accident, so only USR wakes the screen.
+TEST(InputMap, PocketLockedOnlyUsrWakes) {
+  for (InputEvent ev : kAllEvents) {
+    EXPECT_EQ(mapInput(ev, false, true), isUsr(ev) ? Action::Wake : Action::None)
+        << "event " << int(ev);
   }
 }
 
