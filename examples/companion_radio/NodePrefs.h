@@ -1,6 +1,9 @@
 #pragma once
 #include <cstdint> // For uint8_t, uint32_t
 #include <helpers/ConfigSerializer.h>
+#ifdef OFFBAND_GUI
+  #include <helpers/gui/GuiPrefs.h>
+#endif
 
 #define TELEM_MODE_DENY            0
 #define TELEM_MODE_ALLOW_FLAGS     1     // use contact.flags
@@ -224,6 +227,9 @@ protected:
     def("comp", companion);
     def("ui", ui);      // Offband #509/#510/#542
     def("log", log);    // Offband #428
+#ifdef OFFBAND_GUI
+    def("gui", gui);    // Offband #1457: the on-device GUI's settings
+#endif
   }
 public:
   NodePrefs() : radio(this), gps(this), companion(this), ui(this), log(this) {
@@ -234,6 +240,11 @@ public:
   // new accessor methods
   bool isRepeatEn() const { return repeat.disable_fwd == 0; }
   void setRepeatEn(bool en) { repeat.disable_fwd = en ? 0 : 1; }
+#ifdef OFFBAND_GUI
+  // #1457: the on-device GUI's settings. Unlike the groups above it holds its
+  // own fields, so it is public.
+  offband::gui::GuiPrefs gui;
+#endif
 };
 
 // #509: button-sequence indices. Order is the press count, so the array index IS the
