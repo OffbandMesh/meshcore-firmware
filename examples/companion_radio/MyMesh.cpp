@@ -436,6 +436,16 @@ void MyMesh::logRx(mesh::Packet* pkt, int len, float score) {
   if (pkt == nullptr) return;
 #ifdef OFFBAND_GUI
   _gui_metrics.heard.add(pkt->getPayloadType());
+  // #1464: a repeater passing one of our channel sends on: "heard xN".
+  {
+    const uint32_t now_ms = _ms->getMillis();
+    if (pkt->getPayloadType() == PAYLOAD_TYPE_GRP_TXT && _gui_repeats.watching(now_ms)) {
+      uint8_t hash[MAX_HASH_SIZE];
+      pkt->calculatePacketHash(hash);
+      const uint32_t seq = _gui_repeats.heard(hash, now_ms);
+      if (seq && _gui_store.addEcho(seq)) _gui_store_flash.ringChanged(now_ms);
+    }
+  }
 #endif
 #if UI_HAS_CARDKB
   // #1232: a repeater passing one of the badge's channel sends on. The repeat carries
@@ -625,6 +635,13 @@ ContactInfo*  MyMesh::processAck(const uint8_t *data) {
 
       // NOTE: the same ACK can be received multiple times!
       expected_ack_table[i].ack = 0; // clear expected hash, now that we have received ACK
+#ifdef OFFBAND_GUI
+      if (_gui_ack_seq[i]) {   // #1464: the stored DM is delivered
+        _gui_store.setDelivery(_gui_ack_seq[i], offband::gui::Delivery::Delivered);
+        _gui_store_flash.ringChanged(_ms->getMillis());
+        _gui_ack_seq[i] = 0;
+      }
+#endif
       return expected_ack_table[i].contact;
     }
   }
@@ -4072,7 +4089,28 @@ CmdResult MyMesh::cmdSendDirect(ContactInfo& to, uint32_t timestamp, uint8_t att
     result = sendMessage(to, timestamp, attempt, text, ack, timeout);
   }
   if (result == MSG_SEND_FAILED) return CmdResult::Busy;
+#ifdef OFFBAND_GUI
+  // #1464: keep the sent DM. An app resend (attempt > 0) is the same message.
+  uint32_t stored = 0;
+  if (!cli_data) {
+    const int t = guiThreadFor(to);
+    if (t >= 0) {
+      const size_t len = strlen(text);
+      if (attempt > 0) stored = _gui_store.findOwn(t, text, len);
+      if (stored) {
+        _gui_store.setDelivery(stored, offband::gui::Delivery::Sending);
+      } else {
+        stored = _gui_store.addOwn(t, getRTCClock()->getCurrentTime(), text, len,
+                                   ack ? offband::gui::Delivery::Sending : offband::gui::Delivery::None);
+      }
+      _gui_store_flash.ringChanged(_ms->getMillis());
+    }
+  }
+#endif
   if (ack) {
+#ifdef OFFBAND_GUI
+    _gui_ack_seq[next_ack_idx] = stored;
+#endif
     expected_ack_table[next_ack_idx].msg_sent = _ms->getMillis();  // add to circular table
     expected_ack_table[next_ack_idx].ack = ack;
     expected_ack_table[next_ack_idx].contact = &to;
@@ -4094,6 +4132,16 @@ CmdResult MyMesh::cmdSendChannel(uint8_t idx, uint32_t timestamp, const char* te
     return CmdResult::Failed;
   }
   recordSentPktHash(timestamp, idx, sent_hash);
+#ifdef OFFBAND_GUI
+  // #1464: keep the channel send, and watch for repeaters passing it on.
+  const int t = guiThreadForChannel(idx);
+  if (t >= 0) {
+    const uint32_t seq =
+        _gui_store.addOwn(t, getRTCClock()->getCurrentTime(), text, len, offband::gui::Delivery::None);
+    if (seq) _gui_repeats.watch(sent_hash, seq, _ms->getMillis());
+    _gui_store_flash.ringChanged(_ms->getMillis());
+  }
+#endif
   return CmdResult::Ok;
 }
 
@@ -4308,6 +4356,27 @@ CmdResult MyMesh::cmdTrace(uint32_t tag, uint32_t auth, uint8_t flags, const uin
 }
 
 #ifdef OFFBAND_GUI
+// The store's thread for a contact (a room server's is a Room) or a channel,
+// made on first use; -1 if the thread table is full (#1464).
+int MyMesh::guiThreadFor(const ContactInfo& contact) {
+  using offband::gui::ThreadKind;
+  const ThreadKind kind = contact.type == ADV_TYPE_ROOM ? ThreadKind::Room : ThreadKind::Direct;
+  const int before = _gui_store.threadCount();
+  const int t = _gui_store.thread(kind, contact.id.pub_key, PUB_KEY_SIZE, contact.name);
+  if (_gui_store.threadCount() != before) _gui_store_flash.indexChanged(_ms->getMillis());
+  return t;
+}
+
+int MyMesh::guiThreadForChannel(uint8_t idx) {
+  ChannelDetails ch;
+  if (!getChannel(idx, ch)) return -1;
+  const int before = _gui_store.threadCount();
+  const int t = _gui_store.thread(offband::gui::ThreadKind::Channel, ch.channel.secret,
+                                  sizeof(ch.channel.secret), ch.name);
+  if (_gui_store.threadCount() != before) _gui_store_flash.indexChanged(_ms->getMillis());
+  return t;
+}
+
 offband::gui::FixType MyMesh::guiFixType() {
 #if ENV_INCLUDE_GPS == 1
   LocationProvider* loc = sensors.getLocationProvider();

@@ -125,6 +125,10 @@ public:
   uint32_t addOwn(int t, uint32_t time, const char* text, size_t len, Delivery d);
 
   const MsgRecord* msg(uint32_t seq) const;
+  // The newest own message in thread t with exactly this text (after the
+  // 160-byte cut) that isn't yet delivered, or 0: a resend is the same
+  // message (#1464).
+  uint32_t findOwn(int t, const char* text, size_t len) const;
   bool setDelivery(uint32_t seq, Delivery d);
   bool addEcho(uint32_t seq);   // an own channel send heard repeated; stops at 255
 

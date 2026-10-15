@@ -395,6 +395,40 @@ TEST(MsgStore, MessagesForAMissingThreadAreDroppedAtLoad) {
   EXPECT_EQ(b.count(), 1);
 }
 
+// ------------------------------------------------- C4: resends of own DMs
+
+// The app resends an unacknowledged DM with attempt > 0. That is the same
+// message, not a new one (#1464).
+TEST(MsgStore, ResendFindsTheNewestMatchingOwnMessage) {
+  MsgStore s;
+  ASSERT_TRUE(s.begin(16, 8));
+  memset(kPeer, 6, sizeof(kPeer));
+  const int dm = s.thread(ThreadKind::Direct, kPeer, 32, "Bob");
+  const int ch = s.thread(ThreadKind::Channel, kChanA, 16, "a");
+  s.addOwn(dm, 1, "hello", 5, Delivery::Sending);
+  const uint32_t second = s.addOwn(dm, 2, "hello", 5, Delivery::Sending);
+  s.addOwn(ch, 3, "hello", 5, Delivery::None);              // other thread
+  s.addIncoming(dm, 4, "", "hello", 5, 0xFF, 0);            // not own
+  EXPECT_EQ(s.findOwn(dm, "hello", 5), second);
+  EXPECT_EQ(s.findOwn(dm, "hell", 4), 0u);                  // text must match exactly
+  EXPECT_EQ(s.findOwn(dm, "other", 5), 0u);
+}
+
+// "OK" fails, a second "OK" is delivered, then the app resends the first:
+// the resend must not land on the delivered one (Gemini, #1464).
+TEST(MsgStore, ResendSkipsDeliveredMessages) {
+  MsgStore s;
+  ASSERT_TRUE(s.begin(16, 8));
+  memset(kPeer, 6, sizeof(kPeer));
+  const int dm = s.thread(ThreadKind::Direct, kPeer, 32, "Bob");
+  const uint32_t first = s.addOwn(dm, 1, "OK", 2, Delivery::Sending);
+  const uint32_t second = s.addOwn(dm, 2, "OK", 2, Delivery::Sending);
+  s.setDelivery(second, Delivery::Delivered);
+  EXPECT_EQ(s.findOwn(dm, "OK", 2), first);
+  s.setDelivery(first, Delivery::Delivered);
+  EXPECT_EQ(s.findOwn(dm, "OK", 2), 0u);
+}
+
 // ------------------------------------------- C3: snapshot, written in slices
 
 // The flash backend serializes into one buffer, then writes it out a slice
