@@ -191,6 +191,25 @@ TEST(GuiTheme, InkIsReadableOnEveryBackground) {
   }
 }
 
+TEST(GuiLook, ModernIsRoundedWithTailedBubbles) {
+  EXPECT_EQ(kDefaultLook, Look::Modern);
+  LookTokens m = lookTokens(Look::Modern);
+  EXPECT_EQ(m.radius, 6);
+  EXPECT_EQ(m.bubble_radius, 10);
+  EXPECT_EQ(m.bubble_tail, 3);
+  EXPECT_TRUE(m.pill_chips);
+  EXPECT_FALSE(m.own_msg_outline);
+}
+
+TEST(GuiLook, ClassicIsSquareWithOutlinedOwnMessages) {
+  LookTokens c = lookTokens(Look::Classic);
+  EXPECT_EQ(c.radius, 0);
+  EXPECT_EQ(c.bubble_radius, 0);
+  EXPECT_EQ(c.bubble_tail, 0);
+  EXPECT_FALSE(c.pill_chips);
+  EXPECT_TRUE(c.own_msg_outline);
+}
+
 // ------------------------------------------------------------------ input map
 
 TEST(InputMap, PressHoldAndLongHoldTiming) {
