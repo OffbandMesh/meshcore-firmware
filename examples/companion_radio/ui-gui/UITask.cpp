@@ -7,6 +7,7 @@
 
 #include <helpers/gui/ClockPolicy.h>
 #include <helpers/gui/hw/Chsc6xTouch.h>
+#include <helpers/gui/hw/GuiFonts.h>
 #include <helpers/gui/hw/GuiPanel.h>
 #include <helpers/gui/hw/LvglPort.h>
 #include <helpers/ui/ScreenOff.h>
@@ -46,12 +47,32 @@ using namespace offband::gui;
 
 namespace {
 
-// Test-screen colors: the Offband theme's bg, ink, dim and signal tokens.
-// A6 replaces these with the theme tables.
-constexpr uint32_t kBg = 0x0F1412;
-constexpr uint32_t kInk = 0xEFF3E8;
-constexpr uint32_t kDim = 0x7C8B82;
-constexpr uint32_t kSig = 0x7BEFA8;
+// The Accent theme's signal color until Display settings let the user pick
+// one (the prototype's default, ObScreen.dc.html:330).
+constexpr uint32_t kDefaultAccent = 0xF2C14E;
+
+const char* themeName(ThemeId id) {
+  switch (id) {
+    case ThemeId::Offband: return "Offband";
+    case ThemeId::Steel: return "Steel";
+    case ThemeId::MonoHC: return "Mono HC";
+    case ThemeId::Accent: return "Accent";
+  }
+  return "?";
+}
+
+ThemeId nextTheme(ThemeId id) {
+  switch (id) {
+    case ThemeId::Offband: return ThemeId::Steel;
+    case ThemeId::Steel: return ThemeId::MonoHC;
+    case ThemeId::MonoHC: return ThemeId::Accent;
+    case ThemeId::Accent: break;
+  }
+  return ThemeId::Offband;
+}
+
+lv_color_t c(uint32_t rgb) { return lv_color_hex(rgb & 0xFFFFFF); }
+lv_opa_t alpha(uint32_t argb) { return lv_opa_t(argb >> 24); }
 
 lv_obj_t* s_name = nullptr;
 lv_obj_t* s_pin = nullptr;
@@ -123,41 +144,94 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   refreshTestScreen();
 }
 
+// A test screen built only from the theme tables, the Look and the font
+// table, so the bench sees every token and font role on the real panel.
 void UITask::buildTestScreen() {
+  const ThemeTokens t = themeTokens(_theme, kDefaultAccent);
+  const LookTokens look = lookTokens(_look);
+
   lv_obj_t* scr = lv_scr_act();
-  lv_obj_set_style_bg_color(scr, lv_color_hex(kBg), 0);
+  lv_obj_clean(scr);
+  lv_obj_set_style_bg_color(scr, c(t.bg), 0);
 
   lv_obj_t* brand = lv_label_create(scr);
-  lv_obj_set_style_text_font(brand, &lv_font_montserrat_18, 0);
-  lv_obj_set_style_text_color(brand, lv_color_hex(kSig), 0);
+  lv_obj_set_style_text_font(brand, font(FontRole::Title), 0);
+  lv_obj_set_style_text_color(brand, c(t.sig), 0);
   lv_label_set_text(brand, "offband");
-  lv_obj_align(brand, LV_ALIGN_TOP_MID, 0, 40);
+  lv_obj_align(brand, LV_ALIGN_TOP_MID, 0, 28);
+
+  lv_obj_t* theme_label = lv_label_create(scr);
+  lv_obj_set_style_text_font(theme_label, font(FontRole::Label), 0);
+  lv_obj_set_style_text_color(theme_label, c(t.dim), 0);
+  lv_label_set_text_fmt(theme_label, "THEME %s  /  LOOK %s", themeName(_theme),
+                        _look == Look::Modern ? "MODERN" : "CLASSIC");
+  lv_obj_align(theme_label, LV_ALIGN_TOP_MID, 0, 56);
 
   s_name = lv_label_create(scr);
-  lv_obj_set_style_text_color(s_name, lv_color_hex(kInk), 0);
-  lv_obj_align(s_name, LV_ALIGN_TOP_MID, 0, 90);
+  lv_obj_set_style_text_font(s_name, font(FontRole::Body), 0);
+  lv_obj_set_style_text_color(s_name, c(t.ink), 0);
+  lv_obj_align(s_name, LV_ALIGN_TOP_MID, 0, 80);
 
-  s_pin = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_pin, &lv_font_montserrat_18, 0);
-  lv_obj_set_style_text_color(s_pin, lv_color_hex(kInk), 0);
-  lv_obj_align(s_pin, LV_ALIGN_CENTER, 0, 0);
+  // The PIN sits on a card: bg3 fill, line border, the Look's radius.
+  lv_obj_t* card = lv_obj_create(scr);
+  lv_obj_set_size(card, 200, 52);
+  lv_obj_align(card, LV_ALIGN_CENTER, 0, -20);
+  lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_color(card, c(t.flat ? t.bg : t.bg3), 0);
+  lv_obj_set_style_border_color(card, c(t.line), 0);
+  lv_obj_set_style_border_width(card, 1, 0);
+  lv_obj_set_style_radius(card, look.radius, 0);
+  lv_obj_set_style_pad_all(card, 4, 0);
+
+  s_pin = lv_label_create(card);
+  lv_obj_set_style_text_font(s_pin, font(FontRole::Data), 0);
+  lv_obj_set_style_text_color(s_pin, c(t.ink), 0);
+  lv_obj_center(s_pin);
+  _shown_pin = 0;  // force the label to refill
+
+  // An "own message" sample (ObScreen.dc.html:379): Modern is a solid signal
+  // fill with sigInk text in every theme; Classic is a signal outline over
+  // the wash.
+  lv_obj_t* bubble = lv_obj_create(scr);
+  lv_obj_set_size(bubble, 140, 30);
+  lv_obj_align(bubble, LV_ALIGN_CENTER, 30, 26);
+  lv_obj_clear_flag(bubble, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_radius(bubble, look.bubble_radius, 0);
+  if (look.own_msg_outline) {
+    lv_obj_set_style_bg_color(bubble, c(t.wash), 0);
+    lv_obj_set_style_bg_opa(bubble, alpha(t.wash), 0);
+    lv_obj_set_style_border_color(bubble, c(t.sig), 0);
+    lv_obj_set_style_border_width(bubble, 1, 0);
+  } else {
+    lv_obj_set_style_bg_color(bubble, c(t.sig), 0);
+    lv_obj_set_style_border_width(bubble, 0, 0);
+  }
+  lv_obj_t* bubble_text = lv_label_create(bubble);
+  lv_obj_set_style_text_font(bubble_text, font(FontRole::BodySmall), 0);
+  lv_obj_set_style_text_color(bubble_text, c(look.own_msg_outline ? t.ink : t.sigInk), 0);
+  lv_label_set_text(bubble_text, "Copy that");
+  lv_obj_center(bubble_text);
 
   s_unread = lv_label_create(scr);
-  lv_obj_set_style_text_color(s_unread, lv_color_hex(kDim), 0);
-  lv_obj_align(s_unread, LV_ALIGN_CENTER, 0, 40);
+  lv_obj_set_style_text_font(s_unread, font(FontRole::Meta), 0);
+  lv_obj_set_style_text_color(s_unread, c(t.dim), 0);
+  lv_obj_align(s_unread, LV_ALIGN_CENTER, 0, 60);
 
   s_touch_label = lv_label_create(scr);
-  lv_obj_set_style_text_color(s_touch_label, lv_color_hex(kDim), 0);
-  lv_obj_align(s_touch_label, LV_ALIGN_CENTER, 0, 70);
+  lv_obj_set_style_text_font(s_touch_label, font(FontRole::Meta), 0);
+  lv_obj_set_style_text_color(s_touch_label, c(t.dim), 0);
+  lv_obj_align(s_touch_label, LV_ALIGN_CENTER, 0, 80);
 
   s_action_label = lv_label_create(scr);
-  lv_obj_set_style_text_color(s_action_label, lv_color_hex(kDim), 0);
+  lv_obj_set_style_text_font(s_action_label, font(FontRole::Meta), 0);
+  lv_obj_set_style_text_color(s_action_label, c(t.dim), 0);
   lv_obj_align(s_action_label, LV_ALIGN_CENTER, 0, 100);
 
   lv_obj_t* note = lv_label_create(scr);
-  lv_obj_set_style_text_color(note, lv_color_hex(kDim), 0);
-  lv_label_set_text(note, "GUI foundation test screen");
-  lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -20);
+  lv_obj_set_style_text_font(note, font(FontRole::BodySmall), 0);
+  lv_obj_set_style_text_color(note, c(t.dim), 0);
+  lv_label_set_text(note, "USER: next theme  -  hold USER: look");
+  lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -16);
 }
 
 void UITask::refreshTestScreen() {
@@ -219,7 +293,14 @@ void UITask::handle(InputEvent ev, uint32_t now) {
     _manual_off = false;
     applyScreen(ScreenState::On);
   }
-  // NextFocus / Open / Back / Canned drive the screens from Epic D onward.
+  // On the test screen, NextFocus cycles the theme and Canned the Look so the
+  // bench can see each. From Epic D these actions drive real screens.
+  if (a == Action::NextFocus || a == Action::Canned) {
+    if (a == Action::NextFocus) _theme = nextTheme(_theme);
+    else _look = _look == Look::Modern ? Look::Classic : Look::Modern;
+    buildTestScreen();
+    refreshTestScreen();
+  }
 }
 
 void UITask::applyScreen(ScreenState s) {

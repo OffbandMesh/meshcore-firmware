@@ -9,6 +9,7 @@
 // which a phone needs to pair.
 
 #include <helpers/SensorManager.h>
+#include <helpers/gui/GuiTheme.h>
 #include <helpers/gui/InputMap.h>
 #include <helpers/gui/InputTiming.h>
 #include <helpers/ui/DisplayDriver.h>
@@ -55,4 +56,6 @@ private:
   uint32_t _last_input = 0;
   offband::gui::ScreenState _screen = offband::gui::ScreenState::On;
   offband::gui::Action _last_action = offband::gui::Action::None;
+  offband::gui::ThemeId _theme = offband::gui::kDefaultTheme;
+  offband::gui::Look _look = offband::gui::kDefaultLook;
 };

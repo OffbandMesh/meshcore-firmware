@@ -30,6 +30,22 @@ struct ThemeTokens {
 // The default theme on first boot.
 constexpr ThemeId kDefaultTheme = ThemeId::Offband;
 
+// Look (spec v0.3 "Look", D1 §1.3), independent of the theme: Modern has
+// rounded corners, tailed bubbles and pill chips; Classic is square
+// hairline boxes, with your own message as a signal-colored outline.
+enum class Look : uint8_t { Modern, Classic };
+constexpr Look kDefaultLook = Look::Modern;
+
+struct LookTokens {
+  uint8_t radius;         // cards, rows, buttons
+  uint8_t bubble_radius;  // message bubbles
+  uint8_t bubble_tail;    // bubble tail size
+  bool pill_chips;        // fully rounded chips and toggles
+  bool own_msg_outline;   // own message drawn as an outline over the wash
+};
+
+LookTokens lookTokens(Look look);
+
 // The user-picked signal color applies to the Accent theme only; the other
 // themes ignore it. Accent's wash is derived from that color, so the
 // highlight always matches the pick.
