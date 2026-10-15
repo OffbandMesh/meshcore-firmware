@@ -299,3 +299,48 @@ public:
 #define NOTIFY_SCOPE_SELF   1
 #define NOTIFY_SCOPE_NONE   2
 #define NOTIFY_SCOPE_COUNT  3
+
+// #1468: the three decisions a scope control has to make, kept out of the screen so
+// they are host-tested and so the badge and the 0xC5 handler cannot drift apart.
+//
+// Context for why this exists at all: notify_scope is the gate UPSTREAM of every tune
+// choice -- channelMsgShouldNotify() and the DM path consult it before notify() is ever
+// called -- and until now the only writer was the client. A badge left on SELF or NONE
+// had no on-device route back, because the one gesture it has toggles buzzer_quiet,
+// which cannot undo a scope.
+namespace offband {
+
+// The cycle the comment above has always documented: ALL -> SELF -> NONE -> ALL. A
+// function rather than `(scope + 1) % COUNT` at each call site, because the order is a
+// contract shared with the client's control and with #510's triple-press on ui-orig; an
+// out-of-range stored value lands on ALL rather than wrapping somewhere unpredictable.
+inline uint8_t nextNotifyScope(uint8_t scope) {
+  if (scope >= NOTIFY_SCOPE_NONE) return NOTIFY_SCOPE_ALL;
+  return (uint8_t)(scope + 1);
+}
+
+// buzzer_quiet, as the 0xC5 SET handler already sets it: silent only at NONE.
+//
+// This is the line that fixes the strand. The handler applied this coupling on the way
+// IN and nothing applied it on the way OUT, so a client that set NONE also muted the
+// buzzer, and nothing a user could reach on the badge un-muted it. Any scope control
+// must apply the same rule, or it changes the gate and leaves the driver behind.
+inline uint8_t quietForScope(uint8_t scope) {
+  return scope == NOTIFY_SCOPE_NONE ? 1 : 0;
+}
+
+// What the badge shows. Deliberately NOT the client's per-channel words (#1469): the
+// client filters one channel, this is the whole device, and the middle value is not even
+// a clean middle -- at SELF a DM still sounds, only channel traffic is filtered. "DMs +
+// @" is terse but it is the only short phrase that is actually true; calling it
+// "Mentions" would tell a user DMs are filtered too, which they are not.
+inline const char* notifyScopeLabel(uint8_t scope) {
+  switch (scope) {
+    case NOTIFY_SCOPE_ALL:  return "All";
+    case NOTIFY_SCOPE_SELF: return "DMs + @";
+    case NOTIFY_SCOPE_NONE: return "Off";
+    default:                return "All";   // an unknown stored value reads as its fallback
+  }
+}
+
+}  // namespace offband

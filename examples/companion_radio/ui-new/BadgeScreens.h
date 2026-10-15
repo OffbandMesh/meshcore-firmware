@@ -251,6 +251,15 @@ public:
   static void summary(UITask* task, char* out, size_t n);
 
 private:
+  // #1468: row 0 is the notification scope -- the gate ABOVE the six event rows, and on
+  // this UI family the only way to reach it at all. Title plus these seven rows is
+  // exactly the large face's capacity, so nothing scrolls at that size.
+  // The row count lives in the .cpp: it needs ToneSlots.h, and this header is compiled
+  // by every variant that builds these screens, buzzer or not.
+  static constexpr int kScopeRow = 0;
+
+  void cycleScope();
+
   UITask* _task;
   int _sel = 0;
 };
