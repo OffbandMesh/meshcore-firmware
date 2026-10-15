@@ -71,6 +71,16 @@ ThemeId nextTheme(ThemeId id) {
   return ThemeId::Offband;
 }
 
+ThemeId prevTheme(ThemeId id) {
+  switch (id) {
+    case ThemeId::Offband: return ThemeId::Accent;
+    case ThemeId::Steel: return ThemeId::Offband;
+    case ThemeId::MonoHC: return ThemeId::Steel;
+    case ThemeId::Accent: break;
+  }
+  return ThemeId::MonoHC;
+}
+
 lv_color_t c(uint32_t rgb) { return lv_color_hex(rgb & 0xFFFFFF); }
 lv_opa_t alpha(uint32_t argb) { return lv_opa_t(argb >> 24); }
 
@@ -83,12 +93,14 @@ Chsc6xTouch s_touch;
 
 const char* actionName(Action a) {
   switch (a) {
-    case Action::NextFocus: return "next";
+    case Action::Next: return "next";
+    case Action::Prev: return "prev";
     case Action::Open: return "open";
     case Action::Back: return "back";
     case Action::Canned: return "canned";
     case Action::Wake: return "wake";
-    case Action::Sleep: return "sleep";
+    case Action::PocketLock: return "pocket lock";
+    case Action::ToggleBuzzer: return "buzzer";
     case Action::None: break;
   }
   return "-";
@@ -130,18 +142,27 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   mesh_log_line(MLOG_BOOT, "[gui] touch %s\n", _touch_ok ? "chsc6x ok" : "none (buttons only)");
 #endif
 
-  // Both buttons pull to ground when pressed.
+  // USR and AUX both pull to ground when pressed.
   pinMode(PIN_USER_BTN, INPUT_PULLUP);
 #ifdef PIN_USER_BTN_2
   pinMode(PIN_USER_BTN_2, INPUT_PULLUP);
 #endif
 
-  _last_input = millis();
+#ifdef PIN_BUZZER
+  _buzzer.begin();
+  _buzzer.quiet(_prefs ? _prefs->buzzer_quiet : false);
+  _buzzer.startup();
+#endif
+
+  _started_at = millis();
+  _last_input = _started_at;
   setCpuFrequencyMhz(cpuMhzFor(true));
   mesh_log_line(MLOG_BOOT, "[gui] screen on cpu=%u\n", (unsigned)getCpuFrequencyMhz());
 
   buildTestScreen();
   refreshTestScreen();
+  lv_refr_now(nullptr);
+  panel->setBrightness(100);
 }
 
 // A test screen built only from the theme tables, the Look and the font
@@ -230,7 +251,7 @@ void UITask::buildTestScreen() {
   lv_obj_t* note = lv_label_create(scr);
   lv_obj_set_style_text_font(note, font(FontRole::BodySmall), 0);
   lv_obj_set_style_text_color(note, c(t.dim), 0);
-  lv_label_set_text(note, "USER: next theme  -  hold USER: look");
+  lv_label_set_text(note, "USR: theme  hold: look  3x: buzzer");
   lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -16);
 }
 
@@ -252,8 +273,8 @@ void UITask::refreshTestScreen() {
   else if (lvglLastTouch(&tx, &ty)) lv_label_set_text_fmt(s_touch_label, "touch %u, %u", tx, ty);
   else lv_label_set_text(s_touch_label, "touch: tap anywhere");
 
-  lv_label_set_text_fmt(s_action_label, "last action: %s  -  cpu %u MHz", actionName(_last_action),
-                        (unsigned)getCpuFrequencyMhz());
+  lv_label_set_text_fmt(s_action_label, "last: %s  -  buzzer %s  -  %u MHz", actionName(_last_action),
+                        buzzerQuiet() ? "off" : "on", (unsigned)getCpuFrequencyMhz());
 }
 
 // Idle time is the shorter of "since the last button" and LVGL's own "since
@@ -267,40 +288,102 @@ uint32_t UITask::idleMs(uint32_t now) const {
   return idle;
 }
 
+static InputEvent clicksEvent(uint8_t n) {
+  return n >= 3 ? InputEvent::UsrTripleClick : n == 2 ? InputEvent::UsrDoubleClick : InputEvent::UsrClick;
+}
+
 void UITask::pollButtons(uint32_t now) {
   PressKind kind;
-  if (_prg.update(digitalRead(PIN_USER_BTN) == LOW, now, &kind)) {
-    handle(kind == PressKind::Press  ? InputEvent::PrgPress
-           : kind == PressKind::Hold ? InputEvent::PrgHold
-                                     : InputEvent::PrgLongHold,
-           now);
+  if (_usr.update(digitalRead(PIN_USER_BTN) == LOW, now, &kind)) {
+    if (kind != PressKind::Press) {
+      // Clicks just before this hold go first, in the order they happened.
+      if (uint8_t n = _usr_clicks.take()) handle(clicksEvent(n), now);
+      handle(kind == PressKind::Hold ? InputEvent::UsrHold : InputEvent::UsrLongHold, now);
+    } else if (_screen == ScreenState::Off) {
+      // A dark screen wakes on the click itself, without waiting out the
+      // multi-click window.
+      handle(InputEvent::UsrClick, now);
+    } else {
+      _usr_clicks.click(now);
+    }
   }
+  if (uint8_t n = _usr_clicks.poll(now, _usr.isDown())) handle(clicksEvent(n), now);
 #ifdef PIN_USER_BTN_2
-  if (_user.update(digitalRead(PIN_USER_BTN_2) == LOW, now, &kind)) {
-    handle(kind == PressKind::Press ? InputEvent::UserPress : InputEvent::UserHold, now);
+  if (_aux.update(digitalRead(PIN_USER_BTN_2) == LOW, now, &kind)) {
+    handle(kind == PressKind::Press  ? InputEvent::AuxPress
+           : kind == PressKind::Hold ? InputEvent::AuxHold
+                                     : InputEvent::AuxLongHold,
+           now);
   }
 #endif
 }
 
 void UITask::handle(InputEvent ev, uint32_t now) {
-  const Action a = mapInput(ev, _screen != ScreenState::Off);
+  const Action a = mapInput(ev, _screen != ScreenState::Off, _pocket_locked);
+  if (a == Action::None) return;
   _last_input = now;
   _last_action = a;
-  if (a == Action::Sleep) {
-    _manual_off = true;
+  if (a == Action::PocketLock) {
+    _pocket_locked = true;
     applyScreen(ScreenState::Off);
-  } else {
-    _manual_off = false;
-    applyScreen(ScreenState::On);
+    return;
   }
-  // On the test screen, NextFocus cycles the theme and Canned the Look so the
-  // bench can see each. From Epic D these actions drive real screens.
-  if (a == Action::NextFocus || a == Action::Canned) {
-    if (a == Action::NextFocus) _theme = nextTheme(_theme);
-    else _look = _look == Look::Modern ? Look::Classic : Look::Modern;
-    buildTestScreen();
-    refreshTestScreen();
+  _pocket_locked = false;
+  applyScreen(ScreenState::On);
+
+  // On the test screen, Next and Prev cycle the theme and Open the Look so
+  // the bench can see each. From Epic D these actions drive real screens.
+  switch (a) {
+    case Action::Open:
+      // As on stock MeshCore: a USR long press in the first 8 s after boot
+      // enters CLI rescue.
+      if (ev == InputEvent::UsrHold && now - _started_at < 8000) {
+        the_mesh.enterCLIRescue();
+        return;
+      }
+      _look = _look == Look::Modern ? Look::Classic : Look::Modern;
+      break;
+    case Action::Next:
+      _theme = nextTheme(_theme);
+      break;
+    case Action::Prev:
+      _theme = prevTheme(_theme);
+      break;
+    case Action::ToggleBuzzer:
+      toggleBuzzer();
+      break;
+    default:
+      return;
   }
+  buildTestScreen();
+  refreshTestScreen();
+}
+
+bool UITask::buzzerQuiet() {
+#ifdef PIN_BUZZER
+  return _buzzer.isQuiet();
+#else
+  return true;
+#endif
+}
+
+void UITask::toggleBuzzer() {
+#ifdef PIN_BUZZER
+  _buzzer.quiet(!_buzzer.isQuiet());
+  if (!_buzzer.isQuiet()) notify(UIEventType::ack);
+  if (_prefs) {
+    _prefs->buzzer_quiet = _buzzer.isQuiet();
+    the_mesh.savePrefs();
+  }
+#endif
+}
+
+void UITask::applyBuzzerMute(bool quiet) {
+#ifdef PIN_BUZZER
+  _buzzer.quiet(quiet);
+#else
+  (void)quiet;
+#endif
 }
 
 void UITask::applyScreen(ScreenState s) {
@@ -330,21 +413,45 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   _unread = msgcount;
 }
 
-void UITask::notify(UIEventType t) { (void)t; }
+// The stock ui-new sounds, so a GUI companion sounds like any other.
+void UITask::notify(UIEventType t) {
+#ifdef PIN_BUZZER
+  switch (t) {
+    case UIEventType::contactMessage:
+      _buzzer.play("MsgRcv3:d=4,o=6,b=200:32e,32g,32b,16c7");
+      break;
+    case UIEventType::channelMessage:
+      _buzzer.play("kerplop:d=16,o=6,b=120:32g#,32c#");
+      break;
+    case UIEventType::ack:
+      _buzzer.play("ack:d=32,o=8,b=120:c");
+      break;
+    default:
+      break;
+  }
+#else
+  (void)t;
+#endif
+}
 
 void UITask::loop() {
   if (!_gui_ok) return;
   const uint32_t now = millis();
 
+#ifdef PIN_BUZZER
+  if (_buzzer.isPlaying()) _buzzer.loop();
+#endif
+
   pollButtons(now);
 
-  // With the panel off LVGL isn't running, so a touch is read here to wake it.
+  // With the panel off LVGL isn't running, so a touch is read here to wake it
+  // (ignored while pocket-locked).
   if (_screen == ScreenState::Off && _touch_ok) {
     TouchPoint p{};
     if (s_touch.read(&p) && p.pressed) handle(InputEvent::TouchTap, now);
   }
 
-  if (!_manual_off) {
+  if (!_pocket_locked) {
     const uint32_t off_ms = offband::screenOffMillis(_prefs ? _prefs->ui_screen_secs : 0, GUI_OFF_AFTER_MS);
     applyScreen(screenStateFor(idleMs(now), GUI_DIM_AFTER_MS, off_ms, _always_on));
   }

@@ -9,26 +9,47 @@ PressKind classifyPress(uint32_t held_ms) {
   return PressKind::Press;
 }
 
-Action mapInput(InputEvent ev, bool screen_on) {
-  if (!screen_on) return Action::Wake;
+static bool isUsr(InputEvent ev) {
+  switch (ev) {
+    case InputEvent::UsrClick:
+    case InputEvent::UsrDoubleClick:
+    case InputEvent::UsrTripleClick:
+    case InputEvent::UsrHold:
+    case InputEvent::UsrLongHold:
+      return true;
+    default:
+      return false;
+  }
+}
+
+Action mapInput(InputEvent ev, bool screen_on, bool pocket_locked) {
+  if (!screen_on) {
+    if (pocket_locked && !isUsr(ev)) return Action::None;
+    return Action::Wake;
+  }
 
   switch (ev) {
-    case InputEvent::UserPress:
+    case InputEvent::UsrClick:
     case InputEvent::KeyTab:
-      return Action::NextFocus;
-    case InputEvent::PrgPress:
+      return Action::Next;
+    case InputEvent::UsrDoubleClick:
+    case InputEvent::AuxPress:
+      return Action::Prev;
+    case InputEvent::UsrHold:
     case InputEvent::TouchTap:
     case InputEvent::KeyEnter:
       return Action::Open;
-    case InputEvent::PrgHold:
+    case InputEvent::AuxHold:
+    case InputEvent::AuxLongHold:
     case InputEvent::TouchSwipeRight:
     case InputEvent::KeyEsc:
       return Action::Back;
-    case InputEvent::UserHold:
     case InputEvent::KeyAltDigit:
       return Action::Canned;
-    case InputEvent::PrgLongHold:
-      return Action::Sleep;
+    case InputEvent::UsrTripleClick:
+      return Action::ToggleBuzzer;
+    case InputEvent::UsrLongHold:
+      return Action::PocketLock;
     case InputEvent::KeyOther:
       return Action::None;
   }

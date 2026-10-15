@@ -68,7 +68,11 @@ Verified in Epic #1314. Every Epic below traces back to a row here.
 **In:**
 - Class A (240×320 portrait) and class B (320×240 landscape) layouts for every screen in D1 except the map tiles.
 - Themes Offband, Steel, Mono HC and Accent; Look Modern and Classic; Barlow Condensed and JetBrains Mono as LVGL bitmap fonts (both OFL-1.1).
-- Input: PRG and USER buttons, CHSC6x touch (Heltec), and keyboard, trackball and GT911 (T-Deck).
+- Input: USR and AUX buttons, CHSC6x touch (Heltec), and keyboard, trackball and GT911 (T-Deck). Button map (owner, A7 bench 2026-10-15, #1451; replaces D1's PRG/USER map):
+  - **USR** (the board's user button, GPIO0 on the V4) works as on stock MeshCore: click = next / scroll down, double-click = previous, hold 1.2 s = select (CLI rescue in the first 8 s after boot), triple-click = buzzer on/off. Hold 3 s = **pocket lock**: screen off, and only USR wakes it.
+  - **AUX** (the TFT kit's second button): click = previous / scroll up, hold = back.
+  - **Touch:** tap = open, swipe = back.
+  - Multi-click window: 400 ms from release to the next press.
 - The firmware data layer and message store the screens need. The phone keeps working exactly as today.
 - Targets: Heltec V4 TFT, Heltec V4 R8 TFT, LilyGo T-Deck.
 
@@ -89,10 +93,10 @@ Tasks are 3–4 points. Each Epic opens with failing tests for the logic it adds
 | Task | Pts |
 |---|---|
 | **A1 · Failing tests:** native tests for the signal-bar scale (SNR margin over the SF floor), theme token tables (every token, every theme), the input-map dispatcher (button and touch events to actions) and the CPU clock policy (screen state to MHz). | 3 |
-| **A2 · GUI env:** `heltec_v4_tft_companion_radio_ble_gui` plus a `_diag` twin, added to CI. GPIO35 becomes the USER button in GUI envs only; the TX LED stays in the others. Fix `boards/heltec_v4.json`'s RAM ceiling, which reports the PSRAM size. | 3 |
+| **A2 · GUI env:** `heltec_v4_tft_companion_radio_ble_gui` plus a `_diag` twin, added to CI. GPIO35 becomes the AUX button in GUI envs only; the TX LED stays in the others. Fix `boards/heltec_v4.json`'s RAM ceiling, which reports the PSRAM size. | 3 |
 | **A3 · LVGL 8.3.11 and display driver:** ST7789 with DMA flush and two 1/10-screen buffers in internal RAM, so drawing overlaps the transfer. Checked with `tools/diag/lvgl-bench-1326` and `OFFBAND_MEM_TELEMETRY`: scroll at least the measured 16.9 fps at 240 MHz, largest internal block recorded. | 4 |
 | **A4 · CHSC6x touch driver:** our own MIT driver, polled on I2C1 (SDA47/SCL48, no interrupt pin; D3 summary table, from Meshtastic's V4 TFT variant, confirmed on the bench first) at 0x2E, as an LVGL input device. Seeed's MIT reader is the reference. Tested on the bench: tap position across the panel. | 3 |
-| **A5 · Input and power:** PRG/USER press and hold per the D1 input map, touch, wake and sleep, dim and screen-off timers. 240 MHz screen-on and 80 MHz screen-off, logged. | 3 |
+| **A5 · Input and power:** USR/AUX press and hold per the §2 button map, touch, wake and sleep, dim and screen-off timers. 240 MHz screen-on and 80 MHz screen-off, logged. | 3 |
 | **A6 · Themes and fonts:** token tables for Offband, Steel, Mono HC and Accent; Look Modern and Classic; the font table (Barlow Condensed and JetBrains Mono, OFL-1.1 license kept with the font files). | 4 |
 | **A7 · Epic verification:** native tests green, CI green, bench image on `heltec-v4-tft-1` showing a themed test screen driven by touch and buttons. | 1 |
 
@@ -179,7 +183,7 @@ C6 also checks the reverse risk: a 350-contact save running while the store writ
 |---|---|
 | **I0 · Failing tests:** SD bus arbitration (a flush and an SD write never overlap), SD backend round trip, and fallback when the card is missing. | 3 |
 | **I1 · Reset pins:** reconciled against the Expansion Board V2 schematic and checked on the bench, using a backup and restore of `Strycher-WR8`. | 3 |
-| **I2 · GUI env:** `heltec_v4_r8_tft_companion_radio_ble_gui` plus `_diag`, added to CI. USER is GPIO46. Coordinated with Epic #1322 (V4-R8 variant). | 3 |
+| **I2 · GUI env:** `heltec_v4_r8_tft_companion_radio_ble_gui` plus `_diag`, added to CI. AUX is GPIO46. Coordinated with Epic #1322 (V4-R8 variant). | 3 |
 | **I3 · SD driver on the shared display SPI bus:** SD access is arbitrated against panel flushes. | 4 |
 | **I4 · SD store backend:** the store persists to SD when a card is present, 5,000 messages (§9). | 3 |
 | **I5 · Epic verification:** bench image on the R8. | 1 |

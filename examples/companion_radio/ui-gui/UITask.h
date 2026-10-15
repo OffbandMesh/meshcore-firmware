@@ -17,6 +17,10 @@
 #include "../AbstractUITask.h"
 #include "../NodePrefs.h"
 
+#ifdef PIN_BUZZER
+  #include <helpers/ui/buzzer.h>
+#endif
+
 class UITask : public AbstractUITask {
 public:
   UITask(mesh::MainBoard* board, MultiSerialInterface* serial) : AbstractUITask(board, serial) {}
@@ -30,6 +34,7 @@ public:
   void msgRead(int msgcount) override;
   void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) override;
   void notify(UIEventType t = UIEventType::none) override;
+  void applyBuzzerMute(bool quiet) override;
   void loop() override;
 
 private:
@@ -38,7 +43,14 @@ private:
   void pollButtons(uint32_t now);
   void handle(offband::gui::InputEvent ev, uint32_t now);
   void applyScreen(offband::gui::ScreenState s);
+  void toggleBuzzer();
+  bool buzzerQuiet();
   uint32_t idleMs(uint32_t now) const;
+
+#ifdef PIN_BUZZER
+  genericBuzzer _buzzer;
+#endif
+  uint32_t _started_at = 0;
 
   DisplayDriver* _display = nullptr;
   SensorManager* _sensors = nullptr;
@@ -46,13 +58,14 @@ private:
   bool _gui_ok = false;
   bool _touch_ok = false;
   bool _always_on = false;
-  bool _manual_off = false;  // PRG long hold: stays off until the next input
+  bool _pocket_locked = false;  // USR long hold: off, and only USR wakes it
   uint32_t _shown_pin = 0;
   int _unread = 0;
   unsigned long _next_refresh = 0;
 
-  offband::gui::ButtonTracker _prg;
-  offband::gui::ButtonTracker _user;
+  offband::gui::ButtonTracker _usr;
+  offband::gui::ClickCounter _usr_clicks;
+  offband::gui::ButtonTracker _aux;
   uint32_t _last_input = 0;
   offband::gui::ScreenState _screen = offband::gui::ScreenState::On;
   offband::gui::Action _last_action = offband::gui::Action::None;
