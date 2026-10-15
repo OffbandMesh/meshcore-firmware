@@ -254,6 +254,27 @@ uint32_t MsgStore::totalUnread() const {
 
 // -------------------------------------------------------------- persistence
 
+bool BufferSink::reserve(size_t capacity) {
+  if (capacity <= _cap) return _buf != nullptr || capacity == 0;
+  delete[] _buf;
+  _buf = new (std::nothrow) uint8_t[capacity];   // over 4 KB: PSRAM on the S3
+  _cap = _buf ? capacity : 0;
+  _len = 0;
+  return _buf != nullptr;
+}
+
+bool BufferSink::write(const void* data, size_t len) {
+  if (!_buf || len > _cap - _len) return false;
+  memcpy(_buf + _len, data, len);
+  _len += len;
+  return true;
+}
+
+BufferSink::~BufferSink() { delete[] _buf; }
+
+size_t MsgStore::indexBytesMax() const { return sizeof(FileHeader) + sizeof(IndexEntry) * _max_threads; }
+size_t MsgStore::ringBytesMax() const { return sizeof(FileHeader) + sizeof(MsgRecord) * _cap; }
+
 static bool readAll(ByteSource& in, void* buf, size_t len) { return in.read(buf, len) == len; }
 
 bool MsgStore::saveIndex(ByteSink& out) const {

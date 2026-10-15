@@ -1688,6 +1688,23 @@ void MyMesh::begin(bool has_display) {
   const bool had_stored_channels = _store->hasChannels();   // #1364: asked BEFORE the load
   _store->loadChannels(this);
 
+#ifdef OFFBAND_GUI
+  // #1463: the message store, in PSRAM, loaded from flash. Without PSRAM it
+  // stays off and the GUI shows history as unavailable (PLAN.md §8).
+  #ifndef GUI_MSG_CAPACITY
+    #define GUI_MSG_CAPACITY 1000   // V4, flash only (PLAN.md §9 choice 7)
+  #endif
+  #ifndef GUI_MSG_THREADS
+    #define GUI_MSG_THREADS 64
+  #endif
+  if (_gui_store.begin(GUI_MSG_CAPACITY, GUI_MSG_THREADS)) {
+    FILESYSTEM* fs = _store->getSecondaryFS() ? _store->getSecondaryFS() : _store->getPrimaryFS();
+    if (_gui_store_flash.begin(fs, &_gui_store)) _gui_store_flash.load();
+  } else {
+    mesh_log_line(MLOG_BOOT, "[store] no memory for %u messages: history off\n", (unsigned)GUI_MSG_CAPACITY);
+  }
+#endif
+
 #ifdef OFFBAND_PREFLASH_CHANNELS
   // #1364: a board may ship holding extra channels. FIRST BOOT ONLY -- only when this node
   // has no stored channel set at all.
@@ -4003,6 +4020,9 @@ void MyMesh::loop() {
 
 #ifdef OFFBAND_GUI
   contactsSaveTick();   // #1458: a slice per tick, so the GUI keeps drawing
+  // #1463: the message store writes a slice per tick too, never in the same
+  // tick as a contacts slice.
+  _gui_store_flash.loop(_ms->getMillis(), _contacts_save.active());
 #else
   // is there are pending dirty contacts write needed?
   if (dirty_contacts_expiry && millisHasNowPassed(dirty_contacts_expiry)) {
@@ -4166,6 +4186,9 @@ void MyMesh::cmdReboot() {
   pending = pending || _contacts_save.active();   // or one is half-written
 #endif
   if (pending) saveContacts();
+#ifdef OFFBAND_GUI
+  _gui_store_flash.flushNow();   // #1463: messages not yet written
+#endif
   board.reboot();
 }
 
@@ -4179,6 +4202,7 @@ void MyMesh::cmdReboot() {
 void MyMesh::contactsSaveTick() {
   if (!_contacts_save.active()) {
     if (!dirty_contacts_expiry || !millisHasNowPassed(dirty_contacts_expiry)) return;
+    if (_gui_store_flash.busy()) return;   // #1463: let the store's write finish first
     dirty_contacts_expiry = 0;   // a change during the save arms the next one
     if (!_store->beginContactsSave()) {
       saveContacts();            // can't open the temp file: one pass, as before
@@ -4311,6 +4335,7 @@ void MyMesh::postGuiReply(GuiReply kind, const uint8_t* pub_key, uint32_t tag, b
 bool MyMesh::hasPendingWork() const {
 #ifdef OFFBAND_GUI
   if (_contacts_save.active()) return true;   // #1458: a save is half-written
+  if (_gui_store_flash.busy()) return true;   // #1463: so is a store write
 #endif
   return _mgr->getOutboundTotal() > 0 || dirty_contacts_expiry != 0;
 }
