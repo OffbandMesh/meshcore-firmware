@@ -134,6 +134,24 @@ enum class ToneEvent : uint8_t {
   #define DEFAULT_TONE_SENT     offband::kTuneSilent
 #endif
 
+// #1420: "no choice stored yet", which is NOT the same as choosing Silent.
+//
+// Silence is a real choice with a real id (0), so a stored 0 has to mean the human
+// asked for silence. That leaves no room for "unset" at the bottom, hence a sentinel at
+// the top -- which the `kBuiltinCount < 255` assertion above has been keeping free.
+//
+// Why this matters rather than being tidiness: a badge that has never opened Settings
+// takes whatever the firmware's default is, and that default can be improved in a later
+// build. If "unset" were 0, every un-configured badge would be permanently silent, and
+// the two states would be indistinguishable forever after.
+constexpr uint8_t kTuneUnset = 0xFF;
+static_assert(kTuneUnset >= kBuiltinCount, "the unset sentinel must not name a tune");
+
+// The id to actually play: what was stored, or this event's compiled default when
+// nothing has been stored. An out-of-range stored id is left alone here -- `tuneRtttl`
+// turns it into silence, and #1413 will resolve it as a custom slot.
+inline uint8_t resolveTune(uint8_t stored, ToneEvent e);
+
 inline uint8_t defaultTuneFor(ToneEvent e) {
   switch (e) {
     case ToneEvent::ContactMessage: return DEFAULT_TONE_CONTACT;
@@ -145,6 +163,10 @@ inline uint8_t defaultTuneFor(ToneEvent e) {
     case ToneEvent::Count:          break;
   }
   return kTuneSilent;  // an event with no slot is silent, never an arbitrary tune
+}
+
+inline uint8_t resolveTune(uint8_t stored, ToneEvent e) {
+  return stored == kTuneUnset ? defaultTuneFor(e) : stored;
 }
 
 // The RTTTL a builtin id names, or nullptr for silence, for an id past the table, or

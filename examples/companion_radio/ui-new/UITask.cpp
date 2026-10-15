@@ -942,16 +942,48 @@ static bool toneEventFor(UIEventType t, offband::ToneEvent& out) {
       return false;
   }
 }
+
+// #1420: the id stored for this event, or `kTuneUnset` when nothing is stored -- which
+// is also the answer when prefs are not available yet. Unset means "use this board's
+// compiled default", so a missing pref and an un-loaded prefs object both land on the
+// same safe behavior rather than on silence.
+// A slot per event, IN ENUM ORDER, rather than a switch. The static_assert then makes a
+// forgotten event a compile error, which a switch cannot do here: `arduino_base` builds
+// with `-w`, so -Wswitch would never be seen. The cost of the array shape is that this
+// order has to match ToneEvent's; the benefit is that it cannot silently fall short.
+static uint8_t storedToneFor(const NodePrefs* p, offband::ToneEvent e) {
+  // Null prefs means "nothing stored", which resolves to this board's compiled default
+  // -- exactly what the firmware played before prefs existed. The same guard appears
+  // three times elsewhere in this file for the same pointer, so this is the file's
+  // established handling and not a new assumption.
+  if (p == nullptr) return offband::kTuneUnset;
+
+  const uint8_t* const slots[] = {
+      &p->ui_tone_dm,          // ContactMessage
+      &p->ui_tone_channel,     // ChannelMessage
+      &p->ui_tone_room,        // RoomMessage
+      &p->ui_tone_newcontact,  // NewContact
+      &p->ui_tone_ack,         // Ack
+      &p->ui_tone_sent,        // Sent
+  };
+  constexpr size_t kSlots = sizeof(slots) / sizeof(slots[0]);
+  static_assert(kSlots == (size_t)offband::ToneEvent::Count,
+                "every ToneEvent needs a pref slot, in enum order");
+
+  const size_t i = (size_t)e;
+  return i < kSlots ? *slots[i] : offband::kTuneUnset;
+}
 #endif
 
 void UITask::notify(UIEventType t) {
 #if defined(PIN_BUZZER)
-  // #1418/#1419: the tone is looked up, not written here. The literals that used to sit
-  // in this switch are entries 1-3 of the table and remain the defaults, so what a board
-  // plays is unchanged -- but it is now a choice. #1420 makes the id come from a pref.
+  // #1418/#1419/#1420: the tone is looked up, not written here. The id comes from the
+  // stored pref, falling back to this board's compiled default when nothing has been
+  // chosen -- so an un-configured badge plays what it always did, and a deliberately
+  // silenced event stays silent.
   offband::ToneEvent ev;
   if (toneEventFor(t, ev)) {
-    const uint8_t id = offband::defaultTuneFor(ev);
+    const uint8_t id = offband::resolveTune(storedToneFor(_node_prefs, ev), ev);
     // nullptr covers both silence and a custom-slot id this build cannot resolve yet
     // (#1413). Either way nothing plays, which is the safe answer.
     if (const char* melody = offband::tuneRtttl(id)) {

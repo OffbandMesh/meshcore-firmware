@@ -175,6 +175,26 @@ public:
   // marks the second case, which auto-learn then leaves alone.
   uint16_t batt_full_mv = 0;
   uint8_t batt_full_user = 0;
+  // #1420: the tune chosen for each sound event, as a tune-table id.
+  //
+  // 0xFF is "nothing chosen yet", deliberately NOT 0 -- 0 is the id of Silent, which is
+  // a real choice someone can make. A board resolves 0xFF to its own compiled default
+  // (offband::resolveTune), so an un-configured badge follows the firmware and a
+  // deliberately-silenced event stays silent.
+  //
+  // Six separate keys rather than one byte array, and that is deliberate. A blob is
+  // read with `memset(value, 0, len)` then `fromHex` (ConfigSerializer.cpp:155-158), so
+  // a badge whose stored blob is shorter than the array -- which is what happens the
+  // day a seventh event is added -- gets 0 for the new one. 0 is Silent. The new event
+  // would arrive permanently muted on every existing badge, and nothing would say so.
+  // A missing KEY, by contrast, simply leaves the member at its compiled default, which
+  // is the whole reason /prefs.json being keyed is safe to extend.
+  uint8_t ui_tone_dm = 0xFF;
+  uint8_t ui_tone_channel = 0xFF;
+  uint8_t ui_tone_room = 0xFF;
+  uint8_t ui_tone_newcontact = 0xFF;
+  uint8_t ui_tone_ack = 0xFF;
+  uint8_t ui_tone_sent = 0xFF;
 
 private:
   // ---- Offband-only prefs -------------------------------------------------
@@ -194,6 +214,14 @@ private:
       def("scroff", _parent->ui_screen_secs);     // #1245
       def("bfull", _parent->batt_full_mv);        // #1254
       def("bfuser", _parent->batt_full_user);     // #1254
+      // #1420: per-event tune ids. 0xFF means unset; see the members for why these are
+      // six keys and not one blob.
+      def("t_dm", _parent->ui_tone_dm);
+      def("t_ch", _parent->ui_tone_channel);
+      def("t_room", _parent->ui_tone_room);
+      def("t_new", _parent->ui_tone_newcontact);
+      def("t_ack", _parent->ui_tone_ack);
+      def("t_sent", _parent->ui_tone_sent);
       // #509 button-action matrix: 4 bytes, one per OFFBAND_UI_SEQ_*.
       def("btn", _parent->button_actions, sizeof(_parent->button_actions));
     }
