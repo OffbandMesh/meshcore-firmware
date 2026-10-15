@@ -402,6 +402,56 @@ TEST(RtttlValidator, StopsAtTheTerminatorOnTruncatedInput) {
   EXPECT_EQ(RtttlProblem::Ok, rtttlProblem(buf));
 }
 
+// #1467: the picker's diagnosis rests on this. When a highlighted row makes no sound,
+// the cause has to be one the badge can name -- the buzzer pref ("Buzzer: OFF"), a real
+// notification holding the buzzer ("busy"), or the hardware MUTE switch, which firmware
+// cannot see. "This tune simply has no melody" must NOT be a fourth possibility for any
+// row the picker shows, or an unexplained silence stops being diagnosable at all.
+//
+// Silent is the one exception, and it is exempt because its row says the word.
+TEST(TuneTable, EveryListedTuneExceptSilentHasAMelody) {
+  for (uint8_t id = 0; id < kBuiltinCount; id++) {
+    const char* name = tuneName(id);
+    if (name == nullptr) continue;          // un-listed (#1422): never shown, never picked
+    if (id == kTuneSilent) {
+      EXPECT_EQ(nullptr, tuneRtttl(id)) << "Silent must not acquire a melody";
+      continue;
+    }
+    EXPECT_NE(nullptr, tuneRtttl(id))
+        << "'" << name << "' is offered in the picker but would make no sound";
+  }
+}
+
+// #1467: the picker auditions whatever it opens on, so the row it opens on decides what
+// gets PLAYED. The un-listed entry must therefore not be openable -- otherwise the one
+// tune the UI is forbidden to reach becomes reachable by merely being stored.
+TEST(PickerRow, NeverOpensOnAnUnlistedTune) {
+  for (uint8_t id = 0; id < kBuiltinCount; id++) {
+    const uint8_t row = pickerRowFor(id);
+    EXPECT_NE(nullptr, tuneName(row))
+        << "stored id " << (int)id << " would open the picker on an un-listed row";
+  }
+  // Specifically the trigger (#1422): stored, it must land on Silent, not play itself.
+  EXPECT_EQ(nullptr, tuneName(kTuneTrigger)) << "kTuneTrigger stopped being un-listed";
+  EXPECT_EQ(kTuneSilent, pickerRowFor(kTuneTrigger));
+}
+
+// A listed tune opens on itself -- the fallback must not swallow the normal case, which
+// is what makes the picker open on "the tune in use" at all.
+TEST(PickerRow, OpensOnTheTuneInUseWhenItIsListed) {
+  for (uint8_t id = 0; id < kBuiltinCount; id++) {
+    if (tuneName(id) == nullptr) continue;
+    EXPECT_EQ(id, pickerRowFor(id));
+  }
+}
+
+// Past the table: a custom slot (#1413) or an id from a longer table after a downgrade.
+TEST(PickerRow, OutOfRangeIdsOpenOnSilent) {
+  EXPECT_EQ(kTuneSilent, pickerRowFor(kBuiltinCount));
+  EXPECT_EQ(kTuneSilent, pickerRowFor(kTuneUnset));
+  EXPECT_EQ(kTuneSilent, pickerRowFor(200));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

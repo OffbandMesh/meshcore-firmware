@@ -1539,11 +1539,17 @@ bool TonesScreen::handleInput(char c) {
 // with a preview as the selection moves.
 void TonePickerScreen::begin() {
   const uint8_t id = offband::effectiveTone(the_mesh.getNodePrefs(), _task->tonePickerEvent());
-  // Open on the tune in use. An unresolvable id (a custom slot, or one from a longer
-  // table) has no row here, so start at the top rather than off the end.
-  _sel = offband::isBuiltinTune(id) ? (int)id : 0;
+  // Open on the tune in use. An id with no row here -- past the table, a custom slot, or
+  // deliberately un-named -- starts at the top instead. The rule lives in Tunes.h because
+  // opening decides what gets auditioned, and an un-named tune must never be played by
+  // the UI (#1467).
+  _sel = (int)offband::pickerRowFor(id);
   _note = "";
   _note_until = 0;
+  // #1467: audition on arrival. This is also the only place the picker can tell you the
+  // buzzer is globally off, since the refusal comes back from the audition -- without
+  // it, a muted badge shows a normal-looking picker and stays silent whatever you pick.
+  audition();
 }
 
 int TonePickerScreen::render(DisplayDriver& d) {
@@ -1583,6 +1589,27 @@ int TonePickerScreen::render(DisplayDriver& d) {
   return noting ? 250 : 1000;
 }
 
+// Preview priority, so a message arriving mid-audition wins -- and BOTH refusals get
+// words, because a silent picker with no explanation reads as broken. Distinguishing
+// them is the entire reason play() returns a reason rather than a bool (#1417).
+void TonePickerScreen::audition() {
+  switch (_task->previewTune((uint8_t)_sel)) {
+    case offband::TonePlay::RefusedQuiet:
+      _note = "Buzzer: OFF";
+      _note_until = millis() + 1200;
+      break;
+    case offband::TonePlay::RefusedBusy:
+      // A real notification is sounding. The selection still moves; only the audition
+      // is skipped, which is the trade the priority rule exists to make.
+      _note = "busy";
+      _note_until = millis() + 1200;
+      break;
+    case offband::TonePlay::Played:
+    case offband::TonePlay::NotFound:   // previewTune folds this into Played
+      break;
+  }
+}
+
 bool TonePickerScreen::handleInput(char c) {
   const uint8_t key = (uint8_t)c;
   const int count = (int)offband::kBuiltinCount;
@@ -1598,25 +1625,7 @@ bool TonePickerScreen::handleInput(char c) {
       _sel = (_sel + dir + count) % count;
       if (offband::tuneName((uint8_t)_sel) != nullptr) break;
     }
-    // Audition it. Preview priority, so a message arriving mid-audition wins -- and
-    // BOTH refusals get words, because a silent picker with no explanation reads as
-    // broken. Distinguishing them is the entire reason play() returns a reason rather
-    // than a bool (#1417).
-    switch (_task->previewTune((uint8_t)_sel)) {
-      case offband::TonePlay::RefusedQuiet:
-        _note = "Buzzer: OFF";
-        _note_until = millis() + 1200;
-        break;
-      case offband::TonePlay::RefusedBusy:
-        // A real notification is sounding. The selection still moves; only the audition
-        // is skipped, which is the trade the priority rule exists to make.
-        _note = "busy";
-        _note_until = millis() + 1200;
-        break;
-      case offband::TonePlay::Played:
-      case offband::TonePlay::NotFound:   // previewTune folds this into Played
-        break;
-    }
+    audition();
     return true;
   }
   if (key == KEY_ENTER) {

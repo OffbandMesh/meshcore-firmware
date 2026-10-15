@@ -265,11 +265,18 @@ private:
 class TonePickerScreen : public UIScreen {
 public:
   explicit TonePickerScreen(UITask* task) : _task(task) {}
-  void begin();   // on the tune in use for the event being edited
+  void begin();   // on the tune in use for the event being edited, and auditions it
   int render(DisplayDriver& display) override;
   bool handleInput(char c) override;
 
 private:
+  // Audition whatever is highlighted, and give any refusal words. Both the arrival and
+  // a move go through here, because arriving silently was the #1467 bug: the picker
+  // opens on the tune in USE, which is the one you are most likely to want to hear and
+  // least likely to navigate onto, so auditioning only on movement meant the common
+  // path -- open, press Enter -- never made a sound.
+  void audition();
+
   UITask* _task;
   int _sel = 0;
   const char* _note = "";      // "Buzzer: OFF" when a preview could not be heard

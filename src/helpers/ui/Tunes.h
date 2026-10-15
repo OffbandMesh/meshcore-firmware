@@ -205,6 +205,28 @@ inline const char* tuneRtttl(uint8_t id) {
 
 inline bool isBuiltinTune(uint8_t id) { return id < kBuiltinCount; }
 
+// Which picker row to open on, given the tune an event resolves to (#1467).
+//
+// Why this is a rule and not an expression at the call site: the picker auditions
+// whatever it opens on, so "which row do we open on" decides what gets PLAYED, and an
+// un-named entry (#1422) must never be played by the UI -- that is the whole point of
+// leaving it un-named. The navigation path already steps over un-named entries; opening
+// has to honor the same rule, or the one tune the UI is not allowed to reach becomes
+// reachable by simply having it stored.
+//
+// Nothing can store an un-named id today -- the picker is the only writer and it skips
+// them. The guard is here anyway, because #1191 (a remote trigger naming id 7) and #1413
+// (custom slots) both add writers, and a rule that holds only while no writer exists is
+// not a rule.
+//
+// Falls back to row 0, which is Silent: audible as nothing, visible as "Silent", and
+// never a surprise.
+inline uint8_t pickerRowFor(uint8_t effective_id) {
+  if (effective_id >= kBuiltinCount) return 0;
+  if (kBuiltinTunes[effective_id].name == nullptr) return 0;
+  return effective_id;
+}
+
 // The name the picker shows, or nullptr when this id is not one the picker lists --
 // either because it is past the table or because the entry is deliberately un-named.
 inline const char* tuneName(uint8_t id) {
