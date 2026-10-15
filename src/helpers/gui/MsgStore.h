@@ -76,6 +76,24 @@ public:
   virtual ~ByteSource() {}
 };
 
+// A sink into one buffer allocated once (#1463): the store is serialized into
+// it in one fast pass, a consistent snapshot, and the flash backend then
+// writes it out a slice per loop tick.
+class BufferSink : public ByteSink {
+public:
+  bool reserve(size_t capacity);   // false if it can't be allocated
+  void clear() { _len = 0; }
+  bool write(const void* data, size_t len) override;   // false when full
+  const uint8_t* data() const { return _buf; }
+  size_t size() const { return _len; }
+  ~BufferSink();
+
+private:
+  uint8_t* _buf = nullptr;
+  size_t _cap = 0;
+  size_t _len = 0;
+};
+
 enum class LoadResult : uint8_t {
   Ok,
   Empty,           // nothing to read (no file yet)
@@ -120,6 +138,9 @@ public:
   uint16_t capacity() const { return _cap; }
 
   // Persistence: the thread index (small, written often) and the ring.
+  // Worst-case sizes, for sizing a BufferSink.
+  size_t indexBytesMax() const;
+  size_t ringBytesMax() const;
   bool saveIndex(ByteSink& out) const;
   LoadResult loadIndex(ByteSource& in);
   bool saveRing(ByteSink& out) const;

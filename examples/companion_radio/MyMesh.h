@@ -4,6 +4,8 @@
 #include <Mesh.h>
 #include <helpers/gui/GuiCommands.h>
 #ifdef OFFBAND_GUI
+  #include <helpers/gui/hw/StoreFlash.h>
+  #include <helpers/gui/MsgStore.h>
   #include <helpers/gui/ChunkedSave.h>
   #include <helpers/gui/GuiGps.h>
   #include <helpers/gui/GuiMetrics.h>
@@ -184,6 +186,9 @@ public:
   // GPS fix: None, 2D or 3D, and how long ago it was lost (#1456).
   offband::gui::FixType guiFixType();
   const offband::gui::FixTracker& guiFix() const { return _gui_fix; }
+  // The on-device message store (#1427) and its flash backend (#1463).
+  offband::gui::MsgStore& guiStore() { return _gui_store; }
+  StoreFlash& guiStoreFlash() { return _gui_store_flash; }
 #endif
 
 #if UI_HAS_CARDKB
@@ -374,6 +379,9 @@ private:
   offband::gui::ReplyBox _gui_replies;
   offband::gui::MetricsHub _gui_metrics;
   offband::gui::FixTracker _gui_fix;
+
+  offband::gui::MsgStore _gui_store;
+  StoreFlash _gui_store_flash;
 
   // #1458: the contact list is saved a slice per loop tick, not in one pass.
   void contactsSaveTick();

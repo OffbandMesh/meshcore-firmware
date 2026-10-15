@@ -7,6 +7,7 @@
 
 #include <vector>
 
+#include "helpers/gui/ChunkedSave.h"
 #include "helpers/gui/MsgStore.h"
 
 using namespace offband::gui;
@@ -392,6 +393,70 @@ TEST(MsgStore, MessagesForAMissingThreadAreDroppedAtLoad) {
   EXPECT_NE(b.msg(keep), nullptr);
   EXPECT_EQ(b.msg(orphan), nullptr);
   EXPECT_EQ(b.count(), 1);
+}
+
+// ------------------------------------------- C3: snapshot, written in slices
+
+// The flash backend serializes into one buffer, then writes it out a slice
+// per loop tick (#1463). The slices must reassemble to the same file.
+TEST(MsgStoreFlash, SnapshotWrittenInSlicesRoundTrips) {
+  MsgStore a;
+  ASSERT_TRUE(a.begin(50, 8));
+  const int ch = a.thread(ThreadKind::Channel, kChanA, 16, "a");
+  for (int i = 0; i < 40; i++) addText(a, ch, 100 + i, "a message of some length");
+
+  BufferSink snap;
+  ASSERT_TRUE(snap.reserve(a.ringBytesMax()));
+  ASSERT_TRUE(a.saveRing(snap));
+  EXPECT_LE(snap.size(), a.ringBytesMax());
+
+  MemSink file;
+  ChunkedSave slices;
+  slices.begin(snap.size(), 512);
+  size_t from, to, steps = 0;
+  while (slices.next(&from, &to)) {
+    ASSERT_TRUE(file.write(snap.data() + from, to - from));
+    steps++;
+  }
+  EXPECT_EQ(steps, (snap.size() + 511) / 512);
+
+  MsgStore b;
+  ASSERT_TRUE(b.begin(50, 8));
+  MemSink idx;
+  ASSERT_TRUE(a.saveIndex(idx));
+  MemSource idx_in(idx.bytes), ring_in(file.bytes);
+  ASSERT_EQ(b.loadIndex(idx_in), LoadResult::Ok);
+  ASSERT_EQ(b.loadRing(ring_in), LoadResult::Ok);
+  EXPECT_EQ(b.count(), 40);
+}
+
+TEST(MsgStoreFlash, BufferSinkRefusesOverflow) {
+  BufferSink s;
+  ASSERT_TRUE(s.reserve(8));
+  EXPECT_TRUE(s.write("12345678", 8));
+  EXPECT_FALSE(s.write("9", 1));
+  s.clear();
+  EXPECT_TRUE(s.write("9", 1));
+  EXPECT_EQ(s.size(), 1u);
+}
+
+TEST(MsgStoreFlash, SnapshotFitsTheWorstCase) {
+  MsgStore a;
+  ASSERT_TRUE(a.begin(20, 4));
+  for (int t = 0; t < 4; t++) {
+    uint8_t key[16];
+    memset(key, t + 10, sizeof(key));
+    a.thread(ThreadKind::Channel, key, 16, "t");
+  }
+  const int ch = a.find(ThreadKind::Channel, (const uint8_t*)"\x0a\x0a\x0a\x0a\x0a\x0a\x0a\x0a\x0a\x0a\x0a\x0a\x0a\x0a\x0a\x0a", 16);
+  for (int i = 0; i < 25; i++) addText(a, ch, i, std::string(160, 'z').c_str());
+  BufferSink ring, idx;
+  ASSERT_TRUE(ring.reserve(a.ringBytesMax()));
+  ASSERT_TRUE(idx.reserve(a.indexBytesMax()));
+  EXPECT_TRUE(a.saveRing(ring));
+  EXPECT_TRUE(a.saveIndex(idx));
+  EXPECT_EQ(ring.size(), a.ringBytesMax());   // full store: exactly the worst case
+  EXPECT_EQ(idx.size(), a.indexBytesMax());
 }
 
 int main(int argc, char** argv) {
