@@ -109,6 +109,7 @@
 #endif
 #if defined(OFFBAND_GUI) && !UI_HAS_CARDKB
 #include <helpers/HeardRepeats.h>       // #1464: "heard xN" on the GUI's own channel sends
+#include <helpers/BadgeStore.h>         // #1465: splitSender, for the store's channel messages
 #endif
 
 /* -------------------------------------------------------------------------------------- */
