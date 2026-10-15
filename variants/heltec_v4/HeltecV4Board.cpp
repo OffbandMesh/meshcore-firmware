@@ -23,12 +23,16 @@ void HeltecV4Board::begin() {
   }
 
   void HeltecV4Board::onBeforeTransmit(void) {
+#ifdef P_LORA_TX_LED
     if (_led_enabled) digitalWrite(P_LORA_TX_LED, HIGH);   // turn TX LED on
+#endif
     loRaFEMControl.setTxModeEnable();
   }
 
   void HeltecV4Board::onAfterTransmit(void) {
+#ifdef P_LORA_TX_LED
     if (_led_enabled) digitalWrite(P_LORA_TX_LED, LOW);   // turn TX LED off
+#endif
     loRaFEMControl.setRxModeEnable();
   }
 
@@ -123,14 +127,26 @@ void HeltecV4Board::begin() {
   // survive the merge. HeltecV4Board.h declares all three `override`, so dropping
   // them here is a link error, not a silent loss.
   // When disabled, the TX LED is forced LOW and the transmit hooks stop driving
-  // it. The LED is a plain GPIO, always controllable on this board, so
-  // canControlLed() is unconditionally true.
+  // it. The LED is a plain GPIO, controllable whenever the build has one. The
+  // GUI envs give GPIO35 to the TFT kit's USER button instead (#1440), so
+  // there is no TX LED and canControlLed() says so.
   bool HeltecV4Board::setLedEnabled(bool on) {
+#ifdef P_LORA_TX_LED
     _led_enabled = on;
     if (!on) digitalWrite(P_LORA_TX_LED, LOW);  // ensure it's dark immediately
     return true;
+#else
+    (void)on;
+    return false;
+#endif
   }
 
-  bool HeltecV4Board::canControlLed() const { return true; }
+  bool HeltecV4Board::canControlLed() const {
+#ifdef P_LORA_TX_LED
+    return true;
+#else
+    return false;
+#endif
+  }
 
   bool HeltecV4Board::isLedEnabled() const { return _led_enabled; }

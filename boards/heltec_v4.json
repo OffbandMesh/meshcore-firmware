@@ -31,7 +31,7 @@
   "name": "heltec_wifi_lora_32 v4 (16 MB FLASH, 2 MB PSRAM)",
   "upload": {
     "flash_size": "16MB",
-    "maximum_ram_size": 2097152,
+    "maximum_ram_size": 327680,
     "maximum_size": 16777216,
     "use_1200bps_touch": true,
     "wait_for_upload_port": true,
