@@ -356,4 +356,17 @@ void UITask::loop() {
     refreshTestScreen();
   }
   lvglLoop();
+
+#ifdef OFFBAND_GUI_PERF
+  // Diag builds: refresh timing for the frame-rate check (#1441). A theme
+  // switch on the test screen is a full-screen redraw, the worst case.
+  static uint32_t s_next_perf = 0;
+  if (now >= s_next_perf) {
+    s_next_perf = now + 30000;
+    uint32_t frames, avg_ms, max_ms;
+    lvglTakeFrameStats(&frames, &avg_ms, &max_ms);
+    mesh_log_line(MLOG_BOOT, "[gui] frames=%lu avg=%lums max=%lums cpu=%u\n", (unsigned long)frames,
+                  (unsigned long)avg_ms, (unsigned long)max_ms, (unsigned)getCpuFrequencyMhz());
+  }
+#endif
 }
