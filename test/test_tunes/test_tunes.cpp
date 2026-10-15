@@ -106,22 +106,33 @@ TEST(TuneTable, TheEnumeratorVisitsEveryNamedEntryExactlyOnce) {
 // are what a shipped badge has in its prefs: inserting rather than appending would
 // re-point someone's chosen tune, and this is the test that would say so.
 TEST(ShippedChimes, TheApprovedListInTheApprovedOrder) {
-  const char* expected[] = {"Silent", "Chime", "Kerplop", "Tick", "Bloop", "Drop", "Knock"};
+  // #1422 appended an eighth entry with no name: the trigger's, un-listed on purpose.
+  const char* expected[] = {"Silent", "Chime", "Kerplop", "Tick", "Bloop", "Drop",
+                            "Knock", nullptr};
   ASSERT_EQ(sizeof(expected) / sizeof(expected[0]), (size_t)kBuiltinCount)
       << "the table grew or shrank without this test being updated";
   for (uint8_t id = 0; id < kBuiltinCount; id++) {
-    EXPECT_STREQ(expected[id], tuneName(id)) << "id " << (int)id << " moved";
+    if (expected[id] == nullptr) {
+      EXPECT_EQ(nullptr, tuneName(id)) << "id " << (int)id << " should be un-listed";
+    } else {
+      EXPECT_STREQ(expected[id], tuneName(id)) << "id " << (int)id << " moved";
+    }
   }
   // The owner asked for four to six choices. Six, plus Silent, which is not a choice of
-  // tune so much as the absence of one.
+  // tune so much as the absence of one. The trigger entry is not among them.
   EXPECT_EQ(7, visibleTuneCount());
 }
 
-// Every chime is short enough to be a notification rather than a song. The note count
-// is the proxy the host can check without the player's timing: all six are 1-3 sounded
-// notes, where the melodies measured during sourcing ran 10 to 66.
-TEST(ShippedChimes, EveryOneIsAChimeAndNotASong) {
-  for (uint8_t id = 0; id < kBuiltinCount; id++) {
+// Every tune the picker OFFERS is short enough to be a notification rather than a song.
+// The note count is the proxy the host can check without the player's timing: all six
+// are 1-3 sounded notes, where the melodies measured during sourcing ran 10 to 66.
+//
+// Scoped to listed entries on purpose. The trigger's payload (#1422) is deliberately
+// longer than a chime -- a hall of badges firing at once should read as an event, not as
+// six people getting messages -- so holding it to a chime's budget would be wrong.
+TEST(ShippedChimes, EveryOfferedOneIsAChimeAndNotASong) {
+  for (uint8_t nth = 0; nth < visibleTuneCount(); nth++) {
+    const uint8_t id = visibleTuneId(nth);
     const char* r = tuneRtttl(id);
     if (r == nullptr) continue;  // Silent
     int commas = 0;
@@ -132,6 +143,43 @@ TEST(ShippedChimes, EveryOneIsAChimeAndNotASong) {
     EXPECT_LE(commas, 5) << tuneName(id) << " has too many notes for a chime: " << r;
     EXPECT_LT(strlen(r), 45u) << tuneName(id) << " is longer than a chime should be";
   }
+}
+
+// ---------------------------------------------- the un-listed trigger entry
+
+// Reachable by id, invisible in the menu. That combination IS the mechanism epic #1191
+// needs, and either half failing defeats it: a listed trigger spoils the surprise, an
+// unreachable one cannot fire.
+TEST(TriggerTune, ReachableByIdAndInvisibleInTheMenu) {
+  EXPECT_TRUE(isBuiltinTune(kTuneTrigger));
+  ASSERT_NE(nullptr, tuneRtttl(kTuneTrigger)) << "a trigger that plays nothing is useless";
+  EXPECT_EQ(RtttlProblem::Ok, rtttlProblem(tuneRtttl(kTuneTrigger)));
+  EXPECT_EQ(nullptr, tuneName(kTuneTrigger)) << "it must not be listed";
+
+  for (uint8_t nth = 0; nth < visibleTuneCount(); nth++) {
+    EXPECT_NE(kTuneTrigger, visibleTuneId(nth)) << "the picker enumerated the trigger";
+  }
+}
+
+// No event defaults to it. Someone would otherwise hear the CTF payload as their DM
+// tone, which both spoils it and is not a notification.
+TEST(TriggerTune, NoEventDefaultsToIt) {
+  for (uint8_t i = 0; i < (uint8_t)ToneEvent::Count; i++) {
+    EXPECT_NE(kTuneTrigger, defaultTuneFor((ToneEvent)i)) << "event " << (int)i;
+  }
+}
+
+// It is longer than the chimes, which is the point -- but still bounded, because the
+// badge should not be stuck playing for a quarter of a minute.
+TEST(TriggerTune, LongerThanAChimeButStillBounded) {
+  const char* r = tuneRtttl(kTuneTrigger);
+  ASSERT_NE(nullptr, r);
+  int commas = 0;
+  for (const char* p = r; *p; p++) {
+    if (*p == ',') commas++;
+  }
+  EXPECT_GT(commas, 5) << "a trigger that sounds like a chime will be mistaken for one";
+  EXPECT_LT(strlen(r), 120u) << "still not a song";
 }
 
 // ------------------------------------------------- the event-to-tune mapping

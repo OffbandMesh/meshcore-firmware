@@ -274,10 +274,26 @@ public:
   void gotoTones();                                   // #1421: from Settings' Tones row
   void gotoTonePicker(offband::ToneEvent e);          // #1421: from a Tones row
   offband::ToneEvent tonePickerEvent() const { return _tone_picking; }
+  // #1422: plays any tune by id, including the un-listed one the remote trigger names.
+  // This is the ENTIRE surface epic #1191 needs: it honors the quiet pref and the
+  // hardware MUTE, and does nothing for an id this build cannot resolve. Unparking that
+  // work should not require touching sound code at all.
+  offband::TonePlay playTuneById(uint8_t id, offband::TonePriority priority);
+  // #1422: stops whatever is sounding. The other half of the trigger seam -- a tune
+  // sent to a room full of badges has to be stoppable, and the payload is the owner's
+  // to replace, so it will not always be under two seconds.
+  void stopTune();
   // Auditions a tune. Low priority, so it can never cut off a real notification, and
   // the result says WHY nothing played so the screen can show it rather than appearing
   // to do nothing.
-  offband::TonePlay previewTune(uint8_t id);
+  //
+  // NotFound is folded into Played on purpose: a stored id this build cannot resolve is
+  // not something to show the person choosing a tune, it is just a row that makes no
+  // sound. The trigger is the caller that needs the distinction.
+  offband::TonePlay previewTune(uint8_t id) {
+    const offband::TonePlay r = playTuneById(id, offband::TonePriority::Preview);
+    return r == offband::TonePlay::NotFound ? offband::TonePlay::Played : r;
+  }
 #endif
   // The Status screen under another title, as cycle position `pos`: the inbox's empty state.
   int renderStatusAs(DisplayDriver& d, const char* title, int pos);

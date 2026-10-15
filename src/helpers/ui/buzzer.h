@@ -29,6 +29,10 @@ class genericBuzzer
         offband::TonePlay play(const char *melody,
                                offband::TonePriority priority = offband::TonePriority::Event);
         void loop();  // loop driven-nonblocking
+        // #1422: stops whatever is playing. Part of the trigger seam: a tune sent to a
+        // hall of badges must be stoppable, and the payload is replaceable so it will
+        // not always be under two seconds. Additive -- no existing caller stops.
+        void stop();
         void startup();  // play startup sound
         void shutdown();  // play shutdown sound
         bool isPlaying();  // returns true if a sound is still playing else false

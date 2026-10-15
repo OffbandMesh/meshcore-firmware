@@ -28,6 +28,11 @@ enum class TonePlay : uint8_t {
   Played = 0,        // the melody took the buzzer
   RefusedBusy = 1,   // something of higher priority is playing
   RefusedQuiet = 2,  // the buzzer is quiet, so nothing was started
+  // #1422: the id names no melody this build can resolve -- an id past the table after
+  // a downgrade, or a custom slot this firmware cannot reach. Distinct from Played
+  // because a remote trigger needs to know the badge made no noise, where a picker
+  // showing Silent selected does not: `Silent` is a choice and reports Played.
+  NotFound = 3,
 };
 
 enum class TonePriority : uint8_t {

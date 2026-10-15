@@ -18,6 +18,7 @@
 #include "helpers/ui/BuzzerPriority.h"
 
 using offband::toneTakesBuzzer;
+using offband::TonePlay;
 using offband::TonePriority;
 
 namespace {
@@ -93,6 +94,21 @@ TEST(TonePriorityTable, OnlyOneCombinationIsRefused) {
     }
   }
   EXPECT_EQ(1, refused);
+}
+
+// #1422: the four outcomes are distinct, and NotFound is not Played. A remote trigger
+// needs to tell "the badge made no noise" from "the badge played silence", and folding
+// them together is what the fourth value exists to prevent.
+TEST(TonePlayResult, TheFourOutcomesAreDistinct) {
+  const TonePlay all[] = {TonePlay::Played, TonePlay::RefusedBusy,
+                          TonePlay::RefusedQuiet, TonePlay::NotFound};
+  for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); i++) {
+    for (size_t j = i + 1; j < sizeof(all) / sizeof(all[0]); j++) {
+      EXPECT_NE(all[i], all[j]) << "outcomes " << i << " and " << j << " collide";
+    }
+  }
+  EXPECT_NE(TonePlay::NotFound, TonePlay::Played)
+      << "a trigger could not tell a silent badge from an unresolvable tune";
 }
 
 int main(int argc, char** argv) {
