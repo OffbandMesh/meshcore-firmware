@@ -401,7 +401,7 @@ TEST(Prefs, RoundTrip) {
 
 TEST(Prefs, MissingKeysKeepDefaults) {
   RoundTripStream s;
-  s.setText("{\"theme\":2}");
+  s.setText("{theme:2}");  // ConfigSerializer keys are unquoted
   GuiPrefs p;
   ASSERT_TRUE(p.loadSerial(s));
   EXPECT_EQ(p.theme, 2);

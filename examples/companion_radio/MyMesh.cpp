@@ -1632,6 +1632,9 @@ void MyMesh::begin(bool has_display) {
 
   // load persisted prefs
   _store->loadPrefs(_prefs);
+#ifdef OFFBAND_GUI
+  _prefs.gui.sanitize();   // #1457: a hand-edited or corrupt file must not reach the GUI as-is
+#endif
   sensors.node_lat = _prefs.node_lat;
   sensors.node_lon = _prefs.node_lon;
 
@@ -4078,12 +4081,26 @@ CmdResult MyMesh::cmdSendAdvert(bool flood) {
 }
 
 CmdResult MyMesh::cmdSetChannel(uint8_t idx, const char* name, const uint8_t secret[16]) {
+#ifdef OFFBAND_GUI
+  static_assert(MAX_GROUP_CHANNELS <= offband::gui::kGuiMaxChannels,
+                "GuiPrefs::channel_notify must cover every channel slot");
+  ChannelDetails before;
+  const bool was_empty = !getChannel(idx, before) || before.name[0] == 0;
+#endif
   ChannelDetails channel;
   StrHelper::strncpy(channel.name, name, 32);
   memset(channel.channel.secret, 0, sizeof(channel.channel.secret));
   memcpy(channel.channel.secret, secret, 16);  // only 128-bit secrets are supported
   if (!setChannel(idx, channel)) return CmdResult::NotFound;
   saveChannels();
+#ifdef OFFBAND_GUI
+  // A newly joined channel takes the default notification mode (#1457); an
+  // edit of an existing one keeps the mode it has.
+  if (was_empty && name[0] != 0) {
+    _prefs.gui.onChannelJoined(idx);
+    savePrefs();
+  }
+#endif
   return CmdResult::Ok;
 }
 
