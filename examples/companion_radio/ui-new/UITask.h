@@ -20,6 +20,7 @@
 
 #ifdef PIN_BUZZER
   #include <helpers/ui/buzzer.h>
+  #include <helpers/ui/Tunes.h>   // #1418/#1419: the tone for an event is looked up
 #endif
 #ifdef PIN_VIBRATION
   #include <helpers/ui/GenericVibration.h>

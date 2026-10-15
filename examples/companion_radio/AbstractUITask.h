@@ -19,7 +19,12 @@ enum class UIEventType {
     channelMessage,
     roomMessage,
     newContactMessage,
-    ack
+    ack,
+    // #1419: the badge sent a message from its own keyboard. Appended, so the three
+    // UI implementations' switches ignore it through their existing `default` until
+    // one handles it. Only the badge can fire it -- the screen that sends is inside
+    // `#if UI_HAS_CARDKB`, which no other variant sets.
+    sent
 };
 
 class AbstractUITask {

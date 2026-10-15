@@ -102,6 +102,52 @@ TEST(TuneTable, TheEnumeratorVisitsEveryNamedEntryExactlyOnce) {
   EXPECT_EQ(named, (int)visibleTuneCount());
 }
 
+// ------------------------------------------------- the event-to-tune mapping
+
+// The named ids the defaults are written in terms of must be the melodies they claim.
+// This is the test that would catch someone inserting a row in the middle of the table
+// rather than appending, which would silently re-point every shipped badge's prefs.
+TEST(ToneEvents, TheNamedIdsPointAtTheMelodiesTheyName) {
+  EXPECT_STREQ("MsgRcv3:d=4,o=6,b=200:32e,32g,32b,16c7", tuneRtttl(kTuneChime));
+  EXPECT_STREQ("kerplop:d=16,o=6,b=120:32g#,32c#", tuneRtttl(kTuneKerplop));
+  EXPECT_STREQ("ack:d=32,o=8,b=120:c", tuneRtttl(kTuneTick));
+}
+
+// The point of this task: the two events that fell through the UI's switch silently now
+// have slots. They are still silent by default -- having a slot is not having a sound.
+TEST(ToneEvents, EveryEventHasASlotAndNoneResolvesOutOfRange) {
+  for (uint8_t i = 0; i < (uint8_t)ToneEvent::Count; i++) {
+    const uint8_t id = defaultTuneFor((ToneEvent)i);
+    EXPECT_TRUE(isBuiltinTune(id)) << "event " << (int)i << " defaults to id " << (int)id
+                                   << ", which is not in the table";
+  }
+}
+
+// The defaults reproduce today's behavior exactly. If one of these changes, a board
+// that merely took an update starts making a different noise, which is a different kind
+// of change from adding a setting.
+TEST(ToneEvents, DefaultsReproduceTodaysBehavior) {
+  EXPECT_EQ(kTuneChime, defaultTuneFor(ToneEvent::ContactMessage));
+  EXPECT_EQ(kTuneKerplop, defaultTuneFor(ToneEvent::ChannelMessage));
+  EXPECT_EQ(kTuneTick, defaultTuneFor(ToneEvent::Ack));
+  // Silent today because their cases fall through the UI's switch with no sound.
+  EXPECT_EQ(kTuneSilent, defaultTuneFor(ToneEvent::RoomMessage));
+  EXPECT_EQ(kTuneSilent, defaultTuneFor(ToneEvent::NewContact));
+}
+
+// The send tone is off fleet-wide and the badge env turns it on, so this test asserts
+// the fleet default. It compiles without the badge's -D, which is the case being pinned.
+TEST(ToneEvents, TheSendToneIsSilentUnlessABoardAsksForIt) {
+  EXPECT_EQ(kTuneSilent, defaultTuneFor(ToneEvent::Sent));
+}
+
+// An out-of-range event is silent rather than landing on another event's tune. `Count`
+// is the sentinel a loop would reach if someone extended the enum and forgot the switch.
+TEST(ToneEvents, AnEventWithNoSlotIsSilent) {
+  EXPECT_EQ(kTuneSilent, defaultTuneFor(ToneEvent::Count));
+  EXPECT_EQ(kTuneSilent, defaultTuneFor((ToneEvent)200));
+}
+
 // ------------------------------------------------------------ the validator
 
 TEST(RtttlValidator, AcceptsTheRealThing) {

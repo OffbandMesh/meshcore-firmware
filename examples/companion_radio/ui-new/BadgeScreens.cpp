@@ -410,7 +410,10 @@ void ThreadScreen::leave() {
 
 void ThreadScreen::send() {
   switch (the_mesh.uiSendTo(_convo, _line.text())) {
-    case MyMesh::UiSend::Sent:    _line.clear(); break;
+    // #1419: the send confirmation the owner asked for. It fires on accepted-for-send,
+    // not on delivery -- an ack has its own event and arrives much later, and the thing
+    // worth confirming here is that the keypress did something.
+    case MyMesh::UiSend::Sent:    _line.clear(); _task->notify(UIEventType::sent); break;
     case MyMesh::UiSend::Gone:    note(" no longer here"); break;
     case MyMesh::UiSend::NotSent: note(" not sent"); break;
     case MyMesh::UiSend::Busy:    note(" busy, try again"); break;

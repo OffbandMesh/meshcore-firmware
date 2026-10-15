@@ -925,30 +925,51 @@ void UITask::showAlert(const char* text, int duration_millis) {
   _alert_expiry = millis() + duration_millis;
 }
 
-void UITask::notify(UIEventType t) {
 #if defined(PIN_BUZZER)
-switch(t){
-  case UIEventType::contactMessage:
-    // gemini's pick
-    buzzer.play("MsgRcv3:d=4,o=6,b=200:32e,32g,32b,16c7");
-    break;
-  case UIEventType::channelMessage:
-    buzzer.play("kerplop:d=16,o=6,b=120:32g#,32c#");
-    break;
-  case UIEventType::ack:
-    buzzer.play("ack:d=32,o=8,b=120:c");
-    break;
-  case UIEventType::roomMessage:
-  case UIEventType::newContactMessage:
-  case UIEventType::none:
-  default:
-    break;
+// #1419: the UI's event enum, in the tune table's terms. `none` and anything unmapped
+// has no tone event, so it stays silent rather than falling onto some other event's
+// tune.
+static bool toneEventFor(UIEventType t, offband::ToneEvent& out) {
+  switch (t) {
+    case UIEventType::contactMessage:    out = offband::ToneEvent::ContactMessage; return true;
+    case UIEventType::channelMessage:    out = offband::ToneEvent::ChannelMessage; return true;
+    case UIEventType::roomMessage:       out = offband::ToneEvent::RoomMessage;    return true;
+    case UIEventType::newContactMessage: out = offband::ToneEvent::NewContact;     return true;
+    case UIEventType::ack:               out = offband::ToneEvent::Ack;            return true;
+    case UIEventType::sent:              out = offband::ToneEvent::Sent;           return true;
+    case UIEventType::none:
+    default:
+      return false;
+  }
 }
 #endif
 
+void UITask::notify(UIEventType t) {
+#if defined(PIN_BUZZER)
+  // #1418/#1419: the tone is looked up, not written here. The literals that used to sit
+  // in this switch are entries 1-3 of the table and remain the defaults, so what a board
+  // plays is unchanged -- but it is now a choice. #1420 makes the id come from a pref.
+  offband::ToneEvent ev;
+  if (toneEventFor(t, ev)) {
+    const uint8_t id = offband::defaultTuneFor(ev);
+    // nullptr covers both silence and a custom-slot id this build cannot resolve yet
+    // (#1413). Either way nothing plays, which is the safe answer.
+    if (const char* melody = offband::tuneRtttl(id)) {
+      buzzer.play(melody, offband::TonePriority::Event);
+    }
+  }
+#endif
+
 #ifdef PIN_VIBRATION
-  // Trigger vibration for all UI events except none
-  if (t != UIEventType::none) {
+  // Trigger vibration for all UI events except none.
+  //
+  // #1419: `sent` is excluded. Vibration is feedback for something that ARRIVED; a send
+  // is the user's own keypress and they already know they made it. No board today both
+  // has a motor and can fire `sent` -- the screen that sends is badge-only and the badge
+  // has no motor -- so this changes nothing now. It is here because "no board does both
+  // yet" is a latent bug, not a safety argument: a later board with a keyboard and a
+  // motor would have buzzed on every send without anyone choosing that.
+  if (t != UIEventType::none && t != UIEventType::sent) {
     vibration.trigger();
   }
 #endif
