@@ -3,6 +3,9 @@
 #include <Arduino.h>
 #include <Mesh.h>
 #include <helpers/gui/GuiCommands.h>
+#ifdef OFFBAND_GUI
+  #include <helpers/gui/GuiReplies.h>
+#endif
 #include "AbstractUITask.h"
 
 /*------------ Frame Protocol --------------*/
@@ -161,6 +164,19 @@ public:
   offband::gui::CmdResult cmdShareContact(ContactInfo& contact);
   void cmdSetTime(uint32_t secs);
   void cmdReboot();
+
+  // Requests (#1454). There is one request slot, shared with the phone: a new
+  // request replaces whatever was outstanding, from either side.
+  offband::gui::CmdResult cmdLogin(ContactInfo& to, const char* password, bool* flood, uint32_t* tag,
+                                   uint32_t* est_timeout);
+  offband::gui::CmdResult cmdStatusReq(ContactInfo& to, bool* flood, uint32_t* tag, uint32_t* est_timeout);
+  offband::gui::CmdResult cmdPathDiscovery(ContactInfo& to, bool* flood, uint32_t* tag, uint32_t* est_timeout);
+  offband::gui::CmdResult cmdTrace(uint32_t tag, uint32_t auth, uint8_t flags, const uint8_t* path,
+                                   uint8_t path_len, uint32_t* est_timeout);
+#ifdef OFFBAND_GUI
+  // Every login, status, trace and path reply, phone connected or not.
+  offband::gui::ReplyBox& guiReplies() { return _gui_replies; }
+#endif
 
 #if UI_HAS_CARDKB
   // #1227: messages typed on the badge, sent with the same mesh calls as the phone path.
@@ -336,6 +352,16 @@ public:
   bool hasPendingWork() const;
 
 private:
+  // Hands a reply to the GUI (#1454); `body` is the phone frame after its
+  // code and reserved bytes. A no-op without the GUI. The kinds mirror
+  // offband::gui::ReplyKind, which non-GUI builds don't include.
+  enum GuiReply : uint8_t { GUI_REPLY_LOGIN, GUI_REPLY_STATUS, GUI_REPLY_TRACE, GUI_REPLY_PATH };
+  void postGuiReply(GuiReply kind, const uint8_t* pub_key, uint32_t tag, bool ok, const uint8_t* body,
+                    size_t len);
+#ifdef OFFBAND_GUI
+  offband::gui::ReplyBox _gui_replies;
+#endif
+
   // #611: retained hashes of recent outgoing channel messages, for the 0xC6 query.
   // FIFO by _pkthash_next; a duplicate (timestamp, channel) overwrites in place so a
   // repeat key never yields a stale hash. Not persisted -- correlation is only useful

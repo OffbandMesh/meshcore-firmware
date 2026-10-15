@@ -1172,6 +1172,8 @@ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, 
       i += 6; // pub_key_prefix
     }
     _serial->writeFrame(out_frame, i);
+    postGuiReply(GUI_REPLY_LOGIN, contact.id.pub_key, tag, out_frame[0] == PUSH_CODE_LOGIN_SUCCESS,
+                 &out_frame[2], i - 2);
   } else if (len > 4 && // check for status response
              pending_status &&
              memcmp(&pending_status, contact.id.pub_key, 4) == 0 // legacy matching scheme
@@ -1187,6 +1189,7 @@ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, 
     memcpy(&out_frame[i], &data[4], len - 4);
     i += (len - 4);
     _serial->writeFrame(out_frame, i);
+    postGuiReply(GUI_REPLY_STATUS, contact.id.pub_key, tag, true, &out_frame[2], i - 2);
   } else if (len > 4 && tag == pending_telemetry) {  // check for matching response tag
     pending_telemetry = 0;
 
@@ -1235,6 +1238,7 @@ bool MyMesh::onContactPathRecv(ContactInfo& contact, uint8_t* in_path, uint8_t i
         // NOTE: telemetry data in 'extra' is discarded at present
 
         _serial->writeFrame(out_frame, i);
+        postGuiReply(GUI_REPLY_PATH, contact.id.pub_key, tag, true, &out_frame[2], i - 2);
       }
       return false;  // DON'T send reciprocal path!
     }
@@ -1306,6 +1310,7 @@ void MyMesh::onTraceRecv(mesh::Packet *packet, uint32_t tag, uint32_t auth_code,
   i += path_len >> path_sz;
   out_frame[i++] = (int8_t)(packet->getSNR() * 4); // extra/final SNR (to this node)
 
+  postGuiReply(GUI_REPLY_TRACE, nullptr, tag, true, &out_frame[2], i - 2);
   if (_serial->isConnected()) {
     _serial->writeFrame(out_frame, i);
   } else {
@@ -3033,16 +3038,14 @@ void MyMesh::handleCmdFrame(size_t len) {
     char *password = (char *)&cmd_frame[1 + PUB_KEY_SIZE];
     cmd_frame[len] = 0; // ensure null terminator in password
     if (recipient) {
-      uint32_t est_timeout;
-      int result = sendLogin(*recipient, password, est_timeout);
-      if (result == MSG_SEND_FAILED) {
+      bool flood = false;
+      uint32_t tag = 0, est_timeout = 0;
+      if (cmdLogin(*recipient, password, &flood, &tag, &est_timeout) != offband::gui::CmdResult::Ok) {
         writeErrFrame(ERR_CODE_TABLE_FULL);
       } else {
-        clearPendingReqs();
-        memcpy(&pending_login, recipient->id.pub_key, 4); // match this to onContactResponse()
         out_frame[0] = RESP_CODE_SENT;
-        out_frame[1] = (result == MSG_SEND_SENT_FLOOD) ? 1 : 0;
-        memcpy(&out_frame[2], &pending_login, 4);
+        out_frame[1] = flood ? 1 : 0;
+        memcpy(&out_frame[2], &tag, 4);
         memcpy(&out_frame[6], &est_timeout, 4);
         _serial->writeFrame(out_frame, 10);
       }
@@ -3084,16 +3087,13 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint8_t *pub_key = &cmd_frame[1];
     ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
     if (recipient) {
-      uint32_t tag, est_timeout;
-      int result = sendRequest(*recipient, REQ_TYPE_GET_STATUS, tag, est_timeout);
-      if (result == MSG_SEND_FAILED) {
+      bool flood = false;
+      uint32_t tag = 0, est_timeout = 0;
+      if (cmdStatusReq(*recipient, &flood, &tag, &est_timeout) != offband::gui::CmdResult::Ok) {
         writeErrFrame(ERR_CODE_TABLE_FULL);
       } else {
-        clearPendingReqs();
-        // FUTURE:  pending_status = tag;  // match this in onContactResponse()
-        memcpy(&pending_status, recipient->id.pub_key, 4); // legacy matching scheme
         out_frame[0] = RESP_CODE_SENT;
-        out_frame[1] = (result == MSG_SEND_SENT_FLOOD) ? 1 : 0;
+        out_frame[1] = flood ? 1 : 0;
         memcpy(&out_frame[2], &tag, 4);
         memcpy(&out_frame[6], &est_timeout, 4);
         _serial->writeFrame(out_frame, 10);
@@ -3105,24 +3105,13 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint8_t *pub_key = &cmd_frame[2];
     ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
     if (recipient) {
-      uint32_t tag, est_timeout;
-      // 'Path Discovery' is just a special case of flood + Telemetry req
-      uint8_t req_data[9];
-      req_data[0] = REQ_TYPE_GET_TELEMETRY_DATA;
-      req_data[1] = ~(TELEM_PERM_BASE);  // NEW: inverse permissions mask (ie. we only want BASE telemetry)
-      memset(&req_data[2], 0, 3);  // reserved
-      getRNG()->random(&req_data[5], 4);   // random blob to help make packet-hash unique
-      auto save = recipient->out_path_len;    // temporarily force sendRequest() to flood
-      recipient->out_path_len = OUT_PATH_UNKNOWN;
-      int result = sendRequest(*recipient, req_data, sizeof(req_data), tag, est_timeout);
-      recipient->out_path_len = save;
-      if (result == MSG_SEND_FAILED) {
+      bool flood = false;
+      uint32_t tag = 0, est_timeout = 0;
+      if (cmdPathDiscovery(*recipient, &flood, &tag, &est_timeout) != offband::gui::CmdResult::Ok) {
         writeErrFrame(ERR_CODE_TABLE_FULL);
       } else {
-        clearPendingReqs();
-        pending_discovery = tag; // match this in onContactResponse()
         out_frame[0] = RESP_CODE_SENT;
-        out_frame[1] = (result == MSG_SEND_SENT_FLOOD) ? 1 : 0;
+        out_frame[1] = flood ? 1 : 0;
         memcpy(&out_frame[2], &tag, 4);
         memcpy(&out_frame[6], &est_timeout, 4);
         _serial->writeFrame(out_frame, 10);
@@ -3285,16 +3274,10 @@ void MyMesh::handleCmdFrame(size_t len) {
     if ((path_len >> path_sz) > MAX_PATH_SIZE || (path_len % (1 << path_sz)) != 0) { // make sure is multiple of path_sz
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     } else {
-      uint32_t tag, auth;
+      uint32_t tag, auth, est_timeout = 0;
       memcpy(&tag, &cmd_frame[1], 4);
       memcpy(&auth, &cmd_frame[5], 4);
-      auto pkt = createTrace(tag, auth, flags);
-      if (pkt) {
-        sendDirect(pkt, &cmd_frame[10], path_len);
-
-        uint32_t t = _radio->getEstAirtimeFor(pkt->payload_len + pkt->path_len + 2);
-        uint32_t est_timeout = calcDirectTimeoutMillisFor(t, path_len >> path_sz);
-
+      if (cmdTrace(tag, auth, flags, &cmd_frame[10], path_len, &est_timeout) == offband::gui::CmdResult::Ok) {
         out_frame[0] = RESP_CODE_SENT;
         out_frame[1] = 0;
         memcpy(&out_frame[2], &tag, 4);
@@ -4098,6 +4081,77 @@ void MyMesh::cmdSetTime(uint32_t secs) {
 void MyMesh::cmdReboot() {
   if (dirty_contacts_expiry) saveContacts();  // a contacts write is still pending
   board.reboot();
+}
+
+CmdResult MyMesh::cmdLogin(ContactInfo& to, const char* password, bool* flood, uint32_t* tag,
+                           uint32_t* est_timeout) {
+  uint32_t timeout = 0;
+  int result = sendLogin(to, password, timeout);
+  if (result == MSG_SEND_FAILED) return CmdResult::Busy;
+  clearPendingReqs();
+  memcpy(&pending_login, to.id.pub_key, 4);  // matched in onContactResponse()
+  if (flood) *flood = result == MSG_SEND_SENT_FLOOD;
+  if (tag) *tag = pending_login;
+  if (est_timeout) *est_timeout = timeout;
+  return CmdResult::Ok;
+}
+
+CmdResult MyMesh::cmdStatusReq(ContactInfo& to, bool* flood, uint32_t* tag, uint32_t* est_timeout) {
+  uint32_t t = 0, timeout = 0;
+  int result = sendRequest(to, REQ_TYPE_GET_STATUS, t, timeout);
+  if (result == MSG_SEND_FAILED) return CmdResult::Busy;
+  clearPendingReqs();
+  // FUTURE:  pending_status = tag;  // match this in onContactResponse()
+  memcpy(&pending_status, to.id.pub_key, 4);  // legacy matching scheme
+  if (flood) *flood = result == MSG_SEND_SENT_FLOOD;
+  if (tag) *tag = t;
+  if (est_timeout) *est_timeout = timeout;
+  return CmdResult::Ok;
+}
+
+CmdResult MyMesh::cmdPathDiscovery(ContactInfo& to, bool* flood, uint32_t* tag, uint32_t* est_timeout) {
+  uint32_t t = 0, timeout = 0;
+  // 'Path Discovery' is just a special case of flood + Telemetry req
+  uint8_t req_data[9];
+  req_data[0] = REQ_TYPE_GET_TELEMETRY_DATA;
+  req_data[1] = ~(TELEM_PERM_BASE);  // inverse permissions mask (ie. we only want BASE telemetry)
+  memset(&req_data[2], 0, 3);  // reserved
+  getRNG()->random(&req_data[5], 4);   // random blob to help make packet-hash unique
+  auto save = to.out_path_len;    // temporarily force sendRequest() to flood
+  to.out_path_len = OUT_PATH_UNKNOWN;
+  int result = sendRequest(to, req_data, sizeof(req_data), t, timeout);
+  to.out_path_len = save;
+  if (result == MSG_SEND_FAILED) return CmdResult::Busy;
+  clearPendingReqs();
+  pending_discovery = t;  // matched in onContactPathRecv()
+  if (flood) *flood = result == MSG_SEND_SENT_FLOOD;
+  if (tag) *tag = t;
+  if (est_timeout) *est_timeout = timeout;
+  return CmdResult::Ok;
+}
+
+CmdResult MyMesh::cmdTrace(uint32_t tag, uint32_t auth, uint8_t flags, const uint8_t* path, uint8_t path_len,
+                           uint32_t* est_timeout) {
+  auto pkt = createTrace(tag, auth, flags);
+  if (!pkt) return CmdResult::Busy;
+  sendDirect(pkt, path, path_len);
+  // After sendDirect, which sets the packet's path.
+  uint32_t t = _radio->getEstAirtimeFor(pkt->payload_len + pkt->path_len + 2);
+  if (est_timeout) *est_timeout = calcDirectTimeoutMillisFor(t, path_len >> (flags & 0x03));
+  return CmdResult::Ok;
+}
+
+void MyMesh::postGuiReply(GuiReply kind, const uint8_t* pub_key, uint32_t tag, bool ok, const uint8_t* body,
+                          size_t len) {
+#ifdef OFFBAND_GUI
+  using offband::gui::ReplyKind;
+  static_assert(uint8_t(ReplyKind::Login) == GUI_REPLY_LOGIN && uint8_t(ReplyKind::Status) == GUI_REPLY_STATUS &&
+                    uint8_t(ReplyKind::Trace) == GUI_REPLY_TRACE && uint8_t(ReplyKind::Path) == GUI_REPLY_PATH,
+                "MyMesh::GuiReply must mirror offband::gui::ReplyKind");
+  _gui_replies.post(ReplyKind(kind), pub_key, tag, _ms->getMillis(), ok, body, len);
+#else
+  (void)kind; (void)pub_key; (void)tag; (void)ok; (void)body; (void)len;
+#endif
 }
 
 // To check if there is pending work

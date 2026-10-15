@@ -20,13 +20,17 @@ struct Reply {
   uint32_t at_ms;      // when it arrived
   bool ok;             // login: accepted; others: true
   uint8_t len;         // bytes in data
-  uint8_t data[160];   // the reply body as received (status, trace hops, path)
+  // The body in the phone frame's layout after its code and reserved bytes
+  // (PUSH_CODE_LOGIN_*, _STATUS_RESPONSE, _TRACE_DATA, _PATH_DISCOVERY_RESPONSE),
+  // so the GUI and the phone parse one format. Sized to a whole phone frame
+  // (MAX_FRAME_SIZE, 176) so no reply body is ever cut.
+  uint8_t data[176];
 };
 
 class ReplyBox {
 public:
   // Keeps `r` as the latest reply of its kind, replacing an untaken one. A
-  // body longer than data[] is cut to fit.
+  // body longer than data[] (more than a phone frame) is cut to fit.
   void post(ReplyKind kind, const uint8_t peer[4], uint32_t tag, uint32_t at_ms, bool ok,
             const uint8_t* data, size_t len);
 
