@@ -3959,6 +3959,9 @@ void MyMesh::loop() {
 #if UI_HAS_CARDKB
   badgeSendTick();   // #1227
 #endif
+#if defined(OFFBAND_GUI) && ENV_INCLUDE_GPS == 1
+  _gui_fix.update(_ms->getMillis(), sensors.gpsHasFix());
+#endif
 
   if (_cli_rescue) {
     checkCLIRescueCmd();
@@ -4184,6 +4187,17 @@ CmdResult MyMesh::cmdTrace(uint32_t tag, uint32_t auth, uint8_t flags, const uin
   if (est_timeout) *est_timeout = calcDirectTimeoutMillisFor(t, path_len >> (flags & 0x03));
   return CmdResult::Ok;
 }
+
+#ifdef OFFBAND_GUI
+offband::gui::FixType MyMesh::guiFixType() {
+#if ENV_INCLUDE_GPS == 1
+  LocationProvider* loc = sensors.getLocationProvider();
+  return offband::gui::fixType(sensors.gpsHasFix(), loc != nullptr && loc->fixMode() == 3);
+#else
+  return offband::gui::FixType::None;
+#endif
+}
+#endif
 
 void MyMesh::postGuiReply(GuiReply kind, const uint8_t* pub_key, uint32_t tag, bool ok, const uint8_t* body,
                           size_t len) {

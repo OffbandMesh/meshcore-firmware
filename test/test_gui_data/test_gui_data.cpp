@@ -15,6 +15,7 @@
 #include "helpers/gui/GuiMetrics.h"
 #include "helpers/gui/GuiPrefs.h"
 #include "helpers/gui/GuiReplies.h"
+#include "helpers/sensors/NmeaGsa.h"
 
 using namespace offband::gui;
 
@@ -248,6 +249,21 @@ TEST(Gps, TimeSinceFixLost) {
   EXPECT_EQ(t.secsSinceLost(80000), 74u);
   t.update(90000, true);
   EXPECT_EQ(t.secsSinceLost(95000), 0u);
+}
+
+// GGA can't tell 2D from 3D and MicroNMEA's altitude flag sticks true after
+// the first GGA, so the mode comes from GSA field 2 (Gemini, #1456).
+TEST(Gps, GsaFixMode) {
+  EXPECT_EQ(offband::parseGsaMode("$GNGSA,A,3,04,05,,,,,,,,,,,2.5,1.3,2.1*3A"), 3);
+  EXPECT_EQ(offband::parseGsaMode("$GPGSA,A,2,04,05,09,,,,,,,,,,3.1,2.0,2.4*30"), 2);
+  EXPECT_EQ(offband::parseGsaMode("$GPGSA,M,1,,,,,,,,,,,,,,,*12"), 1);
+  EXPECT_EQ(offband::parseGsaMode("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47"), 0);
+  EXPECT_EQ(offband::parseGsaMode("$GPGSA,A,,04*30"), 0);    // empty mode
+  EXPECT_EQ(offband::parseGsaMode("$GPGSA,A,4,04*30"), 0);   // out of range
+  EXPECT_EQ(offband::parseGsaMode("$GPGSA,A,33,04*30"), 0);  // not one digit
+  EXPECT_EQ(offband::parseGsaMode("$GPGSA"), 0);
+  EXPECT_EQ(offband::parseGsaMode(""), 0);
+  EXPECT_EQ(offband::parseGsaMode(nullptr), 0);
 }
 
 TEST(Gps, TimeSinceFixLostAcrossMillisWrap) {
