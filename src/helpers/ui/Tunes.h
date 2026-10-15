@@ -37,18 +37,35 @@ constexpr uint8_t kTuneSilent = 0;
 
 // THE TABLE. Append only.
 //
-// The three melodies below are the ones already in the tree, moved here from their call
-// sites so that today's behavior is a selectable option and nothing is lost by this
-// change. The wider list of recognizable tunes is user-facing content and is the
-// owner's to approve before it ships, so it is deliberately not invented here.
+// Six chimes, owner-approved 2026-10-14 (#1447). They are written for the purpose
+// rather than transcribed from melodies, for two reasons. Measured: nothing available
+// as RTTTL in the wild is a notification tone -- the badge maker's own example runs
+// 17.1 s over 66 notes, and the shortest thing found elsewhere was 3.1 s, against the
+// 0.06-0.19 s of the tones already here. And nothing is borrowed, so no question of
+// another project's license or of a melody's trademark touches any of it. Recognizable
+// melodies belong in the custom slots (#1413), which is also where a long one belongs.
+//
+// The contours are deliberately different KINDS of thing -- rising-four, falling-pair,
+// single, rising-pair, falling-three, repeated-same -- because the point is to know
+// what buzzed without looking. Kerplop and Bloop are a matched pair, the same two-note
+// idea inverted, which reads as channel versus DM.
+//
+// The first three are exactly what the badge played before any of this, so an
+// un-configured badge sounds unchanged; this only adds choices.
 constexpr Tune kBuiltinTunes[] = {
     {"Silent", nullptr},
-    // Was UITask::notify()'s contactMessage literal.
+    // Was UITask::notify()'s contactMessage literal. Rising four, "arrival". 0.19 s.
     {"Chime", "MsgRcv3:d=4,o=6,b=200:32e,32g,32b,16c7"},
-    // Was channelMessage.
+    // Was channelMessage. Falling pair, tight. 0.12 s.
     {"Kerplop", "kerplop:d=16,o=6,b=120:32g#,32c#"},
-    // Was ack. One note, deliberately: it fires often.
+    // Was ack. One note, deliberately: it fires often. 0.06 s.
     {"Tick", "ack:d=32,o=8,b=120:c"},
+    // Rising pair, low -- Kerplop inverted. 0.17 s.
+    {"Bloop", "Bloop:d=16,o=5,b=180:g,d6"},
+    // Falling three, "going away". 0.25 s.
+    {"Drop", "Drop:d=16,o=6,b=180:c7,g,e"},
+    // Two of the same pitch with a gap between them. 0.21 s.
+    {"Knock", "Knock:d=32,o=6,b=140:a,16p,a"},
 };
 
 constexpr uint8_t kBuiltinCount = (uint8_t)(sizeof(kBuiltinTunes) / sizeof(kBuiltinTunes[0]));

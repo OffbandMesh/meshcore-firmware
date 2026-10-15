@@ -102,6 +102,38 @@ TEST(TuneTable, TheEnumeratorVisitsEveryNamedEntryExactlyOnce) {
   EXPECT_EQ(named, (int)visibleTuneCount());
 }
 
+// The list the owner approved (#1447). Pinned by name and by position, because the ids
+// are what a shipped badge has in its prefs: inserting rather than appending would
+// re-point someone's chosen tune, and this is the test that would say so.
+TEST(ShippedChimes, TheApprovedListInTheApprovedOrder) {
+  const char* expected[] = {"Silent", "Chime", "Kerplop", "Tick", "Bloop", "Drop", "Knock"};
+  ASSERT_EQ(sizeof(expected) / sizeof(expected[0]), (size_t)kBuiltinCount)
+      << "the table grew or shrank without this test being updated";
+  for (uint8_t id = 0; id < kBuiltinCount; id++) {
+    EXPECT_STREQ(expected[id], tuneName(id)) << "id " << (int)id << " moved";
+  }
+  // The owner asked for four to six choices. Six, plus Silent, which is not a choice of
+  // tune so much as the absence of one.
+  EXPECT_EQ(7, visibleTuneCount());
+}
+
+// Every chime is short enough to be a notification rather than a song. The note count
+// is the proxy the host can check without the player's timing: all six are 1-3 sounded
+// notes, where the melodies measured during sourcing ran 10 to 66.
+TEST(ShippedChimes, EveryOneIsAChimeAndNotASong) {
+  for (uint8_t id = 0; id < kBuiltinCount; id++) {
+    const char* r = tuneRtttl(id);
+    if (r == nullptr) continue;  // Silent
+    int commas = 0;
+    for (const char* p = r; *p; p++) {
+      if (*p == ',') commas++;
+    }
+    // Two commas separate the three defaults, so sounded notes are commas - 1 at most.
+    EXPECT_LE(commas, 5) << tuneName(id) << " has too many notes for a chime: " << r;
+    EXPECT_LT(strlen(r), 45u) << tuneName(id) << " is longer than a chime should be";
+  }
+}
+
 // ------------------------------------------------- the event-to-tune mapping
 
 // The named ids the defaults are written in terms of must be the melodies they claim.
