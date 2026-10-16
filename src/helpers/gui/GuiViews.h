@@ -198,16 +198,46 @@ private:
   bool _typed_symbol = false;
 };
 
-// Key geometry for the letters page at 240 px, so a touch snaps to the
-// nearest key centre, gaps included.
+// Key geometry at 240 px, so a touch snaps to the nearest key centre, gaps
+// included. Four rows of 32 px keys, 3 px apart.
 struct KeyRect {
   int16_t x, y, w, h;
-  const char* label;   // "q", "⇧", "⌫", "?123", "space", "Send"
+  const char* label;   // "q", "⇧", "⌫", "?123", "=\\<", "ABC", "space", "Send"
 };
-// The letters page laid out in a keyboard area `width` wide whose top is at y0.
-size_t lettersLayout(int16_t width, int16_t y0, KeyRect* out, size_t max);
+constexpr int16_t kKeyH = 32;
+constexpr int16_t kKeyRowGap = 3;
+// A page laid out in a keyboard area `width` wide whose top is at y0.
+size_t pageLayout(KeyPage page, int16_t width, int16_t y0, KeyRect* out, size_t max);
+inline size_t lettersLayout(int16_t width, int16_t y0, KeyRect* out, size_t max) {
+  return pageLayout(KeyPage::Letters, width, y0, out, max);
+}
+// A key that types its label (a letter, digit or symbol), as opposed to a
+// control key (shift, backspace, page switches, space, Send).
+bool typesLabel(const char* label);
 // Index of the key whose centre is nearest (x, y); -1 if none.
 int nearestKey(const KeyRect* keys, size_t count, int16_t x, int16_t y);
+
+// A DM sent from the device: up to kDmAttempts tries, each waiting for the
+// ACK as long as the send estimated, then failed (owner-approved mockup 6).
+// The phone app retries its own sends; this covers the device's.
+constexpr uint8_t kDmAttempts = 3;
+class DmRetry {
+public:
+  enum class Step : uint8_t { Wait, Resend, Fail, Done };
+  void start(uint32_t seq, uint32_t now_ms, uint32_t timeout_ms);
+  // Each pass. delivered: the store already says Delivered.
+  Step poll(uint32_t now_ms, bool delivered);
+  // After acting on a Resend: the next try is out, with its own timeout.
+  void resent(uint32_t now_ms, uint32_t timeout_ms);
+  bool active() const { return _seq != 0; }
+  uint32_t seq() const { return _seq; }
+  uint8_t attempt() const { return _attempt; }   // 1-based: the try in flight
+
+private:
+  uint32_t _seq = 0;
+  uint32_t _deadline = 0;
+  uint8_t _attempt = 0;
+};
 
 }  // namespace gui
 }  // namespace offband

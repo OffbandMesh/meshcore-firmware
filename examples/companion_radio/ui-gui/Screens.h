@@ -56,6 +56,12 @@ public:
   virtual int zone() = 0;                                        // TimeZones.h index
   virtual void sendAdvert() = 0;
   virtual void loraPopover() = 0;
+  // Compose (D5)
+  virtual size_t composeBudget(int thread) = 0;              // bytes a message may carry
+  virtual const char* cannedText(int i) = 0;                 // chip i (0..3), "" if none
+  virtual bool sendText(int thread, const char* text, size_t len) = 0;
+  virtual uint8_t dmAttempt(uint32_t seq) = 0;               // the try in flight, 0 if none
+  virtual void resend(uint32_t seq) = 0;                     // a failed DM, again
   virtual ~ShellModel() {}
 };
 
@@ -68,6 +74,9 @@ public:
   void showTab(Tab tab);
   bool locked() const { return _locked; }
   Tab tab() const { return _tab; }
+  bool composing() const { return _composing; }
+  // Compose for a thread (from a conversation); leaving returns to it.
+  void openCompose(int thread);
 
   // Handles an action; false if the screen had no use for it.
   bool action(offband::gui::Action a);
@@ -86,6 +95,13 @@ private:
   void buildChats(lv_obj_t* content);
   void buildConversation(lv_obj_t* content);
   void buildPlaceholder(lv_obj_t* content);
+  void buildCompose(lv_obj_t* scr);
+  void buildKeys();
+  void refreshDraft();
+  void setHotKey(int i, bool preview);
+  void pressKey(int i);
+  void insertText(const char* text);
+  void leaveCompose();
   void buildTabs(lv_obj_t* parent);
   void buildLock(lv_obj_t* scr);
   void focusable(lv_obj_t* o);
@@ -110,6 +126,23 @@ private:
   uint32_t _shown_rev = 0xFFFFFFFF;
   lv_obj_t* _msg_list = nullptr;  // the conversation's scrolling column
   lv_obj_t* _focus_row = nullptr; // the list row for _focus_thread, if shown
+
+  // Compose (D5)
+  bool _composing = false;
+  offband::gui::ComposeBuffer _draft;
+  offband::gui::ShiftState _shift;
+  offband::gui::PageState _page;
+  offband::gui::KeyRect _keys[40];
+  size_t _nkeys = 0;
+  lv_obj_t* _key_obj[40] = {};
+  int _hot = -1;                    // the highlighted key: pressed, or the button cursor
+  lv_obj_t* _kb = nullptr;          // the keyboard area, which takes the touches
+  lv_obj_t* _draft_box = nullptr;
+  lv_obj_t* _draft_label = nullptr;
+  lv_obj_t* _caret = nullptr;
+  lv_obj_t* _counter = nullptr;
+  lv_obj_t* _key_preview = nullptr; // on the top layer while a finger is down
+  uint32_t _not_sent_at = 0;        // "Not sent" shows in the counter for 2 s
 
   // Home
   lv_obj_t* _name = nullptr;

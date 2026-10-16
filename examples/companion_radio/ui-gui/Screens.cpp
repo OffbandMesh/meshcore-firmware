@@ -212,9 +212,21 @@ void GuiShell::rebuild() {
   _lock_count = 0xFF;
   _lock_more = 0xFFFFFFFF;
 
+  _kb = _draft_box = _draft_label = _caret = _counter = nullptr;
+  for (auto& k : _key_obj) k = nullptr;
+  if (_key_preview) {
+    lv_obj_del(_key_preview);
+    _key_preview = nullptr;
+  }
+
   if (_locked) {
     _status.closePopover();
     buildLock(scr);
+    return;
+  }
+  if (_composing) {   // Compose takes the whole screen below the status bar
+    _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
+    buildCompose(scr);
     return;
   }
   _msg_list = nullptr;
@@ -387,7 +399,28 @@ bool GuiShell::action(Action a) {
     }
     return false;
   }
-  // In a conversation USR and AUX scroll the messages; Back leaves.
+  // Compose: USR and AUX walk a cursor over the keys, USR hold presses it,
+  // AUX hold leaves (the draft is dropped).
+  if (_composing) {
+    switch (a) {
+      case Action::Next:
+        setHotKey(_hot < 0 ? 0 : int((_hot + 1) % _nkeys), false);
+        return true;
+      case Action::Prev:
+        setHotKey(_hot <= 0 ? int(_nkeys) - 1 : _hot - 1, false);
+        return true;
+      case Action::Open:
+        if (_hot >= 0) pressKey(_hot);
+        return true;
+      case Action::Back:
+        leaveCompose();
+        return true;
+      default:
+        return false;
+    }
+  }
+  // In a conversation USR and AUX scroll the messages; USR hold writes;
+  // Back leaves.
   if (_tab == Tab::Chat && _thread >= 0 && _msg_list) {
     switch (a) {
       case Action::Next:
@@ -395,6 +428,9 @@ bool GuiShell::action(Action a) {
         return true;
       case Action::Prev:
         lv_obj_scroll_by_bounded(_msg_list, 0, 60, LV_ANIM_ON);
+        return true;
+      case Action::Open:
+        openCompose(_thread);
         return true;
       case Action::Back:
         if (_status.popoverOpen()) _status.closePopover();
@@ -742,7 +778,7 @@ void GuiShell::buildConversation(lv_obj_t* content) {
 
     char when[8], meta[48], line_text[96];
     formatClock(zone, m->time, when, sizeof when);
-    if (own) deliveryMeta(*m, channel, 1, 0, meta, sizeof meta);
+    if (own) deliveryMeta(*m, channel, _model->dmAttempt(seqs[i]), kDmAttempts, meta, sizeof meta);
     else incomingMeta(m->hops, meta, sizeof meta);
     const char* from = own ? "You" : (channel || ThreadKind(th->kind) == ThreadKind::Room) ? m->sender : th->name;
     metaLine(from, when, meta, line_text, sizeof line_text);
@@ -789,6 +825,18 @@ void GuiShell::buildConversation(lv_obj_t* content) {
       }
     }
     if (own && Delivery(m->delivery) == Delivery::Sending) lv_obj_set_style_opa(bub, LV_OPA_60, 0);
+    // A DM that wasn't delivered: hold the bubble to send it again (mockup 6).
+    if (failed) {
+      lv_obj_add_flag(bub, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_set_user_data(bub, reinterpret_cast<void*>(uintptr_t(seqs[i])));
+      lv_obj_add_event_cb(
+          bub,
+          [](lv_event_t* e) {
+            GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+            self->_model->resend(uint32_t(uintptr_t(lv_obj_get_user_data(lv_event_get_target(e)))));
+          },
+          LV_EVENT_LONG_PRESSED, this);
+    }
     lv_obj_t* txt = label(bub, FontRole::BodySmall, ink);
     userText(txt, m->text, m->text_len);
     lv_obj_set_style_max_width(txt, max_w - 16, 0);
@@ -819,12 +867,307 @@ void GuiShell::buildConversation(lv_obj_t* content) {
   lv_obj_set_style_pad_hor(field, 8, 0);
   lv_obj_t* hint = label(field, FontRole::BodySmall, _t.dim, "Tap to type…");
   lv_obj_align(hint, LV_ALIGN_LEFT_MID, 0, 0);
+  // Tapping the field, or Can (whose chips sit above the keys), opens Compose.
+  for (lv_obj_t* o : {field, can}) {
+    lv_obj_add_flag(o, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(
+        o,
+        [](lv_event_t* e) {
+          static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->openCompose(g->_thread); });
+        },
+        LV_EVENT_CLICKED, this);
+  }
+}
+
+// ---------------------------------------------------------------- Compose
+
+namespace {
+const char* const kDefaultCanned[4] = {"On my way", "Copy that", "Check-in OK", "Need help"};
+constexpr int16_t kKbTop = 320 - 4 * kKeyH - 3 * kKeyRowGap - 4;   // keyboard area top
+}  // namespace
+
+void GuiShell::openCompose(int thread) {
+  if (thread < 0 || !_model->store().threadAt(thread)) return;
+  _thread = thread;
+  _composing = true;
+  _draft.start(_model->composeBudget(thread));
+  _page.select(KeyPage::Letters);
+  _shift = ShiftState();
+  _shift.autoCap("", 0);
+  _hot = -1;
+  rebuild();
+}
+
+void GuiShell::leaveCompose() {
+  _composing = false;
+  _shown_rev = _model->store().revision();
+  rebuild();
+}
+
+void GuiShell::buildCompose(lv_obj_t* scr) {
+  const Thread* th = _model->store().threadAt(_thread);
+  // Header: "To <name>" and the byte counter.
+  lv_obj_t* h = box(scr, kW, 28);
+  lv_obj_set_pos(h, 0, kStatusH);
+  lv_obj_set_style_pad_hor(h, 8, 0);
+  lv_obj_set_style_border_side(h, LV_BORDER_SIDE_BOTTOM, 0);
+  lv_obj_set_style_border_width(h, 1, 0);
+  lv_obj_set_style_border_color(h, c(_t.line2), 0);
+  lv_obj_set_flex_flow(h, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(h, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(h, 4, 0);
+  label(h, FontRole::Body, _t.dim, "To");
+  lv_obj_t* to = label(h, FontRole::Body, _t.ink);
+  userText(to, th ? th->name : "");
+  lv_obj_set_width(to, 0);
+  lv_obj_set_flex_grow(to, 1);
+  oneLine(to, FontRole::Body);
+  _counter = label(h, FontRole::Meta, _t.dim);
+
+  // The draft: a signal-bordered box on the wash, scrolling as it fills.
+  _draft_box = box(scr, kW - 16, 48);
+  lv_obj_set_pos(_draft_box, 8, kStatusH + 28 + 6);
+  lv_obj_set_style_border_width(_draft_box, 1, 0);
+  lv_obj_set_style_border_color(_draft_box, c(_t.sig), 0);
+  lv_obj_set_style_bg_opa(_draft_box, lv_opa_t(_t.wash >> 24), 0);
+  lv_obj_set_style_bg_color(_draft_box, c(_t.wash), 0);
+  lv_obj_set_style_radius(_draft_box, _look.radius, 0);
+  lv_obj_set_style_pad_hor(_draft_box, 7, 0);
+  lv_obj_set_style_pad_ver(_draft_box, 5, 0);
+  lv_obj_add_flag(_draft_box, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollbar_mode(_draft_box, LV_SCROLLBAR_MODE_OFF);
+  _draft_label = label(_draft_box, FontRole::Body, _t.ink);
+  lv_obj_set_width(_draft_label, LV_PCT(100));
+  lv_label_set_long_mode(_draft_label, LV_LABEL_LONG_WRAP);
+  _caret = box(_draft_box, 1, lv_font_get_line_height(font(FontRole::Body)) - 2);
+  lv_obj_add_flag(_caret, LV_OBJ_FLAG_FLOATING);
+  lv_obj_set_style_bg_opa(_caret, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(_caret, c(_t.sig), 0);
+
+  // Canned chips (the "Can" list; the design's four until Setup edits them).
+  lv_obj_t* chips = box(scr, kW - 16, 24);
+  lv_obj_set_pos(chips, 8, kStatusH + 28 + 6 + 48 + 6);
+  lv_obj_set_flex_flow(chips, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_column(chips, 4, 0);
+  for (int i = 0; i < 4; i++) {
+    const char* text = _model->cannedText(i);
+    if (!text || !text[0]) text = kDefaultCanned[i];
+    lv_obj_t* chip = box(chips, LV_SIZE_CONTENT, 24);
+    lv_obj_set_style_border_width(chip, 1, 0);
+    lv_obj_set_style_border_color(chip, c(_t.line), 0);
+    lv_obj_set_style_radius(chip, _look.pill_chips ? 12 : 0, 0);
+    lv_obj_set_style_pad_hor(chip, 6, 0);
+    lv_obj_t* cl = label(chip, FontRole::BodySmall, _t.ink2);
+    userText(cl, text);
+    lv_obj_center(cl);
+    lv_obj_add_flag(chip, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_user_data(chip, const_cast<char*>(text));
+    lv_obj_add_event_cb(
+        chip,
+        [](lv_event_t* e) {
+          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+          self->insertText(static_cast<const char*>(lv_obj_get_user_data(lv_event_get_target(e))));
+        },
+        LV_EVENT_CLICKED, this);
+  }
+
+  // The keyboard: one area takes every touch and snaps it to the nearest
+  // key, so a tap in a gap still lands (mockup 7a).
+  _kb = box(scr, kW, 320 - kKbTop);
+  lv_obj_set_pos(_kb, 0, kKbTop - 2);
+  lv_obj_set_style_bg_opa(_kb, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(_kb, c(_t.bg2), 0);
+  lv_obj_set_style_border_side(_kb, LV_BORDER_SIDE_TOP, 0);
+  lv_obj_set_style_border_width(_kb, 1, 0);
+  lv_obj_set_style_border_color(_kb, c(_t.line2), 0);
+  lv_obj_add_flag(_kb, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_clear_flag(_kb, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_event_cb(
+      _kb,
+      [](lv_event_t* e) {
+        GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+        const lv_event_code_t code = lv_event_get_code(e);
+        if (code == LV_EVENT_PRESSED || code == LV_EVENT_PRESSING) {
+          lv_point_t p;
+          lv_indev_get_point(lv_indev_get_act(), &p);
+          self->setHotKey(nearestKey(self->_keys, self->_nkeys, p.x, p.y), true);
+        } else if (code == LV_EVENT_RELEASED) {
+          const int k = self->_hot;
+          self->setHotKey(-1, false);
+          if (k >= 0) self->pressKey(k);
+        } else if (code == LV_EVENT_PRESS_LOST) {
+          self->setHotKey(-1, false);
+        }
+      },
+      LV_EVENT_ALL, this);
+  buildKeys();
+  refreshDraft();
+}
+
+// The keys of the current page, labeled for the shift state.
+void GuiShell::buildKeys() {
+  if (!_kb) return;
+  if (_key_preview) {   // it belongs to a key that's about to go
+    lv_obj_del(_key_preview);
+    _key_preview = nullptr;
+  }
+  lv_obj_clean(_kb);
+  for (auto& k : _key_obj) k = nullptr;
+  _nkeys = pageLayout(_page.page(), kW, kKbTop, _keys, 40);
+  const bool caps = _page.page() == KeyPage::Letters && _shift.state() != Shift::Off;
+  for (size_t i = 0; i < _nkeys; i++) {
+    const KeyRect& k = _keys[i];
+    lv_obj_t* o = box(_kb, k.w, k.h);
+    lv_obj_set_pos(o, k.x, k.y - (kKbTop - 2));
+    lv_obj_set_style_radius(o, 4, 0);
+    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(o, c(_t.bg3), 0);
+    const bool send = strcmp(k.label, "Send") == 0;
+    const bool shift = strcmp(k.label, "⇧") == 0;
+    uint32_t ink = _t.ink;
+    if (send) {
+      lv_obj_set_style_bg_color(o, c(_t.sig), 0);
+      ink = _t.sigInk;
+    } else if (shift && _shift.state() == Shift::Once) {
+      lv_obj_set_style_bg_color(o, c(_t.ink2), 0);
+      ink = _t.bg;
+    } else if (shift && _shift.state() == Shift::Lock) {
+      lv_obj_set_style_bg_color(o, c(_t.sig), 0);
+      lv_obj_set_style_border_side(o, LV_BORDER_SIDE_BOTTOM, 0);
+      lv_obj_set_style_border_width(o, 3, 0);
+      lv_obj_set_style_border_color(o, c(_t.sigInk), 0);
+      ink = _t.sigInk;
+    } else if (!typesLabel(k.label)) {
+      ink = _t.ink2;
+    }
+    char text[8];
+    snprintf(text, sizeof text, "%s", k.label);
+    if (caps && text[0] >= 'a' && text[0] <= 'z' && !text[1]) text[0] = char(text[0] - 'a' + 'A');
+    lv_obj_t* l = label(o, typesLabel(k.label) ? FontRole::Body : FontRole::BodySmall, ink, text);
+    lv_obj_center(l);
+    _key_obj[i] = o;
+  }
+  if (_hot >= int(_nkeys)) _hot = -1;
+  if (_hot >= 0) setHotKey(_hot, false);
+}
+
+// Highlights key i (-1: none). With `preview`, a finger is down: the key's
+// character pops up above it (mockup 7a).
+void GuiShell::setHotKey(int i, bool preview) {
+  if (_hot >= 0 && _hot < int(_nkeys) && _key_obj[_hot]) {
+    lv_obj_set_style_outline_width(_key_obj[_hot], 0, 0);
+  }
+  _hot = i;
+  if (_key_preview) {
+    lv_obj_del(_key_preview);
+    _key_preview = nullptr;
+  }
+  if (i < 0 || !_key_obj[i]) return;
+  lv_obj_set_style_outline_width(_key_obj[i], 1, 0);
+  lv_obj_set_style_outline_color(_key_obj[i], c(_t.sig), 0);
+  if (!preview || !typesLabel(_keys[i].label)) return;
+  const KeyRect& k = _keys[i];
+  _key_preview = box(lv_layer_top(), 36, 46);
+  lv_obj_set_pos(_key_preview, k.x + k.w / 2 - 18, k.y - 50);
+  lv_obj_set_style_bg_opa(_key_preview, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(_key_preview, c(_t.bg3), 0);
+  lv_obj_set_style_border_width(_key_preview, 1, 0);
+  lv_obj_set_style_border_color(_key_preview, c(_t.sig), 0);
+  lv_obj_set_style_radius(_key_preview, 6, 0);
+  char text[8];
+  snprintf(text, sizeof text, "%s", k.label);
+  if (_page.page() == KeyPage::Letters && _shift.state() != Shift::Off && text[0] >= 'a' && text[0] <= 'z') {
+    text[0] = char(text[0] - 'a' + 'A');
+  }
+  lv_obj_center(label(_key_preview, FontRole::Title, _t.ink, text));
+}
+
+void GuiShell::pressKey(int i) {
+  if (i < 0 || i >= int(_nkeys)) return;
+  const char* l = _keys[i].label;
+  const KeyPage page_before = _page.page();
+  const Shift shift_before = _shift.state();
+
+  if (strcmp(l, "Send") == 0) {
+    if (_draft.length() == 0) return;
+    if (_model->sendText(_thread, _draft.text(), _draft.length())) {
+      // Leave after this event: the rebuild deletes the keyboard taking it.
+      later([](GuiShell* g) { g->leaveCompose(); });
+      return;
+    }
+    _not_sent_at = lv_tick_get();   // the counter reads "Not sent" for 2 s
+    refreshDraft();
+    return;
+  }
+  if (strcmp(l, "⇧") == 0) {
+    _shift.tap(lv_tick_get());
+  } else if (strcmp(l, "⌫") == 0) {
+    _draft.backspace();
+    _shift.autoCap(_draft.text(), _draft.length());
+  } else if (strcmp(l, "?123") == 0) {
+    _page.select(KeyPage::Symbols);
+  } else if (strcmp(l, "=\\<") == 0) {
+    _page.select(KeyPage::Symbols2);
+  } else if (strcmp(l, "ABC") == 0) {
+    _page.select(KeyPage::Letters);
+  } else {
+    char ch[8];
+    snprintf(ch, sizeof ch, "%s", strcmp(l, "space") == 0 ? " " : l);
+    if (page_before == KeyPage::Letters && shift_before != Shift::Off && ch[0] >= 'a' && ch[0] <= 'z') {
+      ch[0] = char(ch[0] - 'a' + 'A');
+    }
+    if (_draft.insert(ch, strlen(ch))) {
+      _shift.typedLetter();
+      _shift.autoCap(_draft.text(), _draft.length());
+      _page.typed(ch[0]);
+    }
+  }
+  if (_page.page() != page_before || _shift.state() != shift_before) buildKeys();
+  refreshDraft();
+}
+
+// A canned chip: its text goes in after what's typed, a space between.
+void GuiShell::insertText(const char* text) {
+  if (!text) return;
+  if (_draft.length() && _draft.text()[_draft.length() - 1] != ' ') _draft.insert(" ", 1);
+  for (const char* p = text; *p;) {
+    const uint8_t b = uint8_t(*p);
+    const size_t k = b < 0x80 ? 1 : b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : 2;
+    if (!_draft.insert(p, k)) break;
+    p += k;
+  }
+  const Shift before = _shift.state();
+  _shift.autoCap(_draft.text(), _draft.length());
+  if (_shift.state() != before) buildKeys();
+  refreshDraft();
+}
+
+void GuiShell::refreshDraft() {
+  if (!_draft_label) return;
+  userText(_draft_label, _draft.text());
+  char buf[24];
+  const bool not_sent = _not_sent_at && lv_tick_elaps(_not_sent_at) < 2000;
+  if (not_sent) snprintf(buf, sizeof buf, "Not sent");
+  else _draft.counter(buf, sizeof buf);
+  lv_label_set_text(_counter, buf);
+  lv_obj_set_style_text_color(
+      _counter, c(not_sent ? _t.warn : _draft.counterTone() == Tone::Warn ? _t.warn : _t.dim), 0);
+  // The caret sits after the last character; the box keeps it in view.
+  lv_obj_update_layout(_draft_box);
+  lv_point_t p;
+  lv_label_get_letter_pos(_draft_label, _lv_txt_get_encoded_length(lv_label_get_text(_draft_label)), &p);
+  lv_obj_set_pos(_caret, p.x + 1, p.y + 1);
+  lv_obj_scroll_to_view(_caret, LV_ANIM_OFF);
 }
 
 void GuiShell::updateChats() {
   if (_locked || _tab != Tab::Chat) return;
   const MsgStore& s = _model->store();
   if (s.revision() == _shown_rev) return;
+  if (_composing) {   // the draft isn't disturbed; the thread redraws on leaving
+    _shown_rev = s.revision();
+    return;
+  }
   // A message that lands in the open conversation is read as it arrives.
   if (_thread >= 0) {
     const Thread* th = s.threadAt(_thread);
