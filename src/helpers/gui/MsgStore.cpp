@@ -8,25 +8,27 @@
 namespace offband {
 namespace gui {
 
-// ------------------------------------------------------------- file headers
+// ------------------------------------------------------------- file layout
 
-// Both files start with: magic, version, entry size, entry count, reserved,
-// next seq. Entry size and count guard against a file from a different
-// layout being read as this one.
+// Both files: a header, then one fixed-size entry per slot, entry i at
+// kHeaderBytes + i * entry_size (#1472). Entry size and count guard against
+// a file from a different layout being read as this one.
 struct FileHeader {
   char magic[4];
   uint16_t version;
   uint16_t entry_size;
-  uint16_t count;
+  uint16_t count;      // slots in the file
   uint16_t reserved;
   uint32_t next_seq;
 };
 static_assert(sizeof(FileHeader) == 16, "the file header is 16 bytes");
+static constexpr size_t kHeaderBytes = sizeof(FileHeader);
 
 static const char kIndexMagic[4] = {'O', 'B', 'M', 'I'};
 static const char kRingMagic[4] = {'O', 'B', 'M', 'R'};
 
-// An index entry is the thread's slot number, then the thread.
+// An index entry is the thread's slot number, then the thread (kind Empty
+// for a free slot).
 struct IndexEntry {
   uint16_t slot;
   uint16_t reserved;
@@ -34,42 +36,77 @@ struct IndexEntry {
 };
 static_assert(sizeof(IndexEntry) == 84, "an index entry is 84 bytes");
 
+static bool bit(const uint8_t* b, size_t i) { return (b[i >> 3] >> (i & 7)) & 1; }
+static void setBit(uint8_t* b, size_t i) { b[i >> 3] |= uint8_t(1u << (i & 7)); }
+static void clearBit(uint8_t* b, size_t i) { b[i >> 3] &= uint8_t(~(1u << (i & 7))); }
+static size_t bitBytes(size_t n) { return (n + 7) / 8; }
+
 // ----------------------------------------------------------------- lifetime
 
-bool MsgStore::begin(uint16_t capacity, uint16_t max_threads) {
+void MsgStore::release() {
   delete[] _msgs;
   delete[] _threads;
   delete[] _per_thread;
-  delete[] _order;
+  delete[] _slot_dirty;
+  delete[] _thread_dirty;
   _msgs = nullptr;
   _threads = nullptr;
   _per_thread = nullptr;
-  _order = nullptr;
+  _slot_dirty = nullptr;
+  _thread_dirty = nullptr;
   _cap = _max_threads = _count = 0;
   _seq = 0;
+  _ring_header_dirty = _index_header_dirty = false;
+  _scan_slot = _scan_thread = 0;
+  _dirty_bits = 0;
+}
+
+bool MsgStore::begin(uint16_t capacity, uint16_t max_threads) {
+  release();
   if (capacity == 0 || max_threads == 0) return false;
 
-  // Over 4 KB, so on the S3 these come from PSRAM.
+  // Over 4 KB, so on the S3 the records come from PSRAM.
   _msgs = new (std::nothrow) MsgRecord[capacity];
   _threads = new (std::nothrow) Thread[max_threads];
   _per_thread = new (std::nothrow) uint16_t[max_threads];
-  _order = new (std::nothrow) uint16_t[capacity];
-  if (!_msgs || !_threads || !_per_thread || !_order) {
-    begin(0, 0);   // frees whatever did come back
+  _slot_dirty = new (std::nothrow) uint8_t[bitBytes(capacity)];
+  _thread_dirty = new (std::nothrow) uint8_t[bitBytes(max_threads)];
+  if (!_msgs || !_threads || !_per_thread || !_slot_dirty || !_thread_dirty) {
+    release();
     return false;
   }
   memset(_msgs, 0, sizeof(MsgRecord) * capacity);
   memset(_threads, 0, sizeof(Thread) * max_threads);
+  memset(_slot_dirty, 0, bitBytes(capacity));
+  memset(_thread_dirty, 0, bitBytes(max_threads));
   _cap = capacity;
   _max_threads = max_threads;
   return true;
 }
 
-MsgStore::~MsgStore() {
-  delete[] _msgs;
-  delete[] _threads;
-  delete[] _per_thread;
-  delete[] _order;
+MsgStore::~MsgStore() { release(); }
+
+void MsgStore::dirtySlot(const MsgRecord* m) {
+  const size_t i = size_t(m - _msgs);
+  if (!bit(_slot_dirty, i)) {
+    setBit(_slot_dirty, i);
+    _dirty_bits++;
+  }
+  _ring_header_dirty = true;
+}
+
+void MsgStore::dirtyThread(int t) {
+  if (!bit(_thread_dirty, size_t(t))) {
+    setBit(_thread_dirty, size_t(t));
+    _dirty_bits++;
+  }
+  _index_header_dirty = true;
+}
+
+static uint32_t countBits(const uint8_t* b, size_t n) {
+  uint32_t c = 0;
+  for (size_t i = 0; i < n; i++) c += bit(b, i);
+  return c;
 }
 
 // ------------------------------------------------------------------ threads
@@ -109,8 +146,14 @@ int MsgStore::thread(ThreadKind kind, const uint8_t* key, size_t key_len, const 
     memset(&_threads[t], 0, sizeof(Thread));
     _threads[t].kind = uint8_t(kind);
     memcpy(_threads[t].key, key, key_len);
+    dirtyThread(t);
   }
-  copyText(_threads[t].name, kThreadNameLen, name);
+  char name_now[kThreadNameLen];
+  copyText(name_now, kThreadNameLen, name);
+  if (strcmp(name_now, _threads[t].name) != 0) {   // a rename is a change; a lookup isn't
+    memcpy(_threads[t].name, name_now, kThreadNameLen);
+    dirtyThread(t);
+  }
   return t;
 }
 
@@ -173,6 +216,8 @@ MsgRecord* MsgStore::add(int t, uint32_t time, const char* text, size_t len) {
   _threads[t].last_seq = m->seq;
   _threads[t].last_time = time;
   _count++;
+  dirtySlot(m);
+  dirtyThread(t);
   return m;
 }
 
@@ -221,14 +266,20 @@ uint32_t MsgStore::findOwn(int t, const char* text, size_t len) const {
 bool MsgStore::setDelivery(uint32_t seq, Delivery d) {
   MsgRecord* m = ref(seq);
   if (!m || !m->own) return false;
-  m->delivery = uint8_t(d);
+  if (m->delivery != uint8_t(d)) {
+    m->delivery = uint8_t(d);
+    dirtySlot(m);
+  }
   return true;
 }
 
 bool MsgStore::addEcho(uint32_t seq) {
   MsgRecord* m = ref(seq);
   if (!m || !m->own) return false;
-  if (m->echoes < 0xFF) m->echoes++;
+  if (m->echoes < 0xFF) {
+    m->echoes++;
+    dirtySlot(m);
+  }
   return true;
 }
 
@@ -256,7 +307,10 @@ size_t MsgStore::threadMessages(int t, uint32_t* out, size_t max) const {
 }
 
 void MsgStore::markRead(int t) {
-  if (live(t)) _threads[t].unread = 0;
+  if (live(t) && _threads[t].unread != 0) {
+    _threads[t].unread = 0;
+    dirtyThread(t);
+  }
 }
 
 uint32_t MsgStore::totalUnread() const {
@@ -285,25 +339,100 @@ bool BufferSink::write(const void* data, size_t len) {
 
 BufferSink::~BufferSink() { delete[] _buf; }
 
-size_t MsgStore::indexBytesMax() const { return sizeof(FileHeader) + sizeof(IndexEntry) * _max_threads; }
-size_t MsgStore::ringBytesMax() const { return sizeof(FileHeader) + sizeof(MsgRecord) * _cap; }
+size_t MsgStore::indexFileBytes() const { return kHeaderBytes + sizeof(IndexEntry) * _max_threads; }
+size_t MsgStore::ringFileBytes() const { return kHeaderBytes + sizeof(MsgRecord) * _cap; }
+
+static void makeHeader(FileHeader* h, const char magic[4], uint16_t entry_size, uint16_t count,
+                       uint32_t next_seq) {
+  memset(h, 0, sizeof(*h));
+  memcpy(h->magic, magic, 4);
+  h->version = kMsgStoreVersion;
+  h->entry_size = entry_size;
+  h->count = count;
+  h->next_seq = next_seq;
+}
+
+static IndexEntry indexEntry(const Thread* threads, uint16_t slot) {
+  IndexEntry e = {};
+  e.slot = slot;
+  e.thread = threads[slot];
+  return e;
+}
+
+bool MsgStore::anyDirty() const { return _dirty_bits > 0 || _ring_header_dirty || _index_header_dirty; }
+
+void MsgStore::clearDirty() {
+  clearDirty(true);
+  clearDirty(false);
+}
+
+void MsgStore::clearDirty(bool ring) {
+  if (ring) {
+    if (_slot_dirty) memset(_slot_dirty, 0, bitBytes(_cap));
+    _ring_header_dirty = false;
+    _scan_slot = 0;
+  } else {
+    if (_thread_dirty) memset(_thread_dirty, 0, bitBytes(_max_threads));
+    _index_header_dirty = false;
+    _scan_thread = 0;
+  }
+  _dirty_bits = (_slot_dirty ? countBits(_slot_dirty, _cap) : 0) +
+                (_thread_dirty ? countBits(_thread_dirty, _max_threads) : 0);
+}
+
+// Thread entries, then slots, then each touched file's header last, so a
+// header never claims a next_seq whose records aren't written yet. A change
+// that lands behind the scan (it arrived mid-burst) is found by a second pass
+// from the start before any header goes out.
+bool MsgStore::nextDirty(DirtyWrite* out) {
+  if (!anyDirty() || !out) return false;
+  for (int pass = 0; pass < 2 && _dirty_bits > 0; pass++) {
+    for (; _scan_thread < _max_threads; _scan_thread++) {
+      if (!bit(_thread_dirty, _scan_thread)) continue;
+      clearBit(_thread_dirty, _scan_thread);
+      _dirty_bits--;
+      const IndexEntry e = indexEntry(_threads, _scan_thread);
+      memcpy(_entry, &e, sizeof(e));   // stays valid until the next call
+      *out = {false, uint32_t(kHeaderBytes + sizeof(IndexEntry) * _scan_thread), _entry,
+              uint16_t(sizeof(IndexEntry))};
+      _scan_thread++;
+      return true;
+    }
+    for (; _scan_slot < _cap; _scan_slot++) {
+      if (!bit(_slot_dirty, _scan_slot)) continue;
+      clearBit(_slot_dirty, _scan_slot);
+      _dirty_bits--;
+      *out = {true, uint32_t(kHeaderBytes + sizeof(MsgRecord) * _scan_slot), &_msgs[_scan_slot],
+              uint16_t(sizeof(MsgRecord))};
+      _scan_slot++;
+      return true;
+    }
+    _scan_thread = _scan_slot = 0;   // bits left behind the cursors: once more from the start
+  }
+  FileHeader* h = reinterpret_cast<FileHeader*>(_hdr);
+  if (_index_header_dirty) {
+    _index_header_dirty = false;
+    makeHeader(h, kIndexMagic, sizeof(IndexEntry), _max_threads, _seq);
+    *out = {false, 0, _hdr, uint16_t(kHeaderBytes)};
+    if (!_ring_header_dirty) _scan_slot = _scan_thread = 0;
+    return true;
+  }
+  _ring_header_dirty = false;
+  makeHeader(h, kRingMagic, sizeof(MsgRecord), _cap, _seq);
+  *out = {true, 0, _hdr, uint16_t(kHeaderBytes)};
+  _scan_slot = _scan_thread = 0;
+  return true;
+}
 
 static bool readAll(ByteSource& in, void* buf, size_t len) { return in.read(buf, len) == len; }
 
 bool MsgStore::saveIndex(ByteSink& out) const {
   if (!_threads) return false;
-  FileHeader h = {};
-  memcpy(h.magic, kIndexMagic, 4);
-  h.version = kMsgStoreVersion;
-  h.entry_size = sizeof(IndexEntry);
-  h.count = threadCount();
-  h.next_seq = _seq;
+  FileHeader h;
+  makeHeader(&h, kIndexMagic, sizeof(IndexEntry), _max_threads, _seq);
   if (!out.write(&h, sizeof(h))) return false;
-  for (int t = 0; t < _max_threads; t++) {
-    if (_threads[t].kind == uint8_t(ThreadKind::Empty)) continue;
-    IndexEntry e = {};
-    e.slot = uint16_t(t);
-    e.thread = _threads[t];
+  for (uint16_t t = 0; t < _max_threads; t++) {
+    const IndexEntry e = indexEntry(_threads, t);
     if (!out.write(&e, sizeof(e))) return false;
   }
   return true;
@@ -331,39 +460,25 @@ LoadResult MsgStore::loadIndex(ByteSource& in) {
       memset(_threads, 0, sizeof(Thread) * _max_threads);   // nothing from a cut-short file
       return LoadResult::BadHeader;
     }
-    if (e.slot >= _max_threads || e.thread.kind == uint8_t(ThreadKind::Empty) ||
+    if (e.slot != i || e.slot >= _max_threads || e.thread.kind == uint8_t(ThreadKind::Empty) ||
         e.thread.kind > uint8_t(ThreadKind::Room)) {
-      continue;   // a slot this build can't hold, or not a thread
+      continue;   // a free slot, one this build can't hold, or not a thread
     }
     e.thread.name[kThreadNameLen - 1] = 0;
     _threads[e.slot] = e.thread;
   }
   if (h.next_seq > _seq) _seq = h.next_seq;
+  clearDirty(false);
   return LoadResult::Ok;
 }
 
 bool MsgStore::saveRing(ByteSink& out) const {
   if (!_msgs) return false;
-  // Oldest first, so a load into a smaller store can skip to the newest.
-  uint16_t n = 0;
-  for (uint16_t i = 0; i < _cap; i++) {
-    if (_msgs[i].seq == 0) continue;
-    uint16_t j = n++;
-    while (j > 0 && _msgs[_order[j - 1]].seq > _msgs[i].seq) {
-      _order[j] = _order[j - 1];
-      j--;
-    }
-    _order[j] = i;
-  }
-  FileHeader h = {};
-  memcpy(h.magic, kRingMagic, 4);
-  h.version = kMsgStoreVersion;
-  h.entry_size = sizeof(MsgRecord);
-  h.count = n;
-  h.next_seq = _seq;
+  FileHeader h;
+  makeHeader(&h, kRingMagic, sizeof(MsgRecord), _cap, _seq);
   if (!out.write(&h, sizeof(h))) return false;
-  for (uint16_t k = 0; k < n; k++) {
-    if (!out.write(&_msgs[_order[k]], sizeof(MsgRecord))) return false;
+  for (uint16_t i = 0; i < _cap; i++) {
+    if (!out.write(&_msgs[i], sizeof(MsgRecord))) return false;
   }
   return true;
 }
@@ -375,8 +490,6 @@ LoadResult MsgStore::loadRing(ByteSource& in) {
   FileHeader h;
   const LoadResult r = readHeader(in, &h, kRingMagic, sizeof(MsgRecord));
   if (r != LoadResult::Ok) return r;
-  // The file is oldest first: with more than fit, the oldest are skipped.
-  const uint16_t skip = h.count > _cap ? uint16_t(h.count - _cap) : 0;
   MsgRecord rec;
   for (uint16_t i = 0; i < h.count; i++) {
     if (!readAll(in, &rec, sizeof(rec))) {
@@ -384,12 +497,45 @@ LoadResult MsgStore::loadRing(ByteSource& in) {
       _count = 0;
       return LoadResult::BadHeader;
     }
-    if (i < skip || rec.seq == 0 || !live(rec.thread) || rec.text_len > kMsgTextMax) continue;
+    if (rec.seq == 0 || !live(rec.thread) || rec.text_len > kMsgTextMax) continue;
     rec.sender[kMsgSenderLen - 1] = 0;
-    _msgs[_count++] = rec;
     if (rec.seq > _seq) _seq = rec.seq;
+    if (i < _cap && _msgs[i].seq == 0) {   // same layout: same slot
+      _msgs[i] = rec;
+      _count++;
+      continue;
+    }
+    // A file from a bigger store: keep the newest that fit.
+    MsgRecord* slot = nullptr;
+    for (uint16_t k = 0; k < _cap; k++) {
+      if (_msgs[k].seq == 0) {
+        slot = &_msgs[k];
+        break;
+      }
+      if (!slot || _msgs[k].seq < slot->seq) slot = &_msgs[k];
+    }
+    if (slot->seq == 0) {
+      _count++;
+    } else if (slot->seq > rec.seq) {
+      continue;   // older than everything kept
+    }
+    *slot = rec;
   }
   if (h.next_seq > _seq) _seq = h.next_seq;
+  // A power cut between a message and its thread entry leaves the thread's
+  // newest message stale: take it from the messages themselves.
+  for (uint16_t t = 0; t < _max_threads; t++) _threads[t].last_seq = _threads[t].last_time = 0;
+  for (uint16_t k = 0; k < _cap; k++) {
+    const MsgRecord& m = _msgs[k];
+    if (m.seq != 0 && m.seq > _threads[m.thread].last_seq) {
+      _threads[m.thread].last_seq = m.seq;
+      _threads[m.thread].last_time = m.time;
+    }
+  }
+  // A file from a different layout gets rewritten whole by the caller; the
+  // same layout needs nothing written back.
+  clearDirty(true);
+  clearDirty(false);
   return LoadResult::Ok;
 }
 

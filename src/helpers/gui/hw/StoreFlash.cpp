@@ -6,13 +6,11 @@
 using namespace offband::gui;
 
 #ifndef GUI_STORE_SLICE_BYTES
-  // ~43 bytes per ms of SPIFFS write on the V4 (#1458's contacts save), so a
-  // slice stays near 12 ms.
+  // A rebuild's slice: ~43 bytes per ms of SPIFFS write on the V4 (#1458).
   #define GUI_STORE_SLICE_BYTES 512
 #endif
 
-static constexpr uint32_t kIndexDelayMs = 5000;   // threads and unread: soon
-static constexpr uint32_t kRingDelayMs = 60000;   // the messages: lazily
+static constexpr uint32_t kWriteDelayMs = 5000;   // bundles a burst of changes
 
 static const char* const kIndexPath = "/msgidx";
 static const char* const kRingPath = "/msgring";
@@ -20,9 +18,6 @@ static const char* const kIndexTmp = "/msgidx.tmp";
 static const char* const kRingTmp = "/msgring.tmp";
 static const char* const kIndexBad = "/msgidx.bad";
 static const char* const kRingBad = "/msgring.bad";
-
-// The open temp file, kept across loop ticks while a write is sliced.
-static File s_file;
 
 namespace {
 
@@ -43,19 +38,19 @@ bool StoreFlash::begin(FILESYSTEM* fs, MsgStore* store) {
   _fs = fs;
   _store = store;
   if (!_fs || !_store || !_store->ready()) return false;
-  const size_t need = _store->ringBytesMax() > _store->indexBytesMax() ? _store->ringBytesMax()
-                                                                        : _store->indexBytesMax();
+  const size_t need = _store->ringFileBytes() > _store->indexFileBytes() ? _store->ringFileBytes()
+                                                                          : _store->indexFileBytes();
   return _snap.reserve(need);
 }
 
-// A swap cut off between removing the old file and renaming the new one
+// A rebuild cut off between removing the old file and renaming the new one
 // leaves only the complete temp file.
 static void recover(FILESYSTEM* fs, const char* path, const char* tmp) {
   if (!fs->exists(path) && fs->exists(tmp)) fs->rename(tmp, path);
 }
 
 // Keeps a file that didn't load aside, unread, so nothing overwrites it. If
-// the rename fails it stays where it is and the next save replaces it: say so.
+// the rename fails it stays where it is and the next rebuild replaces it.
 static void keepAside(FILESYSTEM* fs, const char* path, const char* bad) {
   fs->remove(bad);
   if (!fs->rename(path, bad)) {
@@ -70,62 +65,70 @@ static LoadResult worse(LoadResult a, LoadResult b) {
   return LoadResult::Empty;
 }
 
+// Loads one file. Anything but a good file of exactly the expected size is
+// rebuilt whole at the first write.
+static LoadResult loadOne(FILESYSTEM* fs, const char* path, const char* bad, size_t expect, bool ring,
+                          MsgStore* store, bool* rebuild) {
+  *rebuild = true;
+  if (!fs->exists(path)) return LoadResult::Empty;
+  File f = fs->open(path, "r");
+  const size_t size = f ? f.size() : 0;
+  FileSource src(f);
+  const LoadResult r = ring ? store->loadRing(src) : store->loadIndex(src);
+  f.close();
+  if (r == LoadResult::BadHeader || r == LoadResult::UnknownVersion) {
+    keepAside(fs, path, bad);
+  } else if (r == LoadResult::Ok && size == expect) {
+    *rebuild = false;   // in place from here on
+  }
+  return r;
+}
+
 LoadResult StoreFlash::load() {
   if (!_fs || !_store || !_store->ready()) return LoadResult::Empty;
   recover(_fs, kIndexPath, kIndexTmp);
   recover(_fs, kRingPath, kRingTmp);
-
-  LoadResult idx = LoadResult::Empty;
-  if (_fs->exists(kIndexPath)) {
-    File f = _fs->open(kIndexPath, "r");
-    FileSource src(f);
-    idx = _store->loadIndex(src);
-    f.close();
-    if (idx == LoadResult::BadHeader || idx == LoadResult::UnknownVersion) keepAside(_fs, kIndexPath, kIndexBad);
-  }
-  LoadResult ring = LoadResult::Empty;
-  if (_fs->exists(kRingPath)) {
-    File f = _fs->open(kRingPath, "r");
-    FileSource src(f);
-    ring = _store->loadRing(src);   // with no index, every record is dropped
-    f.close();
-    if (ring == LoadResult::BadHeader || ring == LoadResult::UnknownVersion) keepAside(_fs, kRingPath, kRingBad);
-  }
+  const LoadResult idx =
+      loadOne(_fs, kIndexPath, kIndexBad, _store->indexFileBytes(), false, _store, &_rebuild_index);
+  // With no index, every message is dropped as belonging to no thread.
+  const LoadResult ring =
+      loadOne(_fs, kRingPath, kRingBad, _store->ringFileBytes(), true, _store, &_rebuild_ring);
   _last_load = worse(idx, ring);
-  mesh_log_line(MLOG_BOOT, "[store] load index=%d ring=%d threads=%u msgs=%u\n", int(idx), int(ring),
-                (unsigned)_store->threadCount(), (unsigned)_store->count());
+  if (_rebuild_index || _rebuild_ring) changed(millis());   // lay the files out once
+  mesh_log_line(MLOG_BOOT, "[store] load index=%d ring=%d threads=%u msgs=%u rebuild=%d%d\n", int(idx),
+                int(ring), (unsigned)_store->threadCount(), (unsigned)_store->count(), _rebuild_index ? 1 : 0,
+                _rebuild_ring ? 1 : 0);
   return _last_load;
 }
 
-void StoreFlash::indexChanged(uint32_t now_ms) {
-  if (_index_due == 0) _index_due = (now_ms + kIndexDelayMs) | 1;   // never 0: 0 means nothing pending
+void StoreFlash::changed(uint32_t now_ms) {
+  if (_due == 0) _due = (now_ms + kWriteDelayMs) | 1;   // never 0: 0 means nothing pending
 }
 
-void StoreFlash::ringChanged(uint32_t now_ms) {
-  indexChanged(now_ms);
-  if (_ring_due == 0) _ring_due = (now_ms + kRingDelayMs) | 1;
-}
+// ------------------------------------------------------------ whole rebuilds
 
-bool StoreFlash::startWrite(Which w) {
+bool StoreFlash::startRebuild(Which w) {
   _snap.clear();
-  const bool ok = (w == File_Index) ? _store->saveIndex(_snap) : _store->saveRing(_snap);
-  if (!ok) return false;
-  s_file = _fs->open(w == File_Index ? kIndexTmp : kRingTmp, "w", true);
-  if (!s_file) return false;
-  _writing = w;
+  const bool ring = (w == File_Ring);
+  if (!(ring ? _store->saveRing(_snap) : _store->saveIndex(_snap))) return false;
+  _store->clearDirty(ring);   // the snapshot holds every entry
+  _tmp_file = _fs->open(ring ? kRingTmp : kIndexTmp, "w", true);
+  if (!_tmp_file) return false;
+  _state = Rebuilding;
+  _rebuilding = w;
   _slices.begin(_snap.size(), GUI_STORE_SLICE_BYTES);
-  _slice_max_ms = 0;
-  _write_t0 = millis();
+  _t0 = millis();
+  _step_max_ms = 0;
   return true;
 }
 
-bool StoreFlash::finishWrite(bool commit) {
-  const Which w = _writing;
-  _writing = File_None;
+bool StoreFlash::finishRebuild(bool commit) {
+  const bool ring = (_rebuilding == File_Ring);
+  _state = Idle;
   _slices.cancel();
-  s_file.close();
-  const char* path = (w == File_Index) ? kIndexPath : kRingPath;
-  const char* tmp = (w == File_Index) ? kIndexTmp : kRingTmp;
+  _tmp_file.close();
+  const char* path = ring ? kRingPath : kIndexPath;
+  const char* tmp = ring ? kRingTmp : kIndexTmp;
   bool ok = false;
   if (commit) {
     // SPIFFS rename won't replace a file: the old one goes first (see recover()).
@@ -134,77 +137,133 @@ bool StoreFlash::finishWrite(bool commit) {
   } else {
     _fs->remove(tmp);
   }
+  if (ok) {
+    if (ring) _rebuild_ring = false;
+    else _rebuild_index = false;
+  }
 #if defined(OFFBAND_MEM_TELEMETRY)
-  mesh_log_line(MLOG_BOOT, "[mem] store_save file=%s bytes=%u ms=%lu slice_max_ms=%lu ok=%d\n",
-                w == File_Index ? "index" : "ring", (unsigned)_snap.size(),
-                (unsigned long)(millis() - _write_t0), (unsigned long)_slice_max_ms, ok ? 1 : 0);
+  mesh_log_line(MLOG_BOOT, "[mem] store_rebuild file=%s bytes=%u ms=%lu step_max_ms=%lu ok=%d\n",
+                ring ? "ring" : "index", (unsigned)_snap.size(), (unsigned long)(millis() - _t0),
+                (unsigned long)_step_max_ms, ok ? 1 : 0);
 #endif
   return ok;
 }
 
+// --------------------------------------------------------- in-place writes
+
+bool StoreFlash::openInPlace() {
+  _idx_file = _fs->open(kIndexPath, "r+");
+  _ring_file = _fs->open(kRingPath, "r+");
+  if (!_idx_file || !_ring_file) {
+    closeInPlace();
+    return false;
+  }
+  _state = InPlace;
+  _t0 = millis();
+  _bytes = _writes = _step_max_ms = 0;
+  return true;
+}
+
+void StoreFlash::closeInPlace() {
+  _idx_file.close();
+  _ring_file.close();
+  _state = Idle;
+}
+
+bool StoreFlash::writeOne(const DirtyWrite& w) {
+  File& f = w.ring ? _ring_file : _idx_file;
+  if (!f.seek(w.offset, SeekSet)) return false;
+  return f.write(static_cast<const uint8_t*>(w.data), w.len) == w.len;
+}
+
+// ------------------------------------------------------------------- loop
+
 void StoreFlash::loop(uint32_t now_ms, bool fs_busy) {
   if (!_fs || !_store || fs_busy) return;
 
-  if (_writing != File_None) {
+  if (_state == Rebuilding) {
     size_t from, to;
     if (_slices.next(&from, &to)) {
       const uint32_t t = millis();
       const size_t len = to - from;
-      const bool ok = s_file.write(_snap.data() + from, len) == len;
+      const bool ok = _tmp_file.write(_snap.data() + from, len) == len;
       const uint32_t ms = millis() - t;
-      if (ms > _slice_max_ms) _slice_max_ms = ms;
+      if (ms > _step_max_ms) _step_max_ms = ms;
       if (!ok) {
-        const Which w = _writing;
-        finishWrite(false);
-        if (w == File_Index) indexChanged(now_ms);   // try again later
-        else ringChanged(now_ms);
+        finishRebuild(false);
+        changed(now_ms);   // try again later
       }
       return;
     }
-    const Which w = _writing;
-    if (!finishWrite(true)) {
-      if (w == File_Index) indexChanged(now_ms);
-      else ringChanged(now_ms);
-    }
+    if (!finishRebuild(true)) changed(now_ms);
     return;
   }
 
-  // The index first: it is small and holds the unread counts.
-  if (_index_due && due(now_ms, _index_due)) {
-    _index_due = 0;   // a change during the write schedules the next one
-    if (!startWrite(File_Index)) indexChanged(now_ms);
-  } else if (_ring_due && due(now_ms, _ring_due)) {
-    _ring_due = 0;
-    if (!startWrite(File_Ring)) ringChanged(now_ms);
-  }
-}
-
-void StoreFlash::writeAll(Which w) {
-  if (!startWrite(w)) return;
-  size_t from, to;
-  while (_slices.next(&from, &to)) {
-    if (s_file.write(_snap.data() + from, to - from) != to - from) {
-      finishWrite(false);
+  if (_state == InPlace) {
+    DirtyWrite w;
+    if (_store->nextDirty(&w)) {
+      const uint32_t t = millis();
+      if (!writeOne(w)) {
+        // The file isn't what we think it is: lay both out again.
+        closeInPlace();
+        _rebuild_index = _rebuild_ring = true;
+        changed(now_ms);
+        return;
+      }
+      const uint32_t ms = millis() - t;
+      if (ms > _step_max_ms) _step_max_ms = ms;
+      _bytes += w.len;
+      _writes++;
       return;
     }
+    closeInPlace();
+    if (_store->anyDirty()) changed(now_ms);   // a change that came in at the very end
+#if defined(OFFBAND_MEM_TELEMETRY)
+    mesh_log_line(MLOG_BOOT, "[mem] store_save writes=%lu bytes=%lu ms=%lu step_max_ms=%lu\n",
+                  (unsigned long)_writes, (unsigned long)_bytes, (unsigned long)(millis() - _t0),
+                  (unsigned long)_step_max_ms);
+#endif
+    return;
   }
-  finishWrite(true);
+
+  if (_due == 0 || !due(now_ms, _due)) return;
+  _due = 0;   // a change from here on schedules the next burst
+  if (_rebuild_index) {
+    if (!startRebuild(File_Index)) changed(now_ms);
+    else if (_rebuild_ring || _store->anyDirty()) changed(now_ms);   // more to do after this
+    return;
+  }
+  if (_rebuild_ring) {
+    if (!startRebuild(File_Ring)) changed(now_ms);
+    else if (_store->anyDirty()) changed(now_ms);
+    return;
+  }
+  if (_store->anyDirty() && !openInPlace()) {
+    _rebuild_index = _rebuild_ring = true;   // a file went missing
+    changed(now_ms);
+  }
 }
 
 void StoreFlash::flushNow() {
   if (!_fs || !_store) return;
-  if (_writing != File_None) {
-    // The snapshot in progress may predate the latest change: drop it and
-    // write both files fresh.
-    finishWrite(false);
-    _index_due = _ring_due = 1;
+  if (_state == Rebuilding) {
+    size_t from, to;
+    bool ok = true;
+    while (ok && _slices.next(&from, &to)) ok = _tmp_file.write(_snap.data() + from, to - from) == to - from;
+    finishRebuild(ok);
   }
-  if (_index_due) {
-    _index_due = 0;
-    writeAll(File_Index);
+  for (int i = 0; i < 2 && (_rebuild_index || _rebuild_ring); i++) {
+    if (!startRebuild(_rebuild_index ? File_Index : File_Ring)) return;
+    size_t from, to;
+    bool ok = true;
+    while (ok && _slices.next(&from, &to)) ok = _tmp_file.write(_snap.data() + from, to - from) == to - from;
+    finishRebuild(ok);
   }
-  if (_ring_due) {
-    _ring_due = 0;
-    writeAll(File_Ring);
+  if (_state != InPlace && _store->anyDirty() && !openInPlace()) return;
+  DirtyWrite w;
+  while (_state == InPlace && _store->nextDirty(&w)) {
+    if (!writeOne(w)) break;
   }
+  closeInPlace();
+  _due = 0;
 }

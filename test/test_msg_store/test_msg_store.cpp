@@ -493,6 +493,174 @@ TEST(MsgStoreFlash, SnapshotFitsTheWorstCase) {
   EXPECT_EQ(idx.size(), a.indexBytesMax());
 }
 
+// ------------------------------- #1472: in-place writes of what changed only
+
+namespace {
+
+// A file image the size the store's fixed layout says, updated in place.
+struct FileImage {
+  std::vector<uint8_t> idx, ring;
+  void fullWrite(const MsgStore& s) {
+    MemSink i, r;
+    ASSERT_TRUE(s.saveIndex(i));
+    ASSERT_TRUE(s.saveRing(r));
+    idx = i.bytes;
+    ring = r.bytes;
+  }
+  // Applies every pending in-place write; returns how many bytes went out.
+  size_t applyDirty(MsgStore& s) {
+    size_t bytes = 0;
+    DirtyWrite w;
+    while (s.nextDirty(&w)) {
+      std::vector<uint8_t>& f = w.ring ? ring : idx;
+      EXPECT_LE(w.offset + w.len, f.size());
+      if (w.offset + w.len > f.size()) return bytes;
+      memcpy(&f[w.offset], w.data, w.len);
+      bytes += w.len;
+    }
+    return bytes;
+  }
+};
+
+}  // namespace
+
+TEST(MsgStoreInPlace, FileSizesAreFixed) {
+  MsgStore s;
+  ASSERT_TRUE(s.begin(1000, 64));
+  EXPECT_EQ(s.ringFileBytes(), 16u + 1000u * 192u);
+  EXPECT_EQ(s.indexFileBytes(), 16u + 64u * 84u);
+  MemSink r, i;
+  ASSERT_TRUE(s.saveRing(r));    // empty store: still the whole layout
+  ASSERT_TRUE(s.saveIndex(i));
+  EXPECT_EQ(r.bytes.size(), s.ringFileBytes());
+  EXPECT_EQ(i.bytes.size(), s.indexFileBytes());
+}
+
+TEST(MsgStoreInPlace, OneMessageWritesOneSlotNotTheFile) {
+  MsgStore s;
+  ASSERT_TRUE(s.begin(1000, 64));
+  const int ch = s.thread(ThreadKind::Channel, kChanA, 16, "a");
+  for (int i = 0; i < 1000; i++) addText(s, ch, i, "fill");
+  FileImage f;
+  f.fullWrite(s);
+  s.clearDirty();
+  EXPECT_FALSE(s.anyDirty());
+
+  addText(s, ch, 5000, "one more");   // evicts one, fills its slot
+  EXPECT_TRUE(s.anyDirty());
+  const size_t bytes = f.applyDirty(s);
+  // One slot, one thread entry, two headers: well under 1 KB, not 192 KB.
+  EXPECT_LE(bytes, 192u + 84u + 16u + 16u);
+  EXPECT_FALSE(s.anyDirty());
+
+  MsgStore b;
+  ASSERT_TRUE(b.begin(1000, 64));
+  MemSource i(f.idx), r(f.ring);
+  ASSERT_EQ(b.loadIndex(i), LoadResult::Ok);
+  ASSERT_EQ(b.loadRing(r), LoadResult::Ok);
+  EXPECT_EQ(b.count(), 1000);
+  uint32_t seqs[1];
+  ASSERT_EQ(b.threadMessages(ch, seqs, 1), 1u);
+  EXPECT_EQ(textOf(b.msg(seqs[0])), "one more");
+  EXPECT_EQ(b.threadAt(ch)->unread, s.threadAt(ch)->unread);
+}
+
+TEST(MsgStoreInPlace, StatusAndEchoChangesAreDirtyToo) {
+  MsgStore s;
+  ASSERT_TRUE(s.begin(8, 8));
+  const int ch = s.thread(ThreadKind::Channel, kChanA, 16, "a");
+  const uint32_t q = s.addOwn(ch, 1, "x", 1, Delivery::Sending);
+  FileImage f;
+  f.fullWrite(s);
+  s.clearDirty();
+  s.addEcho(q);
+  EXPECT_TRUE(s.anyDirty());
+  f.applyDirty(s);
+  s.setDelivery(q, Delivery::Delivered);
+  f.applyDirty(s);
+  s.markRead(ch);   // only the thread entry
+  f.applyDirty(s);
+  MsgStore b;
+  ASSERT_TRUE(b.begin(8, 8));
+  MemSource i(f.idx), r(f.ring);
+  ASSERT_EQ(b.loadIndex(i), LoadResult::Ok);
+  ASSERT_EQ(b.loadRing(r), LoadResult::Ok);
+  EXPECT_EQ(b.msg(q)->echoes, 1);
+  EXPECT_EQ(b.msg(q)->delivery, uint8_t(Delivery::Delivered));
+}
+
+// A message that arrives while a burst is being written, in a slot the burst
+// has already passed, must still go out (Gemini, #1472).
+TEST(MsgStoreInPlace, ChangeMidBurstIsNotLost) {
+  MsgStore s;
+  ASSERT_TRUE(s.begin(8, 8));
+  const int ch = s.thread(ThreadKind::Channel, kChanA, 16, "a");
+  FileImage f;
+  f.fullWrite(s);
+  s.clearDirty();
+  addText(s, ch, 1, "a");          // slot 0
+  const uint32_t b = addText(s, ch, 2, "b");   // slot 1
+  DirtyWrite w;
+  for (int k = 0; k < 3; k++) {    // the thread entry, slot 0, slot 1: the cursor is past them
+    ASSERT_TRUE(s.nextDirty(&w));
+    std::vector<uint8_t>& file = w.ring ? f.ring : f.idx;
+    memcpy(&file[w.offset], w.data, w.len);
+  }
+  s.setDelivery(b, Delivery::None);   // not own: no change
+  s.markRead(ch);                     // the thread again, behind the cursor
+  addText(s, ch, 3, "c");             // slot 2
+  // Drain everything that is left, then load: nothing may be missing.
+  f.applyDirty(s);
+  EXPECT_FALSE(s.anyDirty());
+  MsgStore r;
+  ASSERT_TRUE(r.begin(8, 8));
+  MemSource i(f.idx), rg(f.ring);
+  ASSERT_EQ(r.loadIndex(i), LoadResult::Ok);
+  ASSERT_EQ(r.loadRing(rg), LoadResult::Ok);
+  EXPECT_EQ(r.count(), 3);
+  EXPECT_EQ(r.threadAt(ch)->unread, 1);   // markRead then one more
+}
+
+// A power cut between a message and its thread entry leaves last_seq stale;
+// it is rebuilt from the messages at load (Gemini, #1472).
+TEST(MsgStoreInPlace, LastSeqIsRebuiltFromTheMessages) {
+  MsgStore s;
+  ASSERT_TRUE(s.begin(8, 8));
+  const int ch = s.thread(ThreadKind::Channel, kChanA, 16, "a");
+  addText(s, ch, 1, "a");
+  MemSink idx;
+  ASSERT_TRUE(s.saveIndex(idx));   // the index as of one message
+  const uint32_t newest = addText(s, ch, 2, "b");
+  MemSink ring;
+  ASSERT_TRUE(s.saveRing(ring));   // the ring got the second one
+  MsgStore r;
+  ASSERT_TRUE(r.begin(8, 8));
+  MemSource i(idx.bytes), rg(ring.bytes);
+  ASSERT_EQ(r.loadIndex(i), LoadResult::Ok);
+  ASSERT_EQ(r.loadRing(rg), LoadResult::Ok);
+  EXPECT_EQ(r.threadAt(ch)->last_seq, newest);
+  EXPECT_EQ(r.threadAt(ch)->last_time, 2u);
+}
+
+TEST(MsgStoreInPlace, NewThreadIsWrittenInItsSlot) {
+  MsgStore s;
+  ASSERT_TRUE(s.begin(8, 8));
+  FileImage f;
+  f.fullWrite(s);   // empty files at full size
+  s.clearDirty();
+  memset(kPeer, 2, sizeof(kPeer));
+  const int dm = s.thread(ThreadKind::Direct, kPeer, 32, "Bob");
+  addText(s, dm, 1, "hi");
+  f.applyDirty(s);
+  MsgStore b;
+  ASSERT_TRUE(b.begin(8, 8));
+  MemSource i(f.idx), r(f.ring);
+  ASSERT_EQ(b.loadIndex(i), LoadResult::Ok);
+  ASSERT_EQ(b.loadRing(r), LoadResult::Ok);
+  EXPECT_EQ(b.find(ThreadKind::Direct, kPeer, 32), dm);
+  EXPECT_EQ(b.count(), 1);
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

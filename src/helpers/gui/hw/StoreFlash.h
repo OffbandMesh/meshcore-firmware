@@ -1,25 +1,28 @@
 #pragma once
 
-// The message store's flash backend (#1463, PLAN.md §3 C3). Two files on the
-// SPIFFS partition: /msgidx (threads and unread counts, written 5 s after a
-// change) and /msgring (the messages, written lazily, 60 s after a change).
+// The message store's flash backend (#1463, #1472). Two SPIFFS files with a
+// fixed layout: /msgidx (threads and unread counts) and /msgring (the
+// messages). Entry i sits at a fixed offset, so a change rewrites only its
+// own entry in place, one entry (at most 192 bytes) per loop tick, starting
+// 5 s after the first change of a burst.
 //
-// A write never blocks the loop for long: the store is serialized into a PSRAM
-// buffer in one fast pass (a consistent snapshot), then written to a temp file
-// GUI_STORE_SLICE_BYTES per loop tick and swapped in once complete, as the
-// contacts save does (#1458). A file that loads badly is renamed aside as
-// .bad and the store starts empty (PLAN.md §8).
+// A file is written whole only when it is missing or the wrong size: the
+// first boot, or after a bad load. That rebuild goes through a PSRAM
+// snapshot written to a temp file a slice per tick, then swapped in. A file
+// that loads badly is renamed aside as .bad and the store starts empty
+// (PLAN.md §8).
 
 #include <stdint.h>
 
+#include <FS.h>
 #include <helpers/IdentityStore.h>   // FILESYSTEM
 #include <helpers/gui/ChunkedSave.h>
 #include <helpers/gui/MsgStore.h>
 
 class StoreFlash {
 public:
-  // Allocates the snapshot buffer (PSRAM). False if it can't; the store
-  // then lives in RAM only and is lost at reset.
+  // Allocates the rebuild buffer (PSRAM). False if it can't; the store then
+  // lives in RAM only and is lost at reset.
   bool begin(FILESYSTEM* fs, offband::gui::MsgStore* store);
 
   // Reads both files at boot. Returns the worse of the two results; a bad
@@ -27,32 +30,44 @@ public:
   offband::gui::LoadResult load();
   offband::gui::LoadResult lastLoad() const { return _last_load; }
 
-  // Something changed: schedule the file's next write.
-  void indexChanged(uint32_t now_ms);
-  void ringChanged(uint32_t now_ms);   // a ring change changes the index too
+  // The store changed: write what changed soon. Both names do the same.
+  void indexChanged(uint32_t now_ms) { changed(now_ms); }
+  void ringChanged(uint32_t now_ms) { changed(now_ms); }
 
-  // A slice per call. `fs_busy` (a contacts save is running) defers it, so
+  // One write per call. `fs_busy` (a contacts save is running) defers it, so
   // the two never write in the same tick.
   void loop(uint32_t now_ms, bool fs_busy);
 
-  bool busy() const { return _writing != File_None; }
+  bool busy() const { return _state != Idle; }
   // Writes whatever is pending, in one pass: before a reboot.
   void flushNow();
 
 private:
-  enum Which : uint8_t { File_None, File_Index, File_Ring };
-  bool startWrite(Which w);
-  bool finishWrite(bool commit);
-  void writeAll(Which w);
+  enum State : uint8_t { Idle, Rebuilding, InPlace };
+  enum Which : uint8_t { File_Index, File_Ring };
+  void changed(uint32_t now_ms);
+  bool startRebuild(Which w);
+  bool finishRebuild(bool commit);
+  bool openInPlace();
+  void closeInPlace();
+  bool writeOne(const offband::gui::DirtyWrite& w);
 
   FILESYSTEM* _fs = nullptr;
   offband::gui::MsgStore* _store = nullptr;
   offband::gui::BufferSink _snap;
   offband::gui::ChunkedSave _slices;
   offband::gui::LoadResult _last_load = offband::gui::LoadResult::Empty;
-  Which _writing = File_None;
-  uint32_t _index_due = 0;   // 0: nothing pending
-  uint32_t _ring_due = 0;
-  uint32_t _slice_max_ms = 0;
-  uint32_t _write_t0 = 0;
+  State _state = Idle;
+  Which _rebuilding = File_Index;
+  bool _rebuild_index = false;   // the file is missing or the wrong size
+  bool _rebuild_ring = false;
+  uint32_t _due = 0;             // 0: nothing pending
+  File _idx_file;
+  File _ring_file;
+  File _tmp_file;
+  // Telemetry for one burst of in-place writes, or one rebuild.
+  uint32_t _t0 = 0;
+  uint32_t _bytes = 0;
+  uint32_t _writes = 0;
+  uint32_t _step_max_ms = 0;
 };

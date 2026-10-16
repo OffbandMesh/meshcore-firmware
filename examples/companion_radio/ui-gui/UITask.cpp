@@ -438,6 +438,15 @@ void UITask::loop() {
   if (!_gui_ok) return;
   const uint32_t now = millis();
 
+#ifdef OFFBAND_GUI_PERF
+  // #1472: the longest gap between two loop passes. Frame time can't see a
+  // stall elsewhere in the loop (a flash write), but this does: the screen
+  // can't redraw or take input while the loop is held.
+  static uint32_t s_last_loop = 0, s_gap_max = 0;
+  if (s_last_loop && now - s_last_loop > s_gap_max) s_gap_max = now - s_last_loop;
+  s_last_loop = now;
+#endif
+
 #ifdef PIN_BUZZER
   if (_buzzer.isPlaying()) _buzzer.loop();
 #endif
@@ -472,8 +481,10 @@ void UITask::loop() {
     s_next_perf = now + 30000;
     uint32_t frames, avg_ms, max_ms;
     lvglTakeFrameStats(&frames, &avg_ms, &max_ms);
-    mesh_log_line(MLOG_BOOT, "[gui] frames=%lu avg=%lums max=%lums cpu=%u\n", (unsigned long)frames,
-                  (unsigned long)avg_ms, (unsigned long)max_ms, (unsigned)getCpuFrequencyMhz());
+    mesh_log_line(MLOG_BOOT, "[gui] frames=%lu avg=%lums max=%lums loop_gap_max=%lums cpu=%u\n",
+                  (unsigned long)frames, (unsigned long)avg_ms, (unsigned long)max_ms,
+                  (unsigned long)s_gap_max, (unsigned)getCpuFrequencyMhz());
+    s_gap_max = 0;
   }
 #endif
 }
