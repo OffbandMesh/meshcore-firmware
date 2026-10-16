@@ -534,10 +534,16 @@ _SIG = re.compile(r'^[A-Za-z_][\w:<>,&*\s]*?\b(\w+::\w+|\w+)\s*\([^;]*\)\s*\{')
 
 
 def face_sites(src):
-    """Every body-face read, attributed to the function it sits in.
+    """Every uiNavBody()/uiMsgBody() read, attributed to the function it sits in.
 
     Returns {"nav": [fn, ...], "msg": [fn, ...]}. The accessor definitions themselves
     are excluded; everything else is a call site.
+
+    NOT every face read (#1502). This scans those two accessors only, so a function that
+    calls fixedFace(), metaFace() or bodyFaceFor() directly is invisible here.
+    RtttlEditScreen::render does exactly that, and legitimately: it wraps text at a fixed
+    column count, which is only correct when every character is the same width, and
+    bodyFaceFor() is proportional at the medium and small text sizes.
     """
     out = {"nav": [], "msg": []}
     current = "(file scope)"
@@ -592,6 +598,16 @@ EXPECTED_MSG_SITES = {
 
 
 def test_the_body_face_inventory_is_exactly_what_was_agreed():
+    """The two tables below are the agreed inventory of uiNavBody()/uiMsgBody() readers.
+
+    A new screen fails this on purpose: the point is to classify it deliberately rather
+    than let a screen's text size change unnoticed.
+
+    What it does NOT cover (#1502): a screen that pins a face directly, which face_sites()
+    cannot see. So a green run means "nothing changed among the accessor readers", not
+    "no screen changed its face". Treat the tables as complete for those two accessors
+    and no further.
+    """
     sites = face_sites(badge_screens())
     nav, msg = Counter(sites["nav"]), Counter(sites["msg"])
     for label, got, want in (("MESSAGE", msg, EXPECTED_MSG_SITES),
