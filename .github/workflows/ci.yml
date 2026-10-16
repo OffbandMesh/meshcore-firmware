@@ -94,6 +94,13 @@ jobs:
       - name: Sniffer capture bridge-flag tests
         run: python scripts/test_capture_bridge_flags.py
 
+      # #1514: _cap_serial.py writes the LOG before it prints, and its print cannot
+      # raise. A node name carrying an emoji ended a live bench capture: print() hit a
+      # cp1252 console, raised out of emit(), and the line never reached the UTF-8 file.
+      # This fails if that order is reversed or the guard removed.
+      - name: Bench capture survives an unprintable line
+        run: python scripts/test_cap_serial_emit.py
+
       # #1211: SafeBoot's battery lines go through MeshLog, so a bench rig reading
       # the raw UART log mirror sees them, and the low-battery path lets the
       # mirror finish its line before the board sleeps.
