@@ -31,6 +31,13 @@ lv_obj_t* label(lv_obj_t* parent, FontRole role, uint32_t rgb, const char* text 
   return l;
 }
 
+// A label held to one line, cut with "…". LVGL only cuts a label whose
+// height is fixed; with a content height it wraps instead (bench, #1501).
+void oneLine(lv_obj_t* l, FontRole role) {
+  lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+  lv_obj_set_height(l, lv_font_get_line_height(font(role)));
+}
+
 lv_obj_t* line(lv_obj_t* parent, const lv_point_t* pts, uint16_t n, uint32_t rgb) {
   lv_obj_t* l = lv_line_create(parent);
   lv_line_set_points(l, pts, n);
@@ -258,7 +265,7 @@ void GuiShell::buildHome(lv_obj_t* content) {
     _value[i] = label(cell, FontRole::Data, _t.ink);
     _sub[i] = label(cell, FontRole::Label, _t.ink2);
     lv_obj_set_width(_sub[i], LV_PCT(100));
-    lv_label_set_long_mode(_sub[i], LV_LABEL_LONG_DOT);
+    oneLine(_sub[i], FontRole::Label);
   }
 
   // Send advert, pinned to the bottom of the content.
@@ -503,7 +510,7 @@ void GuiShell::updateLock(const LockData& d) {
     lv_obj_align(when, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_t* text = label(row, FontRole::BodySmall, _t.ink, d.items[i].text);
     lv_obj_set_width(text, LV_PCT(100));
-    lv_label_set_long_mode(text, LV_LABEL_LONG_DOT);
+    oneLine(text, FontRole::BodySmall);
   }
   if (d.more) {
     lv_obj_t* more = label(_lock_list, FontRole::BodySmall, _t.dim);
@@ -615,12 +622,12 @@ void GuiShell::buildChats(lv_obj_t* content) {
     lv_obj_set_flex_flow(top, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(top, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(top, 4, 0);
+    // The name takes what the bell and badge leave, cut with "…".
     lv_obj_t* name = label(top, FontRole::Body, _t.ink, th->name);
-    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_max_width(name, 170, 0);
+    lv_obj_set_width(name, 0);
+    lv_obj_set_flex_grow(name, 1);
+    oneLine(name, FontRole::Body);
     if (_model->threadMode(t) == NotifyMode::Off) bellIcon(top, NotifyMode::Off, _t.dim);
-    lv_obj_t* spacer = box(top, 1, 1);
-    lv_obj_set_flex_grow(spacer, 1);
     if (th->unread) {
       lv_obj_t* badge = box(top, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
       lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
@@ -635,7 +642,7 @@ void GuiShell::buildChats(lv_obj_t* content) {
     chatPreview(s, t, preview, sizeof preview);
     lv_obj_t* pv = label(row, FontRole::BodySmall, _t.ink2, preview);
     lv_obj_set_width(pv, LV_PCT(100));
-    lv_label_set_long_mode(pv, LV_LABEL_LONG_DOT);
+    oneLine(pv, FontRole::BodySmall);
     lv_obj_align(pv, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
     focusable(row);
@@ -675,10 +682,9 @@ void GuiShell::buildConversation(lv_obj_t* content) {
       },
       LV_EVENT_CLICKED, this);
   lv_obj_t* name = label(h, FontRole::Title, _t.ink, th->name);
-  lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-  lv_obj_set_style_max_width(name, 120, 0);
-  lv_obj_t* grow = box(h, 1, 1);
-  lv_obj_set_flex_grow(grow, 1);
+  lv_obj_set_width(name, 0);
+  lv_obj_set_flex_grow(name, 1);   // takes what the route and bell leave
+  oneLine(name, FontRole::Title);
   char route[32];
   _model->routeMeta(_thread, route, sizeof route);
   label(h, FontRole::Meta, _t.dim, route);
