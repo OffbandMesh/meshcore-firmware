@@ -131,8 +131,9 @@ python scripts/pio-flash.py list                                                
 ⚠ **`--erase` wipes NVS**: node identity, contacts, and all persisted config.
 On `rc32-bench-1` that means the bench setup (TX power 15, advert name
 `Offband-RC32-R`, admin password, `path.hash.mode 1`, clock) must be re-applied
-afterwards. The diag env seeds the US radio preset at build time so an erased
-board cannot come up on the base-default 869.618 MHz.
+afterwards. The radio preset is not one of them: the root build default is the
+US preset (910.525 / 62.5 / SF 7, `platformio.ini`), so an erased board comes
+back up on it. The RC32 variant sets no radio flags of its own.
 
 ## Capture
 
