@@ -642,6 +642,65 @@ TEST(MsgStoreInPlace, LastSeqIsRebuiltFromTheMessages) {
   EXPECT_EQ(r.threadAt(ch)->last_time, 2u);
 }
 
+// SPIFFS writes 256-byte pages, so a 192-byte record can straddle two and
+// tear on a power cut. A torn record or thread entry fails its CRC and is
+// dropped at load, never shown as garbage (Gemini Epic gate, #1427).
+TEST(MsgStoreInPlace, TornRecordIsDroppedAtLoad) {
+  MsgStore s;
+  ASSERT_TRUE(s.begin(8, 8));
+  const int ch = s.thread(ThreadKind::Channel, kChanA, 16, "a");
+  const uint32_t good = addText(s, ch, 1, "good");
+  const uint32_t torn = addText(s, ch, 2, "torn");
+  FileImage f;
+  f.fullWrite(s);
+  // Flip a byte inside the second record's text: half new, half old.
+  const size_t rec1 = 16 + 192 * 1;
+  f.ring[rec1 + 40] ^= 0x5A;
+  MsgStore r;
+  ASSERT_TRUE(r.begin(8, 8));
+  MemSource i(f.idx), rg(f.ring);
+  ASSERT_EQ(r.loadIndex(i), LoadResult::Ok);
+  ASSERT_EQ(r.loadRing(rg), LoadResult::Ok);
+  EXPECT_NE(r.msg(good), nullptr);
+  EXPECT_EQ(r.msg(torn), nullptr);
+  EXPECT_EQ(r.count(), 1);
+}
+
+TEST(MsgStoreInPlace, TornThreadEntryIsDroppedAtLoad) {
+  MsgStore s;
+  ASSERT_TRUE(s.begin(8, 8));
+  const int a = s.thread(ThreadKind::Channel, kChanA, 16, "a");
+  s.thread(ThreadKind::Channel, kChanB, 16, "b");
+  FileImage f;
+  f.fullWrite(s);
+  f.idx[16 + 84 * 1 + 50] ^= 0x33;   // inside the second entry's name
+  MsgStore r;
+  ASSERT_TRUE(r.begin(8, 8));
+  MemSource i(f.idx);
+  ASSERT_EQ(r.loadIndex(i), LoadResult::Ok);
+  EXPECT_EQ(r.threadCount(), 1);
+  EXPECT_EQ(r.find(ThreadKind::Channel, kChanA, 16), a);
+}
+
+TEST(MsgStoreInPlace, InPlaceWritesCarryAValidCrc) {
+  MsgStore s;
+  ASSERT_TRUE(s.begin(8, 8));
+  const int ch = s.thread(ThreadKind::Channel, kChanA, 16, "a");
+  FileImage f;
+  f.fullWrite(s);
+  s.clearDirty();
+  const uint32_t q = s.addIncoming(ch, 5, "alice", "late sender set", 15, 3, 12);   // sender after add()
+  f.applyDirty(s);
+  MsgStore r;
+  ASSERT_TRUE(r.begin(8, 8));
+  MemSource i(f.idx), rg(f.ring);
+  ASSERT_EQ(r.loadIndex(i), LoadResult::Ok);
+  ASSERT_EQ(r.loadRing(rg), LoadResult::Ok);
+  ASSERT_NE(r.msg(q), nullptr);
+  EXPECT_STREQ(r.msg(q)->sender, "alice");
+  EXPECT_EQ(r.msg(q)->hops, 3);
+}
+
 TEST(MsgStoreInPlace, NewThreadIsWrittenInItsSlot) {
   MsgStore s;
   ASSERT_TRUE(s.begin(8, 8));

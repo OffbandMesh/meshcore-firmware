@@ -36,6 +36,28 @@ struct IndexEntry {
 };
 static_assert(sizeof(IndexEntry) == 84, "an index entry is 84 bytes");
 
+// CRC-16/CCITT-FALSE. SPIFFS writes 256-byte pages, so a power cut can tear
+// a 192-byte entry that straddles two; the CRC finds it at load.
+static uint16_t crc16(const void* data, size_t len) {
+  const uint8_t* p = static_cast<const uint8_t*>(data);
+  uint16_t c = 0xFFFF;
+  while (len--) {
+    c ^= uint16_t(*p++) << 8;
+    for (int b = 0; b < 8; b++) c = (c & 0x8000) ? uint16_t((c << 1) ^ 0x1021) : uint16_t(c << 1);
+  }
+  return c;
+}
+
+static uint16_t recordCrc(MsgRecord r) {
+  r.crc = 0;
+  return crc16(&r, sizeof(r));
+}
+
+static uint16_t threadCrc(Thread t) {
+  t.crc = 0;
+  return crc16(&t, sizeof(t));
+}
+
 static bool bit(const uint8_t* b, size_t i) { return (b[i >> 3] >> (i & 7)) & 1; }
 static void setBit(uint8_t* b, size_t i) { b[i >> 3] |= uint8_t(1u << (i & 7)); }
 static void clearBit(uint8_t* b, size_t i) { b[i >> 3] &= uint8_t(~(1u << (i & 7))); }
@@ -356,6 +378,7 @@ static IndexEntry indexEntry(const Thread* threads, uint16_t slot) {
   IndexEntry e = {};
   e.slot = slot;
   e.thread = threads[slot];
+  e.thread.crc = threadCrc(e.thread);
   return e;
 }
 
@@ -402,6 +425,7 @@ bool MsgStore::nextDirty(DirtyWrite* out) {
       if (!bit(_slot_dirty, _scan_slot)) continue;
       clearBit(_slot_dirty, _scan_slot);
       _dirty_bits--;
+      _msgs[_scan_slot].crc = recordCrc(_msgs[_scan_slot]);   // as it goes out
       *out = {true, uint32_t(kHeaderBytes + sizeof(MsgRecord) * _scan_slot), &_msgs[_scan_slot],
               uint16_t(sizeof(MsgRecord))};
       _scan_slot++;
@@ -461,8 +485,8 @@ LoadResult MsgStore::loadIndex(ByteSource& in) {
       return LoadResult::BadHeader;
     }
     if (e.slot != i || e.slot >= _max_threads || e.thread.kind == uint8_t(ThreadKind::Empty) ||
-        e.thread.kind > uint8_t(ThreadKind::Room)) {
-      continue;   // a free slot, one this build can't hold, or not a thread
+        e.thread.kind > uint8_t(ThreadKind::Room) || e.thread.crc != threadCrc(e.thread)) {
+      continue;   // a free slot, one this build can't hold, not a thread, or torn
     }
     e.thread.name[kThreadNameLen - 1] = 0;
     _threads[e.slot] = e.thread;
@@ -478,7 +502,9 @@ bool MsgStore::saveRing(ByteSink& out) const {
   makeHeader(&h, kRingMagic, sizeof(MsgRecord), _cap, _seq);
   if (!out.write(&h, sizeof(h))) return false;
   for (uint16_t i = 0; i < _cap; i++) {
-    if (!out.write(&_msgs[i], sizeof(MsgRecord))) return false;
+    MsgRecord r = _msgs[i];
+    r.crc = recordCrc(r);
+    if (!out.write(&r, sizeof(r))) return false;
   }
   return true;
 }
@@ -498,6 +524,7 @@ LoadResult MsgStore::loadRing(ByteSource& in) {
       return LoadResult::BadHeader;
     }
     if (rec.seq == 0 || !live(rec.thread) || rec.text_len > kMsgTextMax) continue;
+    if (rec.crc != recordCrc(rec)) continue;   // torn by a power cut mid-write
     rec.sender[kMsgSenderLen - 1] = 0;
     if (rec.seq > _seq) _seq = rec.seq;
     if (i < _cap && _msgs[i].seq == 0) {   // same layout: same slot
