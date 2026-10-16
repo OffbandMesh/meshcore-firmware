@@ -1,4 +1,7 @@
 #include "UITask.h"
+#ifdef PIN_BUZZER
+  #include "TuneSlotStore.h"   // #1475: custom slots resolve through the store
+#endif
 #ifdef PIN_QCC_ACTIVITY_LED
   // #1367: the dispatcher -> UI traffic seam. Up here, not beside the scheduler further
   // down: the sink is registered in begin(), which comes first in this file, so an
@@ -882,11 +885,27 @@ void UITask::gotoTonePicker(offband::ToneEvent e) {
 offband::TonePlay UITask::playTuneById(uint8_t id, offband::TonePriority priority) {
   // Silent is a CHOICE: it sounds like nothing and that is success.
   if (id == offband::kTuneSilent) return offband::TonePlay::Played;
+  // #1475: a custom slot. Asked BEFORE reading the file, because staging overwrites the
+  // one buffer the player may still be walking -- if play() refused after the read, the
+  // tune still sounding would be left pointing at the new tune's bytes. The pre-check is
+  // not a second copy of the priority rule; it is the same rule, queried.
+  if (offband::isSlotId(id)) {
+    if (!buzzer.wouldTake(priority)) return offband::TonePlay::RefusedBusy;
+    const char* staged =
+        offband::stageSlotForPlayback(the_mesh.dataStore(), offband::slotIndex(id));
+    // An empty slot, a slot whose file will not read, or one holding a string the
+    // validator refuses. All three are "this id resolves to nothing", which is what
+    // NotFound means; the picker folds it back to Played and a trigger does not.
+    if (staged == nullptr) return offband::TonePlay::NotFound;
+    // No loop() runs between the stage above and the play below, so the player never
+    // reads a half-written buffer. That is the invariant, not the stop.
+    return buzzer.play(staged, priority);
+  }
   const char* melody = offband::tuneRtttl(id);
   // Anything else with no melody is an id this build cannot resolve -- past the table
-  // after a downgrade, or a custom slot (#1413). A remote trigger needs to tell that
-  // apart from "played", because for it the badge making no noise is a failure it may
-  // want to report. The picker does not care, so previewTune() folds it back.
+  // after a downgrade, or a slot id from a build with more slots. A remote trigger needs
+  // to tell that apart from "played", because for it the badge making no noise is a
+  // failure it may want to report. The picker does not care, so previewTune() folds it.
   if (melody == nullptr) return offband::TonePlay::NotFound;
   return buzzer.play(melody, priority);
 }

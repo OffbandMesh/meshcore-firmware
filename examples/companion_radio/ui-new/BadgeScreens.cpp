@@ -1492,10 +1492,12 @@ void TonesScreen::summary(UITask* task, char* out, size_t n) {
   (void)task;
   const uint8_t id = offband::effectiveTone(the_mesh.getNodePrefs(),
                                             offband::ToneEvent::ContactMessage);
-  const char* name = offband::tuneName(id);
-  // A name is absent only for an id this build cannot resolve -- a custom slot (#1413)
-  // or a tune from a longer table after a downgrade. Say so rather than showing blank.
-  snprintf(out, n, "%s", name != nullptr ? name : "custom");
+  // #1475: one label resolver for builtins and slots alike. A name is absent only for an
+  // id that names nothing in this build -- an empty slot, or a tune from a longer table
+  // after a downgrade. Say so rather than showing blank.
+  char label[offband::kMaxSlotName + 1];
+  offband::tuneLabel(the_mesh.dataStore(), id, label, sizeof(label));
+  snprintf(out, n, "%s", label[0] != 0 ? label : "custom");
 }
 
 int TonesScreen::render(DisplayDriver& d) {
@@ -1526,8 +1528,9 @@ int TonesScreen::render(DisplayDriver& d) {
     }
     const offband::ToneEventRow& row = offband::kToneEventRows[i - 1];
     const uint8_t id = offband::effectiveTone(prefs, row.event);
-    const char* name = offband::tuneName(id);
-    listRow(d, 1 + r, row.label, name != nullptr ? name : "custom", i == _sel);
+    char label[offband::kMaxSlotName + 1];
+    offband::tuneLabel(the_mesh.dataStore(), id, label, sizeof(label));
+    listRow(d, 1 + r, row.label, label[0] != 0 ? label : "custom", i == _sel);
   }
   return 1000;
 }
@@ -1596,11 +1599,11 @@ void TonesScreen::cycleScope() {
 // with a preview as the selection moves.
 void TonePickerScreen::begin() {
   const uint8_t id = offband::effectiveTone(the_mesh.getNodePrefs(), _task->tonePickerEvent());
-  // Open on the tune in use. An id with no row here -- past the table, a custom slot, or
-  // deliberately un-named -- starts at the top instead. The rule lives in Tunes.h because
-  // opening decides what gets auditioned, and an un-named tune must never be played by
-  // the UI (#1467).
-  _sel = (int)offband::pickerRowFor(id);
+  // Open on the tune in use. An id the picker does not list -- past the table, an empty
+  // slot, or a deliberately un-named builtin -- starts at Silent instead. Opening decides
+  // what gets AUDITIONED, which is why the rule is a function and not an expression here
+  // (#1467), and why it takes the store now that a slot can be the tune in use (#1475).
+  _sel = (int)offband::pickerRowFor(the_mesh.dataStore(), id);
   _note = "";
   _note_until = 0;
   // #1467: audition on arrival. This is also the only place the picker can tell you the
@@ -1612,7 +1615,10 @@ void TonePickerScreen::begin() {
 int TonePickerScreen::render(DisplayDriver& d) {
   const Face& kBody = uiNavBody();
   const int kListRows = uiListRows(kBody);
-  const int count = (int)offband::kBuiltinCount;
+  // #1475: builtins first, then the eight slots. Unfilled slots and un-named builtins
+  // are skipped when drawing and stepped over when navigating, so the list is as long as
+  // what actually exists rather than always showing eight empty rows.
+  const int count = (int)offband::kPickerIdEnd;
   int top = listTop(_sel, count, kListRows);
   const bool more_below = count - top > kListRows;
   if (more_below) top = listTop(_sel, count, kListRows - 1);
@@ -1639,8 +1645,9 @@ int TonePickerScreen::render(DisplayDriver& d) {
                                                  _task->tonePickerEvent());
   for (int r = 0; r < kListRows && top + r < count; r++) {
     const uint8_t id = (uint8_t)(top + r);
-    const char* name = offband::tuneName(id);
-    if (name == nullptr) continue;   // an un-listed tune (#1422) stays out of the menu
+    char name[offband::kMaxSlotName + 1];
+    // Empty: an un-listed builtin (#1422), or a slot with nothing in it. Both stay out.
+    if (offband::tuneLabel(the_mesh.dataStore(), id, name, sizeof(name)) == 0) continue;
     listRow(d, 1 + r, name, id == current ? "now" : "", id == _sel);
   }
   return noting ? 250 : 1000;
@@ -1669,7 +1676,7 @@ void TonePickerScreen::audition() {
 
 bool TonePickerScreen::handleInput(char c) {
   const uint8_t key = (uint8_t)c;
-  const int count = (int)offband::kBuiltinCount;
+  const int count = (int)offband::kPickerIdEnd;
   const bool from_button = !_task->inputFromKeyboard();
 
   const bool down = (from_button && key == KEY_NEXT) || key == KEY_DOWN;
@@ -1680,7 +1687,7 @@ bool TonePickerScreen::handleInput(char c) {
     const int dir = down ? 1 : -1;
     for (int tries = 0; tries < count; tries++) {
       _sel = (_sel + dir + count) % count;
-      if (offband::tuneName((uint8_t)_sel) != nullptr) break;
+      if (offband::tuneIsListed(the_mesh.dataStore(), (uint8_t)_sel)) break;
     }
     audition();
     return true;

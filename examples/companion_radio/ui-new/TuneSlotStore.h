@@ -145,11 +145,57 @@ inline size_t slotName(DataStore* store, uint8_t index, char* out, size_t out_ca
 // `exists()` is sufficient because `saveSlotRtttl` never writes an empty file -- an empty
 // string clears the slot instead -- so a file that exists holds a tune that passed the
 // validator at save time.
+// #1475 review: the UI was doing real filesystem work in two hot paths -- up to seven
+// open/read/close per picker render (about once a second) and up to eight exists() per
+// up/down keypress while stepping over unfilled slots. On LittleFS neither is free: an
+// exists() walks metadata blocks, and the input cost is the one a person would feel as
+// lag. Treating file I/O as free is the classic version of this mistake.
+//
+// Names change only when a slot is written, so they are cached. POD with no member
+// initializers on purpose: a static POD is zero-initialised with no guard variable, so
+// there is no thread-safe-static machinery on an embedded target, and `valid` starts 0.
+struct SlotNameCache {
+  char name[kSlotCount][kMaxSlotName + 1];
+  uint8_t valid;
+};
+
+inline SlotNameCache& slotNameCache() {
+  static SlotNameCache c;
+  return c;
+}
+
+// Every writer calls this. #1478's app push goes through saveSlotRtttl too, so a tune
+// arriving over the wire invalidates the cache the same way one typed on the badge does.
+inline void invalidateSlotNames() { slotNameCache().valid = 0; }
+
+// A slot's name, from the cache, filling it on first use. One pass of eight reads after
+// a change, then nothing until the next write.
+inline size_t slotNameCached(DataStore* store, uint8_t index, char* out, size_t out_cap) {
+  if (out == nullptr || out_cap == 0) return 0;
+  out[0] = '\0';
+  if (index >= kSlotCount) return 0;
+  SlotNameCache& c = slotNameCache();
+  if (!c.valid) {
+    for (uint8_t i = 0; i < kSlotCount; i++) {
+      slotName(store, i, c.name[i], kMaxSlotName + 1);
+    }
+    c.valid = 1;
+  }
+  size_t n = 0;
+  while (c.name[index][n] != '\0' && n < out_cap - 1) {
+    out[n] = c.name[index][n];
+    n++;
+  }
+  out[n] = '\0';
+  return n;
+}
+
+// Filled means "has a name this build can show". A file that exists but cannot be
+// labelled -- a name of 63+ characters, or a corrupt file -- counts as empty, which is
+// the same answer the picker gives, so the count and the list cannot disagree.
 inline bool slotIsFilled(DataStore* store, uint8_t index) {
-  FILESYSTEM* fs = slotFs(store);
-  char path[12];
-  if (fs == nullptr || !slotPath(index, path, sizeof(path))) return false;
-  return fs->exists(path);
+  char name[kMaxSlotName + 1];
+  return slotNameCached(store, index, name, sizeof(name)) > 0;
 }
 
 // How many slots hold something, for the "Custom  3 of 8" row.
@@ -165,6 +211,7 @@ inline bool clearSlot(DataStore* store, uint8_t index) {
   FILESYSTEM* fs = slotFs(store);
   char path[12];
   if (fs == nullptr || !slotPath(index, path, sizeof(path))) return false;
+  invalidateSlotNames();
   if (!fs->exists(path)) return true;   // already empty is success, not failure
   return store->removeFile(fs, path);
 }
@@ -193,6 +240,7 @@ inline bool saveSlotRtttl(DataStore* store, uint8_t index, const char* rtttl) {
   if (!f) return false;
   const size_t wrote = f.write((const uint8_t*)rtttl, len);
   f.close();
+  invalidateSlotNames();
   if (wrote != len) {
     // A short write leaves a truncated tune, which could be a string the validator would
     // refuse. Removing it is better than leaving the slot holding half a tune.
@@ -201,5 +249,53 @@ inline bool saveSlotRtttl(DataStore* store, uint8_t index, const char* rtttl) {
   }
   return true;
 }
+
+// #1475: the label for ANY tune id, builtin or slot, into a caller buffer.
+//
+// One resolver so the picker, the Tones rows and the Settings summary cannot disagree
+// about what a stored id is called. Writes an empty string for an id that names nothing
+// -- an un-listed builtin, an empty slot, or an id past this build's table -- which the
+// screens already render as their own fallback rather than as a blank row.
+//
+// Deliberately takes the caller's buffer: the staging buffer belongs to playback, and a
+// screen asking for a label while a tune sounds must not disturb it.
+inline size_t tuneLabel(DataStore* store, uint8_t id, char* out, size_t out_cap) {
+  if (out == nullptr || out_cap == 0) return 0;
+  out[0] = '\0';
+  if (isSlotId(id)) return slotNameCached(store, slotIndex(id), out, out_cap);
+
+  const char* name = tuneName(id);
+  if (name == nullptr) return 0;
+  size_t n = 0;
+  while (name[n] != '\0' && n < out_cap - 1) {
+    out[n] = name[n];
+    n++;
+  }
+  out[n] = '\0';
+  return n;
+}
+
+// Is this id something the picker should offer? A builtin with a name, or a filled slot.
+inline bool tuneIsListed(DataStore* store, uint8_t id) {
+  if (isSlotId(id)) return slotIsFilled(store, slotIndex(id));
+  return tuneName(id) != nullptr;
+}
+
+// Which picker row to open on, now that slots exist (#1475).
+//
+// The pure `pickerRowFor()` in Tunes.h predates slots: it sends anything past the builtin
+// table to row 0, which would have opened the picker on Silent for a person whose DM tune
+// IS a slot -- showing them the wrong current tune and auditioning the wrong thing. It
+// cannot be fixed there, because deciding whether a slot is filled needs the filesystem.
+//
+// Same rule as the pure one, widened: open on the tune in use when it is something the
+// picker lists, and on Silent when it is not. Silent is the safe fallback for the same
+// reason as before -- audible as nothing, visible as "Silent", never a surprise.
+inline uint8_t pickerRowFor(DataStore* store, uint8_t effective_id) {
+  return tuneIsListed(store, effective_id) ? effective_id : kTuneSilent;
+}
+
+// One past the last id the picker may show, so a screen does not hard-code the sum.
+constexpr uint8_t kPickerIdEnd = kFirstSlotId + kSlotCount;
 
 }  // namespace offband
