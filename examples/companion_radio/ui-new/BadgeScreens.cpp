@@ -9,6 +9,12 @@
 #include "BadgeUi.h"
 #include "UITask.h"
 #include "target.h"
+#ifdef PIN_BUZZER
+  // #1474: the custom tune slots. Included here from the start so the badge build
+  // compiles the store now -- a header nobody includes is a header the compiler never
+  // checks, and the screens that consume it land in #1476 and #1477.
+  #include "TuneSlotStore.h"
+#endif
 
 using namespace badgeui;
 using Store = MyMesh::BadgeMsgStore;

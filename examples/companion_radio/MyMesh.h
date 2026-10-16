@@ -214,6 +214,12 @@ public:
   static constexpr int kBadgeMsgs = 32;
   using BadgeMsgStore = offband::BadgeStore<kBadgeConvos, kBadgeMsgs, MAX_TEXT_LEN, PUB_KEY_SIZE>;
   BadgeMsgStore& badgeStore() { return _badge_store; }
+
+  // #1474: the store, for UI code that owns its own small files -- the badge's custom
+  // tune slots. Exposed rather than adding another member here, so the slot store stays
+  // in ui-new and this header, which every companion variant compiles, learns nothing
+  // about it.
+  DataStore* dataStore() { return _store; }
   // #1233: whether the phone or the GPS has set the clock since boot. Until then it runs
   // from the newest contact's last-heard time (bootstrapRTCfromContacts), which can be
   // hours or days behind, so the badge shows ages rather than clock times.
