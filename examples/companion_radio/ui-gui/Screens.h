@@ -128,7 +128,6 @@ private:
   Tab _pending_tab = Tab::Home;   // a switch asked for from inside an event
   int _pending_thread = -1;
   void (*_pending_fn)(GuiShell*) = nullptr;
-  bool _gesture_hooked = false;
 
   // Chats and Conversation
   int _thread = -1;               // the open conversation; -1 = the list

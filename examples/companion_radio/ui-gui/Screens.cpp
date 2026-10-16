@@ -139,6 +139,24 @@ void tabIcon(lv_obj_t* parent, Tab tab, uint32_t rgb) {
 void GuiShell::begin(const ThemeTokens& t, Look look, ShellModel* model) {
   _model = model;
   _group = lv_group_create();
+  // Swipes, on the screen object, which outlives every rebuild: up unlocks
+  // Lock; right leaves Compose (spec: Back is "‹ or swipe right"). The
+  // keyboard doesn't pass its own drags up, so a slide between keys isn't a
+  // swipe.
+  lv_obj_t* scr = lv_scr_act();
+  lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(
+      scr,
+      [](lv_event_t* e) {
+        GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+        const lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
+        if (self->_locked && dir == LV_DIR_TOP) {
+          self->later([](GuiShell* s) { s->showTab(s->_tab); });
+        } else if (self->_composing && dir == LV_DIR_RIGHT) {
+          self->later([](GuiShell* s) { s->leaveCompose(); });
+        }
+      },
+      LV_EVENT_GESTURE, this);
   setTheme(t, look);
 }
 
@@ -375,20 +393,6 @@ void GuiShell::buildLock(lv_obj_t* scr) {
   lv_obj_t* hint = label(scr, FontRole::BodySmall, _t.dim, "Press USR or swipe up to unlock");
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -14);
 
-  // The screen object outlives rebuilds, so the handler is added once.
-  if (!_gesture_hooked) {
-    _gesture_hooked = true;
-    lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(
-        scr,
-        [](lv_event_t* e) {
-          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
-          if (self->_locked && lv_indev_get_gesture_dir(lv_indev_get_act()) == LV_DIR_TOP) {
-            self->later([](GuiShell* s) { s->showTab(s->_tab); });
-          }
-        },
-        LV_EVENT_GESTURE, this);
-  }
 }
 
 bool GuiShell::action(Action a) {
@@ -946,6 +950,18 @@ void GuiShell::buildCompose(lv_obj_t* scr) {
   lv_obj_set_flex_flow(h, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(h, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_column(h, 4, 0);
+  // Back, as the spec gives it ("‹ or swipe right"): the bench found no way
+  // out of Compose by touch (#1501).
+  lv_obj_t* back = box(h, 10, 20);
+  line(back, kChevron, 3, _t.sig);
+  lv_obj_add_flag(back, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_ext_click_area(back, 10);
+  lv_obj_add_event_cb(
+      back,
+      [](lv_event_t* e) {
+        static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->leaveCompose(); });
+      },
+      LV_EVENT_CLICKED, this);
   label(h, FontRole::Body, _t.dim, "To");
   lv_obj_t* to = label(h, FontRole::Body, _t.ink);
   userText(to, th ? th->name : "");
