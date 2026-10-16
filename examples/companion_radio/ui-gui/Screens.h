@@ -135,6 +135,7 @@ private:
   uint32_t _shown_rev = 0xFFFFFFFF;
   lv_obj_t* _msg_list = nullptr;  // the conversation's scrolling column
   lv_obj_t* _focus_row = nullptr; // the list row for _focus_thread, if shown
+  lv_coord_t _keep_scroll = -1;   // a conversation's scroll to restore on redraw; -1 = bottom
 
   // Compose (D5)
   bool _composing = false;

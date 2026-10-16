@@ -33,7 +33,7 @@ lv_obj_t* label(lv_obj_t* parent, FontRole role, uint32_t rgb, const char* text 
 
 // Text from the mesh, with emoji-steering characters dropped (displayText).
 void userText(lv_obj_t* l, const char* s, size_t len) {
-  char buf[kMsgTextMax * 2 + 1];
+  static char buf[kMsgTextMax * 2 + 1];   // off the stack; the GUI is single-threaded
   displayText(s, len, buf, sizeof buf);
   lv_label_set_text(l, buf);
 }
@@ -877,7 +877,11 @@ void GuiShell::buildConversation(lv_obj_t* content) {
     lv_label_set_long_mode(txt, LV_LABEL_LONG_WRAP);
   }
   lv_obj_update_layout(_msg_list);
-  lv_obj_scroll_to_y(_msg_list, LV_COORD_MAX, LV_ANIM_OFF);
+  // The newest message shows, unless a redraw found the reader scrolled up
+  // into history (Epic D gate): then they stay where they were.
+  if (_keep_scroll >= 0) lv_obj_scroll_to_y(_msg_list, _keep_scroll, LV_ANIM_OFF);
+  else lv_obj_scroll_to_y(_msg_list, LV_COORD_MAX, LV_ANIM_OFF);
+  _keep_scroll = -1;
 
   // The compose bar (Compose itself is D5).
   lv_obj_t* bar = box(content, LV_PCT(100), 42);
@@ -1218,6 +1222,8 @@ void GuiShell::updateChats() {
   if (_thread >= 0) {
     const Thread* th = s.threadAt(_thread);
     if (th && th->unread) _model->threadOpened(_thread);
+    // More than a few pixels above the bottom means reading history.
+    if (_msg_list && lv_obj_get_scroll_bottom(_msg_list) > 8) _keep_scroll = lv_obj_get_scroll_y(_msg_list);
   } else if (lv_obj_t* f = lv_group_get_focused(_group)) {
     // Keep the focused row focused across the redraw. Rows carry thread + 1,
     // so 0 (tabs, "+") means "not a row".
