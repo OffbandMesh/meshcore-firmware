@@ -252,10 +252,15 @@ public:
 
 private:
   // #1468: row 0 is the notification scope -- the gate ABOVE the six event rows, and on
-  // this UI family the only way to reach it at all. Title plus these seven rows is
-  // exactly the large face's capacity, so nothing scrolls at that size.
-  // The row count lives in the .cpp: it needs ToneSlots.h, and this header is compiled
-  // by every variant that builds these screens, buzzer or not.
+  // this UI family the only way to reach it at all.
+  //
+  // #1476: Custom goes last, below the six rows it supplies tunes to. That makes eight
+  // rows, so Tones scrolls by one at the large face. The owner chose a row here over a
+  // second Settings entry: it is about tunes, and one scroll is cheaper than a second
+  // place to look for them.
+  //
+  // The row count itself lives in the .cpp -- it needs ToneSlots.h, and this header is
+  // compiled by every variant that builds these screens, buzzer or not.
   static constexpr int kScopeRow = 0;
 
   void cycleScope();
@@ -296,6 +301,31 @@ private:
   UITask* _task;
   int _sel = 0;
   const char* _note = "";      // "Buzzer: OFF" when a preview could not be heard
+  uint32_t _note_until = 0;
+};
+
+// #1476: the eight custom slots -- what is in them, and the way in to editing one.
+//
+// Numbered rather than named-only, so an empty slot still has an identity to refer to
+// ("slot 4") -- which is what a person needs when a tune is pushed to one from the app
+// (#1478). Highlighting a filled slot auditions it, the same as the tune picker: a list
+// of tune names you cannot hear is a list you have to guess at.
+class CustomTunesScreen : public UIScreen {
+public:
+  explicit CustomTunesScreen(UITask* task) : _task(task) {}
+  void begin();
+  int render(DisplayDriver& display) override;
+  bool handleInput(char c) override;
+
+  // What the Tones row shows: how many slots hold something, not how many exist.
+  static void summary(UITask* task, char* out, size_t n);
+
+private:
+  void audition();
+
+  UITask* _task;
+  int _sel = 0;
+  const char* _note = "";
   uint32_t _note_until = 0;
 };
 #endif
