@@ -22,6 +22,8 @@
   #include <helpers/ui/buzzer.h>
   #include <helpers/ui/Tunes.h>   // #1418/#1419: the tone for an event is looked up
   #include "ToneSlots.h"          // #1421: the one event-to-pref slot table
+  #include <helpers/ui/TuneSlots.h>      // #1474: kMaxRtttl, kSlotCount
+  #include <helpers/ui/SlotAssembly.h>   // #1478: a pushed tune arrives in chunks
 #endif
 #ifdef PIN_VIBRATION
   #include <helpers/ui/GenericVibration.h>
@@ -184,6 +186,9 @@ class UITask : public AbstractUITask {
   UIScreen* tone_picker;  // the tunes, for one event
   UIScreen* custom_tunes; // #1476: the eight custom slots
   UIScreen* rtttl_edit;   // #1477: typing one slot's tune
+#ifdef PIN_BUZZER
+  offband::SlotAssembly<offband::kMaxRtttl> _slot_push;   // #1478
+#endif
   // Which event the picker is editing. Held here rather than passed into the screen so
   // the picker can be a plain UIScreen like the others.
   offband::ToneEvent _tone_picking = offband::ToneEvent::ContactMessage;
@@ -346,6 +351,14 @@ public:
   void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) override;
   void notify(UIEventType t = UIEventType::none) override;
   void applyBuzzerMute(bool quiet) override;
+#ifdef PIN_BUZZER
+  // #1478: the app push. The assembly buffer lives here rather than in MyMesh because
+  // MyMesh.h is compiled by every companion variant and a badge-only feature must not
+  // cost them 241 bytes of RAM.
+  uint8_t feedTuneSlot(uint8_t slot, uint8_t offset, bool more, const uint8_t* bytes,
+                       size_t len, uint8_t& accepted) override;
+  bool readTuneSlot(uint8_t slot, uint8_t& len, char* name, size_t name_cap) override;
+#endif
   void loop() override;
 
   // #1075: `cause` names why on the [shutdown] line, so a capture that ends

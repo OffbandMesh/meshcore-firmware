@@ -885,6 +885,44 @@ void UITask::gotoTones() {
   setCurrScreen(tones);
 }
 
+#ifdef PIN_BUZZER
+uint8_t UITask::feedTuneSlot(uint8_t slot, uint8_t offset, bool more, const uint8_t* bytes,
+                            size_t len, uint8_t& accepted) {
+  using Res = offband::SlotAssembly<offband::kMaxRtttl>::Result;
+  accepted = 0;
+  if (slot >= offband::kSlotCount) return (uint8_t)Res::BadSlot;
+
+  const Res r = _slot_push.feed(slot, offset, more, bytes, len);
+  accepted = (uint8_t)_slot_push.length();
+  if (r != Res::Complete) return (uint8_t)r;
+
+  // Committed. The SAME store call a typed tune goes through, so the same validator and
+  // the same refusals apply -- an empty string clears the slot, which is how a client
+  // deletes one without a third sub-code.
+  const bool ok = offband::saveSlotRtttl(the_mesh.dataStore(), slot, _slot_push.text());
+  _slot_push.reset();
+  accepted = 0;
+  // A store refusal is reported as a bad byte rather than invented as a new code: the
+  // only ways saveSlotRtttl says no are a string the validator rejects, one over the
+  // length, or a write that failed -- and the client's remedy for all three is the same,
+  // which is to look at what it sent.
+  return ok ? (uint8_t)Res::Complete : (uint8_t)Res::BadByte;
+}
+
+bool UITask::readTuneSlot(uint8_t slot, uint8_t& len, char* name, size_t name_cap) {
+  len = 0;
+  if (name != nullptr && name_cap > 0) name[0] = 0;
+  if (slot >= offband::kSlotCount) return false;
+  // Through the CALLER's buffer, never the playback stage: answering a client query must
+  // not disturb a tune that is sounding.
+  char tune[offband::kMaxRtttl + 1];
+  const size_t n = offband::readSlotRtttl(the_mesh.dataStore(), slot, tune, sizeof(tune));
+  len = (uint8_t)(n > 255 ? 255 : n);
+  if (n > 0 && name != nullptr) offband::deriveSlotName(tune, name, name_cap);
+  return true;
+}
+#endif
+
 void UITask::gotoRtttlEdit(uint8_t slot_index) {
   ((RtttlEditScreen*)rtttl_edit)->begin(slot_index);
   setCurrScreen(rtttl_edit);
