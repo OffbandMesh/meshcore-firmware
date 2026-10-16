@@ -570,6 +570,12 @@ EXPECTED_NAV_SITES = {
     "BatteryScreen::render": 1,
     "ZonePickerScreen::render": 1,
     "GpsScreen::render": 1,
+    # #1412: the two sound screens. Both are settings-style LISTS -- Tones is a row per
+    # event, the picker a row per tune -- so they take the navigation face like every
+    # other list here, and the picker was built on ZonePickerScreen's shape deliberately.
+    # Neither draws message content, so neither reads the message face.
+    "TonesScreen::render": 1,
+    "TonePickerScreen::render": 1,
 }
 EXPECTED_MSG_SITES = {
     "InboxScreen::drawItem": 1,
