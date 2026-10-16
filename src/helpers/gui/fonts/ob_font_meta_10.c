@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 10 px
  * Bpp: 4
- * Opts: --bpp 4 --format lvgl --no-compress --lv-include lvgl.h --font C:/Users/stryc/AppData/Local/Temp/claude/C--Dev-meshcore-firmware/76a08ed3-e221-4d8a-8800-301f6ce90b03/scratchpad/fonts/JetBrainsMono-Regular.ttf --range 0x20-0x7E --size 10 -o C:/Dev/.worktrees/meshcore-firmware-1425/src/helpers/gui/fonts/ob_font_meta_10.c --lv-font-name ob_font_meta_10
+ * Opts: --bpp 4 --format lvgl --no-compress --lv-include lvgl.h --font JetBrainsMono-Regular.ttf --range 0x20-0x7E,0xB7,0xD7,0x2026,0x2212,0x2713,0x2715,0x21E7,0x232B --size 10 -o C:/Dev/.worktrees/meshcore-firmware-1428/src/helpers/gui/fonts/ob_font_meta_10.c --lv-font-name ob_font_meta_10
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE
@@ -473,7 +473,41 @@ static LV_ATTRIBUTE_LARGE_CONST const uint8_t glyph_bitmap[] = {
     0x0, 0xc3, 0x0, 0xd, 0x80, 0x0,
 
     /* U+007E "~" */
-    0x1b, 0xc2, 0x84, 0x48, 0x2c, 0xc1
+    0x1b, 0xc2, 0x84, 0x48, 0x2c, 0xc1,
+
+    /* U+00B7 "·" */
+    0x66, 0x99,
+
+    /* U+00D7 "×" */
+    0x50, 0x5, 0x79, 0xa6, 0xc, 0xb0, 0x88, 0x97,
+    0x40, 0x4,
+
+    /* U+2026 "…" */
+    0x47, 0x66, 0x74, 0x58, 0x66, 0x85,
+
+    /* U+21E7 "⇧" */
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x84, 0x0, 0x0,
+    0x71, 0x53, 0x0, 0x87, 0x2, 0xa2, 0x0, 0x70,
+    0x70, 0x0, 0x7, 0x7, 0x0, 0x0, 0x70, 0x70,
+    0x0, 0x7, 0x7, 0x0, 0x0, 0x56, 0x90, 0x0,
+
+    /* U+2212 "−" */
+    0xac, 0xc4,
+
+    /* U+232B "⌫" */
+    0x0, 0x2d, 0xff, 0xfe, 0x50, 0x2e, 0x85, 0xf7,
+    0x78, 0x2e, 0xff, 0x42, 0x4f, 0x84, 0xff, 0xf7,
+    0x5, 0xf8, 0x4, 0xf9, 0x3e, 0x47, 0x80, 0x4,
+    0xef, 0xff, 0xe6, 0x0, 0x1, 0x22, 0x22, 0x0,
+
+    /* U+2713 "✓" */
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x86, 0x0, 0x3,
+    0xc0, 0x57, 0xd, 0x20, 0xc, 0xc7, 0x0, 0x0,
+    0x80, 0x0,
+
+    /* U+2715 "✕" */
+    0x15, 0x0, 0x51, 0xb, 0x66, 0xb0, 0x0, 0xdc,
+    0x0, 0x6, 0xbb, 0x60, 0x1a, 0x0, 0xa1
 };
 
 
@@ -577,14 +611,24 @@ static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc[] = {
     {.bitmap_index = 1839, .adv_w = 96, .box_w = 6, .box_h = 10, .ofs_x = 0, .ofs_y = -1},
     {.bitmap_index = 1869, .adv_w = 96, .box_w = 2, .box_h = 10, .ofs_x = 2, .ofs_y = -1},
     {.bitmap_index = 1879, .adv_w = 96, .box_w = 6, .box_h = 10, .ofs_x = 0, .ofs_y = -1},
-    {.bitmap_index = 1909, .adv_w = 96, .box_w = 6, .box_h = 2, .ofs_x = 0, .ofs_y = 3}
+    {.bitmap_index = 1909, .adv_w = 96, .box_w = 6, .box_h = 2, .ofs_x = 0, .ofs_y = 3},
+    {.bitmap_index = 1915, .adv_w = 96, .box_w = 2, .box_h = 2, .ofs_x = 2, .ofs_y = 3},
+    {.bitmap_index = 1917, .adv_w = 96, .box_w = 4, .box_h = 5, .ofs_x = 1, .ofs_y = 1},
+    {.bitmap_index = 1927, .adv_w = 96, .box_w = 6, .box_h = 2, .ofs_x = 0, .ofs_y = 0},
+    {.bitmap_index = 1933, .adv_w = 96, .box_w = 7, .box_h = 9, .ofs_x = -1, .ofs_y = 0},
+    {.bitmap_index = 1965, .adv_w = 96, .box_w = 4, .box_h = 1, .ofs_x = 1, .ofs_y = 3},
+    {.bitmap_index = 1967, .adv_w = 96, .box_w = 9, .box_h = 7, .ofs_x = -2, .ofs_y = 0},
+    {.bitmap_index = 1999, .adv_w = 96, .box_w = 6, .box_h = 6, .ofs_x = 0, .ofs_y = 1},
+    {.bitmap_index = 2017, .adv_w = 96, .box_w = 6, .box_h = 5, .ofs_x = 0, .ofs_y = 1}
 };
 
 /*---------------------
  *  CHARACTER MAPPING
  *--------------------*/
 
-
+static const uint16_t unicode_list_1[] = {
+    0x0, 0x20, 0x1f6f, 0x2130, 0x215b, 0x2274, 0x265c, 0x265e
+};
 
 /*Collect the unicode lists and glyph_id offsets*/
 static const lv_font_fmt_txt_cmap_t cmaps[] =
@@ -592,6 +636,10 @@ static const lv_font_fmt_txt_cmap_t cmaps[] =
     {
         .range_start = 32, .range_length = 95, .glyph_id_start = 1,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
+    },
+    {
+        .range_start = 183, .range_length = 9823, .glyph_id_start = 96,
+        .unicode_list = unicode_list_1, .glyph_id_ofs_list = NULL, .list_length = 8, .type = LV_FONT_FMT_TXT_CMAP_SPARSE_TINY
     }
 };
 
@@ -616,7 +664,7 @@ static lv_font_fmt_txt_dsc_t font_dsc = {
     .cmaps = cmaps,
     .kern_dsc = NULL,
     .kern_scale = 0,
-    .cmap_num = 1,
+    .cmap_num = 2,
     .bpp = 4,
     .kern_classes = 0,
     .bitmap_format = 0,

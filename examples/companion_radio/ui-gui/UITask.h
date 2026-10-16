@@ -12,10 +12,12 @@
 #include <helpers/gui/GuiTheme.h>
 #include <helpers/gui/InputMap.h>
 #include <helpers/gui/InputTiming.h>
+#include <helpers/ui/BatteryGauge.h>
 #include <helpers/ui/DisplayDriver.h>
 
 #include "../AbstractUITask.h"
 #include "../NodePrefs.h"
+#include "StatusBar.h"
 
 #ifdef PIN_BUZZER
   #include <helpers/ui/buzzer.h>
@@ -46,6 +48,16 @@ private:
   void toggleBuzzer();
   bool buzzerQuiet();
   uint32_t idleMs(uint32_t now) const;
+  StatusReadings statusReadings(uint32_t now);
+  void openLoraPopover();
+  bool gpsEnabled() const;
+
+  StatusBar _status;
+  offband::BatteryAverage _batt;
+  uint32_t _next_batt_read = 0;
+  uint32_t _next_status = 0;
+  bool _gps_was_on = false;
+  uint32_t _gps_on_at = 0;   // when GPS was last turned on: where seeking starts
 
 #ifdef PIN_BUZZER
   genericBuzzer _buzzer;

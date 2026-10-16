@@ -5,7 +5,10 @@
 #include <esp_heap_caps.h>
 #include <lvgl.h>
 
+#include <helpers/TimeZones.h>
 #include <helpers/gui/ClockPolicy.h>
+#include <helpers/gui/GuiViews.h>
+#include <helpers/gui/SignalLevel.h>
 #include <helpers/gui/hw/Chsc6xTouch.h>
 #include <helpers/gui/hw/GuiFonts.h>
 #include <helpers/gui/hw/GuiPanel.h>
@@ -13,8 +16,18 @@
 #include <helpers/ui/ScreenOff.h>
 
 #include "../MyMesh.h"
+#include "target.h"
 
 extern MyMesh the_mesh;
+
+// The battery scale's ends, as in ui-new: empty here, full from the learned or
+// pinned prefs value (#1254) or this.
+#ifndef BATT_MIN_MILLIVOLTS
+  #define BATT_MIN_MILLIVOLTS 3000
+#endif
+#ifndef BATT_MAX_MILLIVOLTS
+  #define BATT_MAX_MILLIVOLTS 4200
+#endif
 
 using namespace offband::gui;
 
@@ -174,6 +187,8 @@ void UITask::buildTestScreen() {
   lv_obj_t* scr = lv_scr_act();
   lv_obj_clean(scr);
   lv_obj_set_style_bg_color(scr, c(t.bg), 0);
+  _status.build(scr, t, [](void* ctx) { static_cast<UITask*>(ctx)->openLoraPopover(); }, this);
+  _next_status = 0;
 
   lv_obj_t* brand = lv_label_create(scr);
   lv_obj_set_style_text_font(brand, font(FontRole::Title), 0);
@@ -331,6 +346,11 @@ void UITask::handle(InputEvent ev, uint32_t now) {
   _pocket_locked = false;
   applyScreen(ScreenState::On);
 
+  if (a == Action::Back && _status.popoverOpen()) {
+    _status.closePopover();
+    return;
+  }
+
   // On the test screen, Next and Prev cycle the theme and Open the Look so
   // the bench can see each. From Epic D these actions drive real screens.
   switch (a) {
@@ -404,6 +424,57 @@ void UITask::applyScreen(ScreenState s) {
   mesh_log_line(MLOG_BOOT, "[gui] screen %s cpu=%u\n", screenName(s), (unsigned)getCpuFrequencyMhz());
 }
 
+bool UITask::gpsEnabled() const {
+  if (!_sensors) return false;
+  const int num = _sensors->getNumSettings();
+  for (int i = 0; i < num; i++) {
+    if (strcmp(_sensors->getSettingName(i), "gps") == 0) return strcmp(_sensors->getSettingValue(i), "1") == 0;
+  }
+  return false;   // no GPS setting: no module
+}
+
+StatusReadings UITask::statusReadings(uint32_t now) {
+  StatusReadings r{};
+  formatClock(_prefs ? _prefs->ui_tz : 0, rtc_clock.getCurrentTime(), r.clock, sizeof r.clock);
+
+  MsgStore& store = the_mesh.guiStore();
+  r.unread = store.ready() ? store.totalUnread() : uint32_t(_unread > 0 ? _unread : 0);
+
+  const SnrMedian& snr = the_mesh.guiMetrics().snr;
+  r.lora_heard = !snr.empty();
+  r.bars = r.lora_heard ? signalBars(snr.median(), _prefs ? _prefs->sf : 12) : 0;
+
+  r.ble = bleIcon(isBluetoothEnabled(), hasConnection());
+
+  // Time without a fix counts from when GPS was turned on, so enabling it
+  // late doesn't start it red.
+  const bool gps_on = gpsEnabled();
+  if (gps_on && !_gps_was_on) _gps_on_at = now;
+  _gps_was_on = gps_on;
+  const FixTracker& fix = the_mesh.guiFix();
+  const uint32_t since_on = (now - _gps_on_at) / 1000;
+  uint32_t without = since_on;
+  if (fix.everFixed() && fix.secsSinceLost(now) < since_on) without = fix.secsSinceLost(now);
+  r.gps = gpsIcon(gps_on, the_mesh.guiFixType(), without);
+
+  const uint16_t full = (_prefs && _prefs->batt_full_mv) ? _prefs->batt_full_mv : uint16_t(BATT_MAX_MILLIVOLTS);
+  const uint16_t mv = _batt.seeded() ? _batt.value() : getBattMilliVolts();
+  r.batt_pct = uint8_t(offband::batteryPercent(mv, BATT_MIN_MILLIVOLTS, full));
+  return r;
+}
+
+void UITask::openLoraPopover() {
+  const SnrMedian& snr = the_mesh.guiMetrics().snr;
+  LoraReadings r{};
+  r.packets = snr.size();
+  r.snr_db = snr.median();
+  r.rssi = int16_t(radio_driver.getLastRSSI());
+  r.noise = int16_t(radio_driver.getNoiseFloor());
+  r.sf = _prefs ? _prefs->sf : 12;
+  _status.openPopover(r, millis());
+  _last_input = millis();
+}
+
 void UITask::msgRead(int msgcount) { _unread = msgcount; }
 
 void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) {
@@ -470,7 +541,20 @@ void UITask::loop() {
   // (which covers "always on", where the screen never dims).
   the_mesh.setGuiScreenIdle(_screen != ScreenState::On || idleMs(now) >= GUI_DIM_AFTER_MS);
 
+  // One battery reading a second into the average (#1246), lit or not.
+  if ((int32_t)(now - _next_batt_read) >= 0) {
+    _batt.feed(getBattMilliVolts());
+    _next_batt_read = now + 1000;
+  }
+
   if (_screen == ScreenState::Off) return;
+
+  // Four passes a second: enough for the GPS seeking blink at 1 Hz.
+  if ((int32_t)(now - _next_status) >= 0) {
+    _next_status = now + 250;
+    _status.update(statusReadings(now), now);
+    _status.tick(now);
+  }
 
   if (now >= _next_refresh) {
     _next_refresh = now + 1000;
