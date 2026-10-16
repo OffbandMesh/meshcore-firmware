@@ -1051,8 +1051,8 @@ void loop() {
       snap.recv_errors    = rs.pkts_recv_errors;
       // #88: report the ACTUAL runtime radio config from NodePrefs (set via
       // companion-API CMD_SET_RADIO_PARAMS, surfaced to HA/HACS through
-      // SELF_INFO) -- NOT the compile-time LORA_* macros, which on the observer
-      // env default to esp32_base 869.618/SF8 and never reflect a runtime re-tune.
+      // SELF_INFO) -- NOT the compile-time LORA_* macros, which hold the root
+      // build default and never reflect a runtime re-tune.
       snap.radio_freq     = the_mesh.getNodePrefs()->freq;
       snap.radio_bw       = the_mesh.getNodePrefs()->bw;
       snap.radio_sf       = the_mesh.getNodePrefs()->sf;
