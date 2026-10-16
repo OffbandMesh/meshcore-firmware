@@ -1748,6 +1748,29 @@ void MyMesh::begin(bool has_display) {
   if (_gui_store.begin(GUI_MSG_CAPACITY, GUI_MSG_THREADS)) {
     FILESYSTEM* fs = _store->getSecondaryFS() ? _store->getSecondaryFS() : _store->getPrimaryFS();
     if (_gui_store_flash.begin(fs, &_gui_store)) _gui_store_flash.load();
+  #ifdef OFFBAND_GUI_STORE_FILL
+    // #1470, bench only: fill the store to capacity so the C6 bench (#1466)
+    // measures a full-size ring write and reload. Real traffic evicts these
+    // first: their thread is the busiest.
+    {
+      uint8_t key[32];
+      memset(key, 0xBF, sizeof(key));
+      const int t = _gui_store.thread(offband::gui::ThreadKind::Channel, key, sizeof(key), "bench fill");
+      char text[offband::gui::kMsgTextMax + 1];
+      int added = 0;
+      while (t >= 0 && _gui_store.count() < _gui_store.capacity()) {
+        const int n = snprintf(text, sizeof(text), "bench fill message %04d ", added);
+        memset(text + n, 'x', offband::gui::kMsgTextMax - n);   // full 160 bytes
+        if (!_gui_store.addIncoming(t, getRTCClock()->getCurrentTime(), "bench", text,
+                                    offband::gui::kMsgTextMax, 0xFF, 0)) break;
+        added++;
+      }
+      _gui_store.markRead(t);
+      if (added) _gui_store_flash.ringChanged(_ms->getMillis());
+      mesh_log_line(MLOG_BOOT, "[store] bench fill: added %d, now %u of %u\n", added,
+                    (unsigned)_gui_store.count(), (unsigned)_gui_store.capacity());
+    }
+  #endif
   } else {
     mesh_log_line(MLOG_BOOT, "[store] no memory for %u messages: history off\n", (unsigned)GUI_MSG_CAPACITY);
   }
