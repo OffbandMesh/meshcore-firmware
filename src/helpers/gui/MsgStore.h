@@ -129,6 +129,7 @@ public:
   int find(ThreadKind kind, const uint8_t* key, size_t key_len) const;
   const Thread* threadAt(int t) const;
   uint16_t threadCount() const;
+  uint16_t maxThreads() const { return _max_threads; }   // thread slots, live or not
 
   // A message that arrived; counts as unread. Text over kMsgTextMax is cut at
   // a UTF-8 character boundary. Returns its seq, 0 if not stored.

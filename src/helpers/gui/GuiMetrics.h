@@ -16,6 +16,7 @@ class SnrMedian {
 public:
   void add(float snr_db);  // a non-finite value is ignored
   bool empty() const { return _n == 0; }
+  size_t size() const { return _n; }   // values held, up to kSnrWindow
   // The median of what has been added, up to the last kSnrWindow values; an
   // even count averages the middle two. 0 when empty.
   float median() const;
