@@ -351,10 +351,19 @@ public:
   void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) override;
   void notify(UIEventType t = UIEventType::none) override;
   void applyBuzzerMute(bool quiet) override;
-#ifdef PIN_BUZZER
-  // #1478: the app push. The assembly buffer lives here rather than in MyMesh because
-  // MyMesh.h is compiled by every companion variant and a badge-only feature must not
-  // cost them 241 bytes of RAM.
+// #1478: BOTH guards, matching where _slot_push lives. A board with a buzzer and no
+// keyboard -- heltec_rc32 and WioTrackerL1 are the live cases -- compiles this header but
+// not the CardKB-only members, so declaring these under PIN_BUZZER alone referenced a
+// member that was not there. CI caught it on four envs I had not built locally.
+//
+// Scoping, not an accident: the slots are a badge feature and this epic scoped them to
+// the badge. A buzzer-without-keyboard board answers the client through the base class's
+// default -- "unsupported" -- which is exactly what that default is for. Extending the
+// push to such a board would also mean compiling the slot store's file I/O onto it, and
+// that is a deliberate decision rather than a side effect of a guard.
+#if UI_HAS_CARDKB && defined(PIN_BUZZER)
+  // The assembly buffer lives here rather than in MyMesh because MyMesh.h is compiled by
+  // every companion variant and a badge-only feature must not cost them 241 bytes of RAM.
   uint8_t feedTuneSlot(uint8_t slot, uint8_t offset, bool more, const uint8_t* bytes,
                        size_t len, uint8_t& accepted) override;
   bool readTuneSlot(uint8_t slot, uint8_t& len, char* name, size_t name_cap) override;

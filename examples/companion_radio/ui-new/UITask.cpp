@@ -885,7 +885,8 @@ void UITask::gotoTones() {
   setCurrScreen(tones);
 }
 
-#ifdef PIN_BUZZER
+// #1478: both guards, matching the declaration -- see UITask.h.
+#if UI_HAS_CARDKB && defined(PIN_BUZZER)
 uint8_t UITask::feedTuneSlot(uint8_t slot, uint8_t offset, bool more, const uint8_t* bytes,
                             size_t len, uint8_t& accepted) {
   using Res = offband::SlotAssembly<offband::kMaxRtttl>::Result;
