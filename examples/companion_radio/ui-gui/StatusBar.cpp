@@ -205,11 +205,27 @@ void StatusBar::update(const StatusReadings& r, uint32_t now_ms) {
       if (lv_obj_check_type(ch, &lv_line_class)) lv_obj_set_style_line_color(ch, c(rgb), 0);
     }
   }
-  const bool gps_shown = r.gps != GpsIcon::Hidden && (r.gps != GpsIcon::Seeking || gpsBlinkLit(now_ms));
-  if (gps_shown == lv_obj_has_flag(_gps, LV_OBJ_FLAG_HIDDEN)) {
-    if (gps_shown) lv_obj_clear_flag(_gps, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(_gps, LV_OBJ_FLAG_HIDDEN);
+  if (first || r.gps != _shown.gps) {
+    if (r.gps == GpsIcon::Hidden) lv_obj_add_flag(_gps, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_clear_flag(_gps, LV_OBJ_FLAG_HIDDEN);
+    // Seeking pulses: the icon stays put and fades to 35% and back once a
+    // second (owner, bench 2026-10-16: hiding it outright read as flicker).
+    lv_anim_del(_gps, nullptr);
+    lv_obj_set_style_opa(_gps, LV_OPA_COVER, 0);
+    if (r.gps == GpsIcon::Seeking) {
+      lv_anim_t a;
+      lv_anim_init(&a);
+      lv_anim_set_var(&a, _gps);
+      lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_40 - 5);
+      lv_anim_set_time(&a, 500);
+      lv_anim_set_playback_time(&a, 500);
+      lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+      lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+      lv_anim_set_exec_cb(&a, [](void* o, int32_t v) { lv_obj_set_style_opa((lv_obj_t*)o, lv_opa_t(v), 0); });
+      lv_anim_start(&a);
+    }
   }
+  (void)now_ms;
 
   if (first || r.batt_pct != _shown.batt_pct) {
     const uint8_t pct = r.batt_pct > 100 ? 100 : r.batt_pct;
