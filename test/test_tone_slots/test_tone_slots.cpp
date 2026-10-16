@@ -125,6 +125,59 @@ TEST(ToneRows, TheApprovedLabelsInTheApprovedOrder) {
   }
 }
 
+// The gap the PR-level integration gate found, and it is a real one: the
+// static_assert in ToneSlots.h compares the slot array's LENGTH to ToneEvent::Count,
+// which catches a missing or extra slot and says nothing about ORDER. Reorder the enum
+// without reordering the array -- a plausible tidy-up, grouping the two message events
+// together, say -- and the assert still passes, the existing tests still pass, and every
+// event quietly writes another event's pref. The UI would show one tune and the badge
+// would play another, with nothing failing anywhere.
+//
+// Nor would the compiler help: arduino_base's build_flags begin with `-w`, so there is no
+// -Wswitch and no -Werror anywhere in this tree. A test is the only enforcement available.
+//
+// So: write a DISTINCT value through every event, then read each NAMED member back. This
+// pins event -> member by name rather than by position.
+TEST(ToneSlots, EachEventWritesItsOwnNamedPrefMember) {
+  NodePrefs p;
+  // Values chosen to be distinguishable from each other and from both sentinels
+  // (kTuneSilent = 0, kTuneUnset = 0xFF), so a scramble cannot coincide with a default.
+  const uint8_t kDm = 21, kCh = 22, kRoom = 23, kNew = 24, kAck = 25, kSent = 26;
+  ASSERT_TRUE(setStoredTone(&p, ToneEvent::ContactMessage, kDm));
+  ASSERT_TRUE(setStoredTone(&p, ToneEvent::ChannelMessage, kCh));
+  ASSERT_TRUE(setStoredTone(&p, ToneEvent::RoomMessage, kRoom));
+  ASSERT_TRUE(setStoredTone(&p, ToneEvent::NewContact, kNew));
+  ASSERT_TRUE(setStoredTone(&p, ToneEvent::Ack, kAck));
+  ASSERT_TRUE(setStoredTone(&p, ToneEvent::Sent, kSent));
+
+  EXPECT_EQ(kDm,   p.ui_tone_dm)         << "ContactMessage no longer writes ui_tone_dm";
+  EXPECT_EQ(kCh,   p.ui_tone_channel)    << "ChannelMessage no longer writes ui_tone_channel";
+  EXPECT_EQ(kRoom, p.ui_tone_room)       << "RoomMessage no longer writes ui_tone_room";
+  EXPECT_EQ(kNew,  p.ui_tone_newcontact) << "NewContact no longer writes ui_tone_newcontact";
+  EXPECT_EQ(kAck,  p.ui_tone_ack)        << "Ack no longer writes ui_tone_ack";
+  EXPECT_EQ(kSent, p.ui_tone_sent)       << "Sent no longer writes ui_tone_sent";
+}
+
+// The read side, pinned the same way: set each NAMED member directly and ask for it by
+// event. A reorder breaks writes and reads together, so both directions are asserted
+// rather than trusting that one implies the other.
+TEST(ToneSlots, EachEventReadsItsOwnNamedPrefMember) {
+  NodePrefs p;
+  p.ui_tone_dm = 31;
+  p.ui_tone_channel = 32;
+  p.ui_tone_room = 33;
+  p.ui_tone_newcontact = 34;
+  p.ui_tone_ack = 35;
+  p.ui_tone_sent = 36;
+
+  EXPECT_EQ(31, storedTone(&p, ToneEvent::ContactMessage));
+  EXPECT_EQ(32, storedTone(&p, ToneEvent::ChannelMessage));
+  EXPECT_EQ(33, storedTone(&p, ToneEvent::RoomMessage));
+  EXPECT_EQ(34, storedTone(&p, ToneEvent::NewContact));
+  EXPECT_EQ(35, storedTone(&p, ToneEvent::Ack));
+  EXPECT_EQ(36, storedTone(&p, ToneEvent::Sent));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
