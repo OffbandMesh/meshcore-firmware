@@ -205,7 +205,12 @@ inline const char* tuneRtttl(uint8_t id) {
 
 inline bool isBuiltinTune(uint8_t id) { return id < kBuiltinCount; }
 
-// Which picker row to open on, given the tune an event resolves to (#1467).
+// Which picker row to open on, given a BUILTIN tune an event resolves to (#1467).
+//
+// Renamed from pickerRowFor in #1475, when a store-aware overload arrived in
+// ui-new/TuneSlotStore.h: two functions of the same name, one of which silently sends
+// every custom slot to Silent, is a trap for whoever reaches for the shorter one. This
+// one is correct only where slots cannot occur.
 //
 // Why this is a rule and not an expression at the call site: the picker auditions
 // whatever it opens on, so "which row do we open on" decides what gets PLAYED, and an
@@ -221,7 +226,7 @@ inline bool isBuiltinTune(uint8_t id) { return id < kBuiltinCount; }
 //
 // Falls back to row 0, which is Silent: audible as nothing, visible as "Silent", and
 // never a surprise.
-inline uint8_t pickerRowFor(uint8_t effective_id) {
+inline uint8_t pickerRowForBuiltin(uint8_t effective_id) {
   if (effective_id >= kBuiltinCount) return 0;
   if (kBuiltinTunes[effective_id].name == nullptr) return 0;
   return effective_id;

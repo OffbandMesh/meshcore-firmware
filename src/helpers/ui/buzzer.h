@@ -35,7 +35,18 @@ class genericBuzzer
         void stop();
         void startup();  // play startup sound
         void shutdown();  // play shutdown sound
-        bool isPlaying();  // returns true if a sound is still playing else false
+        bool isPlaying();
+
+    // #1475: would an incoming request take the buzzer, asked WITHOUT taking it.
+    //
+    // This exists because a custom tune has to be read from the filesystem into a shared
+    // staging buffer before it can be played, and that read is destructive: if play()
+    // then refused the request, the tune still sounding would be left walking a buffer
+    // that had been overwritten underneath it. So the caller asks first, and only stages
+    // when the answer is yes. Same pure rule play() uses -- queried, not duplicated.
+    bool wouldTake(offband::TonePriority incoming) {
+      return offband::toneTakesBuzzer(isPlaying(), _playing, incoming);
+    }  // returns true if a sound is still playing else false
         void quiet(bool buzzer_state);  // enables or disables the buzzer
         bool isQuiet();  // get buzzer state on/off
 
