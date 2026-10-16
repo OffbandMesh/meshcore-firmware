@@ -126,6 +126,10 @@ void chatPreview(const MsgStore& store, int thread, char* out, size_t n);
 // to resend". Channel: "heard ×N", empty before any echo.
 void deliveryMeta(const MsgRecord& m, bool channel, uint8_t attempt, uint8_t max_attempts,
                   char* out, size_t n);
+// The route on a received message's meta line, as drawn: "direct" when it
+// came straight from the sender (0 hops, or a direct route, 0xFF), else
+// "1 hop", "2 hops".
+void incomingMeta(uint8_t hops, char* out, size_t n);
 // "{from} · {time} · {meta}", skipping empty parts.
 void metaLine(const char* from, const char* time, const char* meta, char* out, size_t n);
 

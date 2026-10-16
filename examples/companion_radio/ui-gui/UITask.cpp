@@ -119,11 +119,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   setCpuFrequencyMhz(cpuMhzFor(true));
   mesh_log_line(MLOG_BOOT, "[gui] screen on cpu=%u\n", (unsigned)getCpuFrequencyMhz());
 
-  GuiShell::Hooks hooks;
-  hooks.send_advert = [](void* ctx) { static_cast<UITask*>(ctx)->sendAdvert(); };
-  hooks.lora_popover = [](void* ctx) { static_cast<UITask*>(ctx)->openLoraPopover(); };
-  hooks.ctx = this;
-  _shell.begin(themeTokens(_theme, kDefaultAccent), _look, hooks);
+  _shell.begin(themeTokens(_theme, kDefaultAccent), _look, this);
   _next_status = _next_screen = 0;
   loop();   // fill the first frame before the backlight comes up
   lv_refr_now(nullptr);
@@ -388,6 +384,68 @@ void UITask::sendAdvert() {
   mesh_log_line(MLOG_BOOT, "[gui] advert %s\n", ok ? "sent" : "not sent");
 }
 
+const MsgStore& UITask::store() { return the_mesh.guiStore(); }
+
+int UITask::channelSlot(int thread) {
+  const Thread* th = the_mesh.guiStore().threadAt(thread);
+  if (!th || ThreadKind(th->kind) != ThreadKind::Channel) return -1;
+  ChannelDetails ch;
+  for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+    if (the_mesh.getChannel(i, ch) && memcmp(ch.channel.secret, th->key, sizeof ch.channel.secret) == 0) return i;
+  }
+  return -1;
+}
+
+// Channels have a per-channel mode (GuiPrefs, B6); DMs and rooms always alert.
+NotifyMode UITask::threadMode(int thread) {
+  const int slot = channelSlot(thread);
+  return (slot >= 0 && _prefs) ? _prefs->gui.channelMode(uint8_t(slot)) : NotifyMode::All;
+}
+
+void UITask::threadOpened(int thread) {
+  MsgStore& store = the_mesh.guiStore();
+  const Thread* th = store.threadAt(thread);
+  if (!th || th->unread == 0) return;
+  if (ThreadKind(th->kind) != ThreadKind::Channel) the_mesh.guiMetrics().contacts.markRead(th->key);
+  store.markRead(thread);
+  the_mesh.guiStoreFlash().indexChanged(millis());   // written when idle (#1472)
+}
+
+// The conversation header's route line: a channel shows how many repeats of
+// your last message were heard (plan §9 #13); a DM or room the contact's path.
+void UITask::routeMeta(int thread, char* out, size_t n) {
+  const MsgStore& store = the_mesh.guiStore();
+  const Thread* th = store.threadAt(thread);
+  if (!th || !n) {
+    if (n) out[0] = '\0';
+    return;
+  }
+  if (ThreadKind(th->kind) == ThreadKind::Channel) {
+    uint32_t seqs[16];
+    const size_t k = store.threadMessages(thread, seqs, 16);
+    for (size_t i = k; i > 0; i--) {
+      const MsgRecord* m = store.msg(seqs[i - 1]);
+      if (m && m->own) {
+        if (m->echoes) {
+          snprintf(out, n, "flood · %u", unsigned(m->echoes));
+          return;
+        }
+        break;
+      }
+    }
+    snprintf(out, n, "flood");
+    return;
+  }
+  const ContactInfo* ci = the_mesh.lookupContactByPubKey(th->key, PUB_KEY_SIZE);
+  if (!ci || ci->out_path_len == OUT_PATH_UNKNOWN) {
+    snprintf(out, n, "flood");
+    return;
+  }
+  const unsigned hops = ci->out_path_len & 63;
+  if (hops == 0) snprintf(out, n, "direct");
+  else snprintf(out, n, "direct · %u hop%s", hops, hops == 1 ? "" : "s");
+}
+
 void UITask::msgRead(int msgcount) { _unread = msgcount; }
 
 void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) {
@@ -504,6 +562,10 @@ void UITask::loop() {
       GUI_SPAN(s_t_update);
     }
   }
+  // Chats redraw only when the store's revision moved, which is a compare on
+  // every other pass.
+  _shell.updateChats();
+  GUI_SPAN(s_t_update);
   lvglLoop();
   GUI_SPAN(s_t_lvgl);
 #undef GUI_SPAN

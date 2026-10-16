@@ -54,6 +54,26 @@ const lv_point_t kTeeth[8][2] = {{{8, 1}, {8, 4}},   {{8, 12}, {8, 15}}, {{1, 8}
                                  {{3, 3}, {5, 5}},   {{11, 11}, {13, 13}}, {{13, 3}, {11, 5}}, {{3, 13}, {5, 11}}};
 const lv_point_t kBell[] = {{3, 10}, {3, 6}, {5, 3}, {9, 3}, {11, 6}, {11, 10}, {12, 11}, {2, 11}, {3, 10}};
 const lv_point_t kBellClapper[] = {{6, 13}, {8, 13}};
+const lv_point_t kBellSlash[] = {{1, 1}, {13, 13}};
+const lv_point_t kChevron[] = {{7, 4}, {2, 10}, {7, 16}};   // the "‹" back mark
+// Empty-state icons, 34 px: one bubble (a thread), two bubbles (the list).
+const lv_point_t kBubble[] = {{5, 7}, {29, 7}, {29, 22}, {14, 22}, {8, 27}, {8, 22}, {5, 22}, {5, 7}};
+const lv_point_t kBubbleA[] = {{4, 9}, {20, 9}, {20, 19}, {11, 19}, {7, 22}, {7, 19}, {4, 19}, {4, 9}};
+const lv_point_t kBubbleB[] = {{24, 13}, {30, 13}, {30, 23}, {27, 23}, {27, 26}, {23, 23}, {17, 23}, {17, 22}};
+
+// The bell in the conversation header and on muted rows: bell for All, "@"
+// for Mentions, bell with a slash for Off (spec v0.3 "Channel notifications").
+void bellIcon(lv_obj_t* parent, NotifyMode mode, uint32_t rgb) {
+  lv_obj_t* ic = box(parent, 14, 14);
+  if (mode == NotifyMode::Mentions) {
+    lv_obj_t* at = label(ic, FontRole::Body, rgb, "@");
+    lv_obj_center(at);
+    return;
+  }
+  line(ic, kBell, 9, rgb);
+  line(ic, kBellClapper, 2, rgb);
+  if (mode == NotifyMode::Off) line(ic, kBellSlash, 2, rgb);
+}
 
 const char* const kTabName[] = {"HOME", "CHAT", "NODES", "MAP", "SETUP"};
 const char* const kCellName[] = {"RADIO", "HEARD", "UNREAD", "GPS", "BATTERY", "AIRTIME"};
@@ -101,10 +121,38 @@ void tabIcon(lv_obj_t* parent, Tab tab, uint32_t rgb) {
 
 }  // namespace
 
-void GuiShell::begin(const ThemeTokens& t, Look look, const Hooks& hooks) {
-  _hooks = hooks;
+void GuiShell::begin(const ThemeTokens& t, Look look, ShellModel* model) {
+  _model = model;
   _group = lv_group_create();
   setTheme(t, look);
+}
+
+// Runs fn after the current LVGL event: a rebuild deletes the object LVGL
+// is still dispatching to.
+// One switch can be pending: a second tap before it runs replaces it (the
+// latest choice wins) rather than scheduling a second rebuild.
+void GuiShell::later(void (*fn)(GuiShell*)) {
+  const bool scheduled = _pending_fn != nullptr;
+  _pending_fn = fn;
+  if (scheduled) return;
+  lv_async_call(
+      [](void* p) {
+        GuiShell* self = static_cast<GuiShell*>(p);
+        void (*run)(GuiShell*) = self->_pending_fn;
+        self->_pending_fn = nullptr;
+        if (run) run(self);
+      },
+      this);
+}
+
+void GuiShell::openThread(int thread) {
+  _thread = thread;
+  if (thread >= 0) {
+    _focus_thread = thread;
+    _model->threadOpened(thread);
+  }
+  _shown_rev = _model->store().revision();
+  rebuild();
 }
 
 void GuiShell::setTheme(const ThemeTokens& t, Look look) {
@@ -121,6 +169,7 @@ void GuiShell::showLock() {
 
 void GuiShell::showTab(Tab tab) {
   if (!_locked && tab == _tab) return;
+  if (tab != _tab && tab == Tab::Chat) _thread = -1;   // the tab opens on the list
   _locked = false;
   _tab = tab;
   rebuild();
@@ -153,12 +202,23 @@ void GuiShell::rebuild() {
     buildLock(scr);
     return;
   }
-  _status.build(scr, _t, _hooks.lora_popover, _hooks.ctx);
+  _msg_list = nullptr;
+  _focus_row = nullptr;
+  if (_tab == Tab::Chat) _shown_rev = _model->store().revision();
+  _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
   lv_obj_t* content = box(scr, kW, kContentH);
   lv_obj_set_pos(content, 0, kStatusH);
   if (_tab == Tab::Home) buildHome(content);
+  else if (_tab == Tab::Chat && _thread >= 0) buildConversation(content);
+  else if (_tab == Tab::Chat) buildChats(content);
   else buildPlaceholder(content);
   buildTabs(scr);
+
+  // Back on the list, the row that was open (or focused) keeps the focus.
+  if (_focus_row) {
+    lv_group_focus_obj(_focus_row);
+    lv_obj_scroll_to_view(_focus_row, LV_ANIM_OFF);
+  }
 }
 
 void GuiShell::buildHome(lv_obj_t* content) {
@@ -213,18 +273,14 @@ void GuiShell::buildHome(lv_obj_t* content) {
   lv_obj_center(_advert_label);
   focusable(_advert);
   lv_obj_add_event_cb(
-      _advert,
-      [](lv_event_t* e) {
-        GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
-        if (self->_hooks.send_advert) self->_hooks.send_advert(self->_hooks.ctx);
-      },
+      _advert, [](lv_event_t* e) { static_cast<GuiShell*>(lv_event_get_user_data(e))->_model->sendAdvert(); },
       LV_EVENT_CLICKED, this);
   _advert_shown = AdvertButton::State::Idle;
 }
 
 // Tabs whose screens come in later Epics.
 void GuiShell::buildPlaceholder(lv_obj_t* content) {
-  static const char* const kWhen[] = {"", "Chats come in D4.", "Nodes come in Epic E.", "The map comes in Epic F.",
+  static const char* const kWhen[] = {"", "", "Nodes come in Epic E.", "The map comes in Epic F.",
                                       "Setup comes in Epic G."};
   lv_obj_t* l = label(content, FontRole::Body, _t.dim, kWhen[uint8_t(_tab)]);
   lv_obj_center(l);
@@ -259,15 +315,17 @@ void GuiShell::buildTabs(lv_obj_t* parent) {
     tabIcon(t, Tab(i), rgb);
     label(t, FontRole::Label, rgb, kTabName[i]);
     focusable(t);
-    // The switch runs after the event: rebuilding deletes this tab, which
-    // LVGL is still dispatching to.
     lv_obj_add_event_cb(
         t,
         [](lv_event_t* e) {
           GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
           self->_pending_tab = Tab(lv_obj_get_index(lv_event_get_target(e)));
-          lv_async_call([](void* p) { static_cast<GuiShell*>(p)->showTab(static_cast<GuiShell*>(p)->_pending_tab); },
-                        self);
+          self->later([](GuiShell* s) {
+            if (s->_pending_tab == Tab::Chat) s->_thread = -1;   // the tab opens on the list
+            s->_locked = false;
+            s->_tab = s->_pending_tab;
+            s->rebuild();
+          });
         },
         LV_EVENT_CLICKED, this);
   }
@@ -298,9 +356,7 @@ void GuiShell::buildLock(lv_obj_t* scr) {
         [](lv_event_t* e) {
           GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
           if (self->_locked && lv_indev_get_gesture_dir(lv_indev_get_act()) == LV_DIR_TOP) {
-            self->_pending_tab = self->_tab;
-            lv_async_call(
-                [](void* p) { static_cast<GuiShell*>(p)->showTab(static_cast<GuiShell*>(p)->_pending_tab); }, self);
+            self->later([](GuiShell* s) { s->showTab(s->_tab); });
           }
         },
         LV_EVENT_GESTURE, this);
@@ -316,12 +372,31 @@ bool GuiShell::action(Action a) {
     }
     return false;
   }
+  // In a conversation USR and AUX scroll the messages; Back leaves.
+  if (_tab == Tab::Chat && _thread >= 0 && _msg_list) {
+    switch (a) {
+      case Action::Next:
+        lv_obj_scroll_by_bounded(_msg_list, 0, -60, LV_ANIM_ON);
+        return true;
+      case Action::Prev:
+        lv_obj_scroll_by_bounded(_msg_list, 0, 60, LV_ANIM_ON);
+        return true;
+      case Action::Back:
+        if (_status.popoverOpen()) _status.closePopover();
+        else openThread(-1);
+        return true;
+      default:
+        return false;
+    }
+  }
   switch (a) {
     case Action::Next:
       lv_group_focus_next(_group);
+      if (lv_obj_t* f = lv_group_get_focused(_group)) lv_obj_scroll_to_view(f, LV_ANIM_ON);
       return true;
     case Action::Prev:
       lv_group_focus_prev(_group);
+      if (lv_obj_t* f = lv_group_get_focused(_group)) lv_obj_scroll_to_view(f, LV_ANIM_ON);
       return true;
     case Action::Open: {
       lv_obj_t* f = lv_group_get_focused(_group);
@@ -435,4 +510,308 @@ void GuiShell::updateLock(const LockData& d) {
     lv_label_set_text_fmt(more, "+%lu more", (unsigned long)d.more);
     lv_obj_set_style_pad_top(more, 4, 0);
   }
+}
+
+// ------------------------------------------------- Chats and Conversation
+
+namespace {
+
+// A header row: 32 px with a hairline under it (ObScreen Chats/Convo).
+lv_obj_t* header(lv_obj_t* parent, const ThemeTokens& t) {
+  lv_obj_t* h = box(parent, LV_PCT(100), 32);
+  lv_obj_set_style_pad_hor(h, 8, 0);
+  lv_obj_set_style_border_side(h, LV_BORDER_SIDE_BOTTOM, 0);
+  lv_obj_set_style_border_width(h, 1, 0);
+  lv_obj_set_style_border_color(h, c(t.line), 0);
+  lv_obj_set_flex_flow(h, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(h, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(h, 6, 0);
+  return h;
+}
+
+// The empty states (owner-approved mockups 8a, 8b).
+void emptyState(lv_obj_t* parent, const ThemeTokens& t, bool list, const char* title, const char* sub,
+                const char* hint) {
+  lv_obj_t* col = box(parent, LV_PCT(100), LV_SIZE_CONTENT);
+  lv_obj_center(col);
+  lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_row(col, 5, 0);
+  lv_obj_set_style_pad_hor(col, 22, 0);
+  lv_obj_t* ic = box(col, 34, 34);
+  if (list) {
+    line(ic, kBubbleA, 8, t.line);
+    line(ic, kBubbleB, 8, t.line);
+  } else {
+    line(ic, kBubble, 8, t.line);
+  }
+  label(col, FontRole::Title, t.ink2, title);
+  lv_obj_t* s = label(col, FontRole::BodySmall, t.dim, sub);
+  lv_obj_set_width(s, LV_PCT(100));
+  lv_label_set_long_mode(s, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_text_align(s, LV_TEXT_ALIGN_CENTER, 0);
+  if (hint) {
+    box(col, 1, 3);   // with the row gap, 8 px above the hint (LVGL 8 has no margins)
+    lv_obj_t* hb = box(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_border_width(hb, 1, 0);
+    lv_obj_set_style_border_color(hb, c(t.line), 0);
+    lv_obj_set_style_radius(hb, 3, 0);
+    lv_obj_set_style_pad_hor(hb, 6, 0);
+    lv_obj_set_style_pad_ver(hb, 2, 0);
+    label(hb, FontRole::Meta, t.sig, hint);
+  }
+}
+
+}  // namespace
+
+void GuiShell::buildChats(lv_obj_t* content) {
+  lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
+  const MsgStore& s = _model->store();
+
+  lv_obj_t* h = header(content, _t);
+  label(h, FontRole::Title, _t.ink, "Chats");
+  lv_obj_t* grow = box(h, 1, 1);
+  lv_obj_set_flex_grow(grow, 1);
+  // "+" starts a chat: contacts live in Nodes (Epic E), so it goes there.
+  lv_obj_t* plus = box(h, 24, 24);
+  label(plus, FontRole::Title, _t.sig, "+");
+  lv_obj_center(lv_obj_get_child(plus, 0));
+  focusable(plus);
+  lv_obj_add_event_cb(
+      plus,
+      [](lv_event_t* e) {
+        GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+        self->later([](GuiShell* g) { g->showTab(Tab::Nodes); });
+      },
+      LV_EVENT_CLICKED, this);
+
+  uint16_t order[64];
+  const size_t n = chatOrder(s, order, 64);
+  lv_obj_t* list = box(content, LV_PCT(100), 0);
+  lv_obj_set_flex_grow(list, 1);
+  if (n == 0) {
+    emptyState(list, _t, true, "No chats yet", "Channels you join and people who message you show up here.",
+               "+ to start one");
+    return;
+  }
+  lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+
+  char preview[96];
+  for (size_t i = 0; i < n; i++) {
+    const int t = order[i];
+    const Thread* th = s.threadAt(t);
+    lv_obj_t* row = box(list, LV_PCT(100), 44);
+    lv_obj_set_style_pad_hor(row, 8, 0);
+    lv_obj_set_style_pad_ver(row, 6, 0);
+    lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_width(row, 1, 0);
+    lv_obj_set_style_border_color(row, c(_t.line2), 0);
+    lv_obj_set_user_data(row, reinterpret_cast<void*>(intptr_t(t + 1)));
+
+    // Line 1: name, the muted bell, and the unread badge on the right.
+    lv_obj_t* top = box(row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(top, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(top, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(top, 4, 0);
+    lv_obj_t* name = label(top, FontRole::Body, _t.ink, th->name);
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_max_width(name, 170, 0);
+    if (_model->threadMode(t) == NotifyMode::Off) bellIcon(top, NotifyMode::Off, _t.dim);
+    lv_obj_t* spacer = box(top, 1, 1);
+    lv_obj_set_flex_grow(spacer, 1);
+    if (th->unread) {
+      lv_obj_t* badge = box(top, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+      lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
+      lv_obj_set_style_bg_color(badge, c(_t.sig), 0);
+      lv_obj_set_style_radius(badge, _look.pill_chips ? 8 : 0, 0);
+      lv_obj_set_style_pad_hor(badge, 5, 0);
+      lv_obj_t* num = label(badge, FontRole::Meta, _t.sigInk);
+      lv_label_set_text_fmt(num, "%u", unsigned(th->unread));
+    }
+
+    // Line 2: the newest message.
+    chatPreview(s, t, preview, sizeof preview);
+    lv_obj_t* pv = label(row, FontRole::BodySmall, _t.ink2, preview);
+    lv_obj_set_width(pv, LV_PCT(100));
+    lv_label_set_long_mode(pv, LV_LABEL_LONG_DOT);
+    lv_obj_align(pv, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+
+    focusable(row);
+    if (t == _focus_thread) _focus_row = row;
+    lv_obj_add_event_cb(
+        row,
+        [](lv_event_t* e) {
+          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+          self->_pending_thread = int(intptr_t(lv_obj_get_user_data(lv_event_get_target(e)))) - 1;
+          self->later([](GuiShell* g) { g->openThread(g->_pending_thread); });
+        },
+        LV_EVENT_CLICKED, this);
+  }
+}
+
+void GuiShell::buildConversation(lv_obj_t* content) {
+  lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
+  const MsgStore& s = _model->store();
+  const Thread* th = s.threadAt(_thread);
+  if (!th) {   // gone (evicted or deleted): back to the list
+    _thread = -1;
+    buildChats(content);
+    return;
+  }
+  const bool channel = ThreadKind(th->kind) == ThreadKind::Channel;
+
+  // Header: back, name, route, and the bell on channels.
+  lv_obj_t* h = header(content, _t);
+  lv_obj_t* back = box(h, 10, 20);
+  line(back, kChevron, 3, _t.sig);
+  lv_obj_add_flag(back, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_ext_click_area(back, 8);
+  lv_obj_add_event_cb(
+      back,
+      [](lv_event_t* e) {
+        static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->openThread(-1); });
+      },
+      LV_EVENT_CLICKED, this);
+  lv_obj_t* name = label(h, FontRole::Title, _t.ink, th->name);
+  lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+  lv_obj_set_style_max_width(name, 120, 0);
+  lv_obj_t* grow = box(h, 1, 1);
+  lv_obj_set_flex_grow(grow, 1);
+  char route[32];
+  _model->routeMeta(_thread, route, sizeof route);
+  label(h, FontRole::Meta, _t.dim, route);
+  if (channel) {
+    lv_obj_t* bell = box(h, 24, 24);
+    lv_obj_set_flex_flow(bell, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bell, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    bellIcon(bell, _model->threadMode(_thread), _t.ink2);
+  }
+
+  // Messages, oldest at the top, the newest resting on the compose bar.
+  _msg_list = box(content, LV_PCT(100), 0);
+  lv_obj_set_flex_grow(_msg_list, 1);
+  lv_obj_add_flag(_msg_list, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollbar_mode(_msg_list, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_set_style_pad_hor(_msg_list, 8, 0);
+  lv_obj_set_style_pad_ver(_msg_list, 6, 0);
+  lv_obj_set_style_pad_row(_msg_list, 7, 0);
+  lv_obj_set_flex_flow(_msg_list, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(_msg_list, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+  uint32_t seqs[40];
+  const size_t n = s.threadMessages(_thread, seqs, 40);
+  if (n == 0) {
+    char sub[64];
+    snprintf(sub, sizeof sub, "Messages with %s are kept on this device.", th->name);
+    emptyState(_msg_list, _t, false, "No messages yet", sub, nullptr);
+  }
+  const int zone = _model->zone();
+  const int16_t max_w = (kW - 16) * 88 / 100;
+  for (size_t i = 0; i < n; i++) {
+    const MsgRecord* m = s.msg(seqs[i]);
+    if (!m) continue;
+    const bool own = m->own != 0;
+    lv_obj_t* wrap = box(_msg_list, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(wrap, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(wrap, LV_FLEX_ALIGN_START, own ? LV_FLEX_ALIGN_END : LV_FLEX_ALIGN_START,
+                          own ? LV_FLEX_ALIGN_END : LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(wrap, 2, 0);
+
+    char when[8], meta[48], line_text[96];
+    formatClock(zone, m->time, when, sizeof when);
+    if (own) deliveryMeta(*m, channel, 1, 0, meta, sizeof meta);
+    else incomingMeta(m->hops, meta, sizeof meta);
+    const char* from = own ? "You" : (channel || ThreadKind(th->kind) == ThreadKind::Room) ? m->sender : th->name;
+    metaLine(from, when, meta, line_text, sizeof line_text);
+    lv_obj_t* ml = label(wrap, FontRole::Label, _t.dim, line_text);
+    if (own && Delivery(m->delivery) == Delivery::Failed) lv_obj_set_style_text_color(ml, c(_t.bad), 0);
+
+    // The bubble. Modern: filled, rounded, with a squared corner as the tail
+    // (LVGL draws one radius for all four corners). Classic: a square box.
+    lv_obj_t* bub = box(wrap, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_hor(bub, _look.own_msg_outline ? 6 : 8, 0);
+    lv_obj_set_style_pad_ver(bub, _look.own_msg_outline ? 3 : 4, 0);
+    const bool failed = own && Delivery(m->delivery) == Delivery::Failed;
+    uint32_t ink = own ? _t.sigInk : _t.ink;
+    if (_look.own_msg_outline) {
+      lv_obj_set_style_border_width(bub, 1, 0);
+      lv_obj_set_style_border_color(bub, c(failed ? _t.bad : own ? _t.sig : _t.line), 0);
+      if (own) {
+        lv_obj_set_style_bg_opa(bub, lv_opa_t(_t.wash >> 24), 0);
+        lv_obj_set_style_bg_color(bub, c(_t.wash), 0);
+      }
+      ink = _t.ink;
+    } else if (failed) {
+      lv_obj_set_style_border_width(bub, 1, 0);
+      lv_obj_set_style_border_color(bub, c(_t.bad), 0);
+      lv_obj_set_style_radius(bub, _look.bubble_radius, 0);
+      ink = _t.ink;
+    } else {
+      const uint32_t fill = own ? _t.sig : _t.bg3;
+      lv_obj_set_style_bg_opa(bub, LV_OPA_COVER, 0);
+      lv_obj_set_style_bg_color(bub, c(fill), 0);
+      lv_obj_set_style_radius(bub, _look.bubble_radius, 0);
+      if (_t.flat && !own) {
+        lv_obj_set_style_border_width(bub, 1, 0);
+        lv_obj_set_style_border_color(bub, c(_t.line), 0);
+      }
+      if (_look.bubble_tail) {
+        lv_obj_t* tail = box(bub, _look.bubble_tail, _look.bubble_tail);
+        lv_obj_add_flag(tail, LV_OBJ_FLAG_FLOATING);   // out of the bubble's size calculation
+        lv_obj_set_style_bg_opa(tail, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(tail, c(fill), 0);
+        lv_obj_set_style_radius(tail, 2, 0);
+        lv_obj_align(tail, own ? LV_ALIGN_BOTTOM_RIGHT : LV_ALIGN_BOTTOM_LEFT, own ? 8 : -8, 4);
+      }
+    }
+    if (own && Delivery(m->delivery) == Delivery::Sending) lv_obj_set_style_opa(bub, LV_OPA_60, 0);
+    lv_obj_t* txt = label(bub, FontRole::BodySmall, ink);
+    lv_label_set_text_fmt(txt, "%.*s", int(m->text_len), m->text);
+    lv_obj_set_style_max_width(txt, max_w - 16, 0);
+    lv_label_set_long_mode(txt, LV_LABEL_LONG_WRAP);
+  }
+  lv_obj_update_layout(_msg_list);
+  lv_obj_scroll_to_y(_msg_list, LV_COORD_MAX, LV_ANIM_OFF);
+
+  // The compose bar (Compose itself is D5).
+  lv_obj_t* bar = box(content, LV_PCT(100), 42);
+  lv_obj_set_style_pad_hor(bar, 6, 0);
+  lv_obj_set_style_pad_ver(bar, 4, 0);
+  lv_obj_set_style_pad_column(bar, 4, 0);
+  lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_TOP, 0);
+  lv_obj_set_style_border_width(bar, 1, 0);
+  lv_obj_set_style_border_color(bar, c(_t.line), 0);
+  lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
+  lv_obj_t* can = box(bar, 40, 34);
+  lv_obj_set_style_border_width(can, 1, 0);
+  lv_obj_set_style_border_color(can, c(_t.line), 0);
+  lv_obj_set_style_radius(can, _look.radius, 0);
+  lv_obj_center(label(can, FontRole::BodySmall, _t.sig, "Can"));
+  lv_obj_t* field = box(bar, 0, 34);
+  lv_obj_set_flex_grow(field, 1);
+  lv_obj_set_style_border_width(field, 1, 0);
+  lv_obj_set_style_border_color(field, c(_t.line), 0);
+  lv_obj_set_style_radius(field, _look.radius, 0);
+  lv_obj_set_style_pad_hor(field, 8, 0);
+  lv_obj_t* hint = label(field, FontRole::BodySmall, _t.dim, "Tap to type…");
+  lv_obj_align(hint, LV_ALIGN_LEFT_MID, 0, 0);
+}
+
+void GuiShell::updateChats() {
+  if (_locked || _tab != Tab::Chat) return;
+  const MsgStore& s = _model->store();
+  if (s.revision() == _shown_rev) return;
+  // A message that lands in the open conversation is read as it arrives.
+  if (_thread >= 0) {
+    const Thread* th = s.threadAt(_thread);
+    if (th && th->unread) _model->threadOpened(_thread);
+  } else if (lv_obj_t* f = lv_group_get_focused(_group)) {
+    // Keep the focused row focused across the redraw. Rows carry thread + 1,
+    // so 0 (tabs, "+") means "not a row".
+    if (const intptr_t ud = intptr_t(lv_obj_get_user_data(f))) _focus_thread = int(ud - 1);
+  }
+  _shown_rev = s.revision();
+  rebuild();
 }

@@ -445,6 +445,29 @@ TEST(Home, KeySummary) {
   EXPECT_STREQ(b, "a3f1 7e0c … 9c42");
 }
 
+// The screens redraw a list only when the store's revision moves.
+TEST(Chats, StoreRevisionMovesOnEveryChange) {
+  MsgStore s;
+  ASSERT_TRUE(s.begin(50, 8));
+  uint32_t r = s.revision();
+  const int wren = s.thread(ThreadKind::Direct, kWren, 32, "Wren");
+  EXPECT_NE(s.revision(), r);
+  r = s.revision();
+  in(s, wren, kNow, "", "hi");
+  EXPECT_NE(s.revision(), r);
+  r = s.revision();
+  s.markRead(wren);
+  EXPECT_NE(s.revision(), r);
+  r = s.revision();
+  const uint32_t mine = s.addOwn(wren, kNow, "yo", 2, Delivery::Sending);
+  r = s.revision();
+  s.setDelivery(mine, Delivery::Delivered);
+  EXPECT_NE(s.revision(), r);
+  r = s.revision();
+  s.threadAt(wren);   // a read changes nothing
+  EXPECT_EQ(s.revision(), r);
+}
+
 TEST(Conversation, DeliveryMeta) {
   MsgRecord m = {};
   m.own = 1;
@@ -468,6 +491,18 @@ TEST(Conversation, DeliveryMeta) {
   m.echoes = 3;
   deliveryMeta(m, true, 0, 0, b, sizeof b);
   EXPECT_STREQ(b, "heard ×3");
+}
+
+TEST(Conversation, IncomingRoute) {
+  char b[16];
+  incomingMeta(0, b, sizeof b);
+  EXPECT_STREQ(b, "direct");
+  incomingMeta(0xFF, b, sizeof b);
+  EXPECT_STREQ(b, "direct");
+  incomingMeta(1, b, sizeof b);
+  EXPECT_STREQ(b, "1 hop");
+  incomingMeta(2, b, sizeof b);
+  EXPECT_STREQ(b, "2 hops");
 }
 
 TEST(Conversation, MetaLineSkipsEmptyParts) {

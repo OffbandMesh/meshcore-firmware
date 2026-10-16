@@ -2,6 +2,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "../TimeZones.h"
 #include "SignalLevel.h"
@@ -263,10 +264,83 @@ void lockText(const MsgRecord& m, ThreadKind kind, char* out, size_t n) {
   else put(out, n, "%.*s", len, m.text);
 }
 
-size_t chatOrder(const MsgStore&, uint16_t*, size_t) { return 0; }
-void chatPreview(const MsgStore&, int, char* out, size_t n) { blank(out, n); }
-void deliveryMeta(const MsgRecord&, bool, uint8_t, uint8_t, char* out, size_t n) { blank(out, n); }
-void metaLine(const char*, const char*, const char*, char* out, size_t n) { blank(out, n); }
+// ------------------------------------------------- Chats and Conversation
+
+size_t chatOrder(const MsgStore& s, uint16_t* out, size_t max) {
+  if (!s.ready() || max == 0) return 0;
+  // Unread threads first, then by latest arrival; a thread with no messages
+  // (last_seq 0) sinks to the end, in table order.
+  auto before = [&](const Thread* a, const Thread* b) {
+    const bool ua = a->unread > 0, ub = b->unread > 0;
+    if (ua != ub) return ua;
+    return a->last_seq > b->last_seq;
+  };
+  size_t k = 0;
+  for (int t = 0; t < s.maxThreads(); t++) {
+    const Thread* th = s.threadAt(t);
+    if (!th) continue;
+    size_t i = k < max ? k++ : max;   // when full, a thread only displaces the last
+    if (i == max) {
+      if (!before(th, s.threadAt(out[max - 1]))) continue;
+      i = max - 1;
+    }
+    while (i > 0 && before(th, s.threadAt(out[i - 1]))) {
+      out[i] = out[i - 1];
+      i--;
+    }
+    out[i] = uint16_t(t);
+  }
+  return k;
+}
+
+void chatPreview(const MsgStore& s, int thread, char* out, size_t n) {
+  const Thread* th = s.ready() ? s.threadAt(thread) : nullptr;
+  if (!th) return blank(out, n);
+  uint32_t seq = 0;
+  if (s.threadMessages(thread, &seq, 1) == 0) return put(out, n, "No messages yet");
+  const MsgRecord* m = s.msg(seq);
+  if (!m) return put(out, n, "No messages yet");
+  const int len = int(m->text_len);
+  if (m->own) return put(out, n, "You: %.*s", len, m->text);
+  lockText(*m, ThreadKind(th->kind), out, n);
+}
+
+void deliveryMeta(const MsgRecord& m, bool channel, uint8_t attempt, uint8_t max_attempts, char* out,
+                  size_t n) {
+  if (channel) {
+    if (m.echoes) put(out, n, "heard ×%u", unsigned(m.echoes));
+    else blank(out, n);
+    return;
+  }
+  switch (Delivery(m.delivery)) {
+    case Delivery::Sending:
+      if (attempt > 1 && max_attempts > 1) put(out, n, "sending… try %u/%u", unsigned(attempt), unsigned(max_attempts));
+      else put(out, n, "sending…");
+      break;
+    case Delivery::Delivered: put(out, n, "✓ delivered"); break;
+    case Delivery::Failed: put(out, n, "✕ not delivered · hold to resend"); break;
+    default: blank(out, n); break;
+  }
+}
+
+void incomingMeta(uint8_t hops, char* out, size_t n) {
+  if (hops == 0 || hops == 0xFF) put(out, n, "direct");
+  else put(out, n, "%u hop%s", unsigned(hops), hops == 1 ? "" : "s");
+}
+
+void metaLine(const char* from, const char* time, const char* meta, char* out, size_t n) {
+  if (!n) return;
+  out[0] = '\0';
+  const char* parts[3] = {from, time, meta};
+  size_t len = 0;
+  for (const char* p : parts) {
+    if (!p || !*p) continue;
+    if (len) put(out + len, n - len, " · %s", p);
+    else put(out, n, "%s", p);
+    len = strlen(out);
+    if (len + 1 >= n) break;
+  }
+}
 
 void ComposeBuffer::start(size_t) {}
 bool ComposeBuffer::insert(const char*, size_t) { return false; }
