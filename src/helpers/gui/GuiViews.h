@@ -20,6 +20,15 @@
 namespace offband {
 namespace gui {
 
+// Text from the mesh (names, messages) as the screens show it: the
+// characters that only steer how an emoji is drawn are dropped, since the
+// fonts' black-and-white emoji have no glyph for them and LVGL would draw a
+// box: variation selectors (U+FE0E/FE0F), the zero-width joiner (U+200D),
+// skin-tone modifiers (U+1F3FB-1F3FF), the keycap mark (U+20E3) and tag
+// characters (U+E0020-E007F). A joined emoji shows as its parts. Reads
+// `len` bytes; writes a NUL-terminated string, cut at a whole character.
+void displayText(const char* in, size_t len, char* out, size_t n);
+
 // Colour roles. Every role has a second cue on screen (bar count, glyph,
 // fill), so Mono HC and e-ink lose nothing.
 enum class Tone : uint8_t { Ok, Warn, Bad, Dim, Signal };

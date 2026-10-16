@@ -695,6 +695,39 @@ TEST(Compose, TouchSnapsToTheNearestKey) {
   EXPECT_EQ(nearestKey(k, 0, 10, 10), -1);
 }
 
+// ------------------------------------------------------ emoji display text
+
+TEST(DisplayText, DropsCharactersThatOnlySteerEmoji) {
+  char b[64];
+  // ❤️ = U+2764 U+FE0F: the heart stays, the selector goes.
+  const char heart[] = "hi \xE2\x9D\xA4\xEF\xB8\x8F!";
+  displayText(heart, strlen(heart), b, sizeof b);
+  EXPECT_STREQ(b, "hi \xE2\x9D\xA4!");
+  // 👍🏽 = U+1F44D U+1F3FD: the thumb stays, the skin tone goes.
+  const char thumb[] = "\xF0\x9F\x91\x8D\xF0\x9F\x8F\xBD";
+  displayText(thumb, strlen(thumb), b, sizeof b);
+  EXPECT_STREQ(b, "\xF0\x9F\x91\x8D");
+  // 👨‍👩 = U+1F468 U+200D U+1F469: shown as its two parts.
+  const char pair[] = "\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9";
+  displayText(pair, strlen(pair), b, sizeof b);
+  EXPECT_STREQ(b, "\xF0\x9F\x91\xA8\xF0\x9F\x91\xA9");
+}
+
+TEST(DisplayText, PlainTextAndLimits) {
+  char b[6];
+  displayText("hello world", 11, b, sizeof b);
+  EXPECT_STREQ(b, "hello");
+  displayText("abc\xC3\xA9", 5, b, sizeof b);   // é fits exactly
+  EXPECT_STREQ(b, "abc\xC3\xA9");
+  displayText("abcd\xC3\xA9", 6, b, sizeof b);   // é doesn't: cut before it
+  EXPECT_STREQ(b, "abcd");
+  displayText("abcdef", 3, b, sizeof b);         // len bounds the read
+  EXPECT_STREQ(b, "abc");
+  char z[1] = {'x'};
+  displayText("abc", 3, z, 0);
+  EXPECT_EQ(z[0], 'x');
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

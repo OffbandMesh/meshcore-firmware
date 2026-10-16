@@ -293,7 +293,8 @@ StatusReadings UITask::statusReadings(uint32_t now) {
 
 void UITask::homeData(HomeData* d) {
   memset(d, 0, sizeof *d);
-  snprintf(d->name, sizeof d->name, "%s", _prefs ? _prefs->node_name : "");
+  const char* node = _prefs ? _prefs->node_name : "";
+  displayText(node, strlen(node), d->name, sizeof d->name);
   keySummary(the_mesh.self_id.pub_key, d->key, sizeof d->key);
 
   HomeCell* cell = d->cells;
@@ -356,9 +357,12 @@ void UITask::lockData(LockData* d) {
     const MsgRecord* msg = store.msg(seqs[i]);
     const Thread* th = msg ? store.threadAt(msg->thread) : nullptr;
     if (!msg || !th) continue;
-    lockLabel(*th, d->items[i].label, sizeof d->items[i].label);
+    char raw[sizeof d->items[i].text];
+    lockLabel(*th, raw, sizeof d->items[i].label);
+    displayText(raw, strlen(raw), d->items[i].label, sizeof d->items[i].label);
     formatClock(zone, msg->time, d->items[i].time, sizeof d->items[i].time);
-    lockText(*msg, ThreadKind(th->kind), d->items[i].text, sizeof d->items[i].text);
+    lockText(*msg, ThreadKind(th->kind), raw, sizeof raw);
+    displayText(raw, strlen(raw), d->items[i].text, sizeof d->items[i].text);
   }
 }
 

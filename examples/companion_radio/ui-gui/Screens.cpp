@@ -31,6 +31,14 @@ lv_obj_t* label(lv_obj_t* parent, FontRole role, uint32_t rgb, const char* text 
   return l;
 }
 
+// Text from the mesh, with emoji-steering characters dropped (displayText).
+void userText(lv_obj_t* l, const char* s, size_t len) {
+  char buf[kMsgTextMax * 2 + 1];
+  displayText(s, len, buf, sizeof buf);
+  lv_label_set_text(l, buf);
+}
+void userText(lv_obj_t* l, const char* s) { userText(l, s, strlen(s)); }
+
 // A label held to one line, cut with "…". LVGL only cuts a label whose
 // height is fixed; with a content height it wraps instead (bench, #1501).
 void oneLine(lv_obj_t* l, FontRole role) {
@@ -609,13 +617,18 @@ void GuiShell::buildChats(lv_obj_t* content) {
   for (size_t i = 0; i < n; i++) {
     const int t = order[i];
     const Thread* th = s.threadAt(t);
+    // 44 px as drawn: 5 + 17 (name) + 1 + 15 (preview) + 5 + the hairline.
     lv_obj_t* row = box(list, LV_PCT(100), 44);
     lv_obj_set_style_pad_hor(row, 8, 0);
-    lv_obj_set_style_pad_ver(row, 6, 0);
+    lv_obj_set_style_pad_ver(row, 5, 0);
     lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(row, 1, 0);
     lv_obj_set_style_border_color(row, c(_t.line2), 0);
     lv_obj_set_user_data(row, reinterpret_cast<void*>(intptr_t(t + 1)));
+    // The two lines stack: neither can be drawn over the other, whatever
+    // it holds (bench, #1501: a wrapped preview grew up over the name).
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(row, 1, 0);
 
     // Line 1: name, the muted bell, and the unread badge on the right.
     lv_obj_t* top = box(row, LV_PCT(100), LV_SIZE_CONTENT);
@@ -623,7 +636,8 @@ void GuiShell::buildChats(lv_obj_t* content) {
     lv_obj_set_flex_align(top, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(top, 4, 0);
     // The name takes what the bell and badge leave, cut with "…".
-    lv_obj_t* name = label(top, FontRole::Body, _t.ink, th->name);
+    lv_obj_t* name = label(top, FontRole::Body, _t.ink);
+    userText(name, th->name);
     lv_obj_set_width(name, 0);
     lv_obj_set_flex_grow(name, 1);
     oneLine(name, FontRole::Body);
@@ -640,10 +654,10 @@ void GuiShell::buildChats(lv_obj_t* content) {
 
     // Line 2: the newest message.
     chatPreview(s, t, preview, sizeof preview);
-    lv_obj_t* pv = label(row, FontRole::BodySmall, _t.ink2, preview);
+    lv_obj_t* pv = label(row, FontRole::BodySmall, _t.ink2);
+    userText(pv, preview);
     lv_obj_set_width(pv, LV_PCT(100));
     oneLine(pv, FontRole::BodySmall);
-    lv_obj_align(pv, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
     focusable(row);
     if (t == _focus_thread) _focus_row = row;
@@ -681,7 +695,8 @@ void GuiShell::buildConversation(lv_obj_t* content) {
         static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->openThread(-1); });
       },
       LV_EVENT_CLICKED, this);
-  lv_obj_t* name = label(h, FontRole::Title, _t.ink, th->name);
+  lv_obj_t* name = label(h, FontRole::Title, _t.ink);
+  userText(name, th->name);
   lv_obj_set_width(name, 0);
   lv_obj_set_flex_grow(name, 1);   // takes what the route and bell leave
   oneLine(name, FontRole::Title);
@@ -731,7 +746,8 @@ void GuiShell::buildConversation(lv_obj_t* content) {
     else incomingMeta(m->hops, meta, sizeof meta);
     const char* from = own ? "You" : (channel || ThreadKind(th->kind) == ThreadKind::Room) ? m->sender : th->name;
     metaLine(from, when, meta, line_text, sizeof line_text);
-    lv_obj_t* ml = label(wrap, FontRole::Label, _t.dim, line_text);
+    lv_obj_t* ml = label(wrap, FontRole::Label, _t.dim);
+    userText(ml, line_text);
     if (own && Delivery(m->delivery) == Delivery::Failed) lv_obj_set_style_text_color(ml, c(_t.bad), 0);
 
     // The bubble. Modern: filled, rounded, with a squared corner as the tail
@@ -774,7 +790,7 @@ void GuiShell::buildConversation(lv_obj_t* content) {
     }
     if (own && Delivery(m->delivery) == Delivery::Sending) lv_obj_set_style_opa(bub, LV_OPA_60, 0);
     lv_obj_t* txt = label(bub, FontRole::BodySmall, ink);
-    lv_label_set_text_fmt(txt, "%.*s", int(m->text_len), m->text);
+    userText(txt, m->text, m->text_len);
     lv_obj_set_style_max_width(txt, max_w - 16, 0);
     lv_label_set_long_mode(txt, LV_LABEL_LONG_WRAP);
   }

@@ -6,8 +6,14 @@ Barlow Condensed (ob_font_title_18, ob_font_body_14, ob_font_body_12,
 ob_font_label_9):
 Copyright 2017 The Barlow Project Authors (https://github.com/jpt/barlow)
 
-JetBrains Mono (ob_font_data_14, ob_font_meta_10, ob_font_clock_46):
+JetBrains Mono (ob_font_data_14, ob_font_meta_10, ob_font_clock_46, and the
+symbols in ob_font_title_18, ob_font_body_14, ob_font_body_12,
+ob_font_label_9):
 Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+
+Noto Emoji (the emoji in ob_font_title_18, ob_font_body_14, ob_font_body_12,
+ob_font_label_9):
+Copyright 2013 Google LLC (https://github.com/google/fonts/tree/main/ofl/notoemoji)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
