@@ -13,12 +13,18 @@
 // instead, against the 100 KB the badge's extrafs ldscript has already given up to the
 // filesystem, and only the tune currently sounding occupies RAM.
 //
-// WHY LINE-DELIMITED TEXT AND NOT A PACKED RECORD. The project's own trap is that the
-// length-serialized binary records (ContactInfo, ChannelDetails) misparse the remainder
-// of a list when a record's size changes. Lines have no lengths and no fixed widths: a
-// build with fewer slots ignores extra lines, one with more reads missing lines as empty,
-// and the file can be read by eye on a badge that is misbehaving at a conference. RTTTL
-// contains no newline, so the delimiter is unambiguous.
+// WHY ONE FILE PER SLOT, and not one file of eight lines as this header first said.
+// Measured after that first commit and it changed the answer: the badge's secondary
+// filesystem is `CustomLFS ExtraFS(0xD4000, 0x19000, 128)` -- 100 KB at a 128-BYTE block
+// -- so eight small files cost a few KB rather than the ~32 KB a 4 KB block would have
+// implied. At that price per-slot files are simpler and safer: no read-modify-write, no
+// temporary file, no rename (DataStore.cpp:462 already records that rename will not
+// replace an existing file), and a power loss mid-write costs one slot instead of eight.
+// The paths live in ui-new/TuneSlotStore.h with the file I/O.
+//
+// A packed binary record was never the alternative: the length-serialized records
+// (ContactInfo, ChannelDetails) misparse the remainder of a list when a record's size
+// changes, which is the trap this whole feature was kept clear of.
 
 #include <stddef.h>
 #include <stdint.h>
@@ -88,36 +94,6 @@ inline size_t deriveSlotName(const char* rtttl, char* out, size_t out_cap) {
   const size_t room = out_cap - 1 < kMaxSlotName ? out_cap - 1 : kMaxSlotName;
   if (n > room) n = room;
   for (size_t i = 0; i < n; i++) out[i] = rtttl[start + i];
-  out[n] = '\0';
-  return n;
-}
-
-// Line `index` of a text blob, copied out and terminated. Trailing \r is dropped so a
-// file that has been through a Windows editor still reads correctly.
-//
-// Returns the number of characters written. A line that does not exist, or an empty one,
-// both give 0 -- an absent slot and a blank slot are the same thing, so the caller needs
-// no third case.
-inline size_t copyLineAt(const char* blob, size_t len, size_t index, char* out,
-                         size_t out_cap) {
-  if (out == nullptr || out_cap == 0) return 0;
-  out[0] = '\0';
-  if (blob == nullptr) return 0;
-
-  size_t i = 0, line = 0;
-  while (i < len && line < index) {
-    if (blob[i] == '\n') line++;
-    i++;
-  }
-  if (line < index) return 0;   // the blob ended before that line
-
-  size_t end = i;
-  while (end < len && blob[end] != '\n') end++;
-  if (end > i && blob[end - 1] == '\r') end--;
-
-  size_t n = end - i;
-  if (n > out_cap - 1) n = out_cap - 1;
-  for (size_t k = 0; k < n; k++) out[k] = blob[i + k];
   out[n] = '\0';
   return n;
 }

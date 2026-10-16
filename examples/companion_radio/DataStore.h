@@ -54,6 +54,7 @@ public:
   File openRead(const char* filename);
   File openRead(FILESYSTEM* fs, const char* filename);
   File openWriteFile(const char* filename);   // #241: truncating write-open on the primary FS (block list)
+  File openWriteFile(FILESYSTEM* fs, const char* filename);   // #1474: the same on a named FS
   bool removeFile(const char* filename);
   bool removeFile(FILESYSTEM* fs, const char* filename);
   uint32_t getStorageUsedKb() const;

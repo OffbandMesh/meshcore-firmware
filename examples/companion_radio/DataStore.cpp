@@ -171,6 +171,14 @@ File DataStore::openWriteFile(const char* filename) {
   return openWrite(_fs, filename);
 }
 
+// #1474: the same, on a named filesystem. openRead and removeFile both already have this
+// overload; openWriteFile was the only one of the three without it, so a caller holding a
+// FILESYSTEM* from getSecondaryFS() had no way to write through the store and would have
+// had to duplicate openWrite()'s per-platform dance.
+File DataStore::openWriteFile(FILESYSTEM* fs, const char* filename) {
+  return openWrite(fs, filename);
+}
+
 bool DataStore::removeFile(const char* filename) {
   return _fs->remove(filename);
 }
