@@ -5,12 +5,12 @@
 #include <esp_heap_caps.h>
 #include <lvgl.h>
 
+#include <helpers/AdvertDataHelpers.h>
 #include <helpers/TimeZones.h>
 #include <helpers/gui/ClockPolicy.h>
 #include <helpers/gui/GuiViews.h>
 #include <helpers/gui/SignalLevel.h>
 #include <helpers/gui/hw/Chsc6xTouch.h>
-#include <helpers/gui/hw/GuiFonts.h>
 #include <helpers/gui/hw/GuiPanel.h>
 #include <helpers/gui/hw/LvglPort.h>
 #include <helpers/ui/ScreenOff.h>
@@ -32,7 +32,7 @@ extern MyMesh the_mesh;
 using namespace offband::gui;
 
 // Touch axes relative to the panel's portrait orientation. Confirmed on the
-// bench with the test screen's touch readout (A7).
+// bench with the Epic A test screen's touch readout (A7).
 #ifndef GUI_TOUCH_SWAP_XY
   #define GUI_TOUCH_SWAP_XY 0
 #endif
@@ -64,61 +64,6 @@ namespace {
 // one (the prototype's default, ObScreen.dc.html:330).
 constexpr uint32_t kDefaultAccent = 0xF2C14E;
 
-const char* themeName(ThemeId id) {
-  switch (id) {
-    case ThemeId::Offband: return "Offband";
-    case ThemeId::Steel: return "Steel";
-    case ThemeId::MonoHC: return "Mono HC";
-    case ThemeId::Accent: return "Accent";
-  }
-  return "?";
-}
-
-ThemeId nextTheme(ThemeId id) {
-  switch (id) {
-    case ThemeId::Offband: return ThemeId::Steel;
-    case ThemeId::Steel: return ThemeId::MonoHC;
-    case ThemeId::MonoHC: return ThemeId::Accent;
-    case ThemeId::Accent: break;
-  }
-  return ThemeId::Offband;
-}
-
-ThemeId prevTheme(ThemeId id) {
-  switch (id) {
-    case ThemeId::Offband: return ThemeId::Accent;
-    case ThemeId::Steel: return ThemeId::Offband;
-    case ThemeId::MonoHC: return ThemeId::Steel;
-    case ThemeId::Accent: break;
-  }
-  return ThemeId::MonoHC;
-}
-
-lv_color_t c(uint32_t rgb) { return lv_color_hex(rgb & 0xFFFFFF); }
-lv_opa_t alpha(uint32_t argb) { return lv_opa_t(argb >> 24); }
-
-lv_obj_t* s_name = nullptr;
-lv_obj_t* s_pin = nullptr;
-lv_obj_t* s_unread = nullptr;
-lv_obj_t* s_touch_label = nullptr;
-lv_obj_t* s_action_label = nullptr;
-Chsc6xTouch s_touch;
-
-const char* actionName(Action a) {
-  switch (a) {
-    case Action::Next: return "next";
-    case Action::Prev: return "prev";
-    case Action::Open: return "open";
-    case Action::Back: return "back";
-    case Action::Canned: return "canned";
-    case Action::Wake: return "wake";
-    case Action::PocketLock: return "pocket lock";
-    case Action::ToggleBuzzer: return "buzzer";
-    case Action::None: break;
-  }
-  return "-";
-}
-
 const char* screenName(ScreenState s) {
   switch (s) {
     case ScreenState::On: return "on";
@@ -127,6 +72,8 @@ const char* screenName(ScreenState s) {
   }
   return "?";
 }
+
+Chsc6xTouch s_touch;
 
 }  // namespace
 
@@ -172,124 +119,15 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   setCpuFrequencyMhz(cpuMhzFor(true));
   mesh_log_line(MLOG_BOOT, "[gui] screen on cpu=%u\n", (unsigned)getCpuFrequencyMhz());
 
-  buildTestScreen();
-  refreshTestScreen();
+  GuiShell::Hooks hooks;
+  hooks.send_advert = [](void* ctx) { static_cast<UITask*>(ctx)->sendAdvert(); };
+  hooks.lora_popover = [](void* ctx) { static_cast<UITask*>(ctx)->openLoraPopover(); };
+  hooks.ctx = this;
+  _shell.begin(themeTokens(_theme, kDefaultAccent), _look, hooks);
+  _next_status = _next_screen = 0;
+  loop();   // fill the first frame before the backlight comes up
   lv_refr_now(nullptr);
   panel->setBrightness(100);
-}
-
-// A test screen built only from the theme tables, the Look and the font
-// table, so the bench sees every token and font role on the real panel.
-void UITask::buildTestScreen() {
-  const ThemeTokens t = themeTokens(_theme, kDefaultAccent);
-  const LookTokens look = lookTokens(_look);
-
-  lv_obj_t* scr = lv_scr_act();
-  lv_obj_clean(scr);
-  lv_obj_set_style_bg_color(scr, c(t.bg), 0);
-  _status.build(scr, t, [](void* ctx) { static_cast<UITask*>(ctx)->openLoraPopover(); }, this);
-  _next_status = 0;
-
-  lv_obj_t* brand = lv_label_create(scr);
-  lv_obj_set_style_text_font(brand, font(FontRole::Title), 0);
-  lv_obj_set_style_text_color(brand, c(t.sig), 0);
-  lv_label_set_text(brand, "offband");
-  lv_obj_align(brand, LV_ALIGN_TOP_MID, 0, 28);
-
-  lv_obj_t* theme_label = lv_label_create(scr);
-  lv_obj_set_style_text_font(theme_label, font(FontRole::Label), 0);
-  lv_obj_set_style_text_color(theme_label, c(t.dim), 0);
-  lv_label_set_text_fmt(theme_label, "THEME %s  /  LOOK %s", themeName(_theme),
-                        _look == Look::Modern ? "MODERN" : "CLASSIC");
-  lv_obj_align(theme_label, LV_ALIGN_TOP_MID, 0, 56);
-
-  s_name = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_name, font(FontRole::Body), 0);
-  lv_obj_set_style_text_color(s_name, c(t.ink), 0);
-  lv_obj_align(s_name, LV_ALIGN_TOP_MID, 0, 80);
-
-  // The PIN sits on a card: bg3 fill, line border, the Look's radius.
-  lv_obj_t* card = lv_obj_create(scr);
-  lv_obj_set_size(card, 200, 52);
-  lv_obj_align(card, LV_ALIGN_CENTER, 0, -20);
-  lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_style_bg_color(card, c(t.flat ? t.bg : t.bg3), 0);
-  lv_obj_set_style_border_color(card, c(t.line), 0);
-  lv_obj_set_style_border_width(card, 1, 0);
-  lv_obj_set_style_radius(card, look.radius, 0);
-  lv_obj_set_style_pad_all(card, 4, 0);
-
-  s_pin = lv_label_create(card);
-  lv_obj_set_style_text_font(s_pin, font(FontRole::Data), 0);
-  lv_obj_set_style_text_color(s_pin, c(t.ink), 0);
-  lv_obj_center(s_pin);
-  _shown_pin = 0;  // force the label to refill
-
-  // An "own message" sample (ObScreen.dc.html:379): Modern is a solid signal
-  // fill with sigInk text in every theme; Classic is a signal outline over
-  // the wash.
-  lv_obj_t* bubble = lv_obj_create(scr);
-  lv_obj_set_size(bubble, 140, 30);
-  lv_obj_align(bubble, LV_ALIGN_CENTER, 30, 26);
-  lv_obj_clear_flag(bubble, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_style_radius(bubble, look.bubble_radius, 0);
-  if (look.own_msg_outline) {
-    lv_obj_set_style_bg_color(bubble, c(t.wash), 0);
-    lv_obj_set_style_bg_opa(bubble, alpha(t.wash), 0);
-    lv_obj_set_style_border_color(bubble, c(t.sig), 0);
-    lv_obj_set_style_border_width(bubble, 1, 0);
-  } else {
-    lv_obj_set_style_bg_color(bubble, c(t.sig), 0);
-    lv_obj_set_style_border_width(bubble, 0, 0);
-  }
-  lv_obj_t* bubble_text = lv_label_create(bubble);
-  lv_obj_set_style_text_font(bubble_text, font(FontRole::BodySmall), 0);
-  lv_obj_set_style_text_color(bubble_text, c(look.own_msg_outline ? t.ink : t.sigInk), 0);
-  lv_label_set_text(bubble_text, "Copy that");
-  lv_obj_center(bubble_text);
-
-  s_unread = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_unread, font(FontRole::Meta), 0);
-  lv_obj_set_style_text_color(s_unread, c(t.dim), 0);
-  lv_obj_align(s_unread, LV_ALIGN_CENTER, 0, 60);
-
-  s_touch_label = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_touch_label, font(FontRole::Meta), 0);
-  lv_obj_set_style_text_color(s_touch_label, c(t.dim), 0);
-  lv_obj_align(s_touch_label, LV_ALIGN_CENTER, 0, 80);
-
-  s_action_label = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_action_label, font(FontRole::Meta), 0);
-  lv_obj_set_style_text_color(s_action_label, c(t.dim), 0);
-  lv_obj_align(s_action_label, LV_ALIGN_CENTER, 0, 100);
-
-  lv_obj_t* note = lv_label_create(scr);
-  lv_obj_set_style_text_font(note, font(FontRole::BodySmall), 0);
-  lv_obj_set_style_text_color(note, c(t.dim), 0);
-  lv_label_set_text(note, "USR: theme  hold: look  3x: buzzer");
-  lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -16);
-}
-
-void UITask::refreshTestScreen() {
-  if (!_gui_ok) return;
-  lv_label_set_text(s_name, _prefs ? _prefs->node_name : "");
-
-  uint32_t pin = the_mesh.getBLEPin();
-  if (pin != _shown_pin) {
-    _shown_pin = pin;
-    if (pin) lv_label_set_text_fmt(s_pin, "BLE PIN %06lu", (unsigned long)pin);
-    else lv_label_set_text(s_pin, "BLE PIN off");
-  }
-  lv_label_set_text_fmt(s_unread, "%s  -  unread %d", hasConnection() ? "phone connected" : "no phone",
-                        _unread);
-
-  uint16_t tx = 0, ty = 0;
-  if (!_touch_ok) lv_label_set_text(s_touch_label, "touch: none (buttons only)");
-  else if (lvglLastTouch(&tx, &ty)) lv_label_set_text_fmt(s_touch_label, "touch %u, %u", tx, ty);
-  else lv_label_set_text(s_touch_label, "touch: tap anywhere");
-
-  lv_label_set_text_fmt(s_action_label, "last: %s  -  buzzer %s  -  %u MHz", actionName(_last_action),
-                        buzzerQuiet() ? "off" : "on", (unsigned)getCpuFrequencyMhz());
 }
 
 // Idle time is the shorter of "since the last button" and LVGL's own "since
@@ -314,9 +152,9 @@ void UITask::pollButtons(uint32_t now) {
       // Clicks just before this hold go first, in the order they happened.
       if (uint8_t n = _usr_clicks.take()) handle(clicksEvent(n), now);
       handle(kind == PressKind::Hold ? InputEvent::UsrHold : InputEvent::UsrLongHold, now);
-    } else if (_screen == ScreenState::Off) {
-      // A dark screen wakes on the click itself, without waiting out the
-      // multi-click window.
+    } else if (_screen == ScreenState::Off || _shell.locked()) {
+      // A dark or locked screen acts on the click itself, without waiting
+      // out the multi-click window.
       handle(InputEvent::UsrClick, now);
     } else {
       _usr_clicks.click(now);
@@ -337,23 +175,20 @@ void UITask::handle(InputEvent ev, uint32_t now) {
   const Action a = mapInput(ev, _screen != ScreenState::Off, _pocket_locked);
   if (a == Action::None) return;
   _last_input = now;
-  _last_action = a;
   if (a == Action::PocketLock) {
     _pocket_locked = true;
     applyScreen(ScreenState::Off);
     return;
   }
   _pocket_locked = false;
-  applyScreen(ScreenState::On);
+  applyScreen(ScreenState::On);   // a wake from off shows Lock
 
-  if (a == Action::Back && _status.popoverOpen()) {
-    _status.closePopover();
-    return;
-  }
-
-  // On the test screen, Next and Prev cycle the theme and Open the Look so
-  // the bench can see each. From Epic D these actions drive real screens.
   switch (a) {
+    case Action::Wake:
+      return;
+    case Action::ToggleBuzzer:
+      toggleBuzzer();
+      return;
     case Action::Open:
       // As on stock MeshCore: a USR long press in the first 8 s after boot
       // enters CLI rescue.
@@ -361,22 +196,12 @@ void UITask::handle(InputEvent ev, uint32_t now) {
         the_mesh.enterCLIRescue();
         return;
       }
-      _look = _look == Look::Modern ? Look::Classic : Look::Modern;
-      break;
-    case Action::Next:
-      _theme = nextTheme(_theme);
-      break;
-    case Action::Prev:
-      _theme = prevTheme(_theme);
-      break;
-    case Action::ToggleBuzzer:
-      toggleBuzzer();
       break;
     default:
-      return;
+      break;
   }
-  buildTestScreen();
-  refreshTestScreen();
+  _shell.action(a);
+  _next_screen = 0;   // show the result now, not at the next 1 s refresh
 }
 
 bool UITask::buzzerQuiet() {
@@ -413,6 +238,9 @@ void UITask::applyScreen(ScreenState s) {
     panel->turnOff();
   } else {
     if (_screen == ScreenState::Off) {
+      // A screen that went dark comes back locked (design: Lock).
+      _shell.showLock();
+      _next_screen = 0;
       panel->turnOn();
       lv_obj_invalidate(lv_scr_act());  // redraw what the sleeping panel lost
     }
@@ -431,6 +259,12 @@ bool UITask::gpsEnabled() const {
     if (strcmp(_sensors->getSettingName(i), "gps") == 0) return strcmp(_sensors->getSettingValue(i), "1") == 0;
   }
   return false;   // no GPS setting: no module
+}
+
+uint8_t UITask::battPercent() const {
+  const uint16_t full = (_prefs && _prefs->batt_full_mv) ? _prefs->batt_full_mv : uint16_t(BATT_MAX_MILLIVOLTS);
+  const uint16_t mv = _batt.seeded() ? _batt.value() : getBattMilliVolts();
+  return uint8_t(offband::batteryPercent(mv, BATT_MIN_MILLIVOLTS, full));
 }
 
 StatusReadings UITask::statusReadings(uint32_t now) {
@@ -457,10 +291,79 @@ StatusReadings UITask::statusReadings(uint32_t now) {
   if (fix.everFixed() && fix.secsSinceLost(now) < since_on) without = fix.secsSinceLost(now);
   r.gps = gpsIcon(gps_on, the_mesh.guiFixType(), without);
 
-  const uint16_t full = (_prefs && _prefs->batt_full_mv) ? _prefs->batt_full_mv : uint16_t(BATT_MAX_MILLIVOLTS);
-  const uint16_t mv = _batt.seeded() ? _batt.value() : getBattMilliVolts();
-  r.batt_pct = uint8_t(offband::batteryPercent(mv, BATT_MIN_MILLIVOLTS, full));
+  r.batt_pct = battPercent();
   return r;
+}
+
+void UITask::homeData(HomeData* d) {
+  memset(d, 0, sizeof *d);
+  snprintf(d->name, sizeof d->name, "%s", _prefs ? _prefs->node_name : "");
+  keySummary(the_mesh.self_id.pub_key, d->key, sizeof d->key);
+
+  HomeCell* cell = d->cells;
+  formatFreq(_prefs ? _prefs->freq : 0, cell[0].value, sizeof cell[0].value);
+  radioSub(_prefs ? _prefs->sf : 0, _prefs ? _prefs->bw : 0, _prefs ? _prefs->cr : 0, cell[0].sub,
+           sizeof cell[0].sub);
+
+  // Heard: contacts with a packet since boot, by type.
+  MetricsHub& m = the_mesh.guiMetrics();
+  uint16_t rpt = 0, room = 0, chat = 0;
+  ContactInfo ci;
+  for (int i = 0; i < the_mesh.getNumContacts(); i++) {
+    if (!the_mesh.getContactByIdx(i, ci)) continue;
+    const ContactStat* st = m.contacts.find(ci.id.pub_key);
+    if (!st || !st->heard) continue;
+    if (ci.type == ADV_TYPE_REPEATER) rpt++;
+    else if (ci.type == ADV_TYPE_ROOM) room++;
+    else if (ci.type == ADV_TYPE_CHAT) chat++;
+  }
+  snprintf(cell[1].value, sizeof cell[1].value, "%u", unsigned(rpt + room + chat));
+  heardSub(rpt, room, chat, cell[1].sub, sizeof cell[1].sub);
+
+  MsgStore& store = the_mesh.guiStore();
+  snprintf(cell[2].value, sizeof cell[2].value, "%lu", (unsigned long)(store.ready() ? store.totalUnread() : 0));
+  unreadSub(store, cell[2].sub, sizeof cell[2].sub);
+
+  const bool gps_on = gpsEnabled();
+  snprintf(cell[3].value, sizeof cell[3].value, "%s", gpsValue(gps_on, the_mesh.guiFixType()));
+  uint8_t sats = 0;
+  LocationProvider* loc = sensors.getLocationProvider();
+  if (gps_on && loc) sats = uint8_t(loc->satellitesCount());
+  gpsSub(sats, offband::tz::clockSet(rtc_clock.getCurrentTime()), cell[3].sub, sizeof cell[3].sub);
+  if (!gps_on) cell[3].sub[0] = '\0';
+
+  snprintf(cell[4].value, sizeof cell[4].value, "%u%%", unsigned(battPercent()));
+  batterySub(_batt.seeded() ? _batt.value() : getBattMilliVolts(), millis() / 1000, cell[4].sub,
+             sizeof cell[4].sub);
+
+  formatAirtime(m.airtime.dutyPermille(millis()), cell[5].value, sizeof cell[5].value);
+  snprintf(cell[5].sub, sizeof cell[5].sub, "tx, last hour");
+}
+
+void UITask::lockData(LockData* d) {
+  memset(d, 0, sizeof *d);
+  const int zone = _prefs ? _prefs->ui_tz : 0;
+  const uint32_t now = rtc_clock.getCurrentTime();
+  formatClock(zone, now, d->clock, sizeof d->clock);
+  char date[24];
+  formatDate(zone, now, date, sizeof date);
+  if (date[0]) {
+    snprintf(d->sub, sizeof d->sub, "%s · %s · %u%%", date, _prefs ? _prefs->node_name : "", unsigned(battPercent()));
+  } else {
+    snprintf(d->sub, sizeof d->sub, "%s · %u%%", _prefs ? _prefs->node_name : "", unsigned(battPercent()));
+  }
+
+  MsgStore& store = the_mesh.guiStore();
+  uint32_t seqs[2];
+  d->count = uint8_t(lockItems(store, seqs, 2, &d->more));
+  for (uint8_t i = 0; i < d->count; i++) {
+    const MsgRecord* msg = store.msg(seqs[i]);
+    const Thread* th = msg ? store.threadAt(msg->thread) : nullptr;
+    if (!msg || !th) continue;
+    lockLabel(*th, d->items[i].label, sizeof d->items[i].label);
+    formatClock(zone, msg->time, d->items[i].time, sizeof d->items[i].time);
+    lockText(*msg, ThreadKind(th->kind), d->items[i].text, sizeof d->items[i].text);
+  }
 }
 
 void UITask::openLoraPopover() {
@@ -471,8 +374,18 @@ void UITask::openLoraPopover() {
   r.rssi = int16_t(radio_driver.getLastRSSI());
   r.noise = int16_t(radio_driver.getNoiseFloor());
   r.sf = _prefs ? _prefs->sf : 12;
-  _status.openPopover(r, millis());
+  _shell.status().openPopover(r, millis());
   _last_input = millis();
+}
+
+// Home's Send advert: a flood advert, as the phone app's "Advert (flood)".
+void UITask::sendAdvert() {
+  const uint32_t now = millis();
+  if (!_advert.press(now)) return;
+  const bool ok = the_mesh.cmdSendAdvert(true) == CmdResult::Ok;
+  _advert.result(ok, now);
+  _shell.setAdvertState(_advert.state(now));
+  mesh_log_line(MLOG_BOOT, "[gui] advert %s\n", ok ? "sent" : "not sent");
 }
 
 void UITask::msgRead(int msgcount) { _unread = msgcount; }
@@ -549,22 +462,31 @@ void UITask::loop() {
 
   if (_screen == ScreenState::Off) return;
 
-  // Four passes a second: enough for the GPS seeking blink at 1 Hz.
+  // Four passes a second for the status bar; once a second for the screen.
   if ((int32_t)(now - _next_status) >= 0) {
     _next_status = now + 250;
-    _status.update(statusReadings(now), now);
-    _status.tick(now);
+    if (!_shell.locked()) {
+      _shell.status().update(statusReadings(now), now);
+      _shell.status().tick(now);
+    }
+    _shell.setAdvertState(_advert.state(now));
   }
-
-  if (now >= _next_refresh) {
-    _next_refresh = now + 1000;
-    refreshTestScreen();
+  if ((int32_t)(now - _next_screen) >= 0) {
+    _next_screen = now + 1000;
+    if (_shell.locked()) {
+      LockData d;
+      lockData(&d);
+      _shell.updateLock(d);
+    } else if (_shell.tab() == Tab::Home) {
+      HomeData d;
+      homeData(&d);
+      _shell.updateHome(d);
+    }
   }
   lvglLoop();
 
 #ifdef OFFBAND_GUI_PERF
-  // Diag builds: refresh timing for the frame-rate check (#1441). A theme
-  // switch on the test screen is a full-screen redraw, the worst case.
+  // Diag builds: refresh timing for the frame-rate check (#1441).
   static uint32_t s_next_perf = 0;
   if (now >= s_next_perf) {
     s_next_perf = now + 30000;
