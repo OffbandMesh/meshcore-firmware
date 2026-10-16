@@ -196,13 +196,15 @@ TEST(Home, UnreadCellNamesNewestFirst) {
   unreadSub(s, b, sizeof b);
   EXPECT_STREQ(b, "#Public, Wren");
 
+  // Newest by arrival, not by the sender's timestamp: a sender's clock can
+  // be hours off, so this older-stamped message is still the latest news.
   in(s, hik, kNow - 600, "amy", "trail closed");
   unreadSub(s, b, sizeof b);
-  EXPECT_STREQ(b, "#Public, Wren +1");
+  EXPECT_STREQ(b, "#Hikers, #Public +1");
 
   s.markRead(pub);
   unreadSub(s, b, sizeof b);
-  EXPECT_STREQ(b, "Wren, #Hikers");
+  EXPECT_STREQ(b, "#Hikers, Wren");
 }
 
 TEST(Home, AdvertButtonFeedback) {
@@ -269,7 +271,11 @@ TEST(Lock, NewestUnreadPerThread) {
   EXPECT_EQ(lockItems(s, seqs, 2, &more), 2u);
   EXPECT_EQ(seqs[0], p);   // the newest of #Public, not "first"
   EXPECT_EQ(seqs[1], w);
-  EXPECT_EQ(more, 1u);     // "first" is unread but not shown
+  EXPECT_EQ(more, 0u);     // "first" is in #Public's item ("2 new")
+
+  EXPECT_EQ(lockItems(s, seqs, 1, &more), 1u);
+  EXPECT_EQ(seqs[0], p);
+  EXPECT_EQ(more, 1u);     // Wren's thread isn't shown
 
   s.markRead(pub);
   EXPECT_EQ(lockItems(s, seqs, 2, &more), 1u);
@@ -372,7 +378,7 @@ TEST(Views, MaxZeroReturnsNothing) {
   uint32_t more = 0;
   EXPECT_EQ(lockItems(s, seqs, 0, &more), 0u);
   EXPECT_EQ(seqs[0], 77u);
-  EXPECT_EQ(more, 1u);
+  EXPECT_EQ(more, 1u);   // Wren's thread, not shown
   uint16_t order[1] = {77};
   EXPECT_EQ(chatOrder(s, order, 0), 0u);
   EXPECT_EQ(order[0], 77u);
@@ -395,7 +401,48 @@ TEST(Lock, EvictedUnreadStillCounts) {
   uint32_t more = 0;
   ASSERT_EQ(lockItems(s, seqs, 2, &more), 1u);
   EXPECT_EQ(seqs[0], last);
-  EXPECT_EQ(more, 3u + 2u);   // Wren's other 3, and #Public's 2
+  EXPECT_EQ(more, 2u);   // #Public's 2, with nothing left to show
+}
+
+TEST(Lock, Labels) {
+  Thread t = {};
+  strcpy(t.name, "#Public");
+  t.kind = uint8_t(ThreadKind::Channel);
+  t.unread = 3;
+  char b[48];
+  lockLabel(t, b, sizeof b);
+  EXPECT_STREQ(b, "#Public · 3 new");
+  t.unread = 1;
+  lockLabel(t, b, sizeof b);
+  EXPECT_STREQ(b, "#Public · 1 new");
+  strcpy(t.name, "Wren");
+  t.kind = uint8_t(ThreadKind::Direct);
+  lockLabel(t, b, sizeof b);
+  EXPECT_STREQ(b, "Wren · direct");
+  t.unread = 2;
+  lockLabel(t, b, sizeof b);
+  EXPECT_STREQ(b, "Wren · 2 new");
+}
+
+TEST(Lock, ItemText) {
+  MsgRecord m = {};
+  strcpy(m.sender, "Wren");
+  memcpy(m.text, "Moving the node", 15);
+  m.text_len = 15;
+  char b[48];
+  lockText(m, ThreadKind::Channel, b, sizeof b);
+  EXPECT_STREQ(b, "Wren: Moving the node");
+  lockText(m, ThreadKind::Direct, b, sizeof b);
+  EXPECT_STREQ(b, "Moving the node");
+}
+
+TEST(Home, KeySummary) {
+  uint8_t k[32] = {0xa3, 0xf1, 0x7e, 0x0c};
+  k[30] = 0x9c;
+  k[31] = 0x42;
+  char b[24];
+  keySummary(k, b, sizeof b);
+  EXPECT_STREQ(b, "a3f1 7e0c … 9c42");
 }
 
 TEST(Conversation, DeliveryMeta) {

@@ -72,6 +72,8 @@ void formatUptime(uint32_t secs, char* out, size_t n);                  // "42m"
 void batterySub(uint16_t millivolts, uint32_t uptime_secs, char* out, size_t n);  // "4.02 V · 3d 4h up"
 void formatAirtime(uint16_t permille, char* out, size_t n);             // "1.2%"
 // The names of threads with unread messages, newest first: two, then "+N".
+// "Newest" here and in the lists below is arrival order on this device, not
+// the sender's timestamp, which can be far off.
 void unreadSub(const MsgStore& store, char* out, size_t n);
 
 // Send advert: the button reads "Advert sent ✓" (or "Not sent, try again")
@@ -98,10 +100,19 @@ void formatClock(int zone, uint32_t utc, char* out, size_t n);
 // "Fri 16 Oct"; empty before the clock is set.
 void formatDate(int zone, uint32_t utc, char* out, size_t n);
 // The newest unread message of each thread with unread, newest first, at
-// most `max`. *more = the threads' unread counts added up, less the messages
-// returned: the "+N more" line. A thread whose unread messages were all
-// evicted shows no item but still counts in *more.
+// most `max`. Each item stands for its whole thread ("#Public · 3 new"), so
+// *more = unread messages in threads not shown: the "+N more" line. A thread
+// whose unread messages were all evicted shows no item but counts in *more.
 size_t lockItems(const MsgStore& store, uint32_t* out, size_t max, uint32_t* more);
+// A lock item's label: "#Public · 3 new", "Wren · direct" (one unread DM),
+// "Wren · 2 new".
+void lockLabel(const Thread& t, char* out, size_t n);
+// A lock item's text: "Sender: text" on channels and rooms, the text alone
+// in a DM.
+void lockText(const MsgRecord& m, ThreadKind kind, char* out, size_t n);
+
+// The Home header's key line: "a3f1 7e0c … 9c42" (first 4 bytes, last 2).
+void keySummary(const uint8_t* pub_key, char* out, size_t n);
 
 // ------------------------------------------------- Chats and Conversation
 
