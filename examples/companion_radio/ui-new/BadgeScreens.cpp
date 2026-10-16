@@ -1742,6 +1742,12 @@ void CustomTunesScreen::begin() {
   _sel = 0;
   _note = "";
   _note_until = 0;
+  // #1476 review: the name cache is invalidated by this firmware's own writers, which is
+  // every writer that exists today -- the app push in #1478 goes through the same save.
+  // But a cache whose correctness rests on "nobody else ever touches those files" is a
+  // promise about the future, so re-read on entry. It costs eight reads per visit to this
+  // screen rather than per render, and bounds any staleness to one screen visit.
+  offband::invalidateSlotNames();
   audition();   // #1467's lesson: arriving silently means never hearing what is here
 }
 
@@ -1788,7 +1794,14 @@ int CustomTunesScreen::render(DisplayDriver& d) {
     // "1 Nokia" / "4 (empty)". The number is part of the LABEL rather than a separate
     // column so a long tune name has the whole row to use, and an empty slot still reads
     // as a slot rather than as a blank line.
-    char label[4 + offband::kMaxSlotName + 1];
+    // "<n> <name>" or "<n> (empty)". Sized from its parts rather than a magic number,
+    // and the assertion is what makes the size honest: a two-digit slot count still
+    // fits, a three-digit one would not, and review was right that the original 4 was
+    // a number nobody could check.
+    static_assert(offband::kSlotCount < 100, "a slot number wider than two digits needs a wider row buffer");
+    constexpr size_t kNumWidth = 2;        // digits in the largest slot number
+    constexpr size_t kEmptyWidth = 7;      // " (empty)" minus the space, plus slack
+    char label[kNumWidth + 1 + offband::kMaxSlotName + kEmptyWidth + 1];
     char name[offband::kMaxSlotName + 1];
     if (offband::slotNameCached(the_mesh.dataStore(), (uint8_t)i, name, sizeof(name)) > 0) {
       snprintf(label, sizeof(label), "%d %s", i + 1, name);
@@ -1815,7 +1828,12 @@ bool CustomTunesScreen::handleInput(char c) {
     return true;
   }
   // Enter opens the editor, which lands in #1477. Until then this screen is a read-only
-  // view of what the app has pushed, which is a coherent state rather than a stub.
+  // view of what the app has pushed -- a coherent state rather than a stub.
+  //
+  // Review read the bare `return false` as abdicating Enter to a parent that might do
+  // something surprising with it. It cannot: the only fallback in UITask::loop() is
+  // guarded by `keynav::backsOut((uint8_t)c)`, so an unhandled Enter does nothing at all,
+  // and returning false is exactly what Esc NEEDS in order to reach the back-out routing.
   return false;   // Esc: back to Tones
 }
 

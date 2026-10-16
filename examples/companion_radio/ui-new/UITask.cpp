@@ -875,7 +875,14 @@ void UITask::gotoGps() {
 void UITask::gotoBattery() { setCurrScreen(battery); }   // #1254
 
 #if UI_HAS_CARDKB && defined(PIN_BUZZER)
-void UITask::gotoTones() { setCurrScreen(tones); }   // #1421
+// #1421. #1476: re-read the slot names on entry, because the Custom row shows a count
+// that comes from the cache -- same reason the slot list itself re-reads. Eight reads
+// per visit to this screen, not per render, which bounds staleness to one visit rather
+// than resting on "nothing else ever writes those files".
+void UITask::gotoTones() {
+  offband::invalidateSlotNames();
+  setCurrScreen(tones);
+}
 
 void UITask::gotoCustomTunes() {
   ((CustomTunesScreen*)custom_tunes)->begin();
