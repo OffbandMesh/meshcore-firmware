@@ -20,6 +20,11 @@ The glyph sets:
   - `…` 0x2026 and `−` 0x2212.
   - A code point the face lacks is simply left out.
 - **Symbols:** `✓` 0x2713, `✕` 0x2715, `⇧` 0x21E7, `⌫` 0x232B. Barlow has none of these, so the Barlow files take them from JetBrains Mono in the same weight (#1496).
+- **Emoji, Barlow files only:**
+  - Ranges: 0x1F300-0x1F5FF, 0x1F600-0x1F64F, 0x1F680-0x1F6FF, 0x1F900-0x1F9FF, 0x2600-0x2712 and 0x2716-0x27BF. That's 1,179 black-and-white emoji from Noto Emoji (`NotoEmoji[wght].ttf` in github.com/google/fonts, `ofl/notoemoji`, fetched 2026-10-16).
+  - The owner's call (#1501): emoji showed as boxes. They cost about 520 KB across the four files.
+  - Screens drop the characters that only steer emoji drawing (`displayText`), so a joined or skin-toned emoji shows as its parts, not with boxes.
+  - The data, meta and clock fonts carry no emoji.
 
 Sources: `fonts/ttf/` in github.com/jpt/barlow and github.com/JetBrains/JetBrainsMono, fetched 2026-10-15.
 
@@ -28,6 +33,8 @@ Regenerate one file, for example:
 ```
 npx -y lv_font_conv@1.5.3 --bpp 4 --format lvgl --no-compress --lv-include lvgl.h \
   --font BarlowCondensed-SemiBold.ttf --range 0x20-0x7E,0xA0-0x17F,0x2026,0x2212 \
-  --font JetBrainsMono-SemiBold.ttf --range 0x2713,0x2715,0x21E7,0x232B --size 18 \
-  -o ob_font_title_18.c --lv-font-name ob_font_title_18
+  --font JetBrainsMono-SemiBold.ttf --range 0x2713,0x2715,0x21E7,0x232B \
+  --font "NotoEmoji[wght].ttf" \
+  --range 0x1F300-0x1F5FF,0x1F600-0x1F64F,0x1F680-0x1F6FF,0x1F900-0x1F9FF,0x2600-0x2712,0x2716-0x27BF \
+  --size 18 -o ob_font_title_18.c --lv-font-name ob_font_title_18
 ```

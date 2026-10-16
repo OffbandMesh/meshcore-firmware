@@ -42,6 +42,32 @@ static void put(char* out, size_t n, const char* f, ...) {
   }
 }
 
+// --------------------------------------------------------- display text
+
+static bool steersOnly(uint32_t cp) {
+  return cp == 0xFE0E || cp == 0xFE0F || cp == 0x200D || cp == 0x20E3 || (cp >= 0x1F3FB && cp <= 0x1F3FF) ||
+         (cp >= 0xE0020 && cp <= 0xE007F);
+}
+
+void displayText(const char* in, size_t len, char* out, size_t n) {
+  if (!n) return;
+  size_t o = 0, i = 0;
+  while (i < len && in[i]) {
+    const uint8_t b = uint8_t(in[i]);
+    const size_t k = b < 0x80 ? 1 : b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : b >= 0xC0 ? 2 : 1;
+    if (i + k > len) break;
+    uint32_t cp = k == 1 ? b : b & (0xFF >> (k + 1));
+    for (size_t j = 1; j < k; j++) cp = (cp << 6) | (uint8_t(in[i + j]) & 0x3F);
+    if (!steersOnly(cp)) {
+      if (o + k >= n) break;   // only whole characters
+      memcpy(out + o, in + i, k);
+      o += k;
+    }
+    i += k;
+  }
+  out[o] = '\0';
+}
+
 // ------------------------------------------------------------- status bar
 
 Tone batteryTone(uint8_t percent) {
