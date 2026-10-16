@@ -94,6 +94,15 @@ private:
   size_t _len = 0;
 };
 
+// One in-place write (#1472): `len` bytes of `data` at `offset` in the index
+// file (ring == false) or the ring file.
+struct DirtyWrite {
+  bool ring;
+  uint32_t offset;
+  const void* data;
+  uint16_t len;
+};
+
 enum class LoadResult : uint8_t {
   Ok,
   Empty,           // nothing to read (no file yet)
@@ -141,10 +150,22 @@ public:
   uint16_t count() const { return _count; }   // messages held
   uint16_t capacity() const { return _cap; }
 
-  // Persistence: the thread index (small, written often) and the ring.
-  // Worst-case sizes, for sizing a BufferSink.
-  size_t indexBytesMax() const;
-  size_t ringBytesMax() const;
+  // Persistence. Both files have a fixed layout (#1472): a 16-byte header,
+  // then one entry per thread slot (index) or message slot (ring), entry i
+  // at a fixed offset. A change rewrites only its own entry in place.
+  size_t indexFileBytes() const;
+  size_t ringFileBytes() const;
+  size_t indexBytesMax() const { return indexFileBytes(); }
+  size_t ringBytesMax() const { return ringFileBytes(); }
+
+  // In-place writes still owed: changed slots and thread entries, then each
+  // touched file's header. Each call hands out one and clears it.
+  bool anyDirty() const;
+  bool nextDirty(DirtyWrite* out);
+  void clearDirty();               // after a full write of both files
+  void clearDirty(bool ring);      // after a full write of one
+
+  // Whole files: the first write, a rebuild, and the tests.
   bool saveIndex(ByteSink& out) const;
   LoadResult loadIndex(ByteSource& in);
   bool saveRing(ByteSink& out) const;
@@ -152,14 +173,25 @@ public:
 
 private:
   bool live(int t) const;
+  void release();
   MsgRecord* slotForNew();
   MsgRecord* add(int t, uint32_t time, const char* text, size_t len);
   MsgRecord* ref(uint32_t seq) const;
+  void dirtySlot(const MsgRecord* m);
+  void dirtyThread(int t);
 
   MsgRecord* _msgs = nullptr;
+  uint8_t* _slot_dirty = nullptr;     // one bit per message slot
+  uint8_t* _thread_dirty = nullptr;   // one bit per thread slot
+  bool _ring_header_dirty = false;
+  bool _index_header_dirty = false;
+  uint32_t _dirty_bits = 0;           // slot and thread bits set
+  uint16_t _scan_slot = 0;            // nextDirty's resume points
+  uint16_t _scan_thread = 0;
+  uint8_t _hdr[16];                   // the header nextDirty last handed out
+  uint8_t _entry[84];                 // the index entry nextDirty last handed out
   Thread* _threads = nullptr;
   uint16_t* _per_thread = nullptr;   // scratch: message count per thread, for eviction
-  uint16_t* _order = nullptr;        // scratch: slots in seq order, for saveRing
   uint16_t _cap = 0;
   uint16_t _max_threads = 0;
   uint16_t _count = 0;
