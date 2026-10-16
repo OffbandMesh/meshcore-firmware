@@ -62,6 +62,9 @@ public:
   virtual bool sendText(int thread, const char* text, size_t len) = 0;
   virtual uint8_t dmAttempt(uint32_t seq) = 0;               // the try in flight, 0 if none
   virtual void resend(uint32_t seq) = 0;                     // a failed DM, again
+  // Notifications (D6)
+  virtual void setThreadMode(int thread, offband::gui::NotifyMode m) = 0;   // channels only
+  virtual const char* nodeName() = 0;
   virtual ~ShellModel() {}
 };
 
@@ -102,6 +105,13 @@ private:
   void pressKey(int i);
   void insertText(const char* text);
   void leaveCompose();
+  // Bottom sheets (D6): the channel notification sheet, and the menu USR
+  // hold opens in a channel (owner pick a, 2026-10-16).
+  enum class Sheet : uint8_t { None, Notify, Menu };
+  void openSheet(Sheet kind);
+  void closeSheet();
+  void sheetHot(int i);
+  void sheetPick(int i);
   void buildTabs(lv_obj_t* parent);
   void buildLock(lv_obj_t* scr);
   void focusable(lv_obj_t* o);
@@ -143,6 +153,13 @@ private:
   lv_obj_t* _counter = nullptr;
   lv_obj_t* _key_preview = nullptr; // on the top layer while a finger is down
   uint32_t _not_sent_at = 0;        // "Not sent" shows in the counter for 2 s
+
+  // Bottom sheet
+  Sheet _sheet = Sheet::None;
+  lv_obj_t* _sheet_obj = nullptr;   // the backdrop on the top layer; the sheet is its child
+  lv_obj_t* _sheet_rows[3] = {};
+  uint8_t _sheet_count = 0;
+  int _sheet_hot = 0;
 
   // Home
   lv_obj_t* _name = nullptr;

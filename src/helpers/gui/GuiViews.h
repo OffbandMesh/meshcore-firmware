@@ -15,6 +15,7 @@
 #include <stdint.h>
 
 #include "GuiGps.h"
+#include "GuiPrefs.h"
 #include "MsgStore.h"
 
 namespace offband {
@@ -141,6 +142,13 @@ void deliveryMeta(const MsgRecord& m, bool channel, uint8_t attempt, uint8_t max
 void incomingMeta(uint8_t hops, char* out, size_t n);
 // "{from} · {time} · {meta}", skipping empty parts.
 void metaLine(const char* from, const char* time, const char* meta, char* out, size_t n);
+
+// ------------------------------------------------- channel notifications
+
+// Whether a channel message sounds the alert under the channel's mode (spec
+// v0.3 "Channel notifications"): All always; Mentions only when it mentions
+// this node; Off never (it still counts as unread).
+bool channelAlerts(NotifyMode mode, bool mentions_self);
 
 // ---------------------------------------------------------------- Compose
 

@@ -369,6 +369,15 @@ void metaLine(const char* from, const char* time, const char* meta, char* out, s
   }
 }
 
+bool channelAlerts(NotifyMode mode, bool mentions_self) {
+  switch (mode) {
+    case NotifyMode::Off: return false;
+    case NotifyMode::Mentions: return mentions_self;
+    case NotifyMode::All:
+    default: return true;
+  }
+}
+
 // ---------------------------------------------------------------- Compose
 
 void ComposeBuffer::start(size_t budget) {

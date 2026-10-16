@@ -406,6 +406,15 @@ NotifyMode UITask::threadMode(int thread) {
   return (slot >= 0 && _prefs) ? _prefs->gui.channelMode(uint8_t(slot)) : NotifyMode::All;
 }
 
+// The bell's sheet (D6): the channel's mode, kept in the GUI prefs (B6).
+void UITask::setThreadMode(int thread, NotifyMode m) {
+  const int slot = channelSlot(thread);
+  if (slot < 0 || !_prefs || _prefs->gui.channelMode(uint8_t(slot)) == m) return;
+  _prefs->gui.setChannelMode(uint8_t(slot), m);
+  _prefs_dirty = true;   // saved when idle (#1472's rule for internal flash)
+  mesh_log_line(MLOG_BOOT, "[gui] channel %d notify %u\n", slot, unsigned(m));
+}
+
 void UITask::threadOpened(int thread) {
   MsgStore& store = the_mesh.guiStore();
   const Thread* th = store.threadAt(thread);
@@ -640,7 +649,12 @@ void UITask::loop() {
   // #1472: internal-flash writes stall both cores, so they wait until nobody
   // is using the device: the screen dim or off, or no input for the dim time
   // (which covers "always on", where the screen never dims).
-  the_mesh.setGuiScreenIdle(_screen != ScreenState::On || idleMs(now) >= GUI_DIM_AFTER_MS);
+  const bool idle = _screen != ScreenState::On || idleMs(now) >= GUI_DIM_AFTER_MS;
+  the_mesh.setGuiScreenIdle(idle);
+  if (idle && _prefs_dirty) {   // a channel's notify mode (D6)
+    _prefs_dirty = false;
+    the_mesh.savePrefs();
+  }
 
   // DMs sent from here retry and fail on their own, screen lit or not.
   pollDmRetries(now);
