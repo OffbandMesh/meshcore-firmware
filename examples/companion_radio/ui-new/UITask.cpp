@@ -794,6 +794,10 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   zones = new ZonePickerScreen(this);    // #1233
   gps = new GpsScreen(this);             // #1235
   battery = new BatteryScreen(this);     // #1254
+#ifdef PIN_BUZZER
+  tones = new TonesScreen(this);              // #1421
+  tone_picker = new TonePickerScreen(this);   // #1421
+#endif
   msg_preview = NULL;
 #else
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
@@ -866,6 +870,30 @@ void UITask::gotoGps() {
 
 void UITask::gotoBattery() { setCurrScreen(battery); }   // #1254
 
+#if UI_HAS_CARDKB && defined(PIN_BUZZER)
+void UITask::gotoTones() { setCurrScreen(tones); }   // #1421
+
+void UITask::gotoTonePicker(offband::ToneEvent e) {
+  _tone_picking = e;
+  ((TonePickerScreen*)tone_picker)->begin();
+  setCurrScreen(tone_picker);
+}
+
+offband::TonePlay UITask::playTuneById(uint8_t id, offband::TonePriority priority) {
+  // Silent is a CHOICE: it sounds like nothing and that is success.
+  if (id == offband::kTuneSilent) return offband::TonePlay::Played;
+  const char* melody = offband::tuneRtttl(id);
+  // Anything else with no melody is an id this build cannot resolve -- past the table
+  // after a downgrade, or a custom slot (#1413). A remote trigger needs to tell that
+  // apart from "played", because for it the badge making no noise is a failure it may
+  // want to report. The picker does not care, so previewTune() folds it back.
+  if (melody == nullptr) return offband::TonePlay::NotFound;
+  return buzzer.play(melody, priority);
+}
+
+void UITask::stopTune() { buzzer.stop(); }
+#endif
+
 int UITask::renderStatusAs(DisplayDriver& d, const char* title, int pos) {
   return ((StatusScreen*)status)->drawAs(d, title, pos);
 }
@@ -925,30 +953,57 @@ void UITask::showAlert(const char* text, int duration_millis) {
   _alert_expiry = millis() + duration_millis;
 }
 
+#if defined(PIN_BUZZER)
+// #1419: the UI's event enum, in the tune table's terms. `none` and anything unmapped
+// has no tone event, so it stays silent rather than falling onto some other event's
+// tune.
+static bool toneEventFor(UIEventType t, offband::ToneEvent& out) {
+  switch (t) {
+    case UIEventType::contactMessage:    out = offband::ToneEvent::ContactMessage; return true;
+    case UIEventType::channelMessage:    out = offband::ToneEvent::ChannelMessage; return true;
+    case UIEventType::roomMessage:       out = offband::ToneEvent::RoomMessage;    return true;
+    case UIEventType::newContactMessage: out = offband::ToneEvent::NewContact;     return true;
+    case UIEventType::ack:               out = offband::ToneEvent::Ack;            return true;
+    case UIEventType::sent:              out = offband::ToneEvent::Sent;           return true;
+    case UIEventType::none:
+    default:
+      return false;
+  }
+}
+
+// #1420: the id stored for this event, or `kTuneUnset` when nothing is stored -- which
+// is also the answer when prefs are not available yet. Unset means "use this board's
+// compiled default", so a missing pref and an un-loaded prefs object both land on the
+// same safe behavior rather than on silence.
+#endif
+
 void UITask::notify(UIEventType t) {
 #if defined(PIN_BUZZER)
-switch(t){
-  case UIEventType::contactMessage:
-    // gemini's pick
-    buzzer.play("MsgRcv3:d=4,o=6,b=200:32e,32g,32b,16c7");
-    break;
-  case UIEventType::channelMessage:
-    buzzer.play("kerplop:d=16,o=6,b=120:32g#,32c#");
-    break;
-  case UIEventType::ack:
-    buzzer.play("ack:d=32,o=8,b=120:c");
-    break;
-  case UIEventType::roomMessage:
-  case UIEventType::newContactMessage:
-  case UIEventType::none:
-  default:
-    break;
-}
+  // #1418/#1419/#1420: the tone is looked up, not written here. The id comes from the
+  // stored pref, falling back to this board's compiled default when nothing has been
+  // chosen -- so an un-configured badge plays what it always did, and a deliberately
+  // silenced event stays silent.
+  offband::ToneEvent ev;
+  if (toneEventFor(t, ev)) {
+    const uint8_t id = offband::effectiveTone(_node_prefs, ev);
+    // nullptr covers both silence and a custom-slot id this build cannot resolve yet
+    // (#1413). Either way nothing plays, which is the safe answer.
+    if (const char* melody = offband::tuneRtttl(id)) {
+      buzzer.play(melody, offband::TonePriority::Event);
+    }
+  }
 #endif
 
 #ifdef PIN_VIBRATION
-  // Trigger vibration for all UI events except none
-  if (t != UIEventType::none) {
+  // Trigger vibration for all UI events except none.
+  //
+  // #1419: `sent` is excluded. Vibration is feedback for something that ARRIVED; a send
+  // is the user's own keypress and they already know they made it. No board today both
+  // has a motor and can fire `sent` -- the screen that sends is badge-only and the badge
+  // has no motor -- so this changes nothing now. It is here because "no board does both
+  // yet" is a latent bug, not a safety argument: a later board with a keyboard and a
+  // motor would have buzzed on every send without anyone choosing that.
+  if (t != UIEventType::none && t != UIEventType::sent) {
     vibration.trigger();
   }
 #endif
@@ -1306,7 +1361,18 @@ void UITask::loop() {
     // GPS (#1235) to Settings, and Settings to Status, where it was opened.
     if (!curr->handleInput(c) && keynav::backsOut((uint8_t)c) && curr != home) {
 #if UI_HAS_CARDKB
-      if (curr == tools || curr == zones || curr == gps || curr == battery) gotoSettings();
+#ifdef PIN_BUZZER
+      // #1421: the picker is one level deeper than the rest, so Esc from it goes to
+      // Tones rather than all the way out. Without this it would land on Home, because
+      // the fallback below is the default for any screen not named here.
+      if (curr == tone_picker) gotoTones();
+      else
+#endif
+      if (curr == tools || curr == zones || curr == gps || curr == battery
+#ifdef PIN_BUZZER
+          || curr == tones
+#endif
+         ) gotoSettings();
       else if (curr == settings) gotoStatus();
       else
 #endif

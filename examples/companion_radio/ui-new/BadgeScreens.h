@@ -142,8 +142,13 @@ private:
   // they read as a pair. Both cycle in place, like the single row did. The adjacency is
   // asserted rather than asked for: the enum order IS the on-screen order, so a later
   // insertion would separate the pair silently.
-  enum Row : uint8_t { Bluetooth, NavTextSize, MsgTextSize, ScreenOff, TimeZone, Gps,
-                       Battery, AdvertZeroHop, AdvertFlood, Hibernate, DevicePages, kRows };
+  // #1421: Tones sits after Screen off, so the two rows about how the badge behaves AT
+  // you -- when the screen blanks, what it sounds like -- read together. It is hidden by
+  // shown() on a board with no buzzer rather than compiled out, so the enum stays one
+  // shape everywhere.
+  enum Row : uint8_t { Bluetooth, NavTextSize, MsgTextSize, ScreenOff, Tones, TimeZone,
+                       Gps, Battery, AdvertZeroHop, AdvertFlood, Hibernate, DevicePages,
+                       kRows };
   static_assert(MsgTextSize == NavTextSize + 1,
                 "the two text-size rows must stay adjacent -- the enum order is the row order");
   UITask* _task;
@@ -232,6 +237,62 @@ private:
 // One conversation, newest at the bottom, with the compose line under a dotted rule
 // (design 1a). The name shows in a bar for 2 s on entry. Past one line the editor
 // takes the screen, keeping the destination and the room left in its footer.
+#ifdef PIN_BUZZER
+// #1421: Settings -> Tones. One row per sound event, showing the tune it will play.
+// Pressing a row opens the picker for that event.
+class TonesScreen : public UIScreen {
+public:
+  explicit TonesScreen(UITask* task) : _task(task) {}
+  int render(DisplayDriver& display) override;
+  bool handleInput(char c) override;
+
+  // What Settings' own Tones row shows: the DM tune's name, which the owner chose over
+  // a count because a count says nothing you would act on.
+  static void summary(UITask* task, char* out, size_t n);
+
+private:
+  // #1468: row 0 is the notification scope -- the gate ABOVE the six event rows, and on
+  // this UI family the only way to reach it at all. Title plus these seven rows is
+  // exactly the large face's capacity, so nothing scrolls at that size.
+  // The row count lives in the .cpp: it needs ToneSlots.h, and this header is compiled
+  // by every variant that builds these screens, buzzer or not.
+  static constexpr int kScopeRow = 0;
+
+  void cycleScope();
+
+  UITask* _task;
+  int _sel = 0;
+};
+
+// #1421: the tunes, for one event. The owner's design calls this archetype a fixed
+// option list, and ZonePickerScreen is the same shape -- this is that screen with a
+// different source of rows, plus a preview as the selection moves.
+//
+// Seven builtins is exactly the seven content rows under the title bar at the large
+// face, so at that size the whole list is visible with no scrolling. It still scrolls,
+// because a smaller face has more rows and a larger one fewer.
+class TonePickerScreen : public UIScreen {
+public:
+  explicit TonePickerScreen(UITask* task) : _task(task) {}
+  void begin();   // on the tune in use for the event being edited, and auditions it
+  int render(DisplayDriver& display) override;
+  bool handleInput(char c) override;
+
+private:
+  // Audition whatever is highlighted, and give any refusal words. Both the arrival and
+  // a move go through here, because arriving silently was the #1467 bug: the picker
+  // opens on the tune in USE, which is the one you are most likely to want to hear and
+  // least likely to navigate onto, so auditioning only on movement meant the common
+  // path -- open, press Enter -- never made a sound.
+  void audition();
+
+  UITask* _task;
+  int _sel = 0;
+  const char* _note = "";      // "Buzzer: OFF" when a preview could not be heard
+  uint32_t _note_until = 0;
+};
+#endif
+
 class ThreadScreen : public UIScreen {
 public:
   explicit ThreadScreen(UITask* task) : _task(task) {}

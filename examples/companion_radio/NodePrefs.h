@@ -175,6 +175,26 @@ public:
   // marks the second case, which auto-learn then leaves alone.
   uint16_t batt_full_mv = 0;
   uint8_t batt_full_user = 0;
+  // #1420: the tune chosen for each sound event, as a tune-table id.
+  //
+  // 0xFF is "nothing chosen yet", deliberately NOT 0 -- 0 is the id of Silent, which is
+  // a real choice someone can make. A board resolves 0xFF to its own compiled default
+  // (offband::resolveTune), so an un-configured badge follows the firmware and a
+  // deliberately-silenced event stays silent.
+  //
+  // Six separate keys rather than one byte array, and that is deliberate. A blob is
+  // read with `memset(value, 0, len)` then `fromHex` (ConfigSerializer.cpp:155-158), so
+  // a badge whose stored blob is shorter than the array -- which is what happens the
+  // day a seventh event is added -- gets 0 for the new one. 0 is Silent. The new event
+  // would arrive permanently muted on every existing badge, and nothing would say so.
+  // A missing KEY, by contrast, simply leaves the member at its compiled default, which
+  // is the whole reason /prefs.json being keyed is safe to extend.
+  uint8_t ui_tone_dm = 0xFF;
+  uint8_t ui_tone_channel = 0xFF;
+  uint8_t ui_tone_room = 0xFF;
+  uint8_t ui_tone_newcontact = 0xFF;
+  uint8_t ui_tone_ack = 0xFF;
+  uint8_t ui_tone_sent = 0xFF;
 
 private:
   // ---- Offband-only prefs -------------------------------------------------
@@ -194,6 +214,14 @@ private:
       def("scroff", _parent->ui_screen_secs);     // #1245
       def("bfull", _parent->batt_full_mv);        // #1254
       def("bfuser", _parent->batt_full_user);     // #1254
+      // #1420: per-event tune ids. 0xFF means unset; see the members for why these are
+      // six keys and not one blob.
+      def("t_dm", _parent->ui_tone_dm);
+      def("t_ch", _parent->ui_tone_channel);
+      def("t_room", _parent->ui_tone_room);
+      def("t_new", _parent->ui_tone_newcontact);
+      def("t_ack", _parent->ui_tone_ack);
+      def("t_sent", _parent->ui_tone_sent);
       // #509 button-action matrix: 4 bytes, one per OFFBAND_UI_SEQ_*.
       def("btn", _parent->button_actions, sizeof(_parent->button_actions));
     }
@@ -271,3 +299,48 @@ public:
 #define NOTIFY_SCOPE_SELF   1
 #define NOTIFY_SCOPE_NONE   2
 #define NOTIFY_SCOPE_COUNT  3
+
+// #1468: the three decisions a scope control has to make, kept out of the screen so
+// they are host-tested and so the badge and the 0xC5 handler cannot drift apart.
+//
+// Context for why this exists at all: notify_scope is the gate UPSTREAM of every tune
+// choice -- channelMsgShouldNotify() and the DM path consult it before notify() is ever
+// called -- and until now the only writer was the client. A badge left on SELF or NONE
+// had no on-device route back, because the one gesture it has toggles buzzer_quiet,
+// which cannot undo a scope.
+namespace offband {
+
+// The cycle the comment above has always documented: ALL -> SELF -> NONE -> ALL. A
+// function rather than `(scope + 1) % COUNT` at each call site, because the order is a
+// contract shared with the client's control and with #510's triple-press on ui-orig; an
+// out-of-range stored value lands on ALL rather than wrapping somewhere unpredictable.
+inline uint8_t nextNotifyScope(uint8_t scope) {
+  if (scope >= NOTIFY_SCOPE_NONE) return NOTIFY_SCOPE_ALL;
+  return (uint8_t)(scope + 1);
+}
+
+// buzzer_quiet, as the 0xC5 SET handler already sets it: silent only at NONE.
+//
+// This is the line that fixes the strand. The handler applied this coupling on the way
+// IN and nothing applied it on the way OUT, so a client that set NONE also muted the
+// buzzer, and nothing a user could reach on the badge un-muted it. Any scope control
+// must apply the same rule, or it changes the gate and leaves the driver behind.
+inline uint8_t quietForScope(uint8_t scope) {
+  return scope == NOTIFY_SCOPE_NONE ? 1 : 0;
+}
+
+// What the badge shows. Deliberately NOT the client's per-channel words (#1469): the
+// client filters one channel, this is the whole device, and the middle value is not even
+// a clean middle -- at SELF a DM still sounds, only channel traffic is filtered. "DMs +
+// @" is terse but it is the only short phrase that is actually true; calling it
+// "Mentions" would tell a user DMs are filtered too, which they are not.
+inline const char* notifyScopeLabel(uint8_t scope) {
+  switch (scope) {
+    case NOTIFY_SCOPE_ALL:  return "All";
+    case NOTIFY_SCOPE_SELF: return "DMs + @";
+    case NOTIFY_SCOPE_NONE: return "Off";
+    default:                return "All";   // an unknown stored value reads as its fallback
+  }
+}
+
+}  // namespace offband
