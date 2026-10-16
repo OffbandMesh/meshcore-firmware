@@ -193,6 +193,9 @@ public:
   // The on-device message store (#1427) and its flash backend (#1463).
   offband::gui::MsgStore& guiStore() { return _gui_store; }
   StoreFlash& guiStoreFlash() { return _gui_store_flash; }
+  // The UI says whether anyone is looking: internal-flash writes (the store,
+  // the contacts save) wait for a dim or dark screen (#1472).
+  void setGuiScreenIdle(bool idle) { _gui_screen_idle = idle; }
 #endif
 
 #if UI_HAS_CARDKB
@@ -386,6 +389,8 @@ private:
 
   offband::gui::MsgStore _gui_store;
   StoreFlash _gui_store_flash;
+  bool _gui_screen_idle = false;
+  uint32_t _contacts_wait_since = 0;   // a due contacts save held for the screen; 0: none
 
   // #1458: the contact list is saved a slice per loop tick, not in one pass.
   void contactsSaveTick();
