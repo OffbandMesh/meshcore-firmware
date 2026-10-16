@@ -1,0 +1,189 @@
+#pragma once
+
+// What the core screens show (#1428, PLAN.md §3 Epic D): the status bar, Home,
+// Lock, Chats, Conversation and Compose, as text and states the LVGL code puts
+// on screen. Design of record: ObScreen.dc.html and the GUI spec, plus the
+// owner-approved gap mockups (epic-d-gap-mockups.html, 2026-10-16).
+//
+// Pure: no Arduino, no LVGL, no mesh. The caller passes times and readings in.
+//
+// Every function that writes text writes a NUL-terminated string, does nothing
+// when n is 0, and cuts to fit only at a whole UTF-8 character. Store-based
+// functions treat a store that isn't ready as empty.
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include "GuiGps.h"
+#include "MsgStore.h"
+
+namespace offband {
+namespace gui {
+
+// Colour roles. Every role has a second cue on screen (bar count, glyph,
+// fill), so Mono HC and e-ink lose nothing.
+enum class Tone : uint8_t { Ok, Warn, Bad, Dim, Signal };
+
+// ------------------------------------------------------------- status bar
+
+// Battery: ok above 30%, warn 15-30%, bad below 15% (spec v0.2).
+Tone batteryTone(uint8_t percent);
+
+// Bluetooth: shown only when enabled; signal colour with a phone connected,
+// dim while advertising.
+enum class BleIcon : uint8_t { Hidden, Advertising, Connected };
+BleIcon bleIcon(bool enabled, bool connected);
+
+// GPS: shown only when a module is present and enabled. Seeking blinks at
+// 1 Hz; no fix for kGpsTimeoutSecs turns it red.
+enum class GpsIcon : uint8_t { Hidden, Fix3D, Fix2D, Seeking, TimedOut };
+constexpr uint32_t kGpsTimeoutSecs = 600;
+// secs_without_fix: since the fix was lost, or since the GPS started if it
+// never had one.
+GpsIcon gpsIcon(bool present, FixType fix, uint32_t secs_without_fix);
+// The seeking blink: lit for the first half of each second.
+bool gpsBlinkLit(uint32_t now_ms);
+
+// The unread count left of the icons; hidden at 0.
+inline bool showUnread(uint32_t unread) { return unread > 0; }
+
+// ------------------------------------------------ LoRa long-press popover
+
+// The level word for a bar count (spec "Signal level scale").
+const char* signalWord(uint8_t bars);
+// "LoRa · last 8 packets", "LoRa · last packet", or "No packets yet".
+void loraTitle(size_t packets, char* out, size_t n);
+// "+6.5 dB" / "-3.0 dB".
+void formatSnr(float snr_db, char* out, size_t n);
+// "-92 dBm".
+void formatDbm(int16_t dbm, char* out, size_t n);
+// The margin over the SF's demodulation floor: "14.0 dB".
+void formatMargin(float snr_db, uint8_t sf, char* out, size_t n);
+constexpr uint32_t kPopoverCloseMs = 5000;
+
+// ------------------------------------------------------------------- Home
+
+void formatFreq(float mhz, char* out, size_t n);                        // "910.525"
+void radioSub(uint8_t sf, float bw_khz, uint8_t cr, char* out, size_t n);  // "SF7 · BW62.5 · CR5"
+void heardSub(uint16_t repeaters, uint16_t rooms, uint16_t chat, char* out, size_t n);
+const char* gpsValue(bool present, FixType fix);                        // "3D", "2D", "No fix", "Off"
+void gpsSub(uint8_t sats, bool clock_synced, char* out, size_t n);      // "9 sats · clock synced"
+void formatUptime(uint32_t secs, char* out, size_t n);                  // "42m", "5h 12m", "3d 4h"
+void batterySub(uint16_t millivolts, uint32_t uptime_secs, char* out, size_t n);  // "4.02 V · 3d 4h up"
+void formatAirtime(uint16_t permille, char* out, size_t n);             // "1.2%"
+// The names of threads with unread messages, newest first: two, then "+N".
+void unreadSub(const MsgStore& store, char* out, size_t n);
+
+// Send advert: the button reads "Advert sent ✓" (or "Not sent, try again")
+// for kAdvertFeedbackMs, and presses meanwhile are ignored.
+constexpr uint32_t kAdvertFeedbackMs = 2000;
+class AdvertButton {
+public:
+  enum class State : uint8_t { Idle, Sent, NotSent };
+  // True when this press should send an advert.
+  bool press(uint32_t now_ms);
+  void result(bool sent, uint32_t now_ms);
+  State state(uint32_t now_ms) const;
+
+private:
+  State _state = State::Idle;
+  bool _pending = false;
+  uint32_t _at = 0;
+};
+
+// ------------------------------------------------------------------- Lock
+
+// "21:07", or "--:--" before the clock is set. zone: a TimeZones.h index.
+void formatClock(int zone, uint32_t utc, char* out, size_t n);
+// "Fri 16 Oct"; empty before the clock is set.
+void formatDate(int zone, uint32_t utc, char* out, size_t n);
+// The newest unread message of each thread with unread, newest first, at
+// most `max`. *more = the threads' unread counts added up, less the messages
+// returned: the "+N more" line. A thread whose unread messages were all
+// evicted shows no item but still counts in *more.
+size_t lockItems(const MsgStore& store, uint32_t* out, size_t max, uint32_t* more);
+
+// ------------------------------------------------- Chats and Conversation
+
+// Live threads, unread ones first, then by latest activity. Returns the count.
+size_t chatOrder(const MsgStore& store, uint16_t* out, size_t max);
+// The second row of a chat: "Sender: text" on channels and rooms, "You: text"
+// for an own message, the text alone in a DM; "No messages yet" when empty.
+void chatPreview(const MsgStore& store, int thread, char* out, size_t n);
+// The status at the end of an own message's meta line.
+// DM: "sending…", "sending… try 2/3", "✓ delivered", "✕ not delivered · hold
+// to resend". Channel: "heard ×N", empty before any echo.
+void deliveryMeta(const MsgRecord& m, bool channel, uint8_t attempt, uint8_t max_attempts,
+                  char* out, size_t n);
+// "{from} · {time} · {meta}", skipping empty parts.
+void metaLine(const char* from, const char* time, const char* meta, char* out, size_t n);
+
+// ---------------------------------------------------------------- Compose
+
+// The draft, in bytes of UTF-8, stopping at the budget: kMsgTextMax for a
+// DM; less the "<name>: " prefix on a channel (compose::budget).
+class ComposeBuffer {
+public:
+  void start(size_t budget);
+  // Appends one UTF-8 character; false (and nothing changes) if it doesn't fit.
+  bool insert(const char* utf8, size_t len);
+  // Removes the last whole character; false when empty.
+  bool backspace();
+  const char* text() const { return _buf; }
+  size_t length() const { return _len; }
+  size_t budget() const { return _budget; }
+  // "14/160".
+  void counter(char* out, size_t n) const;
+  // Amber from 10 bytes short of the budget: 150 of 160 (owner, 2026-10-16).
+  Tone counterTone() const;
+
+private:
+  char _buf[kMsgTextMax + 1] = {};
+  size_t _len = 0;
+  size_t _budget = kMsgTextMax;
+};
+
+// Shift: one tap = the next letter capital; a double tap (kMultiClickMs) =
+// caps lock; a tap from either clears it. A draft's start and the start of a
+// sentence ("." "!" "?" then a space) turn it on for one letter.
+enum class Shift : uint8_t { Off, Once, Lock };
+class ShiftState {
+public:
+  void tap(uint32_t now_ms);
+  void typedLetter();   // Once -> Off
+  void autoCap(const char* text, size_t len);
+  Shift state() const { return _s; }
+
+private:
+  Shift _s = Shift::Off;
+  uint32_t _last_tap = 0;
+  bool _tapped = false;
+};
+
+// Keyboard pages: ?123 -> Symbols, =\< -> Symbols2, ABC -> Letters. After a
+// symbol and then a space, it returns to Letters.
+enum class KeyPage : uint8_t { Letters, Symbols, Symbols2 };
+class PageState {
+public:
+  void select(KeyPage p) { _p = p; _typed_symbol = false; }
+  void typed(char c);
+  KeyPage page() const { return _p; }
+
+private:
+  KeyPage _p = KeyPage::Letters;
+  bool _typed_symbol = false;
+};
+
+// Key geometry for the letters page at 240 px, so a touch snaps to the
+// nearest key centre, gaps included.
+struct KeyRect {
+  int16_t x, y, w, h;
+  const char* label;   // "q", "⇧", "⌫", "?123", "space", "Send"
+};
+// The letters page laid out in a keyboard area `width` wide whose top is at y0.
+size_t lettersLayout(int16_t width, int16_t y0, KeyRect* out, size_t max);
+// Index of the key whose centre is nearest (x, y); -1 if none.
+int nearestKey(const KeyRect* keys, size_t count, int16_t x, int16_t y);
+
+}  // namespace gui
+}  // namespace offband

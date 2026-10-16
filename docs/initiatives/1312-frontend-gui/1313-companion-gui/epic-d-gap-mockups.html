@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Epic D gap mockups</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* Offband theme tokens, copied from ObScreen.dc.html */
+:root{
+  --bg:#0F1412; --bg2:#161C19; --bg3:#1D2521; --line:#34403A; --line2:#232C28;
+  --ink:#EFF3E8; --ink2:#BAC4B5; --dim:#7C8B82; --sig:#7BEFA8; --sigInk:#0F1412;
+  --wash:rgba(123,239,168,.09); --warn:#FFA552; --bad:#FF7A6E; --r:6px;
+  --sans:'Barlow Condensed',sans-serif; --mono:'JetBrains Mono',monospace;
+  --page:#0a0d0c; --pageInk:#cfd6cc;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--page);color:var(--pageInk);font-family:var(--sans);padding:24px 16px 48px}
+h1{font-size:26px;font-weight:600;color:var(--ink)}
+.lede{font-size:16px;color:var(--dim);margin:6px 0 24px;max-width:900px}
+.grid{display:flex;flex-wrap:wrap;gap:28px}
+.card{width:300px}
+.card h2{font-size:18px;font-weight:600;color:var(--ink)}
+.card .n{font-family:var(--mono);font-size:12px;color:var(--sig);margin-right:6px}
+.card p{font-size:14px;color:var(--ink2);margin:4px 0 10px;line-height:1.3;min-height:54px}
+.card ul{font-size:13px;color:var(--dim);margin:10px 0 0 16px;line-height:1.35}
+/* device frame: native 240x320, shown 1.25x */
+.dev{width:300px;height:400px;border:1px solid #2a332f;border-radius:10px;overflow:hidden;background:#000}
+.scr{width:240px;height:320px;transform:scale(1.25);transform-origin:0 0;background:var(--bg);color:var(--ink);
+  font-family:var(--sans);position:relative;overflow:hidden;display:flex;flex-direction:column}
+.sb{height:20px;flex:none;background:var(--bg2);border-bottom:1px solid var(--line2);display:flex;align-items:center;
+  padding:0 6px;font-family:var(--mono);font-size:10px;color:var(--ink2);gap:5px}
+.sb .clk{color:var(--ink);font-weight:600}
+.sb .mail{color:var(--sig);display:flex;align-items:center;gap:2px}
+.sb .right{margin-left:auto;display:flex;align-items:center;gap:5px}
+.bars{display:flex;align-items:flex-end;gap:1px;height:10px}
+.bars i{display:block;width:2px;background:var(--sig)}
+.bars i.off{background:var(--line)}
+.batt{display:flex;align-items:center;gap:2px}
+.batt b{display:block;width:18px;height:9px;border:1px solid var(--ink2);border-radius:2px;padding:1px}
+.batt b i{display:block;height:100%;background:var(--sig);border-radius:1px}
+.body{flex:1;position:relative;overflow:hidden}
+.tabs{height:40px;flex:none;border-top:1px solid var(--line2);background:var(--bg2);display:flex}
+.tabs div{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);border-top:2px solid transparent}
+.tabs div.on{color:var(--sig);background:var(--wash);border-top-color:var(--sig)}
+.tabs svg{width:16px;height:16px}
+/* home */
+.hhead{padding:8px 10px 6px;display:flex;align-items:baseline;gap:6px}
+.hhead .nm{font-size:20px;font-weight:600}
+.hhead .tag{margin-left:auto;font-size:9px;color:var(--sig);border:1px solid var(--sig);border-radius:3px;padding:0 4px;letter-spacing:.08em;text-transform:uppercase}
+.cells{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:0 8px}
+.cell{background:var(--bg2);border:1px solid var(--line2);border-radius:var(--r);padding:5px 7px;height:52px}
+.cell .l{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.cell .v{font-family:var(--mono);font-size:15px;font-weight:600}
+.cell .s{font-size:9px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.btn{position:absolute;left:8px;right:8px;bottom:8px;height:36px;border:1px solid var(--sig);border-radius:var(--r);
+  color:var(--sig);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600}
+.btn.done{background:var(--sig);color:var(--sigInk)}
+/* popover */
+.scrim{position:absolute;inset:20px 0 0 0;background:rgba(0,0,0,.45)}
+.pop{position:absolute;top:24px;right:6px;width:150px;background:var(--bg3);border:1px solid var(--line);border-radius:8px;
+  padding:7px 9px;font-family:var(--mono);font-size:10px;color:var(--ink2);box-shadow:0 4px 14px rgba(0,0,0,.5)}
+.pop:before{content:"";position:absolute;top:-5px;right:62px;width:8px;height:8px;background:var(--bg3);
+  border-left:1px solid var(--line);border-top:1px solid var(--line);transform:rotate(45deg)}
+.pop .t{font-family:var(--sans);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:4px}
+.pop .row{display:flex;justify-content:space-between;line-height:15px}
+.pop .row b{color:var(--ink);font-weight:600}
+.pop .lvl{margin-top:5px;padding-top:4px;border-top:1px solid var(--line2);color:var(--sig);display:flex;justify-content:space-between}
+.pop .foot{margin-top:3px;font-size:8px;color:var(--dim)}
+/* conversation */
+.chead{height:32px;flex:none;border-bottom:1px solid var(--line2);display:flex;align-items:center;padding:0 6px;gap:6px}
+.chead .bk{color:var(--sig);font-size:18px;width:14px}
+.chead .nm{font-size:15px;font-weight:600}
+.chead .rt{font-family:var(--mono);font-size:9px;color:var(--dim)}
+.chead .bell{margin-left:auto;width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:var(--ink2)}
+.msgs{padding:6px 8px;display:flex;flex-direction:column;gap:6px}
+.meta{font-size:9px;color:var(--dim);margin-bottom:2px}
+.meta.me{text-align:right}
+.bub{font-size:12px;padding:5px 8px;max-width:88%;line-height:1.25}
+.bub.in{background:var(--bg3);border-radius:10px 10px 10px 3px;align-self:flex-start}
+.bub.out{background:var(--sig);color:var(--sigInk);border-radius:10px 10px 3px 10px;align-self:flex-end}
+.bub.out.pending{opacity:.6}
+.bub.out.fail{background:transparent;color:var(--ink);border:1px solid var(--bad)}
+.m{display:flex;flex-direction:column}
+.st-ok{color:var(--sig)} .st-bad{color:var(--bad)} .st-dim{color:var(--dim)}
+.cbar{position:absolute;left:0;right:0;bottom:0;height:42px;border-top:1px solid var(--line2);background:var(--bg2);
+  display:flex;align-items:center;gap:6px;padding:0 6px}
+.cbar .can{width:40px;height:34px;border:1px solid var(--line);border-radius:var(--r);font-size:12px;color:var(--ink2);
+  display:flex;align-items:center;justify-content:center}
+.cbar .fld{flex:1;height:34px;border:1px solid var(--line);border-radius:var(--r);font-size:12px;color:var(--dim);
+  display:flex;align-items:center;padding:0 8px}
+/* compose */
+.khead{height:28px;flex:none;display:flex;align-items:center;padding:0 8px;font-size:13px;border-bottom:1px solid var(--line2)}
+.khead .cnt{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--dim)}
+.draft{margin:6px 8px;height:48px;border:1px solid var(--sig);background:var(--wash);border-radius:var(--r);
+  padding:5px 7px;font-size:13px}
+.caret{display:inline-block;width:1px;height:13px;background:var(--sig);vertical-align:-2px}
+.kb{position:absolute;left:0;right:0;bottom:0;background:var(--bg2);border-top:1px solid var(--line2);padding:3px 2px 4px}
+.kr{display:flex;justify-content:center;gap:2px;margin-top:3px}
+.k{height:32px;width:21.6px;background:var(--bg3);border-radius:4px;font-size:14px;display:flex;align-items:center;
+  justify-content:center;color:var(--ink);font-family:var(--sans)}
+.k.w{width:34px;font-size:11px;color:var(--ink2)}
+.k.sp{width:96px;font-size:11px;color:var(--dim)}
+.k.send{width:46px;background:var(--sig);color:var(--sigInk);font-weight:600;font-size:12px}
+.k.hot{outline:1px solid var(--sig);background:var(--wash)}
+.k.shift1{background:var(--ink2);color:var(--bg)}
+.k.lock{background:var(--sig);color:var(--sigInk);box-shadow:inset 0 -3px 0 var(--sigInk)}
+.prev{position:absolute;width:36px;height:46px;background:var(--bg3);border:1px solid var(--sig);border-radius:6px;
+  display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:600;color:var(--ink);
+  box-shadow:0 4px 10px rgba(0,0,0,.5)}
+.touch{position:absolute;width:14px;height:14px;border-radius:50%;border:1.5px dashed var(--warn)}
+/* chats + empty */
+.lhead{height:32px;flex:none;display:flex;align-items:center;padding:0 10px;border-bottom:1px solid var(--line2)}
+.lhead .t{font-size:16px;font-weight:600}
+.lhead .plus{margin-left:auto;color:var(--sig);font-size:20px}
+.empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  text-align:center;padding:0 22px;gap:5px}
+.empty svg{width:34px;height:34px;color:var(--line);margin-bottom:4px}
+.empty .h{font-size:16px;font-weight:600;color:var(--ink2)}
+.empty .s{font-size:12px;color:var(--dim);line-height:1.3}
+.empty .hint{margin-top:8px;font-family:var(--mono);font-size:9px;color:var(--sig);border:1px solid var(--line);
+  border-radius:3px;padding:2px 6px}
+/* lock */
+.lock{align-items:center;padding-top:44px}
+.lock .clock{font-family:var(--mono);font-size:46px;font-weight:600;letter-spacing:-1px}
+.lock .sub{font-size:12px;color:var(--ink2);margin-top:2px}
+.lock .items{width:216px;margin-top:22px;display:flex;flex-direction:column;gap:6px}
+.lock .it{background:var(--bg2);border:1px solid var(--line2);border-radius:var(--r);padding:6px 8px}
+.lock .it .a{display:flex;justify-content:space-between;font-size:11px;color:var(--sig);font-weight:600}
+.lock .it .a span{font-family:var(--mono);font-size:9px;color:var(--dim);font-weight:400}
+.lock .it .b{font-size:12px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lock .none{margin-top:26px;font-size:13px;color:var(--dim);display:flex;align-items:center;gap:6px}
+.lock .unl{position:absolute;bottom:14px;left:0;right:0;text-align:center;font-size:11px;color:var(--dim)}
+.lock .unl b{color:var(--ink2);font-weight:600}
+.note{font-size:13px;color:var(--warn)}
+</style>
+</head>
+<body>
+<h1>Epic D: mockups for the screens and states the design lacks</h1>
+<p class="lede">Offband theme, Modern look, drawn at the native 240×320 and shown at 1.25×. Everything outside these frames follows ObScreen and the GUI spec as drawn. Each card names what it adds; the bullets are the behavior I'd build.</p>
+
+<div class="grid" id="grid"></div>
+
+<script>
+const ICON = {
+  mail:'<svg width="11" height="9" viewBox="0 0 11 9" fill="none" stroke="currentColor" stroke-width="1.2"><rect x=".6" y=".6" width="9.8" height="7.8" rx="1"/><path d="M1 1l4.5 4 4.5-4"/></svg>',
+  ble:'<svg width="7" height="11" viewBox="0 0 7 11" fill="none" stroke="var(--sig)" stroke-width="1.2"><path d="M1 3l5 4.5-2.5 2.3V1.2L6 3.5 1 8"/></svg>',
+  gps:'<svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="var(--sig)" stroke-width="1.2"><circle cx="5.5" cy="5.5" r="3.4"/><circle cx="5.5" cy="5.5" r="1.3" fill="var(--sig)"/><path d="M5.5 0v2M5.5 9v2M0 5.5h2M9 5.5h2"/></svg>',
+  bell:'<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3.5 10V6.5a3.5 3.5 0 017 0V10l1 1.2h-9z"/><path d="M5.8 12.5a1.3 1.3 0 002.4 0"/></svg>',
+  chat:'<svg viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 7h24v15H14l-6 5v-5H5z"/></svg>',
+  thread:'<svg viewBox="0 0 34 34" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9h16v10H11l-4 3.5V19H4z"/><path d="M24 13h6v10h-3v3l-3.5-3H17v-1"/></svg>',
+  tabs:[
+   ['Home','<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 7.5L8 2.5l6 5V14H2z"/><path d="M6.5 14v-4h3v4"/></svg>'],
+   ['Chat','<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 3h12v8H6l-3 2.5V11H2z"/></svg>'],
+   ['Nodes','<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="4" cy="4" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="7" cy="12.5" r="2"/><path d="M5.8 4.3l4.3.5M5 5.8l1.4 4.8M10.8 6.7l-2.7 4.3"/></svg>'],
+   ['Map','<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 3.5l4-1.5 5 1.5 4-1.5v10.5l-4 1.5-5-1.5-4 1.5z"/><path d="M5.5 2v10.5M10.5 3.5V14"/></svg>'],
+   ['Setup','<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg>']
+  ]
+};
+const sb = (unread=4) => `<div class="sb"><span class="clk">21:07</span>${unread?`<span class="mail">${ICON.mail}${unread}</span>`:''}
+  <span class="right"><span class="bars"><i style="height:3px"></i><i style="height:5px"></i><i style="height:7px"></i><i class="off" style="height:10px"></i></span>
+  ${ICON.ble}${ICON.gps}<span class="batt"><b><i style="width:87%"></i></b>87%</span></span></div>`;
+const tabs = on => `<div class="tabs">${ICON.tabs.map(([n,s])=>`<div class="${n===on?'on':''}">${s}${n}</div>`).join('')}</div>`;
+const home = btn => `<div class="hhead"><span class="nm">OB-Valley</span><span class="tag">Companion</span></div>
+  <div class="cells">
+   <div class="cell"><div class="l">Radio</div><div class="v">910.525</div><div class="s">SF7 · BW62.5 · CR5</div></div>
+   <div class="cell"><div class="l">Heard</div><div class="v">12</div><div class="s">3 rpt · 1 room · 8 chat</div></div>
+   <div class="cell"><div class="l">Unread</div><div class="v">4</div><div class="s">#Public, Wren</div></div>
+   <div class="cell"><div class="l">GPS</div><div class="v">3D</div><div class="s">9 sats · clock synced</div></div>
+   <div class="cell"><div class="l">Battery</div><div class="v">87%</div><div class="s">4.02 V · 3d 4h up</div></div>
+   <div class="cell"><div class="l">Airtime</div><div class="v">1.2%</div><div class="s">tx, last hour</div></div>
+  </div>${btn}`;
+const kbAlpha = (opts={}) => {
+  const sh = opts.shift||''; const up = sh ? s=>s.toUpperCase() : s=>s;
+  const row = (s,hot) => s.split('').map(c=>`<div class="k${c===hot?' hot':''}">${up(c)}</div>`).join('');
+  return `<div class="kb">
+   <div class="kr">${row('qwertyuiop',opts.hot)}</div>
+   <div class="kr">${row('asdfghjkl',opts.hot)}</div>
+   <div class="kr"><div class="k w ${sh}">⇧</div>${row('zxcvbnm',opts.hot)}<div class="k w">⌫</div></div>
+   <div class="kr"><div class="k w">?123</div><div class="k sp">space</div><div class="k send">Send</div></div></div>`;
+};
+const kbSym = () => {
+  const row = s => [...s].map(c=>`<div class="k">${c}</div>`).join('');
+  return `<div class="kb">
+   <div class="kr">${row('1234567890')}</div>
+   <div class="kr">${row('@#$_&-+()/')}</div>
+   <div class="kr"><div class="k w">=\\&lt;</div>${row('*"\':;!?')}<div class="k w">⌫</div></div>
+   <div class="kr"><div class="k w">ABC</div><div class="k" style="width:22px">,</div><div class="k sp" style="width:70px">space</div><div class="k" style="width:22px">.</div><div class="k send">Send</div></div></div>`;
+};
+const compose = (draft,cnt,kb,extra='') => `${sb()}<div class="khead">To <b style="margin-left:4px">#Public</b><span class="cnt">${cnt}</span></div>
+  <div class="body"><div class="draft">${draft}<span class="caret"></span></div>${kb}${extra}</div>`;
+
+const cards = [
+ {n:4, t:'LoRa long-press', p:'Long-press the LoRa bars (touch). A popover hangs under the status bar; the rest of the screen dims.',
+  scr:`${sb()}<div class="body">${home('<div class="btn">Send advert</div>')}<div class="scrim" style="inset:0"></div>
+   <div class="pop" style="top:4px"><div class="t">LoRa · last 8 packets</div>
+    <div class="row">SNR (median)<b>+6.5 dB</b></div><div class="row">RSSI<b>−92 dBm</b></div><div class="row">Noise floor<b>−118 dBm</b></div>
+    <div class="lvl"><span>margin 14.0 dB</span><span>Strong</span></div><div class="foot">SF7 floor −7.5 dB</div></div></div>${tabs('Home')}`,
+  ul:['Closes on any tap, AUX hold, or after 5 s.','Before 8 packets have been heard it shows the count it has (e.g. "last 3"); with none, "No packets yet".']},
+ {n:5, t:'Send advert feedback', p:'The button fills and reads "Advert sent ✓" for 2 s, then returns to its outline.',
+  scr:`${sb()}<div class="body">${home('<div class="btn done">Advert sent ✓</div>')}</div>${tabs('Home')}`,
+  ul:['Further presses within those 2 s are ignored.','If the send fails (radio busy), it reads "Not sent, try again" in warn amber for 2 s.']},
+ {n:6, t:'Delivery marks on your DMs', p:'The status sits at the end of the meta line above your bubble. A failed bubble keeps its text and gets a red outline.',
+  scr:`${sb(0)}<div class="chead"><span class="bk">‹</span><span class="nm">Wren</span><span class="rt">direct · 2 hops</span><span class="bell">${ICON.bell}</span></div>
+   <div class="body"><div class="msgs">
+    <div class="m"><div class="meta">Wren · 20:58</div><div class="bub in">Are you at the trailhead yet?</div></div>
+    <div class="m"><div class="meta me">you · 21:01 · <span class="st-ok">✓ delivered</span></div><div class="bub out" style="margin-left:auto">Ten minutes out</div></div>
+    <div class="m"><div class="meta me">you · 21:05 · <span class="st-bad">✕ not delivered · hold to resend</span></div><div class="bub out fail" style="margin-left:auto">Parking is full, using the lower lot</div></div>
+    <div class="m"><div class="meta me">you · 21:07 · <span class="st-dim">sending… try 2/3</span></div><div class="bub out pending" style="margin-left:auto">Be there at 21:20</div></div>
+   </div><div class="cbar"><div class="can">Can</div><div class="fld">Tap to type…</div></div></div>${tabs('Chat')}`,
+  ul:['Sending: dimmed bubble, counts the firmware\'s own retries.','Delivered: ACK received (C4 tracks it).','Not delivered: retries exhausted. Hold the bubble (or USR hold with it focused) to resend the same message.','Channel messages keep "heard ×N" as designed.']},
+ {n:'7a', t:'Key preview and snap', p:'While a finger is down, the key under it pops up above the finger. A touch that lands between keys snaps to the nearest key centre, which is the one highlighted.',
+  scr:compose('Meet at the lo','14/160',kbAlpha({hot:'w'}),
+   `<div class="touch" style="left:46px;top:144px"></div><div class="prev" style="left:30px;top:96px">w</div>`),
+  ul:['Dashed amber circle = where the finger actually landed (not drawn on the device).','The character is entered on release, so sliding to a neighbour before lifting corrects a miss.']},
+ {n:'7b', t:'Shift and caps', p:'⇧ once = next letter capital (light fill). Double-tap ⇧ = caps lock (signal fill with an underline). Tap again to clear.',
+  scr:compose('Meet at the lower lot. ','23/160',kbAlpha({shift:'shift1'})),
+  ul:['The first letter of the draft and after ". " start with shift on.','Keys show capitals while shift or caps is on, as drawn.']},
+ {n:'7c', t:'Symbols page', p:'?123 swaps the letters for digits and punctuation; ABC swaps back. Send and ⌫ stay where they were.',
+  scr:compose('Meet at 21:20','13/160',kbSym()),
+  ul:['=\\< opens a second page: = \\ &lt; &gt; [ ] { } ~ | ^ % °.','After one symbol and a space, it returns to letters.']},
+ {n:'8a', t:'Chats, empty', p:'Before any channel or DM exists.',
+  scr:`${sb(0)}<div class="lhead"><span class="t">Chats</span><span class="plus">+</span></div>
+   <div class="body"><div class="empty"><span style="color:var(--line)">${ICON.thread}</span><div class="h">No chats yet</div>
+   <div class="s">Channels you join and people who message you show up here.</div><div class="hint">+ to start one</div></div></div>${tabs('Chat')}`,
+  ul:['#Public counts as a chat, so this shows only if it has been removed.']},
+ {n:'8b', t:'Conversation, empty', p:'A thread with no messages yet, e.g. opened from a contact.',
+  scr:`${sb(0)}<div class="chead"><span class="bk">‹</span><span class="nm">Wren</span><span class="rt">direct · 2 hops</span><span class="bell">${ICON.bell}</span></div>
+   <div class="body"><div class="empty" style="bottom:42px"><span style="color:var(--line)">${ICON.chat}</span><div class="h">No messages yet</div>
+   <div class="s">Messages with Wren are kept on this device.</div></div>
+   <div class="cbar"><div class="can">Can</div><div class="fld">Tap to type…</div></div></div>${tabs('Chat')}`,
+  ul:['The route meta in the header still shows what the device knows.']},
+ {n:'8c', t:'Lock, no unread', p:'The clock and sub-line as designed; the unread list is replaced by one quiet line.',
+  scr:`<div class="scr lock" style="display:flex"><div class="clock">21:07</div><div class="sub">Fri 16 Oct · OB-Valley · 87%</div>
+   <div class="none">${ICON.bell} No new messages</div>
+   <div class="unl"><b>Press USR</b> or swipe up to unlock</div></div>`, raw:true,
+  ul:['The hint replaces the spec\'s "Tap PRG" with your USR map.']},
+ {n:'8d', t:'Lock, one unread', p:'One item sits where the first of two would; nothing fills the second slot.',
+  scr:`<div class="scr lock" style="display:flex"><div class="clock">21:07</div><div class="sub">Fri 16 Oct · OB-Valley · 87%</div>
+   <div class="items"><div class="it"><div class="a">Wren<span>21:05</span></div><div class="b">Parking is full, using the lower lot</div></div></div>
+   <div class="unl"><b>Press USR</b> or swipe up to unlock</div></div>`, raw:true,
+  ul:['With 3 or more unread, the two newest show plus a "+N more" line.']},
+];
+document.getElementById('grid').innerHTML = cards.map(c=>`<div class="card">
+  <h2><span class="n">${c.n}</span>${c.t}</h2><p>${c.p}</p>
+  <div class="dev">${c.raw?c.scr:`<div class="scr">${c.scr}</div>`}</div>
+  <ul>${c.ul.map(x=>`<li>${x}</li>`).join('')}</ul></div>`).join('');
+</script>
+</body>
+</html>
