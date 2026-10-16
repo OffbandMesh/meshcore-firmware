@@ -286,6 +286,13 @@ private:
   // path -- open, press Enter -- never made a sound.
   void audition();
 
+  // #1475: move the highlight onto a row that is actually drawn. render() skips an id
+  // with no label and handleInput() steps over one, but nothing re-anchored a selection
+  // that STOPPED being listed while the picker was open -- a slot cleared from the app,
+  // say -- which left the highlight on a row no longer drawn and nothing looking
+  // selected. Silent is always listed, so this always terminates.
+  void normalizeSel();
+
   UITask* _task;
   int _sel = 0;
   const char* _note = "";      // "Buzzer: OFF" when a preview could not be heard

@@ -1604,6 +1604,7 @@ void TonePickerScreen::begin() {
   // what gets AUDITIONED, which is why the rule is a function and not an expression here
   // (#1467), and why it takes the store now that a slot can be the tune in use (#1475).
   _sel = (int)offband::pickerRowFor(the_mesh.dataStore(), id);
+  normalizeSel();
   _note = "";
   _note_until = 0;
   // #1467: audition on arrival. This is also the only place the picker can tell you the
@@ -1612,9 +1613,21 @@ void TonePickerScreen::begin() {
   audition();
 }
 
+void TonePickerScreen::normalizeSel() {
+  const int count = (int)offband::kPickerIdEnd;
+  if (_sel < 0 || _sel >= count) _sel = offband::kTuneSilent;
+  for (int tries = 0; tries < count; tries++) {
+    if (offband::tuneIsListed(the_mesh.dataStore(), (uint8_t)_sel)) return;
+    _sel = (_sel + 1) % count;
+  }
+  _sel = offband::kTuneSilent;   // unreachable: Silent is always listed
+}
+
 int TonePickerScreen::render(DisplayDriver& d) {
   const Face& kBody = uiNavBody();
   const int kListRows = uiListRows(kBody);
+  // Before laying anything out: the selection must be on a row this render will draw.
+  normalizeSel();
   // #1475: builtins first, then the eight slots. Unfilled slots and un-named builtins
   // are skipped when drawing and stepped over when navigating, so the list is as long as
   // what actually exists rather than always showing eight empty rows.
