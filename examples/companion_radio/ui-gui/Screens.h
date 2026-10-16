@@ -1,0 +1,179 @@
+#pragma once
+
+// The GUI's screens (#1497, PLAN.md §3 D3): the shell (status bar, content,
+// tab bar), Home and Lock. Design of record: ObScreen.dc.html (240x320) and
+// the owner-approved gap mockups.
+//
+// Input arrives as Actions (InputMap): Next and Prev move the focus, Open
+// presses the focused item, Back returns toward Home. Touch presses items
+// directly. On Lock, USR or a swipe up unlocks.
+
+#include <lvgl.h>
+#include <stdint.h>
+
+#include <helpers/gui/GuiPrefs.h>
+#include <helpers/gui/GuiTheme.h>
+#include <helpers/gui/GuiViews.h>
+#include <helpers/gui/InputMap.h>
+
+#include "StatusBar.h"
+
+enum class Tab : uint8_t { Home, Chat, Nodes, Map, Setup, Count };
+
+struct HomeCell {
+  char value[16];
+  char sub[48];
+};
+
+struct HomeData {
+  char name[32];
+  char key[24];
+  HomeCell cells[6];   // Radio, Heard, Unread, GPS, Battery, Airtime
+};
+
+struct LockItem {
+  char label[48];
+  char time[8];
+  char text[96];
+};
+
+struct LockData {
+  char clock[8];
+  char sub[64];
+  uint8_t count;   // items, 0..2
+  LockItem items[2];
+  uint32_t more;   // unread in threads not shown
+};
+
+// What the screens need from the rest of the firmware. UITask implements it,
+// so the screens stay free of the mesh.
+class ShellModel {
+public:
+  virtual const offband::gui::MsgStore& store() = 0;
+  virtual offband::gui::NotifyMode threadMode(int thread) = 0;   // All for DMs and rooms
+  virtual void threadOpened(int thread) = 0;                     // mark it read
+  virtual void routeMeta(int thread, char* out, size_t n) = 0;   // the header's route line
+  virtual int zone() = 0;                                        // TimeZones.h index
+  virtual void sendAdvert() = 0;
+  virtual void loraPopover() = 0;
+  // Compose (D5)
+  virtual size_t composeBudget(int thread) = 0;              // bytes a message may carry
+  virtual const char* cannedText(int i) = 0;                 // chip i (0..3), "" if none
+  virtual bool sendText(int thread, const char* text, size_t len) = 0;
+  virtual uint8_t dmAttempt(uint32_t seq) = 0;               // the try in flight, 0 if none
+  virtual void resend(uint32_t seq) = 0;                     // a failed DM, again
+  // Notifications (D6)
+  virtual void setThreadMode(int thread, offband::gui::NotifyMode m) = 0;   // channels only
+  virtual const char* nodeName() = 0;
+  virtual ~ShellModel() {}
+};
+
+class GuiShell {
+public:
+  void begin(const offband::gui::ThemeTokens& t, offband::gui::Look look, ShellModel* model);
+  void setTheme(const offband::gui::ThemeTokens& t, offband::gui::Look look);
+
+  void showLock();
+  void showTab(Tab tab);
+  bool locked() const { return _locked; }
+  Tab tab() const { return _tab; }
+  bool composing() const { return _composing; }
+  // Compose for a thread (from a conversation); leaving returns to it.
+  void openCompose(int thread);
+
+  // Handles an action; false if the screen had no use for it.
+  bool action(offband::gui::Action a);
+
+  void updateHome(const HomeData& d);
+  void updateLock(const LockData& d);
+  void setAdvertState(offband::gui::AdvertButton::State s);
+  // Redraws Chats or the open conversation if the store changed.
+  void updateChats();
+
+  StatusBar& status() { return _status; }
+
+private:
+  void rebuild();
+  void buildHome(lv_obj_t* content);
+  void buildChats(lv_obj_t* content);
+  void buildConversation(lv_obj_t* content);
+  void buildPlaceholder(lv_obj_t* content);
+  void buildCompose(lv_obj_t* scr);
+  void buildKeys();
+  void refreshDraft();
+  void setHotKey(int i, bool preview);
+  void pressKey(int i);
+  void insertText(const char* text);
+  void leaveCompose();
+  // Bottom sheets (D6): the channel notification sheet, and the menu USR
+  // hold opens in a channel (owner pick a, 2026-10-16).
+  enum class Sheet : uint8_t { None, Notify, Menu };
+  void openSheet(Sheet kind);
+  void closeSheet();
+  void sheetHot(int i);
+  void sheetPick(int i);
+  void buildTabs(lv_obj_t* parent);
+  void buildLock(lv_obj_t* scr);
+  void focusable(lv_obj_t* o);
+  void openThread(int thread);   // -1: back to the list
+  void later(void (*fn)(GuiShell*));
+
+  offband::gui::ThemeTokens _t{};
+  offband::gui::LookTokens _look{};
+  ShellModel* _model = nullptr;
+  StatusBar _status;
+  lv_group_t* _group = nullptr;
+  bool _locked = false;
+  Tab _tab = Tab::Home;
+  Tab _pending_tab = Tab::Home;   // a switch asked for from inside an event
+  int _pending_thread = -1;
+  void (*_pending_fn)(GuiShell*) = nullptr;
+
+  // Chats and Conversation
+  int _thread = -1;               // the open conversation; -1 = the list
+  int _focus_thread = -1;         // the list row to refocus after a redraw
+  uint32_t _shown_rev = 0xFFFFFFFF;
+  lv_obj_t* _msg_list = nullptr;  // the conversation's scrolling column
+  lv_obj_t* _focus_row = nullptr; // the list row for _focus_thread, if shown
+  lv_coord_t _keep_scroll = -1;   // a conversation's scroll to restore on redraw; -1 = bottom
+
+  // Compose (D5)
+  bool _composing = false;
+  offband::gui::ComposeBuffer _draft;
+  offband::gui::ShiftState _shift;
+  offband::gui::PageState _page;
+  offband::gui::KeyRect _keys[40];
+  size_t _nkeys = 0;
+  lv_obj_t* _key_obj[40] = {};
+  int _hot = -1;                    // the highlighted key: pressed, or the button cursor
+  lv_obj_t* _kb = nullptr;          // the keyboard area, which takes the touches
+  lv_obj_t* _draft_box = nullptr;
+  lv_obj_t* _draft_label = nullptr;
+  lv_obj_t* _caret = nullptr;
+  lv_obj_t* _counter = nullptr;
+  lv_obj_t* _key_preview = nullptr; // on the top layer while a finger is down
+  uint32_t _not_sent_at = 0;        // "Not sent" shows in the counter for 2 s
+
+  // Bottom sheet
+  Sheet _sheet = Sheet::None;
+  lv_obj_t* _sheet_obj = nullptr;   // the backdrop on the top layer; the sheet is its child
+  lv_obj_t* _sheet_rows[3] = {};
+  uint8_t _sheet_count = 0;
+  int _sheet_hot = 0;
+
+  // Home
+  lv_obj_t* _name = nullptr;
+  lv_obj_t* _key = nullptr;
+  lv_obj_t* _value[6] = {};
+  lv_obj_t* _sub[6] = {};
+  lv_obj_t* _advert = nullptr;
+  lv_obj_t* _advert_label = nullptr;
+  offband::gui::AdvertButton::State _advert_shown = offband::gui::AdvertButton::State::Idle;
+
+  // Lock
+  lv_obj_t* _lock_clock = nullptr;
+  lv_obj_t* _lock_sub = nullptr;
+  lv_obj_t* _lock_list = nullptr;
+  uint8_t _lock_count = 0xFF;
+  uint32_t _lock_more = 0xFFFFFFFF;
+};

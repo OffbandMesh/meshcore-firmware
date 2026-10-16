@@ -129,6 +129,7 @@ public:
   int find(ThreadKind kind, const uint8_t* key, size_t key_len) const;
   const Thread* threadAt(int t) const;
   uint16_t threadCount() const;
+  uint16_t maxThreads() const { return _max_threads; }   // thread slots, live or not
 
   // A message that arrived; counts as unread. Text over kMsgTextMax is cut at
   // a UTF-8 character boundary. Returns its seq, 0 if not stored.
@@ -152,6 +153,9 @@ public:
   void markRead(int t);
   uint32_t totalUnread() const;
   uint16_t count() const { return _count; }   // messages held
+  // Bumped by every change to a message or thread, so a screen redraws only
+  // when what it shows may have changed (#1498).
+  uint32_t revision() const { return _revision; }
   uint16_t capacity() const { return _cap; }
 
   // Persistence. Both files have a fixed layout (#1472): a 16-byte header,
@@ -200,6 +204,7 @@ private:
   uint16_t _max_threads = 0;
   uint16_t _count = 0;
   uint32_t _seq = 0;
+  uint32_t _revision = 0;
 };
 
 }  // namespace gui

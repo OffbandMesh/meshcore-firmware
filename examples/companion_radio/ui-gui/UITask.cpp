@@ -5,21 +5,34 @@
 #include <esp_heap_caps.h>
 #include <lvgl.h>
 
+#include <helpers/AdvertDataHelpers.h>
+#include <helpers/TimeZones.h>
 #include <helpers/gui/ClockPolicy.h>
+#include <helpers/gui/GuiViews.h>
+#include <helpers/gui/SignalLevel.h>
 #include <helpers/gui/hw/Chsc6xTouch.h>
-#include <helpers/gui/hw/GuiFonts.h>
 #include <helpers/gui/hw/GuiPanel.h>
 #include <helpers/gui/hw/LvglPort.h>
 #include <helpers/ui/ScreenOff.h>
 
 #include "../MyMesh.h"
+#include "target.h"
 
 extern MyMesh the_mesh;
+
+// The battery scale's ends, as in ui-new: empty here, full from the learned or
+// pinned prefs value (#1254) or this.
+#ifndef BATT_MIN_MILLIVOLTS
+  #define BATT_MIN_MILLIVOLTS 3000
+#endif
+#ifndef BATT_MAX_MILLIVOLTS
+  #define BATT_MAX_MILLIVOLTS 4200
+#endif
 
 using namespace offband::gui;
 
 // Touch axes relative to the panel's portrait orientation. Confirmed on the
-// bench with the test screen's touch readout (A7).
+// bench with the Epic A test screen's touch readout (A7).
 #ifndef GUI_TOUCH_SWAP_XY
   #define GUI_TOUCH_SWAP_XY 0
 #endif
@@ -51,61 +64,6 @@ namespace {
 // one (the prototype's default, ObScreen.dc.html:330).
 constexpr uint32_t kDefaultAccent = 0xF2C14E;
 
-const char* themeName(ThemeId id) {
-  switch (id) {
-    case ThemeId::Offband: return "Offband";
-    case ThemeId::Steel: return "Steel";
-    case ThemeId::MonoHC: return "Mono HC";
-    case ThemeId::Accent: return "Accent";
-  }
-  return "?";
-}
-
-ThemeId nextTheme(ThemeId id) {
-  switch (id) {
-    case ThemeId::Offband: return ThemeId::Steel;
-    case ThemeId::Steel: return ThemeId::MonoHC;
-    case ThemeId::MonoHC: return ThemeId::Accent;
-    case ThemeId::Accent: break;
-  }
-  return ThemeId::Offband;
-}
-
-ThemeId prevTheme(ThemeId id) {
-  switch (id) {
-    case ThemeId::Offband: return ThemeId::Accent;
-    case ThemeId::Steel: return ThemeId::Offband;
-    case ThemeId::MonoHC: return ThemeId::Steel;
-    case ThemeId::Accent: break;
-  }
-  return ThemeId::MonoHC;
-}
-
-lv_color_t c(uint32_t rgb) { return lv_color_hex(rgb & 0xFFFFFF); }
-lv_opa_t alpha(uint32_t argb) { return lv_opa_t(argb >> 24); }
-
-lv_obj_t* s_name = nullptr;
-lv_obj_t* s_pin = nullptr;
-lv_obj_t* s_unread = nullptr;
-lv_obj_t* s_touch_label = nullptr;
-lv_obj_t* s_action_label = nullptr;
-Chsc6xTouch s_touch;
-
-const char* actionName(Action a) {
-  switch (a) {
-    case Action::Next: return "next";
-    case Action::Prev: return "prev";
-    case Action::Open: return "open";
-    case Action::Back: return "back";
-    case Action::Canned: return "canned";
-    case Action::Wake: return "wake";
-    case Action::PocketLock: return "pocket lock";
-    case Action::ToggleBuzzer: return "buzzer";
-    case Action::None: break;
-  }
-  return "-";
-}
-
 const char* screenName(ScreenState s) {
   switch (s) {
     case ScreenState::On: return "on";
@@ -114,6 +72,8 @@ const char* screenName(ScreenState s) {
   }
   return "?";
 }
+
+Chsc6xTouch s_touch;
 
 }  // namespace
 
@@ -159,122 +119,11 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   setCpuFrequencyMhz(cpuMhzFor(true));
   mesh_log_line(MLOG_BOOT, "[gui] screen on cpu=%u\n", (unsigned)getCpuFrequencyMhz());
 
-  buildTestScreen();
-  refreshTestScreen();
+  _shell.begin(themeTokens(_theme, kDefaultAccent), _look, this);
+  _next_status = _next_screen = 0;
+  loop();   // fill the first frame before the backlight comes up
   lv_refr_now(nullptr);
   panel->setBrightness(100);
-}
-
-// A test screen built only from the theme tables, the Look and the font
-// table, so the bench sees every token and font role on the real panel.
-void UITask::buildTestScreen() {
-  const ThemeTokens t = themeTokens(_theme, kDefaultAccent);
-  const LookTokens look = lookTokens(_look);
-
-  lv_obj_t* scr = lv_scr_act();
-  lv_obj_clean(scr);
-  lv_obj_set_style_bg_color(scr, c(t.bg), 0);
-
-  lv_obj_t* brand = lv_label_create(scr);
-  lv_obj_set_style_text_font(brand, font(FontRole::Title), 0);
-  lv_obj_set_style_text_color(brand, c(t.sig), 0);
-  lv_label_set_text(brand, "offband");
-  lv_obj_align(brand, LV_ALIGN_TOP_MID, 0, 28);
-
-  lv_obj_t* theme_label = lv_label_create(scr);
-  lv_obj_set_style_text_font(theme_label, font(FontRole::Label), 0);
-  lv_obj_set_style_text_color(theme_label, c(t.dim), 0);
-  lv_label_set_text_fmt(theme_label, "THEME %s  /  LOOK %s", themeName(_theme),
-                        _look == Look::Modern ? "MODERN" : "CLASSIC");
-  lv_obj_align(theme_label, LV_ALIGN_TOP_MID, 0, 56);
-
-  s_name = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_name, font(FontRole::Body), 0);
-  lv_obj_set_style_text_color(s_name, c(t.ink), 0);
-  lv_obj_align(s_name, LV_ALIGN_TOP_MID, 0, 80);
-
-  // The PIN sits on a card: bg3 fill, line border, the Look's radius.
-  lv_obj_t* card = lv_obj_create(scr);
-  lv_obj_set_size(card, 200, 52);
-  lv_obj_align(card, LV_ALIGN_CENTER, 0, -20);
-  lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_style_bg_color(card, c(t.flat ? t.bg : t.bg3), 0);
-  lv_obj_set_style_border_color(card, c(t.line), 0);
-  lv_obj_set_style_border_width(card, 1, 0);
-  lv_obj_set_style_radius(card, look.radius, 0);
-  lv_obj_set_style_pad_all(card, 4, 0);
-
-  s_pin = lv_label_create(card);
-  lv_obj_set_style_text_font(s_pin, font(FontRole::Data), 0);
-  lv_obj_set_style_text_color(s_pin, c(t.ink), 0);
-  lv_obj_center(s_pin);
-  _shown_pin = 0;  // force the label to refill
-
-  // An "own message" sample (ObScreen.dc.html:379): Modern is a solid signal
-  // fill with sigInk text in every theme; Classic is a signal outline over
-  // the wash.
-  lv_obj_t* bubble = lv_obj_create(scr);
-  lv_obj_set_size(bubble, 140, 30);
-  lv_obj_align(bubble, LV_ALIGN_CENTER, 30, 26);
-  lv_obj_clear_flag(bubble, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_style_radius(bubble, look.bubble_radius, 0);
-  if (look.own_msg_outline) {
-    lv_obj_set_style_bg_color(bubble, c(t.wash), 0);
-    lv_obj_set_style_bg_opa(bubble, alpha(t.wash), 0);
-    lv_obj_set_style_border_color(bubble, c(t.sig), 0);
-    lv_obj_set_style_border_width(bubble, 1, 0);
-  } else {
-    lv_obj_set_style_bg_color(bubble, c(t.sig), 0);
-    lv_obj_set_style_border_width(bubble, 0, 0);
-  }
-  lv_obj_t* bubble_text = lv_label_create(bubble);
-  lv_obj_set_style_text_font(bubble_text, font(FontRole::BodySmall), 0);
-  lv_obj_set_style_text_color(bubble_text, c(look.own_msg_outline ? t.ink : t.sigInk), 0);
-  lv_label_set_text(bubble_text, "Copy that");
-  lv_obj_center(bubble_text);
-
-  s_unread = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_unread, font(FontRole::Meta), 0);
-  lv_obj_set_style_text_color(s_unread, c(t.dim), 0);
-  lv_obj_align(s_unread, LV_ALIGN_CENTER, 0, 60);
-
-  s_touch_label = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_touch_label, font(FontRole::Meta), 0);
-  lv_obj_set_style_text_color(s_touch_label, c(t.dim), 0);
-  lv_obj_align(s_touch_label, LV_ALIGN_CENTER, 0, 80);
-
-  s_action_label = lv_label_create(scr);
-  lv_obj_set_style_text_font(s_action_label, font(FontRole::Meta), 0);
-  lv_obj_set_style_text_color(s_action_label, c(t.dim), 0);
-  lv_obj_align(s_action_label, LV_ALIGN_CENTER, 0, 100);
-
-  lv_obj_t* note = lv_label_create(scr);
-  lv_obj_set_style_text_font(note, font(FontRole::BodySmall), 0);
-  lv_obj_set_style_text_color(note, c(t.dim), 0);
-  lv_label_set_text(note, "USR: theme  hold: look  3x: buzzer");
-  lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -16);
-}
-
-void UITask::refreshTestScreen() {
-  if (!_gui_ok) return;
-  lv_label_set_text(s_name, _prefs ? _prefs->node_name : "");
-
-  uint32_t pin = the_mesh.getBLEPin();
-  if (pin != _shown_pin) {
-    _shown_pin = pin;
-    if (pin) lv_label_set_text_fmt(s_pin, "BLE PIN %06lu", (unsigned long)pin);
-    else lv_label_set_text(s_pin, "BLE PIN off");
-  }
-  lv_label_set_text_fmt(s_unread, "%s  -  unread %d", hasConnection() ? "phone connected" : "no phone",
-                        _unread);
-
-  uint16_t tx = 0, ty = 0;
-  if (!_touch_ok) lv_label_set_text(s_touch_label, "touch: none (buttons only)");
-  else if (lvglLastTouch(&tx, &ty)) lv_label_set_text_fmt(s_touch_label, "touch %u, %u", tx, ty);
-  else lv_label_set_text(s_touch_label, "touch: tap anywhere");
-
-  lv_label_set_text_fmt(s_action_label, "last: %s  -  buzzer %s  -  %u MHz", actionName(_last_action),
-                        buzzerQuiet() ? "off" : "on", (unsigned)getCpuFrequencyMhz());
 }
 
 // Idle time is the shorter of "since the last button" and LVGL's own "since
@@ -299,9 +148,9 @@ void UITask::pollButtons(uint32_t now) {
       // Clicks just before this hold go first, in the order they happened.
       if (uint8_t n = _usr_clicks.take()) handle(clicksEvent(n), now);
       handle(kind == PressKind::Hold ? InputEvent::UsrHold : InputEvent::UsrLongHold, now);
-    } else if (_screen == ScreenState::Off) {
-      // A dark screen wakes on the click itself, without waiting out the
-      // multi-click window.
+    } else if (_screen == ScreenState::Off || _shell.locked()) {
+      // A dark or locked screen acts on the click itself, without waiting
+      // out the multi-click window.
       handle(InputEvent::UsrClick, now);
     } else {
       _usr_clicks.click(now);
@@ -322,18 +171,20 @@ void UITask::handle(InputEvent ev, uint32_t now) {
   const Action a = mapInput(ev, _screen != ScreenState::Off, _pocket_locked);
   if (a == Action::None) return;
   _last_input = now;
-  _last_action = a;
   if (a == Action::PocketLock) {
     _pocket_locked = true;
     applyScreen(ScreenState::Off);
     return;
   }
   _pocket_locked = false;
-  applyScreen(ScreenState::On);
+  applyScreen(ScreenState::On);   // a wake from off shows Lock
 
-  // On the test screen, Next and Prev cycle the theme and Open the Look so
-  // the bench can see each. From Epic D these actions drive real screens.
   switch (a) {
+    case Action::Wake:
+      return;
+    case Action::ToggleBuzzer:
+      toggleBuzzer();
+      return;
     case Action::Open:
       // As on stock MeshCore: a USR long press in the first 8 s after boot
       // enters CLI rescue.
@@ -341,22 +192,12 @@ void UITask::handle(InputEvent ev, uint32_t now) {
         the_mesh.enterCLIRescue();
         return;
       }
-      _look = _look == Look::Modern ? Look::Classic : Look::Modern;
-      break;
-    case Action::Next:
-      _theme = nextTheme(_theme);
-      break;
-    case Action::Prev:
-      _theme = prevTheme(_theme);
-      break;
-    case Action::ToggleBuzzer:
-      toggleBuzzer();
       break;
     default:
-      return;
+      break;
   }
-  buildTestScreen();
-  refreshTestScreen();
+  _shell.action(a);
+  _next_screen = 0;   // show the result now, not at the next 1 s refresh
 }
 
 bool UITask::buzzerQuiet() {
@@ -373,7 +214,7 @@ void UITask::toggleBuzzer() {
   if (!_buzzer.isQuiet()) notify(UIEventType::ack);
   if (_prefs) {
     _prefs->buzzer_quiet = _buzzer.isQuiet();
-    the_mesh.savePrefs();
+    _prefs_dirty = true;   // saved when idle, like every GUI pref (Epic D gate)
   }
 #endif
 }
@@ -393,6 +234,9 @@ void UITask::applyScreen(ScreenState s) {
     panel->turnOff();
   } else {
     if (_screen == ScreenState::Off) {
+      // A screen that went dark comes back locked (design: Lock).
+      _shell.showLock();
+      _next_screen = 0;
       panel->turnOn();
       lv_obj_invalidate(lv_scr_act());  // redraw what the sleeping panel lost
     }
@@ -402,6 +246,336 @@ void UITask::applyScreen(ScreenState s) {
   if ((_screen == ScreenState::Off) != !lit) setCpuFrequencyMhz(cpuMhzFor(lit));
   _screen = s;
   mesh_log_line(MLOG_BOOT, "[gui] screen %s cpu=%u\n", screenName(s), (unsigned)getCpuFrequencyMhz());
+}
+
+bool UITask::gpsEnabled() const {
+  if (!_sensors) return false;
+  const int num = _sensors->getNumSettings();
+  for (int i = 0; i < num; i++) {
+    if (strcmp(_sensors->getSettingName(i), "gps") == 0) return strcmp(_sensors->getSettingValue(i), "1") == 0;
+  }
+  return false;   // no GPS setting: no module
+}
+
+uint8_t UITask::battPercent() const {
+  const uint16_t full = (_prefs && _prefs->batt_full_mv) ? _prefs->batt_full_mv : uint16_t(BATT_MAX_MILLIVOLTS);
+  const uint16_t mv = _batt.seeded() ? _batt.value() : getBattMilliVolts();
+  return uint8_t(offband::batteryPercent(mv, BATT_MIN_MILLIVOLTS, full));
+}
+
+StatusReadings UITask::statusReadings(uint32_t now) {
+  StatusReadings r{};
+  formatClock(_prefs ? _prefs->ui_tz : 0, rtc_clock.getCurrentTime(), r.clock, sizeof r.clock);
+
+  MsgStore& store = the_mesh.guiStore();
+  r.unread = store.ready() ? store.totalUnread() : uint32_t(_unread > 0 ? _unread : 0);
+
+  const SnrMedian& snr = the_mesh.guiMetrics().snr;
+  r.lora_heard = !snr.empty();
+  r.bars = r.lora_heard ? signalBars(snr.median(), _prefs ? _prefs->sf : 12) : 0;
+
+  r.ble = bleIcon(isBluetoothEnabled(), hasConnection());
+
+  // Time without a fix counts from when GPS was turned on, so enabling it
+  // late doesn't start it red.
+  const bool gps_on = gpsEnabled();
+  if (gps_on && !_gps_was_on) _gps_on_at = now;
+  _gps_was_on = gps_on;
+  const FixTracker& fix = the_mesh.guiFix();
+  const uint32_t since_on = (now - _gps_on_at) / 1000;
+  uint32_t without = since_on;
+  if (fix.everFixed() && fix.secsSinceLost(now) < since_on) without = fix.secsSinceLost(now);
+  r.gps = gpsIcon(gps_on, the_mesh.guiFixType(), without);
+
+  r.batt_pct = battPercent();
+  return r;
+}
+
+void UITask::homeData(HomeData* d) {
+  memset(d, 0, sizeof *d);
+  const char* node = _prefs ? _prefs->node_name : "";
+  displayText(node, strlen(node), d->name, sizeof d->name);
+  keySummary(the_mesh.self_id.pub_key, d->key, sizeof d->key);
+
+  HomeCell* cell = d->cells;
+  formatFreq(_prefs ? _prefs->freq : 0, cell[0].value, sizeof cell[0].value);
+  radioSub(_prefs ? _prefs->sf : 0, _prefs ? _prefs->bw : 0, _prefs ? _prefs->cr : 0, cell[0].sub,
+           sizeof cell[0].sub);
+
+  // Heard: contacts with a packet since boot, by type.
+  MetricsHub& m = the_mesh.guiMetrics();
+  uint16_t rpt = 0, room = 0, chat = 0;
+  ContactInfo ci;
+  for (int i = 0; i < the_mesh.getNumContacts(); i++) {
+    if (!the_mesh.getContactByIdx(i, ci)) continue;
+    const ContactStat* st = m.contacts.find(ci.id.pub_key);
+    if (!st || !st->heard) continue;
+    if (ci.type == ADV_TYPE_REPEATER) rpt++;
+    else if (ci.type == ADV_TYPE_ROOM) room++;
+    else if (ci.type == ADV_TYPE_CHAT) chat++;
+  }
+  snprintf(cell[1].value, sizeof cell[1].value, "%u", unsigned(rpt + room + chat));
+  heardSub(rpt, room, chat, cell[1].sub, sizeof cell[1].sub);
+
+  MsgStore& store = the_mesh.guiStore();
+  snprintf(cell[2].value, sizeof cell[2].value, "%lu", (unsigned long)(store.ready() ? store.totalUnread() : 0));
+  unreadSub(store, cell[2].sub, sizeof cell[2].sub);
+
+  const bool gps_on = gpsEnabled();
+  snprintf(cell[3].value, sizeof cell[3].value, "%s", gpsValue(gps_on, the_mesh.guiFixType()));
+  uint8_t sats = 0;
+  LocationProvider* loc = sensors.getLocationProvider();
+  if (gps_on && loc) sats = uint8_t(loc->satellitesCount());
+  gpsSub(sats, offband::tz::clockSet(rtc_clock.getCurrentTime()), cell[3].sub, sizeof cell[3].sub);
+  if (!gps_on) cell[3].sub[0] = '\0';
+
+  snprintf(cell[4].value, sizeof cell[4].value, "%u%%", unsigned(battPercent()));
+  batterySub(_batt.seeded() ? _batt.value() : getBattMilliVolts(), millis() / 1000, cell[4].sub,
+             sizeof cell[4].sub);
+
+  formatAirtime(m.airtime.dutyPermille(millis()), cell[5].value, sizeof cell[5].value);
+  snprintf(cell[5].sub, sizeof cell[5].sub, "tx, last hour");
+}
+
+void UITask::lockData(LockData* d) {
+  memset(d, 0, sizeof *d);
+  const int zone = _prefs ? _prefs->ui_tz : 0;
+  const uint32_t now = rtc_clock.getCurrentTime();
+  formatClock(zone, now, d->clock, sizeof d->clock);
+  char date[24];
+  formatDate(zone, now, date, sizeof date);
+  if (date[0]) {
+    snprintf(d->sub, sizeof d->sub, "%s · %s · %u%%", date, _prefs ? _prefs->node_name : "", unsigned(battPercent()));
+  } else {
+    snprintf(d->sub, sizeof d->sub, "%s · %u%%", _prefs ? _prefs->node_name : "", unsigned(battPercent()));
+  }
+
+  MsgStore& store = the_mesh.guiStore();
+  uint32_t seqs[2];
+  d->count = uint8_t(lockItems(store, seqs, 2, &d->more));
+  for (uint8_t i = 0; i < d->count; i++) {
+    const MsgRecord* msg = store.msg(seqs[i]);
+    const Thread* th = msg ? store.threadAt(msg->thread) : nullptr;
+    if (!msg || !th) continue;
+    char raw[sizeof d->items[i].text];
+    lockLabel(*th, raw, sizeof d->items[i].label);
+    displayText(raw, strlen(raw), d->items[i].label, sizeof d->items[i].label);
+    formatClock(zone, msg->time, d->items[i].time, sizeof d->items[i].time);
+    lockText(*msg, ThreadKind(th->kind), raw, sizeof raw);
+    displayText(raw, strlen(raw), d->items[i].text, sizeof d->items[i].text);
+  }
+}
+
+void UITask::openLoraPopover() {
+  const SnrMedian& snr = the_mesh.guiMetrics().snr;
+  LoraReadings r{};
+  r.packets = snr.size();
+  r.snr_db = snr.median();
+  r.rssi = int16_t(radio_driver.getLastRSSI());
+  r.noise = int16_t(radio_driver.getNoiseFloor());
+  r.sf = _prefs ? _prefs->sf : 12;
+  _shell.status().openPopover(r, millis());
+  _last_input = millis();
+}
+
+// Home's Send advert: a flood advert, as the phone app's "Advert (flood)".
+void UITask::sendAdvert() {
+  const uint32_t now = millis();
+  if (!_advert.press(now)) return;
+  const bool ok = the_mesh.cmdSendAdvert(true) == CmdResult::Ok;
+  _advert.result(ok, now);
+  _shell.setAdvertState(_advert.state(now));
+  mesh_log_line(MLOG_BOOT, "[gui] advert %s\n", ok ? "sent" : "not sent");
+}
+
+const MsgStore& UITask::store() { return the_mesh.guiStore(); }
+
+int UITask::channelSlot(int thread) {
+  const Thread* th = the_mesh.guiStore().threadAt(thread);
+  if (!th || ThreadKind(th->kind) != ThreadKind::Channel) return -1;
+  ChannelDetails ch;
+  for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+    if (the_mesh.getChannel(i, ch) && memcmp(ch.channel.secret, th->key, sizeof ch.channel.secret) == 0) return i;
+  }
+  return -1;
+}
+
+// Channels have a per-channel mode (GuiPrefs, B6); DMs and rooms always alert.
+NotifyMode UITask::threadMode(int thread) {
+  const int slot = channelSlot(thread);
+  return (slot >= 0 && _prefs) ? _prefs->gui.channelMode(uint8_t(slot)) : NotifyMode::All;
+}
+
+// The bell's sheet (D6): the channel's mode, kept in the GUI prefs (B6).
+void UITask::setThreadMode(int thread, NotifyMode m) {
+  const int slot = channelSlot(thread);
+  if (slot < 0 || !_prefs || _prefs->gui.channelMode(uint8_t(slot)) == m) return;
+  _prefs->gui.setChannelMode(uint8_t(slot), m);
+  _prefs_dirty = true;   // saved when idle (#1472's rule for internal flash)
+  mesh_log_line(MLOG_BOOT, "[gui] channel %d notify %u\n", slot, unsigned(m));
+}
+
+void UITask::threadOpened(int thread) {
+  MsgStore& store = the_mesh.guiStore();
+  const Thread* th = store.threadAt(thread);
+  if (!th || th->unread == 0) return;
+  if (ThreadKind(th->kind) != ThreadKind::Channel) the_mesh.guiMetrics().contacts.markRead(th->key);
+  store.markRead(thread);
+  the_mesh.guiStoreFlash().indexChanged(millis());   // written when idle (#1472)
+}
+
+// The conversation header's route line: a channel shows how many repeats of
+// your last message were heard (plan §9 #13); a DM or room the contact's path.
+void UITask::routeMeta(int thread, char* out, size_t n) {
+  const MsgStore& store = the_mesh.guiStore();
+  const Thread* th = store.threadAt(thread);
+  if (!th || !n) {
+    if (n) out[0] = '\0';
+    return;
+  }
+  if (ThreadKind(th->kind) == ThreadKind::Channel) {
+    uint32_t seqs[16];
+    const size_t k = store.threadMessages(thread, seqs, 16);
+    for (size_t i = k; i > 0; i--) {
+      const MsgRecord* m = store.msg(seqs[i - 1]);
+      if (m && m->own) {
+        if (m->echoes) {
+          snprintf(out, n, "flood · %u", unsigned(m->echoes));
+          return;
+        }
+        break;
+      }
+    }
+    snprintf(out, n, "flood");
+    return;
+  }
+  const ContactInfo* ci = the_mesh.lookupContactByPubKey(th->key, PUB_KEY_SIZE);
+  if (!ci || ci->out_path_len == OUT_PATH_UNKNOWN) {
+    snprintf(out, n, "flood");
+    return;
+  }
+  const unsigned hops = ci->out_path_len & 63;
+  if (hops == 0) snprintf(out, n, "direct");
+  else snprintf(out, n, "direct · %u hop%s", hops, hops == 1 ? "" : "s");
+}
+
+// ------------------------------------------------------------- Compose (D5)
+
+// A channel message goes out as "<name>: <text>" inside the 160-byte text
+// payload, so the name and ": " come off the top (as compose::budget).
+size_t UITask::composeBudget(int thread) {
+  const Thread* th = the_mesh.guiStore().threadAt(thread);
+  if (!th || ThreadKind(th->kind) != ThreadKind::Channel) return kMsgTextMax;
+  const size_t name = _prefs ? strlen(_prefs->node_name) : 0;
+  return name + 2 < kMsgTextMax ? kMsgTextMax - name - 2 : 0;
+}
+
+const char* UITask::cannedText(int i) {
+  return (_prefs && i >= 0 && i < int(kCannedCount)) ? _prefs->gui.canned[i] : "";
+}
+
+bool UITask::sendDirect(int thread, const char* text, uint32_t timestamp, uint8_t attempt, uint32_t* timeout_ms) {
+  const Thread* th = the_mesh.guiStore().threadAt(thread);
+  if (!th) return false;
+  ContactInfo* to = the_mesh.lookupContactByPubKey(th->key, PUB_KEY_SIZE);
+  if (!to) return false;
+  bool flood = false;
+  uint32_t ack = 0, est = 0;
+  const CmdResult r = the_mesh.cmdSendDirect(*to, timestamp, attempt, text, false, &flood, &ack, &est);
+  *timeout_ms = est ? est : 10000;
+  return r == CmdResult::Ok;
+}
+
+bool UITask::sendText(int thread, const char* text, size_t len) {
+  MsgStore& store = the_mesh.guiStore();
+  const Thread* th = store.threadAt(thread);
+  if (!th || len == 0 || len > kMsgTextMax) return false;
+  char buf[kMsgTextMax + 1];
+  memcpy(buf, text, len);
+  buf[len] = '\0';
+  const uint32_t now = rtc_clock.getCurrentTime();
+
+  if (ThreadKind(th->kind) == ThreadKind::Channel) {
+    const int slot = channelSlot(thread);
+    const bool ok = slot >= 0 && the_mesh.cmdSendChannel(uint8_t(slot), now, buf, len) == CmdResult::Ok;
+    mesh_log_line(MLOG_BOOT, "[gui] channel send %s\n", ok ? "ok" : "failed");
+    return ok;
+  }
+  // Every device DM is tracked to delivered or failed, so with no free slot
+  // it isn't sent (Compose says "Not sent") rather than left "sending…".
+  DmRetry* slot = nullptr;
+  for (DmRetry& r : _dm) {
+    if (!r.active()) {
+      slot = &r;
+      break;
+    }
+  }
+  uint32_t timeout = 0;
+  if (!slot || !sendDirect(thread, buf, now, 0, &timeout)) {
+    mesh_log_line(MLOG_BOOT, "[gui] dm send failed%s\n", slot ? "" : " (8 awaiting ACK)");
+    return false;
+  }
+  // The store kept it as Sending (#1464); watch for its ACK.
+  const uint32_t seq = store.findOwn(thread, buf, len);
+  if (seq) slot->start(seq, millis(), timeout);
+  mesh_log_line(MLOG_BOOT, "[gui] dm send ok, ack timeout %lums\n", (unsigned long)timeout);
+  return true;
+}
+
+uint8_t UITask::dmAttempt(uint32_t seq) {
+  for (const DmRetry& r : _dm) {
+    if (r.active() && r.seq() == seq) return r.attempt();
+  }
+  return 0;
+}
+
+// Held on a DM that wasn't delivered: a fresh round of tries, sent as a
+// resend (same timestamp) so a recipient that did get it sees a repeat.
+void UITask::resend(uint32_t seq) {
+  MsgStore& store = the_mesh.guiStore();
+  const MsgRecord* m = store.msg(seq);
+  if (!m || !m->own || Delivery(m->delivery) != Delivery::Failed || dmAttempt(seq)) return;
+  char buf[kMsgTextMax + 1];
+  memcpy(buf, m->text, m->text_len);
+  buf[m->text_len] = '\0';
+  uint32_t timeout = 0;
+  if (!sendDirect(m->thread, buf, m->time, 1, &timeout)) return;
+  for (DmRetry& r : _dm) {
+    if (!r.active()) {
+      r.start(seq, millis(), timeout);
+      break;
+    }
+  }
+  mesh_log_line(MLOG_BOOT, "[gui] dm resend\n");
+}
+
+void UITask::pollDmRetries(uint32_t now) {
+  MsgStore& store = the_mesh.guiStore();
+  for (DmRetry& r : _dm) {
+    if (!r.active()) continue;
+    const uint32_t seq = r.seq();   // poll() clears it on Fail
+    const MsgRecord* m = store.msg(seq);
+    const bool delivered = !m || Delivery(m->delivery) == Delivery::Delivered;   // gone counts as done
+    switch (r.poll(now, delivered)) {
+      case DmRetry::Step::Resend: {
+        char buf[kMsgTextMax + 1];
+        memcpy(buf, m->text, m->text_len);
+        buf[m->text_len] = '\0';
+        uint32_t timeout = 10000;
+        sendDirect(m->thread, buf, m->time, r.attempt(), &timeout);
+        r.resent(now, timeout);
+        mesh_log_line(MLOG_BOOT, "[gui] dm retry %u/%u\n", unsigned(r.attempt()), unsigned(kDmAttempts));
+        break;
+      }
+      case DmRetry::Step::Fail:
+        store.setDelivery(seq, Delivery::Failed);
+        the_mesh.guiStoreFlash().ringChanged(millis());
+        mesh_log_line(MLOG_BOOT, "[gui] dm not delivered\n");
+        break;
+      default:
+        break;
+    }
+  }
 }
 
 void UITask::msgRead(int msgcount) { _unread = msgcount; }
@@ -451,7 +625,14 @@ void UITask::loop() {
   if (_buzzer.isPlaying()) _buzzer.loop();
 #endif
 
+#ifdef OFFBAND_GUI_PERF
+  static uint32_t s_t_input = 0;   // input handling, which includes screen rebuilds
+  const uint32_t t_in = millis();
+#endif
   pollButtons(now);
+#ifdef OFFBAND_GUI_PERF
+  if (millis() - t_in > s_t_input) s_t_input = millis() - t_in;
+#endif
 
   // With the panel off LVGL isn't running, so a touch is read here to wake it
   // (ignored while pocket-locked).
@@ -468,19 +649,69 @@ void UITask::loop() {
   // #1472: internal-flash writes stall both cores, so they wait until nobody
   // is using the device: the screen dim or off, or no input for the dim time
   // (which covers "always on", where the screen never dims).
-  the_mesh.setGuiScreenIdle(_screen != ScreenState::On || idleMs(now) >= GUI_DIM_AFTER_MS);
+  const bool idle = _screen != ScreenState::On || idleMs(now) >= GUI_DIM_AFTER_MS;
+  the_mesh.setGuiScreenIdle(idle);
+  if (idle && _prefs_dirty) {   // a channel's notify mode (D6)
+    _prefs_dirty = false;
+    the_mesh.savePrefs();
+  }
+
+  // DMs sent from here retry and fail on their own, screen lit or not.
+  pollDmRetries(now);
+
+  // One battery reading a second into the average (#1246), lit or not.
+  if ((int32_t)(now - _next_batt_read) >= 0) {
+    _batt.feed(getBattMilliVolts());
+    _next_batt_read = now + 1000;
+  }
 
   if (_screen == ScreenState::Off) return;
 
-  if (now >= _next_refresh) {
-    _next_refresh = now + 1000;
-    refreshTestScreen();
+#ifdef OFFBAND_GUI_PERF
+  // #1501: where a long loop gap comes from, piece by piece.
+  static uint32_t s_t_status = 0, s_t_data = 0, s_t_update = 0, s_t_lvgl = 0;
+  uint32_t t0 = millis();
+  #define GUI_SPAN(acc) do { const uint32_t t1 = millis(); if (t1 - t0 > acc) acc = t1 - t0; t0 = t1; } while (0)
+#else
+  #define GUI_SPAN(acc) do {} while (0)
+#endif
+
+  // Four passes a second for the status bar; once a second for the screen.
+  if ((int32_t)(now - _next_status) >= 0) {
+    _next_status = now + 250;
+    if (!_shell.locked()) {
+      _shell.status().update(statusReadings(now), now);
+      _shell.status().tick(now);
+    }
+    _shell.setAdvertState(_advert.state(now));
+    GUI_SPAN(s_t_status);
   }
+  if ((int32_t)(now - _next_screen) >= 0) {
+    _next_screen = now + 1000;
+    if (_shell.locked()) {
+      static LockData d;   // off the stack; the GUI is single-threaded
+      lockData(&d);
+      GUI_SPAN(s_t_data);
+      _shell.updateLock(d);
+      GUI_SPAN(s_t_update);
+    } else if (_shell.tab() == Tab::Home) {
+      static HomeData d;
+      homeData(&d);
+      GUI_SPAN(s_t_data);
+      _shell.updateHome(d);
+      GUI_SPAN(s_t_update);
+    }
+  }
+  // Chats redraw only when the store's revision moved, which is a compare on
+  // every other pass.
+  _shell.updateChats();
+  GUI_SPAN(s_t_update);
   lvglLoop();
+  GUI_SPAN(s_t_lvgl);
+#undef GUI_SPAN
 
 #ifdef OFFBAND_GUI_PERF
-  // Diag builds: refresh timing for the frame-rate check (#1441). A theme
-  // switch on the test screen is a full-screen redraw, the worst case.
+  // Diag builds: refresh timing for the frame-rate check (#1441).
   static uint32_t s_next_perf = 0;
   if (now >= s_next_perf) {
     s_next_perf = now + 30000;
@@ -489,7 +720,10 @@ void UITask::loop() {
     mesh_log_line(MLOG_BOOT, "[gui] frames=%lu avg=%lums max=%lums loop_gap_max=%lums cpu=%u\n",
                   (unsigned long)frames, (unsigned long)avg_ms, (unsigned long)max_ms,
                   (unsigned long)s_gap_max, (unsigned)getCpuFrequencyMhz());
-    s_gap_max = 0;
+    mesh_log_line(MLOG_BOOT, "[gui] spans max: input=%lums status=%lums data=%lums update=%lums lvgl=%lums\n",
+                  (unsigned long)s_t_input, (unsigned long)s_t_status, (unsigned long)s_t_data,
+                  (unsigned long)s_t_update, (unsigned long)s_t_lvgl);
+    s_gap_max = s_t_input = s_t_status = s_t_data = s_t_update = s_t_lvgl = 0;
   }
 #endif
 }

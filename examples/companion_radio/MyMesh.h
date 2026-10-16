@@ -10,6 +10,7 @@
   #include <helpers/gui/GuiGps.h>
   #include <helpers/gui/GuiMetrics.h>
   #include <helpers/gui/GuiReplies.h>
+  #include <helpers/gui/GuiViews.h>
 #endif
 #include "AbstractUITask.h"
 
