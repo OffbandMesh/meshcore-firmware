@@ -11,6 +11,7 @@
 #include <lvgl.h>
 #include <stdint.h>
 
+#include <helpers/gui/GuiPrefs.h>
 #include <helpers/gui/GuiTheme.h>
 #include <helpers/gui/GuiViews.h>
 #include <helpers/gui/InputMap.h>
@@ -44,15 +45,23 @@ struct LockData {
   uint32_t more;   // unread in threads not shown
 };
 
+// What the screens need from the rest of the firmware. UITask implements it,
+// so the screens stay free of the mesh.
+class ShellModel {
+public:
+  virtual const offband::gui::MsgStore& store() = 0;
+  virtual offband::gui::NotifyMode threadMode(int thread) = 0;   // All for DMs and rooms
+  virtual void threadOpened(int thread) = 0;                     // mark it read
+  virtual void routeMeta(int thread, char* out, size_t n) = 0;   // the header's route line
+  virtual int zone() = 0;                                        // TimeZones.h index
+  virtual void sendAdvert() = 0;
+  virtual void loraPopover() = 0;
+  virtual ~ShellModel() {}
+};
+
 class GuiShell {
 public:
-  struct Hooks {
-    void (*send_advert)(void* ctx);
-    void (*lora_popover)(void* ctx);
-    void* ctx;
-  };
-
-  void begin(const offband::gui::ThemeTokens& t, offband::gui::Look look, const Hooks& hooks);
+  void begin(const offband::gui::ThemeTokens& t, offband::gui::Look look, ShellModel* model);
   void setTheme(const offband::gui::ThemeTokens& t, offband::gui::Look look);
 
   void showLock();
@@ -66,26 +75,41 @@ public:
   void updateHome(const HomeData& d);
   void updateLock(const LockData& d);
   void setAdvertState(offband::gui::AdvertButton::State s);
+  // Redraws Chats or the open conversation if the store changed.
+  void updateChats();
 
   StatusBar& status() { return _status; }
 
 private:
   void rebuild();
   void buildHome(lv_obj_t* content);
+  void buildChats(lv_obj_t* content);
+  void buildConversation(lv_obj_t* content);
   void buildPlaceholder(lv_obj_t* content);
   void buildTabs(lv_obj_t* parent);
   void buildLock(lv_obj_t* scr);
   void focusable(lv_obj_t* o);
+  void openThread(int thread);   // -1: back to the list
+  void later(void (*fn)(GuiShell*));
 
   offband::gui::ThemeTokens _t{};
   offband::gui::LookTokens _look{};
-  Hooks _hooks{};
+  ShellModel* _model = nullptr;
   StatusBar _status;
   lv_group_t* _group = nullptr;
   bool _locked = false;
   Tab _tab = Tab::Home;
   Tab _pending_tab = Tab::Home;   // a switch asked for from inside an event
+  int _pending_thread = -1;
+  void (*_pending_fn)(GuiShell*) = nullptr;
   bool _gesture_hooked = false;
+
+  // Chats and Conversation
+  int _thread = -1;               // the open conversation; -1 = the list
+  int _focus_thread = -1;         // the list row to refocus after a redraw
+  uint32_t _shown_rev = 0xFFFFFFFF;
+  lv_obj_t* _msg_list = nullptr;  // the conversation's scrolling column
+  lv_obj_t* _focus_row = nullptr; // the list row for _focus_thread, if shown
 
   // Home
   lv_obj_t* _name = nullptr;

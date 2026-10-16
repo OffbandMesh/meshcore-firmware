@@ -115,6 +115,7 @@ void MsgStore::dirtySlot(const MsgRecord* m) {
     _dirty_bits++;
   }
   _ring_header_dirty = true;
+  _revision++;
 }
 
 void MsgStore::dirtyThread(int t) {
@@ -123,6 +124,7 @@ void MsgStore::dirtyThread(int t) {
     _dirty_bits++;
   }
   _index_header_dirty = true;
+  _revision++;
 }
 
 static uint32_t countBits(const uint8_t* b, size_t n) {

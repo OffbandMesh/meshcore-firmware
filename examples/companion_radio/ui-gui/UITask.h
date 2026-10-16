@@ -23,7 +23,7 @@
   #include <helpers/ui/buzzer.h>
 #endif
 
-class UITask : public AbstractUITask {
+class UITask : public AbstractUITask, public ShellModel {
 public:
   UITask(mesh::MainBoard* board, MultiSerialInterface* serial) : AbstractUITask(board, serial) {}
 
@@ -39,6 +39,15 @@ public:
   void applyBuzzerMute(bool quiet) override;
   void loop() override;
 
+  // ShellModel: what the screens read and do.
+  const offband::gui::MsgStore& store() override;
+  offband::gui::NotifyMode threadMode(int thread) override;
+  void threadOpened(int thread) override;
+  void routeMeta(int thread, char* out, size_t n) override;
+  int zone() override { return _prefs ? _prefs->ui_tz : 0; }
+  void sendAdvert() override;
+  void loraPopover() override { openLoraPopover(); }
+
 private:
   void pollButtons(uint32_t now);
   void handle(offband::gui::InputEvent ev, uint32_t now);
@@ -50,7 +59,7 @@ private:
   void homeData(HomeData* d);
   void lockData(LockData* d);
   void openLoraPopover();
-  void sendAdvert();
+  int channelSlot(int thread);   // the channel slot behind a channel thread, or -1
   bool gpsEnabled() const;
   uint8_t battPercent() const;
 
