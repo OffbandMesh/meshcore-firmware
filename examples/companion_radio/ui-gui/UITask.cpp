@@ -435,7 +435,14 @@ void UITask::loop() {
   if (_buzzer.isPlaying()) _buzzer.loop();
 #endif
 
+#ifdef OFFBAND_GUI_PERF
+  static uint32_t s_t_input = 0;   // input handling, which includes screen rebuilds
+  const uint32_t t_in = millis();
+#endif
   pollButtons(now);
+#ifdef OFFBAND_GUI_PERF
+  if (millis() - t_in > s_t_input) s_t_input = millis() - t_in;
+#endif
 
   // With the panel off LVGL isn't running, so a touch is read here to wake it
   // (ignored while pocket-locked).
@@ -462,6 +469,15 @@ void UITask::loop() {
 
   if (_screen == ScreenState::Off) return;
 
+#ifdef OFFBAND_GUI_PERF
+  // #1501: where a long loop gap comes from, piece by piece.
+  static uint32_t s_t_status = 0, s_t_data = 0, s_t_update = 0, s_t_lvgl = 0;
+  uint32_t t0 = millis();
+  #define GUI_SPAN(acc) do { const uint32_t t1 = millis(); if (t1 - t0 > acc) acc = t1 - t0; t0 = t1; } while (0)
+#else
+  #define GUI_SPAN(acc) do {} while (0)
+#endif
+
   // Four passes a second for the status bar; once a second for the screen.
   if ((int32_t)(now - _next_status) >= 0) {
     _next_status = now + 250;
@@ -470,20 +486,27 @@ void UITask::loop() {
       _shell.status().tick(now);
     }
     _shell.setAdvertState(_advert.state(now));
+    GUI_SPAN(s_t_status);
   }
   if ((int32_t)(now - _next_screen) >= 0) {
     _next_screen = now + 1000;
     if (_shell.locked()) {
       LockData d;
       lockData(&d);
+      GUI_SPAN(s_t_data);
       _shell.updateLock(d);
+      GUI_SPAN(s_t_update);
     } else if (_shell.tab() == Tab::Home) {
       HomeData d;
       homeData(&d);
+      GUI_SPAN(s_t_data);
       _shell.updateHome(d);
+      GUI_SPAN(s_t_update);
     }
   }
   lvglLoop();
+  GUI_SPAN(s_t_lvgl);
+#undef GUI_SPAN
 
 #ifdef OFFBAND_GUI_PERF
   // Diag builds: refresh timing for the frame-rate check (#1441).
@@ -495,7 +518,10 @@ void UITask::loop() {
     mesh_log_line(MLOG_BOOT, "[gui] frames=%lu avg=%lums max=%lums loop_gap_max=%lums cpu=%u\n",
                   (unsigned long)frames, (unsigned long)avg_ms, (unsigned long)max_ms,
                   (unsigned long)s_gap_max, (unsigned)getCpuFrequencyMhz());
-    s_gap_max = 0;
+    mesh_log_line(MLOG_BOOT, "[gui] spans max: input=%lums status=%lums data=%lums update=%lums lvgl=%lums\n",
+                  (unsigned long)s_t_input, (unsigned long)s_t_status, (unsigned long)s_t_data,
+                  (unsigned long)s_t_update, (unsigned long)s_t_lvgl);
+    s_gap_max = s_t_input = s_t_status = s_t_data = s_t_update = s_t_lvgl = 0;
   }
 #endif
 }
