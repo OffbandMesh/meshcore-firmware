@@ -214,7 +214,7 @@ void UITask::toggleBuzzer() {
   if (!_buzzer.isQuiet()) notify(UIEventType::ack);
   if (_prefs) {
     _prefs->buzzer_quiet = _buzzer.isQuiet();
-    the_mesh.savePrefs();
+    _prefs_dirty = true;   // saved when idle, like every GUI pref (Epic D gate)
   }
 #endif
 }
@@ -689,13 +689,13 @@ void UITask::loop() {
   if ((int32_t)(now - _next_screen) >= 0) {
     _next_screen = now + 1000;
     if (_shell.locked()) {
-      LockData d;
+      static LockData d;   // off the stack; the GUI is single-threaded
       lockData(&d);
       GUI_SPAN(s_t_data);
       _shell.updateLock(d);
       GUI_SPAN(s_t_update);
     } else if (_shell.tab() == Tab::Home) {
-      HomeData d;
+      static HomeData d;
       homeData(&d);
       GUI_SPAN(s_t_data);
       _shell.updateHome(d);
