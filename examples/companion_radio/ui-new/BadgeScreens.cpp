@@ -1974,6 +1974,7 @@ bool RtttlEditScreen::handleInput(char c) {
       }
       _confirm_delete = false;
       if (offband::clearSlot(the_mesh.dataStore(), _slot)) {
+        _task->cancelTuneSlotPush();   // #1478: a push in flight must not undo this
         _task->gotoCustomTunes();
       } else {
         note("not saved");
@@ -1992,6 +1993,7 @@ bool RtttlEditScreen::handleInput(char c) {
       note("not saved");
       return true;
     }
+    _task->cancelTuneSlotPush();   // #1478: a push in flight must not undo this
     // Saved. Play it once, from the slot now that it is on disk, so what is heard is what
     // was stored rather than what is in the editor.
     _task->playTuneById(offband::slotIdAt(_slot), offband::TonePriority::Preview);

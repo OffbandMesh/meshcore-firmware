@@ -358,6 +358,12 @@ public:
   uint8_t feedTuneSlot(uint8_t slot, uint8_t offset, bool more, const uint8_t* bytes,
                        size_t len, uint8_t& accepted) override;
   bool readTuneSlot(uint8_t slot, uint8_t& len, char* name, size_t name_cap) override;
+
+  // #1478: abandon a push in flight. The badge's own editor calls this when it saves,
+  // so a chunked push that was already under way cannot later commit over what the
+  // person just typed -- review was right that the two writers could otherwise race on
+  // intent, with the stale one winning because it finished last.
+  void cancelTuneSlotPush() { _slot_push.reset(); }
 #endif
   void loop() override;
 

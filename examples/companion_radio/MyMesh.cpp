@@ -2442,8 +2442,19 @@ void MyMesh::handleCmdFrame(size_t len) {
         _serial->writeFrame(out_frame, 3);
         return;
       }
-      // Accepted (0) and Complete (1) are progress; everything else is a refusal the
-      // client has to see, because its remedy is to restart the push at offset 0.
+      // Accepted (0) and Complete (1) are progress. A step error -- BadOffset (2) or
+      // BadSlot (3) -- answers with the offset the device expects NEXT, so a client that
+      // lost a frame can resume or restart knowing where it stands rather than guessing.
+      // TooLong and BadByte are the client's own data being wrong, so they stay
+      // MALFORMED: there is nothing to resume toward.
+      if (r == 2 || r == 3) {
+        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+        out_frame[1] = offband::OFFBAND_UI_ERR;
+        out_frame[2] = offband::OFFBAND_UI_ERR_SLOT_OFFSET;
+        out_frame[3] = accepted;
+        _serial->writeFrame(out_frame, 4);
+        return;
+      }
       if (r > 1) {
         out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
         out_frame[1] = offband::OFFBAND_UI_ERR;
