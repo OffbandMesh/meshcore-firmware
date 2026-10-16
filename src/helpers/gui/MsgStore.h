@@ -26,10 +26,12 @@ namespace offband {
 namespace gui {
 
 constexpr size_t kMsgTextMax = 160;    // D5 decision 11
-constexpr size_t kMsgSenderLen = 16;   // a channel message's sender, with terminator
+constexpr size_t kMsgSenderLen = 14;   // a channel message's sender, with terminator
 constexpr size_t kThreadKeyLen = 32;   // a public key; a channel secret is zero-padded
 constexpr size_t kThreadNameLen = 32;
-constexpr uint16_t kMsgStoreVersion = 1;
+// 2: fixed slot layout and a CRC per entry (#1472, #1427). Version 1 files
+// (never released) are kept aside unread.
+constexpr uint16_t kMsgStoreVersion = 2;
 
 enum class ThreadKind : uint8_t { Empty = 0, Channel, Direct, Room };
 enum class Delivery : uint8_t { None = 0, Sending, Delivered, Failed };
@@ -46,6 +48,7 @@ struct MsgRecord {
   int8_t snr_q4;     // SNR x 4 when received; 0 when not known
   uint8_t text_len;  // bytes in text, at most kMsgTextMax
   char sender[kMsgSenderLen];  // a channel message's sender, NUL-terminated
+  uint16_t crc;                // over the record with this field 0, set as it's written
   char text[kMsgTextMax];      // not NUL-terminated; text_len says how much
 };
 static_assert(sizeof(MsgRecord) == 192, "the on-disk record is 192 bytes");
@@ -58,7 +61,8 @@ struct Thread {
   uint32_t last_time;
   uint8_t key[kThreadKeyLen];
   char name[kThreadNameLen];   // NUL-terminated
-  uint8_t reserved[4];         // zero; room for per-thread flags without a version bump
+  uint16_t crc;                // over the entry with this field 0, set as it's written
+  uint8_t reserved[2];         // zero; room for per-thread flags without a version bump
 };
 static_assert(sizeof(Thread) == 80, "the on-disk thread entry is 80 bytes");
 
