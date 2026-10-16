@@ -427,13 +427,13 @@ TEST(TuneTable, EveryListedTuneExceptSilentHasAMelody) {
 // tune the UI is forbidden to reach becomes reachable by merely being stored.
 TEST(PickerRow, NeverOpensOnAnUnlistedTune) {
   for (uint8_t id = 0; id < kBuiltinCount; id++) {
-    const uint8_t row = pickerRowFor(id);
+    const uint8_t row = pickerRowForBuiltin(id);
     EXPECT_NE(nullptr, tuneName(row))
         << "stored id " << (int)id << " would open the picker on an un-listed row";
   }
   // Specifically the trigger (#1422): stored, it must land on Silent, not play itself.
   EXPECT_EQ(nullptr, tuneName(kTuneTrigger)) << "kTuneTrigger stopped being un-listed";
-  EXPECT_EQ(kTuneSilent, pickerRowFor(kTuneTrigger));
+  EXPECT_EQ(kTuneSilent, pickerRowForBuiltin(kTuneTrigger));
 }
 
 // A listed tune opens on itself -- the fallback must not swallow the normal case, which
@@ -441,15 +441,15 @@ TEST(PickerRow, NeverOpensOnAnUnlistedTune) {
 TEST(PickerRow, OpensOnTheTuneInUseWhenItIsListed) {
   for (uint8_t id = 0; id < kBuiltinCount; id++) {
     if (tuneName(id) == nullptr) continue;
-    EXPECT_EQ(id, pickerRowFor(id));
+    EXPECT_EQ(id, pickerRowForBuiltin(id));
   }
 }
 
 // Past the table: a custom slot (#1413) or an id from a longer table after a downgrade.
 TEST(PickerRow, OutOfRangeIdsOpenOnSilent) {
-  EXPECT_EQ(kTuneSilent, pickerRowFor(kBuiltinCount));
-  EXPECT_EQ(kTuneSilent, pickerRowFor(kTuneUnset));
-  EXPECT_EQ(kTuneSilent, pickerRowFor(200));
+  EXPECT_EQ(kTuneSilent, pickerRowForBuiltin(kBuiltinCount));
+  EXPECT_EQ(kTuneSilent, pickerRowForBuiltin(kTuneUnset));
+  EXPECT_EQ(kTuneSilent, pickerRowForBuiltin(200));
 }
 
 int main(int argc, char** argv) {

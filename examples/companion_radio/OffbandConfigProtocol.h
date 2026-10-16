@@ -109,6 +109,51 @@ constexpr uint8_t OFFBAND_UI_DISPLAY_SET = 0x06;  // [0xC5][0x06][mode] -> echo
 constexpr uint8_t OFFBAND_UI_LED_GET     = 0x07;  // -> [0xC5][0x07][on]
 constexpr uint8_t OFFBAND_UI_LED_SET     = 0x08;  // [0xC5][0x08][on]   -> echo
 
+// #1478: the eight custom tune slots. Gated on the buzzer capability, like the scope
+// sub-codes -- a board with no buzzer has no slots. Allocated 2026-10-16 after checking
+// every live branch: 0x01-0x08 were taken on all of them and 0x7F is the error code.
+//
+// SLOT_GET  [0xC5][0x09][slot]
+//   -> [0xC5][0x09][slot][len][name...]
+//
+//   `len` is the stored tune's LENGTH, `name` its derived display name (<= 12 chars,
+//   taken from the RTTTL's own name field). An empty slot answers len 0 and no name.
+//
+//   It deliberately does NOT return the tune itself. A tune is up to 240 characters and
+//   a frame carries at most MAX_FRAME_SIZE (176), or the negotiated ATT MTU minus 3 over
+//   BLE -- 20 before negotiation. Returning the string would mean a second chunked
+//   protocol in the read direction, for data the client is the one that sent. Length and
+//   name are enough to show what is in a slot and to tell whether a push landed, and
+//   they fit the 20-byte worst case: 4 header bytes plus at most 12 of name.
+//
+// SLOT_SET  [0xC5][0x0A][slot][offset][more][bytes...]
+//   -> [0xC5][0x0A][slot][accepted_len]   on Accepted or Complete
+//   -> [0xC5][0x7F][err]                  on anything refused
+//
+//   CHUNKED, because a tune does not fit a frame on any transport. The CLIENT picks each
+//   chunk's size against maxFramePayload(5); the device takes whatever a frame carried.
+//
+//   `offset` must equal the number of bytes already accepted for this slot, and 0 starts
+//   or restarts. Requiring it rather than trusting arrival order is what makes a dropped,
+//   duplicated or reordered frame a reported error instead of a silently corrupted tune.
+//   `more` = 1 means another chunk follows; 0 commits.
+//
+//   ONE push at a time, deliberately. An `offset` of 0 always restarts, so a second
+//   client (or the same one changing its mind) takes over the assembly and the first gets
+//   ERR_SLOT_OFFSET on its next chunk. A badge is paired with one app, so a transaction
+//   id would be machinery for a case that does not arise -- but the refusal says where
+//   the device is, so the loser can tell it was displaced rather than malformed.
+//
+//   A push in flight is also ABANDONED when the badge's own editor saves that slot, so a
+//   stale commit cannot overwrite what the person just typed.
+//
+//   On commit the string is validated by the SAME validator a tune typed on the badge
+//   gets, and refused the same way: divergent validation between the two routes is how
+//   one of them becomes the trusted path and the other a trap. An empty commit (offset 0,
+//   more 0, no bytes) CLEARS the slot, so deleting needs no third sub-code.
+constexpr uint8_t OFFBAND_UI_SLOT_GET    = 0x09;
+constexpr uint8_t OFFBAND_UI_SLOT_SET    = 0x0A;
+
 // === 0xC6 PACKET-HASH QUERY -- CANONICAL WIRE CONTRACT (#611) =================
 // FIRMWARE OWNS THIS CONTRACT (same discipline as 0xC5). Agreed with the client
 // (QuietSnow) 2026-08-10; owner-approved. The client codes to what is written here.
@@ -170,6 +215,13 @@ constexpr uint8_t OFFBAND_UI_ERR_NO_BUZZER          = 3;
 constexpr uint8_t OFFBAND_UI_ERR_NO_GPS             = 4;
 constexpr uint8_t OFFBAND_UI_ERR_MALFORMED          = 5;
 constexpr uint8_t OFFBAND_UI_ERR_UNSUPPORTED_INDICATOR = 6;  // #542 B1: no controllable LED/display
+// #1478: a SLOT_SET chunk arrived out of step -- dropped, duplicated, reordered, or for a
+// slot that is not the one being assembled. Carries a FOURTH byte, the offset the device
+// expects next: [0xC5][0x7F][7][expected]. Without it a client that lost a frame cannot
+// tell a protocol error from a lost one, cannot resume, and cannot even learn where the
+// device got to -- which review was right to call out as leaving it stuck with no remedy
+// but a blind restart.
+constexpr uint8_t OFFBAND_UI_ERR_SLOT_OFFSET           = 7;
 constexpr uint8_t CMD_OFFBAND_CONFIG       = 0xC0;  // request:  cmd_frame[0]
 constexpr uint8_t RESP_CODE_OFFBAND_CONFIG = 0xC0;  // response: out_frame[0]
 

@@ -9,6 +9,12 @@
 #include "BadgeUi.h"
 #include "UITask.h"
 #include "target.h"
+#ifdef PIN_BUZZER
+  // #1474: the custom tune slots. Included here from the start so the badge build
+  // compiles the store now -- a header nobody includes is a header the compiler never
+  // checks, and the screens that consume it land in #1476 and #1477.
+  #include "TuneSlotStore.h"
+#endif
 
 using namespace badgeui;
 using Store = MyMesh::BadgeMsgStore;
@@ -1479,17 +1485,20 @@ bool ZonePickerScreen::handleInput(char c) {
 
 // Settings' own row shows the DM tune: the owner's call, over a count, because a count
 // is not something you would act on.
-// The six event rows plus the scope row above them (#1468).
-static constexpr int kTonesRowCount = offband::kToneEventRowCount + 1;
+// The scope row, the six event rows, then Custom (#1468, #1476).
+static constexpr int kTonesCustomRow = offband::kToneEventRowCount + 1;
+static constexpr int kTonesRowCount = offband::kToneEventRowCount + 2;
 
 void TonesScreen::summary(UITask* task, char* out, size_t n) {
   (void)task;
   const uint8_t id = offband::effectiveTone(the_mesh.getNodePrefs(),
                                             offband::ToneEvent::ContactMessage);
-  const char* name = offband::tuneName(id);
-  // A name is absent only for an id this build cannot resolve -- a custom slot (#1413)
-  // or a tune from a longer table after a downgrade. Say so rather than showing blank.
-  snprintf(out, n, "%s", name != nullptr ? name : "custom");
+  // #1475: one label resolver for builtins and slots alike. A name is absent only for an
+  // id that names nothing in this build -- an empty slot, or a tune from a longer table
+  // after a downgrade. Say so rather than showing blank.
+  char label[offband::kMaxSlotName + 1];
+  offband::tuneLabel(the_mesh.dataStore(), id, label, sizeof(label));
+  snprintf(out, n, "%s", label[0] != 0 ? label : "custom");
 }
 
 int TonesScreen::render(DisplayDriver& d) {
@@ -1518,10 +1527,17 @@ int TonesScreen::render(DisplayDriver& d) {
               i == _sel);
       continue;
     }
+    if (i == kTonesCustomRow) {
+      char count[12];
+      CustomTunesScreen::summary(_task, count, sizeof(count));
+      listRow(d, 1 + r, "Custom", count, i == _sel);
+      continue;
+    }
     const offband::ToneEventRow& row = offband::kToneEventRows[i - 1];
     const uint8_t id = offband::effectiveTone(prefs, row.event);
-    const char* name = offband::tuneName(id);
-    listRow(d, 1 + r, row.label, name != nullptr ? name : "custom", i == _sel);
+    char label[offband::kMaxSlotName + 1];
+    offband::tuneLabel(the_mesh.dataStore(), id, label, sizeof(label));
+    listRow(d, 1 + r, row.label, label[0] != 0 ? label : "custom", i == _sel);
   }
   return 1000;
 }
@@ -1541,6 +1557,10 @@ bool TonesScreen::handleInput(char c) {
   if (key == KEY_ENTER) {
     if (_sel == kScopeRow) {
       cycleScope();
+      return true;
+    }
+    if (_sel == kTonesCustomRow) {
+      _task->gotoCustomTunes();
       return true;
     }
     _task->gotoTonePicker(offband::kToneEventRows[_sel - 1].event);
@@ -1590,11 +1610,12 @@ void TonesScreen::cycleScope() {
 // with a preview as the selection moves.
 void TonePickerScreen::begin() {
   const uint8_t id = offband::effectiveTone(the_mesh.getNodePrefs(), _task->tonePickerEvent());
-  // Open on the tune in use. An id with no row here -- past the table, a custom slot, or
-  // deliberately un-named -- starts at the top instead. The rule lives in Tunes.h because
-  // opening decides what gets auditioned, and an un-named tune must never be played by
-  // the UI (#1467).
-  _sel = (int)offband::pickerRowFor(id);
+  // Open on the tune in use. An id the picker does not list -- past the table, an empty
+  // slot, or a deliberately un-named builtin -- starts at Silent instead. Opening decides
+  // what gets AUDITIONED, which is why the rule is a function and not an expression here
+  // (#1467), and why it takes the store now that a slot can be the tune in use (#1475).
+  _sel = (int)offband::pickerRowFor(the_mesh.dataStore(), id);
+  normalizeSel();
   _note = "";
   _note_until = 0;
   // #1467: audition on arrival. This is also the only place the picker can tell you the
@@ -1603,10 +1624,25 @@ void TonePickerScreen::begin() {
   audition();
 }
 
+void TonePickerScreen::normalizeSel() {
+  const int count = (int)offband::kPickerIdEnd;
+  if (_sel < 0 || _sel >= count) _sel = offband::kTuneSilent;
+  for (int tries = 0; tries < count; tries++) {
+    if (offband::tuneIsListed(the_mesh.dataStore(), (uint8_t)_sel)) return;
+    _sel = (_sel + 1) % count;
+  }
+  _sel = offband::kTuneSilent;   // unreachable: Silent is always listed
+}
+
 int TonePickerScreen::render(DisplayDriver& d) {
   const Face& kBody = uiNavBody();
   const int kListRows = uiListRows(kBody);
-  const int count = (int)offband::kBuiltinCount;
+  // Before laying anything out: the selection must be on a row this render will draw.
+  normalizeSel();
+  // #1475: builtins first, then the eight slots. Unfilled slots and un-named builtins
+  // are skipped when drawing and stepped over when navigating, so the list is as long as
+  // what actually exists rather than always showing eight empty rows.
+  const int count = (int)offband::kPickerIdEnd;
   int top = listTop(_sel, count, kListRows);
   const bool more_below = count - top > kListRows;
   if (more_below) top = listTop(_sel, count, kListRows - 1);
@@ -1633,8 +1669,9 @@ int TonePickerScreen::render(DisplayDriver& d) {
                                                  _task->tonePickerEvent());
   for (int r = 0; r < kListRows && top + r < count; r++) {
     const uint8_t id = (uint8_t)(top + r);
-    const char* name = offband::tuneName(id);
-    if (name == nullptr) continue;   // an un-listed tune (#1422) stays out of the menu
+    char name[offband::kMaxSlotName + 1];
+    // Empty: an un-listed builtin (#1422), or a slot with nothing in it. Both stay out.
+    if (offband::tuneLabel(the_mesh.dataStore(), id, name, sizeof(name)) == 0) continue;
     listRow(d, 1 + r, name, id == current ? "now" : "", id == _sel);
   }
   return noting ? 250 : 1000;
@@ -1663,7 +1700,7 @@ void TonePickerScreen::audition() {
 
 bool TonePickerScreen::handleInput(char c) {
   const uint8_t key = (uint8_t)c;
-  const int count = (int)offband::kBuiltinCount;
+  const int count = (int)offband::kPickerIdEnd;
   const bool from_button = !_task->inputFromKeyboard();
 
   const bool down = (from_button && key == KEY_NEXT) || key == KEY_DOWN;
@@ -1674,7 +1711,7 @@ bool TonePickerScreen::handleInput(char c) {
     const int dir = down ? 1 : -1;
     for (int tries = 0; tries < count; tries++) {
       _sel = (_sel + dir + count) % count;
-      if (offband::tuneName((uint8_t)_sel) != nullptr) break;
+      if (offband::tuneIsListed(the_mesh.dataStore(), (uint8_t)_sel)) break;
     }
     audition();
     return true;
@@ -1693,6 +1730,283 @@ bool TonePickerScreen::handleInput(char c) {
     return true;
   }
   return false;   // Esc: back to Tones, unchanged
+}
+
+void CustomTunesScreen::summary(UITask* task, char* out, size_t n) {
+  (void)task;
+  snprintf(out, n, "%u of %u", (unsigned)offband::filledSlotCount(the_mesh.dataStore()),
+           (unsigned)offband::kSlotCount);
+}
+
+void CustomTunesScreen::begin() {
+  _sel = 0;
+  _note = "";
+  _note_until = 0;
+  // #1476 review: the name cache is invalidated by this firmware's own writers, which is
+  // every writer that exists today -- the app push in #1478 goes through the same save.
+  // But a cache whose correctness rests on "nobody else ever touches those files" is a
+  // promise about the future, so re-read on entry. It costs eight reads per visit to this
+  // screen rather than per render, and bounds any staleness to one screen visit.
+  offband::invalidateSlotNames();
+  audition();   // #1467's lesson: arriving silently means never hearing what is here
+}
+
+// Same shape as the tune picker's audition, and the same reason: both refusals get words,
+// because a silent list with no explanation reads as broken.
+void CustomTunesScreen::audition() {
+  if (!offband::slotIsFilled(the_mesh.dataStore(), (uint8_t)_sel)) return;   // nothing to hear
+  switch (_task->previewTune(offband::slotIdAt((uint8_t)_sel))) {
+    case offband::TonePlay::RefusedQuiet:
+      _note = "Buzzer: OFF";
+      _note_until = millis() + 1200;
+      break;
+    case offband::TonePlay::RefusedBusy:
+      _note = "busy";
+      _note_until = millis() + 1200;
+      break;
+    case offband::TonePlay::Played:
+    case offband::TonePlay::NotFound:
+      break;
+  }
+}
+
+int CustomTunesScreen::render(DisplayDriver& d) {
+  const Face& kBody = uiNavBody();
+  const int kListRows = uiListRows(kBody);
+  const int count = (int)offband::kSlotCount;
+  int top = listTop(_sel, count, kListRows);
+  const bool more_below = count - top > kListRows;
+  if (more_below) top = listTop(_sel, count, kListRows - 1);
+
+  const bool noting = _note[0] != 0 && millis() < _note_until;
+  bar(d, kBody, 0, " Custom tunes", noting ? _note : "");
+  if (!noting) {
+    int right_edge = kScreenPx - kEdgePx;
+    if (more_below) {
+      markDown(d, right_edge - 6, 0, true);
+      right_edge -= 7;
+    }
+    if (top > 0) markUp(d, right_edge - 6, 0, true);
+  }
+
+  for (int r = 0; r < kListRows && top + r < count; r++) {
+    const int i = top + r;
+    // "1 Nokia" / "4 (empty)". The number is part of the LABEL rather than a separate
+    // column so a long tune name has the whole row to use, and an empty slot still reads
+    // as a slot rather than as a blank line.
+    // "<n> <name>" or "<n> (empty)". Sized from its parts rather than a magic number,
+    // and the assertion is what makes the size honest: a two-digit slot count still
+    // fits, a three-digit one would not, and review was right that the original 4 was
+    // a number nobody could check.
+    static_assert(offband::kSlotCount < 100, "a slot number wider than two digits needs a wider row buffer");
+    constexpr size_t kNumWidth = 2;        // digits in the largest slot number
+    constexpr size_t kEmptyWidth = 7;      // " (empty)" minus the space, plus slack
+    char label[kNumWidth + 1 + offband::kMaxSlotName + kEmptyWidth + 1];
+    char name[offband::kMaxSlotName + 1];
+    if (offband::slotNameCached(the_mesh.dataStore(), (uint8_t)i, name, sizeof(name)) > 0) {
+      snprintf(label, sizeof(label), "%d %s", i + 1, name);
+    } else {
+      snprintf(label, sizeof(label), "%d (empty)", i + 1);
+    }
+    listRow(d, 1 + r, label, "", i == _sel);
+  }
+  return noting ? 250 : 1000;
+}
+
+bool CustomTunesScreen::handleInput(char c) {
+  const uint8_t key = (uint8_t)c;
+  const int count = (int)offband::kSlotCount;
+  const bool from_button = !_task->inputFromKeyboard();
+
+  const bool down = (from_button && key == KEY_NEXT) || key == KEY_DOWN;
+  const bool up = (from_button && key == KEY_PREV) || key == KEY_UP;
+  if (down || up) {
+    // Every slot is a row here, filled or not -- unlike the tune picker, which hides what
+    // cannot be chosen. An empty slot is exactly what you navigate to in order to fill it.
+    _sel = (_sel + (down ? 1 : count - 1)) % count;
+    audition();
+    return true;
+  }
+  if (key == KEY_ENTER) {
+    _task->gotoRtttlEdit((uint8_t)_sel);   // #1477: filled or empty, Enter edits it
+    return true;
+  }
+  // Review read the bare `return false` as abdicating keys to a parent that might do
+  // something surprising with them. It cannot: the only fallback in UITask::loop() is
+  // guarded by `keynav::backsOut((uint8_t)c)`, so an unhandled key does nothing at all,
+  // and returning false is exactly what Esc NEEDS in order to reach the back-out routing.
+  return false;   // Esc: back to Tones
+}
+
+// The editor pins the FIXED face, and that is a correctness requirement rather than a
+// preference. Wrapping at a column count is only right when every character is the same
+// width; bodyFaceFor() returns a PROPORTIONAL face at the medium and small text sizes
+// (Org_01, TomThumb), so laying the string out as row * cols would drift against what is
+// actually drawn. The display's own 6 x 8 font gives 128 / 6 = 21 exact columns.
+static constexpr int kEditCols = kScreenPx / 6;
+static_assert(kEditCols == 21, "the editor's wrap assumes the fixed 6 px face");
+
+void RtttlEditScreen::note(const char* text) {
+  _note = text;
+  _note_until = millis() + 1500;
+}
+
+// Keep the end of the text in view: that is where every edit happens, since there is no
+// cursor to move. Up and Down scroll back to read what was typed earlier, and the next
+// keystroke snaps back here.
+void RtttlEditScreen::follow() {
+  const int rows = rowsFor(fixedFace()) - 2;   // the title row and the key-hint row
+  // Not _line.rows(): the cursor needs a row of its own when the last line is exactly
+  // full, and rows() answers how many rows the TEXT occupies. length/cols + 1 counts the
+  // row the cursor is on, which is 1 for an empty line and 2 at exactly 21 characters.
+  const int last = (int)(_line.length() / kEditCols);
+  _top_row = last - (rows - 1);
+  if (_top_row < 0) _top_row = 0;
+}
+
+void RtttlEditScreen::begin(uint8_t slot_index) {
+  _slot = slot_index;
+  _line.clear();
+  _note = "";
+  _note_until = 0;
+  _confirm_delete = false;
+  // Load what is there. Through readSlotRtttl and NOT the playback stage, so opening the
+  // editor cannot disturb a tune that is sounding.
+  char existing[offband::kMaxRtttl + 1];
+  if (offband::readSlotRtttl(the_mesh.dataStore(), slot_index, existing, sizeof(existing)) > 0) {
+    // LineEdit has no setter, and it does not need one: apply() takes exactly the
+    // printable range RTTTL occupies, so feeding the string through it reuses the one
+    // tested path rather than adding a second way to fill the buffer.
+    for (size_t i = 0; existing[i] != 0; i++) _line.apply((uint8_t)existing[i]);
+  }
+  follow();
+}
+
+int RtttlEditScreen::render(DisplayDriver& d) {
+  const Face& kBody = fixedFace();
+  const int rows = rowsFor(kBody) - 2;   // the title row and the key-hint row
+
+  char title[24];
+  snprintf(title, sizeof(title), " Slot %u", (unsigned)(_slot + 1));
+  const bool noting = _note[0] != 0 && millis() < _note_until;
+  char right[12];
+  snprintf(right, sizeof(right), "%u/%u", (unsigned)_line.length(), (unsigned)offband::kMaxRtttl);
+  bar(d, kBody, 0, title, noting ? _note : right);
+
+  // Rows including the cursor's own -- see follow(). Review caught the cursor vanishing
+  // at exactly 21 characters, where the text filled the row and nothing was left to draw
+  // it on: for an editor with no other cursor movement that is the one indicator that
+  // must never blink out.
+  const int total = (int)(_line.length() / kEditCols) + 1;
+  // Clamp to [0, total - rows], not [0, total - 1]: the old clamp let Down scroll the
+  // text off the top one row at a time until the screen was blank, which reads as the
+  // text having vanished.
+  const int max_top = total > rows ? total - rows : 0;
+  if (_top_row > max_top) _top_row = max_top;
+  if (_top_row < 0) _top_row = 0;
+
+  for (int r = 0; r < rows; r++) {
+    const int row = _top_row + r;
+    if (row >= total) break;
+    char text[kEditCols + 2];
+    const size_t n = _line.window((size_t)row * kEditCols, kEditCols, text, sizeof(text) - 1);
+    // The cursor sits at the end of the text -- the only place an edit can land -- and
+    // the row count above guarantees that row exists even when the text filled the last.
+    if (row == total - 1) {
+      text[n] = '_';
+      text[n + 1] = 0;
+    }
+    line(d, kBody, 1 + r, text);
+  }
+
+  // The keys, because three of them are arrows doing things no arrow obviously does.
+  line(d, kBody, 1 + rows, "Ret save <clr >play");
+  return noting ? 250 : 500;
+}
+
+bool RtttlEditScreen::handleInput(char c) {
+  const uint8_t key = (uint8_t)c;
+
+  // A pending delete confirmation survives nothing but a second Enter.
+  if (key != KEY_ENTER) _confirm_delete = false;
+
+  if (key == KEY_UP) {
+    if (_top_row > 0) _top_row--;
+    return true;
+  }
+  if (key == KEY_DOWN) {
+    _top_row++;   // render clamps, so there is one place that knows the row count
+    return true;
+  }
+  if (key == KEY_LEFT) {
+    // Clear, not a cursor move. A typo in character twelve of a 218-character string
+    // would otherwise cost two hundred backspaces, which is the cost the owner accepted
+    // on the understanding that restarting is one key.
+    _line.clear();
+    follow();
+    note("cleared");
+    return true;
+  }
+  if (key == KEY_RIGHT) {
+    // Hear it before committing it. Staged as a copy: the player keeps the pointer and
+    // the next keystroke would otherwise mutate the tune underneath it.
+    const offband::RtttlProblem p = offband::rtttlProblem(_line.text());
+    if (_line.length() == 0) {
+      note("empty");
+    } else if (p != offband::RtttlProblem::Ok) {
+      note(offband::rtttlProblemText(p));
+    } else {
+      const char* staged = offband::stageTextForPlayback(_line.text());
+      if (staged != nullptr) _task->playStagedTune(staged);
+    }
+    return true;
+  }
+  if (key == KEY_ENTER) {
+    // An empty line deletes the slot -- but not on one keystroke. Review was right that
+    // Clear is instant and Enter is next to it, so a slipped thumb could destroy a
+    // carefully typed 218-character tune with no confirmation and no undo. A second
+    // Enter is the confirmation; anything else, Esc included, abandons it.
+    if (_line.length() == 0) {
+      if (!_confirm_delete) {
+        _confirm_delete = true;
+        note("Enter again: delete");
+        return true;
+      }
+      _confirm_delete = false;
+      if (offband::clearSlot(the_mesh.dataStore(), _slot)) {
+        _task->cancelTuneSlotPush();   // #1478: a push in flight must not undo this
+        _task->gotoCustomTunes();
+      } else {
+        note("not saved");
+      }
+      return true;
+    }
+    const offband::RtttlProblem p = offband::rtttlProblem(_line.text());
+    if (p != offband::RtttlProblem::Ok) {
+      // Refused, with the reason named. A saved-but-broken slot would resolve to silence
+      // at notification time, which is the hardest kind of fault to trace -- and exactly
+      // the confusion #1467 and #1468 came out of.
+      note(offband::rtttlProblemText(p));
+      return true;
+    }
+    if (!offband::saveSlotRtttl(the_mesh.dataStore(), _slot, _line.text())) {
+      note("not saved");
+      return true;
+    }
+    _task->cancelTuneSlotPush();   // #1478: a push in flight must not undo this
+    // Saved. Play it once, from the slot now that it is on disk, so what is heard is what
+    // was stored rather than what is in the editor.
+    _task->playTuneById(offband::slotIdAt(_slot), offband::TonePriority::Preview);
+    _task->gotoCustomTunes();
+    return true;
+  }
+  // Text: printables, Backspace, and Tab as a space. Everything else, Esc included, goes
+  // back to the dispatcher.
+  if (_line.apply(key)) {
+    follow();
+    return true;
+  }
+  return false;
 }
 
 #endif  // PIN_BUZZER

@@ -22,6 +22,8 @@
   #include <helpers/ui/buzzer.h>
   #include <helpers/ui/Tunes.h>   // #1418/#1419: the tone for an event is looked up
   #include "ToneSlots.h"          // #1421: the one event-to-pref slot table
+  #include <helpers/ui/TuneSlots.h>      // #1474: kMaxRtttl, kSlotCount
+  #include <helpers/ui/SlotAssembly.h>   // #1478: a pushed tune arrives in chunks
 #endif
 #ifdef PIN_VIBRATION
   #include <helpers/ui/GenericVibration.h>
@@ -182,6 +184,11 @@ class UITask : public AbstractUITask {
   // case -- but a keyboard board without a piezo should not fail to compile.
   UIScreen* tones;        // the six events
   UIScreen* tone_picker;  // the tunes, for one event
+  UIScreen* custom_tunes; // #1476: the eight custom slots
+  UIScreen* rtttl_edit;   // #1477: typing one slot's tune
+#ifdef PIN_BUZZER
+  offband::SlotAssembly<offband::kMaxRtttl> _slot_push;   // #1478
+#endif
   // Which event the picker is editing. Held here rather than passed into the screen so
   // the picker can be a plain UIScreen like the others.
   offband::ToneEvent _tone_picking = offband::ToneEvent::ContactMessage;
@@ -273,6 +280,14 @@ public:
 #if UI_HAS_CARDKB && defined(PIN_BUZZER)
   void gotoTones();                                   // #1421: from Settings' Tones row
   void gotoTonePicker(offband::ToneEvent e);          // #1421: from a Tones row
+  void gotoCustomTunes();                             // #1476: from Tones' Custom row
+  void gotoRtttlEdit(uint8_t slot_index);             // #1477: from a Custom row
+
+  // #1477: play a string the caller has already staged in the playback buffer. Preview
+  // priority, so auditioning what is being typed can never cut off a notification.
+  offband::TonePlay playStagedTune(const char* staged) {
+    return buzzer.play(staged, offband::TonePriority::Preview);
+  }
   offband::ToneEvent tonePickerEvent() const { return _tone_picking; }
   // #1422: plays any tune by id, including the un-listed one the remote trigger names.
   // This is the ENTIRE surface epic #1191 needs: it honors the quiet pref and the
@@ -336,6 +351,29 @@ public:
   void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) override;
   void notify(UIEventType t = UIEventType::none) override;
   void applyBuzzerMute(bool quiet) override;
+// #1478: BOTH guards, matching where _slot_push lives. A board with a buzzer and no
+// keyboard -- heltec_rc32 and WioTrackerL1 are the live cases -- compiles this header but
+// not the CardKB-only members, so declaring these under PIN_BUZZER alone referenced a
+// member that was not there. CI caught it on four envs I had not built locally.
+//
+// Scoping, not an accident: the slots are a badge feature and this epic scoped them to
+// the badge. A buzzer-without-keyboard board answers the client through the base class's
+// default -- "unsupported" -- which is exactly what that default is for. Extending the
+// push to such a board would also mean compiling the slot store's file I/O onto it, and
+// that is a deliberate decision rather than a side effect of a guard.
+#if UI_HAS_CARDKB && defined(PIN_BUZZER)
+  // The assembly buffer lives here rather than in MyMesh because MyMesh.h is compiled by
+  // every companion variant and a badge-only feature must not cost them 241 bytes of RAM.
+  uint8_t feedTuneSlot(uint8_t slot, uint8_t offset, bool more, const uint8_t* bytes,
+                       size_t len, uint8_t& accepted) override;
+  bool readTuneSlot(uint8_t slot, uint8_t& len, char* name, size_t name_cap) override;
+
+  // #1478: abandon a push in flight. The badge's own editor calls this when it saves,
+  // so a chunked push that was already under way cannot later commit over what the
+  // person just typed -- review was right that the two writers could otherwise race on
+  // intent, with the stale one winning because it finished last.
+  void cancelTuneSlotPush() { _slot_push.reset(); }
+#endif
   void loop() override;
 
   // #1075: `cause` names why on the [shutdown] line, so a capture that ends

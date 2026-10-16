@@ -1,4 +1,7 @@
 #include "UITask.h"
+#ifdef PIN_BUZZER
+  #include "TuneSlotStore.h"   // #1475: custom slots resolve through the store
+#endif
 #ifdef PIN_QCC_ACTIVITY_LED
   // #1367: the dispatcher -> UI traffic seam. Up here, not beside the scheduler further
   // down: the sink is registered in begin(), which comes first in this file, so an
@@ -797,6 +800,8 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #ifdef PIN_BUZZER
   tones = new TonesScreen(this);              // #1421
   tone_picker = new TonePickerScreen(this);   // #1421
+  custom_tunes = new CustomTunesScreen(this);  // #1476
+  rtttl_edit = new RtttlEditScreen(this);      // #1477
 #endif
   msg_preview = NULL;
 #else
@@ -871,7 +876,63 @@ void UITask::gotoGps() {
 void UITask::gotoBattery() { setCurrScreen(battery); }   // #1254
 
 #if UI_HAS_CARDKB && defined(PIN_BUZZER)
-void UITask::gotoTones() { setCurrScreen(tones); }   // #1421
+// #1421. #1476: re-read the slot names on entry, because the Custom row shows a count
+// that comes from the cache -- same reason the slot list itself re-reads. Eight reads
+// per visit to this screen, not per render, which bounds staleness to one visit rather
+// than resting on "nothing else ever writes those files".
+void UITask::gotoTones() {
+  offband::invalidateSlotNames();
+  setCurrScreen(tones);
+}
+
+// #1478: both guards, matching the declaration -- see UITask.h.
+#if UI_HAS_CARDKB && defined(PIN_BUZZER)
+uint8_t UITask::feedTuneSlot(uint8_t slot, uint8_t offset, bool more, const uint8_t* bytes,
+                            size_t len, uint8_t& accepted) {
+  using Res = offband::SlotAssembly<offband::kMaxRtttl>::Result;
+  accepted = 0;
+  if (slot >= offband::kSlotCount) return (uint8_t)Res::BadSlot;
+
+  const Res r = _slot_push.feed(slot, offset, more, bytes, len);
+  accepted = (uint8_t)_slot_push.length();
+  if (r != Res::Complete) return (uint8_t)r;
+
+  // Committed. The SAME store call a typed tune goes through, so the same validator and
+  // the same refusals apply -- an empty string clears the slot, which is how a client
+  // deletes one without a third sub-code.
+  const bool ok = offband::saveSlotRtttl(the_mesh.dataStore(), slot, _slot_push.text());
+  _slot_push.reset();
+  accepted = 0;
+  // A store refusal is reported as a bad byte rather than invented as a new code: the
+  // only ways saveSlotRtttl says no are a string the validator rejects, one over the
+  // length, or a write that failed -- and the client's remedy for all three is the same,
+  // which is to look at what it sent.
+  return ok ? (uint8_t)Res::Complete : (uint8_t)Res::BadByte;
+}
+
+bool UITask::readTuneSlot(uint8_t slot, uint8_t& len, char* name, size_t name_cap) {
+  len = 0;
+  if (name != nullptr && name_cap > 0) name[0] = 0;
+  if (slot >= offband::kSlotCount) return false;
+  // Through the CALLER's buffer, never the playback stage: answering a client query must
+  // not disturb a tune that is sounding.
+  char tune[offband::kMaxRtttl + 1];
+  const size_t n = offband::readSlotRtttl(the_mesh.dataStore(), slot, tune, sizeof(tune));
+  len = (uint8_t)(n > 255 ? 255 : n);
+  if (n > 0 && name != nullptr) offband::deriveSlotName(tune, name, name_cap);
+  return true;
+}
+#endif
+
+void UITask::gotoRtttlEdit(uint8_t slot_index) {
+  ((RtttlEditScreen*)rtttl_edit)->begin(slot_index);
+  setCurrScreen(rtttl_edit);
+}
+
+void UITask::gotoCustomTunes() {
+  ((CustomTunesScreen*)custom_tunes)->begin();
+  setCurrScreen(custom_tunes);
+}
 
 void UITask::gotoTonePicker(offband::ToneEvent e) {
   _tone_picking = e;
@@ -882,11 +943,34 @@ void UITask::gotoTonePicker(offband::ToneEvent e) {
 offband::TonePlay UITask::playTuneById(uint8_t id, offband::TonePriority priority) {
   // Silent is a CHOICE: it sounds like nothing and that is success.
   if (id == offband::kTuneSilent) return offband::TonePlay::Played;
+  // #1475: a custom slot. Asked BEFORE reading the file, because staging overwrites the
+  // one buffer the player may still be walking -- if play() refused after the read, the
+  // tune still sounding would be left pointing at the new tune's bytes. The pre-check is
+  // not a second copy of the priority rule; it is the same rule, queried.
+  if (offband::isSlotId(id)) {
+    if (!buzzer.wouldTake(priority)) return offband::TonePlay::RefusedBusy;
+    // Stop BEFORE staging. wouldTake() has already said this request takes the buzzer,
+    // so stopping costs nothing -- and it closes the one window review found that is
+    // actually reachable: stageSlotForPlayback writes into the shared buffer as it reads
+    // the file and only validates afterwards, so a corrupt slot overwrites the buffer and
+    // then returns nullptr with no play() call. Without this, a tune already sounding
+    // would be left walking those bytes.
+    buzzer.stop();
+    const char* staged =
+        offband::stageSlotForPlayback(the_mesh.dataStore(), offband::slotIndex(id));
+    // An empty slot, a slot whose file will not read, or one holding a string the
+    // validator refuses. All three are "this id resolves to nothing", which is what
+    // NotFound means; the picker folds it back to Played and a trigger does not.
+    if (staged == nullptr) return offband::TonePlay::NotFound;
+    // No loop() runs between the stage above and the play below, so the player never
+    // reads a half-written buffer. That is the invariant, not the stop.
+    return buzzer.play(staged, priority);
+  }
   const char* melody = offband::tuneRtttl(id);
   // Anything else with no melody is an id this build cannot resolve -- past the table
-  // after a downgrade, or a custom slot (#1413). A remote trigger needs to tell that
-  // apart from "played", because for it the badge making no noise is a failure it may
-  // want to report. The picker does not care, so previewTune() folds it back.
+  // after a downgrade, or a slot id from a build with more slots. A remote trigger needs
+  // to tell that apart from "played", because for it the badge making no noise is a
+  // failure it may want to report. The picker does not care, so previewTune() folds it.
   if (melody == nullptr) return offband::TonePlay::NotFound;
   return buzzer.play(melody, priority);
 }
@@ -1365,7 +1449,8 @@ void UITask::loop() {
       // #1421: the picker is one level deeper than the rest, so Esc from it goes to
       // Tones rather than all the way out. Without this it would land on Home, because
       // the fallback below is the default for any screen not named here.
-      if (curr == tone_picker) gotoTones();
+      if (curr == rtttl_edit) gotoCustomTunes();
+      else if (curr == tone_picker || curr == custom_tunes) gotoTones();
       else
 #endif
       if (curr == tools || curr == zones || curr == gps || curr == battery

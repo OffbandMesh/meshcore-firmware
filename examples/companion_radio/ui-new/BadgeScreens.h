@@ -238,6 +238,11 @@ private:
 // (design 1a). The name shows in a bar for 2 s on entry. Past one line the editor
 // takes the screen, keeping the destination and the room left in its footer.
 #ifdef PIN_BUZZER
+// #1477: for kMaxRtttl, which sizes the editor's LineEdit. The pure half only -- the
+// store needs DataStore and stays in the .cpp, so this header learns the slot sizes
+// without learning the filesystem.
+#include <helpers/ui/TuneSlots.h>
+
 // #1421: Settings -> Tones. One row per sound event, showing the tune it will play.
 // Pressing a row opens the picker for that event.
 class TonesScreen : public UIScreen {
@@ -252,10 +257,15 @@ public:
 
 private:
   // #1468: row 0 is the notification scope -- the gate ABOVE the six event rows, and on
-  // this UI family the only way to reach it at all. Title plus these seven rows is
-  // exactly the large face's capacity, so nothing scrolls at that size.
-  // The row count lives in the .cpp: it needs ToneSlots.h, and this header is compiled
-  // by every variant that builds these screens, buzzer or not.
+  // this UI family the only way to reach it at all.
+  //
+  // #1476: Custom goes last, below the six rows it supplies tunes to. That makes eight
+  // rows, so Tones scrolls by one at the large face. The owner chose a row here over a
+  // second Settings entry: it is about tunes, and one scroll is cheaper than a second
+  // place to look for them.
+  //
+  // The row count itself lives in the .cpp -- it needs ToneSlots.h, and this header is
+  // compiled by every variant that builds these screens, buzzer or not.
   static constexpr int kScopeRow = 0;
 
   void cycleScope();
@@ -286,9 +296,75 @@ private:
   // path -- open, press Enter -- never made a sound.
   void audition();
 
+  // #1475: move the highlight onto a row that is actually drawn. render() skips an id
+  // with no label and handleInput() steps over one, but nothing re-anchored a selection
+  // that STOPPED being listed while the picker was open -- a slot cleared from the app,
+  // say -- which left the highlight on a row no longer drawn and nothing looking
+  // selected. Silent is always listed, so this always terminates.
+  void normalizeSel();
+
   UITask* _task;
   int _sel = 0;
   const char* _note = "";      // "Buzzer: OFF" when a preview could not be heard
+  uint32_t _note_until = 0;
+};
+
+// #1476: the eight custom slots -- what is in them, and the way in to editing one.
+//
+// Numbered rather than named-only, so an empty slot still has an identity to refer to
+// ("slot 4") -- which is what a person needs when a tune is pushed to one from the app
+// (#1478). Highlighting a filled slot auditions it, the same as the tune picker: a list
+// of tune names you cannot hear is a list you have to guess at.
+class CustomTunesScreen : public UIScreen {
+public:
+  explicit CustomTunesScreen(UITask* task) : _task(task) {}
+  void begin();
+  int render(DisplayDriver& display) override;
+  bool handleInput(char c) override;
+
+  // What the Tones row shows: how many slots hold something, not how many exist.
+  static void summary(UITask* task, char* out, size_t n);
+
+private:
+  void audition();
+
+  UITask* _task;
+  int _sel = 0;
+  const char* _note = "";
+  uint32_t _note_until = 0;
+};
+
+// #1477: typing an RTTTL string for one slot.
+//
+// The key budget is fixed by the hardware, not chosen: CardKbKeys.h maps the CardKB to
+// arrows, Backspace, Tab, Enter, Esc and printable ASCII, and nothing else. KEY_SELECT,
+// KEY_HOME and KEY_CONTEXT_MENU exist in UIScreen.h but reach the badge only from the
+// button, so an editor key bound to one of them would be unreachable while typing.
+//
+// That leaves: printables, Backspace and Tab for the text, Enter to save, Esc to leave,
+// and the four arrows. Up and Down have to scroll -- 218 characters at 21 columns is
+// eleven rows and only a few are visible -- so Left and Right are the whole of the
+// remaining budget, and they take Clear and Play.
+//
+// No cursor movement, per the owner: a typo early in a long string is restarted with
+// Clear rather than un-typed, and the app push (#1478) is the route for anything long.
+class RtttlEditScreen : public UIScreen {
+public:
+  explicit RtttlEditScreen(UITask* task) : _task(task) {}
+  void begin(uint8_t slot_index);
+  int render(DisplayDriver& display) override;
+  bool handleInput(char c) override;
+
+private:
+  void note(const char* text);
+  void follow();          // keep the end of the text in view, where typing happens
+
+  UITask* _task;
+  LineEdit<offband::kMaxRtttl> _line;
+  uint8_t _slot = 0;
+  int _top_row = 0;
+  bool _confirm_delete = false;   // a second Enter on an empty line, never the first
+  const char* _note = "";
   uint32_t _note_until = 0;
 };
 #endif
