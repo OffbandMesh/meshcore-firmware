@@ -1485,8 +1485,9 @@ bool ZonePickerScreen::handleInput(char c) {
 
 // Settings' own row shows the DM tune: the owner's call, over a count, because a count
 // is not something you would act on.
-// The six event rows plus the scope row above them (#1468).
-static constexpr int kTonesRowCount = offband::kToneEventRowCount + 1;
+// The scope row, the six event rows, then Custom (#1468, #1476).
+static constexpr int kTonesCustomRow = offband::kToneEventRowCount + 1;
+static constexpr int kTonesRowCount = offband::kToneEventRowCount + 2;
 
 void TonesScreen::summary(UITask* task, char* out, size_t n) {
   (void)task;
@@ -1526,6 +1527,12 @@ int TonesScreen::render(DisplayDriver& d) {
               i == _sel);
       continue;
     }
+    if (i == kTonesCustomRow) {
+      char count[12];
+      CustomTunesScreen::summary(_task, count, sizeof(count));
+      listRow(d, 1 + r, "Custom", count, i == _sel);
+      continue;
+    }
     const offband::ToneEventRow& row = offband::kToneEventRows[i - 1];
     const uint8_t id = offband::effectiveTone(prefs, row.event);
     char label[offband::kMaxSlotName + 1];
@@ -1550,6 +1557,10 @@ bool TonesScreen::handleInput(char c) {
   if (key == KEY_ENTER) {
     if (_sel == kScopeRow) {
       cycleScope();
+      return true;
+    }
+    if (_sel == kTonesCustomRow) {
+      _task->gotoCustomTunes();
       return true;
     }
     _task->gotoTonePicker(offband::kToneEventRows[_sel - 1].event);
@@ -1719,6 +1730,93 @@ bool TonePickerScreen::handleInput(char c) {
     return true;
   }
   return false;   // Esc: back to Tones, unchanged
+}
+
+void CustomTunesScreen::summary(UITask* task, char* out, size_t n) {
+  (void)task;
+  snprintf(out, n, "%u of %u", (unsigned)offband::filledSlotCount(the_mesh.dataStore()),
+           (unsigned)offband::kSlotCount);
+}
+
+void CustomTunesScreen::begin() {
+  _sel = 0;
+  _note = "";
+  _note_until = 0;
+  audition();   // #1467's lesson: arriving silently means never hearing what is here
+}
+
+// Same shape as the tune picker's audition, and the same reason: both refusals get words,
+// because a silent list with no explanation reads as broken.
+void CustomTunesScreen::audition() {
+  if (!offband::slotIsFilled(the_mesh.dataStore(), (uint8_t)_sel)) return;   // nothing to hear
+  switch (_task->previewTune(offband::slotIdAt((uint8_t)_sel))) {
+    case offband::TonePlay::RefusedQuiet:
+      _note = "Buzzer: OFF";
+      _note_until = millis() + 1200;
+      break;
+    case offband::TonePlay::RefusedBusy:
+      _note = "busy";
+      _note_until = millis() + 1200;
+      break;
+    case offband::TonePlay::Played:
+    case offband::TonePlay::NotFound:
+      break;
+  }
+}
+
+int CustomTunesScreen::render(DisplayDriver& d) {
+  const Face& kBody = uiNavBody();
+  const int kListRows = uiListRows(kBody);
+  const int count = (int)offband::kSlotCount;
+  int top = listTop(_sel, count, kListRows);
+  const bool more_below = count - top > kListRows;
+  if (more_below) top = listTop(_sel, count, kListRows - 1);
+
+  const bool noting = _note[0] != 0 && millis() < _note_until;
+  bar(d, kBody, 0, " Custom tunes", noting ? _note : "");
+  if (!noting) {
+    int right_edge = kScreenPx - kEdgePx;
+    if (more_below) {
+      markDown(d, right_edge - 6, 0, true);
+      right_edge -= 7;
+    }
+    if (top > 0) markUp(d, right_edge - 6, 0, true);
+  }
+
+  for (int r = 0; r < kListRows && top + r < count; r++) {
+    const int i = top + r;
+    // "1 Nokia" / "4 (empty)". The number is part of the LABEL rather than a separate
+    // column so a long tune name has the whole row to use, and an empty slot still reads
+    // as a slot rather than as a blank line.
+    char label[4 + offband::kMaxSlotName + 1];
+    char name[offband::kMaxSlotName + 1];
+    if (offband::slotNameCached(the_mesh.dataStore(), (uint8_t)i, name, sizeof(name)) > 0) {
+      snprintf(label, sizeof(label), "%d %s", i + 1, name);
+    } else {
+      snprintf(label, sizeof(label), "%d (empty)", i + 1);
+    }
+    listRow(d, 1 + r, label, "", i == _sel);
+  }
+  return noting ? 250 : 1000;
+}
+
+bool CustomTunesScreen::handleInput(char c) {
+  const uint8_t key = (uint8_t)c;
+  const int count = (int)offband::kSlotCount;
+  const bool from_button = !_task->inputFromKeyboard();
+
+  const bool down = (from_button && key == KEY_NEXT) || key == KEY_DOWN;
+  const bool up = (from_button && key == KEY_PREV) || key == KEY_UP;
+  if (down || up) {
+    // Every slot is a row here, filled or not -- unlike the tune picker, which hides what
+    // cannot be chosen. An empty slot is exactly what you navigate to in order to fill it.
+    _sel = (_sel + (down ? 1 : count - 1)) % count;
+    audition();
+    return true;
+  }
+  // Enter opens the editor, which lands in #1477. Until then this screen is a read-only
+  // view of what the app has pushed, which is a coherent state rather than a stub.
+  return false;   // Esc: back to Tones
 }
 
 #endif  // PIN_BUZZER

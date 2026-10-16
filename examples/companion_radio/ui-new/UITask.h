@@ -182,6 +182,7 @@ class UITask : public AbstractUITask {
   // case -- but a keyboard board without a piezo should not fail to compile.
   UIScreen* tones;        // the six events
   UIScreen* tone_picker;  // the tunes, for one event
+  UIScreen* custom_tunes; // #1476: the eight custom slots
   // Which event the picker is editing. Held here rather than passed into the screen so
   // the picker can be a plain UIScreen like the others.
   offband::ToneEvent _tone_picking = offband::ToneEvent::ContactMessage;
@@ -273,6 +274,7 @@ public:
 #if UI_HAS_CARDKB && defined(PIN_BUZZER)
   void gotoTones();                                   // #1421: from Settings' Tones row
   void gotoTonePicker(offband::ToneEvent e);          // #1421: from a Tones row
+  void gotoCustomTunes();                             // #1476: from Tones' Custom row
   offband::ToneEvent tonePickerEvent() const { return _tone_picking; }
   // #1422: plays any tune by id, including the un-listed one the remote trigger names.
   // This is the ENTIRE surface epic #1191 needs: it honors the quiet pref and the

@@ -576,6 +576,10 @@ EXPECTED_NAV_SITES = {
     # Neither draws message content, so neither reads the message face.
     "TonesScreen::render": 1,
     "TonePickerScreen::render": 1,
+    # #1476: the custom-slot list. A settings-style list like the two above and like
+    # ZonePickerScreen, so it takes the navigation face; it draws no message content, so
+    # it does not read the message face.
+    "CustomTunesScreen::render": 1,
 }
 EXPECTED_MSG_SITES = {
     "InboxScreen::drawItem": 1,

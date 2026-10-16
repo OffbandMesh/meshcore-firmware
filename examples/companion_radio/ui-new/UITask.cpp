@@ -800,6 +800,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #ifdef PIN_BUZZER
   tones = new TonesScreen(this);              // #1421
   tone_picker = new TonePickerScreen(this);   // #1421
+  custom_tunes = new CustomTunesScreen(this);  // #1476
 #endif
   msg_preview = NULL;
 #else
@@ -875,6 +876,11 @@ void UITask::gotoBattery() { setCurrScreen(battery); }   // #1254
 
 #if UI_HAS_CARDKB && defined(PIN_BUZZER)
 void UITask::gotoTones() { setCurrScreen(tones); }   // #1421
+
+void UITask::gotoCustomTunes() {
+  ((CustomTunesScreen*)custom_tunes)->begin();
+  setCurrScreen(custom_tunes);
+}
 
 void UITask::gotoTonePicker(offband::ToneEvent e) {
   _tone_picking = e;
@@ -1384,7 +1390,7 @@ void UITask::loop() {
       // #1421: the picker is one level deeper than the rest, so Esc from it goes to
       // Tones rather than all the way out. Without this it would land on Home, because
       // the fallback below is the default for any screen not named here.
-      if (curr == tone_picker) gotoTones();
+      if (curr == tone_picker || curr == custom_tunes) gotoTones();
       else
 #endif
       if (curr == tools || curr == zones || curr == gps || curr == battery
