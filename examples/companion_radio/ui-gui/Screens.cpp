@@ -1269,8 +1269,9 @@ void GuiShell::openSheet(Sheet kind) {
   oneLine(tl, FontRole::Body);
   lv_obj_set_height(tl, lv_font_get_line_height(font(FontRole::Body)) + 16);
 
-  char mention[64];
-  snprintf(mention, sizeof mention, "Only @%s and replies", _model->nodeName());
+  // The design's "Only @<name> and replies" promised replies, which MeshCore
+  // can't tell apart (owner pick a, 2026-10-16).
+  const char* mention = "Only when you're @mentioned";
   _sheet_count = kind == Sheet::Notify ? 3 : 2;
   for (uint8_t i = 0; i < _sheet_count; i++) {
     const bool chosen = kind == Sheet::Notify && i == uint8_t(mode);
