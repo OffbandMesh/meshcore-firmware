@@ -58,6 +58,29 @@ public:
   // Non-pure with a no-op default: implementations without a buzzer inherit the
   // default and are unaffected.
   virtual void applyBuzzerMute(bool quiet) { (void)quiet; }
+
+  // #1478: a custom tune slot, pushed from the app. Routed through this interface for
+  // the same reason applyBuzzerMute is: the slot store lives in the badge's UI and
+  // MyMesh.cpp is compiled by every companion variant, so the mesh layer asks rather
+  // than knowing. A UI without slots keeps the defaults and the handler reports
+  // unsupported.
+  //
+  // feedTuneSlot returns one of the SlotAssembly results as a uint8_t, plus the bytes
+  // accepted so far in `accepted`, so the handler can answer without knowing the store.
+  virtual uint8_t feedTuneSlot(uint8_t slot, uint8_t offset, bool more,
+                               const uint8_t* bytes, size_t len, uint8_t& accepted) {
+    (void)slot; (void)offset; (void)more; (void)bytes; (void)len;
+    accepted = 0;
+    return 0xFF;   // unsupported on this UI
+  }
+
+  // The stored tune's length and derived name, for SLOT_GET. False when this UI has no
+  // slots. `name` is written as a NUL-terminated string of at most 12 characters.
+  virtual bool readTuneSlot(uint8_t slot, uint8_t& len, char* name, size_t name_cap) {
+    (void)slot; (void)name; (void)name_cap;
+    len = 0;
+    return false;
+  }
   // #542 B1: OLED mode (0 auto, 1 always-on, 2 always-off). No-op default: UIs
   // without a controllable display inherit it and are unaffected. Applied live from
   // the 0xC5 display SET sub-code and at boot.

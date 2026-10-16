@@ -2329,8 +2329,14 @@ void MyMesh::handleCmdFrame(size_t len) {
     // The two capabilities are independent and are advertised independently
     // (OFFBAND_CAP2_NOTIFY_SCOPE on PIN_BUZZER, OFFBAND_CAP2_BUTTON_MATRIX on
     // PIN_USER_BTN), so the command surface must match that split exactly.
+    // #1478: the slot sub-codes belong to the BUZZER capability, like the scope ones --
+    // a board with no buzzer has no tunes to store -- so they join is_scope_sub rather
+    // than getting a gate of their own. Keeping the #509 rule: gate per sub-command, and
+    // match the capability split exactly.
     const bool is_scope_sub  = (sub == offband::OFFBAND_UI_SCOPE_GET ||
-                                sub == offband::OFFBAND_UI_SCOPE_SET);
+                                sub == offband::OFFBAND_UI_SCOPE_SET ||
+                                sub == offband::OFFBAND_UI_SLOT_GET ||
+                                sub == offband::OFFBAND_UI_SLOT_SET);
     const bool is_matrix_sub = (sub == offband::OFFBAND_UI_MATRIX_GET ||
                                 sub == offband::OFFBAND_UI_MATRIX_SET);
     // #542 B1: indicator sub-codes, gated on their own capability (not the buzzer).
@@ -2377,6 +2383,83 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
     (void)is_scope_sub; (void)is_matrix_sub; (void)is_display_sub; (void)is_led_sub;
 {
+    // #1478: the custom tune slots. Asked of the UI rather than handled here: the slot
+    // store and its assembly buffer live in the badge's UI, and this file is compiled by
+    // every companion variant, so a badge-only feature must not cost them the RAM. Same
+    // route applyBuzzerMute takes.
+    if (sub == offband::OFFBAND_UI_SLOT_GET) {
+      if (len < 3 || _ui == NULL) {
+        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+        out_frame[1] = offband::OFFBAND_UI_ERR;
+        out_frame[2] = offband::OFFBAND_UI_ERR_MALFORMED;
+        _serial->writeFrame(out_frame, 3);
+        return;
+      }
+      const uint8_t slot = cmd_frame[2];
+      uint8_t tune_len = 0;
+      char name[16];
+      if (!_ui->readTuneSlot(slot, tune_len, name, sizeof(name))) {
+        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+        out_frame[1] = offband::OFFBAND_UI_ERR;
+        out_frame[2] = offband::OFFBAND_UI_ERR_UNSUPPORTED_ACTION;
+        _serial->writeFrame(out_frame, 3);
+        return;
+      }
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = slot;
+      out_frame[3] = tune_len;
+      // Four header bytes plus the name. Capped against the TRANSPORT rather than the
+      // buffer: BLE silently clips a frame longer than its MTU (#450/#453), and the
+      // pre-negotiation floor is 20 bytes, so a 12-character name is the most that can
+      // ever be promised here. maxFramePayload floors at 0, so this cannot underflow.
+      const size_t room = _serial->maxFramePayload(4);
+      size_t n = 0;
+      while (name[n] != 0 && n < room && n < sizeof(name) - 1) n++;
+      memcpy(&out_frame[4], name, n);
+      _serial->writeFrame(out_frame, 4 + n);
+      return;
+    }
+    if (sub == offband::OFFBAND_UI_SLOT_SET) {
+      // [0xC5][0x0A][slot][offset][more][bytes...] -- five header bytes, the rest payload.
+      if (len < 5 || _ui == NULL) {
+        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+        out_frame[1] = offband::OFFBAND_UI_ERR;
+        out_frame[2] = offband::OFFBAND_UI_ERR_MALFORMED;
+        _serial->writeFrame(out_frame, 3);
+        return;
+      }
+      const uint8_t slot = cmd_frame[2];
+      const uint8_t offset = cmd_frame[3];
+      const bool more = cmd_frame[4] != 0;
+      uint8_t accepted = 0;
+      const uint8_t r = _ui->feedTuneSlot(slot, offset, more, &cmd_frame[5],
+                                          (size_t)(len - 5), accepted);
+      if (r == 0xFF) {
+        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+        out_frame[1] = offband::OFFBAND_UI_ERR;
+        out_frame[2] = offband::OFFBAND_UI_ERR_UNSUPPORTED_ACTION;
+        _serial->writeFrame(out_frame, 3);
+        return;
+      }
+      // Accepted (0) and Complete (1) are progress; everything else is a refusal the
+      // client has to see, because its remedy is to restart the push at offset 0.
+      if (r > 1) {
+        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+        out_frame[1] = offband::OFFBAND_UI_ERR;
+        out_frame[2] = offband::OFFBAND_UI_ERR_MALFORMED;
+        _serial->writeFrame(out_frame, 3);
+        return;
+      }
+      MESH_DEBUG_PRINTLN("[0xC5] tune slot %d <- %d bytes at %d, more=%d, r=%d",
+                         (int)slot, (int)(len - 5), (int)offset, (int)more, (int)r);
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = slot;
+      out_frame[3] = accepted;
+      _serial->writeFrame(out_frame, 4);
+      return;
+    }
     if (sub == offband::OFFBAND_UI_SCOPE_GET) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = sub;
