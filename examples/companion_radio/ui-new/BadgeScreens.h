@@ -238,6 +238,11 @@ private:
 // (design 1a). The name shows in a bar for 2 s on entry. Past one line the editor
 // takes the screen, keeping the destination and the room left in its footer.
 #ifdef PIN_BUZZER
+// #1477: for kMaxRtttl, which sizes the editor's LineEdit. The pure half only -- the
+// store needs DataStore and stays in the .cpp, so this header learns the slot sizes
+// without learning the filesystem.
+#include <helpers/ui/TuneSlots.h>
+
 // #1421: Settings -> Tones. One row per sound event, showing the tune it will play.
 // Pressing a row opens the picker for that event.
 class TonesScreen : public UIScreen {
@@ -325,6 +330,40 @@ private:
 
   UITask* _task;
   int _sel = 0;
+  const char* _note = "";
+  uint32_t _note_until = 0;
+};
+
+// #1477: typing an RTTTL string for one slot.
+//
+// The key budget is fixed by the hardware, not chosen: CardKbKeys.h maps the CardKB to
+// arrows, Backspace, Tab, Enter, Esc and printable ASCII, and nothing else. KEY_SELECT,
+// KEY_HOME and KEY_CONTEXT_MENU exist in UIScreen.h but reach the badge only from the
+// button, so an editor key bound to one of them would be unreachable while typing.
+//
+// That leaves: printables, Backspace and Tab for the text, Enter to save, Esc to leave,
+// and the four arrows. Up and Down have to scroll -- 218 characters at 21 columns is
+// eleven rows and only a few are visible -- so Left and Right are the whole of the
+// remaining budget, and they take Clear and Play.
+//
+// No cursor movement, per the owner: a typo early in a long string is restarted with
+// Clear rather than un-typed, and the app push (#1478) is the route for anything long.
+class RtttlEditScreen : public UIScreen {
+public:
+  explicit RtttlEditScreen(UITask* task) : _task(task) {}
+  void begin(uint8_t slot_index);
+  int render(DisplayDriver& display) override;
+  bool handleInput(char c) override;
+
+private:
+  void note(const char* text);
+  void follow();          // keep the end of the text in view, where typing happens
+
+  UITask* _task;
+  LineEdit<offband::kMaxRtttl> _line;
+  uint8_t _slot = 0;
+  int _top_row = 0;
+  bool _confirm_delete = false;   // a second Enter on an empty line, never the first
   const char* _note = "";
   uint32_t _note_until = 0;
 };
