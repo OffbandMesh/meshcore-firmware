@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "../TimeZones.h"
+#include "InputMap.h"
 #include "SignalLevel.h"
 
 // D4 and D5 replace the remaining stubs (D1, #1495).
@@ -368,20 +369,217 @@ void metaLine(const char* from, const char* time, const char* meta, char* out, s
   }
 }
 
-void ComposeBuffer::start(size_t) {}
-bool ComposeBuffer::insert(const char*, size_t) { return false; }
-bool ComposeBuffer::backspace() { return false; }
-void ComposeBuffer::counter(char* out, size_t n) const { blank(out, n); }
-Tone ComposeBuffer::counterTone() const { return Tone::Bad; }
+// ---------------------------------------------------------------- Compose
 
-void ShiftState::tap(uint32_t) {}
-void ShiftState::typedLetter() {}
-void ShiftState::autoCap(const char*, size_t) {}
+void ComposeBuffer::start(size_t budget) {
+  _budget = budget < kMsgTextMax ? budget : kMsgTextMax;
+  _len = 0;
+  _buf[0] = '\0';
+}
 
-void PageState::typed(char) {}
+// The byte length of the UTF-8 sequence a lead byte starts; 0 if it can't
+// start one.
+static size_t seqLen(uint8_t b) {
+  if (b < 0x80) return 1;
+  if (b >= 0xC2 && b <= 0xDF) return 2;
+  if (b >= 0xE0 && b <= 0xEF) return 3;
+  if (b >= 0xF0 && b <= 0xF4) return 4;
+  return 0;
+}
 
-size_t lettersLayout(int16_t, int16_t, KeyRect*, size_t) { return 0; }
-int nearestKey(const KeyRect*, size_t, int16_t, int16_t) { return -1; }
+bool ComposeBuffer::insert(const char* utf8, size_t len) {
+  if (!utf8 || len == 0 || seqLen(uint8_t(utf8[0])) != len || uint8_t(utf8[0]) == 0) return false;
+  for (size_t i = 1; i < len; i++) {
+    if ((uint8_t(utf8[i]) & 0xC0) != 0x80) return false;
+  }
+  if (_len + len > _budget) return false;
+  memcpy(_buf + _len, utf8, len);
+  _len += len;
+  _buf[_len] = '\0';
+  return true;
+}
+
+bool ComposeBuffer::backspace() {
+  if (_len == 0) return false;
+  do {
+    _len--;
+  } while (_len > 0 && (uint8_t(_buf[_len]) & 0xC0) == 0x80);
+  _buf[_len] = '\0';
+  return true;
+}
+
+void ComposeBuffer::counter(char* out, size_t n) const {
+  put(out, n, "%u/%u", unsigned(_len), unsigned(_budget));
+}
+
+Tone ComposeBuffer::counterTone() const {
+  return _len + 10 >= _budget ? Tone::Warn : Tone::Dim;
+}
+
+void ShiftState::tap(uint32_t now_ms) {
+  const bool quick = _tapped && now_ms - _last_tap <= kMultiClickMs;
+  if (_s == Shift::Lock) _s = Shift::Off;
+  else if (_s == Shift::Once) _s = quick ? Shift::Lock : Shift::Off;
+  else _s = Shift::Once;
+  _last_tap = now_ms;
+  _tapped = true;
+}
+
+void ShiftState::typedLetter() {
+  if (_s == Shift::Once) _s = Shift::Off;
+}
+
+void ShiftState::autoCap(const char* text, size_t len) {
+  if (_s == Shift::Lock) return;
+  const bool start = len == 0 || (len >= 2 && text[len - 1] == ' ' &&
+                                  (text[len - 2] == '.' || text[len - 2] == '!' || text[len - 2] == '?'));
+  _s = start ? Shift::Once : Shift::Off;
+}
+
+void PageState::typed(char c) {
+  if (_p == KeyPage::Letters) return;
+  if (c != ' ') _typed_symbol = true;
+  else if (_typed_symbol) select(KeyPage::Letters);
+}
+
+// ------------------------------------------------------- key geometry
+
+namespace {
+
+// One row: single-character keys from a UTF-8 string, between optional wide
+// keys at either end.
+struct RowSpec {
+  const char* left;    // a wide key before the characters, or null
+  const char* chars;   // UTF-8, one key per character
+  const char* right;   // a wide key after, or null
+};
+
+// Labels for single characters live here so KeyRect can point at them.
+constexpr size_t kMaxKeys = 40;
+char g_labels[kMaxKeys][5];
+
+constexpr int16_t kKeyW = 21;
+constexpr int16_t kGap = 2;
+constexpr int16_t kRowW = 10 * kKeyW + 9 * kGap;   // 228: the widest row
+
+}  // namespace
+
+bool typesLabel(const char* label) {
+  if (!label || !label[0]) return false;
+  const size_t k = seqLen(uint8_t(label[0]));
+  return k && label[k] == '\0' && strcmp(label, "⇧") != 0 && strcmp(label, "⌫") != 0;
+}
+
+size_t pageLayout(KeyPage page, int16_t width, int16_t y0, KeyRect* out, size_t max) {
+  static const RowSpec kLetters[3] = {{nullptr, "qwertyuiop", nullptr},
+                                      {nullptr, "asdfghjkl", nullptr},
+                                      {"⇧", "zxcvbnm", "⌫"}};
+  static const RowSpec kSymbols[3] = {{nullptr, "1234567890", nullptr},
+                                      {nullptr, "@#$_&-+()/", nullptr},
+                                      {"=\\<", "*\"':;!?", "⌫"}};
+  static const RowSpec kSymbols2[3] = {{nullptr, "[]{}<>~|\\^", nullptr},
+                                       {nullptr, "%=°£¥§¿¡«»", nullptr},
+                                       {"?123", "`´¨¬±×÷", "⌫"}};
+  const RowSpec* rows = page == KeyPage::Letters ? kLetters : page == KeyPage::Symbols ? kSymbols : kSymbols2;
+  const int16_t x0 = (width - kRowW) / 2;
+  size_t n = 0;
+  auto add = [&](int16_t x, int16_t y, int16_t w, const char* label) {
+    if (n < max) out[n] = {x, y, w, kKeyH, label};
+    n++;
+  };
+
+  for (int r = 0; r < 3; r++) {
+    const int16_t y = y0 + r * (kKeyH + kKeyRowGap);
+    size_t chars = 0;
+    for (const char* p = rows[r].chars; *p; p += seqLen(uint8_t(*p))) chars++;
+    const bool wide = rows[r].left != nullptr;
+    // Wide keys share what the characters leave of the row.
+    const int16_t used = int16_t(chars * kKeyW + (chars - 1) * kGap);
+    const int16_t wide_w = wide ? int16_t((kRowW - used - 2 * kGap) / 2) : 0;
+    int16_t x = wide ? x0 : int16_t(x0 + (kRowW - used) / 2);
+    if (wide) {
+      add(x, y, wide_w, rows[r].left);
+      x += wide_w + kGap;
+    }
+    for (const char* p = rows[r].chars; *p;) {
+      const size_t k = seqLen(uint8_t(*p));
+      const size_t slot = n < kMaxKeys ? n : kMaxKeys - 1;
+      memcpy(g_labels[slot], p, k);
+      g_labels[slot][k] = '\0';
+      add(x, y, kKeyW, g_labels[slot]);
+      x += kKeyW + kGap;
+      p += k;
+    }
+    if (wide) add(x, y, wide_w, rows[r].right);
+  }
+
+  // The bottom row: page switch, space, Send; the symbol pages put "," and
+  // "." beside the space bar.
+  const int16_t y = y0 + 3 * (kKeyH + kKeyRowGap);
+  const int16_t sw_w = 46, send_w = 50;
+  int16_t x = x0;
+  add(x, y, sw_w, page == KeyPage::Letters ? "?123" : "ABC");
+  x += sw_w + kGap;
+  int16_t space_w = kRowW - sw_w - send_w - 2 * kGap;
+  if (page != KeyPage::Letters) {
+    space_w -= 2 * (kKeyW + kGap);
+    add(x, y, kKeyW, ",");
+    x += kKeyW + kGap;
+  }
+  add(x, y, space_w, "space");
+  x += space_w + kGap;
+  if (page != KeyPage::Letters) {
+    add(x, y, kKeyW, ".");
+    x += kKeyW + kGap;
+  }
+  add(x, y, send_w, "Send");
+  return n < max ? n : max;
+}
+
+int nearestKey(const KeyRect* keys, size_t count, int16_t x, int16_t y) {
+  int best = -1;
+  int32_t best_d = 0;
+  for (size_t i = 0; i < count; i++) {
+    const int32_t dx = int32_t(x) * 2 - (keys[i].x * 2 + keys[i].w);
+    const int32_t dy = int32_t(y) * 2 - (keys[i].y * 2 + keys[i].h);
+    // Distance to the key's box, not its centre, so a wide key (space)
+    // still wins a touch anywhere on it.
+    const int32_t ox = dx < 0 ? -dx : dx, oy = dy < 0 ? -dy : dy;
+    const int32_t ex = ox > keys[i].w ? ox - keys[i].w : 0;
+    const int32_t ey = oy > keys[i].h ? oy - keys[i].h : 0;
+    const int32_t d = ex * ex + ey * ey;
+    if (best < 0 || d < best_d) {
+      best = int(i);
+      best_d = d;
+    }
+  }
+  return best;
+}
+
+// ------------------------------------------------------------- DM retry
+
+void DmRetry::start(uint32_t seq, uint32_t now_ms, uint32_t timeout_ms) {
+  _seq = seq;
+  _attempt = 1;
+  _deadline = now_ms + timeout_ms;
+}
+
+DmRetry::Step DmRetry::poll(uint32_t now_ms, bool delivered) {
+  if (!_seq) return Step::Done;
+  if (delivered) {
+    _seq = 0;
+    return Step::Done;
+  }
+  if (int32_t(now_ms - _deadline) < 0) return Step::Wait;
+  if (_attempt < kDmAttempts) return Step::Resend;
+  _seq = 0;
+  return Step::Fail;
+}
+
+void DmRetry::resent(uint32_t now_ms, uint32_t timeout_ms) {
+  _attempt++;
+  _deadline = now_ms + timeout_ms;
+}
 
 }  // namespace gui
 }  // namespace offband

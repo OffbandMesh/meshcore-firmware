@@ -47,6 +47,11 @@ public:
   int zone() override { return _prefs ? _prefs->ui_tz : 0; }
   void sendAdvert() override;
   void loraPopover() override { openLoraPopover(); }
+  size_t composeBudget(int thread) override;
+  const char* cannedText(int i) override;
+  bool sendText(int thread, const char* text, size_t len) override;
+  uint8_t dmAttempt(uint32_t seq) override;
+  void resend(uint32_t seq) override;
 
 private:
   void pollButtons(uint32_t now);
@@ -60,6 +65,8 @@ private:
   void lockData(LockData* d);
   void openLoraPopover();
   int channelSlot(int thread);   // the channel slot behind a channel thread, or -1
+  bool sendDirect(int thread, const char* text, uint32_t timestamp, uint8_t attempt, uint32_t* timeout_ms);
+  void pollDmRetries(uint32_t now);
   bool gpsEnabled() const;
   uint8_t battPercent() const;
 
@@ -78,6 +85,7 @@ private:
   int _unread = 0;
 
   GuiShell _shell;
+  offband::gui::DmRetry _dm[8];   // DMs sent from the device, awaiting their ACK
   offband::gui::AdvertButton _advert;
   offband::BatteryAverage _batt;
   uint32_t _next_batt_read = 0;

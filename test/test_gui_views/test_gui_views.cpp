@@ -695,6 +695,74 @@ TEST(Compose, TouchSnapsToTheNearestKey) {
   EXPECT_EQ(nearestKey(k, 0, 10, 10), -1);
 }
 
+TEST(Compose, SymbolPagesLayOut) {
+  KeyRect k[40];
+  const size_t n = pageLayout(KeyPage::Symbols, 240, 100, k, 40);
+  ASSERT_GT(n, 0u);
+  EXPECT_STREQ(k[0].label, "1");
+  EXPECT_STREQ(k[n - 1].label, "Send");
+  bool has_abc = false, has_more = false;
+  for (size_t i = 0; i < n; i++) {
+    if (strcmp(k[i].label, "ABC") == 0) has_abc = true;
+    if (strcmp(k[i].label, "=\\<") == 0) has_more = true;
+    EXPECT_LE(k[i].x + k[i].w, 240) << k[i].label;
+  }
+  EXPECT_TRUE(has_abc);
+  EXPECT_TRUE(has_more);
+  const size_t n2 = pageLayout(KeyPage::Symbols2, 240, 100, k, 40);
+  ASSERT_GT(n2, 0u);
+  bool back = false;
+  for (size_t i = 0; i < n2; i++) back = back || strcmp(k[i].label, "?123") == 0;
+  EXPECT_TRUE(back);   // the second page leads back to the first
+}
+
+TEST(Compose, KeysThatTypeTheirLabel) {
+  EXPECT_TRUE(typesLabel("q"));
+  EXPECT_TRUE(typesLabel("@"));
+  EXPECT_TRUE(typesLabel("\xC2\xB0"));   // °
+  EXPECT_FALSE(typesLabel("⇧"));
+  EXPECT_FALSE(typesLabel("⌫"));
+  EXPECT_FALSE(typesLabel("?123"));
+  EXPECT_FALSE(typesLabel("=\\<"));
+  EXPECT_FALSE(typesLabel("ABC"));
+  EXPECT_FALSE(typesLabel("space"));
+  EXPECT_FALSE(typesLabel("Send"));
+}
+
+TEST(DmRetry, DeliveredEndsIt) {
+  DmRetry r;
+  EXPECT_FALSE(r.active());
+  r.start(7, 1000, 5000);
+  EXPECT_TRUE(r.active());
+  EXPECT_EQ(r.attempt(), 1);
+  EXPECT_EQ(r.poll(2000, false), DmRetry::Step::Wait);
+  EXPECT_EQ(r.poll(2500, true), DmRetry::Step::Done);
+  EXPECT_FALSE(r.active());
+}
+
+TEST(DmRetry, ThreeTriesThenFail) {
+  DmRetry r;
+  r.start(7, 1000, 5000);
+  EXPECT_EQ(r.poll(5999, false), DmRetry::Step::Wait);
+  EXPECT_EQ(r.poll(6000, false), DmRetry::Step::Resend);
+  r.resent(6000, 5000);
+  EXPECT_EQ(r.attempt(), 2);
+  EXPECT_EQ(r.poll(11000, false), DmRetry::Step::Resend);
+  r.resent(11000, 5000);
+  EXPECT_EQ(r.attempt(), 3);
+  EXPECT_EQ(r.poll(15999, false), DmRetry::Step::Wait);
+  EXPECT_EQ(r.poll(16000, false), DmRetry::Step::Fail);
+  EXPECT_FALSE(r.active());
+}
+
+TEST(DmRetry, LateAckStillCounts) {
+  DmRetry r;
+  r.start(7, 1000, 5000);
+  EXPECT_EQ(r.poll(6000, false), DmRetry::Step::Resend);
+  r.resent(6000, 5000);
+  EXPECT_EQ(r.poll(6100, true), DmRetry::Step::Done);   // the first try's ACK
+}
+
 // ------------------------------------------------------ emoji display text
 
 TEST(DisplayText, DropsCharactersThatOnlySteerEmoji) {

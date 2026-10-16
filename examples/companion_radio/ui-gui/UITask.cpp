@@ -450,6 +450,125 @@ void UITask::routeMeta(int thread, char* out, size_t n) {
   else snprintf(out, n, "direct · %u hop%s", hops, hops == 1 ? "" : "s");
 }
 
+// ------------------------------------------------------------- Compose (D5)
+
+// A channel message goes out as "<name>: <text>" inside the 160-byte text
+// payload, so the name and ": " come off the top (as compose::budget).
+size_t UITask::composeBudget(int thread) {
+  const Thread* th = the_mesh.guiStore().threadAt(thread);
+  if (!th || ThreadKind(th->kind) != ThreadKind::Channel) return kMsgTextMax;
+  const size_t name = _prefs ? strlen(_prefs->node_name) : 0;
+  return name + 2 < kMsgTextMax ? kMsgTextMax - name - 2 : 0;
+}
+
+const char* UITask::cannedText(int i) {
+  return (_prefs && i >= 0 && i < int(kCannedCount)) ? _prefs->gui.canned[i] : "";
+}
+
+bool UITask::sendDirect(int thread, const char* text, uint32_t timestamp, uint8_t attempt, uint32_t* timeout_ms) {
+  const Thread* th = the_mesh.guiStore().threadAt(thread);
+  if (!th) return false;
+  ContactInfo* to = the_mesh.lookupContactByPubKey(th->key, PUB_KEY_SIZE);
+  if (!to) return false;
+  bool flood = false;
+  uint32_t ack = 0, est = 0;
+  const CmdResult r = the_mesh.cmdSendDirect(*to, timestamp, attempt, text, false, &flood, &ack, &est);
+  *timeout_ms = est ? est : 10000;
+  return r == CmdResult::Ok;
+}
+
+bool UITask::sendText(int thread, const char* text, size_t len) {
+  MsgStore& store = the_mesh.guiStore();
+  const Thread* th = store.threadAt(thread);
+  if (!th || len == 0 || len > kMsgTextMax) return false;
+  char buf[kMsgTextMax + 1];
+  memcpy(buf, text, len);
+  buf[len] = '\0';
+  const uint32_t now = rtc_clock.getCurrentTime();
+
+  if (ThreadKind(th->kind) == ThreadKind::Channel) {
+    const int slot = channelSlot(thread);
+    const bool ok = slot >= 0 && the_mesh.cmdSendChannel(uint8_t(slot), now, buf, len) == CmdResult::Ok;
+    mesh_log_line(MLOG_BOOT, "[gui] channel send %s\n", ok ? "ok" : "failed");
+    return ok;
+  }
+  // Every device DM is tracked to delivered or failed, so with no free slot
+  // it isn't sent (Compose says "Not sent") rather than left "sending…".
+  DmRetry* slot = nullptr;
+  for (DmRetry& r : _dm) {
+    if (!r.active()) {
+      slot = &r;
+      break;
+    }
+  }
+  uint32_t timeout = 0;
+  if (!slot || !sendDirect(thread, buf, now, 0, &timeout)) {
+    mesh_log_line(MLOG_BOOT, "[gui] dm send failed%s\n", slot ? "" : " (8 awaiting ACK)");
+    return false;
+  }
+  // The store kept it as Sending (#1464); watch for its ACK.
+  const uint32_t seq = store.findOwn(thread, buf, len);
+  if (seq) slot->start(seq, millis(), timeout);
+  mesh_log_line(MLOG_BOOT, "[gui] dm send ok, ack timeout %lums\n", (unsigned long)timeout);
+  return true;
+}
+
+uint8_t UITask::dmAttempt(uint32_t seq) {
+  for (const DmRetry& r : _dm) {
+    if (r.active() && r.seq() == seq) return r.attempt();
+  }
+  return 0;
+}
+
+// Held on a DM that wasn't delivered: a fresh round of tries, sent as a
+// resend (same timestamp) so a recipient that did get it sees a repeat.
+void UITask::resend(uint32_t seq) {
+  MsgStore& store = the_mesh.guiStore();
+  const MsgRecord* m = store.msg(seq);
+  if (!m || !m->own || Delivery(m->delivery) != Delivery::Failed || dmAttempt(seq)) return;
+  char buf[kMsgTextMax + 1];
+  memcpy(buf, m->text, m->text_len);
+  buf[m->text_len] = '\0';
+  uint32_t timeout = 0;
+  if (!sendDirect(m->thread, buf, m->time, 1, &timeout)) return;
+  for (DmRetry& r : _dm) {
+    if (!r.active()) {
+      r.start(seq, millis(), timeout);
+      break;
+    }
+  }
+  mesh_log_line(MLOG_BOOT, "[gui] dm resend\n");
+}
+
+void UITask::pollDmRetries(uint32_t now) {
+  MsgStore& store = the_mesh.guiStore();
+  for (DmRetry& r : _dm) {
+    if (!r.active()) continue;
+    const uint32_t seq = r.seq();   // poll() clears it on Fail
+    const MsgRecord* m = store.msg(seq);
+    const bool delivered = !m || Delivery(m->delivery) == Delivery::Delivered;   // gone counts as done
+    switch (r.poll(now, delivered)) {
+      case DmRetry::Step::Resend: {
+        char buf[kMsgTextMax + 1];
+        memcpy(buf, m->text, m->text_len);
+        buf[m->text_len] = '\0';
+        uint32_t timeout = 10000;
+        sendDirect(m->thread, buf, m->time, r.attempt(), &timeout);
+        r.resent(now, timeout);
+        mesh_log_line(MLOG_BOOT, "[gui] dm retry %u/%u\n", unsigned(r.attempt()), unsigned(kDmAttempts));
+        break;
+      }
+      case DmRetry::Step::Fail:
+        store.setDelivery(seq, Delivery::Failed);
+        the_mesh.guiStoreFlash().ringChanged(millis());
+        mesh_log_line(MLOG_BOOT, "[gui] dm not delivered\n");
+        break;
+      default:
+        break;
+    }
+  }
+}
+
 void UITask::msgRead(int msgcount) { _unread = msgcount; }
 
 void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) {
@@ -522,6 +641,9 @@ void UITask::loop() {
   // is using the device: the screen dim or off, or no input for the dim time
   // (which covers "always on", where the screen never dims).
   the_mesh.setGuiScreenIdle(_screen != ScreenState::On || idleMs(now) >= GUI_DIM_AFTER_MS);
+
+  // DMs sent from here retry and fail on their own, screen lit or not.
+  pollDmRetries(now);
 
   // One battery reading a second into the average (#1246), lit or not.
   if ((int32_t)(now - _next_batt_read) >= 0) {
