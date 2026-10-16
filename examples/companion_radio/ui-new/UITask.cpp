@@ -801,6 +801,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   tones = new TonesScreen(this);              // #1421
   tone_picker = new TonePickerScreen(this);   // #1421
   custom_tunes = new CustomTunesScreen(this);  // #1476
+  rtttl_edit = new RtttlEditScreen(this);      // #1477
 #endif
   msg_preview = NULL;
 #else
@@ -884,6 +885,11 @@ void UITask::gotoTones() {
   setCurrScreen(tones);
 }
 
+void UITask::gotoRtttlEdit(uint8_t slot_index) {
+  ((RtttlEditScreen*)rtttl_edit)->begin(slot_index);
+  setCurrScreen(rtttl_edit);
+}
+
 void UITask::gotoCustomTunes() {
   ((CustomTunesScreen*)custom_tunes)->begin();
   setCurrScreen(custom_tunes);
@@ -904,6 +910,13 @@ offband::TonePlay UITask::playTuneById(uint8_t id, offband::TonePriority priorit
   // not a second copy of the priority rule; it is the same rule, queried.
   if (offband::isSlotId(id)) {
     if (!buzzer.wouldTake(priority)) return offband::TonePlay::RefusedBusy;
+    // Stop BEFORE staging. wouldTake() has already said this request takes the buzzer,
+    // so stopping costs nothing -- and it closes the one window review found that is
+    // actually reachable: stageSlotForPlayback writes into the shared buffer as it reads
+    // the file and only validates afterwards, so a corrupt slot overwrites the buffer and
+    // then returns nullptr with no play() call. Without this, a tune already sounding
+    // would be left walking those bytes.
+    buzzer.stop();
     const char* staged =
         offband::stageSlotForPlayback(the_mesh.dataStore(), offband::slotIndex(id));
     // An empty slot, a slot whose file will not read, or one holding a string the
@@ -1397,7 +1410,8 @@ void UITask::loop() {
       // #1421: the picker is one level deeper than the rest, so Esc from it goes to
       // Tones rather than all the way out. Without this it would land on Home, because
       // the fallback below is the default for any screen not named here.
-      if (curr == tone_picker || curr == custom_tunes) gotoTones();
+      if (curr == rtttl_edit) gotoCustomTunes();
+      else if (curr == tone_picker || curr == custom_tunes) gotoTones();
       else
 #endif
       if (curr == tools || curr == zones || curr == gps || curr == battery

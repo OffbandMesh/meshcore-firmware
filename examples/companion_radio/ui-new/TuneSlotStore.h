@@ -83,27 +83,63 @@ inline bool slotPath(uint8_t index, char* out, size_t out_cap) {
 // resolve to silence rather than to noise.
 //
 // The returned pointer is valid until the NEXT call. See the contract above.
-inline const char* stageSlotForPlayback(DataStore* store, uint8_t index) {
-  static char staged[kMaxRtttl + 1];
-  staged[0] = '\0';
+// A slot's tune into the CALLER's buffer. #1477's editor loads through this rather than
+// through the staging buffer, so opening the editor cannot disturb a tune that is
+// sounding. Returns the length, or 0 for an empty, missing or unreadable slot -- all of
+// which mean the same thing to every caller.
+inline size_t readSlotRtttl(DataStore* store, uint8_t index, char* out, size_t out_cap) {
+  if (out == nullptr || out_cap == 0) return 0;
+  out[0] = '\0';
   FILESYSTEM* fs = slotFs(store);
   char path[12];
-  if (fs == nullptr || !slotPath(index, path, sizeof(path))) return nullptr;
+  if (fs == nullptr || !slotPath(index, path, sizeof(path))) return 0;
 
   File f = store->openRead(fs, path);
-  if (!f) return nullptr;
-  const int n = f.read((uint8_t*)staged, kMaxRtttl);
+  if (!f) return 0;
+  const int n = f.read((uint8_t*)out, out_cap - 1);
   f.close();
-  if (n <= 0) return nullptr;
-  staged[n] = '\0';
+  if (n <= 0) return 0;
+  out[n] = '\0';
   // A file written by hand, or recovered from a crash, may carry a trailing newline.
   size_t len = (size_t)n;
-  while (len > 0 && (staged[len - 1] == '\n' || staged[len - 1] == '\r')) staged[--len] = '\0';
-  if (len == 0) return nullptr;
-  // An unplayable string must not be handed to the player: rtttlProblem() exists because
-  // the parser walks past the buffer on some malformed input. A corrupt slot reads as
-  // empty, which the picker and the event path already handle.
-  if (rtttlProblem(staged) != RtttlProblem::Ok) return nullptr;
+  while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r')) out[--len] = '\0';
+  if (len == 0) return 0;
+  // An unplayable string must not reach the player: rtttlProblem() exists because the
+  // parser walks past the buffer on some malformed input. A corrupt slot reads as empty,
+  // which the picker and the event path already handle.
+  if (rtttlProblem(out) != RtttlProblem::Ok) return 0;
+  return len;
+}
+
+// The one buffer reserved for playback. See the contract at the top: the player keeps
+// the pointer, so whatever is handed to it must outlive the whole of playback and must
+// not be edited underneath it.
+inline char* playbackStage() {
+  static char staged[kMaxRtttl + 1];
+  return staged;
+}
+
+inline const char* stageSlotForPlayback(DataStore* store, uint8_t index) {
+  char* staged = playbackStage();
+  return readSlotRtttl(store, index, staged, kMaxRtttl + 1) > 0 ? staged : nullptr;
+}
+
+// Stage a string the caller holds -- #1477's editor auditioning what has been typed so
+// far. It is COPIED rather than played in place, and that is the point: the editor's own
+// buffer is about to be typed into, and the player walks its pointer across loop() calls,
+// so playing the live buffer would have the tune mutate underneath it as the next key
+// arrives. Returns nullptr for anything the validator refuses, so nothing unplayable
+// reaches a parser that walks past the end on malformed input.
+inline const char* stageTextForPlayback(const char* text) {
+  if (text == nullptr || text[0] == 0) return nullptr;
+  if (rtttlProblem(text) != RtttlProblem::Ok) return nullptr;
+  char* staged = playbackStage();
+  size_t n = 0;
+  while (text[n] != 0 && n < kMaxRtttl) {
+    staged[n] = text[n];
+    n++;
+  }
+  staged[n] = 0;
   return staged;
 }
 
@@ -229,6 +265,14 @@ inline bool saveSlotRtttl(DataStore* store, uint8_t index, const char* rtttl) {
   size_t len = 0;
   while (rtttl[len] != '\0') {
     if (len >= kMaxRtttl) return false;    // refuse rather than truncate into nonsense
+    // Printable ASCII only, which is exactly what LineEdit::apply accepts. Review found
+    // that without this, load-then-save was not idempotent: a tab or newline pushed in
+    // from the app (#1478) would come back through the editor as a space or be dropped,
+    // silently rewriting a stored tune -- and a dropped interior newline could merge an
+    // RTTTL's defaults into its notes and invalidate it. Refusing here makes both write
+    // routes agree on what a slot may hold.
+    const unsigned char ch = (unsigned char)rtttl[len];
+    if (ch < 0x20 || ch > 0x7E) return false;
     len++;
   }
 

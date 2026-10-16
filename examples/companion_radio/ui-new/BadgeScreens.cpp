@@ -1827,14 +1827,184 @@ bool CustomTunesScreen::handleInput(char c) {
     audition();
     return true;
   }
-  // Enter opens the editor, which lands in #1477. Until then this screen is a read-only
-  // view of what the app has pushed -- a coherent state rather than a stub.
-  //
-  // Review read the bare `return false` as abdicating Enter to a parent that might do
-  // something surprising with it. It cannot: the only fallback in UITask::loop() is
-  // guarded by `keynav::backsOut((uint8_t)c)`, so an unhandled Enter does nothing at all,
+  if (key == KEY_ENTER) {
+    _task->gotoRtttlEdit((uint8_t)_sel);   // #1477: filled or empty, Enter edits it
+    return true;
+  }
+  // Review read the bare `return false` as abdicating keys to a parent that might do
+  // something surprising with them. It cannot: the only fallback in UITask::loop() is
+  // guarded by `keynav::backsOut((uint8_t)c)`, so an unhandled key does nothing at all,
   // and returning false is exactly what Esc NEEDS in order to reach the back-out routing.
   return false;   // Esc: back to Tones
+}
+
+// The editor pins the FIXED face, and that is a correctness requirement rather than a
+// preference. Wrapping at a column count is only right when every character is the same
+// width; bodyFaceFor() returns a PROPORTIONAL face at the medium and small text sizes
+// (Org_01, TomThumb), so laying the string out as row * cols would drift against what is
+// actually drawn. The display's own 6 x 8 font gives 128 / 6 = 21 exact columns.
+static constexpr int kEditCols = kScreenPx / 6;
+static_assert(kEditCols == 21, "the editor's wrap assumes the fixed 6 px face");
+
+void RtttlEditScreen::note(const char* text) {
+  _note = text;
+  _note_until = millis() + 1500;
+}
+
+// Keep the end of the text in view: that is where every edit happens, since there is no
+// cursor to move. Up and Down scroll back to read what was typed earlier, and the next
+// keystroke snaps back here.
+void RtttlEditScreen::follow() {
+  const int rows = rowsFor(fixedFace()) - 2;   // the title row and the key-hint row
+  // Not _line.rows(): the cursor needs a row of its own when the last line is exactly
+  // full, and rows() answers how many rows the TEXT occupies. length/cols + 1 counts the
+  // row the cursor is on, which is 1 for an empty line and 2 at exactly 21 characters.
+  const int last = (int)(_line.length() / kEditCols);
+  _top_row = last - (rows - 1);
+  if (_top_row < 0) _top_row = 0;
+}
+
+void RtttlEditScreen::begin(uint8_t slot_index) {
+  _slot = slot_index;
+  _line.clear();
+  _note = "";
+  _note_until = 0;
+  _confirm_delete = false;
+  // Load what is there. Through readSlotRtttl and NOT the playback stage, so opening the
+  // editor cannot disturb a tune that is sounding.
+  char existing[offband::kMaxRtttl + 1];
+  if (offband::readSlotRtttl(the_mesh.dataStore(), slot_index, existing, sizeof(existing)) > 0) {
+    // LineEdit has no setter, and it does not need one: apply() takes exactly the
+    // printable range RTTTL occupies, so feeding the string through it reuses the one
+    // tested path rather than adding a second way to fill the buffer.
+    for (size_t i = 0; existing[i] != 0; i++) _line.apply((uint8_t)existing[i]);
+  }
+  follow();
+}
+
+int RtttlEditScreen::render(DisplayDriver& d) {
+  const Face& kBody = fixedFace();
+  const int rows = rowsFor(kBody) - 2;   // the title row and the key-hint row
+
+  char title[24];
+  snprintf(title, sizeof(title), " Slot %u", (unsigned)(_slot + 1));
+  const bool noting = _note[0] != 0 && millis() < _note_until;
+  char right[12];
+  snprintf(right, sizeof(right), "%u/%u", (unsigned)_line.length(), (unsigned)offband::kMaxRtttl);
+  bar(d, kBody, 0, title, noting ? _note : right);
+
+  // Rows including the cursor's own -- see follow(). Review caught the cursor vanishing
+  // at exactly 21 characters, where the text filled the row and nothing was left to draw
+  // it on: for an editor with no other cursor movement that is the one indicator that
+  // must never blink out.
+  const int total = (int)(_line.length() / kEditCols) + 1;
+  // Clamp to [0, total - rows], not [0, total - 1]: the old clamp let Down scroll the
+  // text off the top one row at a time until the screen was blank, which reads as the
+  // text having vanished.
+  const int max_top = total > rows ? total - rows : 0;
+  if (_top_row > max_top) _top_row = max_top;
+  if (_top_row < 0) _top_row = 0;
+
+  for (int r = 0; r < rows; r++) {
+    const int row = _top_row + r;
+    if (row >= total) break;
+    char text[kEditCols + 2];
+    const size_t n = _line.window((size_t)row * kEditCols, kEditCols, text, sizeof(text) - 1);
+    // The cursor sits at the end of the text -- the only place an edit can land -- and
+    // the row count above guarantees that row exists even when the text filled the last.
+    if (row == total - 1) {
+      text[n] = '_';
+      text[n + 1] = 0;
+    }
+    line(d, kBody, 1 + r, text);
+  }
+
+  // The keys, because three of them are arrows doing things no arrow obviously does.
+  line(d, kBody, 1 + rows, "Ret save <clr >play");
+  return noting ? 250 : 500;
+}
+
+bool RtttlEditScreen::handleInput(char c) {
+  const uint8_t key = (uint8_t)c;
+
+  // A pending delete confirmation survives nothing but a second Enter.
+  if (key != KEY_ENTER) _confirm_delete = false;
+
+  if (key == KEY_UP) {
+    if (_top_row > 0) _top_row--;
+    return true;
+  }
+  if (key == KEY_DOWN) {
+    _top_row++;   // render clamps, so there is one place that knows the row count
+    return true;
+  }
+  if (key == KEY_LEFT) {
+    // Clear, not a cursor move. A typo in character twelve of a 218-character string
+    // would otherwise cost two hundred backspaces, which is the cost the owner accepted
+    // on the understanding that restarting is one key.
+    _line.clear();
+    follow();
+    note("cleared");
+    return true;
+  }
+  if (key == KEY_RIGHT) {
+    // Hear it before committing it. Staged as a copy: the player keeps the pointer and
+    // the next keystroke would otherwise mutate the tune underneath it.
+    const offband::RtttlProblem p = offband::rtttlProblem(_line.text());
+    if (_line.length() == 0) {
+      note("empty");
+    } else if (p != offband::RtttlProblem::Ok) {
+      note(offband::rtttlProblemText(p));
+    } else {
+      const char* staged = offband::stageTextForPlayback(_line.text());
+      if (staged != nullptr) _task->playStagedTune(staged);
+    }
+    return true;
+  }
+  if (key == KEY_ENTER) {
+    // An empty line deletes the slot -- but not on one keystroke. Review was right that
+    // Clear is instant and Enter is next to it, so a slipped thumb could destroy a
+    // carefully typed 218-character tune with no confirmation and no undo. A second
+    // Enter is the confirmation; anything else, Esc included, abandons it.
+    if (_line.length() == 0) {
+      if (!_confirm_delete) {
+        _confirm_delete = true;
+        note("Enter again: delete");
+        return true;
+      }
+      _confirm_delete = false;
+      if (offband::clearSlot(the_mesh.dataStore(), _slot)) {
+        _task->gotoCustomTunes();
+      } else {
+        note("not saved");
+      }
+      return true;
+    }
+    const offband::RtttlProblem p = offband::rtttlProblem(_line.text());
+    if (p != offband::RtttlProblem::Ok) {
+      // Refused, with the reason named. A saved-but-broken slot would resolve to silence
+      // at notification time, which is the hardest kind of fault to trace -- and exactly
+      // the confusion #1467 and #1468 came out of.
+      note(offband::rtttlProblemText(p));
+      return true;
+    }
+    if (!offband::saveSlotRtttl(the_mesh.dataStore(), _slot, _line.text())) {
+      note("not saved");
+      return true;
+    }
+    // Saved. Play it once, from the slot now that it is on disk, so what is heard is what
+    // was stored rather than what is in the editor.
+    _task->playTuneById(offband::slotIdAt(_slot), offband::TonePriority::Preview);
+    _task->gotoCustomTunes();
+    return true;
+  }
+  // Text: printables, Backspace, and Tab as a space. Everything else, Esc included, goes
+  // back to the dispatcher.
+  if (_line.apply(key)) {
+    follow();
+    return true;
+  }
+  return false;
 }
 
 #endif  // PIN_BUZZER

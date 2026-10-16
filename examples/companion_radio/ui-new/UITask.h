@@ -183,6 +183,7 @@ class UITask : public AbstractUITask {
   UIScreen* tones;        // the six events
   UIScreen* tone_picker;  // the tunes, for one event
   UIScreen* custom_tunes; // #1476: the eight custom slots
+  UIScreen* rtttl_edit;   // #1477: typing one slot's tune
   // Which event the picker is editing. Held here rather than passed into the screen so
   // the picker can be a plain UIScreen like the others.
   offband::ToneEvent _tone_picking = offband::ToneEvent::ContactMessage;
@@ -275,6 +276,13 @@ public:
   void gotoTones();                                   // #1421: from Settings' Tones row
   void gotoTonePicker(offband::ToneEvent e);          // #1421: from a Tones row
   void gotoCustomTunes();                             // #1476: from Tones' Custom row
+  void gotoRtttlEdit(uint8_t slot_index);             // #1477: from a Custom row
+
+  // #1477: play a string the caller has already staged in the playback buffer. Preview
+  // priority, so auditioning what is being typed can never cut off a notification.
+  offband::TonePlay playStagedTune(const char* staged) {
+    return buzzer.play(staged, offband::TonePriority::Preview);
+  }
   offband::ToneEvent tonePickerEvent() const { return _tone_picking; }
   // #1422: plays any tune by id, including the un-listed one the remote trigger names.
   // This is the ENTIRE surface epic #1191 needs: it honors the quiet pref and the
