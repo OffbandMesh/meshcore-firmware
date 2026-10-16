@@ -138,6 +138,15 @@ constexpr uint8_t OFFBAND_UI_LED_SET     = 0x08;  // [0xC5][0x08][on]   -> echo
 //   duplicated or reordered frame a reported error instead of a silently corrupted tune.
 //   `more` = 1 means another chunk follows; 0 commits.
 //
+//   ONE push at a time, deliberately. An `offset` of 0 always restarts, so a second
+//   client (or the same one changing its mind) takes over the assembly and the first gets
+//   ERR_SLOT_OFFSET on its next chunk. A badge is paired with one app, so a transaction
+//   id would be machinery for a case that does not arise -- but the refusal says where
+//   the device is, so the loser can tell it was displaced rather than malformed.
+//
+//   A push in flight is also ABANDONED when the badge's own editor saves that slot, so a
+//   stale commit cannot overwrite what the person just typed.
+//
 //   On commit the string is validated by the SAME validator a tune typed on the badge
 //   gets, and refused the same way: divergent validation between the two routes is how
 //   one of them becomes the trusted path and the other a trap. An empty commit (offset 0,
@@ -206,6 +215,13 @@ constexpr uint8_t OFFBAND_UI_ERR_NO_BUZZER          = 3;
 constexpr uint8_t OFFBAND_UI_ERR_NO_GPS             = 4;
 constexpr uint8_t OFFBAND_UI_ERR_MALFORMED          = 5;
 constexpr uint8_t OFFBAND_UI_ERR_UNSUPPORTED_INDICATOR = 6;  // #542 B1: no controllable LED/display
+// #1478: a SLOT_SET chunk arrived out of step -- dropped, duplicated, reordered, or for a
+// slot that is not the one being assembled. Carries a FOURTH byte, the offset the device
+// expects next: [0xC5][0x7F][7][expected]. Without it a client that lost a frame cannot
+// tell a protocol error from a lost one, cannot resume, and cannot even learn where the
+// device got to -- which review was right to call out as leaving it stuck with no remedy
+// but a blind restart.
+constexpr uint8_t OFFBAND_UI_ERR_SLOT_OFFSET           = 7;
 constexpr uint8_t CMD_OFFBAND_CONFIG       = 0xC0;  // request:  cmd_frame[0]
 constexpr uint8_t RESP_CODE_OFFBAND_CONFIG = 0xC0;  // response: out_frame[0]
 
