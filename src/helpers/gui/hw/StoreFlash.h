@@ -35,8 +35,14 @@ public:
   void ringChanged(uint32_t now_ms) { changed(now_ms); }
 
   // One write per call. `fs_busy` (a contacts save is running) defers it, so
-  // the two never write in the same tick.
-  void loop(uint32_t now_ms, bool fs_busy);
+  // the two never write in the same tick. `screen_idle` (dim or off): an
+  // internal-flash write stops both cores while it erases (the cache is off),
+  // ~140 ms for one entry on the bench (#1472), so writes wait until nobody
+  // is looking at the screen (owner, 2026-10-16) -- or until changes have
+  // waited kMaxHoldMs with the screen kept awake. This is about internal
+  // flash only; an SD backend (I4) has no such stall.
+  void loop(uint32_t now_ms, bool fs_busy, bool screen_idle);
+  static constexpr uint32_t kMaxHoldMs = 5UL * 60UL * 1000UL;
 
   bool busy() const { return _state != Idle; }
   // Writes whatever is pending, in one pass: before a reboot.
@@ -62,6 +68,7 @@ private:
   bool _rebuild_index = false;   // the file is missing or the wrong size
   bool _rebuild_ring = false;
   uint32_t _due = 0;             // 0: nothing pending
+  uint32_t _pending_since = 0;   // first unsaved change, for the hold cap; 0: none
   File _idx_file;
   File _ring_file;
   File _tmp_file;

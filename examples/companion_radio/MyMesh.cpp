@@ -4093,7 +4093,7 @@ void MyMesh::loop() {
   contactsSaveTick();   // #1458: a slice per tick, so the GUI keeps drawing
   // #1463: the message store writes a slice per tick too, never in the same
   // tick as a contacts slice.
-  _gui_store_flash.loop(_ms->getMillis(), _contacts_save.active());
+  _gui_store_flash.loop(_ms->getMillis(), _contacts_save.active(), _gui_screen_idle);
 #else
   // is there are pending dirty contacts write needed?
   if (dirty_contacts_expiry && millisHasNowPassed(dirty_contacts_expiry)) {
@@ -4302,6 +4302,17 @@ void MyMesh::cmdReboot() {
 #endif
 
 void MyMesh::contactsSaveTick() {
+  // #1472: an internal-flash write stops both cores while it erases, so the
+  // save waits for a dim or dark screen -- unless it has waited 5 minutes.
+  if (_contacts_save.active() || (dirty_contacts_expiry && millisHasNowPassed(dirty_contacts_expiry))) {
+    const uint32_t now = millis();
+    if (_gui_screen_idle) {
+      _contacts_wait_since = 0;
+    } else {
+      if (_contacts_wait_since == 0) _contacts_wait_since = now | 1;
+      if (now - _contacts_wait_since < StoreFlash::kMaxHoldMs) return;
+    }
+  }
   if (!_contacts_save.active()) {
     if (!dirty_contacts_expiry || !millisHasNowPassed(dirty_contacts_expiry)) return;
     if (_gui_store_flash.busy()) return;   // #1463: let the store's write finish first

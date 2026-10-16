@@ -103,6 +103,7 @@ LoadResult StoreFlash::load() {
 
 void StoreFlash::changed(uint32_t now_ms) {
   if (_due == 0) _due = (now_ms + kWriteDelayMs) | 1;   // never 0: 0 means nothing pending
+  if (_pending_since == 0) _pending_since = now_ms | 1;
 }
 
 // ------------------------------------------------------------ whole rebuilds
@@ -178,8 +179,11 @@ bool StoreFlash::writeOne(const DirtyWrite& w) {
 
 // ------------------------------------------------------------------- loop
 
-void StoreFlash::loop(uint32_t now_ms, bool fs_busy) {
+void StoreFlash::loop(uint32_t now_ms, bool fs_busy, bool screen_idle) {
   if (!_fs || !_store || fs_busy) return;
+  const bool held_too_long = _pending_since && now_ms - _pending_since >= kMaxHoldMs;
+  if (!screen_idle && !held_too_long) return;   // a write now would hitch the screen
+  if (_state == Idle && _due == 0) _pending_since = 0;   // all caught up
 
   if (_state == Rebuilding) {
     size_t from, to;
@@ -266,4 +270,5 @@ void StoreFlash::flushNow() {
   }
   closeInPlace();
   _due = 0;
+  _pending_since = 0;
 }

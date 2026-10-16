@@ -465,6 +465,11 @@ void UITask::loop() {
     applyScreen(screenStateFor(idleMs(now), GUI_DIM_AFTER_MS, off_ms, _always_on));
   }
 
+  // #1472: internal-flash writes stall both cores, so they wait until nobody
+  // is using the device: the screen dim or off, or no input for the dim time
+  // (which covers "always on", where the screen never dims).
+  the_mesh.setGuiScreenIdle(_screen != ScreenState::On || idleMs(now) >= GUI_DIM_AFTER_MS);
+
   if (_screen == ScreenState::Off) return;
 
   if (now >= _next_refresh) {
