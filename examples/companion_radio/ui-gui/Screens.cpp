@@ -201,6 +201,7 @@ void GuiShell::focusable(lv_obj_t* o) {
 
 void GuiShell::rebuild() {
   lv_obj_t* scr = lv_scr_act();
+  closeSheet();   // it lives on the top layer, outside the rebuilt screen
   lv_group_remove_all_objs(_group);
   lv_obj_clean(scr);
   lv_obj_set_style_bg_color(scr, c(_t.bg), 0);
@@ -399,6 +400,26 @@ bool GuiShell::action(Action a) {
     }
     return false;
   }
+  // A sheet takes the buttons while it's up: USR and AUX move, USR hold
+  // picks, AUX hold closes (spec: "USER moves, PRG picks", remapped).
+  if (_sheet != Sheet::None) {
+    switch (a) {
+      case Action::Next:
+        sheetHot((_sheet_hot + 1) % _sheet_count);
+        return true;
+      case Action::Prev:
+        sheetHot((_sheet_hot + _sheet_count - 1) % _sheet_count);
+        return true;
+      case Action::Open:
+        sheetPick(_sheet_hot);
+        return true;
+      case Action::Back:
+        closeSheet();
+        return true;
+      default:
+        return false;
+    }
+  }
   // Compose: USR and AUX walk a cursor over the keys, USR hold presses it,
   // AUX hold leaves (the draft is dropped).
   if (_composing) {
@@ -429,9 +450,13 @@ bool GuiShell::action(Action a) {
       case Action::Prev:
         lv_obj_scroll_by_bounded(_msg_list, 0, 60, LV_ANIM_ON);
         return true;
-      case Action::Open:
-        openCompose(_thread);
+      case Action::Open: {
+        // A channel asks first: write, or its notifications (owner pick a).
+        const Thread* th = _model->store().threadAt(_thread);
+        if (th && ThreadKind(th->kind) == ThreadKind::Channel) openSheet(Sheet::Menu);
+        else openCompose(_thread);
         return true;
+      }
       case Action::Back:
         if (_status.popoverOpen()) _status.closePopover();
         else openThread(-1);
@@ -744,6 +769,11 @@ void GuiShell::buildConversation(lv_obj_t* content) {
     lv_obj_set_flex_flow(bell, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(bell, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     bellIcon(bell, _model->threadMode(_thread), _t.ink2);
+    lv_obj_add_flag(bell, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(bell, 6);
+    lv_obj_add_event_cb(
+        bell, [](lv_event_t* e) { static_cast<GuiShell*>(lv_event_get_user_data(e))->openSheet(Sheet::Notify); },
+        LV_EVENT_CLICKED, this);
   }
 
   // Messages, oldest at the top, the newest resting on the compose bar.
@@ -1179,4 +1209,143 @@ void GuiShell::updateChats() {
   }
   _shown_rev = s.revision();
   rebuild();
+}
+
+// ----------------------------------------------------------- bottom sheets
+
+namespace {
+const char* const kModeTitle[3] = {"All messages", "Mentions only", "Off"};
+}  // namespace
+
+// A bottom sheet over the conversation, as drawn (ObScreen ntSheet): a dim
+// backdrop below the status bar, the sheet on bg3 with the Look's top
+// corners, a title, and 38 px rows; the chosen row in signal on the wash
+// with a ✓.
+void GuiShell::openSheet(Sheet kind) {
+  closeSheet();
+  const Thread* th = _model->store().threadAt(_thread);
+  if (!th) return;
+  _sheet = kind;
+  const NotifyMode mode = _model->threadMode(_thread);
+
+  _sheet_obj = box(lv_layer_top(), kW, 320 - kStatusH);
+  lv_obj_set_pos(_sheet_obj, 0, kStatusH);
+  lv_obj_set_style_bg_opa(_sheet_obj, LV_OPA_50, 0);
+  lv_obj_set_style_bg_color(_sheet_obj, lv_color_black(), 0);
+  lv_obj_add_flag(_sheet_obj, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(
+      _sheet_obj,
+      [](lv_event_t* e) {
+        // A tap on the backdrop (not a row) closes it.
+        if (lv_event_get_target(e) == lv_event_get_current_target(e)) {
+          static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->closeSheet(); });
+        }
+      },
+      LV_EVENT_CLICKED, this);
+
+  // Modern: the radius rounds the top corners; the sheet runs past the
+  // screen's bottom by that much, so its bottom corners stay square.
+  const int16_t r = _look.pill_chips ? 12 : 0;
+  lv_obj_t* sheet = box(_sheet_obj, kW, LV_SIZE_CONTENT);
+  lv_obj_align(sheet, LV_ALIGN_BOTTOM_MID, 0, r);
+  lv_obj_set_style_bg_opa(sheet, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(sheet, c(_t.bg3), 0);
+  lv_obj_set_style_radius(sheet, r, 0);
+  lv_obj_set_style_border_side(sheet, LV_BORDER_SIDE_TOP, 0);
+  lv_obj_set_style_border_width(sheet, 1, 0);
+  lv_obj_set_style_border_color(sheet, c(_t.line), 0);
+  lv_obj_set_style_pad_bottom(sheet, r + 6, 0);
+  lv_obj_set_flex_flow(sheet, LV_FLEX_FLOW_COLUMN);
+  lv_obj_add_flag(sheet, LV_OBJ_FLAG_CLICKABLE);   // a tap on the title isn't a backdrop tap
+
+  char title[64], raw[64];
+  snprintf(raw, sizeof raw, "%s%s", kind == Sheet::Notify ? "Notifications · " : "", th->name);
+  displayText(raw, strlen(raw), title, sizeof title);
+  lv_obj_t* tl = label(sheet, FontRole::Body, _t.ink, title);
+  lv_obj_set_style_pad_left(tl, 12, 0);
+  lv_obj_set_style_pad_top(tl, 10, 0);
+  lv_obj_set_style_pad_bottom(tl, 6, 0);
+  lv_obj_set_width(tl, LV_PCT(100));
+  oneLine(tl, FontRole::Body);
+  lv_obj_set_height(tl, lv_font_get_line_height(font(FontRole::Body)) + 16);
+
+  char mention[64];
+  snprintf(mention, sizeof mention, "Only @%s and replies", _model->nodeName());
+  _sheet_count = kind == Sheet::Notify ? 3 : 2;
+  for (uint8_t i = 0; i < _sheet_count; i++) {
+    const bool chosen = kind == Sheet::Notify && i == uint8_t(mode);
+    lv_obj_t* row = box(sheet, LV_PCT(100), 38);
+    lv_obj_set_style_pad_hor(row, 12, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, 9, 0);
+    if (chosen) {
+      lv_obj_set_style_bg_opa(row, lv_opa_t(_t.wash >> 24), 0);
+      lv_obj_set_style_bg_color(row, c(_t.wash), 0);
+    }
+    const uint32_t ink = chosen ? _t.sig : _t.ink;
+    const char* name;
+    const char* sub;
+    if (kind == Sheet::Notify) {
+      bellIcon(row, NotifyMode(i), ink);
+      name = kModeTitle[i];
+      sub = i == 0 ? "Alert on every message" : i == 1 ? mention : "Unread count only, no alert";
+    } else {
+      name = i == 0 ? "Write message" : "Notifications";
+      sub = i == 0 ? "Open the keyboard" : kModeTitle[uint8_t(mode)];
+    }
+    lv_obj_t* col = box(row, 0, LV_SIZE_CONTENT);
+    lv_obj_set_flex_grow(col, 1);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_t* nl = label(col, FontRole::Body, ink, name);
+    lv_obj_set_width(nl, LV_PCT(100));
+    oneLine(nl, FontRole::Body);
+    lv_obj_t* sl = label(col, FontRole::Label, _t.dim);
+    userText(sl, sub);
+    lv_obj_set_width(sl, LV_PCT(100));
+    oneLine(sl, FontRole::Label);
+    if (chosen) label(row, FontRole::Body, _t.sig, "✓");
+
+    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_user_data(row, reinterpret_cast<void*>(intptr_t(i)));
+    lv_obj_add_event_cb(
+        row,
+        [](lv_event_t* e) {
+          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+          self->_sheet_hot = int(intptr_t(lv_obj_get_user_data(lv_event_get_current_target(e))));
+          self->later([](GuiShell* g) { g->sheetPick(g->_sheet_hot); });
+        },
+        LV_EVENT_CLICKED, this);
+    _sheet_rows[i] = row;
+  }
+  sheetHot(kind == Sheet::Notify ? int(mode) : 0);
+}
+
+void GuiShell::closeSheet() {
+  if (!_sheet_obj) return;
+  lv_obj_del(_sheet_obj);
+  _sheet_obj = nullptr;
+  for (auto& r : _sheet_rows) r = nullptr;
+  _sheet = Sheet::None;
+}
+
+// The button cursor: a signal outline on the row it rests on.
+void GuiShell::sheetHot(int i) {
+  for (uint8_t k = 0; k < _sheet_count; k++) {
+    if (_sheet_rows[k]) lv_obj_set_style_outline_width(_sheet_rows[k], k == i ? 2 : 0, 0);
+    if (_sheet_rows[k]) lv_obj_set_style_outline_pad(_sheet_rows[k], -2, 0);
+    if (_sheet_rows[k]) lv_obj_set_style_outline_color(_sheet_rows[k], c(_t.sig), 0);
+  }
+  _sheet_hot = i;
+}
+
+void GuiShell::sheetPick(int i) {
+  const Sheet kind = _sheet;
+  if (kind == Sheet::Notify) {
+    _model->setThreadMode(_thread, NotifyMode(i));
+    rebuild();   // closes the sheet; the header bell shows the new mode
+  } else if (kind == Sheet::Menu) {
+    if (i == 0) openCompose(_thread);   // rebuild closes the sheet
+    else openSheet(Sheet::Notify);
+  }
 }

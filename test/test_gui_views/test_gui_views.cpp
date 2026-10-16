@@ -763,6 +763,17 @@ TEST(DmRetry, LateAckStillCounts) {
   EXPECT_EQ(r.poll(6100, true), DmRetry::Step::Done);   // the first try's ACK
 }
 
+// ------------------------------------------------- D6 channel notifications
+
+TEST(Notify, ChannelModeDecidesTheAlert) {
+  EXPECT_TRUE(channelAlerts(NotifyMode::All, false));
+  EXPECT_TRUE(channelAlerts(NotifyMode::All, true));
+  EXPECT_FALSE(channelAlerts(NotifyMode::Mentions, false));
+  EXPECT_TRUE(channelAlerts(NotifyMode::Mentions, true));
+  EXPECT_FALSE(channelAlerts(NotifyMode::Off, false));
+  EXPECT_FALSE(channelAlerts(NotifyMode::Off, true));   // Off counts unread, never alerts
+}
+
 // ------------------------------------------------------ emoji display text
 
 TEST(DisplayText, DropsCharactersThatOnlySteerEmoji) {

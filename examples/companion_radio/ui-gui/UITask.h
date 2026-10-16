@@ -52,6 +52,8 @@ public:
   bool sendText(int thread, const char* text, size_t len) override;
   uint8_t dmAttempt(uint32_t seq) override;
   void resend(uint32_t seq) override;
+  void setThreadMode(int thread, offband::gui::NotifyMode m) override;
+  const char* nodeName() override { return _prefs ? _prefs->node_name : ""; }
 
 private:
   void pollButtons(uint32_t now);
@@ -82,6 +84,7 @@ private:
   bool _touch_ok = false;
   bool _always_on = false;
   bool _pocket_locked = false;  // USR long hold: off, and only USR wakes it
+  bool _prefs_dirty = false;    // a GUI pref changed; saved when the device is idle
   int _unread = 0;
 
   GuiShell _shell;
