@@ -154,16 +154,89 @@ inline uint8_t decodeChannelTune(uint8_t stored) {
 //
 // Review argued the two cases should be distinguishable -- "nothing chosen" versus "chose
 // something this build cannot read" -- and that collapsing them hides a downgrade. Worth
-// saying what is actually at stake: the stored BYTE is preserved either way, so nothing
-// is lost and a re-upgrade restores the choice. Only the interpretation falls back, and
-// no caller today would act differently on the distinction. The property that makes that
-// true is that a save must never normalise an unresolvable id away, which is a done-when
-// on the persistence task rather than something this function can guarantee.
+// saying what is actually at stake: the stored BYTE is preserved, so only the
+// interpretation falls back, and a build that does know the id finds the choice intact.
+// No caller today would act differently on the distinction. The property that makes that
+// true is that a save must never normalise an unresolvable id away, which lives with the
+// persistence (channelTuneToSpare) rather than here.
+//
+// It does NOT extend to a downgrade below the build that introduced the field at all --
+// that one zeroes the spare bytes on its first save and the tunes are gone. See the note
+// on channelTuneToSpare; #1523 records it as the accepted cost.
 inline uint8_t resolveChannelTune(uint8_t stored, uint8_t inherited) {
   const uint8_t id = decodeChannelTune(stored);
   if (id == kTuneUnset) return inherited;
   if (!isBuiltinTune(id) && !isSlotId(id)) return inherited;
   return id;
+}
+
+// ---- where it sits in the file (#1523) ------------------------------------------------
+//
+// Each /channels2 record is 4 spare bytes, then 32 of name, then 32 of secret. The spare
+// field has only ever been written as zero and read-then-discarded, so taking one byte of
+// it changes no offset: the stride stays 68, DataStore::hasChannels's hardcoded
+// 4 + 32 + 32 stays right, and an older build reads the file as it always did.
+constexpr size_t kChannelSpareBytes = 4;
+constexpr size_t kChannelTuneSpareIndex = 0;
+static_assert(kChannelTuneSpareIndex < kChannelSpareBytes, "the tune must fit the spare field");
+
+// The stored tune byte out of a record's spare field.
+inline uint8_t channelTuneFromSpare(const uint8_t* spare) {
+  if (spare == nullptr) return kChannelTuneUnset;
+  return spare[kChannelTuneSpareIndex];
+}
+
+// The spare field as it goes back to the file.
+//
+// `stored` is written through BYTE-FOR-BYTE and is deliberately not validated here. A
+// build that reads a tune id it cannot resolve must write that same byte back: #1522's
+// resolution falls back to the inherited tune, and the byte surviving every save THIS
+// build makes is what keeps that a fallback rather than a loss -- a later build that
+// knows the id finds the choice still there. Normalising an unresolvable id to "unset"
+// here is what would actually destroy it.
+//
+// That argument covers one case only, and review was right to press on it: a build that
+// HAS this field but cannot resolve the id. A downgrade to a build from before the field
+// existed is different -- its saveChannels zeroes all four spare bytes, so the first save
+// it makes drops every per-channel tune, and a re-upgrade finds them unset. That is this
+// design's one real cost and it is recorded as accepted on #1523. Reading on an older
+// build is harmless; it is writing that loses them.
+//
+// The remaining three bytes are zeroed, exactly as the memset they replace did, so a
+// later field added beside this one starts from a known value rather than from whatever
+// this build happened to leave there.
+inline void channelTuneToSpare(uint8_t stored, uint8_t* spare) {
+  if (spare == nullptr) return;
+  for (size_t i = 0; i < kChannelSpareBytes; i++) spare[i] = 0;
+  spare[kChannelTuneSpareIndex] = stored;
+}
+
+// What a channel's tune becomes when the app overwrites the slot.
+//
+// CMD_SET_CHANNEL carries a name and a 16-byte secret, nothing else, and the handler
+// builds a fresh record -- so an edit from the phone keeps only what is carried over
+// deliberately. Without this, renaming a channel on the phone would silently clear the
+// tune set on the badge.
+//
+// It keeps the tune only when the slot still holds the SAME CHANNEL, judged by the secret
+// rather than by the slot being occupied. Review caught the difference: channel slots are
+// a fixed table and the app reuses them, so "the slot was not empty" is also true when
+// someone has replaced channel A with channel B in it -- and B would then inherit a tune
+// chosen for a channel that is gone. The secret is what identifies a channel, so a
+// re-key counts as a different channel too; a rename, which is what people actually do,
+// keeps its tune.
+//
+// Note this is DELIBERATELY stricter than the per-channel notification mode beside it
+// (#1457), which keys off occupancy alone and so does carry a mode across a replacement.
+// Filed rather than quietly changed, since that is shipped behaviour and not this task.
+//
+// A rule in its own function because the alternative is a condition inside an
+// Arduino-only translation unit, where the cost of getting it wrong is every channel on
+// the badge silently losing its tune the next time someone edits one from the phone.
+inline uint8_t channelTuneAfterEdit(bool slot_was_empty, bool same_channel,
+                                    uint8_t before_stored) {
+  if (slot_was_empty || !same_channel) return kChannelTuneUnset;
+  return before_stored;
 }
 
 }  // namespace offband

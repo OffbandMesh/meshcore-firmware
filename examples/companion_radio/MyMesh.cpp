@@ -5,6 +5,9 @@
 #include <MeshLog.h>  // #396: serial-capture buffer access for the caplog download
 #include <helpers/ClockSanity.h>  // #607: owner-path clock sets + audit log
 #include "helpers/CdcConsoleFlush.h"   // #1035: right-flush (ZLP) for the USB-Serial-JTAG console
+// #1523: the per-channel tune's encoding. Header-only constexpr, and the builtin table is
+// internal-linkage, so a variant that only names the unset value emits nothing of it.
+#include <helpers/ui/TuneSlots.h>
 
 // Offband fork-only companion-API frame codes (config 0xC0 / GPS 0xC1 / block 0xC2)
 // + shared enums. Self-contained (only <stdint.h>); included unconditionally so the
@@ -4327,13 +4330,25 @@ CmdResult MyMesh::cmdSetChannel(uint8_t idx, const char* name, const uint8_t sec
 #ifdef OFFBAND_GUI
   static_assert(MAX_GROUP_CHANNELS <= offband::gui::kGuiMaxChannels,
                 "GuiPrefs::channel_notify must cover every channel slot");
+#endif
+  // Read before writing: the app's channel-set carries a name and a secret and nothing
+  // else, so anything the badge keeps per channel has to be carried over here or it is
+  // lost. setChannel() copies the struct whole (#1523).
   ChannelDetails before;
   const bool was_empty = !getChannel(idx, before) || before.name[0] == 0;
-#endif
+
   ChannelDetails channel;
   StrHelper::strncpy(channel.name, name, 32);
   memset(channel.channel.secret, 0, sizeof(channel.channel.secret));
   memcpy(channel.channel.secret, secret, 16);  // only 128-bit secrets are supported
+  // #1523: keep the tune through a rename from the phone, but not across a REPLACEMENT.
+  // The slot is what the app addresses, so "not empty" is also true when a different
+  // channel is being dropped into it; the secret is what says whether this is still the
+  // same channel. Only the first 16 bytes are compared because that is all CMD_SET_CHANNEL
+  // carries -- the 256-bit variant is refused above.
+  const bool same_channel = !was_empty &&
+                            memcmp(before.channel.secret, secret, 16) == 0;
+  channel.tune = offband::channelTuneAfterEdit(was_empty, same_channel, before.tune);
   if (!setChannel(idx, channel)) return CmdResult::NotFound;
   saveChannels();
 #ifdef OFFBAND_GUI
