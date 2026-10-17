@@ -7,6 +7,7 @@
 // Epic A brought up the panel, LVGL, input, power and themes; Epic D adds the
 // screens (GuiShell): the status bar, Home, Lock, and the chat screens.
 
+#include <helpers/ContactInfo.h>
 #include <helpers/SensorManager.h>
 #include <helpers/gui/GuiTheme.h>
 #include <helpers/gui/GuiViews.h>
@@ -54,8 +55,21 @@ public:
   void resend(uint32_t seq) override;
   void setThreadMode(int thread, offband::gui::NotifyMode m) override;
   const char* nodeName() override { return _prefs ? _prefs->node_name : ""; }
+  const offband::gui::NodeRow* nodeRows(size_t* total) override;
+  uint8_t radioSf() override { return _prefs && _prefs->sf ? _prefs->sf : 12; }
+  bool nodeDetail(const uint8_t* key, NodeDetail* out) override;
+  void detailOpened(const uint8_t* key) override;
+  bool startNodeAct(const uint8_t* key, NodeAct a, const char* password) override;
+  void nodeActState(NodeAct a, ActView* out) override;
+  const char* savedPassword(const uint8_t* key) override;
+  int openDm(const uint8_t* key) override;
+  bool ownPos(offband::gui::GeoPos* out) override;
 
 private:
+  void fillNodeRow(const ContactInfo& ci, offband::gui::NodeRow& r, uint8_t* key_copy, uint32_t now, bool clock_ok);
+  void pollNodeActs(uint32_t now);
+  void loadPasswords();
+  void savePasswords();
   void pollButtons(uint32_t now);
   void handle(offband::gui::InputEvent ev, uint32_t now);
   void applyScreen(offband::gui::ScreenState s);
@@ -89,6 +103,22 @@ private:
 
   GuiShell _shell;
   offband::gui::DmRetry _dm[8];   // DMs sent from the device, awaiting their ACK
+  offband::gui::NodeRow* _node_rows = nullptr;   // MAX_CONTACTS rows, in PSRAM (Epic E)
+  uint8_t (*_node_keys)[32] = nullptr;           // the rows' keys, copied
+  // The open detail's actions (E4): one node at a time; results last until
+  // another detail opens.
+  struct NodeActRun {
+    ActView view;
+    uint32_t started;    // millis
+    uint32_t deadline;   // millis; Failed ("No reply") after it
+    uint32_t tag;        // Trace: the reply carries it
+  };
+  NodeActRun _acts[size_t(NodeAct::Count)] = {};
+  uint8_t _act_key[32] = {};
+  char _login_pw[offband::gui::kPasswordLen] = {};   // the one in flight, kept if it works
+  offband::gui::PasswordBook _passwords;             // owner pick a: plain, per node, on this device
+  bool _passwords_loaded = false;
+  bool _passwords_dirty = false;                     // saved when idle (#1472)
   offband::gui::AdvertButton _advert;
   offband::BatteryAverage _batt;
   uint32_t _next_batt_read = 0;

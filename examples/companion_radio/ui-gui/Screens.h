@@ -15,6 +15,8 @@
 #include <helpers/gui/GuiTheme.h>
 #include <helpers/gui/GuiViews.h>
 #include <helpers/gui/InputMap.h>
+#include <helpers/gui/NodeViews.h>
+#include <helpers/gui/RadarViews.h>
 
 #include "StatusBar.h"
 
@@ -45,6 +47,26 @@ struct LockData {
   uint32_t more;   // unread in threads not shown
 };
 
+// A node as its detail screen shows it (E4).
+struct NodeDetail {
+  offband::gui::NodeRow row;   // name, kind, path, heard, SNR, unread (row.key -> key below)
+  uint8_t key[32];
+  int16_t rssi;                // last heard, when row.snr_known
+  char path[80];               // "path: You › Hilltop-2 › Wren"; empty with no route
+  bool can_trace;              // a route is known
+};
+
+// The detail's actions (mockups 2-6) and how each stands.
+enum class NodeAct : uint8_t { Ping, Trace, Login, Share, Count };
+struct ActView {
+  enum State : uint8_t { Idle, Busy, Ok, Failed } state;
+  uint32_t rtt_ms;           // Ping, Trace: round trip when Ok
+  bool login_refused;        // Login Failed: the node answered no (else: no reply)
+  uint8_t body[176];         // Ping: the status reply; Trace: the trace reply
+  uint8_t len;
+  uint32_t done_ms;          // when it finished (Share's "Shared ✓" lasts 2 s)
+};
+
 // What the screens need from the rest of the firmware. UITask implements it,
 // so the screens stay free of the mesh.
 class ShellModel {
@@ -65,6 +87,20 @@ public:
   // Notifications (D6)
   virtual void setThreadMode(int thread, offband::gui::NotifyMode m) = 0;   // channels only
   virtual const char* nodeName() = 0;
+  // Nodes (Epic E): every contact as a list row, rebuilt on each call; the
+  // array stays valid until the next call. *total = contacts held.
+  virtual const offband::gui::NodeRow* nodeRows(size_t* total) = 0;
+  virtual uint8_t radioSf() = 0;   // for signal bars: the margin over this SF's floor
+  // Node detail (E4).
+  virtual bool nodeDetail(const uint8_t* key, NodeDetail* out) = 0;    // false if gone
+  // A detail opened: the actions start Idle (results last until you leave).
+  virtual void detailOpened(const uint8_t* key) = 0;
+  virtual bool startNodeAct(const uint8_t* key, NodeAct a, const char* password) = 0;
+  virtual void nodeActState(NodeAct a, ActView* out) = 0;
+  virtual const char* savedPassword(const uint8_t* key) = 0;          // null if none
+  virtual int openDm(const uint8_t* key) = 0;                         // its thread, -1 if none
+  // Map (Epic F): this device's position, false if it has none.
+  virtual bool ownPos(offband::gui::GeoPos* out) = 0;
   virtual ~ShellModel() {}
 };
 
@@ -78,6 +114,15 @@ public:
   bool locked() const { return _locked; }
   Tab tab() const { return _tab; }
   bool composing() const { return _composing; }
+  // USR steps through something here (the letter wheel, a keyboard's key
+  // cursor, a conversation's scroll): each click is one step, at once.
+  bool stepping() const {
+    if (_locked || _sheet != Sheet::None) return false;
+    if (_composing || _login) return true;
+    if (_searching && _tab == Tab::Nodes) return _search_wheel || _search_kb;
+    if (_tab == Tab::Map && !_detail) return true;   // USR selects the next node
+    return _tab == Tab::Chat && _thread >= 0;
+  }
   // Compose for a thread (from a conversation); leaving returns to it.
   void openCompose(int thread);
 
@@ -89,6 +134,9 @@ public:
   void setAdvertState(offband::gui::AdvertButton::State s);
   // Redraws Chats or the open conversation if the store changed.
   void updateChats();
+  // Nodes: row text refreshed in place; the list rebuilt when the order
+  // changes, at most every few seconds.
+  void updateNodes(uint32_t now_ms);
 
   StatusBar& status() { return _status; }
 
@@ -98,6 +146,42 @@ private:
   void buildChats(lv_obj_t* content);
   void buildConversation(lv_obj_t* content);
   void buildPlaceholder(lv_obj_t* content);
+  void buildNodes(lv_obj_t* content);
+  lv_obj_t* nodeRow(lv_obj_t* list, const offband::gui::NodeRow& r);
+  void buildKeyboard(lv_obj_t* scr);
+  void openSearch(bool wheel);
+  void closeSearch();
+  void buildSearch(lv_obj_t* scr);
+  void refreshSearch();
+  void buildWheel(lv_obj_t* scr);
+  void wheelPick();
+  // Node detail (E4)
+  void openDetail(const uint8_t* key);
+  void closeDetail();
+  void buildDetail(lv_obj_t* content);
+  void buildLogin(lv_obj_t* scr);
+  void openLogin();
+  void closeLogin();
+  void actPressed(NodeAct a);
+  void refreshLoginField();     // the masked password, one dot a character
+  void refreshActs(uint32_t now_ms);   // the action buttons' text and look, from their state
+  uint32_t detailSignature();   // what the detail shows; it redraws when this moves
+
+  // Map (Epic F): the radar.
+  void buildRadar(lv_obj_t* content);
+  void radarStep(int dir);       // USR/AUX: the next or previous node, nearest first
+  void radarOpen();              // the selected node's detail
+  uint32_t radarSignature();     // what the radar shows; it redraws when this moves
+  bool detailTab() const { return _tab == Tab::Nodes || _tab == Tab::Map; }
+
+public:
+  // Node detail: redraws as its actions progress; the login sheet closes
+  // itself after a success.
+  void updateDetail(uint32_t now_ms);
+  // Map: redrawn when a position, the selection or the scale changes.
+  void updateRadar(uint32_t now_ms);
+
+private:
   void buildCompose(lv_obj_t* scr);
   void buildKeys();
   void refreshDraft();
@@ -116,6 +200,8 @@ private:
   void buildLock(lv_obj_t* scr);
   void focusable(lv_obj_t* o);
   void openThread(int thread);   // -1: back to the list
+  void resetNodes();             // Nodes opens on its list
+  void resetMap();               // Map opens on the radar, nothing selected
   void later(void (*fn)(GuiShell*));
 
   offband::gui::ThemeTokens _t{};
@@ -160,6 +246,81 @@ private:
   lv_obj_t* _sheet_rows[3] = {};
   uint8_t _sheet_count = 0;
   int _sheet_hot = 0;
+
+  // Nodes (Epic E)
+  static constexpr size_t kNodeRowsShown = 50;   // the newest; search reaches the rest
+  // Built 12 at a time: 50 rows cost ~515 ms to build and ~380 ms to draw
+  // (bench, #1534). More are added on scrolling near the end, or when USR
+  // steps past the last row.
+  static constexpr size_t kNodeBatch = 12;
+  size_t _node_cap = kNodeBatch;
+  lv_obj_t* _node_list = nullptr;
+  lv_obj_t* _node_clear = nullptr;   // the unread view's footer, in the focus order
+  lv_obj_t* _tab_obj[5] = {};
+  void appendNodeRows();
+  offband::gui::TypeFilter _node_filter = offband::gui::TypeFilter::All;
+  bool _node_unread = false;
+  char _node_query[33] = {};
+  uint16_t _node_order[kNodeRowsShown] = {};
+  size_t _node_shown = 0;
+  lv_obj_t* _node_row_obj[kNodeRowsShown] = {};
+  lv_obj_t* _node_count = nullptr;
+  uint32_t _node_refresh_at = 0;
+  uint32_t _node_rebuild_at = 0;
+  uint8_t _focus_key[6] = {};   // the focused row's node, kept across rebuilds
+  bool _focus_key_set = false;
+
+  // Nodes search (E3): the field takes the header; the keyboard (touch) or
+  // the letter wheel (buttons) sits under the results, or neither once Done.
+  bool _searching = false;
+  bool _search_kb = false;
+  bool _search_wheel = false;
+  offband::gui::ComposeBuffer _query;
+  offband::gui::LetterWheel _wheel;
+  lv_obj_t* _query_label = nullptr;
+  lv_obj_t* _match_label = nullptr;
+  lv_obj_t* _search_list = nullptr;
+  lv_obj_t* _wheel_strip = nullptr;
+  // Performance (bench, #1534: 889 ms per keystroke with a full contact
+  // list): the rows are read once per search, the results redraw 250 ms
+  // after typing stops, and only what fits is built while typing.
+  const offband::gui::NodeRow* _search_rows = nullptr;
+  size_t _search_total = 0;
+  uint32_t _search_due = 0;   // when the results next redraw; 0 = not owed
+  void querySoon();           // the field now, the results shortly
+
+  // Node detail (E4): which node, and the login sheet over it.
+  bool _detail = false;
+  uint8_t _detail_key[32] = {};
+  bool _login = false;
+  offband::gui::ComposeBuffer _login_pw;
+  uint32_t _detail_sig = 0;
+  uint32_t _detail_at = 0;     // next check of what the detail shows
+  uint32_t _login_ok_at = 0;   // when a login succeeded: the sheet closes 1 s later
+  bool _login_sent = false;    // a login is in flight from this sheet
+  lv_obj_t* _login_field = nullptr;
+  lv_obj_t* _login_status = nullptr;
+  uint32_t _login_at = 0;      // lv tick when the login went
+  uint32_t _detail_now = 0;    // the loop's clock, for the actions' timed text
+  lv_obj_t* _act_btn[3] = {};  // the detail's action buttons, primary first
+  NodeAct _act_kind[3] = {};   // NodeAct::Count: DM
+  bool _act_off[3] = {};       // Trace with no route
+  uint8_t _act_count = 0;
+  uint8_t _act_focus = 0;      // the focused button, kept across redraws
+  uint8_t _pending_act = 0;
+  offband::gui::NodeKind _detail_kind = offband::gui::NodeKind::Other;
+  uint8_t _row_keys[kNodeRowsShown][32] = {};   // each built row's node, for opening it
+  void rowOpens(lv_obj_t* row, size_t i, const uint8_t* key);
+
+  // Map (Epic F): the scale, the selection (by key, so it survives a
+  // redraw), and the pins drawn.
+  static constexpr size_t kRadarPins = 20;   // the nearest shown (owner default, 2026-10-17)
+  size_t _radar_step = offband::gui::kRadarStartStep;
+  uint8_t _radar_sel[32] = {};   // the whole key: two nodes can share a prefix
+  bool _radar_sel_set = false;
+  uint8_t _radar_keys[kRadarPins][32] = {};   // each drawn pin's node, for a tap
+  uint32_t _radar_sig = 0;
+  uint32_t _radar_at = 0;
 
   // Home
   lv_obj_t* _name = nullptr;

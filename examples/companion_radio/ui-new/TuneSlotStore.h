@@ -339,7 +339,7 @@ inline uint8_t pickerRowFor(DataStore* store, uint8_t effective_id) {
   return tuneIsListed(store, effective_id) ? effective_id : kTuneSilent;
 }
 
-// One past the last id the picker may show, so a screen does not hard-code the sum.
-constexpr uint8_t kPickerIdEnd = kFirstSlotId + kSlotCount;
+// kPickerIdEnd moved to TuneSlots.h in #1525, where the picker's row mapping lives and
+// can be unit-tested. It is the same value; nothing that used it had to change.
 
 }  // namespace offband

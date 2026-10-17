@@ -75,6 +75,14 @@ const char* screenName(ScreenState s) {
 
 Chsc6xTouch s_touch;
 
+// With an AUX button USR clicks aren't grouped into double and triple:
+// AUX does "previous", and AUX held 3 s the buzzer (#1534).
+#ifdef PIN_USER_BTN_2
+constexpr bool kUsrClicksAtOnce = true;
+#else
+constexpr bool kUsrClicksAtOnce = false;
+#endif
+
 }  // namespace
 
 void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs) {
@@ -148,9 +156,12 @@ void UITask::pollButtons(uint32_t now) {
       // Clicks just before this hold go first, in the order they happened.
       if (uint8_t n = _usr_clicks.take()) handle(clicksEvent(n), now);
       handle(kind == PressKind::Hold ? InputEvent::UsrHold : InputEvent::UsrLongHold, now);
-    } else if (_screen == ScreenState::Off || _shell.locked()) {
+    } else if (kUsrClicksAtOnce || _screen == ScreenState::Off || _shell.locked() || _shell.stepping()) {
       // A dark or locked screen acts on the click itself, without waiting
-      // out the multi-click window.
+      // out the multi-click window. So does a screen where USR steps, and
+      // every screen on a board with AUX (owner, 2026-10-17, #1534): fast
+      // clicks are fast steps, never a double ("previous", AUX's job) or a
+      // triple (the buzzer, AUX held 3 s there).
       handle(InputEvent::UsrClick, now);
     } else {
       _usr_clicks.click(now);
@@ -306,8 +317,11 @@ void UITask::homeData(HomeData* d) {
   MetricsHub& m = the_mesh.guiMetrics();
   uint16_t rpt = 0, room = 0, chat = 0;
   ContactInfo ci;
-  for (int i = 0; i < the_mesh.getNumContacts(); i++) {
-    if (!the_mesh.getContactByIdx(i, ci)) continue;
+  // The iterator skips the anonymous-request slots at the front of the
+  // table; getContactByIdx doesn't, so a 0..getNumContacts() walk read those
+  // and missed the newest contacts (#1550).
+  ContactsIterator it = the_mesh.startContactsIterator();
+  while (it.hasNext(&the_mesh, ci)) {
     const ContactStat* st = m.contacts.find(ci.id.pub_key);
     if (!st || !st->heard) continue;
     if (ci.type == ADV_TYPE_REPEATER) rpt++;
@@ -578,6 +592,340 @@ void UITask::pollDmRetries(uint32_t now) {
   }
 }
 
+// ------------------------------------------------------------- Nodes (E)
+
+// Every contact as a list row. Last heard is the contact's advert time on
+// our clock (ContactInfo::lastmod, kept across reboots); SNR and unread come
+// from the GUI's per-contact stats, which start empty at boot.
+const NodeRow* UITask::nodeRows(size_t* total) {
+  *total = 0;
+  if (!_node_rows || !_node_keys) {
+    // Both or neither: a half-made pair is freed so the next call tries again.
+    if (!_node_rows) _node_rows = static_cast<NodeRow*>(heap_caps_malloc(sizeof(NodeRow) * MAX_CONTACTS, MALLOC_CAP_SPIRAM));
+    if (!_node_keys) _node_keys = static_cast<uint8_t(*)[32]>(heap_caps_malloc(32 * MAX_CONTACTS, MALLOC_CAP_SPIRAM));
+    if (!_node_rows || !_node_keys) {
+      heap_caps_free(_node_rows);
+      heap_caps_free(_node_keys);
+      _node_rows = nullptr;
+      _node_keys = nullptr;
+      return nullptr;
+    }
+  }
+  const uint32_t now = rtc_clock.getCurrentTime();
+  const bool clock_ok = offband::tz::clockSet(now);
+  ContactInfo ci;
+  size_t n = 0;
+  // Every contact, as the phone's list walks them: past the anonymous-request
+  // slots (see homeData, #1550).
+  ContactsIterator it = the_mesh.startContactsIterator();
+  while (n < MAX_CONTACTS && it.hasNext(&the_mesh, ci)) {
+    if (ci.type == ADV_TYPE_NONE) continue;   // an empty slot
+    fillNodeRow(ci, _node_rows[n], _node_keys[n], now, clock_ok);
+    n++;
+  }
+  *total = n;
+  return _node_rows;
+}
+
+void UITask::fillNodeRow(const ContactInfo& ci, NodeRow& r, uint8_t* key_copy, uint32_t now, bool clock_ok) {
+  memcpy(key_copy, ci.id.pub_key, 32);
+  snprintf(r.name, sizeof r.name, "%s", ci.name);
+  r.key = key_copy;
+  r.kind = nodeKind(ci.type);
+  r.out_path_len = ci.out_path_len;
+  // A clock stepped back (a GPS or phone sync) reads as "now", not "never".
+  r.heard = clock_ok && ci.lastmod != 0;
+  r.heard_age_s = (r.heard && now >= ci.lastmod) ? now - ci.lastmod : 0;
+  const ContactStat* st = the_mesh.guiMetrics().contacts.find(ci.id.pub_key);
+  r.snr_known = st && st->heard;
+  r.snr_db = r.snr_known ? st->snr_db : 0;
+  // Unread from the store, as Chats counts it (it survives a reboot).
+  const MsgStore& store = the_mesh.guiStore();
+  const int t = store.find(ci.type == ADV_TYPE_ROOM ? ThreadKind::Room : ThreadKind::Direct, ci.id.pub_key,
+                           PUB_KEY_SIZE);
+  const Thread* th = store.threadAt(t);
+  r.unread = th ? th->unread : 0;
+  r.lat_e6 = ci.gps_lat;
+  r.lon_e6 = ci.gps_lon;
+}
+
+// The GPS fix while there is one, else the position set in Setup: the
+// sensors keep both in node_lat/lon (MyMesh seeds them from the prefs).
+bool UITask::ownPos(GeoPos* out) {
+  if (!_sensors) return false;
+  *out = GeoPos{int32_t(lround(_sensors->node_lat * 1e6)), int32_t(lround(_sensors->node_lon * 1e6))};
+  return hasPos(*out);
+}
+
+// ------------------------------------------------------- Node detail (E4)
+
+namespace {
+
+// A hop's hash as the hash size gives it: a hop's bytes in out_path, which
+// are the first bytes of that repeater's key. The trace flags carry the size
+// as a power of two; a 3-byte hash can't be traced.
+int traceSizeCode(uint8_t hash_size) {
+  return hash_size == 1 ? 0 : hash_size == 2 ? 1 : hash_size == 4 ? 2 : -1;
+}
+
+// "Hilltop-2" for a hop whose hash matches a contact, else its hash in hex.
+void hopName(const uint8_t* hash, uint8_t size, char* out, size_t n) {
+  ContactInfo* c = the_mesh.lookupContactByPubKey(hash, size);
+  if (c && c->name[0]) {
+    snprintf(out, n, "%s", c->name);
+    return;
+  }
+  size_t o = 0;
+  for (uint8_t i = 0; i < size && o + 2 < n; i++) o += snprintf(out + o, n - o, "%02x", hash[i]);
+}
+
+}  // namespace
+
+bool UITask::nodeDetail(const uint8_t* key, NodeDetail* out) {
+  ContactInfo* ci = the_mesh.lookupContactByPubKey(key, PUB_KEY_SIZE);
+  if (!ci) return false;
+  const uint32_t now = rtc_clock.getCurrentTime();
+  fillNodeRow(*ci, out->row, out->key, now, offband::tz::clockSet(now));
+  const ContactStat* st = the_mesh.guiMetrics().contacts.find(ci->id.pub_key);
+  out->rssi = st && st->heard ? st->rssi : 0;
+  out->path[0] = '\0';
+  out->can_trace = false;
+  if (ci->out_path_len == OUT_PATH_UNKNOWN) return true;   // flood: no route yet
+
+  // "path: You › Hilltop-2 › Wren": each hop, then the node.
+  const uint8_t hops = ci->out_path_len & 63, size = uint8_t((ci->out_path_len >> 6) + 1);
+  textf(out->path, sizeof out->path, "path: You");
+  char name[32];
+  for (uint8_t h = 0; h < hops && size_t(h + 1) * size <= MAX_PATH_SIZE; h++) {
+    hopName(&ci->out_path[h * size], size, name, sizeof name);
+    const size_t o = strlen(out->path);
+    textf(out->path + o, sizeof out->path - o, " › %s", name);   // cut whole characters at the end
+  }
+  const size_t o = strlen(out->path);
+  textf(out->path + o, sizeof out->path - o, " › %s", ci->name);
+  // Trace: out along the route and back. A repeater turns it around itself;
+  // anything else, at the last repeater before it.
+  const bool turns = ci->type == ADV_TYPE_REPEATER;
+  const size_t legs = size_t(hops) * 2 + (turns ? 1 : 0) - (turns || hops == 0 ? 0 : 1);
+  out->can_trace = traceSizeCode(size) >= 0 && (hops > 0 || turns) && legs * size <= MAX_PATH_SIZE;
+  return true;
+}
+
+void UITask::detailOpened(const uint8_t* key) {
+  memcpy(_act_key, key, PUB_KEY_SIZE);
+  for (NodeActRun& a : _acts) a = NodeActRun{};
+  // A reply meant for an earlier detail mustn't land on this one.
+  Reply r;
+  ReplyBox& box = the_mesh.guiReplies();
+  box.take(ReplyKind::Login, &r);
+  box.take(ReplyKind::Status, &r);
+  box.take(ReplyKind::Trace, &r);
+}
+
+bool UITask::startNodeAct(const uint8_t* key, NodeAct a, const char* password) {
+  if (a == NodeAct::Count) return false;
+  if (memcmp(key, _act_key, PUB_KEY_SIZE) != 0) detailOpened(key);
+  NodeActRun& run = _acts[size_t(a)];
+  if (run.view.state == ActView::Busy) return false;
+  // Ping and Login share the mesh's one request slot (#1454): one at a time.
+  if ((a == NodeAct::Ping && _acts[size_t(NodeAct::Login)].view.state == ActView::Busy) ||
+      (a == NodeAct::Login && _acts[size_t(NodeAct::Ping)].view.state == ActView::Busy)) {
+    return false;
+  }
+  ContactInfo* ci = the_mesh.lookupContactByPubKey(key, PUB_KEY_SIZE);
+  if (!ci) return false;
+  const uint32_t now = millis();
+  bool flood = false;
+  uint32_t tag = 0, est = 0;
+  CmdResult res = CmdResult::Failed;
+  Reply stale;
+  switch (a) {
+    case NodeAct::Ping:
+      the_mesh.guiReplies().take(ReplyKind::Status, &stale);
+      res = the_mesh.cmdStatusReq(*ci, &flood, &tag, &est);
+      break;
+    case NodeAct::Login:
+      the_mesh.guiReplies().take(ReplyKind::Login, &stale);
+      // An empty field tries the guest password (mockup 5).
+      snprintf(_login_pw, sizeof _login_pw, "%s", password ? password : "");
+      res = the_mesh.cmdLogin(*ci, _login_pw, &flood, &tag, &est);
+      break;
+    case NodeAct::Trace: {
+      NodeDetail d;
+      if (!nodeDetail(key, &d) || !d.can_trace) return false;
+      const uint8_t hops = ci->out_path_len & 63, size = uint8_t((ci->out_path_len >> 6) + 1);
+      uint8_t path[MAX_PATH_SIZE];
+      size_t len = 0;
+      for (uint8_t h = 0; h < hops; h++, len += size) memcpy(&path[len], &ci->out_path[h * size], size);
+      if (ci->type == ADV_TYPE_REPEATER) {
+        memcpy(&path[len], ci->id.pub_key, size);
+        len += size;
+      }
+      const int back_from = ci->type == ADV_TYPE_REPEATER ? int(hops) - 1 : int(hops) - 2;
+      for (int h = back_from; h >= 0; h--, len += size) memcpy(&path[len], &ci->out_path[h * size], size);
+      tag = esp_random();
+      the_mesh.guiReplies().take(ReplyKind::Trace, &stale);
+      res = the_mesh.cmdTrace(tag, 0, uint8_t(traceSizeCode(size)), path, uint8_t(len), &est);
+      break;
+    }
+    case NodeAct::Share:
+      res = the_mesh.cmdShareContact(*ci);
+      run.view = ActView{};
+      run.view.state = res == CmdResult::Ok ? ActView::Ok : ActView::Failed;
+      run.view.done_ms = now;
+      mesh_log_line(MLOG_BOOT, "[gui] node share: %s\n", res == CmdResult::Ok ? "sent" : "not sent");
+      return res == CmdResult::Ok;
+    default:
+      return false;
+  }
+  if (res != CmdResult::Ok) {
+    mesh_log_line(MLOG_BOOT, "[gui] node act %u not sent (%u)\n", unsigned(a), unsigned(res));
+    return false;
+  }
+  run.view = ActView{};
+  run.view.state = ActView::Busy;
+  run.started = now;
+  run.deadline = now + (est ? est : 10000) + 2000;   // the send's own estimate, and a margin
+  run.tag = tag;
+  mesh_log_line(MLOG_BOOT, "[gui] node act %u sent (%s, %lums)\n", unsigned(a), flood ? "flood" : "direct",
+                (unsigned long)est);
+  return true;
+}
+
+void UITask::nodeActState(NodeAct a, ActView* out) {
+  *out = a < NodeAct::Count ? _acts[size_t(a)].view : ActView{};
+}
+
+const char* UITask::savedPassword(const uint8_t* key) {
+  loadPasswords();
+  return _passwords.get(key);
+}
+
+int UITask::openDm(const uint8_t* key) {
+  ContactInfo* ci = the_mesh.lookupContactByPubKey(key, PUB_KEY_SIZE);
+  return ci ? the_mesh.guiThreadForContact(*ci) : -1;
+}
+
+// Replies for the open detail's actions, and their timeouts.
+void UITask::pollNodeActs(uint32_t now) {
+  ReplyBox& box = the_mesh.guiReplies();
+  Reply r;
+  auto finish = [&](NodeActRun& run, bool ok, const Reply* rep) {
+    run.view.state = ok ? ActView::Ok : ActView::Failed;
+    run.view.done_ms = now;
+    if (rep) {
+      run.view.rtt_ms = rep->at_ms - run.started;
+      run.view.len = rep->len < sizeof run.view.body ? rep->len : uint8_t(sizeof run.view.body);
+      memcpy(run.view.body, rep->data, run.view.len);
+    }
+  };
+
+  NodeActRun& ping = _acts[size_t(NodeAct::Ping)];
+  if (ping.view.state == ActView::Busy) {
+    if (box.take(ReplyKind::Status, &r) && memcmp(r.peer, _act_key, 4) == 0) {
+      finish(ping, true, &r);
+      mesh_log_line(MLOG_BOOT, "[gui] ping reply %lums\n", (unsigned long)ping.view.rtt_ms);
+    } else if (int32_t(now - ping.deadline) >= 0) {
+      finish(ping, false, nullptr);
+      mesh_log_line(MLOG_BOOT, "[gui] ping: no reply\n");
+    }
+  }
+
+  NodeActRun& login = _acts[size_t(NodeAct::Login)];
+  if (login.view.state == ActView::Busy) {
+    if (box.take(ReplyKind::Login, &r) && memcmp(r.peer, _act_key, 4) == 0) {
+      finish(login, r.ok, &r);
+      login.view.login_refused = !r.ok;
+      if (r.ok) {   // remembered for next time (owner pick a)
+        loadPasswords();
+        _passwords.set(_act_key, _login_pw);
+        _passwords_dirty = true;
+      }
+      mesh_log_line(MLOG_BOOT, "[gui] login %s\n", r.ok ? "ok" : "refused");
+    } else if (int32_t(now - login.deadline) >= 0) {
+      finish(login, false, nullptr);
+      mesh_log_line(MLOG_BOOT, "[gui] login: no reply\n");
+    }
+  }
+
+  NodeActRun& trace = _acts[size_t(NodeAct::Trace)];
+  if (trace.view.state == ActView::Busy) {
+    if (box.take(ReplyKind::Trace, &r) && r.tag == trace.tag) {
+      finish(trace, true, &r);
+      mesh_log_line(MLOG_BOOT, "[gui] trace reply %lums\n", (unsigned long)trace.view.rtt_ms);
+    } else if (int32_t(now - trace.deadline) >= 0) {
+      finish(trace, false, nullptr);
+      mesh_log_line(MLOG_BOOT, "[gui] trace: no reply\n");
+    }
+  }
+}
+
+namespace {
+const char* const kPasswordPath = "/gui_pw";
+const char* const kPasswordTmp = "/gui_pw.tmp";
+
+FILESYSTEM* guiFs() {
+  DataStore* ds = the_mesh.guiDataStore();
+  if (!ds) return nullptr;
+  return ds->getSecondaryFS() ? ds->getSecondaryFS() : ds->getPrimaryFS();
+}
+
+class PwFileSource : public ByteSource {
+public:
+  explicit PwFileSource(File& f) : _f(f) {}
+  size_t read(void* data, size_t len) override { return _f.read(static_cast<uint8_t*>(data), len); }
+
+private:
+  File& _f;
+};
+class PwFileSink : public ByteSink {
+public:
+  explicit PwFileSink(File& f) : _f(f) {}
+  bool write(const void* data, size_t len) override {
+    return _f.write(static_cast<const uint8_t*>(data), len) == len;
+  }
+
+private:
+  File& _f;
+};
+}  // namespace
+
+// Read once, on first use: the book is small, and nothing else writes it.
+void UITask::loadPasswords() {
+  if (_passwords_loaded) return;
+  _passwords_loaded = true;
+  FILESYSTEM* fs = guiFs();
+  if (!fs) return;
+  // Cut off between the remove and the rename: the temp file is the book.
+  if (!fs->exists(kPasswordPath) && fs->exists(kPasswordTmp)) fs->rename(kPasswordTmp, kPasswordPath);
+  if (!fs->exists(kPasswordPath)) return;
+  File f = the_mesh.guiDataStore()->openRead(fs, kPasswordPath);
+  if (!f) return;
+  PwFileSource in(f);
+  const LoadResult res = _passwords.load(in);
+  f.close();
+  mesh_log_line(MLOG_BOOT, "[gui] passwords: %u (load %u)\n", unsigned(_passwords.size()), unsigned(res));
+}
+
+// Written whole to a temp file, then swapped in, so a power cut mid-write
+// leaves the old book (or the new one), never a cut-short file.
+void UITask::savePasswords() {
+  FILESYSTEM* fs = guiFs();
+  if (!fs) return;
+  File f = the_mesh.guiDataStore()->openWriteFile(fs, kPasswordTmp);
+  if (!f) return;
+  PwFileSink out(f);
+  const bool ok = _passwords.save(out);
+  f.close();
+  if (ok) {
+    fs->remove(kPasswordPath);
+    fs->rename(kPasswordTmp, kPasswordPath);
+  } else {
+    fs->remove(kPasswordTmp);
+  }
+  mesh_log_line(MLOG_BOOT, "[gui] passwords saved: %s\n", ok ? "ok" : "failed");
+}
+
 void UITask::msgRead(int msgcount) { _unread = msgcount; }
 
 void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) {
@@ -655,9 +1003,15 @@ void UITask::loop() {
     _prefs_dirty = false;
     the_mesh.savePrefs();
   }
+  if (idle && _passwords_dirty) {   // a login that worked (E4)
+    _passwords_dirty = false;
+    savePasswords();
+  }
 
-  // DMs sent from here retry and fail on their own, screen lit or not.
+  // DMs sent from here retry and fail on their own, screen lit or not; so
+  // do a node detail's Ping, Trace and login.
   pollDmRetries(now);
+  pollNodeActs(now);
 
   // One battery reading a second into the average (#1246), lit or not.
   if ((int32_t)(now - _next_batt_read) >= 0) {
@@ -705,6 +1059,9 @@ void UITask::loop() {
   // Chats redraw only when the store's revision moved, which is a compare on
   // every other pass.
   _shell.updateChats();
+  _shell.updateNodes(now);   // once a second while the Nodes tab is up
+  _shell.updateDetail(now);  // a node detail's actions as they progress
+  _shell.updateRadar(now);   // the Map, when a position moves
   GUI_SPAN(s_t_update);
   lvglLoop();
   GUI_SPAN(s_t_lvgl);

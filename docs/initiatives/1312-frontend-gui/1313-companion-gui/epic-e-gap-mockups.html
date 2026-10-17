@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Epic E gap mockups</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* Offband theme tokens, copied from ObScreen.dc.html */
+:root{
+  --bg:#0F1412; --bg2:#161C19; --bg3:#1D2521; --line:#34403A; --line2:#232C28;
+  --ink:#EFF3E8; --ink2:#BAC4B5; --dim:#7C8B82; --sig:#7BEFA8; --sigInk:#0F1412;
+  --wash:rgba(123,239,168,.09); --warn:#FFA552; --bad:#FF7A6E; --r:6px;
+  --cht:#8CC8FF; --rpt:#C3A5FF; --room:#F2D27A; --sens:#FF9EC4;
+  --sans:'Barlow Condensed',sans-serif; --mono:'JetBrains Mono',monospace;
+  --page:#0a0d0c; --pageInk:#cfd6cc;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--page);color:var(--pageInk);font-family:var(--sans);padding:24px 16px 48px}
+h1{font-size:26px;font-weight:600;color:var(--ink)}
+.lede{font-size:16px;color:var(--dim);margin:6px 0 24px;max-width:900px}
+.grid{display:flex;flex-wrap:wrap;gap:28px}
+.card{width:300px}
+.card h2{font-size:18px;font-weight:600;color:var(--ink)}
+.card .n{font-family:var(--mono);font-size:12px;color:var(--sig);margin-right:6px}
+.card p{font-size:14px;color:var(--ink2);margin:4px 0 10px;line-height:1.3;min-height:54px}
+.card ul{font-size:13px;color:var(--dim);margin:10px 0 0 16px;line-height:1.35}
+.dev{width:300px;height:400px;border:1px solid #2a332f;border-radius:10px;overflow:hidden;background:#000}
+.scr{width:240px;height:320px;transform:scale(1.25);transform-origin:0 0;background:var(--bg);color:var(--ink);
+  font-family:var(--sans);position:relative;overflow:hidden;display:flex;flex-direction:column}
+.sb{height:20px;flex:none;background:var(--bg2);border-bottom:1px solid var(--line2);display:flex;align-items:center;
+  padding:0 6px;font-family:var(--mono);font-size:10px;color:var(--ink2);gap:5px}
+.sb .clk{color:var(--ink);font-weight:600}
+.sb .right{margin-left:auto}
+.tabs{height:40px;flex:none;border-top:1px solid var(--line2);background:var(--bg2);display:flex;margin-top:auto}
+.tabs div{flex:1;display:flex;align-items:center;justify-content:center;font-size:9px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--dim);border-top:2px solid transparent}
+.tabs div.on{color:var(--sig);background:var(--wash);border-top-color:var(--sig)}
+/* nodes header + rows */
+.nh{height:32px;flex:none;display:flex;align-items:center;gap:6px;padding:0 6px 0 8px;border-bottom:1px solid var(--line)}
+.nh .t{font-size:16px;font-weight:600}
+.nh .cnt{font-family:var(--mono);font-size:10px;color:var(--dim)}
+.search{margin-left:auto;width:86px;height:26px;border-radius:999px;border:1px solid var(--line);display:flex;
+  align-items:center;gap:5px;padding:0 7px;font-size:12px;color:var(--dim)}
+.search.on{flex:1;width:auto;margin-left:0;border-color:var(--sig);background:var(--wash);color:var(--ink)}
+.caret{display:inline-block;width:1px;height:12px;background:var(--sig);margin-left:-3px}
+.chips{height:30px;flex:none;display:flex;align-items:center;gap:3px;padding:0 6px;border-bottom:1px solid var(--line2)}
+.chip{font-size:10px;padding:3px 5px;border-radius:999px;border:1px solid var(--line);color:var(--ink2)}
+.chip.on{background:var(--sig);border-color:var(--sig);color:var(--sigInk);font-weight:600}
+.match{padding:4px 8px 2px;font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.row{height:38px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;border-bottom:1px solid var(--line2)}
+.tile{width:22px;height:22px;flex:none;display:flex;align-items:center;justify-content:center;font-size:11px}
+.tile.cht{border-radius:50%;background:#8CC8FF24;color:var(--cht)}
+.tile.rpt{border-radius:6px;background:#C3A5FF24;color:var(--rpt)}
+.tile.room{border-radius:6px;background:#F2D27A24;color:var(--room)}
+.tile.sens{border-radius:6px;background:#FF9EC424;color:var(--sens)}
+.row .tx{flex:1;min-width:0}
+.row .nm{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .sub{font-family:var(--mono);font-size:9px;color:var(--dim)}
+.row .snr{font-family:var(--mono);font-size:11px;color:var(--ink2)}
+.row .chev{color:var(--dim)}
+/* detail */
+.dh{height:28px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;border-bottom:1px solid var(--line)}
+.dh .bk{font-size:16px;color:var(--sig)} .dh .lb{font-size:12px;color:var(--ink2)}
+.db{padding:6px 8px;display:flex;flex-direction:column;gap:6px;flex:1;min-height:0}
+.kind{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--sig)}
+.dname{font-size:18px;font-weight:600;line-height:1.1}
+.key{font-family:var(--mono);font-size:9px;color:var(--dim)}
+.tg{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line);border-left:1px solid var(--line)}
+.tg > div{padding:3px 5px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.tg .tk{font-size:8px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.tg .v{font-family:var(--mono);font-size:12px;font-weight:600}
+.tg .v.dash{color:var(--dim);font-weight:400}
+.path{font-family:var(--mono);font-size:9px;color:var(--ink2)}
+.path .hop{color:var(--dim)}
+.acts{margin-top:auto;display:flex;flex-direction:column;gap:4px}
+.btn{height:34px;border-radius:var(--r);display:flex;align-items:center;justify-content:center;font-size:13px;
+  border:1px solid var(--line);color:var(--ink);flex:1}
+.btn.pri{background:var(--sig);border-color:var(--sig);color:var(--sigInk);font-weight:600}
+.btn.busy{color:var(--dim)} .btn.ok{color:var(--sig);border-color:var(--sig)} .btn.bad{color:var(--bad);border-color:var(--bad)}
+.arow{display:flex;gap:4px}
+.note{font-family:var(--mono);font-size:9px;color:var(--dim)}
+/* empty */
+.empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 22px;gap:5px}
+.empty .h{font-size:16px;font-weight:600;color:var(--ink2)}
+.empty .s{font-size:12px;color:var(--dim);line-height:1.3}
+.empty .ic{width:34px;height:34px;border:2px solid var(--line);border-radius:50%;margin-bottom:4px}
+.foot{padding:8px;font-size:10px;color:var(--dim);text-align:center}
+.foot b{color:var(--sig);font-weight:400}
+/* wheel */
+.wheel{margin-top:auto;background:var(--bg2);border-top:1px solid var(--line);padding:6px 4px 6px;flex:none}
+.wl{display:flex;align-items:center;justify-content:center;gap:4px;height:46px}
+.wl span{font-family:var(--mono);font-size:13px;color:var(--dim);width:18px;text-align:center}
+.wl span.near{font-size:16px;color:var(--ink2)}
+.wl span.cur{width:36px;height:42px;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:600;
+  color:var(--ink);border:1px solid var(--sig);background:var(--wash);border-radius:6px}
+.wl span.ctl{font-family:var(--sans);font-size:11px;width:auto;padding:0 3px}
+.hint{font-size:9px;color:var(--dim);text-align:center;margin-top:4px;letter-spacing:.04em}
+/* sheet */
+.scrim{position:absolute;left:0;right:0;top:20px;bottom:0;background:rgba(0,0,0,.5)}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--bg3);border-top:1px solid var(--line);border-radius:12px 12px 0 0}
+.sheet .st{font-size:14px;font-weight:600;padding:10px 12px 6px}
+.pw{margin:0 12px 6px;height:32px;border:1px solid var(--sig);background:var(--wash);border-radius:var(--r);display:flex;
+  align-items:center;padding:0 8px;font-family:var(--mono);font-size:14px;letter-spacing:2px}
+.status{margin:0 12px 6px;font-size:11px}
+.kb{background:var(--bg2);border-top:1px solid var(--line2);padding:4px 3px;display:flex;flex-direction:column;gap:3px}
+.kr{display:flex;justify-content:center;gap:2px}
+.k{height:28px;width:21px;background:var(--bg3);border-radius:4px;font-size:12px;display:flex;align-items:center;justify-content:center}
+.k.w{width:32px;font-size:10px;color:var(--ink2)} .k.sp{width:110px;font-size:10px;color:var(--dim)}
+.k.go{width:56px;background:var(--sig);color:var(--sigInk);font-weight:600;font-size:11px}
+</style>
+</head>
+<body>
+<h1>Epic E: mockups for the screens and states the design lacks</h1>
+<p class="lede">Offband theme, Modern look, native 240×320 shown at 1.25×. The Nodes list, search with the keyboard, the unread view and the repeater detail follow ObScreen as drawn; these are the parts it leaves out. The bullets are the behavior I'd build.</p>
+<div class="grid" id="grid"></div>
+<script>
+const sb = `<div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>`;
+const tabs = `<div class="tabs"><div>Home</div><div>Chat</div><div class="on">Nodes</div><div>Map</div><div>Setup</div></div>`;
+const row = (t, ic, name, sub, snr, extra='') => `<div class="row"><div class="tile ${t}">${ic}</div><div class="tx"><div class="nm">${name}</div><div class="sub">${sub}</div></div>${extra}<span class="snr">▂▄▆ ${snr}</span><span class="chev">›</span></div>`;
+const kb = (go) => `<div class="kb">
+  <div class="kr">${[...'qwertyuiop'].map(c=>`<div class="k">${c}</div>`).join('')}</div>
+  <div class="kr">${[...'asdfghjkl'].map(c=>`<div class="k">${c}</div>`).join('')}</div>
+  <div class="kr"><div class="k w">⇧</div>${[...'zxcvbnm'].map(c=>`<div class="k">${c}</div>`).join('')}<div class="k w">⌫</div></div>
+  <div class="kr"><div class="k w">?123</div><div class="k sp">space</div><div class="k go">${go}</div></div></div>`;
+const detail = (kind, name, key, cells, path, acts, extra='') => `${sb}<div class="dh"><span class="bk">‹</span><span class="lb">Nodes</span></div>
+  <div class="db"><div><div class="kind">${kind}</div><div class="dname">${name}</div><div class="key">${key}</div></div>
+  <div class="tg">${cells.map(([k,v])=>`<div><div class="tk">${k}</div><div class="v${v==='—'?' dash':''}">${v}</div></div>`).join('')}</div>
+  <div class="path">${path}</div>${extra}<div class="acts">${acts}</div></div>${tabs}`;
+
+const cards = [
+ {n:1, t:'Letter wheel (button-only search)', p:'USR hold on the search field with no touch: a wheel of A–Z, 0–9, space, ⌫ and Done replaces the keyboard. Results update as letters go in.',
+  scr:`${sb}<div class="nh"><div class="search on">⌕ <span>wa</span><span class="caret"></span><span style="margin-left:auto;color:var(--dim)">×</span></div></div>
+   <div class="match">1 match · all types</div>
+   ${row('rpt','◬','Water Tower','1 hop · 1h','+1.0')}
+   <div class="wheel"><div class="wl"><span class="ctl">⌫</span><span>U</span><span class="near">V</span><span class="cur">W</span><span class="near">X</span><span>Y</span><span class="ctl">Done</span></div>
+   <div class="hint">USR next · AUX back one · USR hold add · AUX hold done</div></div>`,
+  ul:['Order: A–Z, 0–9, space, ⌫, Done, then back to A.','USR hold on ⌫ deletes; on Done closes the wheel and keeps the results.','A touch anywhere on the wheel switches to the keyboard.']},
+ {n:2, t:'Chat node detail', p:'A companion: what is known of it, and DM / Share contact as the spec says. DM opens its conversation and Compose.',
+  scr:detail('Companion · 2 hops · +3.0 dB','Wren','5b21 07fe … 9a13',
+   [['Heard','4m'],['SNR','+3.0'],['RSSI','-101'],['Unread','1'],['Hops','2']],
+   'path: You › Hilltop-2 › Wren',
+   `<div class="btn pri">DM</div><div class="arow"><div class="btn">Share contact</div><div class="btn">Trace</div></div>`),
+  ul:['DM: the conversation opens with Compose up (or just the conversation if you hold off typing).','Share contact: a zero-hop advert of Wren for nearby nodes; "Shared ✓" for 2 s, as Send advert does.','Trace is kept for any node with a known path.']},
+ {n:3, t:'Room server detail', p:'A room: log in to receive its posts (they land in Chats as a room thread), with Trace and Ping as on a repeater.',
+  scr:detail('Room server · 1 hop · +5.1 dB','Valley Ops','a91c 3d02 … 77e1',
+   [['Heard','11m'],['SNR','+5.1'],['RSSI','-92'],['Posts','—'],['Battery','—'],['Uptime','—']],
+   'path: You › Valley Ops',
+   `<div class="btn pri">Log in</div><div class="arow"><div class="btn">Trace</div><div class="btn">Ping</div></div>`),
+  ul:['Log in uses the same password sheet as Admin login (card 5).','Cells show "—" until a Ping (status request) fills them.']},
+ {n:4, t:'Sensor detail', p:'A sensor: its readings come from its status reply. Ping fetches them; Trace shows the route.',
+  scr:detail('Sensor · 2 hops · +4.0 dB','Creek Gauge','e4b0 1a6c … 0c5d',
+   [['Heard','9m'],['SNR','+4.0'],['RSSI','-97'],['Battery','3.71 V'],['Uptime','4d 2h'],['Airtime','0.3%']],
+   'path: You › Hilltop-2 › Creek Gauge',
+   `<div class="btn pri">Ping</div><div class="arow"><div class="btn">Trace</div></div>`),
+  ul:['Ping is the primary here: there is no login for a sensor.','Sensor-specific readings (temperature, level) need the telemetry request, a later Epic; this shows what the status reply carries.']},
+ {n:5, t:'Admin login (and room Log in)', p:'A bottom sheet over the detail: masked password, the keyboard, "Log in" as its Send key. The result shows in the sheet, then it closes.',
+  scr:`${detail('Repeater · 1 hop · +7.5 dB','KD9-Ridge RPT','7c02 d1e9 … 44a0',[['Battery','—'],['Uptime','—'],['Airtime','—'],['Relayed','—'],['Noise','—'],['Last','—']],'path: You › Hilltop-2 › KD9-Ridge','<div class="btn pri">Admin login</div>')}
+   <div class="scrim"></div><div class="sheet"><div class="st">Admin login · KD9-Ridge RPT</div>
+   <div class="pw">••••••<span class="caret" style="margin-left:2px"></span></div>
+   <div class="status" style="color:var(--dim)">Logging in… 1.8 s</div>${kb('Log in')}</div>`,
+  ul:['Results: "Logged in ✓" (sheet closes after 1 s; the detail runs a Ping to fill the grid), "Wrong password", or "No reply" after the send\'s timeout.','The password is remembered per node on this device after a successful login and prefilled next time; the guest password (empty) is tried if the field is left empty.','Admin commands after login (reboot, settings) are a later Epic.']},
+ {n:6, t:'Ping and Trace states', p:'The secondary buttons show their own progress and result, and the grid or path line fills in.',
+  scr:detail('Repeater · 1 hop · +7.5 dB','KD9-Ridge RPT','7c02 d1e9 … 44a0',
+   [['Battery','3.94 V'],['Uptime','12d 6h'],['Airtime','4.1%'],['Relayed','2,318'],['Noise','-118'],['RTT','1.8 s']],
+   'path: You › Hilltop-2 › KD9-Ridge',
+   `<div class="btn pri">Admin login</div><div class="arow"><div class="btn busy">Tracing…</div><div class="btn ok">Ping ✓ 1.8 s</div></div>`,
+   `<div class="path"><span class="hop">snr: +6.2 › +4.0 › +7.5</span></div>`),
+  ul:['Ping: "Pinging…", then "Ping ✓ 1.8 s" (the grid fills, Heap dropped per §9, Relayed = flood + direct sent), or "No reply" in red.','Trace: "Tracing…", then the path line gains a per-hop SNR line; "No reply" if it times out.','Each result stays until you leave the detail.']},
+ {n:7, t:'Nodes, empty', p:'Before any advert has been heard.',
+  scr:`${sb}<div class="nh"><span class="t">Nodes</span><span class="cnt">0</span><div class="search">⌕ Search</div></div>
+   <div class="chips"><span class="chip on">All</span><span class="chip">Chat</span><span class="chip">Rpt</span><span class="chip">Room</span><span class="chip">Sens</span><span class="chip" style="margin-left:auto">○ Unread</span></div>
+   <div class="empty"><div class="ic"></div><div class="h">No nodes heard yet</div><div class="s">Nodes appear as their adverts are heard. Send an advert from Home so others find you.</div></div>${tabs}`,
+  ul:['A type filter with nothing in it says "No repeaters heard yet" etc.']},
+ {n:8, t:'No matches, no unread', p:'Search with nothing found (top), and the unread view with nothing unread (bottom, same footer as drawn).',
+  scr:`${sb}<div class="nh"><div class="search on">⌕ <span>zq</span><span class="caret"></span><span style="margin-left:auto;color:var(--dim)">×</span></div></div>
+   <div class="match">0 matches · all types</div>
+   <div class="empty" style="flex:none;height:70px"><div class="s">No node name or key starts with "zq".</div></div>
+   <div style="border-top:1px solid var(--line);margin-top:10px"></div>
+   <div class="nh"><span class="t">Nodes</span><span class="cnt">0 of 12</span><div class="search">⌕ Search</div></div>
+   <div class="chips"><span class="chip">All</span><span class="chip on">Chat</span><span class="chip">Rpt</span><span class="chip">Room</span><span class="chip">Sens</span><span class="chip" style="margin-left:auto;border-color:var(--sig);color:var(--sig)">● Unread</span></div>
+   <div class="foot">No unread DMs · <b>Clear</b></div>`,
+  ul:['The match line counts real matches (the design\'s is a fixed string).']},
+];
+document.getElementById('grid').innerHTML = cards.map(c=>`<div class="card"><h2><span class="n">${c.n}</span>${c.t}</h2><p>${c.p}</p>
+  <div class="dev"><div class="scr">${c.scr}</div></div><ul>${c.ul.map(x=>`<li>${x}</li>`).join('')}</ul></div>`).join('');
+</script>
+</body>
+</html>
