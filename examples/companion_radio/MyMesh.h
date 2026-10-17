@@ -197,6 +197,11 @@ public:
   // The UI says whether anyone is looking: internal-flash writes (the store,
   // the contacts save) wait for a dim or dark screen (#1472).
   void setGuiScreenIdle(bool idle) { _gui_screen_idle = idle; }
+  // A contact's conversation, made on first use (Nodes DM, #1533); -1 if the
+  // thread table is full.
+  int guiThreadForContact(const ContactInfo& contact) { return guiThreadFor(contact); }
+  // The store, for the GUI's own small files (its node passwords, #1533).
+  DataStore* guiDataStore() { return _store; }
 #endif
 
 #if UI_HAS_CARDKB

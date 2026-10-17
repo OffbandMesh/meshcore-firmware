@@ -84,6 +84,13 @@ struct Cell {
 size_t statusCells(const uint8_t* body, size_t len, uint32_t rtt_ms, Cell* out, size_t max);
 // The same keys with "—" before any reply.
 size_t emptyStatusCells(Cell* out, size_t max);
+// The detail's grid for a node (mockups 2-6). Chat: Heard, SNR, RSSI,
+// Unread, Hops. Repeater: its status (statusCells, or dashes before a
+// Ping). Room: Heard, SNR, RSSI, Posts, Battery, Uptime. Sensor: Heard, SNR,
+// RSSI, Battery, Uptime, Airtime. status/len is the last status reply (null:
+// none); rssi counts only when r.snr_known.
+size_t detailCells(const NodeRow& r, int16_t rssi, const uint8_t* status, size_t len, uint32_t rtt_ms, Cell* out,
+                   size_t max);
 // "2,318".
 void thousands(uint32_t v, char* out, size_t n);
 

@@ -275,6 +275,84 @@ TEST(Detail, EmptyCellsDash) {
   for (int i = 0; i < 6; i++) EXPECT_STREQ(c[i].value, "—");
 }
 
+// The grid by kind (mockups 2-6): a companion shows what was heard of it;
+// a repeater its status; a room and a sensor both, three cells each.
+TEST(Detail, ChatGridIsWhatWasHeard) {
+  auto s = sample();
+  s[1].snr_known = true;
+  Cell c[8];
+  ASSERT_EQ(detailCells(s[1], -101, nullptr, 0, 0, c, 8), 5u);
+  const char* const keys[] = {"Heard", "SNR", "RSSI", "Unread", "Hops"};
+  const char* const vals[] = {"4m", "+3.0", "-101", "1", "2"};
+  for (int i = 0; i < 5; i++) {
+    EXPECT_STREQ(c[i].key, keys[i]);
+    EXPECT_STREQ(c[i].value, vals[i]);
+  }
+}
+
+TEST(Detail, ChatGridBeforeAnythingIsHeard) {
+  const auto s = sample();
+  Cell c[8];
+  ASSERT_EQ(detailCells(s[6], 0, nullptr, 0, 0, c, 8), 5u);
+  for (int i = 0; i < 3; i++) EXPECT_STREQ(c[i].value, "—");
+  EXPECT_STREQ(c[3].value, "0");
+  EXPECT_STREQ(c[4].value, "flood");
+}
+
+TEST(Detail, RepeaterGridIsItsStatus) {
+  const auto s = sample();
+  const auto body = statusBody();
+  Cell c[8];
+  ASSERT_EQ(detailCells(s[0], -92, nullptr, 0, 0, c, 8), 6u);
+  EXPECT_STREQ(c[0].key, "Battery");
+  EXPECT_STREQ(c[0].value, "—");
+  ASSERT_EQ(detailCells(s[0], -92, body.data(), body.size(), 1800, c, 8), 6u);
+  EXPECT_STREQ(c[3].value, "2,318");
+  EXPECT_STREQ(c[5].value, "1.8 s");
+}
+
+TEST(Detail, RoomGridHasPosts) {
+  auto s = sample();
+  s[2].snr_known = true;
+  auto body = statusBody();
+  body.resize(6 + 52, 0);
+  const uint16_t posted = 37;
+  memcpy(&body[6 + 48], &posted, 2);   // ServerStats.n_posted
+  Cell c[8];
+  ASSERT_EQ(detailCells(s[2], -92, nullptr, 0, 0, c, 8), 6u);
+  const char* const keys[] = {"Heard", "SNR", "RSSI", "Posts", "Battery", "Uptime"};
+  for (int i = 0; i < 6; i++) EXPECT_STREQ(c[i].key, keys[i]);
+  EXPECT_STREQ(c[0].value, "11m");
+  EXPECT_STREQ(c[3].value, "—");
+  ASSERT_EQ(detailCells(s[2], -92, body.data(), body.size(), 0, c, 8), 6u);
+  EXPECT_STREQ(c[3].value, "37");
+  EXPECT_STREQ(c[4].value, "3.94 V");
+  EXPECT_STREQ(c[5].value, "12d 6h");
+}
+
+TEST(Detail, RoomPostsNeedTheLongerReply) {
+  const auto s = sample();
+  const auto body = statusBody();   // a repeater-sized reply: no n_posted
+  Cell c[8];
+  ASSERT_EQ(detailCells(s[2], -92, body.data(), 6 + 48, 0, c, 8), 6u);
+  EXPECT_STREQ(c[3].value, "—");
+  EXPECT_STREQ(c[4].value, "3.94 V");
+}
+
+TEST(Detail, SensorGrid) {
+  auto s = sample();
+  s[3].snr_known = true;
+  const auto body = statusBody();
+  Cell c[8];
+  ASSERT_EQ(detailCells(s[3], -97, body.data(), body.size(), 0, c, 8), 6u);
+  const char* const keys[] = {"Heard", "SNR", "RSSI", "Battery", "Uptime", "Airtime"};
+  const char* const vals[] = {"9m", "+4.0", "-97", "3.94 V", "12d 6h", "4.1%"};
+  for (int i = 0; i < 6; i++) {
+    EXPECT_STREQ(c[i].key, keys[i]);
+    EXPECT_STREQ(c[i].value, vals[i]);
+  }
+}
+
 TEST(Detail, Thousands) {
   char b[16];
   thousands(0, b, sizeof b);
