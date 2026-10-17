@@ -69,6 +69,53 @@ constexpr size_t kOffCount = sizeof(kOffChoices) / sizeof(kOffChoices[0]);
 // Where v is in a choice list; -1 if it isn't one.
 int choiceIndex(const uint32_t* choices, size_t n, uint32_t v);
 
+// ----------------------------------------- Node, stats, Contacts (G4)
+
+// Radio stats rows (mockup 10): transmit share of uptime "1.2%", sent
+// "412 · 96" (flood · direct), last packet "+6.3 · -97" (SNR x4, RSSI).
+void airtimeText(uint32_t tx_secs, uint32_t up_secs, char* out, size_t n);
+void sentText(uint32_t flood, uint32_t direct, char* out, size_t n);
+void lastPacketText(int snr_x4, int rssi, char* out, size_t n);
+
+// Contacts › Up to: autoadd_max_hops, 0 any, 1 direct only, N up to N-1.
+constexpr uint32_t kHopChoices[] = {0, 1, 2, 3, 4, 6};
+constexpr size_t kHopCount = sizeof(kHopChoices) / sizeof(kHopChoices[0]);
+void hopLimitText(uint32_t v, char* out, size_t n);
+// The list's Contacts value: "Auto-add: all / some / off". Manual off
+// means every type; on, the type bits (chat, repeater, room, sensor) decide.
+void autoAddText(bool manual, uint8_t bits, char* out, size_t n);
+
+// Node › GPS interval, seconds.
+constexpr uint32_t kGpsChoices[] = {10, 30, 60, 300, 600};
+constexpr size_t kGpsCount = sizeof(kGpsChoices) / sizeof(kGpsChoices[0]);
+// Position, degrees x 1e6: "39.5000, -84.4000", or "Not set" at 0, 0.
+bool latOk(int32_t lat_e6);
+bool lonOk(int32_t lon_e6);
+void positionText(int32_t lat_e6, int32_t lon_e6, char* out, size_t n);
+
+// What Node, Privacy and Contacts show and set (the companion's prefs).
+struct NodeSettings {
+  char name[32];
+  bool gps_on;
+  uint32_t gps_secs;
+  int32_t lat_e6, lon_e6;
+  bool share_location;
+  bool extra_acks;
+  uint8_t tel_base, tel_loc, tel_env;   // 0 Never, 1 Contacts, 2 Everyone
+  bool manual_add;                      // false: every type is added
+  uint8_t auto_bits;                    // chat 0x02, repeater 0x04, room 0x08, sensor 0x10
+  uint8_t auto_hops;                    // kHopChoices
+  uint16_t contacts, contacts_max;
+};
+
+// Radio stats, as the phone's stats read them.
+struct RadioStats {
+  uint32_t uptime_secs, tx_air_secs;
+  int16_t noise_floor;
+  int snr_x4, rssi;
+  uint32_t recv, sent_flood, sent_direct;
+};
+
 // ------------------------------------------------------------- radio
 
 struct RadioValues {
@@ -109,16 +156,21 @@ size_t radioChanges(const RadioValues& was, const RadioValues& now, char (*lines
 // at most `decimals` after it, `max_len` characters in all.
 class NumberEntry {
 public:
-  void start(const char* text, uint8_t decimals, uint8_t max_len);
-  bool key(char c);   // a digit or '.'; false if it doesn't fit
+  // signed_: '-' toggles a leading minus (a position).
+  void start(const char* text, uint8_t decimals, uint8_t max_len, bool signed_ = false);
+  bool key(char c);   // a digit, '.' or (signed) '-'; false if it doesn't fit
   void backspace();
   const char* text() const { return _buf; }
   // The value in thousandths ("910.525" -> 910525); false if empty or a bare point.
   bool thousandths(uint32_t* out) const;
+  // The value times 10^decimals, signed ("-84.4", 6 -> -84400000); false if
+  // empty, a bare point or sign, or too big for 32 bits.
+  bool scaled(uint8_t decimals, int32_t* out) const;
 
 private:
   char _buf[16] = {};
   uint8_t _len = 0, _decimals = 3, _max = 10;
+  bool _signed = false;
 };
 
 }  // namespace gui

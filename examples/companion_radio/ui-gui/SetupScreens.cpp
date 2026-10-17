@@ -19,6 +19,12 @@ enum RowKind : uint8_t { kVal, kSel, kNav, kTog, kRo };
 enum RadioRow : uint8_t { rPreset, rFreq, rBw, rSf, rCr, rTx, rRepeat, rPath, rSave };
 enum MsgRow : uint8_t { mOn, mDm, mCh, mDefault, mNode, mAlert, mClear, mJump };
 enum DisplayRow : uint8_t { dTheme, dLook, dClock, dRotation, dBright, dDim, dOff };
+enum NodeRowId : uint8_t { nName, nKey, nGps, nPos, nGpsSecs };
+enum PrivacyRow : uint8_t { pLoc, pAcks, pBase, pLocTel, pEnv };
+enum ContactsRow : uint8_t { cAuto, cChat, cRpt, cRoom, cSens, cHops, cCount };
+// The auto-add bits (MyMesh AUTO_ADD_*), in the rows' order.
+const uint8_t kTypeBit[4] = {0x02, 0x04, 0x08, 0x10};
+const char* const kTypeName[4] = {"Companions", "Repeaters", "Room servers", "Sensors"};
 
 const char* const kModeName[] = {"All messages", "Mentions only", "Off"};   // as the notification sheet
 const char* const kLookName[] = {"Modern", "Classic"};
@@ -38,8 +44,8 @@ const lv_point_t kDown[] = {{0, 0}, {3, 3}, {6, 0}};      // ▾, a picker
 const lv_point_t kRight[] = {{1, 1}, {5, 6}, {1, 11}};    // ›, a page
 
 // The pad's keys (mockup 5), then Cancel and Set.
-const char* const kPadKeys[12] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "⌫"};
-constexpr int kPadCancel = 12, kPadSet = 13;
+const char* const kPadKeys[13] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "⌫", "±"};
+constexpr int kPadCancel = 13, kPadSet = 14;   // ± (12) only on the Position pad
 
 }  // namespace
 
@@ -91,7 +97,13 @@ void GuiShell::setNote(const char* text) {
 }
 
 void GuiShell::updateSetup(uint32_t now_ms) {
-  (void)now_ms;
+  // Radio stats: live, once a second while open (no sheet on it).
+  if (_tab == Tab::Setup && !_locked && _set_page == SetPage::Stats && _ss == SetSheet::None &&
+      _sheet == Sheet::None && int32_t(now_ms - _stats_at) >= 0) {
+    _stats_at = now_ms + 1000;
+    _stats_scroll = _set_body ? lv_obj_get_scroll_y(_set_body) : 0;
+    rebuild();
+  }
   if (!_set_note[0] || lv_tick_elaps(_set_note_at) < 2000) return;
   _set_note[0] = '\0';
   if (_set_save) lv_label_set_text(lv_obj_get_child(lv_obj_get_child(_set_save, 0), 0), "Save · radio restarts");
@@ -101,10 +113,16 @@ void GuiShell::updateSetup(uint32_t now_ms) {
 
 void GuiShell::buildSetup(lv_obj_t* content) {
   SlowStep slow("setup", int(_set_page));
+  _set_body = nullptr;
+  if (_set_page != SetPage::Stats) _stats_scroll = 0;   // a fresh visit starts at the top
   lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
   if (_set_page == SetPage::List) buildSetupList(content);
   else if (_set_page == SetPage::Radio) buildRadioPage(content);
   else if (_set_page == SetPage::Msg) buildMsgPage(content);
+  else if (_set_page == SetPage::Node) buildNodePage(content);
+  else if (_set_page == SetPage::Stats) buildStatsPage(content);
+  else if (_set_page == SetPage::Privacy) buildPrivacyPage(content);
+  else if (_set_page == SetPage::Contacts) buildContactsPage(content);
   else if (_set_page == SetPage::Display) buildDisplayPage(content);
   else if (_set_page == SetPage::Theme) buildThemePage(content);
   else buildSetupLater(content);
@@ -470,7 +488,156 @@ void GuiShell::buildThemePage(lv_obj_t* content) {
   }
 }
 
-// Pages that come later in this Epic (G4, G5).
+// Node (mockup 9): name, key, and where this device is.
+void GuiShell::buildNodePage(lv_obj_t* content) {
+  setHeader(content, "Node");
+  lv_obj_t* body = pageBody(content);
+  const NodeSettings s = _model->nodeSettings();
+  char v[40];
+  setSection(body, "Identity");
+  setRow(body, nName, "Name", "Shown to others in adverts", s.name, kNav, false, false, false);
+  keySummary(_model->selfKey(), v, sizeof v);
+  setRow(body, nKey, "Public key", nullptr, v, kRo, false, false, false);
+  setSection(body, "Location");
+  setRow(body, nGps, "GPS", "Position from the receiver", nullptr, kTog, s.gps_on, false, false);
+  positionText(s.lat_e6, s.lon_e6, v, sizeof v);
+  // With GPS on, the position comes from the fix; set here only with it off.
+  setRow(body, nPos, "Position", s.gps_on ? "From GPS" : "Set here", v, s.gps_on ? kRo : kNav, false, false, false);
+  durationText(s.gps_secs, v, sizeof v);
+  setRow(body, nGpsSecs, "GPS interval", "How often it reads", v, kSel, false, false, !s.gps_on);
+}
+
+// Radio stats (mockup 10): read-only, refreshed every second while open.
+void GuiShell::buildStatsPage(lv_obj_t* content) {
+  setHeader(content, "Radio stats");
+  lv_obj_t* body = pageBody(content);
+  _set_body = body;
+  RadioStats st{};
+  _model->radioStats(&st);
+  char v[32];
+  setSection(body, "Since boot");
+  airtimeText(st.tx_air_secs, st.uptime_secs, v, sizeof v);
+  setRow(body, 0, "Airtime", "Transmit share of uptime", v, kRo, false, false, false);
+  textf(v, sizeof v, "%d dBm", int(st.noise_floor));
+  setRow(body, 1, "Noise floor", nullptr, v, kRo, false, false, false);
+  thousands(st.recv, v, sizeof v);
+  setRow(body, 2, "Received", "Packets", v, kRo, false, false, false);
+  sentText(st.sent_flood, st.sent_direct, v, sizeof v);
+  setRow(body, 3, "Sent", "Flood · direct", v, kRo, false, false, false);
+  lastPacketText(st.snr_x4, st.rssi, v, sizeof v);
+  setRow(body, 4, "Last packet", "SNR · RSSI", v, kRo, false, false, false);
+  setSection(body, "Radio");
+  formatUptime(st.uptime_secs, v, sizeof v);
+  setRow(body, 5, "Uptime", nullptr, v, kRo, false, false, false);
+  // The 1 s refresh keeps where the reader scrolled to.
+  lv_obj_update_layout(body);
+  lv_obj_scroll_to_y(body, _stats_scroll, LV_ANIM_OFF);
+}
+
+// Privacy (mockup 11): location in adverts, extra ACKs, telemetry.
+void GuiShell::buildPrivacyPage(lv_obj_t* content) {
+  setHeader(content, "Privacy");
+  lv_obj_t* body = pageBody(content);
+  const NodeSettings s = _model->nodeSettings();
+  setSection(body, "Adverts");
+  setRow(body, pLoc, "Share location", "In your adverts", s.share_location ? "On" : "Off", kSel, false, false, false);
+  setSection(body, "Messaging");
+  setRow(body, pAcks, "Extra ACKs", "Send each ACK more than once", nullptr, kTog, s.extra_acks, false, false);
+  setSection(body, "Telemetry");
+  setRow(body, pBase, "Base", "Battery, uptime to others", telemetryText(s.tel_base), kSel, false, false, false);
+  setRow(body, pLocTel, "Location", nullptr, telemetryText(s.tel_loc), kSel, false, false, false);
+  setRow(body, pEnv, "Environment", "Sensors", telemetryText(s.tel_env), kSel, false, false, false);
+}
+
+// Contacts (mockup 12, owner pick a): the auto-add rules. All on is
+// "every type"; the type rows then pick which.
+void GuiShell::buildContactsPage(lv_obj_t* content) {
+  setHeader(content, "Contacts");
+  lv_obj_t* body = pageBody(content);
+  const NodeSettings s = _model->nodeSettings();
+  const bool all = !s.manual_add;
+  const bool on = all || (s.auto_bits & 0x1E);
+  char v[24];
+  setSection(body, "Adding");
+  setRow(body, cAuto, "Add automatically", "New nodes heard become contacts", nullptr, kTog, on, false, false);
+  for (uint8_t i = 0; i < 4; i++) {
+    setRow(body, uint8_t(cChat + i), kTypeName[i], nullptr, nullptr, kTog, all || (s.auto_bits & kTypeBit[i]), false,
+           !on);
+  }
+  hopLimitText(s.auto_hops, v, sizeof v);
+  setRow(body, cHops, "Up to", "Hops away", v, kSel, false, false, !on);
+  setSection(body, "Stored");
+  textf(v, sizeof v, "%u", unsigned(s.contacts));
+  char hint[16];
+  textf(hint, sizeof hint, "Of %u", unsigned(s.contacts_max));
+  setRow(body, cCount, "Contacts", hint, v, kRo, false, false, false);
+}
+
+// ------------------------------------------------------------ Node › Name
+
+void GuiShell::openSetText() {
+  _set_text = true;
+  _set_buf.start(31);
+  const NodeSettings s = _model->nodeSettings();
+  _set_buf.insert(s.name, strlen(s.name));
+  _page.select(KeyPage::Letters);
+  _shift = ShiftState();
+  _hot = -1;
+  rebuild();
+}
+
+void GuiShell::closeSetText(bool keep) {
+  if (keep && _set_buf.length()) {   // an empty name isn't kept
+    NodeSettings s = _model->nodeSettings();
+    textf(s.name, sizeof s.name, "%s", _set_buf.text());
+    _model->setNodeSettings(s);
+  }
+  _set_text = false;
+  rebuild();
+}
+
+// As Admin login's sheet: a title, the field, a hint, the keyboard.
+void GuiShell::buildSetText(lv_obj_t* scr) {
+  lv_obj_t* h = box(scr, kW, 28);
+  lv_obj_set_pos(h, 0, kStatusH);
+  lv_obj_set_style_pad_hor(h, 8, 0);
+  lv_obj_set_flex_flow(h, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(h, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(h, 6, 0);
+  lv_obj_t* back = box(h, 10, 20);
+  line(back, chevronPoints(), 3, _t.sig);
+  label(h, FontRole::Body, _t.ink, "Name");
+  lv_obj_add_flag(h, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(
+      h, [](lv_event_t* e) { static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->closeSetText(false); }); },
+      LV_EVENT_CLICKED, this);
+  lv_obj_t* field = box(scr, kW - 16, 34);
+  lv_obj_set_pos(field, 8, kStatusH + 32);
+  lv_obj_set_style_pad_hor(field, 8, 0);
+  lv_obj_set_style_border_width(field, 1, 0);
+  lv_obj_set_style_border_color(field, c(_t.sig), 0);
+  lv_obj_set_style_bg_opa(field, lv_opa_t(_t.wash >> 24), 0);
+  lv_obj_set_style_bg_color(field, c(_t.wash), 0);
+  lv_obj_set_style_radius(field, _look.radius, 0);
+  lv_obj_set_flex_flow(field, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(field, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  _set_text_label = label(field, FontRole::Body, _t.ink);
+  lv_obj_t* caret = box(field, 1, 14);
+  lv_obj_set_style_bg_opa(caret, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(caret, c(_t.sig), 0);
+  // The limit is 31 bytes (accents and emoji take more than one), so it
+  // isn't stated as characters.
+  lv_obj_t* hint = label(scr, FontRole::Label, _t.dim, "Shown to others in adverts");
+  lv_obj_set_pos(hint, 10, kStatusH + 32 + 38);
+  buildKeyboard(scr);
+  refreshSetText();
+}
+
+void GuiShell::refreshSetText() {
+  if (_set_text_label) userText(_set_text_label, _set_buf.text());
+}
+
+// Pages that come later in this Epic (G5).
 void GuiShell::buildSetupLater(lv_obj_t* content) {
   setHeader(content, kPageName[size_t(_set_page) < kPages ? size_t(_set_page) : 0]);
   lv_obj_t* l = label(content, FontRole::BodySmall, _t.dim, "This page comes later in Epic G.");
@@ -496,6 +663,57 @@ void GuiShell::setRowPressed(uint8_t id) {
       case mAlert: openSetSheet(SetSheet::Pick, id); break;
       default: break;
     }
+    return;
+  }
+  if (_set_page == SetPage::Node) {
+    NodeSettings s = _model->nodeSettings();
+    switch (id) {
+      case nName: openSetText(); break;
+      case nGps:
+        s.gps_on = !s.gps_on;
+        _model->setNodeSettings(s);
+        rebuild();
+        break;
+      case nPos:
+        _pad_stage = 0;
+        openSetSheet(SetSheet::Pad, id);
+        break;
+      case nGpsSecs: openSetSheet(SetSheet::Pick, id); break;
+      default: break;
+    }
+    return;
+  }
+  if (_set_page == SetPage::Privacy) {
+    if (id == pAcks) {
+      NodeSettings s = _model->nodeSettings();
+      s.extra_acks = !s.extra_acks;
+      _model->setNodeSettings(s);
+      rebuild();
+    } else {
+      openSetSheet(SetSheet::Pick, id);
+    }
+    return;
+  }
+  if (_set_page == SetPage::Contacts) {
+    NodeSettings s = _model->nodeSettings();
+    const bool all = !s.manual_add;
+    if (id == cAuto) {   // on: every type; off: none
+      const bool on = all || (s.auto_bits & 0x1E);
+      s.manual_add = on;
+      s.auto_bits = uint8_t(s.auto_bits & ~0x1E);
+    } else if (id >= cChat && id <= cSens) {   // one type, from what is in effect now
+      uint8_t bits = all ? uint8_t(s.auto_bits | 0x1E) : s.auto_bits;
+      bits ^= kTypeBit[id - cChat];
+      s.manual_add = true;
+      s.auto_bits = bits;
+    } else if (id == cHops) {
+      openSetSheet(SetSheet::Pick, id);
+      return;
+    } else {
+      return;
+    }
+    _model->setNodeSettings(s);
+    rebuild();
     return;
   }
   if (_set_page == SetPage::Display) {
@@ -554,6 +772,15 @@ void GuiShell::setRowPressed(uint8_t id) {
 // The buttons on Setup: a sheet first, then a page (Back asks before
 // dropping changes). On the list, the shell's own handling (and Back Home).
 bool GuiShell::setAction(Action a) {
+  if (_set_text) {   // Node › Name: a key cursor as in Compose; Back drops the edit
+    switch (a) {
+      case Action::Next: setHotKey(_hot < 0 ? 0 : int((_hot + 1) % _nkeys), false); return true;
+      case Action::Prev: setHotKey(_hot <= 0 ? int(_nkeys) - 1 : _hot - 1, false); return true;
+      case Action::Open: if (_hot >= 0) pressKey(_hot); return true;
+      case Action::Back: closeSetText(false); return true;
+      default: return false;
+    }
+  }
   if (_ss != SetSheet::None && _ss_count <= 0) {   // nothing to move over: only leave
     if (a == Action::Back) closeSetSheet();
     return a == Action::Back || a == Action::Next || a == Action::Prev || a == Action::Open;
@@ -575,9 +802,13 @@ bool GuiShell::setAction(Action a) {
         else return false;
         return true;
       case SetSheet::Pad:
-        if (a == Action::Next) setSheetCursor((_ss_cur + 1) % _ss_count);
-        else if (a == Action::Prev) setSheetCursor((_ss_cur + _ss_count - 1) % _ss_count);
-        else if (a == Action::Open) setSheetPress(_ss_cur);
+        if (a == Action::Next || a == Action::Prev) {   // over the keys there are
+          int i = _ss_cur;
+          const int step = a == Action::Next ? 1 : _ss_count - 1;
+          do i = (i + step) % _ss_count;
+          while (!_ss_item[i] && i != _ss_cur);
+          setSheetCursor(i);
+        } else if (a == Action::Open) setSheetPress(_ss_cur);
         else if (a == Action::Back) closeSetSheet();
         else return false;
         return true;
@@ -792,9 +1023,29 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
       break;
     }
     case SetSheet::Pad: {   // Frequency (mockup 5)
-      freqText(_radio_now.freq_khz, v, sizeof v);
-      _ss_pad.start(v, 3, 8);
-      title("Frequency", nullptr);
+      // Frequency (Radio), or Position (Node): latitude, then longitude,
+      // signed, with ± as a thirteenth key.
+      const bool pos = _set_page == SetPage::Node;
+      const char* unit = "MHz";
+      const char* range = "150.000 – 2500.000 MHz";
+      if (pos) {
+        const NodeSettings ns = _model->nodeSettings();
+        const int32_t e6 = _pad_stage == 0 ? ns.lat_e6 : ns.lon_e6;
+        if (e6 != 0) {
+          const int32_t a = e6 < 0 ? -e6 : e6;
+          textf(v, sizeof v, "%s%ld.%06ld", e6 < 0 ? "-" : "", (long)(a / 1000000), (long)(a % 1000000));
+        } else {
+          v[0] = '\0';
+        }
+        _ss_pad.start(v, 6, 11, true);
+        title(_pad_stage == 0 ? "Latitude" : "Longitude", _pad_stage == 0 ? "Then longitude" : nullptr);
+        unit = "°";
+        range = _pad_stage == 0 ? "-90 – 90°" : "-180 – 180°";
+      } else {
+        freqText(_radio_now.freq_khz, v, sizeof v);
+        _ss_pad.start(v, 3, 8);
+        title("Frequency", nullptr);
+      }
       lv_obj_t* field = box(sheet, kW - 24, 32);
       lv_obj_set_style_pad_hor(field, 8, 0);
       lv_obj_set_style_border_width(field, 1, 0);
@@ -811,8 +1062,8 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
       lv_obj_set_style_bg_color(caret, c(_t.sig), 0);
       lv_obj_t* grow = box(field, 1, 1);
       lv_obj_set_flex_grow(grow, 1);
-      label(field, FontRole::BodySmall, _t.dim, "MHz");
-      _ss_limit = label(sheet, FontRole::Meta, _t.dim, "150.000 – 2500.000 MHz");
+      label(field, FontRole::BodySmall, _t.dim, unit);
+      _ss_limit = label(sheet, FontRole::Meta, _t.dim, range);
       lv_obj_set_width(_ss_limit, LV_PCT(100));
       lv_obj_set_style_text_align(_ss_limit, LV_TEXT_ALIGN_CENTER, 0);
       lv_obj_set_style_pad_ver(_ss_limit, 4, 0);
@@ -821,12 +1072,12 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
       lv_obj_set_flex_flow(pad, LV_FLEX_FLOW_ROW_WRAP);
       lv_obj_set_style_pad_row(pad, 3, 0);
       lv_obj_set_style_pad_column(pad, 3, 0);
-      for (int i = 0; i < 12; i++) {
+      for (int i = 0; i < (pos ? 13 : 12); i++) {
         lv_obj_t* k = box(pad, (kW - 12 - 6) / 3, 28);
         lv_obj_set_style_radius(k, 4, 0);
         lv_obj_set_style_bg_opa(k, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(k, c(_t.bg2), 0);
-        const bool word = i == 9 || i == 11;
+        const bool word = i == 9 || i >= 11;
         lv_obj_center(label(k, word ? FontRole::Body : FontRole::Data, word ? _t.ink2 : _t.ink, kPadKeys[i]));
         lv_obj_add_flag(k, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_user_data(k, reinterpret_cast<void*>(intptr_t(i) + 1));
@@ -843,8 +1094,8 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
       }
       lv_obj_t* br = buttonRow();
       button(br, kPadCancel, "Cancel", _t.ink, _t.line, false);
-      button(br, kPadSet, "Set", _t.sigInk, _t.sig, true);
-      _ss_count = 14;
+      button(br, kPadSet, pos && _pad_stage == 0 ? "Next" : "Set", _t.sigInk, _t.sig, true);
+      _ss_count = kPadSet + 1;   // the frequency pad has no ± (item 12 stays empty)
       setSheetCursor(kPadSet);
       break;
     }
@@ -958,6 +1209,19 @@ void GuiShell::stepApply(int v) {
 
 const char* GuiShell::pickTitle(const char** sub) {
   *sub = nullptr;
+  if (_set_page == SetPage::Node) return "GPS interval";
+  if (_set_page == SetPage::Contacts) {
+    *sub = "Nodes farther away aren't added";
+    return "Up to";
+  }
+  if (_set_page == SetPage::Privacy) {
+    switch (_ss_row) {
+      case pLoc: *sub = "In your adverts"; return "Share location";
+      case pBase: return "Base telemetry";
+      case pLocTel: return "Location telemetry";
+      default: return "Environment telemetry";
+    }
+  }
   if (_set_page == SetPage::Msg) {
     if (_ss_row == mDefault) {
       *sub = "Each channel's own mode can still be changed";
@@ -984,6 +1248,9 @@ const char* GuiShell::pickTitle(const char** sub) {
 }
 
 int GuiShell::pickCount() {
+  if (_set_page == SetPage::Node) return int(kGpsCount);
+  if (_set_page == SetPage::Contacts) return int(kHopCount);
+  if (_set_page == SetPage::Privacy) return _ss_row == pLoc ? 2 : 3;
   if (_set_page == SetPage::Msg) return _ss_row == mDefault ? 3 : 2;
   if (_set_page == SetPage::Display) {
     switch (_ss_row) {
@@ -1004,6 +1271,17 @@ int GuiShell::pickCount() {
 
 int GuiShell::pickCurrent() {
   GuiPrefs& g = _model->guiPrefs();
+  if (_set_page == SetPage::Node || _set_page == SetPage::Contacts || _set_page == SetPage::Privacy) {
+    const NodeSettings s = _model->nodeSettings();
+    if (_set_page == SetPage::Node) return choiceIndex(kGpsChoices, kGpsCount, s.gps_secs);
+    if (_set_page == SetPage::Contacts) return choiceIndex(kHopChoices, kHopCount, s.auto_hops);
+    switch (_ss_row) {
+      case pLoc: return s.share_location ? 1 : 0;
+      case pBase: return s.tel_base;
+      case pLocTel: return s.tel_loc;
+      default: return s.tel_env;
+    }
+  }
   if (_set_page == SetPage::Msg) return _ss_row == mDefault ? g.notify_default : (_model->buzzerOn() ? 0 : 1);
   if (_set_page == SetPage::Display) {
     switch (_ss_row) {
@@ -1023,6 +1301,12 @@ int GuiShell::pickCurrent() {
 }
 
 void GuiShell::pickText(int i, char* out, size_t n) {
+  if (_set_page == SetPage::Node) return durationText(kGpsChoices[i], out, n);
+  if (_set_page == SetPage::Contacts) return hopLimitText(kHopChoices[i], out, n);
+  if (_set_page == SetPage::Privacy) {
+    textf(out, n, "%s", _ss_row == pLoc ? (i ? "On" : "Off") : telemetryText(uint8_t(i)));
+    return;
+  }
   if (_set_page == SetPage::Msg) {
     textf(out, n, "%s", _ss_row == mDefault ? kModeName[i < 3 ? i : 0] : (i == 0 ? "Buzzer" : "Silent"));
     return;
@@ -1047,6 +1331,23 @@ void GuiShell::pickText(int i, char* out, size_t n) {
 // A pick: Radio's go to the draft (Save applies them); the others apply now.
 void GuiShell::pickApply(int i) {
   GuiPrefs& g = _model->guiPrefs();
+  if (_set_page == SetPage::Node || _set_page == SetPage::Contacts || _set_page == SetPage::Privacy) {
+    NodeSettings s = _model->nodeSettings();
+    if (_set_page == SetPage::Node) {
+      s.gps_secs = kGpsChoices[i];
+    } else if (_set_page == SetPage::Contacts) {
+      s.auto_hops = uint8_t(kHopChoices[i]);
+    } else {
+      switch (_ss_row) {
+        case pLoc: s.share_location = i == 1; break;
+        case pBase: s.tel_base = uint8_t(i); break;
+        case pLocTel: s.tel_loc = uint8_t(i); break;
+        default: s.tel_env = uint8_t(i); break;
+      }
+    }
+    _model->setNodeSettings(s);
+    return;
+  }
   if (_set_page == SetPage::Msg) {
     if (_ss_row == mDefault) g.notify_default = uint8_t(i);
     else _model->setBuzzerOn(i == 0);
@@ -1095,6 +1396,7 @@ void GuiShell::setSheetPress(int i) {
         setSheetCommit();
       } else {
         if (i == 11) _ss_pad.backspace();
+        else if (i == 12) _ss_pad.key('-');   // ± toggles the sign
         else _ss_pad.key(kPadKeys[i][0]);
         if (_ss_value) lv_label_set_text(_ss_value, _ss_pad.text());
         if (_ss_limit) lv_obj_set_style_text_color(_ss_limit, c(_t.dim), 0);
@@ -1126,6 +1428,25 @@ void GuiShell::setSheetCommit() {
       stepApply(_ss_val);
       break;
     case SetSheet::Pad: {
+      if (_set_page == SetPage::Node) {   // Position: latitude, then longitude
+        int32_t e6 = 0;
+        const bool ok = _ss_pad.scaled(6, &e6) && (_pad_stage == 0 ? latOk(e6) : lonOk(e6));
+        if (!ok) {
+          if (_ss_limit) lv_obj_set_style_text_color(_ss_limit, c(_t.bad), 0);
+          return;
+        }
+        if (_pad_stage == 0) {
+          _pad_lat = e6;
+          _pad_stage = 1;
+          openSetSheet(SetSheet::Pad, _ss_row);   // the same pad, for longitude
+          return;
+        }
+        NodeSettings s = _model->nodeSettings();
+        s.lat_e6 = _pad_lat;
+        s.lon_e6 = e6;
+        _model->setNodeSettings(s);
+        break;
+      }
       uint32_t khz = 0;
       if (!_ss_pad.thousandths(&khz) || !freqOk(khz)) {   // refused: the range turns red
         if (_ss_limit) lv_obj_set_style_text_color(_ss_limit, c(_t.bad), 0);

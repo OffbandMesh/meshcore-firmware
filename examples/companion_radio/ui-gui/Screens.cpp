@@ -207,6 +207,7 @@ void GuiShell::rebuild() {
   closeSheet();   // it lives on the top layer, outside the rebuilt screen
   closeSetSheet();
   _set_save = nullptr;
+  _set_body = nullptr;
   lv_group_remove_all_objs(_group);
   lv_obj_clean(scr);
   lv_obj_set_style_bg_color(scr, c(_t.bg), 0);
@@ -221,6 +222,7 @@ void GuiShell::rebuild() {
   _kb = _draft_box = _draft_label = _caret = _counter = nullptr;
   _query_label = _match_label = _search_list = _wheel_strip = nullptr;
   _login_field = _login_status = nullptr;
+  _set_text_label = nullptr;
   for (auto& k : _key_obj) k = nullptr;
   if (_key_preview) {
     lv_obj_del(_key_preview);
@@ -235,6 +237,11 @@ void GuiShell::rebuild() {
   if (_composing) {   // Compose takes the whole screen below the status bar
     _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
     buildCompose(scr);
+    return;
+  }
+  if (_set_text && _tab == Tab::Setup) {   // Node › Name, typed
+    _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
+    buildSetText(scr);
     return;
   }
   if (_login && detailTab()) {   // the login sheet, over a node's detail
@@ -1225,7 +1232,8 @@ void GuiShell::buildKeys() {
     }
     char text[8];
     // Search's keyboard ends its entry with Done (ObScreen kbRowsFind).
-    snprintf(text, sizeof text, "%s", send && _login ? "Log in" : send && _searching ? "Done" : k.label);
+    snprintf(text, sizeof text, "%s",
+             send && _login ? "Log in" : send && (_searching || _set_text) ? "Done" : k.label);
     if (caps && text[0] >= 'a' && text[0] <= 'z' && !text[1]) text[0] = char(text[0] - 'a' + 'A');
     lv_obj_t* l = label(o, typesLabel(k.label) ? FontRole::Body : FontRole::BodySmall, ink, text);
     lv_obj_center(l);
@@ -1274,8 +1282,13 @@ void GuiShell::pressKey(int i) {
   const Shift shift_before = _shift.state();
   // Search types into the query: no capitals of its own (matching ignores
   // case), and Done puts the keyboard away, keeping the results.
-  ComposeBuffer& buf = _login ? _login_pw : _searching ? _query : _draft;
-  const bool plain = _login || _searching;   // no capitals of their own
+  ComposeBuffer& buf = _set_text ? _set_buf : _login ? _login_pw : _searching ? _query : _draft;
+  const bool plain = _login || _searching || _set_text;   // no capitals of their own
+
+  if (_set_text && strcmp(l, "Send") == 0) {   // "Done": the name is kept
+    later([](GuiShell* g) { g->closeSetText(true); });
+    return;
+  }
 
   if (_login && strcmp(l, "Send") == 0) {   // "Log in"
     _login_ok_at = 0;
@@ -1324,7 +1337,8 @@ void GuiShell::pressKey(int i) {
     }
   }
   if (_page.page() != page_before || _shift.state() != shift_before) buildKeys();
-  if (_login) refreshLoginField();
+  if (_set_text) refreshSetText();
+  else if (_login) refreshLoginField();
   else if (_searching) querySoon();
   else refreshDraft();
 }

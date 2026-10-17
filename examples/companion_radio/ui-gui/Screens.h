@@ -127,6 +127,11 @@ public:
   virtual void setScreenOffSecs(uint16_t secs) = 0;
   virtual bool buzzerOn() = 0;            // Alert with: Buzzer, or Silent
   virtual void setBuzzerOn(bool on) = 0;
+  // Node, Privacy, Contacts (G4): applied at once, saved on leaving the page.
+  virtual offband::gui::NodeSettings nodeSettings() = 0;
+  virtual void setNodeSettings(const offband::gui::NodeSettings& s) = 0;
+  virtual void radioStats(offband::gui::RadioStats* out) = 0;
+  virtual const uint8_t* selfKey() = 0;   // 32 bytes
   virtual ~ShellModel() {}
 };
 
@@ -220,6 +225,15 @@ private:
   void buildSetupList(lv_obj_t* content);
   void buildRadioPage(lv_obj_t* content);
   void buildMsgPage(lv_obj_t* content);
+  void buildNodePage(lv_obj_t* content);
+  void buildStatsPage(lv_obj_t* content);
+  void buildPrivacyPage(lv_obj_t* content);
+  void buildContactsPage(lv_obj_t* content);
+  // Node › Name: the keyboard under a one-line field (as Admin login).
+  void openSetText();
+  void buildSetText(lv_obj_t* scr);
+  void refreshSetText();
+  void closeSetText(bool keep);
   void buildDisplayPage(lv_obj_t* content);
   void buildThemePage(lv_obj_t* content);
   void buildSetupLater(lv_obj_t* content);
@@ -249,6 +263,14 @@ private:
   void setSheetCommit();
   void setNote(const char* text);
 
+  bool _set_text = false;                   // Node › Name is being typed
+  offband::gui::ComposeBuffer _set_buf;
+  lv_obj_t* _set_text_label = nullptr;
+  uint8_t _pad_stage = 0;                   // Position: 0 latitude, 1 longitude
+  int32_t _pad_lat = 0;
+  uint32_t _stats_at = 0;                   // Radio stats: next refresh
+  lv_coord_t _stats_scroll = 0;             // Radio stats: where the reader is, across refreshes
+  lv_obj_t* _set_body = nullptr;            // the page's scrolling body (Radio stats)
   SetPage _set_page = SetPage::List;
   SetPage _set_focus = SetPage::Node;    // the list row to refocus
   uint8_t _set_focus_row = 0xFF;         // a page's row to refocus

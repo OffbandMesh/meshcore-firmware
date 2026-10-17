@@ -709,6 +709,70 @@ void UITask::prefsChanged() {
   if (_screen == ScreenState::On) static_cast<GuiPanel*>(_display)->setBrightness(litPercent());
 }
 
+NodeSettings UITask::nodeSettings() {
+  NodeSettings s{};
+  if (!_prefs) return s;
+  snprintf(s.name, sizeof s.name, "%s", _prefs->node_name);
+  s.gps_on = _prefs->gps_enabled;
+  s.gps_secs = _prefs->gps_interval;
+  if (_sensors) {   // the fix while there is one, else the position set here
+    s.lat_e6 = int32_t(lround(_sensors->node_lat * 1e6));
+    s.lon_e6 = int32_t(lround(_sensors->node_lon * 1e6));
+  }
+  s.share_location = _prefs->advert_loc_policy != ADVERT_LOC_NONE;
+  s.extra_acks = _prefs->multi_acks != 0;
+  s.tel_base = _prefs->telemetry_mode_base;
+  s.tel_loc = _prefs->telemetry_mode_loc;
+  s.tel_env = _prefs->telemetry_mode_env;
+  s.manual_add = (_prefs->manual_add_contacts & 1) != 0;
+  s.auto_bits = _prefs->autoadd_config;
+  s.auto_hops = _prefs->autoadd_max_hops;
+  s.contacts = uint16_t(the_mesh.getNumContacts());
+  s.contacts_max = MAX_CONTACTS;
+  return s;
+}
+
+// Applied at once, as the phone's commands would set them; written when
+// the page is left (owner pick a).
+void UITask::setNodeSettings(const NodeSettings& s) {
+  if (!_prefs) return;
+  if (s.name[0]) snprintf(_prefs->node_name, sizeof _prefs->node_name, "%s", s.name);
+  const bool gps_changed = (_prefs->gps_enabled != 0) != s.gps_on || _prefs->gps_interval != s.gps_secs;
+  _prefs->gps_enabled = s.gps_on ? 1 : 0;
+  _prefs->gps_interval = s.gps_secs;
+  if (_sensors && !s.gps_on && latOk(s.lat_e6) && lonOk(s.lon_e6)) {   // with GPS on, the fix wins
+    _sensors->node_lat = s.lat_e6 / 1e6;
+    _sensors->node_lon = s.lon_e6 / 1e6;
+  }
+  _prefs->advert_loc_policy = s.share_location ? ADVERT_LOC_SHARE : ADVERT_LOC_NONE;
+  _prefs->multi_acks = s.extra_acks ? 1 : 0;
+  _prefs->telemetry_mode_base = s.tel_base & 0x03;
+  _prefs->telemetry_mode_loc = s.tel_loc & 0x03;
+  _prefs->telemetry_mode_env = s.tel_env & 0x03;
+  _prefs->manual_add_contacts = uint8_t((_prefs->manual_add_contacts & ~1) | (s.manual_add ? 1 : 0));
+  _prefs->autoadd_config = s.auto_bits;
+  _prefs->autoadd_max_hops = s.auto_hops > 64 ? 64 : s.auto_hops;
+#if ENV_INCLUDE_GPS == 1
+  if (gps_changed) the_mesh.applyGpsPrefs();
+#else
+  (void)gps_changed;
+#endif
+  _prefs_dirty = true;
+}
+
+void UITask::radioStats(RadioStats* out) {
+  out->uptime_secs = millis() / 1000;
+  out->tx_air_secs = the_mesh.getTotalAirTime() / 1000;
+  out->noise_floor = int16_t(radio_driver.getNoiseFloor());
+  out->snr_x4 = int(radio_driver.getLastSNR() * 4);
+  out->rssi = int(radio_driver.getLastRSSI());
+  out->recv = radio_driver.getPacketsRecv();
+  out->sent_flood = the_mesh.getNumSentFlood();
+  out->sent_direct = the_mesh.getNumSentDirect();
+}
+
+const uint8_t* UITask::selfKey() { return the_mesh.self_id.pub_key; }
+
 void UITask::savePrefsNow() {
   if (!_prefs_dirty) return;
   _prefs_dirty = false;
@@ -791,6 +855,20 @@ void UITask::setupSummary(SetPage page, char* out, size_t n) {
     }
     case SetPage::Msg:
       snprintf(out, n, "%s", _prefs->gui.notify_on ? "On" : "Off");
+      break;
+    case SetPage::Stats: {
+      RadioStats st{};
+      radioStats(&st);
+      char pct[12];
+      airtimeText(st.tx_air_secs, st.uptime_secs, pct, sizeof pct);
+      snprintf(out, n, "%s air", pct);
+      break;
+    }
+    case SetPage::Privacy:
+      snprintf(out, n, "Location %s", _prefs->advert_loc_policy == ADVERT_LOC_NONE ? "off" : "on");
+      break;
+    case SetPage::Contacts:
+      autoAddText(_prefs->manual_add_contacts & 1, _prefs->autoadd_config, out, n);
       break;
     case SetPage::Display:
       snprintf(out, n, "%s", themeName(_prefs->gui.theme));

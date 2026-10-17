@@ -141,6 +141,79 @@ TEST(Display, TimerChoices) {
   EXPECT_EQ(choiceIndex(kOffChoices, kOffCount, 45), -1);   // not one of them
 }
 
+// ---------------------------------------------- Node, stats, Contacts (G4)
+
+TEST(Stats, RowsReadAsDrawn) {
+  char b[24];
+  airtimeText(43, 3600, b, sizeof b);   // 43 s of 1 h
+  EXPECT_STREQ(b, "1.2%");
+  airtimeText(0, 0, b, sizeof b);
+  EXPECT_STREQ(b, "0.0%");
+  sentText(412, 96, b, sizeof b);
+  EXPECT_STREQ(b, "412 · 96");
+  sentText(2318, 0, b, sizeof b);
+  EXPECT_STREQ(b, "2,318 · 0");
+  lastPacketText(25, -97, b, sizeof b);   // SNR x4
+  EXPECT_STREQ(b, "+6.3 · -97");
+  lastPacketText(-10, -120, b, sizeof b);
+  EXPECT_STREQ(b, "-2.5 · -120");
+}
+
+TEST(Contacts, HopLimitChoices) {
+  // autoadd_max_hops: 0 any, 1 direct only, N up to N-1 hops.
+  ASSERT_EQ(kHopCount, 6u);
+  char b[16];
+  hopLimitText(0, b, sizeof b);
+  EXPECT_STREQ(b, "Any");
+  hopLimitText(1, b, sizeof b);
+  EXPECT_STREQ(b, "Direct");
+  hopLimitText(2, b, sizeof b);
+  EXPECT_STREQ(b, "1 hop");
+  hopLimitText(4, b, sizeof b);
+  EXPECT_STREQ(b, "3 hops");
+  EXPECT_EQ(choiceIndex(kHopChoices, kHopCount, 4), 4);
+}
+
+TEST(Contacts, AutoAddSummary) {
+  // Bits: chat 0x02, repeater 0x04, room 0x08, sensor 0x10.
+  char b[24];
+  autoAddText(false, 0x1E, b, sizeof b);
+  EXPECT_STREQ(b, "Auto-add: all");
+  autoAddText(true, 0x1E, b, sizeof b);
+  EXPECT_STREQ(b, "Auto-add: all");
+  autoAddText(true, 0x06, b, sizeof b);
+  EXPECT_STREQ(b, "Auto-add: some");
+  autoAddText(true, 0x00, b, sizeof b);
+  EXPECT_STREQ(b, "Auto-add: off");
+}
+
+TEST(Node, PositionEntrySigned) {
+  NumberEntry e;
+  e.start("", 6, 12, true);
+  EXPECT_TRUE(e.key('-'));   // the sign toggles, at the front
+  for (char c : {'8', '4', '.', '4', '0', '0', '0', '0', '0'}) EXPECT_TRUE(e.key(c));
+  EXPECT_STREQ(e.text(), "-84.400000");
+  int32_t v = 0;
+  ASSERT_TRUE(e.scaled(6, &v));
+  EXPECT_EQ(v, -84400000);
+  EXPECT_TRUE(e.key('-'));
+  EXPECT_STREQ(e.text(), "84.400000");
+  e.start("", 3, 10);   // unsigned entry refuses a sign
+  EXPECT_FALSE(e.key('-'));
+}
+
+TEST(Node, PositionLimits) {
+  EXPECT_TRUE(latOk(90000000));
+  EXPECT_FALSE(latOk(90000001));
+  EXPECT_TRUE(lonOk(-180000000));
+  EXPECT_FALSE(lonOk(180000001));
+  char b[32];
+  positionText(39500000, -84400000, b, sizeof b);
+  EXPECT_STREQ(b, "39.5000, -84.4000");
+  positionText(0, 0, b, sizeof b);
+  EXPECT_STREQ(b, "Not set");
+}
+
 // --------------------------------------------------------------- presets
 
 TEST(Presets, TableFromTheApp) {

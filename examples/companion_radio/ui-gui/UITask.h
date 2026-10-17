@@ -71,6 +71,10 @@ public:
   offband::gui::GuiPrefs& guiPrefs() override;
   void prefsChanged() override;
   void savePrefsNow() override;
+  offband::gui::NodeSettings nodeSettings() override;
+  void setNodeSettings(const offband::gui::NodeSettings& s) override;
+  void radioStats(offband::gui::RadioStats* out) override;
+  const uint8_t* selfKey() override;
   uint16_t screenOffSecs() override;
   void setScreenOffSecs(uint16_t secs) override;
   bool buzzerOn() override;

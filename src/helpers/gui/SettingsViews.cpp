@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "GuiViews.h"
+#include "NodeViews.h"   // thousands
 
 namespace offband {
 namespace gui {
@@ -142,6 +143,55 @@ const char* telemetryText(uint8_t mode) {
 
 bool freqOk(uint32_t khz) { return khz >= kFreqMinKhz && khz <= kFreqMaxKhz; }
 
+void airtimeText(uint32_t tx_secs, uint32_t up_secs, char* out, size_t n) {
+  const uint32_t permille = up_secs ? uint32_t((uint64_t(tx_secs) * 1000 + up_secs / 2) / up_secs) : 0;
+  textf(out, n, "%lu.%lu%%", (unsigned long)(permille / 10), (unsigned long)(permille % 10));
+}
+
+void sentText(uint32_t flood, uint32_t direct, char* out, size_t n) {
+  char a[16], b[16];
+  thousands(flood, a, sizeof a);
+  thousands(direct, b, sizeof b);
+  textf(out, n, "%s · %s", a, b);
+}
+
+void lastPacketText(int snr_x4, int rssi, char* out, size_t n) {
+  // Tenths, rounded half away from zero, as the Nodes rows show SNR.
+  const int t = snr_x4 >= 0 ? (snr_x4 * 10 + 2) / 4 : -((-snr_x4 * 10 + 2) / 4);
+  const int a = t < 0 ? -t : t;
+  textf(out, n, "%c%d.%d · %d", t < 0 ? '-' : '+', a / 10, a % 10, rssi);
+}
+
+void hopLimitText(uint32_t v, char* out, size_t n) {
+  if (v == 0) textf(out, n, "Any");
+  else if (v == 1) textf(out, n, "Direct");
+  else textf(out, n, "%lu hop%s", (unsigned long)(v - 1), v == 2 ? "" : "s");
+}
+
+void autoAddText(bool manual, uint8_t bits, char* out, size_t n) {
+  const uint8_t types = bits & 0x1E;
+  const char* what = !manual || types == 0x1E ? "all" : types ? "some" : "off";
+  textf(out, n, "Auto-add: %s", what);
+}
+
+bool latOk(int32_t v) { return v >= -90000000 && v <= 90000000; }
+bool lonOk(int32_t v) { return v >= -180000000 && v <= 180000000; }
+
+void positionText(int32_t lat, int32_t lon, char* out, size_t n) {
+  if (lat == 0 && lon == 0) {
+    textf(out, n, "Not set");
+    return;
+  }
+  auto four = [](int32_t e6, char* o, size_t m) {   // degrees to 4 places, rounded
+    const int64_t t = (int64_t(e6 < 0 ? -e6 : e6) + 50) / 100;
+    textf(o, m, "%s%lld.%04lld", e6 < 0 ? "-" : "", (long long)(t / 10000), (long long)(t % 10000));
+  };
+  char a[16], b[16];
+  four(lat, a, sizeof a);
+  four(lon, b, sizeof b);
+  textf(out, n, "%s, %s", a, b);
+}
+
 const char* themeName(uint8_t theme) {
   static const char* const kNames[] = {"Offband", "Steel", "Mono HC", "Accent"};
   return theme < 4 ? kNames[theme] : kNames[0];
@@ -230,15 +280,29 @@ size_t radioChanges(const RadioValues& was, const RadioValues& now, char (*lines
   return k;
 }
 
-void NumberEntry::start(const char* text, uint8_t decimals, uint8_t max_len) {
+void NumberEntry::start(const char* text, uint8_t decimals, uint8_t max_len, bool signed_) {
   _decimals = decimals;
   _max = max_len < sizeof _buf ? max_len : uint8_t(sizeof _buf - 1);
+  _signed = signed_;
   _len = 0;
   _buf[0] = '\0';
   for (const char* p = text ? text : ""; *p; p++) key(*p);
 }
 
 bool NumberEntry::key(char c) {
+  if (c == '-') {   // the sign, at the front, toggled
+    if (!_signed) return false;
+    if (_buf[0] == '-') {
+      memmove(_buf, _buf + 1, _len);
+      _len--;
+      return true;
+    }
+    if (_len >= _max) return false;
+    memmove(_buf + 1, _buf, size_t(_len) + 1);
+    _buf[0] = '-';
+    _len++;
+    return true;
+  }
   if (_len >= _max) return false;
   const char* dot = strchr(_buf, '.');
   if (c == '.') {
@@ -257,7 +321,34 @@ void NumberEntry::backspace() {
   if (_len) _buf[--_len] = '\0';
 }
 
+bool NumberEntry::scaled(uint8_t decimals, int32_t* out) const {
+  const bool neg = _buf[0] == '-';
+  int64_t v = 0;
+  unsigned frac_digits = 0;
+  bool any = false, after = false;
+  for (const char* p = _buf + (neg ? 1 : 0); *p; p++) {
+    if (*p == '.') {
+      after = true;
+      continue;
+    }
+    any = true;
+    if (after && frac_digits >= decimals) continue;   // past the precision kept
+    v = v * 10 + (*p - '0');
+    if (after) frac_digits++;
+    if (v > 0x7FFFFFFFLL) return false;
+  }
+  if (!any) return false;
+  while (frac_digits < decimals) {
+    v *= 10;
+    frac_digits++;
+    if (v > 0x7FFFFFFFLL) return false;
+  }
+  *out = int32_t(neg ? -v : v);
+  return true;
+}
+
 bool NumberEntry::thousandths(uint32_t* out) const {
+  if (_buf[0] == '-') return false;   // frequencies have no sign
   uint32_t whole = 0, frac = 0;
   unsigned frac_digits = 0;
   bool any = false, after = false;
