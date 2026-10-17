@@ -709,6 +709,14 @@ void UITask::prefsChanged() {
   if (_screen == ScreenState::On) static_cast<GuiPanel*>(_display)->setBrightness(litPercent());
 }
 
+void UITask::savePrefsNow() {
+  if (!_prefs_dirty) return;
+  _prefs_dirty = false;
+  const uint32_t t0 = millis();
+  the_mesh.savePrefs();
+  mesh_log_line(MLOG_BOOT, "[gui] prefs saved on leaving Settings: %lums\n", (unsigned long)(millis() - t0));
+}
+
 uint16_t UITask::screenOffSecs() {
   return offband::screenOffSecsShown(_prefs ? _prefs->ui_screen_secs : 0, GUI_OFF_AFTER_MS);
 }

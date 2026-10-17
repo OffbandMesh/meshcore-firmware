@@ -68,6 +68,7 @@ void GuiShell::setBack() {
     openSetSheet(SetSheet::Confirm, 0);
     return;
   }
+  _model->savePrefsNow();   // leaving a page keeps what changed on it
   if (_set_page == SetPage::Theme) {   // back to Display, on its Theme row
     _set_page = SetPage::Display;
     _set_focus_row = 0;

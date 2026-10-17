@@ -70,6 +70,7 @@ public:
   void setupSummary(SetPage page, char* out, size_t n) override;
   offband::gui::GuiPrefs& guiPrefs() override;
   void prefsChanged() override;
+  void savePrefsNow() override;
   uint16_t screenOffSecs() override;
   void setScreenOffSecs(uint16_t secs) override;
   bool buzzerOn() override;

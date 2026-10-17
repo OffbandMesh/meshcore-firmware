@@ -120,6 +120,9 @@ public:
   // them when the device is idle and applies the Display ones at once.
   virtual offband::gui::GuiPrefs& guiPrefs() = 0;
   virtual void prefsChanged() = 0;
+  // Leaving a Settings page: write pending changes now (owner pick a,
+  // 2026-10-17), not only when the device is next idle.
+  virtual void savePrefsNow() = 0;
   virtual uint16_t screenOffSecs() = 0;   // as it takes effect
   virtual void setScreenOffSecs(uint16_t secs) = 0;
   virtual bool buzzerOn() = 0;            // Alert with: Buzzer, or Silent

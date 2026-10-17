@@ -170,6 +170,7 @@ void GuiShell::showTab(Tab tab) {
   if (tab != _tab && tab == Tab::Nodes) resetNodes();
   if (tab != _tab && tab == Tab::Map) resetMap();
   if (tab != _tab && tab == Tab::Setup) resetSetup();
+  if (tab != _tab && _tab == Tab::Setup) _model->savePrefsNow();   // leaving Settings keeps its changes
   _locked = false;
   _tab = tab;
   rebuild();
@@ -381,6 +382,7 @@ void GuiShell::buildTabs(lv_obj_t* parent) {
             if (s->_pending_tab == Tab::Nodes && s->_tab != Tab::Nodes) s->resetNodes();
             if (s->_pending_tab == Tab::Map && s->_tab != Tab::Map) s->resetMap();
             if (s->_pending_tab == Tab::Setup && s->_tab != Tab::Setup) s->resetSetup();
+            if (s->_pending_tab != Tab::Setup && s->_tab == Tab::Setup) s->_model->savePrefsNow();
             s->_locked = false;
             s->_tab = s->_pending_tab;
             s->rebuild();
