@@ -16,6 +16,7 @@
 #include <helpers/gui/GuiViews.h>
 #include <helpers/gui/InputMap.h>
 #include <helpers/gui/NodeViews.h>
+#include <helpers/gui/RadarViews.h>
 
 #include "StatusBar.h"
 
@@ -98,6 +99,8 @@ public:
   virtual void nodeActState(NodeAct a, ActView* out) = 0;
   virtual const char* savedPassword(const uint8_t* key) = 0;          // null if none
   virtual int openDm(const uint8_t* key) = 0;                         // its thread, -1 if none
+  // Map (Epic F): this device's position, false if it has none.
+  virtual bool ownPos(offband::gui::GeoPos* out) = 0;
   virtual ~ShellModel() {}
 };
 
@@ -117,6 +120,7 @@ public:
     if (_locked || _sheet != Sheet::None) return false;
     if (_composing || _login) return true;
     if (_searching && _tab == Tab::Nodes) return _search_wheel || _search_kb;
+    if (_tab == Tab::Map && !_detail) return true;   // USR selects the next node
     return _tab == Tab::Chat && _thread >= 0;
   }
   // Compose for a thread (from a conversation); leaving returns to it.
@@ -163,10 +167,19 @@ private:
   void refreshActs(uint32_t now_ms);   // the action buttons' text and look, from their state
   uint32_t detailSignature();   // what the detail shows; it redraws when this moves
 
+  // Map (Epic F): the radar.
+  void buildRadar(lv_obj_t* content);
+  void radarStep(int dir);       // USR/AUX: the next or previous node, nearest first
+  void radarOpen();              // the selected node's detail
+  uint32_t radarSignature();     // what the radar shows; it redraws when this moves
+  bool detailTab() const { return _tab == Tab::Nodes || _tab == Tab::Map; }
+
 public:
   // Node detail: redraws as its actions progress; the login sheet closes
   // itself after a success.
   void updateDetail(uint32_t now_ms);
+  // Map: redrawn when a position, the selection or the scale changes.
+  void updateRadar(uint32_t now_ms);
 
 private:
   void buildCompose(lv_obj_t* scr);
@@ -188,6 +201,7 @@ private:
   void focusable(lv_obj_t* o);
   void openThread(int thread);   // -1: back to the list
   void resetNodes();             // Nodes opens on its list
+  void resetMap();               // Map opens on the radar, nothing selected
   void later(void (*fn)(GuiShell*));
 
   offband::gui::ThemeTokens _t{};
@@ -297,6 +311,16 @@ private:
   offband::gui::NodeKind _detail_kind = offband::gui::NodeKind::Other;
   uint8_t _row_keys[kNodeRowsShown][32] = {};   // each built row's node, for opening it
   void rowOpens(lv_obj_t* row, size_t i, const uint8_t* key);
+
+  // Map (Epic F): the scale, the selection (by key, so it survives a
+  // redraw), and the pins drawn.
+  static constexpr size_t kRadarPins = 20;   // the nearest shown (owner default, 2026-10-17)
+  size_t _radar_step = offband::gui::kRadarStartStep;
+  uint8_t _radar_sel[32] = {};   // the whole key: two nodes can share a prefix
+  bool _radar_sel_set = false;
+  uint8_t _radar_keys[kRadarPins][32] = {};   // each drawn pin's node, for a tap
+  uint32_t _radar_sig = 0;
+  uint32_t _radar_at = 0;
 
   // Home
   lv_obj_t* _name = nullptr;

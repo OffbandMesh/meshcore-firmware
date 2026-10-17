@@ -222,9 +222,18 @@ void GuiShell::showTab(Tab tab) {
   if (!_locked && tab == _tab) return;
   if (tab != _tab && tab == Tab::Chat) _thread = -1;   // the tab opens on the list
   if (tab != _tab && tab == Tab::Nodes) resetNodes();
+  if (tab != _tab && tab == Tab::Map) resetMap();
   _locked = false;
   _tab = tab;
   rebuild();
+}
+
+// Coming to Map from another tab: the radar at 3 km, nothing selected
+// (mockup 3), and no detail left open from an earlier visit.
+void GuiShell::resetMap() {
+  _detail = _login = _login_sent = false;
+  _radar_step = kRadarStartStep;
+  _radar_sel_set = false;
 }
 
 // Coming to Nodes from another tab: the list, the first batch (a DM from a
@@ -278,7 +287,7 @@ void GuiShell::rebuild() {
     buildCompose(scr);
     return;
   }
-  if (_login && _tab == Tab::Nodes) {   // the login sheet, over a node's detail
+  if (_login && detailTab()) {   // the login sheet, over a node's detail
     _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
     buildLogin(scr);
     return;
@@ -302,8 +311,9 @@ void GuiShell::rebuild() {
   if (_tab == Tab::Home) buildHome(content);
   else if (_tab == Tab::Chat && _thread >= 0) buildConversation(content);
   else if (_tab == Tab::Chat) buildChats(content);
-  else if (_tab == Tab::Nodes && _detail) buildDetail(content);
+  else if (detailTab() && _detail) buildDetail(content);   // from Nodes, or from the radar
   else if (_tab == Tab::Nodes) buildNodes(content);
+  else if (_tab == Tab::Map) buildRadar(content);
   else buildPlaceholder(content);
   buildTabs(scr);
 
@@ -417,6 +427,7 @@ void GuiShell::buildTabs(lv_obj_t* parent) {
           self->later([](GuiShell* s) {
             if (s->_pending_tab == Tab::Chat) s->_thread = -1;   // the tab opens on the list
             if (s->_pending_tab == Tab::Nodes && s->_tab != Tab::Nodes) s->resetNodes();
+            if (s->_pending_tab == Tab::Map && s->_tab != Tab::Map) s->resetMap();
             s->_locked = false;
             s->_tab = s->_pending_tab;
             s->rebuild();
@@ -474,7 +485,7 @@ bool GuiShell::action(Action a) {
     }
   }
   // The login sheet: a key cursor as in Compose; Back closes it.
-  if (_login && _tab == Tab::Nodes) {
+  if (_login && detailTab()) {
     switch (a) {
       case Action::Next:
         setHotKey(_hot < 0 ? 0 : int((_hot + 1) % _nkeys), false);
@@ -492,10 +503,28 @@ bool GuiShell::action(Action a) {
         return false;
     }
   }
-  // Node detail: Back returns to the list; the actions take the focus.
-  if (_detail && _tab == Tab::Nodes && a == Action::Back) {
+  // Node detail: Back returns to the list (or the radar); the actions take
+  // the focus.
+  if (_detail && detailTab() && a == Action::Back) {
     closeDetail();
     return true;
+  }
+  // The radar (mockup 1): USR the next node, nearest first, AUX the
+  // previous; USR hold opens the selected one. Back goes Home as anywhere.
+  if (_tab == Tab::Map && !_detail) {
+    switch (a) {
+      case Action::Next:
+        radarStep(1);
+        return true;
+      case Action::Prev:
+        radarStep(-1);
+        return true;
+      case Action::Open:
+        radarOpen();
+        return true;
+      default:
+        break;
+    }
   }
   // Nodes search. The wheel (mockup 1): USR next, AUX back one, USR hold
   // adds the letter or acts on ⌫ / Done, AUX hold leaves search. The
@@ -721,7 +750,11 @@ lv_obj_t* header(lv_obj_t* parent, const ThemeTokens& t) {
 }
 
 // The empty states (owner-approved mockups 8a, 8b).
-void emptyState(lv_obj_t* parent, const ThemeTokens& t, bool list, const char* title, const char* sub,
+// One bubble (a thread), two (a list), or a ring with you at its centre (the
+// radar, Epic F mockup 4).
+enum class EmptyIcon : uint8_t { Bubble, Bubbles, Radar };
+
+void emptyState(lv_obj_t* parent, const ThemeTokens& t, EmptyIcon icon, const char* title, const char* sub,
                 const char* hint) {
   lv_obj_t* col = box(parent, LV_PCT(100), LV_SIZE_CONTENT);
   lv_obj_center(col);
@@ -730,11 +763,19 @@ void emptyState(lv_obj_t* parent, const ThemeTokens& t, bool list, const char* t
   lv_obj_set_style_pad_row(col, 5, 0);
   lv_obj_set_style_pad_hor(col, 22, 0);
   lv_obj_t* ic = box(col, 34, 34);
-  if (list) {
+  if (icon == EmptyIcon::Bubbles) {
     line(ic, kBubbleA, 8, t.line);
     line(ic, kBubbleB, 8, t.line);
-  } else {
+  } else if (icon == EmptyIcon::Bubble) {
     line(ic, kBubble, 8, t.line);
+  } else {
+    lv_obj_set_style_radius(ic, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(ic, 2, 0);
+    lv_obj_set_style_border_color(ic, c(t.line), 0);
+    lv_obj_t* me = box(ic, 6, 6);
+    lv_obj_center(me);
+    lv_obj_set_style_bg_opa(me, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(me, c(t.line), 0);
   }
   label(col, FontRole::Title, t.ink2, title);
   lv_obj_t* s = label(col, FontRole::BodySmall, t.dim, sub);
@@ -781,7 +822,7 @@ void GuiShell::buildChats(lv_obj_t* content) {
   lv_obj_t* list = box(content, LV_PCT(100), 0);
   lv_obj_set_flex_grow(list, 1);
   if (n == 0) {
-    emptyState(list, _t, true, "No chats yet", "Channels you join and people who message you show up here.",
+    emptyState(list, _t, EmptyIcon::Bubbles, "No chats yet", "Channels you join and people who message you show up here.",
                "+ to start one");
     return;
   }
@@ -907,7 +948,7 @@ void GuiShell::buildConversation(lv_obj_t* content) {
   if (n == 0) {
     char sub[64];
     snprintf(sub, sizeof sub, "Messages with %s are kept on this device.", th->name);
-    emptyState(_msg_list, _t, false, "No messages yet", sub, nullptr);
+    emptyState(_msg_list, _t, EmptyIcon::Bubble, "No messages yet", sub, nullptr);
   }
   const int zone = _model->zone();
   const int16_t max_w = (kW - 16) * 88 / 100;
@@ -1750,7 +1791,7 @@ void GuiShell::buildNodes(lv_obj_t* content) {
       lv_obj_set_style_text_align(f, LV_TEXT_ALIGN_CENTER, 0);
       lv_obj_set_style_pad_top(f, 8, 0);
     } else {
-      emptyState(list, _t, true, emptyTitle(_node_filter),
+      emptyState(list, _t, EmptyIcon::Bubbles, emptyTitle(_node_filter),
                  "Nodes appear as their adverts are heard. Send an advert from Home so others find you.", nullptr);
     }
   } else {
@@ -2188,9 +2229,10 @@ void GuiShell::closeLogin() {
 // pinned at the bottom.
 void GuiShell::buildDetail(lv_obj_t* content) {
   NodeDetail d;
-  if (!_model->nodeDetail(_detail_key, &d)) {   // the contact went: back to the list
+  if (!_model->nodeDetail(_detail_key, &d)) {   // the contact went: back where it was opened from
     _detail = _login = false;
-    buildNodes(content);
+    if (_tab == Tab::Map) buildRadar(content);
+    else buildNodes(content);
     return;
   }
   lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
@@ -2206,7 +2248,7 @@ void GuiShell::buildDetail(lv_obj_t* content) {
   lv_obj_set_style_pad_column(h, 6, 0);
   lv_obj_t* back = box(h, 10, 20);
   line(back, kChevron, 3, _t.sig);
-  label(h, FontRole::BodySmall, _t.ink2, "Nodes");
+  label(h, FontRole::BodySmall, _t.ink2, _tab == Tab::Map ? "Map" : "Nodes");   // where Back goes
   lv_obj_add_flag(h, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_event_cb(
       h, [](lv_event_t* e) { static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->closeDetail(); }); },
@@ -2522,7 +2564,7 @@ void GuiShell::refreshLoginField() {
 
 void GuiShell::updateDetail(uint32_t now_ms) {
   _detail_now = now_ms;
-  if (_locked || _composing || _tab != Tab::Nodes || !_detail || _sheet != Sheet::None) return;
+  if (_locked || _composing || !detailTab() || !_detail || _sheet != Sheet::None) return;
 
   if (_login) {
     if (!_login_status || !_login_sent) return;
@@ -2569,4 +2611,357 @@ void GuiShell::updateDetail(uint32_t now_ms) {
     return;
   }
   refreshActs(now_ms);
+}
+
+// ------------------------------------------------------------------ Map
+
+namespace {
+
+// Every contact row's distance and bearing from this device, for the radar's
+// pick. Off the stack; the GUI is single-threaded.
+constexpr size_t kRadarRowsMax = 512;
+RadarItem s_radar_items[kRadarRowsMax];
+uint16_t s_radar_bearing[kRadarRowsMax];
+
+size_t radarItems(const NodeRow* rows, size_t total, GeoPos own) {
+  const size_t n = total < kRadarRowsMax ? total : kRadarRowsMax;
+  for (size_t i = 0; i < n; i++) {
+    const GeoPos p{rows[i].lat_e6, rows[i].lon_e6};
+    s_radar_items[i].has_pos = hasPos(p);
+    s_radar_items[i].dist_m = s_radar_items[i].has_pos ? distanceM(own, p) : 0;
+    s_radar_bearing[i] = s_radar_items[i].has_pos ? bearingDeg(own, p) : 0;
+  }
+  return n;
+}
+
+// The plot: a square that fits between the header (28) and the sheet (36),
+// 6 px clear all round, as drawn.
+constexpr int16_t kPlot = kContentH - 28 - 36 - 12;
+constexpr int16_t kPlotR = kPlot / 2 - 4;   // the outer ring's radius for pins, inside the stroke
+const lv_point_t kAxisV[] = {{kPlot / 2, 0}, {kPlot / 2, kPlot}};
+const lv_point_t kAxisH[] = {{0, kPlot / 2}, {kPlot, kPlot / 2}};
+const lv_point_t kDiamond[] = {{3, 0}, {6, 3}, {3, 6}, {0, 3}, {3, 0}};
+
+// A pin, 7 px, in the Nodes shapes and tints: companion a dot, repeater a
+// diamond, room a square, sensor a hollow ring.
+lv_obj_t* radarPin(lv_obj_t* plot, NodeKind kind, int16_t cx, int16_t cy, const ThemeTokens& t) {
+  const uint32_t tint = kindTint(t, kind);
+  lv_obj_t* p = box(plot, 7, 7);
+  lv_obj_set_pos(p, cx - 3, cy - 3);
+  switch (kind) {
+    case NodeKind::Repeater: {
+      lv_obj_t* d = line(p, kDiamond, 5, tint);
+      lv_obj_set_style_line_width(d, 2, 0);
+      break;
+    }
+    case NodeKind::Room:
+      lv_obj_set_style_radius(p, 2, 0);
+      lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
+      lv_obj_set_style_bg_color(p, c(tint), 0);
+      break;
+    case NodeKind::Sensor:
+      lv_obj_set_style_radius(p, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_border_width(p, 2, 0);
+      lv_obj_set_style_border_color(p, c(tint), 0);
+      break;
+    default:
+      lv_obj_set_style_radius(p, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
+      lv_obj_set_style_bg_color(p, c(tint), 0);
+      break;
+  }
+  return p;
+}
+
+}  // namespace
+
+// ObScreen radar, with the gap mockups: the header with the scale where
+// Tiles | Radar was, the plot, and the selection sheet (or its hint).
+void GuiShell::buildRadar(lv_obj_t* content) {
+  SlowStep slow("radar", int(_radar_step));
+  lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
+
+  lv_obj_t* h = box(content, LV_PCT(100), 28);
+  lv_obj_set_style_pad_hor(h, 8, 0);
+  lv_obj_set_style_border_side(h, LV_BORDER_SIDE_BOTTOM, 0);
+  lv_obj_set_style_border_width(h, 1, 0);
+  lv_obj_set_style_border_color(h, c(_t.line), 0);
+  lv_obj_set_flex_flow(h, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(h, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  label(h, FontRole::Title, _t.ink, "Map");
+  lv_obj_t* grow = box(h, 1, 1);
+  lv_obj_set_flex_grow(grow, 1);
+  // The scale: a tap goes to the next step (mockup 2).
+  lv_obj_t* sc = box(h, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_set_style_border_width(sc, 1, 0);
+  lv_obj_set_style_border_color(sc, c(_t.line), 0);
+  lv_obj_set_style_radius(sc, _look.radius, 0);
+  lv_obj_set_style_pad_hor(sc, 6, 0);
+  lv_obj_set_style_pad_ver(sc, 2, 0);
+  char buf[48];
+  ringText(_radar_step, buf, sizeof buf);
+  label(sc, FontRole::Meta, _t.ink2, buf);
+  lv_obj_add_flag(sc, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_ext_click_area(sc, 6);
+  lv_obj_add_event_cb(
+      sc,
+      [](lv_event_t* e) {
+        GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+        self->_radar_step = nextStep(self->_radar_step);
+        self->later([](GuiShell* g) { g->rebuild(); });
+      },
+      LV_EVENT_CLICKED, this);
+
+  GeoPos own;
+  if (!_model->ownPos(&own)) {   // mockup 4
+    lv_obj_t* body = box(content, LV_PCT(100), 0);
+    lv_obj_set_flex_grow(body, 1);
+    emptyState(body, _t, EmptyIcon::Radar, "No position yet",
+               "The radar needs this device's position. It appears with a GPS fix, or set one in Setup.", nullptr);
+    _radar_sig = radarSignature();
+    return;
+  }
+  size_t total = 0;
+  const NodeRow* rows = _model->nodeRows(&total);
+  const size_t n = rows ? radarItems(rows, total, own) : 0;
+  const uint32_t outer = radarStepM(_radar_step);
+  uint16_t shown[kRadarPins];
+  size_t beyond = 0, beyond_max = 0;
+  const size_t k = radarPick(s_radar_items, n, outer, shown, kRadarPins, &beyond);
+  uint16_t any[1];
+  const bool in_range = radarPick(s_radar_items, n, radarStepM(kRadarStepCount - 1), any, 1, &beyond_max) > 0;
+
+  // The selection, by key: a row of the full list, drawn or not.
+  int sel_row = -1;
+  for (size_t i = 0; _radar_sel_set && i < n; i++) {
+    if (s_radar_items[i].has_pos && rows[i].key && memcmp(rows[i].key, _radar_sel, 32) == 0) sel_row = int(i);
+  }
+  if (sel_row < 0) _radar_sel_set = false;
+
+  // The plot: three rings, the axes, N, the corner note, the pins, you.
+  lv_obj_t* area = box(content, LV_PCT(100), 0);
+  lv_obj_set_flex_grow(area, 1);
+  lv_obj_t* plot = box(area, kPlot, kPlot);
+  lv_obj_center(plot);
+  for (int f = 3; f >= 1; f--) {
+    const lv_coord_t d = kPlot * f / 3;
+    lv_obj_t* ring = box(plot, d, d);
+    lv_obj_center(ring);
+    lv_obj_set_style_radius(ring, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(ring, 1, 0);
+    lv_obj_set_style_border_color(ring, c(_t.line), 0);
+  }
+  line(plot, kAxisV, 2, _t.line2);
+  line(plot, kAxisH, 2, _t.line2);
+  lv_obj_t* north = label(area, FontRole::Label, _t.sig, "N");
+  lv_obj_align_to(north, plot, LV_ALIGN_OUT_TOP_MID, 0, 4);
+  beyondText(beyond, _radar_step, buf, sizeof buf);
+  if (buf[0]) {
+    lv_obj_t* note = label(area, FontRole::Meta, _t.dim, buf);
+    lv_obj_align(note, LV_ALIGN_BOTTOM_LEFT, 3, -1);
+  }
+
+  LabelBox boxes[kRadarPins];
+  int16_t px[kRadarPins], py[kRadarPins];
+  int sel_shown = -1;
+  const lv_font_t* lf = font(FontRole::Label);
+  for (size_t i = 0; i < k; i++) {
+    const uint16_t r = shown[i];
+    const PlotPt pt = plotPoint(s_radar_items[r].dist_m, s_radar_bearing[r], outer, kPlotR);
+    px[i] = int16_t(kPlot / 2 + pt.x);
+    py[i] = int16_t(kPlot / 2 + pt.y);
+    if (int(r) == sel_row) sel_shown = int(i);
+    lv_point_t sz;
+    lv_txt_get_size(&sz, rows[r].name, lf, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    // Right of the pin, or left of it where the plot's edge would cut it.
+    const int16_t w = int16_t(sz.x + 4), lh = int16_t(sz.y);
+    const int16_t x = px[i] + 6 + w > kPlot ? int16_t(px[i] - 6 - w) : int16_t(px[i] + 6);
+    boxes[i] = LabelBox{x, int16_t(py[i] - lh / 2), w, lh};
+  }
+  bool show[kRadarPins];
+  placeLabels(boxes, k, sel_shown, show);
+  for (size_t i = 0; i < k; i++) {
+    const NodeRow& r = rows[shown[i]];
+    lv_obj_t* pin = radarPin(plot, r.kind, px[i], py[i], _t);
+    if (int(i) == sel_shown) {
+      lv_obj_set_style_outline_width(pin, 2, 0);
+      lv_obj_set_style_outline_pad(pin, 2, 0);
+      lv_obj_set_style_outline_color(pin, c(_t.sig), 0);
+    }
+    // A tap selects (a pin is small: the touch area reaches 8 px round it).
+    if (r.key) memcpy(_radar_keys[i], r.key, 32);
+    lv_obj_set_user_data(pin, reinterpret_cast<void*>(uintptr_t(i + 1)));
+    lv_obj_add_flag(pin, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(pin, 8);
+    lv_obj_add_event_cb(
+        pin,
+        [](lv_event_t* e) {
+          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+          const uintptr_t ud = uintptr_t(lv_obj_get_user_data(lv_event_get_current_target(e)));
+          if (ud == 0 || ud > kRadarPins) return;
+          memcpy(self->_radar_sel, self->_radar_keys[ud - 1], 32);
+          self->_radar_sel_set = true;
+          self->later([](GuiShell* g) { g->rebuild(); });
+        },
+        LV_EVENT_CLICKED, this);
+    if (!show[i]) continue;
+    const bool sel = int(i) == sel_shown;
+    lv_obj_t* l = label(plot, FontRole::Label, sel ? _t.ink : _t.ink2);
+    userText(l, r.name);
+    lv_obj_set_pos(l, boxes[i].x + (sel ? 0 : 2), boxes[i].y);
+    if (sel) {
+      lv_obj_set_style_bg_opa(l, LV_OPA_80, 0);
+      lv_obj_set_style_bg_color(l, c(_t.bg), 0);
+      lv_obj_set_style_pad_hor(l, 2, 0);
+      lv_obj_set_style_radius(l, 3, 0);
+    }
+  }
+  lv_obj_t* me = box(plot, 9, 9);   // you: a signal square on the background
+  lv_obj_set_pos(me, kPlot / 2 - 4, kPlot / 2 - 4);
+  lv_obj_set_style_bg_opa(me, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(me, c(_t.sig), 0);
+  lv_obj_set_style_border_width(me, 2, 0);
+  lv_obj_set_style_border_color(me, c(_t.bg), 0);
+
+  // The sheet (mockup 1), or what selects (mockups 3 and 5).
+  lv_obj_t* sh = box(content, LV_PCT(100), 36);
+  lv_obj_set_style_pad_hor(sh, 8, 0);
+  lv_obj_set_style_bg_opa(sh, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(sh, c(_t.bg2), 0);
+  lv_obj_set_style_border_side(sh, LV_BORDER_SIDE_TOP, 0);
+  lv_obj_set_style_border_width(sh, 1, 0);
+  lv_obj_set_style_border_color(sh, c(_t.line), 0);
+  lv_obj_set_flex_flow(sh, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_column(sh, 6, 0);
+  if (sel_row < 0) {
+    lv_obj_set_flex_align(sh, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    label(sh, FontRole::BodySmall, _t.dim,
+          in_range ? "USR or tap a pin to select" : "No nodes with a position within 30 km");
+    _radar_sig = radarSignature();
+    return;
+  }
+  lv_obj_set_flex_align(sh, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  const NodeRow& r = rows[sel_row];
+  const uint32_t tint = kindTint(_t, r.kind);
+  lv_obj_t* tile = box(sh, 22, 22);
+  lv_obj_set_style_radius(tile, r.kind == NodeKind::Chat && _look.pill_chips ? LV_RADIUS_CIRCLE
+                                : _look.pill_chips                           ? 6
+                                                                             : 0,
+                          0);
+  if (_t.flat) {
+    lv_obj_set_style_border_width(tile, 1, 0);
+    lv_obj_set_style_border_color(tile, c(tint), 0);
+  } else {
+    lv_obj_set_style_bg_opa(tile, 36, 0);
+    lv_obj_set_style_bg_color(tile, c(tint), 0);
+  }
+  lv_obj_center(label(tile, FontRole::BodySmall, tint, kindGlyph(r.kind)));
+  lv_obj_t* tx = box(sh, 0, LV_SIZE_CONTENT);
+  lv_obj_set_flex_grow(tx, 1);
+  lv_obj_set_flex_flow(tx, LV_FLEX_FLOW_COLUMN);
+  lv_obj_t* nm = label(tx, FontRole::Body, _t.ink);
+  userText(nm, r.name);
+  lv_obj_set_width(nm, LV_PCT(100));
+  oneLine(nm, FontRole::Body);
+  sheetSub(r.out_path_len, s_radar_items[sel_row].dist_m, s_radar_bearing[sel_row], buf, sizeof buf);
+  label(tx, FontRole::Meta, _t.dim, buf);
+  lv_obj_t* bars[4];
+  rowBars(sh, bars);
+  colorBars(bars, r.snr_known, r.snr_db, _model->radioSf(), _t);
+  if (r.snr_known) rowSnr(r.snr_db, buf, sizeof buf);
+  else buf[0] = '\0';
+  label(sh, FontRole::Meta, _t.ink2, buf);
+  lv_obj_t* chev = box(sh, 6, 12);
+  static const lv_point_t kNext[] = {{1, 1}, {5, 6}, {1, 11}};
+  line(chev, kNext, 3, _t.dim);
+  lv_obj_add_flag(sh, LV_OBJ_FLAG_CLICKABLE);   // a tap opens the node
+  lv_obj_add_event_cb(
+      sh, [](lv_event_t* e) { static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->radarOpen(); }); },
+      LV_EVENT_CLICKED, this);
+  _radar_sig = radarSignature();
+}
+
+// The next or previous node with a position within 30 km, nearest first,
+// zoomed so it shows (mockup 2).
+void GuiShell::radarStep(int dir) {
+  GeoPos own;
+  if (!_model->ownPos(&own)) return;
+  size_t total = 0;
+  const NodeRow* rows = _model->nodeRows(&total);
+  if (!rows) return;
+  const size_t n = radarItems(rows, total, own);
+  uint16_t order[kRadarPins];
+  size_t beyond = 0;
+  const size_t k = radarPick(s_radar_items, n, radarStepM(kRadarStepCount - 1), order, kRadarPins, &beyond);
+  if (k == 0) return;
+  int cur = -1;
+  for (size_t i = 0; _radar_sel_set && i < k; i++) {
+    if (rows[order[i]].key && memcmp(rows[order[i]].key, _radar_sel, 32) == 0) cur = int(i);
+  }
+  const int next = cur < 0 ? (dir > 0 ? 0 : int(k) - 1) : (cur + dir + int(k)) % int(k);
+  const NodeRow& r = rows[order[next]];
+  if (!r.key) return;
+  memcpy(_radar_sel, r.key, 32);
+  _radar_sel_set = true;
+  const int st = stepFor(s_radar_items[order[next]].dist_m);
+  if (st >= 0) _radar_step = size_t(st);
+  rebuild();
+}
+
+// USR hold or a tap on the sheet: the selected node's detail, over the
+// Map tab, so Back returns here.
+void GuiShell::radarOpen() {
+  if (!_radar_sel_set) return;
+  size_t total = 0;
+  const NodeRow* rows = _model->nodeRows(&total);
+  for (size_t i = 0; rows && i < total; i++) {
+    if (rows[i].key && memcmp(rows[i].key, _radar_sel, 32) == 0) {
+      openDetail(rows[i].key);
+      return;
+    }
+  }
+  _radar_sel_set = false;   // the contact went: the sheet goes back to its hint
+  rebuild();
+}
+
+// What the radar draws: your position to ~10 m, the scale, the selection,
+// and each shown node's place to ~1% of the ring.
+uint32_t GuiShell::radarSignature() {
+  uint32_t h = 2166136261u;
+  auto mix = [&h](uint32_t v) { h = (h ^ v) * 16777619u; };
+  mix(uint32_t(_radar_step));
+  mix(_radar_sel_set ? (uint32_t(_radar_sel[0]) << 8 | _radar_sel[1]) + 1 : 0);
+  GeoPos own;
+  if (!_model->ownPos(&own)) return h ^ 0xDEAD;
+  mix(uint32_t(own.lat_e6 / 100));
+  mix(uint32_t(own.lon_e6 / 100));
+  size_t total = 0;
+  const NodeRow* rows = _model->nodeRows(&total);
+  if (!rows) return h;
+  const size_t n = radarItems(rows, total, own);
+  const uint32_t outer = radarStepM(_radar_step);
+  uint16_t shown[kRadarPins];
+  size_t beyond = 0;
+  const size_t k = radarPick(s_radar_items, n, outer, shown, kRadarPins, &beyond);
+  mix(uint32_t(k));
+  mix(uint32_t(beyond));
+  for (size_t i = 0; i < k; i++) {
+    mix(shown[i]);
+    mix(s_radar_items[shown[i]].dist_m * 100 / outer);
+    mix(s_radar_bearing[shown[i]] / 4);
+  }
+  return h;
+}
+
+// Every 2 s while the radar is up: a redraw only if something it shows moved.
+void GuiShell::updateRadar(uint32_t now_ms) {
+  if (_locked || _composing || _tab != Tab::Map || _detail || _sheet != Sheet::None) return;
+  if (int32_t(now_ms - _radar_at) < 0) return;
+  _radar_at = now_ms + 2000;
+  uint32_t sig;
+  {
+    SlowStep slow("radar check");
+    sig = radarSignature();
+  }
+  if (sig != _radar_sig) rebuild();
 }

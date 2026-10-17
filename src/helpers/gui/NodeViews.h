@@ -37,6 +37,8 @@ struct NodeRow {
   float snr_db;            // last heard
   uint16_t unread;         // unread DMs
   bool snr_known;          // heard since boot, so snr_db is real (bars and SNR show)
+  int32_t lat_e6;          // its advertised position, degrees x 1e6; 0, 0 = none (Map, Epic F)
+  int32_t lon_e6;
 };
 
 bool passesFilter(const NodeRow& r, TypeFilter f, bool unread_only);

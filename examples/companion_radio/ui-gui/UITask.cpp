@@ -645,6 +645,16 @@ void UITask::fillNodeRow(const ContactInfo& ci, NodeRow& r, uint8_t* key_copy, u
                            PUB_KEY_SIZE);
   const Thread* th = store.threadAt(t);
   r.unread = th ? th->unread : 0;
+  r.lat_e6 = ci.gps_lat;
+  r.lon_e6 = ci.gps_lon;
+}
+
+// The GPS fix while there is one, else the position set in Setup: the
+// sensors keep both in node_lat/lon (MyMesh seeds them from the prefs).
+bool UITask::ownPos(GeoPos* out) {
+  if (!_sensors) return false;
+  *out = GeoPos{int32_t(lround(_sensors->node_lat * 1e6)), int32_t(lround(_sensors->node_lon * 1e6))};
+  return hasPos(*out);
 }
 
 // ------------------------------------------------------- Node detail (E4)
@@ -1051,6 +1061,7 @@ void UITask::loop() {
   _shell.updateChats();
   _shell.updateNodes(now);   // once a second while the Nodes tab is up
   _shell.updateDetail(now);  // a node detail's actions as they progress
+  _shell.updateRadar(now);   // the Map, when a position moves
   GUI_SPAN(s_t_update);
   lvglLoop();
   GUI_SPAN(s_t_lvgl);
