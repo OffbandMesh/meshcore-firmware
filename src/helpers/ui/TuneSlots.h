@@ -98,4 +98,72 @@ inline size_t deriveSlotName(const char* rtttl, char* out, size_t out_cap) {
   return n;
 }
 
+// ---- a tune set on one channel (#1522) ------------------------------------------------
+//
+// Stored in a byte of /channels2 that has only ever held zero: the record is fixed-stride
+// (4 unused + 32 name + 32 secret), and those four bytes are memset to zero on write and
+// read-then-discarded on read. Taking one changes no stride, so DataStore::hasChannels's
+// arithmetic stays correct and an older build still reads the file.
+//
+// THE ENCODING IS id + 1, AND THAT IS LOAD-BEARING.
+//
+// Tune id 0 is Silent -- a real choice someone makes. If a stored 0 meant Silent, then
+// every channel in every /channels2 that already exists would go silent the moment a
+// badge took this build, from a field that was only ever padding. With id + 1, an older
+// file's zeros mean "unset", which falls back to the global channel tune and sounds
+// exactly as it does today.
+constexpr uint8_t kChannelTuneUnset = 0;
+
+// The largest tune id that can be stored, since the encoding spends one value on "unset".
+constexpr uint8_t kMaxStorableTuneId = 254;
+static_assert((int)kFirstSlotId + (int)kSlotCount <= (int)kMaxStorableTuneId,
+              "every builtin and slot id must fit the per-channel encoding");
+
+// `id` as stored.
+//
+// Passing kTuneUnset is the CLEAR operation, not an error: it is how the picker's
+// "Default" row gives a channel back to the global tune, and it is the only id outside
+// the storable range, so there is no silent-failure set hiding behind it. Review read
+// this as swallowing bad input; it is the intended way to un-set.
+//
+// The guard is written out rather than left to unsigned wraparound (0xFF + 1 == 0 would
+// give the same answer) so the behaviour does not depend on overflow being convenient.
+inline uint8_t encodeChannelTune(uint8_t id) {
+  if (id > kMaxStorableTuneId) return kChannelTuneUnset;
+  return (uint8_t)(id + 1);
+}
+
+// The stored byte as a tune id, or kTuneUnset when the channel has made no choice.
+inline uint8_t decodeChannelTune(uint8_t stored) {
+  if (stored == kChannelTuneUnset) return kTuneUnset;
+  return (uint8_t)(stored - 1);
+}
+
+// Which tune a channel message plays: the channel's own choice, else what it inherits.
+//
+// `inherited` is what the event path already resolves today -- the global t_ch for
+// ChannelMessage, itself falling back to DEFAULT_TONE_CHANNEL -- so an unset channel
+// behaves exactly as it did before this existed, and the fallback chain has one new link
+// at the front rather than a second mechanism beside it.
+//
+// A stored id this build cannot resolve (a slot from a build with more of them, or a
+// corrupt byte) also falls back. It must NOT resolve to silence: silence is a choice
+// someone makes deliberately, and a channel going quiet because of a downgrade would be
+// indistinguishable from that choice -- whereas inheriting is what every un-configured
+// channel already does, so it is the one outcome that surprises nobody.
+//
+// Review argued the two cases should be distinguishable -- "nothing chosen" versus "chose
+// something this build cannot read" -- and that collapsing them hides a downgrade. Worth
+// saying what is actually at stake: the stored BYTE is preserved either way, so nothing
+// is lost and a re-upgrade restores the choice. Only the interpretation falls back, and
+// no caller today would act differently on the distinction. The property that makes that
+// true is that a save must never normalise an unresolvable id away, which is a done-when
+// on the persistence task rather than something this function can guarantee.
+inline uint8_t resolveChannelTune(uint8_t stored, uint8_t inherited) {
+  const uint8_t id = decodeChannelTune(stored);
+  if (id == kTuneUnset) return inherited;
+  if (!isBuiltinTune(id) && !isSlotId(id)) return inherited;
+  return id;
+}
+
 }  // namespace offband
