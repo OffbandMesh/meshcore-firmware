@@ -36,12 +36,12 @@ struct HomeData {
 
 struct LockItem {
   char label[48];
-  char time[8];
+  char time[12];   // "12:05 PM"
   char text[96];
 };
 
 struct LockData {
-  char clock[8];
+  char clock[12];   // "21:07", or "9:07 PM" (12-hour)
   char sub[64];
   uint8_t count;   // items, 0..2
   LockItem items[2];
@@ -70,7 +70,11 @@ struct ActView {
 
 // Setup's pages, in the drawn list's order (Blocked is Contacts, owner pick
 // a, 2026-10-17).
-enum class SetPage : uint8_t { Node, Radio, Stats, Privacy, Contacts, Msg, Display, Conn, Power, Actions, Debug, About, Count, List = 0xFF };
+enum class SetPage : uint8_t {
+  Node, Radio, Stats, Privacy, Contacts, Msg, Display, Conn, Power, Actions, Debug, About, Count,
+  Theme = 0x40,   // Display › Theme (not in the list)
+  List = 0xFF
+};
 
 // What the screens need from the rest of the firmware. UITask implements it,
 // so the screens stay free of the mesh.
@@ -112,6 +116,14 @@ public:
   virtual int8_t txMax() = 0;
   virtual bool saveRadio(const offband::gui::RadioValues& v) = 0;
   virtual void setupSummary(SetPage page, char* out, size_t n) = 0;
+  // The GUI's own settings, read and written in place; prefsChanged() saves
+  // them when the device is idle and applies the Display ones at once.
+  virtual offband::gui::GuiPrefs& guiPrefs() = 0;
+  virtual void prefsChanged() = 0;
+  virtual uint16_t screenOffSecs() = 0;   // as it takes effect
+  virtual void setScreenOffSecs(uint16_t secs) = 0;
+  virtual bool buzzerOn() = 0;            // Alert with: Buzzer, or Silent
+  virtual void setBuzzerOn(bool on) = 0;
   virtual ~ShellModel() {}
 };
 
@@ -204,7 +216,18 @@ private:
   void buildSetup(lv_obj_t* content);
   void buildSetupList(lv_obj_t* content);
   void buildRadioPage(lv_obj_t* content);
+  void buildMsgPage(lv_obj_t* content);
+  void buildDisplayPage(lv_obj_t* content);
+  void buildThemePage(lv_obj_t* content);
   void buildSetupLater(lv_obj_t* content);
+  // The open picker or stepper, for whichever page and row opened it.
+  int pickCount();
+  int pickCurrent();
+  void pickText(int i, char* out, size_t n);
+  const char* pickTitle(const char** sub);
+  void pickApply(int i);
+  void stepApply(int v);
+  void stepText(int v, char* out, size_t n);
   lv_obj_t* setHeader(lv_obj_t* content, const char* title);
   lv_obj_t* setSection(lv_obj_t* parent, const char* h);
   lv_obj_t* setRow(lv_obj_t* parent, uint8_t id, const char* k, const char* hint, const char* v, uint8_t kind,
@@ -214,6 +237,7 @@ private:
   void setRowPressed(uint8_t id);
   bool setAction(offband::gui::Action a);
   bool fullScreenSetup() const { return _tab == Tab::Setup && _set_page == SetPage::Radio; }
+  void setFlag(uint8_t& flag);   // a toggle row: flip, save, redraw
   void openSetSheet(SetSheet kind, uint8_t row);
   void closeSetSheet();
   void setSheetCursor(int i);
@@ -291,6 +315,7 @@ private:
   lv_obj_t* _msg_list = nullptr;  // the conversation's scrolling column
   lv_obj_t* _focus_row = nullptr; // the list row for _focus_thread, if shown
   lv_coord_t _keep_scroll = -1;   // a conversation's scroll to restore on redraw; -1 = bottom
+  size_t _jump_unread = 0;        // on opening: unread messages to start above (Jump to oldest unread)
 
   // Compose (D5)
   bool _composing = false;
@@ -402,6 +427,7 @@ private:
 
   // Lock
   lv_obj_t* _lock_clock = nullptr;
+  lv_obj_t* _lock_ampm = nullptr;   // 12-hour: the clock font has digits and a colon only
   lv_obj_t* _lock_sub = nullptr;
   lv_obj_t* _lock_list = nullptr;
   uint8_t _lock_count = 0xFF;

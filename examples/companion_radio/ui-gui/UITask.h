@@ -68,6 +68,12 @@ public:
   int8_t txMax() override;
   bool saveRadio(const offband::gui::RadioValues& v) override;
   void setupSummary(SetPage page, char* out, size_t n) override;
+  offband::gui::GuiPrefs& guiPrefs() override;
+  void prefsChanged() override;
+  uint16_t screenOffSecs() override;
+  void setScreenOffSecs(uint16_t secs) override;
+  bool buzzerOn() override;
+  void setBuzzerOn(bool on) override;
 
 private:
   void fillNodeRow(const ContactInfo& ci, offband::gui::NodeRow& r, uint8_t* key_copy, uint32_t now, bool clock_ok);
@@ -80,6 +86,10 @@ private:
   void toggleBuzzer();
   bool buzzerQuiet();
   uint32_t idleMs(uint32_t now) const;
+  uint8_t litPercent() const;   // Display › Brightness
+  uint32_t dimMs() const;       // Display › Dim after; 0 never
+  bool clock12h() const;        // Display › Clock
+  void pollNewNodes(uint32_t now);   // Messages & alerts › New node discovered
   StatusReadings statusReadings(uint32_t now);
   void homeData(HomeData* d);
   void lockData(LockData* d);
@@ -138,4 +148,6 @@ private:
   offband::gui::ScreenState _screen = offband::gui::ScreenState::On;
   offband::gui::ThemeId _theme = offband::gui::kDefaultTheme;
   offband::gui::Look _look = offband::gui::kDefaultLook;
+  uint32_t _accent_shown = offband::gui::kDefaultAccentRgb;
+  int _contacts_seen = -1;   // contacts last counted; -1 before the first count
 };

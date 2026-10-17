@@ -119,6 +119,28 @@ TEST(Limits, OptionLists) {
   EXPECT_EQ(kCrMax, 8);
 }
 
+// ------------------------------------------------------- Display choices
+
+TEST(Display, ThemeNamesAndAccents) {
+  EXPECT_STREQ(themeName(0), "Offband");
+  EXPECT_STREQ(themeName(1), "Steel");
+  EXPECT_STREQ(themeName(2), "Mono HC");
+  EXPECT_STREQ(themeName(3), "Accent");
+  EXPECT_STREQ(themeName(9), "Offband");
+  ASSERT_EQ(kAccentCount, 8u);
+  EXPECT_EQ(kAccents[0], 0xF2C14Eu);   // the default accent first
+  for (size_t i = 0; i < kAccentCount; i++) EXPECT_EQ(kAccents[i] & 0xFF000000u, 0u);
+}
+
+TEST(Display, TimerChoices) {
+  // Dim after: 10 s to 5 min, or never (0). Screen off: 30 s to 30 min.
+  EXPECT_EQ(kDimChoices[kDimCount - 1], 0u);
+  EXPECT_EQ(choiceIndex(kDimChoices, kDimCount, 30), 1);
+  EXPECT_EQ(choiceIndex(kDimChoices, kDimCount, 0), int(kDimCount) - 1);
+  EXPECT_EQ(choiceIndex(kOffChoices, kOffCount, 120), 2);
+  EXPECT_EQ(choiceIndex(kOffChoices, kOffCount, 45), -1);   // not one of them
+}
+
 // --------------------------------------------------------------- presets
 
 TEST(Presets, TableFromTheApp) {

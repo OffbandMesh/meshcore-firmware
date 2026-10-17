@@ -399,6 +399,52 @@ TEST(Prefs, RoundTrip) {
   EXPECT_EQ(b.rotation, 180);
 }
 
+// Messages & alerts and Display (Epic G, G3): defaults as drawn, and kept.
+TEST(Prefs, AlertsAndClockDefaultsAsDrawn) {
+  GuiPrefs p;
+  EXPECT_EQ(p.clock_12h, 0);
+  EXPECT_EQ(p.notify_on, 1);
+  EXPECT_EQ(p.notify_dm, 1);
+  EXPECT_EQ(p.notify_channels, 1);
+  EXPECT_EQ(p.notify_new_node, 0);
+  EXPECT_EQ(p.clear_path_on_fail, 0);
+  EXPECT_EQ(p.jump_to_unread, 0);
+}
+
+TEST(Prefs, AlertsAndClockRoundTrip) {
+  GuiPrefs a;
+  a.clock_12h = 1;
+  a.notify_on = 0;
+  a.notify_dm = 0;
+  a.notify_channels = 0;
+  a.notify_new_node = 1;
+  a.clear_path_on_fail = 1;
+  a.jump_to_unread = 1;
+  RoundTripStream s;
+  ASSERT_TRUE(a.saveSerial(s));
+  s.rewind();
+  GuiPrefs b;
+  ASSERT_TRUE(b.loadSerial(s));
+  EXPECT_EQ(b.clock_12h, 1);
+  EXPECT_EQ(b.notify_on, 0);
+  EXPECT_EQ(b.notify_dm, 0);
+  EXPECT_EQ(b.notify_channels, 0);
+  EXPECT_EQ(b.notify_new_node, 1);
+  EXPECT_EQ(b.clear_path_on_fail, 1);
+  EXPECT_EQ(b.jump_to_unread, 1);
+}
+
+TEST(Prefs, AlertFlagsSanitizeToZeroOrOne) {
+  GuiPrefs p;
+  p.clock_12h = 7;
+  p.notify_on = 2;
+  p.jump_to_unread = 9;
+  p.sanitize();
+  EXPECT_EQ(p.clock_12h, 1);
+  EXPECT_EQ(p.notify_on, 1);
+  EXPECT_EQ(p.jump_to_unread, 1);
+}
+
 TEST(Prefs, MissingKeysKeepDefaults) {
   RoundTripStream s;
   s.setText("{theme:2}");  // ConfigSerializer keys are unquoted

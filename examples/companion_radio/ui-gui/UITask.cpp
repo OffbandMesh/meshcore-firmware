@@ -127,12 +127,24 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   setCpuFrequencyMhz(cpuMhzFor(true));
   mesh_log_line(MLOG_BOOT, "[gui] screen on cpu=%u\n", (unsigned)getCpuFrequencyMhz());
 
-  _shell.begin(themeTokens(_theme, kDefaultAccent), _look, this);
+  // Display › Theme and Look, as stored (Epic G, G3).
+  if (_prefs) {
+    _theme = ThemeId(_prefs->gui.theme);
+    _look = Look(_prefs->gui.look);
+    _accent_shown = _prefs->gui.accent;
+  }
+  _shell.begin(themeTokens(_theme, _prefs ? _prefs->gui.accent : kDefaultAccent), _look, this);
   _next_status = _next_screen = 0;
   loop();   // fill the first frame before the backlight comes up
   lv_refr_now(nullptr);
-  panel->setBrightness(100);
+  panel->setBrightness(litPercent());
 }
+
+// Display › Brightness while lit; GUI_DIM_PERCENT while dim.
+uint8_t UITask::litPercent() const { return _prefs ? _prefs->gui.brightness : 100; }
+
+// Display › Dim after; 0 never dims.
+uint32_t UITask::dimMs() const { return _prefs ? uint32_t(_prefs->gui.dim_secs) * 1000 : GUI_DIM_AFTER_MS; }
 
 // Idle time is the shorter of "since the last button" and LVGL's own "since
 // the last touch", so either kind of input keeps the screen lit.
@@ -251,7 +263,7 @@ void UITask::applyScreen(ScreenState s) {
       panel->turnOn();
       lv_obj_invalidate(lv_scr_act());  // redraw what the sleeping panel lost
     }
-    panel->setBrightness(s == ScreenState::Dim ? GUI_DIM_PERCENT : 100);
+    panel->setBrightness(s == ScreenState::Dim ? GUI_DIM_PERCENT : litPercent());
   }
   const bool lit = s != ScreenState::Off;
   if ((_screen == ScreenState::Off) != !lit) setCpuFrequencyMhz(cpuMhzFor(lit));
@@ -276,7 +288,7 @@ uint8_t UITask::battPercent() const {
 
 StatusReadings UITask::statusReadings(uint32_t now) {
   StatusReadings r{};
-  formatClock(_prefs ? _prefs->ui_tz : 0, rtc_clock.getCurrentTime(), r.clock, sizeof r.clock);
+  formatClock(_prefs ? _prefs->ui_tz : 0, rtc_clock.getCurrentTime(), r.clock, sizeof r.clock, clock12h());
 
   MsgStore& store = the_mesh.guiStore();
   r.unread = store.ready() ? store.totalUnread() : uint32_t(_unread > 0 ? _unread : 0);
@@ -355,7 +367,7 @@ void UITask::lockData(LockData* d) {
   memset(d, 0, sizeof *d);
   const int zone = _prefs ? _prefs->ui_tz : 0;
   const uint32_t now = rtc_clock.getCurrentTime();
-  formatClock(zone, now, d->clock, sizeof d->clock);
+  formatClock(zone, now, d->clock, sizeof d->clock, clock12h());
   char date[24];
   formatDate(zone, now, date, sizeof date);
   if (date[0]) {
@@ -374,7 +386,7 @@ void UITask::lockData(LockData* d) {
     char raw[sizeof d->items[i].text];
     lockLabel(*th, raw, sizeof d->items[i].label);
     displayText(raw, strlen(raw), d->items[i].label, sizeof d->items[i].label);
-    formatClock(zone, msg->time, d->items[i].time, sizeof d->items[i].time);
+    formatClock(zone, msg->time, d->items[i].time, sizeof d->items[i].time, clock12h());
     lockText(*msg, ThreadKind(th->kind), raw, sizeof raw);
     displayText(raw, strlen(raw), d->items[i].text, sizeof d->items[i].text);
   }
@@ -581,11 +593,18 @@ void UITask::pollDmRetries(uint32_t now) {
         mesh_log_line(MLOG_BOOT, "[gui] dm retry %u/%u\n", unsigned(r.attempt()), unsigned(kDmAttempts));
         break;
       }
-      case DmRetry::Step::Fail:
+      case DmRetry::Step::Fail: {
         store.setDelivery(seq, Delivery::Failed);
         the_mesh.guiStoreFlash().ringChanged(millis());
-        mesh_log_line(MLOG_BOOT, "[gui] dm not delivered\n");
+        // Messages & alerts › Clear path on max retry: the next send floods
+        // and finds a route again.
+        const Thread* th = m ? store.threadAt(m->thread) : nullptr;
+        ContactInfo* ci = th ? the_mesh.lookupContactByPubKey(th->key, PUB_KEY_SIZE) : nullptr;
+        const bool clear = ci && _prefs && _prefs->gui.clear_path_on_fail;
+        if (clear) the_mesh.cmdResetPath(*ci);
+        mesh_log_line(MLOG_BOOT, "[gui] dm not delivered%s\n", clear ? "; path cleared" : "");
         break;
+      }
       default:
         break;
     }
@@ -651,6 +670,61 @@ void UITask::fillNodeRow(const ContactInfo& ci, NodeRow& r, uint8_t* key_copy, u
 
 // ------------------------------------------------------------ Setup (G)
 
+bool UITask::clock12h() const { return _prefs && _prefs->gui.clock_12h; }
+
+// A contact added (an advert heard from a node not yet known): one chirp,
+// once a second at most. The first count after boot only sets the baseline.
+void UITask::pollNewNodes(uint32_t now) {
+  static uint32_t s_next = 0;
+  if (int32_t(now - s_next) < 0) return;
+  s_next = now + 1000;
+  const int n = the_mesh.getNumContacts();
+  const bool more = _contacts_seen >= 0 && n > _contacts_seen;
+  _contacts_seen = n;
+  if (!more || !_prefs || !_prefs->gui.notify_on || !_prefs->gui.notify_new_node) return;
+  mesh_log_line(MLOG_BOOT, "[gui] new node: %d contacts\n", n);
+#ifdef PIN_BUZZER
+  _buzzer.play("node:d=16,o=6,b=180:c,g");
+#endif
+}
+
+GuiPrefs& UITask::guiPrefs() {
+  static GuiPrefs s_none;   // before begin(): defaults, never saved
+  return _prefs ? _prefs->gui : s_none;
+}
+
+// A GUI setting changed: saved when idle (#1472), and the Display ones now.
+void UITask::prefsChanged() {
+  if (!_prefs) return;
+  _prefs->gui.sanitize();
+  _prefs_dirty = true;
+  const ThemeId theme = ThemeId(_prefs->gui.theme);
+  const Look look = Look(_prefs->gui.look);
+  if (theme != _theme || look != _look || _prefs->gui.accent != _accent_shown) {
+    _theme = theme;
+    _look = look;
+    _accent_shown = _prefs->gui.accent;
+    _shell.setTheme(themeTokens(_theme, _accent_shown), _look);
+  }
+  if (_screen == ScreenState::On) static_cast<GuiPanel*>(_display)->setBrightness(litPercent());
+}
+
+uint16_t UITask::screenOffSecs() {
+  return offband::screenOffSecsShown(_prefs ? _prefs->ui_screen_secs : 0, GUI_OFF_AFTER_MS);
+}
+
+void UITask::setScreenOffSecs(uint16_t secs) {
+  if (!_prefs) return;
+  _prefs->ui_screen_secs = secs;
+  _prefs_dirty = true;
+}
+
+bool UITask::buzzerOn() { return !buzzerQuiet(); }
+
+void UITask::setBuzzerOn(bool on) {
+  if (buzzerOn() != on) toggleBuzzer();   // saves the pref, and chirps when it comes on
+}
+
 RadioValues UITask::radioValues() {
   RadioValues v{};
   if (!_prefs) return v;
@@ -707,6 +781,12 @@ void UITask::setupSummary(SetPage page, char* out, size_t n) {
       snprintf(out, n, "%u.%02u V · %u%%", unsigned(mv / 1000), unsigned(mv % 1000 / 10), unsigned(battPercent()));
       break;
     }
+    case SetPage::Msg:
+      snprintf(out, n, "%s", _prefs->gui.notify_on ? "On" : "Off");
+      break;
+    case SetPage::Display:
+      snprintf(out, n, "%s", themeName(_prefs->gui.theme));
+      break;
     case SetPage::About:
 #ifdef OFFBAND_VERSION
       snprintf(out, n, "%s", strncmp(OFFBAND_VERSION, "offband-", 8) == 0 ? OFFBAND_VERSION + 8 : OFFBAND_VERSION);
@@ -1008,6 +1088,8 @@ void UITask::notify(UIEventType t) {
 #ifdef PIN_BUZZER
   switch (t) {
     case UIEventType::contactMessage:
+      // Messages & alerts: notifications on, and Direct messages on.
+      if (_prefs && (!_prefs->gui.notify_on || !_prefs->gui.notify_dm)) break;
       _buzzer.play("MsgRcv3:d=4,o=6,b=200:32e,32g,32b,16c7");
       break;
     case UIEventType::channelMessage:
@@ -1059,13 +1141,16 @@ void UITask::loop() {
 
   if (!_pocket_locked) {
     const uint32_t off_ms = offband::screenOffMillis(_prefs ? _prefs->ui_screen_secs : 0, GUI_OFF_AFTER_MS);
-    applyScreen(screenStateFor(idleMs(now), GUI_DIM_AFTER_MS, off_ms, _always_on));
+    applyScreen(screenStateFor(idleMs(now), dimMs(), off_ms, _always_on));
   }
 
   // #1472: internal-flash writes stall both cores, so they wait until nobody
   // is using the device: the screen dim or off, or no input for the dim time
   // (which covers "always on", where the screen never dims).
-  const bool idle = _screen != ScreenState::On || idleMs(now) >= GUI_DIM_AFTER_MS;
+  // The dim time is Display › Dim after; with Never, the compiled 30 s, so a
+  // save can't be held off for as long as the screen stays lit.
+  const uint32_t quiet_ms = dimMs() ? dimMs() : GUI_DIM_AFTER_MS;
+  const bool idle = _screen != ScreenState::On || idleMs(now) >= quiet_ms;
   the_mesh.setGuiScreenIdle(idle);
   if (idle && _prefs_dirty) {   // a channel's notify mode (D6)
     _prefs_dirty = false;
@@ -1080,6 +1165,7 @@ void UITask::loop() {
   // do a node detail's Ping, Trace and login.
   pollDmRetries(now);
   pollNodeActs(now);
+  pollNewNodes(now);
 
   // One battery reading a second into the average (#1246), lit or not.
   if ((int32_t)(now - _next_batt_read) >= 0) {

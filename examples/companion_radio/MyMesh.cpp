@@ -1076,7 +1076,9 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   // #1500: GUI builds also obey the channel's own mode (All / Mentions / Off,
   // set from the conversation's bell); the global scope above stays the
   // master switch.
-  const bool alert = channelMsgShouldNotify(text) &&
+  // Setup › Messages & alerts: notifications and Channel messages are master
+  // switches over every channel's own mode (Epic G).
+  const bool alert = _prefs.gui.notify_on && _prefs.gui.notify_channels && channelMsgShouldNotify(text) &&
                      offband::gui::channelAlerts(_prefs.gui.channelMode(channel_idx), textMentionsSelf(text));
 #else
   const bool alert = channelMsgShouldNotify(text);

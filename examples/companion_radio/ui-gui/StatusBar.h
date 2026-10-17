@@ -15,7 +15,7 @@
 #include <helpers/gui/GuiViews.h>
 
 struct StatusReadings {
-  char clock[8];
+  char clock[12];   // "21:07", or "9:07 PM" (12-hour)
   uint32_t unread;
   bool lora_heard;   // at least one packet in the SNR window
   uint8_t bars;      // 0..4

@@ -52,6 +52,23 @@ struct StepSpec {
 };
 int stepBy(int v, int dir, const StepSpec& s);
 
+// ----------------------------------------------------------- display
+
+// "Offband", "Steel", "Mono HC", "Accent" (a ThemeId); Offband if unknown.
+const char* themeName(uint8_t theme);
+// The Accent theme's eight colors (owner choice 12B: derived from the
+// Offband palette, for review): the default accent, then the type tints,
+// signal, warn and bad.
+constexpr uint32_t kAccents[] = {0xF2C14E, 0x7BEFA8, 0x8CC8FF, 0xC3A5FF, 0xFF9EC4, 0xF2D27A, 0xFFA552, 0xFF7A6E};
+constexpr size_t kAccentCount = sizeof(kAccents) / sizeof(kAccents[0]);
+// Dim after (0: never) and Screen off, in seconds.
+constexpr uint32_t kDimChoices[] = {10, 30, 60, 120, 300, 0};
+constexpr size_t kDimCount = sizeof(kDimChoices) / sizeof(kDimChoices[0]);
+constexpr uint32_t kOffChoices[] = {30, 60, 120, 300, 600, 1800};
+constexpr size_t kOffCount = sizeof(kOffChoices) / sizeof(kOffChoices[0]);
+// Where v is in a choice list; -1 if it isn't one.
+int choiceIndex(const uint32_t* choices, size_t n, uint32_t v);
+
 // ------------------------------------------------------------- radio
 
 struct RadioValues {

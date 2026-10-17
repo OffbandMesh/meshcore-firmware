@@ -17,6 +17,11 @@ namespace {
 
 enum RowKind : uint8_t { kVal, kSel, kNav, kTog, kRo };
 enum RadioRow : uint8_t { rPreset, rFreq, rBw, rSf, rCr, rTx, rRepeat, rPath, rSave };
+enum MsgRow : uint8_t { mOn, mDm, mCh, mDefault, mNode, mAlert, mClear, mJump };
+enum DisplayRow : uint8_t { dTheme, dLook, dClock, dRotation, dBright, dDim, dOff };
+
+const char* const kModeName[] = {"All messages", "Mentions only", "Off"};   // as the notification sheet
+const char* const kLookName[] = {"Modern", "Classic"};
 
 const char* const kPageName[] = {"Node",    "Radio",   "Radio stats", "Privacy", "Contacts", "Messages & alerts",
                                  "Display", "Connectivity", "Power",  "Actions", "Debug",    "About device"};
@@ -48,7 +53,7 @@ void GuiShell::resetSetup() {
 }
 
 void GuiShell::setOpen(SetPage p) {
-  _set_focus = p;
+  if (p < SetPage::Count) _set_focus = p;   // the list row to come back to
   _set_page = p;
   _set_focus_row = 0;
   _set_note[0] = '\0';
@@ -63,7 +68,18 @@ void GuiShell::setBack() {
     openSetSheet(SetSheet::Confirm, 0);
     return;
   }
-  _set_page = SetPage::List;
+  if (_set_page == SetPage::Theme) {   // back to Display, on its Theme row
+    _set_page = SetPage::Display;
+    _set_focus_row = 0;
+  } else {
+    _set_page = SetPage::List;
+  }
+  rebuild();
+}
+
+void GuiShell::setFlag(uint8_t& flag) {
+  flag = flag ? 0 : 1;
+  _model->prefsChanged();
   rebuild();
 }
 
@@ -87,6 +103,9 @@ void GuiShell::buildSetup(lv_obj_t* content) {
   lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
   if (_set_page == SetPage::List) buildSetupList(content);
   else if (_set_page == SetPage::Radio) buildRadioPage(content);
+  else if (_set_page == SetPage::Msg) buildMsgPage(content);
+  else if (_set_page == SetPage::Display) buildDisplayPage(content);
+  else if (_set_page == SetPage::Theme) buildThemePage(content);
   else buildSetupLater(content);
 }
 
@@ -313,7 +332,144 @@ void GuiShell::buildRadioPage(lv_obj_t* content) {
   if (_set_focus_row == rSave) _focus_row = btn;
 }
 
-// Pages that come later in this Epic (G3-G5).
+// A scrolling page body under the header.
+static lv_obj_t* pageBody(lv_obj_t* content) {
+  lv_obj_t* body = box(content, LV_PCT(100), 0);
+  lv_obj_set_flex_grow(body, 1);
+  lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
+  lv_obj_add_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollbar_mode(body, LV_SCROLLBAR_MODE_OFF);
+  return body;
+}
+
+// Messages & alerts (cSetSub, mockup 7): every change applies and is kept
+// at once. With notifications off, the rows under it grey out.
+void GuiShell::buildMsgPage(lv_obj_t* content) {
+  setHeader(content, "Messages & alerts");
+  lv_obj_t* body = pageBody(content);
+  const GuiPrefs& g = _model->guiPrefs();
+  const bool on = g.notify_on;
+  setSection(body, "Notifications");
+  setRow(body, mOn, "Enable notifications", "Messages and adverts", nullptr, kTog, on, false, false);
+  setRow(body, mDm, "Direct messages", "New DM from a contact", nullptr, kTog, g.notify_dm, false, !on);
+  setRow(body, mCh, "Channel messages", "Per channel: All / Mentions / Off", nullptr, kTog, g.notify_channels,
+         false, !on);
+  setRow(body, mDefault, "New channels default", nullptr, kModeName[g.notify_default < 3 ? g.notify_default : 0],
+         kSel, false, false, false);
+  setRow(body, mNode, "New node discovered", "Repeaters or contacts heard", nullptr, kTog, g.notify_new_node, false,
+         !on);
+  setRow(body, mAlert, "Alert with", "Device only", _model->buzzerOn() ? "Buzzer" : "Silent", kSel, false, false,
+         false);
+  setSection(body, "Messaging");
+  setRow(body, mClear, "Clear path on max retry", "After 3 failed sends", nullptr, kTog, g.clear_path_on_fail, false,
+         false);
+  setRow(body, mJump, "Jump to oldest unread", "Open chats at first unread", nullptr, kTog, g.jump_to_unread, false,
+         false);
+}
+
+// Display (cSetSub, mockup 8): Appearance and Screen, applied at once.
+void GuiShell::buildDisplayPage(lv_obj_t* content) {
+  setHeader(content, "Display");
+  lv_obj_t* body = pageBody(content);
+  const GuiPrefs& g = _model->guiPrefs();
+  char v[24];
+  setSection(body, "Appearance");
+  setRow(body, dTheme, "Theme", nullptr, themeName(g.theme), kNav, false, false, false);
+  setRow(body, dLook, "Look", "Rounded or square", kLookName[g.look & 1], kSel, false, false, false);
+  setRow(body, dClock, "Clock", nullptr, g.clock_12h ? "12-hour" : "24-hour", kSel, false, false, false);
+  setRow(body, dRotation, "Rotation", "Comes with landscape (Epic H)", "Portrait 0°", kNav, false, false, true);
+  setSection(body, "Screen");
+  pctText(g.brightness, v, sizeof v);
+  setRow(body, dBright, "Brightness", nullptr, v, kVal, false, false, false);
+  durationText(g.dim_secs, v, sizeof v);
+  setRow(body, dDim, "Dim after", nullptr, v, kSel, false, false, false);
+  durationText(_model->screenOffSecs(), v, sizeof v);
+  setRow(body, dOff, "Screen off", nullptr, v, kSel, false, false, false);
+}
+
+// Display › Theme: the four themes as tiles (as drawn on the wide layout),
+// and with Accent, its eight colors (owner choice 12B). A pick applies at once.
+void GuiShell::buildThemePage(lv_obj_t* content) {
+  setHeader(content, "Theme");
+  lv_obj_t* body = pageBody(content);
+  lv_obj_set_style_pad_all(body, 8, 0);
+  lv_obj_set_style_pad_row(body, 8, 0);
+  const GuiPrefs& g = _model->guiPrefs();
+  lv_obj_t* grid = box(body, LV_PCT(100), LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
+  lv_obj_set_style_pad_row(grid, 8, 0);
+  lv_obj_set_style_pad_column(grid, 8, 0);
+  for (uint8_t i = 0; i < 4; i++) {
+    const ThemeTokens tt = themeTokens(ThemeId(i), g.accent);
+    const bool on = g.theme == i;
+    lv_obj_t* tile = box(grid, (kW - 16 - 8) / 2, 62);
+    lv_obj_set_style_radius(tile, _look.radius, 0);
+    lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(tile, c(tt.bg), 0);
+    lv_obj_set_style_border_width(tile, on ? 2 : 1, 0);
+    lv_obj_set_style_border_color(tile, c(on ? _t.sig : _t.line), 0);
+    lv_obj_set_style_pad_all(tile, 6, 0);
+    lv_obj_set_flex_flow(tile, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(tile, 6, 0);
+    label(tile, FontRole::Body, tt.ink, themeName(i));
+    lv_obj_t* sw = box(tile, LV_PCT(100), 14);
+    lv_obj_set_flex_flow(sw, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(sw, 4, 0);
+    for (uint32_t rgb : {tt.sig, tt.ink2, tt.bg3, tt.warn}) {
+      lv_obj_t* d = box(sw, 14, 14);
+      lv_obj_set_style_radius(d, _look.pill_chips ? LV_RADIUS_CIRCLE : 2, 0);
+      lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
+      lv_obj_set_style_bg_color(d, c(rgb), 0);
+      lv_obj_set_style_border_width(d, 1, 0);
+      lv_obj_set_style_border_color(d, c(tt.line), 0);
+    }
+    focusable(tile);
+    lv_obj_set_user_data(tile, reinterpret_cast<void*>(uintptr_t(i) + 1));
+    lv_obj_add_event_cb(
+        tile,
+        [](lv_event_t* e) {
+          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+          self->_set_focus_row = uint8_t(uintptr_t(lv_obj_get_user_data(lv_event_get_current_target(e))) - 1);
+          self->later([](GuiShell* g) {
+            g->_model->guiPrefs().theme = g->_set_focus_row;
+            g->_model->prefsChanged();   // redraws in the new theme (a same-theme tap changes nothing)
+          });
+        },
+        LV_EVENT_CLICKED, this);
+    if (i == _set_focus_row) _focus_row = tile;
+  }
+  if (g.theme != uint8_t(ThemeId::Accent)) return;
+  setSection(body, "Accent");
+  lv_obj_t* row = box(body, LV_PCT(100), LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW_WRAP);
+  lv_obj_set_style_pad_column(row, 8, 0);
+  lv_obj_set_style_pad_row(row, 8, 0);
+  for (size_t i = 0; i < kAccentCount; i++) {
+    const bool on = (g.accent & 0xFFFFFF) == kAccents[i];
+    lv_obj_t* d = box(row, 40, 40);
+    lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(d, c(kAccents[i]), 0);
+    lv_obj_set_style_border_width(d, on ? 3 : 0, 0);
+    lv_obj_set_style_border_color(d, c(_t.ink), 0);
+    focusable(d);
+    lv_obj_set_user_data(d, reinterpret_cast<void*>(uintptr_t(4 + i) + 1));
+    lv_obj_add_event_cb(
+        d,
+        [](lv_event_t* e) {
+          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+          self->_set_focus_row = uint8_t(uintptr_t(lv_obj_get_user_data(lv_event_get_current_target(e))) - 1);
+          self->later([](GuiShell* g) {
+            g->_model->guiPrefs().accent = kAccents[g->_set_focus_row - 4];
+            g->_model->prefsChanged();   // redraws in the new accent
+          });
+        },
+        LV_EVENT_CLICKED, this);
+    if (4 + i == _set_focus_row) _focus_row = d;
+  }
+}
+
+// Pages that come later in this Epic (G4, G5).
 void GuiShell::buildSetupLater(lv_obj_t* content) {
   setHeader(content, kPageName[size_t(_set_page) < kPages ? size_t(_set_page) : 0]);
   lv_obj_t* l = label(content, FontRole::BodySmall, _t.dim, "This page comes later in Epic G.");
@@ -325,8 +481,35 @@ void GuiShell::buildSetupLater(lv_obj_t* content) {
 // ------------------------------------------------------------- actions
 
 void GuiShell::setRowPressed(uint8_t id) {
-  if (_set_page != SetPage::Radio) return;
   _set_focus_row = id;
+  GuiPrefs& g = _model->guiPrefs();
+  if (_set_page == SetPage::Msg) {
+    switch (id) {
+      case mOn: setFlag(g.notify_on); break;
+      case mDm: setFlag(g.notify_dm); break;
+      case mCh: setFlag(g.notify_channels); break;
+      case mNode: setFlag(g.notify_new_node); break;
+      case mClear: setFlag(g.clear_path_on_fail); break;
+      case mJump: setFlag(g.jump_to_unread); break;
+      case mDefault:
+      case mAlert: openSetSheet(SetSheet::Pick, id); break;
+      default: break;
+    }
+    return;
+  }
+  if (_set_page == SetPage::Display) {
+    switch (id) {
+      case dTheme: setOpen(SetPage::Theme); break;
+      case dBright: openSetSheet(SetSheet::Step, id); break;
+      case dLook:
+      case dClock:
+      case dDim:
+      case dOff: openSetSheet(SetSheet::Pick, id); break;
+      default: break;   // Rotation: Epic H
+    }
+    return;
+  }
+  if (_set_page != SetPage::Radio) return;
   switch (id) {
     case rPreset:
     case rBw:
@@ -498,40 +681,10 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
   char v[48];
   switch (kind) {
     case SetSheet::Pick: {
-      int current = 0;
-      const char* t = "";
-      const char* sub = kMustMatch;
-      switch (row) {
-        case rPreset:
-          t = "Preset";
-          sub = kPresetsUpdated;
-          _ss_count = int(radioPresetCount());
-          current = presetFor(_radio_now, _preset_hint);
-          break;
-        case rBw:
-          t = "Bandwidth";
-          _ss_count = int(kBandwidthCount);
-          for (size_t i = 0; i < kBandwidthCount; i++) {
-            if (kBandwidthsHz[i] == _radio_now.bw_hz) current = int(i);
-          }
-          break;
-        case rSf:
-          t = "Spreading factor";
-          _ss_count = kSfMax - kSfMin + 1;
-          current = _radio_now.sf - kSfMin;
-          break;
-        case rCr:
-          t = "Coding rate";
-          _ss_count = kCrMax - kCrMin + 1;
-          current = _radio_now.cr - kCrMin;
-          break;
-        default:   // rPath
-          t = "Path hash mode";
-          sub = "Needs v1.14+ across the mesh";
-          _ss_count = 3;
-          current = _radio_now.path_hash_mode;
-          break;
-      }
+      const char* sub = nullptr;
+      const char* t = pickTitle(&sub);
+      _ss_count = pickCount();
+      const int current = pickCurrent();
       title(t, sub);
       // Only the rows on screen are built, and refilled as the cursor or a
       // drag moves the window: the 59 presets as objects took internal RAM
@@ -600,10 +753,17 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
       setSheetCursor(current >= 0 ? current : 0);
       break;
     }
-    case SetSheet::Step: {   // TX power (mockup 4)
-      _ss_spec = StepSpec{0, _model->txMax(), 1};
-      _ss_val = _radio_now.tx_dbm;
-      title("TX power", "The radio chip's setting, not the antenna's output");
+    case SetSheet::Step: {   // TX power, Brightness (mockup 4)
+      const bool bright = _set_page == SetPage::Display;
+      if (bright) {
+        _ss_spec = StepSpec{10, 100, 10};
+        _ss_val = _model->guiPrefs().brightness;
+        title("Brightness", nullptr);
+      } else {
+        _ss_spec = StepSpec{0, _model->txMax(), 1};
+        _ss_val = _radio_now.tx_dbm;
+        title("TX power", "The radio chip's setting, not the antenna's output");
+      }
       lv_obj_t* st = box(sheet, LV_PCT(100), LV_SIZE_CONTENT);
       lv_obj_set_style_pad_ver(st, 8, 0);
       lv_obj_set_flex_flow(st, LV_FLEX_FLOW_ROW);
@@ -612,14 +772,15 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
       lv_obj_t* minus = button(st, 0, "−", _t.ink, _t.line, false);
       lv_obj_set_flex_grow(minus, 0);
       lv_obj_set_width(minus, 40);
-      dbmText(_ss_val, v, sizeof v);
+      stepText(_ss_val, v, sizeof v);
       _ss_value = label(st, FontRole::Title, _t.ink, v);
       lv_obj_set_style_min_width(_ss_value, 90, 0);
       lv_obj_set_style_text_align(_ss_value, LV_TEXT_ALIGN_CENTER, 0);
       lv_obj_t* plus = button(st, 1, "+", _t.ink, _t.line, false);
       lv_obj_set_flex_grow(plus, 0);
       lv_obj_set_width(plus, 40);
-      textf(v, sizeof v, "0 – %d dBm · this board's maximum", int(_model->txMax()));
+      if (bright) textf(v, sizeof v, "10 – 100%%");
+      else textf(v, sizeof v, "0 – %d dBm · this board's maximum", int(_model->txMax()));
       _ss_limit = label(sheet, FontRole::Meta, _t.dim, v);
       lv_obj_set_width(_ss_limit, LV_PCT(100));
       lv_obj_set_style_text_align(_ss_limit, LV_TEXT_ALIGN_CENTER, 0);
@@ -757,13 +918,7 @@ void GuiShell::setPickTop(int top) {
     lv_obj_t* o = _ss_item[w];
     if (!o) continue;
     const int opt = top + w;
-    switch (_ss_row) {
-      case rPreset: textf(v, sizeof v, "%s", radioPreset(size_t(opt)).title); break;
-      case rBw: bwText(kBandwidthsHz[opt], v, sizeof v); break;
-      case rSf: sfText(uint8_t(kSfMin + opt), v, sizeof v); break;
-      case rCr: crText(uint8_t(kCrMin + opt), v, sizeof v); break;
-      default: pathHashText(uint8_t(opt), v, sizeof v); break;
-    }
+    pickText(opt, v, sizeof v);
     const bool chosen = opt == _ss_picked, hot = opt == _ss_cur;
     lv_obj_t* rd = lv_obj_get_child(o, 0);
     lv_obj_set_style_border_color(rd, c(chosen ? _t.sig : _t.line), 0);
@@ -780,8 +935,144 @@ void GuiShell::setSheetStep(int dir) {
   if (_ss != SetSheet::Step) return;
   _ss_val = stepBy(_ss_val, dir, _ss_spec);
   char v[16];
-  dbmText(_ss_val, v, sizeof v);
+  stepText(_ss_val, v, sizeof v);
   if (_ss_value) lv_label_set_text(_ss_value, v);
+}
+
+void GuiShell::stepText(int v, char* out, size_t n) {
+  if (_set_page == SetPage::Display) pctText(v, out, n);
+  else dbmText(v, out, n);
+}
+
+void GuiShell::stepApply(int v) {
+  if (_set_page == SetPage::Display) {
+    _model->guiPrefs().brightness = uint8_t(v);
+    _model->prefsChanged();   // lights the screen at the new level now
+  } else {
+    _radio_now.tx_dbm = int8_t(v);
+  }
+}
+
+// ---------------------------------------------------------------- pickers
+
+const char* GuiShell::pickTitle(const char** sub) {
+  *sub = nullptr;
+  if (_set_page == SetPage::Msg) {
+    if (_ss_row == mDefault) {
+      *sub = "Each channel's own mode can still be changed";
+      return "New channels default";
+    }
+    *sub = "This board has no notification LED";
+    return "Alert with";
+  }
+  if (_set_page == SetPage::Display) {
+    switch (_ss_row) {
+      case dLook: return "Look";
+      case dClock: return "Clock";
+      case dDim: return "Dim after";
+      default: return "Screen off";
+    }
+  }
+  switch (_ss_row) {   // Radio
+    case rPreset: *sub = kPresetsUpdated; return "Preset";
+    case rBw: *sub = kMustMatch; return "Bandwidth";
+    case rSf: *sub = kMustMatch; return "Spreading factor";
+    case rCr: *sub = kMustMatch; return "Coding rate";
+    default: *sub = "Needs v1.14+ across the mesh"; return "Path hash mode";
+  }
+}
+
+int GuiShell::pickCount() {
+  if (_set_page == SetPage::Msg) return _ss_row == mDefault ? 3 : 2;
+  if (_set_page == SetPage::Display) {
+    switch (_ss_row) {
+      case dLook:
+      case dClock: return 2;
+      case dDim: return int(kDimCount);
+      default: return int(kOffCount);
+    }
+  }
+  switch (_ss_row) {
+    case rPreset: return int(radioPresetCount());
+    case rBw: return int(kBandwidthCount);
+    case rSf: return kSfMax - kSfMin + 1;
+    case rCr: return kCrMax - kCrMin + 1;
+    default: return 3;
+  }
+}
+
+int GuiShell::pickCurrent() {
+  GuiPrefs& g = _model->guiPrefs();
+  if (_set_page == SetPage::Msg) return _ss_row == mDefault ? g.notify_default : (_model->buzzerOn() ? 0 : 1);
+  if (_set_page == SetPage::Display) {
+    switch (_ss_row) {
+      case dLook: return g.look;
+      case dClock: return g.clock_12h;
+      case dDim: return choiceIndex(kDimChoices, kDimCount, g.dim_secs);
+      default: return choiceIndex(kOffChoices, kOffCount, _model->screenOffSecs());
+    }
+  }
+  switch (_ss_row) {
+    case rPreset: return presetFor(_radio_now, _preset_hint);
+    case rBw: return choiceIndex(kBandwidthsHz, kBandwidthCount, _radio_now.bw_hz);
+    case rSf: return _radio_now.sf - kSfMin;
+    case rCr: return _radio_now.cr - kCrMin;
+    default: return _radio_now.path_hash_mode;
+  }
+}
+
+void GuiShell::pickText(int i, char* out, size_t n) {
+  if (_set_page == SetPage::Msg) {
+    textf(out, n, "%s", _ss_row == mDefault ? kModeName[i < 3 ? i : 0] : (i == 0 ? "Buzzer" : "Silent"));
+    return;
+  }
+  if (_set_page == SetPage::Display) {
+    switch (_ss_row) {
+      case dLook: textf(out, n, "%s", kLookName[i & 1]); return;
+      case dClock: textf(out, n, "%s", i ? "12-hour" : "24-hour"); return;
+      case dDim: durationText(kDimChoices[i], out, n); return;
+      default: durationText(kOffChoices[i], out, n); return;
+    }
+  }
+  switch (_ss_row) {
+    case rPreset: textf(out, n, "%s", radioPreset(size_t(i)).title); return;
+    case rBw: bwText(kBandwidthsHz[i], out, n); return;
+    case rSf: sfText(uint8_t(kSfMin + i), out, n); return;
+    case rCr: crText(uint8_t(kCrMin + i), out, n); return;
+    default: pathHashText(uint8_t(i), out, n); return;
+  }
+}
+
+// A pick: Radio's go to the draft (Save applies them); the others apply now.
+void GuiShell::pickApply(int i) {
+  GuiPrefs& g = _model->guiPrefs();
+  if (_set_page == SetPage::Msg) {
+    if (_ss_row == mDefault) g.notify_default = uint8_t(i);
+    else _model->setBuzzerOn(i == 0);
+    _model->prefsChanged();
+    return;
+  }
+  if (_set_page == SetPage::Display) {
+    switch (_ss_row) {
+      case dLook: g.look = uint8_t(i); break;
+      case dClock: g.clock_12h = uint8_t(i); break;
+      case dDim: g.dim_secs = uint16_t(kDimChoices[i]); break;
+      default: _model->setScreenOffSecs(uint16_t(kOffChoices[i])); break;
+    }
+    _model->prefsChanged();
+    return;
+  }
+  RadioValues& n = _radio_now;
+  switch (_ss_row) {
+    case rPreset:
+      n = applyPreset(n, size_t(i), _model->txMax());
+      _preset_hint = i;
+      break;
+    case rBw: n.bw_hz = kBandwidthsHz[i]; break;
+    case rSf: n.sf = uint8_t(kSfMin + i); break;
+    case rCr: n.cr = uint8_t(kCrMin + i); break;
+    default: n.path_hash_mode = uint8_t(i); break;
+  }
 }
 
 void GuiShell::setSheetPress(int i) {
@@ -828,19 +1119,10 @@ void GuiShell::setSheetCommit() {
   RadioValues& n = _radio_now;
   switch (_ss) {
     case SetSheet::Pick:
-      switch (_ss_row) {
-        case rPreset:
-          n = applyPreset(n, size_t(_ss_cur), _model->txMax());
-          _preset_hint = _ss_cur;
-          break;
-        case rBw: n.bw_hz = kBandwidthsHz[_ss_cur]; break;
-        case rSf: n.sf = uint8_t(kSfMin + _ss_cur); break;
-        case rCr: n.cr = uint8_t(kCrMin + _ss_cur); break;
-        default: n.path_hash_mode = uint8_t(_ss_cur); break;
-      }
+      pickApply(_ss_cur);
       break;
     case SetSheet::Step:
-      n.tx_dbm = int8_t(_ss_val);
+      stepApply(_ss_val);
       break;
     case SetSheet::Pad: {
       uint32_t khz = 0;

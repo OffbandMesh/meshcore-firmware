@@ -142,6 +142,18 @@ const char* telemetryText(uint8_t mode) {
 
 bool freqOk(uint32_t khz) { return khz >= kFreqMinKhz && khz <= kFreqMaxKhz; }
 
+const char* themeName(uint8_t theme) {
+  static const char* const kNames[] = {"Offband", "Steel", "Mono HC", "Accent"};
+  return theme < 4 ? kNames[theme] : kNames[0];
+}
+
+int choiceIndex(const uint32_t* choices, size_t n, uint32_t v) {
+  for (size_t i = 0; i < n; i++) {
+    if (choices[i] == v) return int(i);
+  }
+  return -1;
+}
+
 int stepBy(int v, int dir, const StepSpec& s) {
   if (s.step <= 0) return v;
   const int off = v - s.min;

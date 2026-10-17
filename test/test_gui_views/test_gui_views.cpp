@@ -241,6 +241,16 @@ TEST(Lock, Clock) {
   EXPECT_STREQ(b, "--:--");
 }
 
+TEST(Lock, Clock12Hour) {   // Display › Clock (Epic G, G3)
+  char b[16];
+  formatClock(offband::tz::kUtc, kNow, b, sizeof b, true);
+  EXPECT_STREQ(b, "9:07 PM");
+  formatClock(offband::tz::kEastern, kNow, b, sizeof b, true);
+  EXPECT_STREQ(b, "5:07 PM");
+  formatClock(offband::tz::kUtc, 1000, b, sizeof b, true);
+  EXPECT_STREQ(b, "--:--");
+}
+
 TEST(Lock, Date) {
   char b[24];
   formatDate(offband::tz::kUtc, kNow, b, sizeof b);

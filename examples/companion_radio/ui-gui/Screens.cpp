@@ -140,8 +140,12 @@ void GuiShell::later(void (*fn)(GuiShell*)) {
 
 void GuiShell::openThread(int thread) {
   _thread = thread;
+  _jump_unread = 0;
   if (thread >= 0) {
     _focus_thread = thread;
+    // Before threadOpened marks it read: how many to jump back over.
+    const Thread* th = _model->store().threadAt(thread);
+    if (th && _model->guiPrefs().jump_to_unread) _jump_unread = th->unread;
     _model->threadOpened(thread);
   }
   _shown_rev = _model->store().revision();
@@ -207,7 +211,7 @@ void GuiShell::rebuild() {
   lv_obj_set_style_bg_color(scr, c(_t.bg), 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
   _name = _key = _advert = _advert_label = nullptr;
-  _lock_clock = _lock_sub = _lock_list = nullptr;
+  _lock_clock = _lock_sub = _lock_list = _lock_ampm = nullptr;
   for (auto& v : _value) v = nullptr;
   for (auto& s : _sub) s = nullptr;
   _lock_count = 0xFF;
@@ -393,7 +397,13 @@ void GuiShell::buildLock(lv_obj_t* scr) {
   lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_row(col, 4, 0);
-  _lock_clock = label(col, FontRole::Clock, _t.ink, "--:--");
+  lv_obj_t* clock_row = box(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(clock_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(clock_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+  lv_obj_set_style_pad_column(clock_row, 4, 0);
+  _lock_clock = label(clock_row, FontRole::Clock, _t.ink, "--:--");
+  _lock_ampm = label(clock_row, FontRole::Title, _t.ink2, "");
+  lv_obj_set_style_pad_bottom(_lock_ampm, 8, 0);
   _lock_sub = label(col, FontRole::BodySmall, _t.ink2);
   _lock_list = box(col, LV_PCT(100), LV_SIZE_CONTENT);
   lv_obj_set_style_pad_top(_lock_list, 10, 0);
@@ -628,7 +638,14 @@ void GuiShell::setAdvertState(AdvertButton::State s) {
 
 void GuiShell::updateLock(const LockData& d) {
   if (!_locked || !_lock_clock) return;
-  if (strcmp(lv_label_get_text(_lock_clock), d.clock) != 0) lv_label_set_text(_lock_clock, d.clock);
+  // "9:07 PM": the digits in the clock font, "PM" beside them.
+  char digits[12];
+  textf(digits, sizeof digits, "%s", d.clock);
+  char* space = strchr(digits, ' ');
+  const char* ampm = space ? space + 1 : "";
+  if (space) *space = '\0';
+  if (strcmp(lv_label_get_text(_lock_clock), digits) != 0) lv_label_set_text(_lock_clock, digits);
+  if (_lock_ampm && strcmp(lv_label_get_text(_lock_ampm), ampm) != 0) lv_label_set_text(_lock_ampm, ampm);
   if (strcmp(lv_label_get_text(_lock_sub), d.sub) != 0) lv_label_set_text(_lock_sub, d.sub);
 
   // The list rebuilds only when what it shows changes.
@@ -903,6 +920,9 @@ void GuiShell::buildConversation(lv_obj_t* content) {
   }
   const int zone = _model->zone();
   const int16_t max_w = (kW - 16) * 88 / 100;
+  // Messages & alerts › Jump to oldest unread: where the reading starts.
+  const int first_unread = _jump_unread ? (_jump_unread >= n ? 0 : int(n - _jump_unread)) : -1;
+  lv_obj_t* jump_to = nullptr;
   for (size_t i = 0; i < n; i++) {
     const MsgRecord* m = s.msg(seqs[i]);
     if (!m) continue;
@@ -913,8 +933,9 @@ void GuiShell::buildConversation(lv_obj_t* content) {
                           own ? LV_FLEX_ALIGN_END : LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_row(wrap, 2, 0);
 
-    char when[8], meta[48], line_text[96];
-    formatClock(zone, m->time, when, sizeof when);
+    char when[12], meta[48], line_text[96];
+    formatClock(zone, m->time, when, sizeof when, _model->guiPrefs().clock_12h);
+    if (int(i) == first_unread) jump_to = wrap;
     if (own) deliveryMeta(*m, channel, _model->dmAttempt(seqs[i]), kDmAttempts, meta, sizeof meta);
     else incomingMeta(m->hops, meta, sizeof meta);
     const char* from = own ? "You" : (channel || ThreadKind(th->kind) == ThreadKind::Room) ? m->sender : th->name;
@@ -983,8 +1004,10 @@ void GuiShell::buildConversation(lv_obj_t* content) {
   // The newest message shows, unless a redraw found the reader scrolled up
   // into history (Epic D gate): then they stay where they were.
   if (_keep_scroll >= 0) lv_obj_scroll_to_y(_msg_list, _keep_scroll, LV_ANIM_OFF);
+  else if (jump_to) lv_obj_scroll_to_y(_msg_list, lv_obj_get_y(jump_to) - 6, LV_ANIM_OFF);
   else lv_obj_scroll_to_y(_msg_list, LV_COORD_MAX, LV_ANIM_OFF);
   _keep_scroll = -1;
+  _jump_unread = 0;   // only on opening
 
   // The compose bar (Compose itself is D5).
   lv_obj_t* bar = box(content, LV_PCT(100), 42);
