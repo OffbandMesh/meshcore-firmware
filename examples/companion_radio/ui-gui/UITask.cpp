@@ -599,11 +599,18 @@ void UITask::pollDmRetries(uint32_t now) {
 // from the GUI's per-contact stats, which start empty at boot.
 const NodeRow* UITask::nodeRows(size_t* total) {
   *total = 0;
-  if (!_node_rows) {
-    _node_rows = static_cast<NodeRow*>(heap_caps_malloc(sizeof(NodeRow) * MAX_CONTACTS, MALLOC_CAP_SPIRAM));
-    _node_keys = static_cast<uint8_t(*)[32]>(heap_caps_malloc(32 * MAX_CONTACTS, MALLOC_CAP_SPIRAM));
+  if (!_node_rows || !_node_keys) {
+    // Both or neither: a half-made pair is freed so the next call tries again.
+    if (!_node_rows) _node_rows = static_cast<NodeRow*>(heap_caps_malloc(sizeof(NodeRow) * MAX_CONTACTS, MALLOC_CAP_SPIRAM));
+    if (!_node_keys) _node_keys = static_cast<uint8_t(*)[32]>(heap_caps_malloc(32 * MAX_CONTACTS, MALLOC_CAP_SPIRAM));
+    if (!_node_rows || !_node_keys) {
+      heap_caps_free(_node_rows);
+      heap_caps_free(_node_keys);
+      _node_rows = nullptr;
+      _node_keys = nullptr;
+      return nullptr;
+    }
   }
-  if (!_node_rows || !_node_keys) return nullptr;
   const uint32_t now = rtc_clock.getCurrentTime();
   const bool clock_ok = offband::tz::clockSet(now);
   ContactInfo ci;
