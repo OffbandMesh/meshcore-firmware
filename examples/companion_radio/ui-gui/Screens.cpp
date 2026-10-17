@@ -221,6 +221,7 @@ void GuiShell::showLock() {
 void GuiShell::showTab(Tab tab) {
   if (!_locked && tab == _tab) return;
   if (tab != _tab && tab == Tab::Chat) _thread = -1;   // the tab opens on the list
+  if (tab != _tab && tab == Tab::Nodes) _node_cap = kNodeBatch;
   _locked = false;
   _tab = tab;
   rebuild();
@@ -276,6 +277,8 @@ void GuiShell::rebuild() {
   _msg_list = nullptr;
   _focus_row = nullptr;
   _node_count = nullptr;
+  _node_list = _node_clear = nullptr;
+  for (auto& t : _tab_obj) t = nullptr;
   for (auto& r : _node_row_obj) r = nullptr;
   _node_shown = 0;
   if (_tab == Tab::Chat) _shown_rev = _model->store().revision();
@@ -390,6 +393,7 @@ void GuiShell::buildTabs(lv_obj_t* parent) {
     tabIcon(t, Tab(i), rgb);
     label(t, FontRole::Label, rgb, kTabName[i]);
     focusable(t);
+    _tab_obj[i] = t;
     lv_obj_add_event_cb(
         t,
         [](lv_event_t* e) {
@@ -532,6 +536,10 @@ bool GuiShell::action(Action a) {
   }
   switch (a) {
     case Action::Next:
+      // Stepping past the last built node row builds the next batch first.
+      if (_tab == Tab::Nodes && _node_shown && lv_group_get_focused(_group) == _node_row_obj[_node_shown - 1]) {
+        appendNodeRows();
+      }
       lv_group_focus_next(_group);
       if (lv_obj_t* f = lv_group_get_focused(_group)) lv_obj_scroll_to_view(f, LV_ANIM_ON);
       return true;
@@ -1571,7 +1579,8 @@ void GuiShell::buildNodes(lv_obj_t* content) {
   size_t total = 0;
   const NodeRow* rows = _model->nodeRows(&total);
   const bool filtered = _node_filter != TypeFilter::All || _node_unread;
-  _node_shown = nodeOrder(rows, total, _node_filter, _node_unread, "", _node_order, kNodeRowsShown);
+  if (_node_cap > kNodeRowsShown) _node_cap = kNodeRowsShown;
+  _node_shown = nodeOrder(rows, total, _node_filter, _node_unread, "", _node_order, _node_cap);
   size_t matches = 0;
   for (size_t i = 0; i < total; i++) matches += passesFilter(rows[i], _node_filter, _node_unread);
 
@@ -1643,6 +1652,7 @@ void GuiShell::buildNodes(lv_obj_t* content) {
         [](lv_event_t* e) {
           GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
           self->_node_filter = TypeFilter(uintptr_t(lv_obj_get_user_data(lv_event_get_current_target(e))));
+          self->_node_cap = kNodeBatch;
           self->later([](GuiShell* g) { g->rebuild(); });
         },
         LV_EVENT_CLICKED, this);
@@ -1675,6 +1685,7 @@ void GuiShell::buildNodes(lv_obj_t* content) {
         GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
         self->_node_unread = !self->_node_unread;
         self->_node_filter = self->_node_unread ? TypeFilter::Chat : TypeFilter::All;
+        self->_node_cap = kNodeBatch;
         self->later([](GuiShell* g) { g->rebuild(); });
       },
       LV_EVENT_CLICKED, this);
@@ -1696,7 +1707,18 @@ void GuiShell::buildNodes(lv_obj_t* content) {
   } else {
     lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
+    // Near the end of what's built, build the next batch.
+    lv_obj_add_event_cb(
+        list,
+        [](lv_event_t* e) {
+          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+          if (lv_obj_get_scroll_bottom(lv_event_get_target(e)) < 60) {
+            self->later([](GuiShell* g) { g->appendNodeRows(); });
+          }
+        },
+        LV_EVENT_SCROLL_END, this);
   }
+  _node_list = list;
   for (size_t i = 0; i < _node_shown; i++) {
     const NodeRow& r = rows[_node_order[i]];
     lv_obj_t* row = nodeRow(list, r);
@@ -1717,6 +1739,7 @@ void GuiShell::buildNodes(lv_obj_t* content) {
     lv_obj_t* clear = lv_obj_get_child(list, -1);
     lv_obj_add_flag(clear, LV_OBJ_FLAG_CLICKABLE);
     focusable(clear);
+    _node_clear = clear;
     lv_obj_add_event_cb(
         clear,
         [](lv_event_t* e) {
@@ -1746,7 +1769,7 @@ void GuiShell::updateNodes(uint32_t now_ms) {
   size_t total = 0;
   const NodeRow* rows = _model->nodeRows(&total);
   uint16_t order[kNodeRowsShown];
-  const size_t shown = nodeOrder(rows, total, _node_filter, _node_unread, "", order, kNodeRowsShown);
+  const size_t shown = nodeOrder(rows, total, _node_filter, _node_unread, "", order, _node_cap);
   bool same = shown == _node_shown;
   for (size_t i = 0; same && i < shown; i++) same = order[i] == _node_order[i];
   for (size_t i = 0; same && i < shown; i++) {
@@ -1809,7 +1832,46 @@ void GuiShell::openSearch(bool wheel) {
   rebuild();
 }
 
+// The next batch of rows, added to the built list. The focus order stays
+// rows-then-footer-then-tabs: the footer and tabs leave the group and
+// rejoin after the new rows. If the order moved meanwhile, it rebuilds.
+void GuiShell::appendNodeRows() {
+  if (!_node_list || _tab != Tab::Nodes || _searching || _node_shown >= kNodeRowsShown) return;
+  size_t total = 0;
+  const NodeRow* rows = _model->nodeRows(&total);
+  const size_t cap = _node_cap + kNodeBatch < kNodeRowsShown ? _node_cap + kNodeBatch : kNodeRowsShown;
+  uint16_t order[kNodeRowsShown];
+  const size_t n = nodeOrder(rows, total, _node_filter, _node_unread, "", order, cap);
+  if (n <= _node_shown) return;   // nothing more to show
+  for (size_t i = 0; i < _node_shown; i++) {
+    if (order[i] != _node_order[i]) {
+      _node_cap = cap;
+      rebuild();
+      return;
+    }
+  }
+  if (_node_clear) lv_group_remove_obj(_node_clear);
+  for (lv_obj_t* t : _tab_obj) {
+    if (t) lv_group_remove_obj(t);
+  }
+  for (size_t i = _node_shown; i < n; i++) {
+    lv_obj_t* row = nodeRow(_node_list, rows[order[i]]);
+    if (_node_clear) lv_obj_move_to_index(row, lv_obj_get_index(_node_clear));
+    lv_obj_set_user_data(row, reinterpret_cast<void*>(uintptr_t(i + 1)));
+    focusable(row);
+    _node_row_obj[i] = row;
+    _node_order[i] = order[i];
+  }
+  if (_node_clear) lv_group_add_obj(_group, _node_clear);
+  for (lv_obj_t* t : _tab_obj) {
+    if (t) lv_group_add_obj(_group, t);
+  }
+  _node_shown = n;
+  _node_cap = cap;
+}
+
 void GuiShell::closeSearch() {
+  _node_cap = kNodeBatch;
   _searching = _search_kb = _search_wheel = false;
   rebuild();
 }

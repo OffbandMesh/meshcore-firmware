@@ -188,6 +188,15 @@ private:
 
   // Nodes (Epic E)
   static constexpr size_t kNodeRowsShown = 50;   // the newest; search reaches the rest
+  // Built 12 at a time: 50 rows cost ~515 ms to build and ~380 ms to draw
+  // (bench, #1534). More are added on scrolling near the end, or when USR
+  // steps past the last row.
+  static constexpr size_t kNodeBatch = 12;
+  size_t _node_cap = kNodeBatch;
+  lv_obj_t* _node_list = nullptr;
+  lv_obj_t* _node_clear = nullptr;   // the unread view's footer, in the focus order
+  lv_obj_t* _tab_obj[5] = {};
+  void appendNodeRows();
   offband::gui::TypeFilter _node_filter = offband::gui::TypeFilter::All;
   bool _node_unread = false;
   char _node_query[33] = {};
