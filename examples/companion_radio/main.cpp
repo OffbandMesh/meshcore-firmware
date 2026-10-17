@@ -1014,11 +1014,24 @@ void loop() {
     static offband::GpsDutyProbe s_probe;
     static bool s_gps_on = true;
     static bool s_uart_up = true;
+    static long s_epoch_at_power_down = 0;
 
-    const offband::GpsProbeAction a = s_probe.tick(millis(), sensors.gpsHasFix());
+    // A fix the module is merely still HOLDING from before the power cut is not an
+    // acquisition. The provider never invalidates its cached fix, so this has to be
+    // decided on the GPS epoch rather than on gpsHasFix() -- see gpsProbeFixIsNew(). The
+    // first run of this probe reported an 8 ms time-to-fix with zero satellites because
+    // this check was not here.
+    const offband::GpsSnapshot snap = sensors.gpsSnapshot();
+    const bool fresh_fix = offband::gpsProbeFixIsNew(snap.fix, snap.sats, snap.epoch,
+                                                     s_epoch_at_power_down);
+
+    const offband::GpsProbeAction a = s_probe.tick(millis(), fresh_fix);
 
     if (a.gps_on != s_gps_on) {
       s_gps_on = a.gps_on;
+      // Remember where the clock stood as power is cut; that is what the next fix has to
+      // beat to count as new.
+      if (!a.gps_on) s_epoch_at_power_down = snap.epoch;
       sensors.setSettingValue("gps", a.gps_on ? "1" : "0");
     }
     if (a.uart_up != s_uart_up) {
@@ -1040,8 +1053,7 @@ void loop() {
       mesh_log_line(MLOG_BOOT, "[gpsprobe] %s phase=%s off_s=%u ms=%u sats=%d\n",
                     a.result == offband::GpsProbeResult::Fix ? "fix" : "nofix",
                     offband::gpsProbePhaseName(a.result_phase),
-                    (unsigned)a.off_s, (unsigned)a.elapsed_ms,
-                    (int)sensors.gpsSnapshot().sats);
+                    (unsigned)a.off_s, (unsigned)a.elapsed_ms, (int)snap.sats);
     }
     if (a.phase_start) {
       // One line per phase, and per sweep leg's power-down and power-up. This is what the

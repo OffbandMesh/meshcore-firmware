@@ -262,6 +262,52 @@ TEST(GpsDutyProbe, AResultAndTheNextPhaseMarkerShareATickAndAreLabelledIndepende
       << "the last leg's result must be labelled Sweep while the tick starts Done";
 }
 
+// ---- telling a new fix from the one it never let go of --------------------------------
+//
+// The bug these exist for, found by reading the probe's own first run on hardware: the GPS
+// provider caches its last fix and never invalidates it on power-down, and gpsHasFix() is
+// `gps_active && _location->isValid()` -- so the instant start_gps() flips gps_active, the
+// fix from before the power cut reads as current. The run logged
+// "fix off_s=30 ms=8 sats=0" and would have been written up as an instant hot start: the
+// exact wrong answer to the one question G0 exists to ask.
+
+TEST(GpsProbeFixIsNew, TheStaleFixThatVoidedTheFirstRunIsRejected) {
+  // Exactly what the device reported: fix flag set, no satellites, clock untouched since
+  // power was cut.
+  EXPECT_FALSE(gpsProbeFixIsNew(true, 0, 1792220957L, 1792220957L));
+}
+
+TEST(GpsProbeFixIsNew, AFixWhoseClockHasNotMovedIsStaleEvenWithSatellites) {
+  const long at_cut = 1792220957L;
+  EXPECT_FALSE(gpsProbeFixIsNew(true, 8, at_cut, at_cut));
+  // Inside the slack: still not convincing.
+  EXPECT_FALSE(gpsProbeFixIsNew(true, 8, at_cut + kGpsProbeEpochSlackS, at_cut));
+}
+
+TEST(GpsProbeFixIsNew, AnAcquisitionAfterTheShortestLegIsAccepted) {
+  const long at_cut = 1792220957L;
+  // The shortest sweep leg is 30 s, so a real re-acquisition clears the slack easily.
+  EXPECT_TRUE(gpsProbeFixIsNew(true, 6, at_cut + (long)kGpsProbeSweepS[0], at_cut));
+}
+
+TEST(GpsProbeFixIsNew, NoFixAndNoSatellitesAreNeverNew) {
+  EXPECT_FALSE(gpsProbeFixIsNew(false, 9, 1792230000L, 1792220957L));
+  EXPECT_FALSE(gpsProbeFixIsNew(true, 0, 1792230000L, 1792220957L));
+  EXPECT_FALSE(gpsProbeFixIsNew(true, -1, 1792230000L, 1792220957L));
+}
+
+TEST(GpsProbeFixIsNew, AFixWithNoDateIsNotUsable) {
+  // epoch 0 means the GPS has not given a date, so there is nothing to time against.
+  EXPECT_FALSE(gpsProbeFixIsNew(true, 7, 0, 0));
+  EXPECT_FALSE(gpsProbeFixIsNew(true, 7, 0, 1792220957L));
+}
+
+TEST(GpsProbeFixIsNew, TheFirstFixOfTheRunHasNothingToBeStaleAgainst) {
+  // Cold boot: no epoch was recorded at any power-down, so a real fix counts at once.
+  // Without this the warm-up could never complete and the sweep would never start.
+  EXPECT_TRUE(gpsProbeFixIsNew(true, 9, 1792220957L, 0));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

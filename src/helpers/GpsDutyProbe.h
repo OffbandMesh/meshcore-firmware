@@ -57,6 +57,32 @@ struct GpsProbeAction {
   uint32_t elapsed_ms = 0;                       // time-to-fix, or time waited
 };
 
+// Is the GPS reporting a fix it has actually just ACQUIRED, rather than the one it was
+// holding before it was powered down?
+//
+// This is not defensive programming, it is the measurement. The provider caches its last
+// fix and never invalidates it on power-down, and gpsHasFix() is
+// `gps_active && _location->isValid()` -- so the instant start_gps() sets gps_active, the
+// stale fix reads as current. The first run of this probe reported "fix ... ms=8 sats=0"
+// for a 30 s power-off, which would have been written up as an instant hot start.
+//
+// Three things have to hold. A fix flag, at least one satellite (a real fix has sats; the
+// stale one reported zero), and a GPS epoch that has moved on from where it stood when
+// power was cut. The epoch is the decisive one: it only advances on a real fix, and every
+// off duration here is at least 30 s, so a couple of seconds of slack separates "new" from
+// "stale" with no ambiguity.
+//
+// `epoch_at_power_down` of 0 means the GPS had never given a date, in which case any fix
+// with satellites is new by definition.
+constexpr long kGpsProbeEpochSlackS = 2;
+
+inline bool gpsProbeFixIsNew(bool fix, long sats, long epoch, long epoch_at_power_down) {
+  if (!fix || sats <= 0) return false;
+  if (epoch <= 0) return false;                       // no date yet: not a usable fix
+  if (epoch_at_power_down <= 0) return true;          // nothing to be stale against
+  return epoch > epoch_at_power_down + kGpsProbeEpochSlackS;
+}
+
 // The phase's name for the log. A number would make the capture unreadable months from
 // now, and the capture is the deliverable -- these lines are what G0 reports.
 inline const char* gpsProbePhaseName(GpsProbePhase p) {
