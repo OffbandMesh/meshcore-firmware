@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include <MeshLog.h>
 #include <helpers/gui/SignalLevel.h>
 #include <helpers/gui/hw/GuiFonts.h>
 
@@ -1781,6 +1782,7 @@ void GuiShell::openSearch(bool wheel) {
   _searching = true;
   _search_wheel = wheel;
   _search_kb = !wheel;
+  mesh_log_line(MLOG_BOOT, "[gui] search open: %s\n", wheel ? "wheel (button)" : "keyboard (touch)");
   _query.start(64);   // room for a whole public key in hex
   _search_rows = _model->nodeRows(&_search_total);   // once per search, not per key
   _search_due = 0;
@@ -1893,6 +1895,7 @@ void GuiShell::refreshSearch() {
   // 3 rows); all of them once Done puts it away.
   const size_t cap = (_search_kb || _search_wheel) ? 6 : kNodeRowsShown;
   _node_shown = nodeOrder(rows, total, _node_filter, _node_unread, _query.text(), _node_order, cap);
+  mesh_log_line(MLOG_BOOT, "[gui] search \"%s\": %u matches\n", _query.text(), unsigned(matches));
   if (matches == 0 && _query.length()) {
     char none[64];
     textf(none, sizeof none, "No node name or key starts with \"%s\".", _query.text());
