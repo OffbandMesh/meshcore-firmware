@@ -172,12 +172,34 @@ size_t emptyStatusCells(Cell*, size_t) { return 0; }
 void thousands(uint32_t, char* out, size_t n) { blank(out, n); }
 void traceSnrLine(const uint8_t*, size_t, char* out, size_t n) { blank(out, n); }
 
-void LetterWheel::next() {}
-void LetterWheel::prev() {}
-LetterWheel::Pick LetterWheel::pick() const { return Pick::Done; }
-char LetterWheel::ch() const { return 0; }
-const char* LetterWheel::label() const { return ""; }
-const char* LetterWheel::labelAt(int) const { return ""; }
+// ------------------------------------------------------------ letter wheel
+
+namespace {
+// A-Z, 0-9, space, then the two controls.
+constexpr int kWheelChars = 26 + 10 + 1;
+constexpr int kWheelSize = kWheelChars + 2;
+const char* const kWheelLabels[kWheelSize] = {
+    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T",
+    "U", "V", "W", "X", "Y", "Z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "space", "⌫", "Done"};
+int wrap(int i) { return ((i % kWheelSize) + kWheelSize) % kWheelSize; }
+}  // namespace
+
+void LetterWheel::next() { _i = wrap(_i + 1); }
+void LetterWheel::prev() { _i = wrap(_i - 1); }
+
+LetterWheel::Pick LetterWheel::pick() const {
+  if (_i < kWheelChars) return Pick::Char;
+  return _i == kWheelChars ? Pick::Backspace : Pick::Done;
+}
+
+char LetterWheel::ch() const {
+  if (_i < 26) return char('A' + _i);
+  if (_i < 36) return char('0' + _i - 26);
+  return _i == 36 ? ' ' : 0;
+}
+
+const char* LetterWheel::label() const { return kWheelLabels[_i]; }
+const char* LetterWheel::labelAt(int offset) const { return kWheelLabels[wrap(_i + offset)]; }
 
 void PasswordBook::set(const uint8_t*, const char*) {}
 const char* PasswordBook::get(const uint8_t*) const { return nullptr; }
