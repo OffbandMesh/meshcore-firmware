@@ -457,6 +457,64 @@ TEST(GpsForceRetry, ATripThroughOffAlsoClearsTheBackoff) {
   EXPECT_TRUE(m.tick(t, false).attempt_started);
 }
 
+// ---- re-arming (#1557) -----------------------------------------------------------------
+
+// THE rule that made the machine a member instead of a loop-local, and review was right
+// that the orchestration around it was untested. A re-selection of the mode already in
+// effect must re-arm, because that gesture is the only way out of a four-hour backoff.
+TEST(GpsRearm, ABumpedGenerationRearmsEvenWhenTheModeHasNotChanged) {
+  EXPECT_TRUE(gpsShouldRearm(true, GpsMode::PowerSave, 7, GpsMode::PowerSave, 8))
+      << "re-selecting the mode in effect would be a silent no-op -- no way out of backoff";
+}
+
+TEST(GpsRearm, AChangedModeRearms) {
+  EXPECT_TRUE(gpsShouldRearm(true, GpsMode::On, 7, GpsMode::PowerSave, 7));
+  EXPECT_TRUE(gpsShouldRearm(true, GpsMode::PowerSave, 7, GpsMode::Off, 7));
+}
+
+TEST(GpsRearm, TheFirstCallAlwaysArms) {
+  EXPECT_TRUE(gpsShouldRearm(false, GpsMode::On, 0, GpsMode::On, 0))
+      << "an un-primed machine would never start";
+}
+
+// And a steady state must NOT re-arm, or the machine restarts every loop: the failure
+// count would clear constantly, backoff would never grow, and an indoor badge would
+// attempt forever at 70 mA -- the exact behaviour this epic exists to remove.
+TEST(GpsRearm, NothingChangedDoesNotRearm) {
+  EXPECT_FALSE(gpsShouldRearm(true, GpsMode::PowerSave, 7, GpsMode::PowerSave, 7))
+      << "re-arming every loop would reset backoff forever and never let it grow";
+}
+
+// ---- the screen's mode cycle (#1557) ---------------------------------------------------
+
+TEST(GpsModeCycle, ItVisitsEveryModeAndReturns) {
+  GpsMode m = GpsMode::Off;
+  m = nextGpsMode(m, true); EXPECT_EQ(GpsMode::On, m);
+  m = nextGpsMode(m, true); EXPECT_EQ(GpsMode::PowerSave, m);
+  m = nextGpsMode(m, true); EXPECT_EQ(GpsMode::Off, m);
+}
+
+// Power save must NOT be offered on a build that cannot run it. Those variants carry a
+// SensorManager without the accessors a duty cycle needs (#1556), so the screen would
+// show "Power save" while GPS simply stayed on -- a screen lying about the hardware is
+// worse than one mode fewer.
+TEST(GpsModeCycle, PowerSaveIsNotOfferedWhereNothingDrivesIt) {
+  GpsMode m = GpsMode::Off;
+  for (int i = 0; i < 12; i++) {
+    m = nextGpsMode(m, false);
+    ASSERT_NE(GpsMode::PowerSave, m) << "offered Power save on a build without it";
+  }
+  // And it still cycles usefully: Off <-> On.
+  EXPECT_EQ(GpsMode::On, nextGpsMode(GpsMode::Off, false));
+  EXPECT_EQ(GpsMode::Off, nextGpsMode(GpsMode::On, false));
+}
+
+// A badge already IN Power save when the feature is compiled out -- a downgrade, or the
+// flag removed -- must still be able to cycle out of it rather than being stuck.
+TEST(GpsModeCycle, AModeTheBuildNoLongerOffersCanStillBeLeft) {
+  EXPECT_EQ(GpsMode::Off, nextGpsMode(GpsMode::PowerSave, false));
+}
+
 // ---- the backoff arithmetic itself -----------------------------------------------------
 
 TEST(GpsBackoff, TheWaitDoublesFromTheSecondFailureAndSaturatesAtTheCap) {

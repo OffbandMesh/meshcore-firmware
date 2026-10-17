@@ -1005,75 +1005,11 @@ void loop() {
   interface_manager.loop();
   sensors.loop();
 
-#if defined(OFFBAND_GPS_POWER_SAVE) && ENV_INCLUDE_GPS == 1 && \
-    !defined(OFFBAND_GPS_DUTY_PROBE)
-  // #1556: Power save's duty cycle. The rules are in helpers/GpsPowerMode.h and are
-  // host-tested; this is only the part that touches the sensor manager.
-  //
-  // It drives GPS through setSettingValue("gps", ...), the lever the app and the CLI
-  // already use, rather than reaching into the manager -- so Power save goes through the
-  // same path as a user toggling GPS, and there is one way GPS gets switched.
-  //
-  // OPT-IN PER VARIANT, and that is not caution for its own sake: ten SensorManager
-  // classes exist across the variants and only EnvironmentSensorManager exposes
-  // gpsHasFix() and gpsSnapshot(), which the duty cycle needs to tell a fix from a
-  // timeout. t1000-e carries T1000SensorManager and failed to compile when this block was
-  // merely companion-wide. Guarding on the board name would have been wrong for the same
-  // reason -- t1000-e is one of several, it just happened to be in the build list.
-  //
-  // A board with no mode stored resolves to On or Off, never Power save, so even where
-  // this compiles the branch below stays dormant until someone chooses the mode. Off and
-  // On are applied by applyGpsPrefs() as they always were; only Power save needs a tick.
-  //
-  // Excluded on the #1553 probe build, which drives GPS on its own schedule.
-  {
-    static offband::GpsPowerMachine s_gps;
-    static offband::GpsMode s_mode = offband::GpsMode::On;
-    static uint32_t s_gen = 0xFFFFFFFFu;
-    // -1 = not applied yet. Deliberately NOT seeded from gps_enabled on re-arm: that
-    // assumed applyGpsPrefs() had already got the hardware there, and review was right
-    // that nothing confirms it. Unknown means the first tick applies unconditionally,
-    // which needs no such assumption.
-    static int8_t s_applied = -1;
-    static bool s_primed = false;
-
-    NodePrefs* gp = the_mesh.getNodePrefs();
-    if (gp != NULL) {
-      const offband::GpsMode mode =
-          offband::gpsModeFromPrefs(gp->gps_mode, gp->gps_enabled);
-      const uint32_t gen = the_mesh.gpsModeGeneration();
-
-      // Re-arm on a mode change OR on a bump of the generation -- the latter is what makes
-      // re-selecting the mode already in effect a real "try now" (#1557).
-      if (!s_primed || mode != s_mode || gen != s_gen) {
-        s_primed = true;
-        s_mode = mode;
-        s_gen = gen;
-        s_applied = -1;
-        s_gps.reset(offband::gpsConfigFromPrefs(gp->gps_ps_interval_s), mode, millis());
-      }
-
-      if (mode == offband::GpsMode::PowerSave) {
-        // ONE snapshot, used for both the decision and the log. Reading the fix inside
-        // tick() and the satellite count afterwards would let them disagree, and the log
-        // is the only view of this a bench ever gets (review).
-        const offband::GpsSnapshot snap = sensors.gpsSnapshot();
-        const offband::GpsPowerAction a = s_gps.tick(millis(), snap.fix);
-        const int8_t want = a.gps_on ? 1 : 0;
-        if (want != s_applied) {
-          s_applied = want;
-          sensors.setSettingValue("gps", a.gps_on ? "1" : "0");
-        }
-        if (a.attempt_started || a.fix_acquired || a.attempt_failed) {
-          mesh_log_line(MLOG_DEBUG,
-                        "[gps] %s fails=%u wait_s=%u sats=%d\n",
-                        a.fix_acquired ? "fix" : (a.attempt_failed ? "nofix" : "searching"),
-                        (unsigned)a.failures, (unsigned)(a.next_wait_ms / 1000U),
-                        (int)snap.sats);
-        }
-      }
-    }
-  }
+#if defined(OFFBAND_GPS_POWER_SAVE) && ENV_INCLUDE_GPS == 1 &&     !defined(OFFBAND_GPS_DUTY_PROBE)
+  // #1556: Power save's duty cycle. It lives on MyMesh rather than as a static here, so
+  // the GPS screen can say what it is doing (#1557). Excluded on the #1553 probe build,
+  // which drives GPS on its own schedule.
+  the_mesh.gpsPowerLoop();
 #endif
 
 #if defined(OFFBAND_GPS_DUTY_PROBE) && ENV_INCLUDE_GPS == 1

@@ -352,6 +352,34 @@ private:
   bool _attempting = false;
 };
 
+// Should the duty cycle re-arm: pick the mode up again, clear its failure count and
+// attempt now?
+//
+// `gen` is a counter bumped by every writer of the GPS prefs. Watching it, and not just
+// the mode, is the ENTIRE reason the machine is a member rather than a loop-local: a
+// re-selection of the mode already in effect must still force a retry. Someone looking at
+// "no sky; next try 4h" has that one gesture and nothing else short of a reboot, and a
+// check for a changed mode alone would make it a silent no-op.
+//
+// Pure so the rule is tested; the driver around it needs hardware.
+inline bool gpsShouldRearm(bool primed, GpsMode seen_mode, uint32_t seen_gen,
+                           GpsMode now_mode, uint32_t now_gen) {
+  return !primed || seen_mode != now_mode || seen_gen != now_gen;
+}
+
+// The next mode as the GPS screen's row cycles. Power save is only offered where the
+// variant actually compiles the duty cycle (OFFBAND_GPS_POWER_SAVE) -- offering a mode
+// that nothing drives would leave GPS simply on while the screen claimed otherwise, which
+// is worse than not offering it.
+inline GpsMode nextGpsMode(GpsMode m, bool power_save_available) {
+  switch (m) {
+    case GpsMode::Off: return GpsMode::On;
+    case GpsMode::On:  return power_save_available ? GpsMode::PowerSave : GpsMode::Off;
+    case GpsMode::PowerSave: return GpsMode::Off;
+  }
+  return GpsMode::On;
+}
+
 inline const char* gpsModeName(GpsMode m) {
   switch (m) {
     case GpsMode::Off:       return "Off";

@@ -389,6 +389,61 @@ public:
     gpsModeTouched();   // #1556: the power machine re-reads and restarts from this
   }
 
+  // #1557: the mode in effect, for the GPS screen and the Settings row. Available
+  // wherever GPS is, since it needs only the prefs and a pure rule.
+  offband::GpsMode gpsMode() const {
+    return offband::gpsModeFromPrefs(_prefs.gps_mode, _prefs.gps_enabled);
+  }
+
+  // Can this build actually run Power save? The screen must not offer a mode nothing
+  // drives -- GPS would simply stay on while the screen claimed otherwise.
+  static bool gpsPowerSaveAvailable() {
+#if defined(OFFBAND_GPS_POWER_SAVE)
+    return true;
+#else
+    return false;
+#endif
+  }
+
+  // #1557: what GPS is doing right now, and how long the current wait has left.
+  //
+  // Without the duty cycle compiled there are only two answers, derived from the mode, so
+  // the screen has one code path either way.
+  offband::GpsActivity gpsActivity() const {
+#if defined(OFFBAND_GPS_POWER_SAVE)
+    if (gpsMode() == offband::GpsMode::PowerSave) return _gps_activity;
+#endif
+    return gpsMode() == offband::GpsMode::Off ? offband::GpsActivity::Off
+                                              : offband::GpsActivity::On;
+  }
+
+  uint32_t gpsWaitRemainingS() const {
+#if defined(OFFBAND_GPS_POWER_SAVE)
+    if (gpsMode() == offband::GpsMode::PowerSave && _gps_wait_ms > 0) {
+      const int32_t left = (int32_t)(_gps_wait_until - millis());
+      return left <= 0 ? 0 : (uint32_t)left / 1000U;
+    }
+#endif
+    return 0;
+  }
+
+  // #1557: store a mode the user has chosen, and apply it.
+  //
+  // Writes BOTH fields: gps_enabled keeps meaning on-or-off for every reader that knows
+  // nothing about modes, and the mode byte records how it runs while on. Picking Off
+  // leaves that byte alone so Off-then-On returns to Power save (#1555).
+  void setGpsMode(offband::GpsMode m) {
+    _prefs.gps_mode = offband::gpsStoredModeForPick(m, _prefs.gps_mode);
+    _prefs.gps_enabled = offband::gpsEnabledForMode(m);
+    savePrefs();
+    applyGpsPrefs();   // pushes the hardware and bumps the generation, so the machine re-arms
+  }
+
+#if defined(OFFBAND_GPS_POWER_SAVE)
+  // #1556: the duty cycle's tick. Called every loop; does nothing outside Power save.
+  void gpsPowerLoop();
+#endif
+
   // #1556: tell the GPS power machine to pick the mode up again and start fresh.
   //
   // A counter rather than a flag, because it has to fire even when the resolved mode has
@@ -409,8 +464,21 @@ public:
 private:
 #if ENV_INCLUDE_GPS == 1
   // #1556: bumped by every writer of the GPS prefs, including a re-selection of the mode
-  // already in effect. The power machine in the main loop watches it.
+  // already in effect. The power machine watches it.
   uint32_t _gps_mode_gen = 0;
+#endif
+#if defined(OFFBAND_GPS_POWER_SAVE)
+  // #1556/#1557: the duty cycle, here rather than as a static in the main loop so the GPS
+  // screen can say what it is doing.
+  offband::GpsPowerMachine _gps_machine;
+  offband::GpsActivity _gps_activity = offband::GpsActivity::On;
+  uint32_t _gps_wait_until = 0;      // millis() the current wait ends
+  uint32_t _gps_wait_ms = 0;         // its length; 0 when not waiting
+  uint32_t _gps_seen_gen = 0xFFFFFFFFu;
+  offband::GpsMode _gps_seen_mode = offband::GpsMode::On;
+  int8_t _gps_applied = -1;          // -1 = not yet applied, so the first tick applies
+  uint32_t _gps_mismatch_ms = 0;     // rate limit on the hardware-drift complaint
+  bool _gps_primed = false;
 #endif
 
   // Hands a reply to the GUI (#1454); `body` is the phone frame after its
