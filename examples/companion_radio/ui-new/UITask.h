@@ -349,7 +349,19 @@ public:
   // from AbstractUITask
   void msgRead(int msgcount) override;
   void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) override;
+#if defined(PIN_BUZZER)
+  // #1549: the one way an EVENT turns a tune id into sound. Guarded on the buzzer alone,
+  // not on the keyboard: both buzzer configurations need it, and each resolves the id the
+  // only way it can -- see the definition.
+  void playEventTune(uint8_t id);
+#endif
   void notify(UIEventType t = UIEventType::none) override;
+  // #1524: a channel message, with the channel. Declared for all three ui-new
+  // configurations and branched inside, rather than guarded here: the #1478 lesson was
+  // that a header guard which does not match where the members live fails on the envs
+  // you did not build. The non-badge branch calls the base behaviour and is identical to
+  // inheriting it.
+  void notifyChannel(uint8_t channel_idx) override;
   void applyBuzzerMute(bool quiet) override;
 // #1478: BOTH guards, matching where _slot_push lives. A board with a buzzer and no
 // keyboard -- heltec_rc32 and WioTrackerL1 are the live cases -- compiles this header but

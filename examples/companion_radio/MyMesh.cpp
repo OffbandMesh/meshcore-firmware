@@ -1066,6 +1066,12 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   // type -- so the policy decision stays in the mesh layer and the UI layer stays
   // dumb. That also avoids changing the AbstractUITask signature, which all three
   // UITask implementations (ui-orig, ui-new, ui-tiny) would otherwise have to follow.
+  //
+  // #1524 keeps that split. Which channel this is does go through, because a tune set on
+  // one channel cannot be resolved without it -- but through notifyChannel(), whose
+  // default forwards to notify(channelMessage), so UIEventType is unchanged and every UI
+  // that does not care inherits exactly what it did before. The decision of WHETHER to
+  // alert is still made here; only the question of what it sounds like moves.
 #ifdef OFFBAND_GUI
   // #1500: GUI builds also obey the channel's own mode (All / Mentions / Off,
   // set from the conversation's bell); the global scope above stays the
@@ -1075,7 +1081,7 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
 #else
   const bool alert = channelMsgShouldNotify(text);
 #endif
-  if (_ui && alert) _ui->notify(UIEventType::channelMessage);
+  if (_ui && alert) _ui->notifyChannel(channel_idx);
 #endif
 #ifdef DISPLAY_CLASS
   // Get the channel name from the channel index
