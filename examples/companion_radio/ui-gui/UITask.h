@@ -63,6 +63,7 @@ public:
   void nodeActState(NodeAct a, ActView* out) override;
   const char* savedPassword(const uint8_t* key) override;
   int openDm(const uint8_t* key) override;
+  bool ownPos(offband::gui::GeoPos* out) override;
 
 private:
   void fillNodeRow(const ContactInfo& ci, offband::gui::NodeRow& r, uint8_t* key_copy, uint32_t now, bool clock_ok);
