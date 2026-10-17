@@ -2215,8 +2215,11 @@ void GuiShell::buildDetail(lv_obj_t* content) {
   lv_obj_t* b = box(content, LV_PCT(100), 0);
   lv_obj_set_flex_grow(b, 1);
   lv_obj_set_style_pad_hor(b, 8, 0);
-  lv_obj_set_style_pad_ver(b, 5, 0);
-  lv_obj_set_style_pad_row(b, 3, 0);
+  // Tight enough that a repeater's six cells, the path and a trace's SNRs
+  // fit the 150 px between header and buttons (bench #1534: the SNR line
+  // sat below the edge).
+  lv_obj_set_style_pad_ver(b, 3, 0);
+  lv_obj_set_style_pad_row(b, 2, 0);
   lv_obj_set_flex_flow(b, LV_FLEX_FLOW_COLUMN);
   lv_obj_add_flag(b, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_scrollbar_mode(b, LV_SCROLLBAR_MODE_OFF);
@@ -2241,7 +2244,7 @@ void GuiShell::buildDetail(lv_obj_t* content) {
   const size_t n = detailCells(d.row, d.rssi, pinged ? ping.body : nullptr, pinged ? ping.len : 0,
                                pinged ? ping.rtt_ms : 0, cells, 6);
   lv_obj_t* grid = box(b, LV_PCT(100), LV_SIZE_CONTENT);
-  lv_obj_set_style_pad_top(grid, 2, 0);
+  lv_obj_set_style_pad_top(grid, 1, 0);
   lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
   lv_obj_set_style_border_side(grid, LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_LEFT, 0);
   lv_obj_set_style_border_width(grid, 1, 0);
@@ -2252,7 +2255,7 @@ void GuiShell::buildDetail(lv_obj_t* content) {
     lv_obj_set_style_border_width(cell, 1, 0);
     lv_obj_set_style_border_color(cell, c(_t.line), 0);
     lv_obj_set_style_pad_hor(cell, 5, 0);
-    lv_obj_set_style_pad_ver(cell, 2, 0);
+    lv_obj_set_style_pad_ver(cell, 1, 0);
     lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
     upcase(cells[i].key);
     label(cell, FontRole::Label, _t.dim, cells[i].key);
@@ -2270,7 +2273,13 @@ void GuiShell::buildDetail(lv_obj_t* content) {
   _model->nodeActState(NodeAct::Trace, &tr);
   if (tr.state == ActView::Ok) {
     traceSnrLine(tr.body, tr.len, buf, sizeof buf);
-    if (buf[0]) label(b, FontRole::Meta, _t.dim, buf);
+    if (buf[0]) {
+      lv_obj_t* snr = label(b, FontRole::Meta, _t.dim, buf);
+      // The newest result shows even if the body runs past its height.
+      lv_obj_update_layout(b);
+      lv_obj_scroll_to_view(snr, LV_ANIM_OFF);
+    }
+    mesh_log_line(MLOG_BOOT, "[gui] trace line: \"%s\" (%u bytes)\n", buf, unsigned(tr.len));
   }
 
   // The actions (mockups 2-6): the primary across, the others under it.
@@ -2286,8 +2295,8 @@ void GuiShell::buildDetail(lv_obj_t* content) {
   }
   lv_obj_t* acts = box(content, LV_PCT(100), LV_SIZE_CONTENT);
   lv_obj_set_style_pad_hor(acts, 8, 0);
-  lv_obj_set_style_pad_top(acts, 4, 0);
-  lv_obj_set_style_pad_bottom(acts, 6, 0);
+  lv_obj_set_style_pad_top(acts, 3, 0);
+  lv_obj_set_style_pad_bottom(acts, 4, 0);
   lv_obj_set_style_pad_row(acts, 4, 0);
   lv_obj_set_flex_flow(acts, LV_FLEX_FLOW_COLUMN);
   lv_obj_t* second = nullptr;
