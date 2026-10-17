@@ -40,8 +40,9 @@ struct NodeRow {
 };
 
 bool passesFilter(const NodeRow& r, TypeFilter f, bool unread_only);
-// Name prefix, ignoring case; or, when the query is all hex digits, a prefix
-// of the public key in hex. An empty query matches everything.
+// Anywhere in the name, ignoring case (owner, 2026-10-17; the spec said a
+// prefix); or, when the query is all hex digits, a prefix of the public key
+// in hex. An empty query matches everything.
 bool searchMatches(const NodeRow& r, const char* query);
 // The rows that pass, most recently heard first, then the never-heard A-Z.
 // Returns the count written to out (at most max).

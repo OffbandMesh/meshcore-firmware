@@ -89,7 +89,9 @@ TEST(Nodes, SearchByNamePrefixOrKeyHex) {
   EXPECT_TRUE(searchMatches(s[1], ""));
   EXPECT_TRUE(searchMatches(s[1], "w"));
   EXPECT_TRUE(searchMatches(s[1], "WR"));       // ignores case
-  EXPECT_FALSE(searchMatches(s[1], "ren"));     // a prefix, not a substring
+  EXPECT_TRUE(searchMatches(s[1], "ren"));      // anywhere in the name (owner, 2026-10-17)
+  EXPECT_TRUE(searchMatches(s[0], "ridge"));
+  EXPECT_FALSE(searchMatches(s[1], "renx"));
   EXPECT_TRUE(searchMatches(s[0], "7c02"));     // key hex
   EXPECT_TRUE(searchMatches(s[0], "7C02D1"));
   EXPECT_FALSE(searchMatches(s[0], "7c03"));
