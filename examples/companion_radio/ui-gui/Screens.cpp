@@ -14,6 +14,9 @@ constexpr int16_t kStatusH = 20;
 constexpr int16_t kTabH = 40;
 constexpr int16_t kContentH = 320 - kStatusH - kTabH;
 
+// The param of a CLICKED that a button (USR hold) sent rather than a touch.
+const char kByButton[] = "button";
+
 lv_color_t c(uint32_t rgb) { return lv_color_hex(rgb & 0xFFFFFF); }
 
 lv_obj_t* box(lv_obj_t* parent, lv_coord_t w, lv_coord_t h) {
@@ -233,6 +236,7 @@ void GuiShell::rebuild() {
   _lock_more = 0xFFFFFFFF;
 
   _kb = _draft_box = _draft_label = _caret = _counter = nullptr;
+  _query_label = _match_label = _search_list = _wheel_strip = nullptr;
   for (auto& k : _key_obj) k = nullptr;
   if (_key_preview) {
     lv_obj_del(_key_preview);
@@ -247,6 +251,11 @@ void GuiShell::rebuild() {
   if (_composing) {   // Compose takes the whole screen below the status bar
     _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
     buildCompose(scr);
+    return;
+  }
+  if (_searching && _tab == Tab::Nodes) {   // so does Nodes search (ObScreen: no tab bar)
+    _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
+    buildSearch(scr);
     return;
   }
   _msg_list = nullptr;
@@ -429,6 +438,38 @@ bool GuiShell::action(Action a) {
         return false;
     }
   }
+  // Nodes search. The wheel (mockup 1): USR next, AUX back one, USR hold
+  // adds the letter or acts on ⌫ / Done, AUX hold leaves search. The
+  // keyboard: a key cursor as in Compose. Results alone: the list's focus.
+  if (_searching && _tab == Tab::Nodes) {
+    if (a == Action::Back) {
+      closeSearch();
+      return true;
+    }
+    if (_search_wheel) {
+      if (a == Action::Next) _wheel.next();
+      else if (a == Action::Prev) _wheel.prev();
+      else if (a == Action::Open) wheelPick();
+      else return false;
+      if (_search_wheel && _wheel_strip) buildWheel(nullptr);   // redraw the strip
+      return true;
+    }
+    if (_search_kb) {
+      switch (a) {
+        case Action::Next:
+          setHotKey(_hot < 0 ? 0 : int((_hot + 1) % _nkeys), false);
+          return true;
+        case Action::Prev:
+          setHotKey(_hot <= 0 ? int(_nkeys) - 1 : _hot - 1, false);
+          return true;
+        case Action::Open:
+          if (_hot >= 0) pressKey(_hot);
+          return true;
+        default:
+          return false;
+      }
+    }
+  }
   // Compose: USR and AUX walk a cursor over the keys, USR hold presses it,
   // AUX hold leaves (the draft is dropped).
   if (_composing) {
@@ -485,7 +526,9 @@ bool GuiShell::action(Action a) {
       return true;
     case Action::Open: {
       lv_obj_t* f = lv_group_get_focused(_group);
-      if (f) lv_event_send(f, LV_EVENT_CLICKED, nullptr);
+      // The param marks a button press, for handlers that differ by input
+      // (Nodes search: the wheel for buttons, the keyboard for touch).
+      if (f) lv_event_send(f, LV_EVENT_CLICKED, const_cast<char*>(kByButton));
       return true;
     }
     case Action::Back:
@@ -1026,8 +1069,13 @@ void GuiShell::buildCompose(lv_obj_t* scr) {
         LV_EVENT_CLICKED, this);
   }
 
-  // The keyboard: one area takes every touch and snaps it to the nearest
-  // key, so a tap in a gap still lands (mockup 7a).
+  buildKeyboard(scr);
+  refreshDraft();
+}
+
+// The keyboard, for Compose and for Nodes search: one area takes every touch
+// and snaps it to the nearest key, so a tap in a gap still lands (mockup 7a).
+void GuiShell::buildKeyboard(lv_obj_t* scr) {
   _kb = box(scr, kW, 320 - kKbTop);
   lv_obj_set_pos(_kb, 0, kKbTop - 2);
   lv_obj_set_style_bg_opa(_kb, LV_OPA_COVER, 0);
@@ -1056,7 +1104,6 @@ void GuiShell::buildCompose(lv_obj_t* scr) {
       },
       LV_EVENT_ALL, this);
   buildKeys();
-  refreshDraft();
 }
 
 // The keys of the current page, labeled for the shift state.
@@ -1096,7 +1143,8 @@ void GuiShell::buildKeys() {
       ink = _t.ink2;
     }
     char text[8];
-    snprintf(text, sizeof text, "%s", k.label);
+    // Search's keyboard ends its entry with Done (ObScreen kbRowsFind).
+    snprintf(text, sizeof text, "%s", send && _searching ? "Done" : k.label);
     if (caps && text[0] >= 'a' && text[0] <= 'z' && !text[1]) text[0] = char(text[0] - 'a' + 'A');
     lv_obj_t* l = label(o, typesLabel(k.label) ? FontRole::Body : FontRole::BodySmall, ink, text);
     lv_obj_center(l);
@@ -1142,7 +1190,15 @@ void GuiShell::pressKey(int i) {
   const char* l = _keys[i].label;
   const KeyPage page_before = _page.page();
   const Shift shift_before = _shift.state();
+  // Search types into the query: no capitals of its own (matching ignores
+  // case), and Done puts the keyboard away, keeping the results.
+  ComposeBuffer& buf = _searching ? _query : _draft;
 
+  if (_searching && strcmp(l, "Send") == 0) {
+    _search_kb = false;
+    later([](GuiShell* g) { g->rebuild(); });
+    return;
+  }
   if (strcmp(l, "Send") == 0) {
     if (_draft.length() == 0) return;
     if (_model->sendText(_thread, _draft.text(), _draft.length())) {
@@ -1157,8 +1213,8 @@ void GuiShell::pressKey(int i) {
   if (strcmp(l, "⇧") == 0) {
     _shift.tap(lv_tick_get());
   } else if (strcmp(l, "⌫") == 0) {
-    _draft.backspace();
-    _shift.autoCap(_draft.text(), _draft.length());
+    buf.backspace();
+    if (!_searching) _shift.autoCap(buf.text(), buf.length());
   } else if (strcmp(l, "?123") == 0) {
     _page.select(KeyPage::Symbols);
   } else if (strcmp(l, "=\\<") == 0) {
@@ -1171,14 +1227,15 @@ void GuiShell::pressKey(int i) {
     if (page_before == KeyPage::Letters && shift_before != Shift::Off && ch[0] >= 'a' && ch[0] <= 'z') {
       ch[0] = char(ch[0] - 'a' + 'A');
     }
-    if (_draft.insert(ch, strlen(ch))) {
+    if (buf.insert(ch, strlen(ch))) {
       _shift.typedLetter();
-      _shift.autoCap(_draft.text(), _draft.length());
+      if (!_searching) _shift.autoCap(buf.text(), buf.length());
       _page.typed(ch[0]);
     }
   }
   if (_page.page() != page_before || _shift.state() != shift_before) buildKeys();
-  refreshDraft();
+  if (_searching) refreshSearch();
+  else refreshDraft();
 }
 
 // A canned chip: its text goes in after what's typed, a space between.
@@ -1429,6 +1486,69 @@ void colorBars(lv_obj_t** bar, bool known, float snr, uint8_t sf, const ThemeTok
 
 }  // namespace
 
+// One node row (ObScreen nodes): 38 px, the type tile, name and "2 hops ·
+// 4m", the unread badge, bars and SNR, a chevron. Children, in order: tile,
+// text (name, sub), [badge], bars, SNR, chevron; updateNodes relies on it.
+lv_obj_t* GuiShell::nodeRow(lv_obj_t* list, const NodeRow& r) {
+  char buf[32];
+  lv_obj_t* row = box(list, LV_PCT(100), 38);
+  lv_obj_set_style_pad_hor(row, 8, 0);
+  lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+  lv_obj_set_style_border_width(row, 1, 0);
+  lv_obj_set_style_border_color(row, c(_t.line2), 0);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(row, 6, 0);
+
+  // Type tile: 14% of the tint behind the tinted glyph; flat themes outline.
+  const uint32_t tint = kindTint(_t, r.kind);
+  lv_obj_t* tile = box(row, 22, 22);
+  lv_obj_set_style_radius(tile, r.kind == NodeKind::Chat && _look.pill_chips ? LV_RADIUS_CIRCLE
+                                : _look.pill_chips                           ? 6
+                                                                             : 0,
+                          0);
+  if (_t.flat) {
+    lv_obj_set_style_border_width(tile, 1, 0);
+    lv_obj_set_style_border_color(tile, c(tint), 0);
+  } else {
+    lv_obj_set_style_bg_opa(tile, 36, 0);
+    lv_obj_set_style_bg_color(tile, c(tint), 0);
+  }
+  lv_obj_center(label(tile, FontRole::BodySmall, tint, kindGlyph(r.kind)));
+
+  lv_obj_t* tx = box(row, 0, LV_SIZE_CONTENT);
+  lv_obj_set_flex_grow(tx, 1);
+  lv_obj_set_flex_flow(tx, LV_FLEX_FLOW_COLUMN);
+  lv_obj_t* nm = label(tx, FontRole::Body, _t.ink);
+  userText(nm, r.name);
+  lv_obj_set_width(nm, LV_PCT(100));
+  oneLine(nm, FontRole::Body);
+  rowSub(r, buf, sizeof buf);
+  lv_obj_t* sub = label(tx, FontRole::Meta, _t.dim, buf);
+  lv_obj_set_width(sub, LV_PCT(100));
+  oneLine(sub, FontRole::Meta);
+
+  if (r.unread) {
+    lv_obj_t* badge = box(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(badge, c(_t.sig), 0);
+    lv_obj_set_style_radius(badge, _look.pill_chips ? 8 : 0, 0);
+    lv_obj_set_style_pad_hor(badge, 5, 0);
+    badgeText(r.unread, buf, sizeof buf);
+    label(badge, FontRole::Meta, _t.sigInk, buf);
+  }
+  lv_obj_t* bars[4];
+  rowBars(row, bars);
+  colorBars(bars, r.snr_known, r.snr_db, _model->radioSf(), _t);
+  if (r.snr_known) rowSnr(r.snr_db, buf, sizeof buf);
+  else buf[0] = '\0';
+  label(row, FontRole::Meta, _t.ink2, buf);
+  lv_obj_t* chev = box(row, 6, 12);
+  static const lv_point_t kNext[] = {{1, 1}, {5, 6}, {1, 11}};
+  line(chev, kNext, 3, _t.dim);
+  return row;
+}
+
 void GuiShell::buildNodes(lv_obj_t* content) {
   lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
   size_t total = 0;
@@ -1465,6 +1585,16 @@ void GuiShell::buildNodes(lv_obj_t* content) {
   label(search, FontRole::BodySmall, _t.dim, "\xF0\x9F\x94\x8D");   // 🔍
   label(search, FontRole::BodySmall, _t.dim, "Search");
   focusable(search);
+  // A touch opens the keyboard; a USR hold opens the letter wheel (spec:
+  // "Button-only: … a letter wheel").
+  lv_obj_add_event_cb(
+      search,
+      [](lv_event_t* e) {
+        GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+        if (lv_event_get_param(e) == kByButton) self->later([](GuiShell* g) { g->openSearch(true); });
+        else self->later([](GuiShell* g) { g->openSearch(false); });
+      },
+      LV_EVENT_CLICKED, this);
 
   // Chips: the five types, then Unread at the right.
   lv_obj_t* chips = box(content, LV_PCT(100), 30);
@@ -1550,65 +1680,9 @@ void GuiShell::buildNodes(lv_obj_t* content) {
     lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
   }
-  char buf[32];
   for (size_t i = 0; i < _node_shown; i++) {
     const NodeRow& r = rows[_node_order[i]];
-    lv_obj_t* row = box(list, LV_PCT(100), 38);
-    lv_obj_set_style_pad_hor(row, 8, 0);
-    lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
-    lv_obj_set_style_border_width(row, 1, 0);
-    lv_obj_set_style_border_color(row, c(_t.line2), 0);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(row, 6, 0);
-
-    // Type tile: 14% of the tint behind the tinted glyph; flat themes outline.
-    const uint32_t tint = kindTint(_t, r.kind);
-    lv_obj_t* tile = box(row, 22, 22);
-    lv_obj_set_style_radius(tile, r.kind == NodeKind::Chat && _look.pill_chips ? LV_RADIUS_CIRCLE
-                                  : _look.pill_chips                           ? 6
-                                                                               : 0,
-                            0);
-    if (_t.flat) {
-      lv_obj_set_style_border_width(tile, 1, 0);
-      lv_obj_set_style_border_color(tile, c(tint), 0);
-    } else {
-      lv_obj_set_style_bg_opa(tile, 36, 0);
-      lv_obj_set_style_bg_color(tile, c(tint), 0);
-    }
-    lv_obj_center(label(tile, FontRole::BodySmall, tint, kindGlyph(r.kind)));
-
-    lv_obj_t* tx = box(row, 0, LV_SIZE_CONTENT);
-    lv_obj_set_flex_grow(tx, 1);
-    lv_obj_set_flex_flow(tx, LV_FLEX_FLOW_COLUMN);
-    lv_obj_t* nm = label(tx, FontRole::Body, _t.ink);
-    userText(nm, r.name);
-    lv_obj_set_width(nm, LV_PCT(100));
-    oneLine(nm, FontRole::Body);
-    rowSub(r, buf, sizeof buf);
-    lv_obj_t* sub = label(tx, FontRole::Meta, _t.dim, buf);
-    lv_obj_set_width(sub, LV_PCT(100));
-    oneLine(sub, FontRole::Meta);
-
-    if (r.unread) {
-      lv_obj_t* badge = box(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-      lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
-      lv_obj_set_style_bg_color(badge, c(_t.sig), 0);
-      lv_obj_set_style_radius(badge, _look.pill_chips ? 8 : 0, 0);
-      lv_obj_set_style_pad_hor(badge, 5, 0);
-      badgeText(r.unread, buf, sizeof buf);
-      label(badge, FontRole::Meta, _t.sigInk, buf);
-    }
-    lv_obj_t* bars[4];
-    rowBars(row, bars);
-    colorBars(bars, r.snr_known, r.snr_db, _model->radioSf(), _t);
-    if (r.snr_known) rowSnr(r.snr_db, buf, sizeof buf);
-    else buf[0] = '\0';
-    label(row, FontRole::Meta, _t.ink2, buf);
-    lv_obj_t* chev = box(row, 6, 12);
-    static const lv_point_t kNext[] = {{1, 1}, {5, 6}, {1, 11}};
-    line(chev, kNext, 3, _t.dim);
-
+    lv_obj_t* row = nodeRow(list, r);
     lv_obj_set_user_data(row, reinterpret_cast<void*>(uintptr_t(i + 1)));
     focusable(row);
     _node_row_obj[i] = row;
@@ -1639,7 +1713,8 @@ void GuiShell::buildNodes(lv_obj_t* content) {
 }
 
 void GuiShell::updateNodes(uint32_t now_ms) {
-  if (_locked || _composing || _tab != Tab::Nodes || _sheet != Sheet::None) return;
+  // Search redraws its results per keystroke, not on this timer.
+  if (_locked || _composing || _searching || _tab != Tab::Nodes || _sheet != Sheet::None) return;
   if (int32_t(now_ms - _node_refresh_at) < 0) return;
   _node_refresh_at = now_ms + 1000;
 
@@ -1689,5 +1764,206 @@ void GuiShell::updateNodes(uint32_t now_ms) {
     else buf[0] = '\0';
     lv_obj_t* snr = lv_obj_get_child(row, base + 1);
     if (strcmp(lv_label_get_text(snr), buf) != 0) lv_label_set_text(snr, buf);
+  }
+}
+
+// ---------------------------------------------------------- Nodes search
+
+void GuiShell::openSearch(bool wheel) {
+  _searching = true;
+  _search_wheel = wheel;
+  _search_kb = !wheel;
+  _query.start(64);   // room for a whole public key in hex
+  _wheel.reset();
+  _page.select(KeyPage::Letters);
+  _shift = ShiftState();   // no capitals of its own: matching ignores case
+  _hot = -1;
+  rebuild();
+}
+
+void GuiShell::closeSearch() {
+  _searching = _search_kb = _search_wheel = false;
+  rebuild();
+}
+
+// ObScreen nodesfind: the field takes the header row (signal border on the
+// wash, caret, ×), the match line under it, results, and the keyboard or
+// the wheel pinned at the bottom.
+void GuiShell::buildSearch(lv_obj_t* scr) {
+  lv_obj_t* h = box(scr, kW, 32);
+  lv_obj_set_pos(h, 0, kStatusH);
+  lv_obj_set_style_pad_hor(h, 8, 0);
+  lv_obj_set_style_border_side(h, LV_BORDER_SIDE_BOTTOM, 0);
+  lv_obj_set_style_border_width(h, 1, 0);
+  lv_obj_set_style_border_color(h, c(_t.line), 0);
+  lv_obj_t* field = box(h, LV_PCT(100), 26);
+  lv_obj_center(field);
+  lv_obj_set_style_border_width(field, 1, 0);
+  lv_obj_set_style_border_color(field, c(_t.sig), 0);
+  lv_obj_set_style_bg_opa(field, lv_opa_t(_t.wash >> 24), 0);
+  lv_obj_set_style_bg_color(field, c(_t.wash), 0);
+  lv_obj_set_style_radius(field, _look.pill_chips ? 13 : 0, 0);
+  lv_obj_set_style_pad_hor(field, 7, 0);
+  lv_obj_set_flex_flow(field, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(field, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(field, 5, 0);
+  label(field, FontRole::BodySmall, _t.dim, "\xF0\x9F\x94\x8D");   // 🔍
+  _query_label = label(field, FontRole::Body, _t.ink);
+  lv_obj_t* caret = box(field, 1, 12);
+  lv_obj_set_style_bg_opa(caret, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(caret, c(_t.sig), 0);
+  lv_obj_t* grow = box(field, 1, 1);
+  lv_obj_set_flex_grow(grow, 1);
+  // ×: leaves search. Drawn as two short lines (no × in the mono font here).
+  lv_obj_t* x = box(field, 10, 10);
+  static const lv_point_t kX1[] = {{1, 1}, {9, 9}};
+  static const lv_point_t kX2[] = {{9, 1}, {1, 9}};
+  line(x, kX1, 2, _t.dim);
+  line(x, kX2, 2, _t.dim);
+  lv_obj_add_flag(x, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_ext_click_area(x, 10);
+  lv_obj_add_event_cb(
+      x, [](lv_event_t* e) { static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->closeSearch(); }); },
+      LV_EVENT_CLICKED, this);
+  // With the keyboard away, a tap on the field brings it back.
+  if (!_search_kb) {
+    lv_obj_add_flag(field, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(
+        field,
+        [](lv_event_t* e) {
+          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+          self->_search_kb = true;
+          self->_search_wheel = false;
+          self->later([](GuiShell* g) { g->rebuild(); });
+        },
+        LV_EVENT_CLICKED, this);
+  }
+
+  _match_label = label(scr, FontRole::Label, _t.dim);
+  lv_obj_set_pos(_match_label, 8, kStatusH + 32 + 4);
+
+  const int16_t top = kStatusH + 32 + 18;
+  const int16_t bottom = _search_kb ? kKbTop - 2 : _search_wheel ? 320 - 70 : 320;
+  _search_list = box(scr, kW, bottom - top);
+  lv_obj_set_pos(_search_list, 0, top);
+  lv_obj_set_flex_flow(_search_list, LV_FLEX_FLOW_COLUMN);
+  lv_obj_add_flag(_search_list, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollbar_mode(_search_list, LV_SCROLLBAR_MODE_OFF);
+
+  if (_search_kb) buildKeyboard(scr);
+  if (_search_wheel) buildWheel(scr);
+  refreshSearch();
+}
+
+// The query, the match line and the results, redrawn after each change.
+void GuiShell::refreshSearch() {
+  if (!_query_label || !_search_list) return;
+  userText(_query_label, _query.text());
+  size_t total = 0;
+  const NodeRow* rows = _model->nodeRows(&total);
+  size_t matches = 0;
+  for (size_t i = 0; i < total; i++) {
+    matches += passesFilter(rows[i], _node_filter, _node_unread) && searchMatches(rows[i], _query.text());
+  }
+  char line_text[48];
+  matchLine(matches, _node_filter, line_text, sizeof line_text);
+  for (char* p = line_text; *p; p++) {   // caps, as drawn (9 px, +0.1em)
+    if (*p >= 'a' && *p <= 'z') *p = char(*p - 'a' + 'A');
+  }
+  lv_label_set_text(_match_label, line_text);
+
+  lv_obj_clean(_search_list);
+  _node_shown = nodeOrder(rows, total, _node_filter, _node_unread, _query.text(), _node_order, kNodeRowsShown);
+  if (matches == 0 && _query.length()) {
+    char none[64];
+    textf(none, sizeof none, "No node name or key starts with \"%s\".", _query.text());
+    lv_obj_t* l = label(_search_list, FontRole::BodySmall, _t.dim);
+    userText(l, none);
+    lv_obj_set_width(l, LV_PCT(100));
+    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_pad_top(l, 16, 0);
+    return;
+  }
+  // With the keyboard or the wheel up, the buttons type; the rows join the
+  // focus order only once Done has put them away.
+  const bool rows_focusable = !_search_kb && !_search_wheel;
+  for (size_t i = 0; i < _node_shown; i++) {
+    lv_obj_t* row = nodeRow(_search_list, rows[_node_order[i]]);
+    lv_obj_set_user_data(row, reinterpret_cast<void*>(uintptr_t(i + 1)));
+    if (rows_focusable) focusable(row);
+  }
+}
+
+// The wheel strip (mockup 1): the current entry boxed in the middle, three
+// either side, and the hint. With scr null it redraws the existing strip.
+void GuiShell::buildWheel(lv_obj_t* scr) {
+  if (scr) {
+    _wheel_strip = box(scr, kW, 70);
+    lv_obj_set_pos(_wheel_strip, 0, 320 - 70);
+    lv_obj_set_style_bg_opa(_wheel_strip, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(_wheel_strip, c(_t.bg2), 0);
+    lv_obj_set_style_border_side(_wheel_strip, LV_BORDER_SIDE_TOP, 0);
+    lv_obj_set_style_border_width(_wheel_strip, 1, 0);
+    lv_obj_set_style_border_color(_wheel_strip, c(_t.line), 0);
+    // A touch on the wheel switches to the keyboard.
+    lv_obj_add_flag(_wheel_strip, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(
+        _wheel_strip,
+        [](lv_event_t* e) {
+          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+          self->_search_wheel = false;
+          self->_search_kb = true;
+          self->later([](GuiShell* g) { g->rebuild(); });
+        },
+        LV_EVENT_CLICKED, this);
+  }
+  if (!_wheel_strip) return;
+  lv_obj_clean(_wheel_strip);
+  lv_obj_t* row = box(_wheel_strip, kW, 46);
+  lv_obj_align(row, LV_ALIGN_TOP_MID, 0, 4);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(row, 4, 0);
+  for (int off = -3; off <= 3; off++) {
+    const char* l = _wheel.labelAt(off);
+    const bool control = strlen(l) > 1 && strcmp(l, "⌫") != 0;   // "space", "Done"
+    if (off == 0) {
+      lv_obj_t* cur = box(row, LV_SIZE_CONTENT, 42);
+      lv_obj_set_style_min_width(cur, 36, 0);
+      lv_obj_set_style_pad_hor(cur, 4, 0);
+      lv_obj_set_style_border_width(cur, 1, 0);
+      lv_obj_set_style_border_color(cur, c(_t.sig), 0);
+      lv_obj_set_style_bg_opa(cur, lv_opa_t(_t.wash >> 24), 0);
+      lv_obj_set_style_bg_color(cur, c(_t.wash), 0);
+      lv_obj_set_style_radius(cur, 6, 0);
+      lv_obj_center(label(cur, control ? FontRole::Body : FontRole::Title, _t.ink, l));
+    } else {
+      const bool near = off == -1 || off == 1;
+      label(row, control ? FontRole::Label : near ? FontRole::Body : FontRole::BodySmall, near ? _t.ink2 : _t.dim, l);
+    }
+  }
+  lv_obj_t* hint = label(_wheel_strip, FontRole::Label, _t.dim, "USR next · AUX back one · USR hold add · AUX hold done");
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
+}
+
+// USR hold on the wheel: add the letter, delete one, or Done (keeps the
+// results; the rows then take the buttons).
+void GuiShell::wheelPick() {
+  switch (_wheel.pick()) {
+    case LetterWheel::Pick::Char: {
+      const char ch = char(_wheel.ch() >= 'A' && _wheel.ch() <= 'Z' ? _wheel.ch() - 'A' + 'a' : _wheel.ch());
+      _query.insert(&ch, 1);
+      refreshSearch();
+      break;
+    }
+    case LetterWheel::Pick::Backspace:
+      _query.backspace();
+      refreshSearch();
+      break;
+    case LetterWheel::Pick::Done:
+      _search_wheel = false;
+      rebuild();
+      break;
   }
 }

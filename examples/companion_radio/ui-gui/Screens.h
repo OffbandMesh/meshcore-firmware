@@ -107,6 +107,14 @@ private:
   void buildConversation(lv_obj_t* content);
   void buildPlaceholder(lv_obj_t* content);
   void buildNodes(lv_obj_t* content);
+  lv_obj_t* nodeRow(lv_obj_t* list, const offband::gui::NodeRow& r);
+  void buildKeyboard(lv_obj_t* scr);
+  void openSearch(bool wheel);
+  void closeSearch();
+  void buildSearch(lv_obj_t* scr);
+  void refreshSearch();
+  void buildWheel(lv_obj_t* scr);
+  void wheelPick();
   void buildCompose(lv_obj_t* scr);
   void buildKeys();
   void refreshDraft();
@@ -183,6 +191,18 @@ private:
   uint32_t _node_rebuild_at = 0;
   uint8_t _focus_key[6] = {};   // the focused row's node, kept across rebuilds
   bool _focus_key_set = false;
+
+  // Nodes search (E3): the field takes the header; the keyboard (touch) or
+  // the letter wheel (buttons) sits under the results, or neither once Done.
+  bool _searching = false;
+  bool _search_kb = false;
+  bool _search_wheel = false;
+  offband::gui::ComposeBuffer _query;
+  offband::gui::LetterWheel _wheel;
+  lv_obj_t* _query_label = nullptr;
+  lv_obj_t* _match_label = nullptr;
+  lv_obj_t* _search_list = nullptr;
+  lv_obj_t* _wheel_strip = nullptr;
 
   // Home
   lv_obj_t* _name = nullptr;
