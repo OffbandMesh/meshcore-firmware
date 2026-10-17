@@ -936,8 +936,38 @@ void UITask::gotoCustomTunes() {
 
 void UITask::gotoTonePicker(offband::ToneEvent e) {
   _tone_picking = e;
+  _tone_picking_channel = -1;   // #1525: event mode, so no Default row
   ((TonePickerScreen*)tone_picker)->begin();
   setCurrScreen(tone_picker);
+}
+
+// #1525: the same picker, for one conversation.
+//
+// _tone_picking stays at ChannelMessage because that is what the conversation INHERITS
+// when it has chosen nothing -- the Default row shows that tune's name, and the picker
+// resolves against it. So the event the picker was built around is still the right
+// fallback here rather than something this mode has to carry separately.
+void UITask::gotoTonePickerForChannel(uint8_t channel_idx, int convo) {
+  _tone_picking = offband::ToneEvent::ChannelMessage;
+  _tone_picking_channel = (int)channel_idx;
+  _tone_picking_convo = convo;
+  ((TonePickerScreen*)tone_picker)->begin();
+  setCurrScreen(tone_picker);
+}
+
+void UITask::leaveTonePicker() {
+  const int convo = _tone_picking_channel >= 0 ? _tone_picking_convo : -1;
+  // Cleared on the way out, so the mode cannot outlive the visit. Review's point: a
+  // future caller that opens the picker without clearing this would inherit a stale
+  // channel and be sent back to a conversation it was never in. Clearing here means only
+  // the call that SETS the mode can turn it on.
+  _tone_picking_channel = -1;
+  _tone_picking_convo = -1;
+  if (convo >= 0) {
+    gotoThread(convo);
+    return;
+  }
+  gotoTones();
 }
 
 offband::TonePlay UITask::playTuneById(uint8_t id, offband::TonePriority priority) {
@@ -1061,6 +1091,68 @@ static bool toneEventFor(UIEventType t, offband::ToneEvent& out) {
 // same safe behavior rather than on silence.
 #endif
 
+#if UI_HAS_CARDKB && defined(PIN_BUZZER)
+// #1524: which tune a message on `channel_idx` plays -- the channel's own choice, else
+// the global Channel tune that every channel message has always used. A channel that has
+// chosen nothing, and a channel_idx that does not resolve, both land on exactly what this
+// board played before the feature existed.
+static uint8_t channelTuneIdFor(NodePrefs* prefs, uint8_t channel_idx) {
+  const uint8_t inherited =
+      offband::effectiveTone(prefs, offband::ToneEvent::ChannelMessage);
+  ChannelDetails ch;
+  if (!the_mesh.getChannel(channel_idx, ch)) return inherited;
+  return offband::resolveChannelTune(ch.tune, inherited);
+}
+#endif
+
+// Trigger vibration for all UI events except none.
+//
+// #1419: `sent` is excluded. Vibration is feedback for something that ARRIVED; a send
+// is the user's own keypress and they already know they made it. No board today both
+// has a motor and can fire `sent` -- the screen that sends is badge-only and the badge
+// has no motor -- so this changes nothing now. It is here because "no board does both
+// yet" is a latent bug, not a safety argument: a later board with a keyboard and a
+// motor would have buzzed on every send without anyone choosing that.
+//
+// Lifted out of notify() in #1524 so the channel path gets the motor too without also
+// getting notify()'s tune lookup -- calling notify() for the vibration would have played
+// the global tune on top of the channel's own.
+static void vibrateFor(UIEventType t) {
+#ifdef PIN_VIBRATION
+  if (t != UIEventType::none && t != UIEventType::sent) {
+    vibration.trigger();
+  }
+#else
+  (void)t;
+#endif
+}
+
+#if defined(PIN_BUZZER)
+// #1549: one way to turn a tune id into sound, for every event.
+//
+// This replaces a direct offband::tuneRtttl() lookup that could only play the builtin
+// table. Once a custom slot became selectable (#1413), picking one for an event stored an
+// id past that table, the lookup returned nullptr, and the event went SILENT -- while the
+// picker's own audition played it, because the audition had always gone through
+// playTuneById. One resolver for both paths is the fix and the point: a third kind of
+// tune cannot now reach one path and not the other.
+void UITask::playEventTune(uint8_t id) {
+#if UI_HAS_CARDKB
+  // Slots exist on this board, so the id may name a file rather than a table entry.
+  // playTuneById is the only resolver that knows how, and it carries the
+  // stop-before-staging ordering that makes slot playback safe (#1437).
+  playTuneById(id, offband::TonePriority::Event);
+#else
+  // No keyboard means no slot store and no picker, so nothing can have stored an id past
+  // the table. The table lookup is the whole answer, and playTuneById is not compiled
+  // here (#1478's guard).
+  if (const char* melody = offband::tuneRtttl(id)) {
+    buzzer.play(melody, offband::TonePriority::Event);
+  }
+#endif
+}
+#endif
+
 void UITask::notify(UIEventType t) {
 #if defined(PIN_BUZZER)
   // #1418/#1419/#1420: the tone is looked up, not written here. The id comes from the
@@ -1068,28 +1160,21 @@ void UITask::notify(UIEventType t) {
   // chosen -- so an un-configured badge plays what it always did, and a deliberately
   // silenced event stays silent.
   offband::ToneEvent ev;
-  if (toneEventFor(t, ev)) {
-    const uint8_t id = offband::effectiveTone(_node_prefs, ev);
-    // nullptr covers both silence and a custom-slot id this build cannot resolve yet
-    // (#1413). Either way nothing plays, which is the safe answer.
-    if (const char* melody = offband::tuneRtttl(id)) {
-      buzzer.play(melody, offband::TonePriority::Event);
-    }
-  }
+  if (toneEventFor(t, ev)) playEventTune(offband::effectiveTone(_node_prefs, ev));
 #endif
+  vibrateFor(t);
+}
 
-#ifdef PIN_VIBRATION
-  // Trigger vibration for all UI events except none.
-  //
-  // #1419: `sent` is excluded. Vibration is feedback for something that ARRIVED; a send
-  // is the user's own keypress and they already know they made it. No board today both
-  // has a motor and can fire `sent` -- the screen that sends is badge-only and the badge
-  // has no motor -- so this changes nothing now. It is here because "no board does both
-  // yet" is a latent bug, not a safety argument: a later board with a keyboard and a
-  // motor would have buzzed on every send without anyone choosing that.
-  if (t != UIEventType::none && t != UIEventType::sent) {
-    vibration.trigger();
-  }
+// #1524: a channel message, resolved against the channel it arrived on.
+void UITask::notifyChannel(uint8_t channel_idx) {
+#if UI_HAS_CARDKB && defined(PIN_BUZZER)
+  playEventTune(channelTuneIdFor(_node_prefs, channel_idx));
+  vibrateFor(UIEventType::channelMessage);
+#else
+  // Nothing on this board can set a per-channel tune -- the screen that does is the
+  // badge's -- so it keeps the base class's behaviour exactly, by calling it.
+  (void)channel_idx;
+  notify(UIEventType::channelMessage);
 #endif
 }
 
@@ -1450,7 +1535,11 @@ void UITask::loop() {
       // Tones rather than all the way out. Without this it would land on Home, because
       // the fallback below is the default for any screen not named here.
       if (curr == rtttl_edit) gotoCustomTunes();
-      else if (curr == tone_picker || curr == custom_tunes) gotoTones();
+      // #1525: the picker now serves conversations too, and one opened from a
+      // conversation has to go back to it -- landing in Settings would strand someone
+      // three levels from what they were reading.
+      else if (curr == tone_picker) leaveTonePicker();
+      else if (curr == custom_tunes) gotoTones();
       else
 #endif
       if (curr == tools || curr == zones || curr == gps || curr == battery

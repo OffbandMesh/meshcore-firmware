@@ -5,6 +5,9 @@
 #include <MeshLog.h>  // #396: serial-capture buffer access for the caplog download
 #include <helpers/ClockSanity.h>  // #607: owner-path clock sets + audit log
 #include "helpers/CdcConsoleFlush.h"   // #1035: right-flush (ZLP) for the USB-Serial-JTAG console
+// #1523: the per-channel tune's encoding. Header-only constexpr, and the builtin table is
+// internal-linkage, so a variant that only names the unset value emits nothing of it.
+#include <helpers/ui/TuneSlots.h>
 
 // Offband fork-only companion-API frame codes (config 0xC0 / GPS 0xC1 / block 0xC2)
 // + shared enums. Self-contained (only <stdint.h>); included unconditionally so the
@@ -1063,6 +1066,12 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   // type -- so the policy decision stays in the mesh layer and the UI layer stays
   // dumb. That also avoids changing the AbstractUITask signature, which all three
   // UITask implementations (ui-orig, ui-new, ui-tiny) would otherwise have to follow.
+  //
+  // #1524 keeps that split. Which channel this is does go through, because a tune set on
+  // one channel cannot be resolved without it -- but through notifyChannel(), whose
+  // default forwards to notify(channelMessage), so UIEventType is unchanged and every UI
+  // that does not care inherits exactly what it did before. The decision of WHETHER to
+  // alert is still made here; only the question of what it sounds like moves.
 #ifdef OFFBAND_GUI
   // #1500: GUI builds also obey the channel's own mode (All / Mentions / Off,
   // set from the conversation's bell); the global scope above stays the
@@ -1072,7 +1081,7 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
 #else
   const bool alert = channelMsgShouldNotify(text);
 #endif
-  if (_ui && alert) _ui->notify(UIEventType::channelMessage);
+  if (_ui && alert) _ui->notifyChannel(channel_idx);
 #endif
 #ifdef DISPLAY_CLASS
   // Get the channel name from the channel index
@@ -4327,13 +4336,25 @@ CmdResult MyMesh::cmdSetChannel(uint8_t idx, const char* name, const uint8_t sec
 #ifdef OFFBAND_GUI
   static_assert(MAX_GROUP_CHANNELS <= offband::gui::kGuiMaxChannels,
                 "GuiPrefs::channel_notify must cover every channel slot");
+#endif
+  // Read before writing: the app's channel-set carries a name and a secret and nothing
+  // else, so anything the badge keeps per channel has to be carried over here or it is
+  // lost. setChannel() copies the struct whole (#1523).
   ChannelDetails before;
   const bool was_empty = !getChannel(idx, before) || before.name[0] == 0;
-#endif
+
   ChannelDetails channel;
   StrHelper::strncpy(channel.name, name, 32);
   memset(channel.channel.secret, 0, sizeof(channel.channel.secret));
   memcpy(channel.channel.secret, secret, 16);  // only 128-bit secrets are supported
+  // #1523: keep the tune through a rename from the phone, but not across a REPLACEMENT.
+  // The slot is what the app addresses, so "not empty" is also true when a different
+  // channel is being dropped into it; the secret is what says whether this is still the
+  // same channel. Only the first 16 bytes are compared because that is all CMD_SET_CHANNEL
+  // carries -- the 256-bit variant is refused above.
+  const bool same_channel = !was_empty &&
+                            memcmp(before.channel.secret, secret, 16) == 0;
+  channel.tune = offband::channelTuneAfterEdit(was_empty, same_channel, before.tune);
   if (!setChannel(idx, channel)) return CmdResult::NotFound;
   saveChannels();
 #ifdef OFFBAND_GUI
@@ -4345,6 +4366,17 @@ CmdResult MyMesh::cmdSetChannel(uint8_t idx, const char* name, const uint8_t sec
   }
 #endif
   return CmdResult::Ok;
+}
+
+// #1525: the one writer of a channel's tune.
+bool MyMesh::setChannelTune(uint8_t idx, uint8_t stored) {
+  ChannelDetails ch;
+  if (!getChannel(idx, ch)) return false;
+  if (ch.tune == stored) return true;   // no flash write for a no-op
+  ch.tune = stored;
+  if (!setChannel(idx, ch)) return false;
+  saveChannels();
+  return true;
 }
 
 CmdResult MyMesh::cmdSetRadio(uint32_t freq_khz, uint32_t bw_hz, uint8_t sf, uint8_t cr, bool repeat) {

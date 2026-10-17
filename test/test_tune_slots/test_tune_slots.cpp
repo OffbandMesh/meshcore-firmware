@@ -150,6 +150,21 @@ TEST(SlotName, HandlesTheRowWidthBoundary) {
   EXPECT_STREQ("ThirteenChar", out) << "thirteen is truncated, not refused";
 }
 
+// #1549: the builtin table cannot play a slot, and the whole range says so.
+//
+// test_tunes already pins tuneRtttl(kBuiltinCount) and two arbitrary high values as
+// nullptr. This is the same contract over every id a slot can have, because a build that
+// used this lookup for events is exactly what made a custom tune chosen for DM, Channel
+// or Ack audition correctly and then never sound. Anything resolving an id for playback
+// has to handle slots itself; the table is not a fallback for them.
+TEST(TuneSlotIds, TheBuiltinTableResolvesNoSlotId) {
+  for (uint8_t i = 0; i < kSlotCount; i++) {
+    EXPECT_EQ(nullptr, tuneRtttl(slotIdAt(i)))
+        << "slot " << (int)i << " looks like a builtin -- an event path using tuneRtttl() "
+        << "alone would play the wrong tune instead of silently none";
+  }
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

@@ -192,6 +192,10 @@ class UITask : public AbstractUITask {
   // Which event the picker is editing. Held here rather than passed into the screen so
   // the picker can be a plain UIScreen like the others.
   offband::ToneEvent _tone_picking = offband::ToneEvent::ContactMessage;
+  // #1525: which channel slot the picker is editing, or -1 when it is editing an event.
+  // One screen serves both, so this is the mode flag as well as the subject.
+  int _tone_picking_channel = -1;
+  int _tone_picking_convo = -1;   // the conversation to return to, in conversation mode
 #endif
   UIScreen* curr;
 
@@ -280,6 +284,13 @@ public:
 #if UI_HAS_CARDKB && defined(PIN_BUZZER)
   void gotoTones();                                   // #1421: from Settings' Tones row
   void gotoTonePicker(offband::ToneEvent e);          // #1421: from a Tones row
+  // #1525: the same picker, editing one conversation's tune. From Right in a thread.
+  // `convo` is remembered so both Enter and Esc return to the conversation it was
+  // opened from -- with its draft, which ThreadScreen keeps per conversation.
+  void gotoTonePickerForChannel(uint8_t channel_idx, int convo);
+  // Where the picker goes when it is finished: the conversation it came from, or the
+  // Tones screen. One place decides, so Enter and Esc cannot disagree.
+  void leaveTonePicker();
   void gotoCustomTunes();                             // #1476: from Tones' Custom row
   void gotoRtttlEdit(uint8_t slot_index);             // #1477: from a Custom row
 
@@ -289,6 +300,10 @@ public:
     return buzzer.play(staged, offband::TonePriority::Preview);
   }
   offband::ToneEvent tonePickerEvent() const { return _tone_picking; }
+  // #1525: the channel the picker is editing, or -1 for an event. The picker shows its
+  // Default row, names the conversation in its title, and writes the channel record
+  // instead of a pref, when this is not -1.
+  int tonePickerChannel() const { return _tone_picking_channel; }
   // #1422: plays any tune by id, including the un-listed one the remote trigger names.
   // This is the ENTIRE surface epic #1191 needs: it honors the quiet pref and the
   // hardware MUTE, and does nothing for an id this build cannot resolve. Unparking that
@@ -349,7 +364,19 @@ public:
   // from AbstractUITask
   void msgRead(int msgcount) override;
   void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) override;
+#if defined(PIN_BUZZER)
+  // #1549: the one way an EVENT turns a tune id into sound. Guarded on the buzzer alone,
+  // not on the keyboard: both buzzer configurations need it, and each resolves the id the
+  // only way it can -- see the definition.
+  void playEventTune(uint8_t id);
+#endif
   void notify(UIEventType t = UIEventType::none) override;
+  // #1524: a channel message, with the channel. Declared for all three ui-new
+  // configurations and branched inside, rather than guarded here: the #1478 lesson was
+  // that a header guard which does not match where the members live fails on the envs
+  // you did not build. The non-badge branch calls the base behaviour and is identical to
+  // inheriting it.
+  void notifyChannel(uint8_t channel_idx) override;
   void applyBuzzerMute(bool quiet) override;
 // #1478: BOTH guards, matching where _slot_push lives. A board with a buzzer and no
 // keyboard -- heltec_rc32 and WioTrackerL1 are the live cases -- compiles this header but
