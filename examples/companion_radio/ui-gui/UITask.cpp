@@ -148,9 +148,11 @@ void UITask::pollButtons(uint32_t now) {
       // Clicks just before this hold go first, in the order they happened.
       if (uint8_t n = _usr_clicks.take()) handle(clicksEvent(n), now);
       handle(kind == PressKind::Hold ? InputEvent::UsrHold : InputEvent::UsrLongHold, now);
-    } else if (_screen == ScreenState::Off || _shell.locked()) {
+    } else if (_screen == ScreenState::Off || _shell.locked() || _shell.stepping()) {
       // A dark or locked screen acts on the click itself, without waiting
-      // out the multi-click window.
+      // out the multi-click window. So does a screen where USR steps
+      // (owner, 2026-10-17, #1534): fast clicks are fast steps, never a
+      // double ("previous") or a triple (the buzzer).
       handle(InputEvent::UsrClick, now);
     } else {
       _usr_clicks.click(now);
