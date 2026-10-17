@@ -46,6 +46,10 @@ const lv_point_t kRight[] = {{1, 1}, {5, 6}, {1, 11}};    // ›, a page
 // The pad's keys (mockup 5), then Cancel and Set.
 const char* const kPadKeys[13] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "⌫", "±"};
 constexpr int kPadCancel = 13, kPadSet = 14;   // ± (12) only on the Position pad
+// The Position pad is four across, so its 13 keys fit four rows under the
+// status bar (bench: five rows of three ran into it): the slots' keys, in
+// order, as 1 2 3 ⌫ / 4 5 6 ± / 7 8 9 . / a wide 0.
+const int kPosOrder[13] = {0, 1, 2, 11, 3, 4, 5, 12, 6, 7, 8, 9, 10};
 
 }  // namespace
 
@@ -1046,7 +1050,7 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
         _ss_pad.start(v, 3, 8);
         title("Frequency", nullptr);
       }
-      lv_obj_t* field = box(sheet, kW - 24, 32);
+      lv_obj_t* field = box(sheet, kW - 24, pos ? 28 : 32);
       lv_obj_set_style_pad_hor(field, 8, 0);
       lv_obj_set_style_border_width(field, 1, 0);
       lv_obj_set_style_border_color(field, c(_t.sig), 0);
@@ -1073,12 +1077,14 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
       lv_obj_set_style_pad_row(pad, 3, 0);
       lv_obj_set_style_pad_column(pad, 3, 0);
       for (int i = 0; i < (pos ? 13 : 12); i++) {
-        lv_obj_t* k = box(pad, (kW - 12 - 6) / 3, 28);
+        const int key = pos ? kPosOrder[i] : i;   // slot i shows this key
+        const lv_coord_t w = pos ? (i == 12 ? kW - 12 : (kW - 12 - 9) / 4) : (kW - 12 - 6) / 3;
+        lv_obj_t* k = box(pad, w, pos ? 24 : 28);
         lv_obj_set_style_radius(k, 4, 0);
         lv_obj_set_style_bg_opa(k, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(k, c(_t.bg2), 0);
-        const bool word = i == 9 || i >= 11;
-        lv_obj_center(label(k, word ? FontRole::Body : FontRole::Data, word ? _t.ink2 : _t.ink, kPadKeys[i]));
+        const bool word = key == 9 || key >= 11;
+        lv_obj_center(label(k, word ? FontRole::Body : FontRole::Data, word ? _t.ink2 : _t.ink, kPadKeys[key]));
         lv_obj_add_flag(k, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_user_data(k, reinterpret_cast<void*>(intptr_t(i) + 1));
         lv_obj_add_event_cb(
@@ -1395,9 +1401,10 @@ void GuiShell::setSheetPress(int i) {
       } else if (i == kPadSet) {
         setSheetCommit();
       } else {
-        if (i == 11) _ss_pad.backspace();
-        else if (i == 12) _ss_pad.key('-');   // ± toggles the sign
-        else _ss_pad.key(kPadKeys[i][0]);
+        const int key = _set_page == SetPage::Node ? kPosOrder[i] : i;   // the slot's key
+        if (key == 11) _ss_pad.backspace();
+        else if (key == 12) _ss_pad.key('-');   // ± toggles the sign
+        else _ss_pad.key(kPadKeys[key][0]);
         if (_ss_value) lv_label_set_text(_ss_value, _ss_pad.text());
         if (_ss_limit) lv_obj_set_style_text_color(_ss_limit, c(_t.dim), 0);
       }
