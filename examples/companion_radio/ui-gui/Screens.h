@@ -17,6 +17,7 @@
 #include <helpers/gui/InputMap.h>
 #include <helpers/gui/NodeViews.h>
 #include <helpers/gui/RadarViews.h>
+#include <helpers/gui/SettingsViews.h>
 
 #include "StatusBar.h"
 
@@ -67,6 +68,10 @@ struct ActView {
   uint32_t done_ms;          // when it finished (Share's "Shared ✓" lasts 2 s)
 };
 
+// Setup's pages, in the drawn list's order (Blocked is Contacts, owner pick
+// a, 2026-10-17).
+enum class SetPage : uint8_t { Node, Radio, Stats, Privacy, Contacts, Msg, Display, Conn, Power, Actions, Debug, About, Count, List = 0xFF };
+
 // What the screens need from the rest of the firmware. UITask implements it,
 // so the screens stay free of the mesh.
 class ShellModel {
@@ -101,6 +106,12 @@ public:
   virtual int openDm(const uint8_t* key) = 0;                         // its thread, -1 if none
   // Map (Epic F): this device's position, false if it has none.
   virtual bool ownPos(offband::gui::GeoPos* out) = 0;
+  // Setup (Epic G): the radio as set, this board's TX ceiling, and a save
+  // (false if refused); the list's value column for a page.
+  virtual offband::gui::RadioValues radioValues() = 0;
+  virtual int8_t txMax() = 0;
+  virtual bool saveRadio(const offband::gui::RadioValues& v) = 0;
+  virtual void setupSummary(SetPage page, char* out, size_t n) = 0;
   virtual ~ShellModel() {}
 };
 
@@ -121,6 +132,7 @@ public:
     if (_composing || _login) return true;
     if (_searching && _tab == Tab::Nodes) return _search_wheel || _search_kb;
     if (_tab == Tab::Map && !_detail) return true;   // USR selects the next node
+    if (_tab == Tab::Setup && _ss != SetSheet::None) return true;   // a sheet's cursor or stepper
     return _tab == Tab::Chat && _thread >= 0;
   }
   // Compose for a thread (from a conversation); leaving returns to it.
@@ -180,8 +192,59 @@ public:
   void updateDetail(uint32_t now_ms);
   // Map: redrawn when a position, the selection or the scale changes.
   void updateRadar(uint32_t now_ms);
+  // Setup: timed notes ("Not saved") clear themselves.
+  void updateSetup(uint32_t now_ms);
+  bool setupSheetOpen() const { return _ss != SetSheet::None; }
 
 private:
+  // Setup (Epic G, SetupScreens.cpp): the list, the pages, and the edit
+  // sheets of mockups 3-6.
+  enum class SetSheet : uint8_t { None, Pick, Step, Pad, Confirm };
+  void resetSetup();
+  void buildSetup(lv_obj_t* content);
+  void buildSetupList(lv_obj_t* content);
+  void buildRadioPage(lv_obj_t* content);
+  void buildSetupLater(lv_obj_t* content);
+  lv_obj_t* setHeader(lv_obj_t* content, const char* title);
+  lv_obj_t* setSection(lv_obj_t* parent, const char* h);
+  lv_obj_t* setRow(lv_obj_t* parent, uint8_t id, const char* k, const char* hint, const char* v, uint8_t kind,
+                   bool on, bool changed, bool off);
+  void setOpen(SetPage p);
+  void setBack();
+  void setRowPressed(uint8_t id);
+  bool setAction(offband::gui::Action a);
+  bool fullScreenSetup() const { return _tab == Tab::Setup && _set_page == SetPage::Radio; }
+  void openSetSheet(SetSheet kind, uint8_t row);
+  void closeSetSheet();
+  void setSheetCursor(int i);
+  void setSheetStep(int dir);
+  void setSheetPress(int i);   // a row, a key, or a button
+  void setSheetCommit();
+  void setNote(const char* text);
+
+  SetPage _set_page = SetPage::List;
+  SetPage _set_focus = SetPage::Node;    // the list row to refocus
+  uint8_t _set_focus_row = 0xFF;         // a page's row to refocus
+  offband::gui::RadioValues _radio_was{};
+  offband::gui::RadioValues _radio_now{};
+  int _preset_hint = -1;                 // the preset last picked, among twins
+  char _set_note[24] = {};               // shown on Save for 2 s
+  uint32_t _set_note_at = 0;
+  lv_obj_t* _set_save = nullptr;
+  SetSheet _ss = SetSheet::None;
+  uint8_t _ss_row = 0;                   // the row the sheet edits
+  int _ss_cur = 0;                       // the cursor: an option, a key, a button
+  int _ss_count = 0;
+  int _ss_val = 0;                       // the stepper's value
+  offband::gui::StepSpec _ss_spec{0, 0, 1};
+  offband::gui::NumberEntry _ss_pad;
+  lv_obj_t* _ss_obj = nullptr;           // on the top layer
+  lv_obj_t* _ss_list = nullptr;          // the picker's scrolling list
+  lv_obj_t* _ss_value = nullptr;         // the stepper's or pad's value
+  lv_obj_t* _ss_limit = nullptr;         // the range line under it
+  static constexpr size_t kSheetItems = 64;
+  lv_obj_t* _ss_item[kSheetItems] = {};
+
   void buildCompose(lv_obj_t* scr);
   void buildKeys();
   void refreshDraft();

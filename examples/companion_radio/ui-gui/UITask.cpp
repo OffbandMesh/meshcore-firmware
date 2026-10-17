@@ -649,6 +649,74 @@ void UITask::fillNodeRow(const ContactInfo& ci, NodeRow& r, uint8_t* key_copy, u
   r.lon_e6 = ci.gps_lon;
 }
 
+// ------------------------------------------------------------ Setup (G)
+
+RadioValues UITask::radioValues() {
+  RadioValues v{};
+  if (!_prefs) return v;
+  v.freq_khz = uint32_t(lround(_prefs->freq * 1000.0));
+  v.bw_hz = uint32_t(lround(_prefs->bw * 1000.0));
+  v.sf = _prefs->sf;
+  v.cr = _prefs->cr;
+  v.tx_dbm = _prefs->tx_power_dbm;
+  v.path_hash_mode = _prefs->path_hash_mode;
+  v.repeat = _prefs->isRepeatEn();
+  return v;
+}
+
+int8_t UITask::txMax() { return MAX_LORA_TX_POWER; }
+
+// Through the same commands the phone uses: the radio first (it checks the
+// values, and off-grid repeat against its frequencies), then TX power and
+// the path hash mode, each only if it changed.
+bool UITask::saveRadio(const RadioValues& v) {
+  const RadioValues was = radioValues();
+  if (v.freq_khz != was.freq_khz || v.bw_hz != was.bw_hz || v.sf != was.sf || v.cr != was.cr ||
+      v.repeat != was.repeat) {
+    const CmdResult r = the_mesh.cmdSetRadio(v.freq_khz, v.bw_hz, v.sf, v.cr, v.repeat);
+    if (r != CmdResult::Ok) {
+      mesh_log_line(MLOG_BOOT, "[gui] radio not saved (%u)\n", unsigned(r));
+      return false;
+    }
+  }
+  if (v.tx_dbm != was.tx_dbm && the_mesh.cmdSetTxPower(v.tx_dbm) != CmdResult::Ok) return false;
+  if (v.path_hash_mode != was.path_hash_mode && the_mesh.cmdSetPathHashMode(v.path_hash_mode) != CmdResult::Ok) {
+    return false;
+  }
+  mesh_log_line(MLOG_BOOT, "[gui] radio saved: %lu kHz bw %lu sf%u cr%u %d dBm path %u repeat %u\n",
+                (unsigned long)v.freq_khz, (unsigned long)v.bw_hz, unsigned(v.sf), unsigned(v.cr), int(v.tx_dbm),
+                unsigned(v.path_hash_mode), unsigned(v.repeat));
+  return true;
+}
+
+// The Settings list's value column. Pages built later in Epic G fill theirs in then.
+void UITask::setupSummary(SetPage page, char* out, size_t n) {
+  out[0] = '\0';
+  if (!_prefs) return;
+  switch (page) {
+    case SetPage::Node:
+      snprintf(out, n, "%s", _prefs->node_name);
+      break;
+    case SetPage::Radio: {
+      const RadioValues v = radioValues();
+      radioSummary(v.freq_khz, v.sf, out, n);
+      break;
+    }
+    case SetPage::Power: {
+      const uint16_t mv = _batt.seeded() ? _batt.value() : getBattMilliVolts();
+      snprintf(out, n, "%u.%02u V · %u%%", unsigned(mv / 1000), unsigned(mv % 1000 / 10), unsigned(battPercent()));
+      break;
+    }
+    case SetPage::About:
+#ifdef OFFBAND_VERSION
+      snprintf(out, n, "%s", strncmp(OFFBAND_VERSION, "offband-", 8) == 0 ? OFFBAND_VERSION + 8 : OFFBAND_VERSION);
+#endif
+      break;
+    default:
+      break;
+  }
+}
+
 // The GPS fix while there is one, else the position set in Setup: the
 // sensors keep both in node_lat/lon (MyMesh seeds them from the prefs).
 bool UITask::ownPos(GeoPos* out) {
@@ -1062,6 +1130,7 @@ void UITask::loop() {
   _shell.updateNodes(now);   // once a second while the Nodes tab is up
   _shell.updateDetail(now);  // a node detail's actions as they progress
   _shell.updateRadar(now);   // the Map, when a position moves
+  _shell.updateSetup(now);   // Setup's timed notes
   GUI_SPAN(s_t_update);
   lvglLoop();
   GUI_SPAN(s_t_lvgl);

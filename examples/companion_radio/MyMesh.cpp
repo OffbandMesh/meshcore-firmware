@@ -3171,13 +3171,9 @@ void MyMesh::handleCmdFrame(size_t len) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     }
   } else if (cmd_frame[0] == CMD_SET_RADIO_TX_POWER) {
-    int8_t power = (int8_t)cmd_frame[1];
-    if (power < -9 || power > MAX_LORA_TX_POWER) {
+    if (cmdSetTxPower((int8_t)cmd_frame[1]) != offband::gui::CmdResult::Ok) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     } else {
-      _prefs.tx_power_dbm = power;
-      savePrefs();
-      radio_driver.setTxPower(_prefs.tx_power_dbm);
       writeOKFrame();
     }
   } else if (cmd_frame[0] == CMD_SET_TUNING_PARAMS) {
@@ -3215,11 +3211,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     savePrefs();
     writeOKFrame();
   } else if (cmd_frame[0] == CMD_SET_PATH_HASH_MODE && cmd_frame[1] == 0 && len >= 3) {
-    if (cmd_frame[2] >= 3) {
+    if (cmdSetPathHashMode(cmd_frame[2]) != offband::gui::CmdResult::Ok) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     } else {
-      _prefs.path_hash_mode = cmd_frame[2];
-      savePrefs();
       writeOKFrame();
     }
   } else if (cmd_frame[0] == CMD_REBOOT && memcmp(&cmd_frame[1], "reboot", 6) == 0) {
@@ -4390,6 +4384,21 @@ CmdResult MyMesh::cmdSetRadio(uint32_t freq_khz, uint32_t bw_hz, uint8_t sf, uin
   savePrefs();
   // Applied live; the radio doesn't restart.
   radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
+  return CmdResult::Ok;
+}
+
+CmdResult MyMesh::cmdSetTxPower(int8_t dbm) {
+  if (dbm < -9 || dbm > MAX_LORA_TX_POWER) return CmdResult::BadArgs;
+  _prefs.tx_power_dbm = dbm;
+  savePrefs();
+  radio_driver.setTxPower(_prefs.tx_power_dbm);
+  return CmdResult::Ok;
+}
+
+CmdResult MyMesh::cmdSetPathHashMode(uint8_t mode) {
+  if (mode >= 3) return CmdResult::BadArgs;   // 1-, 2- or 3-byte hashes
+  _prefs.path_hash_mode = mode;
+  savePrefs();
   return CmdResult::Ok;
 }
 

@@ -64,6 +64,10 @@ public:
   const char* savedPassword(const uint8_t* key) override;
   int openDm(const uint8_t* key) override;
   bool ownPos(offband::gui::GeoPos* out) override;
+  offband::gui::RadioValues radioValues() override;
+  int8_t txMax() override;
+  bool saveRadio(const offband::gui::RadioValues& v) override;
+  void setupSummary(SetPage page, char* out, size_t n) override;
 
 private:
   void fillNodeRow(const ContactInfo& ci, offband::gui::NodeRow& r, uint8_t* key_copy, uint32_t now, bool clock_ok);

@@ -6,72 +6,14 @@
 #include <helpers/gui/SignalLevel.h>
 #include <helpers/gui/hw/GuiFonts.h>
 
+#include "ShellWidgets.h"
+
 using namespace offband::gui;
+using namespace shell;
 
 namespace {
 
-constexpr int16_t kW = 240;
-constexpr int16_t kStatusH = 20;
-constexpr int16_t kTabH = 40;
-constexpr int16_t kContentH = 320 - kStatusH - kTabH;
-
-// The param of a CLICKED that a button (USR hold) sent rather than a touch.
-const char kByButton[] = "button";
-
-// Names a step that held the loop past 100 ms (bench, #1534: taps lost to
-// a 981 ms stall during search). One line, when it happens.
-struct SlowStep {
-  const char* what;
-  int detail;
-  uint32_t t0;
-  SlowStep(const char* w, int d = 0) : what(w), detail(d), t0(lv_tick_get()) {}
-  ~SlowStep() {
-    const uint32_t ms = lv_tick_elaps(t0);
-    if (ms > 100) mesh_log_line(MLOG_BOOT, "[gui] slow %s (%d): %lums\n", what, detail, (unsigned long)ms);
-  }
-};
-
-lv_color_t c(uint32_t rgb) { return lv_color_hex(rgb & 0xFFFFFF); }
-
-lv_obj_t* box(lv_obj_t* parent, lv_coord_t w, lv_coord_t h) {
-  lv_obj_t* o = lv_obj_create(parent);
-  lv_obj_remove_style_all(o);
-  lv_obj_set_size(o, w, h);
-  lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-  return o;
-}
-
-lv_obj_t* label(lv_obj_t* parent, FontRole role, uint32_t rgb, const char* text = "") {
-  lv_obj_t* l = lv_label_create(parent);
-  lv_obj_set_style_text_font(l, font(role), 0);
-  lv_obj_set_style_text_color(l, c(rgb), 0);
-  lv_label_set_text(l, text);
-  return l;
-}
-
-// Text from the mesh, with emoji-steering characters dropped (displayText).
-void userText(lv_obj_t* l, const char* s, size_t len) {
-  static char buf[kMsgTextMax * 2 + 1];   // off the stack; the GUI is single-threaded
-  displayText(s, len, buf, sizeof buf);
-  lv_label_set_text(l, buf);
-}
-void userText(lv_obj_t* l, const char* s) { userText(l, s, strlen(s)); }
-
-// A label held to one line, cut with "…". LVGL only cuts a label whose
-// height is fixed; with a content height it wraps instead (bench, #1501).
-void oneLine(lv_obj_t* l, FontRole role) {
-  lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
-  lv_obj_set_height(l, lv_font_get_line_height(font(role)));
-}
-
-lv_obj_t* line(lv_obj_t* parent, const lv_point_t* pts, uint16_t n, uint32_t rgb) {
-  lv_obj_t* l = lv_line_create(parent);
-  lv_line_set_points(l, pts, n);
-  lv_obj_set_style_line_width(l, 1, 0);
-  lv_obj_set_style_line_color(l, c(rgb), 0);
-  lv_obj_clear_flag(l, LV_OBJ_FLAG_CLICKABLE);
-  return l;
-}
+const char* const kByButton = byButton();
 
 // Tab icons, 16 px, after the design's stroke icons. lv_line keeps the
 // pointer, so the point lists live for the program.
@@ -223,6 +165,7 @@ void GuiShell::showTab(Tab tab) {
   if (tab != _tab && tab == Tab::Chat) _thread = -1;   // the tab opens on the list
   if (tab != _tab && tab == Tab::Nodes) resetNodes();
   if (tab != _tab && tab == Tab::Map) resetMap();
+  if (tab != _tab && tab == Tab::Setup) resetSetup();
   _locked = false;
   _tab = tab;
   rebuild();
@@ -257,6 +200,8 @@ void GuiShell::rebuild() {
   SlowStep slow("rebuild tab", _searching ? 10 + int(_tab) : _composing ? 20 + int(_tab) : int(_tab));
   lv_obj_t* scr = lv_scr_act();
   closeSheet();   // it lives on the top layer, outside the rebuilt screen
+  closeSetSheet();
+  _set_save = nullptr;
   lv_group_remove_all_objs(_group);
   lv_obj_clean(scr);
   lv_obj_set_style_bg_color(scr, c(_t.bg), 0);
@@ -306,7 +251,9 @@ void GuiShell::rebuild() {
   _node_shown = 0;
   if (_tab == Tab::Chat) _shown_rev = _model->store().revision();
   _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
-  lv_obj_t* content = box(scr, kW, kContentH);
+  // Radio takes the tab bar's place for its pinned Save (mockup 2).
+  const bool full = fullScreenSetup();
+  lv_obj_t* content = box(scr, kW, full ? 320 - kStatusH : kContentH);
   lv_obj_set_pos(content, 0, kStatusH);
   if (_tab == Tab::Home) buildHome(content);
   else if (_tab == Tab::Chat && _thread >= 0) buildConversation(content);
@@ -314,8 +261,9 @@ void GuiShell::rebuild() {
   else if (detailTab() && _detail) buildDetail(content);   // from Nodes, or from the radar
   else if (_tab == Tab::Nodes) buildNodes(content);
   else if (_tab == Tab::Map) buildRadar(content);
+  else if (_tab == Tab::Setup) buildSetup(content);
   else buildPlaceholder(content);
-  buildTabs(scr);
+  if (!full) buildTabs(scr);
 
   // Back on the list, the row that was open (or focused) keeps the focus.
   if (_focus_row) {
@@ -428,6 +376,7 @@ void GuiShell::buildTabs(lv_obj_t* parent) {
             if (s->_pending_tab == Tab::Chat) s->_thread = -1;   // the tab opens on the list
             if (s->_pending_tab == Tab::Nodes && s->_tab != Tab::Nodes) s->resetNodes();
             if (s->_pending_tab == Tab::Map && s->_tab != Tab::Map) s->resetMap();
+            if (s->_pending_tab == Tab::Setup && s->_tab != Tab::Setup) s->resetSetup();
             s->_locked = false;
             s->_tab = s->_pending_tab;
             s->rebuild();
@@ -484,6 +433,8 @@ bool GuiShell::action(Action a) {
         return false;
     }
   }
+  // Setup: its pages and edit sheets (SetupScreens.cpp).
+  if (_tab == Tab::Setup && setAction(a)) return true;
   // The login sheet: a key cursor as in Compose; Back closes it.
   if (_login && detailTab()) {
     switch (a) {

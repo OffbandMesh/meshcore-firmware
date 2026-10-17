@@ -170,6 +170,8 @@ public:
   offband::gui::CmdResult cmdSendAdvert(bool flood);
   offband::gui::CmdResult cmdSetChannel(uint8_t idx, const char* name, const uint8_t secret[16]);
   offband::gui::CmdResult cmdSetRadio(uint32_t freq_khz, uint32_t bw_hz, uint8_t sf, uint8_t cr, bool repeat);
+  offband::gui::CmdResult cmdSetTxPower(int8_t dbm);          // -9..MAX_LORA_TX_POWER
+  offband::gui::CmdResult cmdSetPathHashMode(uint8_t mode);   // 0..2: 1- to 3-byte hashes
   offband::gui::CmdResult cmdResetPath(ContactInfo& contact);
   offband::gui::CmdResult cmdShareContact(ContactInfo& contact);
   void cmdSetTime(uint32_t secs);
