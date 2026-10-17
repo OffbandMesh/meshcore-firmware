@@ -15,6 +15,7 @@
 #include <helpers/gui/GuiTheme.h>
 #include <helpers/gui/GuiViews.h>
 #include <helpers/gui/InputMap.h>
+#include <helpers/gui/NodeViews.h>
 
 #include "StatusBar.h"
 
@@ -65,6 +66,10 @@ public:
   // Notifications (D6)
   virtual void setThreadMode(int thread, offband::gui::NotifyMode m) = 0;   // channels only
   virtual const char* nodeName() = 0;
+  // Nodes (Epic E): every contact as a list row, rebuilt on each call; the
+  // array stays valid until the next call. *total = contacts held.
+  virtual const offband::gui::NodeRow* nodeRows(size_t* total) = 0;
+  virtual uint8_t radioSf() = 0;   // for signal bars: the margin over this SF's floor
   virtual ~ShellModel() {}
 };
 
@@ -89,6 +94,9 @@ public:
   void setAdvertState(offband::gui::AdvertButton::State s);
   // Redraws Chats or the open conversation if the store changed.
   void updateChats();
+  // Nodes: row text refreshed in place; the list rebuilt when the order
+  // changes, at most every few seconds.
+  void updateNodes(uint32_t now_ms);
 
   StatusBar& status() { return _status; }
 
@@ -98,6 +106,7 @@ private:
   void buildChats(lv_obj_t* content);
   void buildConversation(lv_obj_t* content);
   void buildPlaceholder(lv_obj_t* content);
+  void buildNodes(lv_obj_t* content);
   void buildCompose(lv_obj_t* scr);
   void buildKeys();
   void refreshDraft();
@@ -160,6 +169,20 @@ private:
   lv_obj_t* _sheet_rows[3] = {};
   uint8_t _sheet_count = 0;
   int _sheet_hot = 0;
+
+  // Nodes (Epic E)
+  static constexpr size_t kNodeRowsShown = 50;   // the newest; search reaches the rest
+  offband::gui::TypeFilter _node_filter = offband::gui::TypeFilter::All;
+  bool _node_unread = false;
+  char _node_query[33] = {};
+  uint16_t _node_order[kNodeRowsShown] = {};
+  size_t _node_shown = 0;
+  lv_obj_t* _node_row_obj[kNodeRowsShown] = {};
+  lv_obj_t* _node_count = nullptr;
+  uint32_t _node_refresh_at = 0;
+  uint32_t _node_rebuild_at = 0;
+  uint8_t _focus_key[6] = {};   // the focused row's node, kept across rebuilds
+  bool _focus_key_set = false;
 
   // Home
   lv_obj_t* _name = nullptr;

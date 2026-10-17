@@ -54,6 +54,8 @@ public:
   void resend(uint32_t seq) override;
   void setThreadMode(int thread, offband::gui::NotifyMode m) override;
   const char* nodeName() override { return _prefs ? _prefs->node_name : ""; }
+  const offband::gui::NodeRow* nodeRows(size_t* total) override;
+  uint8_t radioSf() override { return _prefs && _prefs->sf ? _prefs->sf : 12; }
 
 private:
   void pollButtons(uint32_t now);
@@ -89,6 +91,8 @@ private:
 
   GuiShell _shell;
   offband::gui::DmRetry _dm[8];   // DMs sent from the device, awaiting their ACK
+  offband::gui::NodeRow* _node_rows = nullptr;   // MAX_CONTACTS rows, in PSRAM (Epic E)
+  uint8_t (*_node_keys)[32] = nullptr;           // the rows' keys, copied
   offband::gui::AdvertButton _advert;
   offband::BatteryAverage _batt;
   uint32_t _next_batt_read = 0;
