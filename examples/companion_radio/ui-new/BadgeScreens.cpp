@@ -631,7 +631,22 @@ int ThreadScreen::render(DisplayDriver& d) {
   if (entry) {
     char left[40], right[16] = "";
     snprintf(left, sizeof(left), " %s", name);
-    if (_unread_at_entry > 0) snprintf(right, sizeof(right), "%u unread", (unsigned)_unread_at_entry);
+    if (_unread_at_entry > 0) {
+      snprintf(right, sizeof(right), "%u unread", (unsigned)_unread_at_entry);
+    }
+#ifdef PIN_BUZZER
+    // #1525: the tune goes in this slot when there is no unread count to show. Both want
+    // the same space and the bar is only up for 2 s, so one has to yield.
+    //
+    // The unread count wins because it is the only place that number is ever shown and
+    // it is gone the moment you look away; the tune is persistent state with another way
+    // to see it -- press Right, which is what the '>' is telling you. A busy channel
+    // therefore does not advertise the key, which is the known cost of putting a hint in
+    // a bar that exists to show a name.
+    else {
+      tuneHint(right, sizeof(right));
+    }
+#endif
     bar(d, uiTitleFace(), 0, left, right);   // #1370: chrome, pinned to the nav face
   }
   for (int r = 0; r < count; r++) drawRow(d, first + r, _rows[top + r], channel);
@@ -639,6 +654,60 @@ int ThreadScreen::render(DisplayDriver& d) {
   if (!entry) drawCompose(d, kListRows);
   return entry ? (int)(2000 - (now - _entered_at)) + 10 : 500;
 }
+
+#ifdef PIN_BUZZER
+// #1525: the channel slot behind this conversation.
+//
+// The store keys a conversation by its secret, and that is exactly what identifies a
+// channel, so findChannelIdx answers directly rather than this screen keeping a slot
+// number that could go stale when channels are edited from the phone.
+int ThreadScreen::channelSlot() const {
+  if (_kind != Store::Channel) return -1;
+  mesh::GroupChannel g;
+  memcpy(g.secret, _key, sizeof(g.secret));
+  return the_mesh.findChannelIdx(g);
+}
+
+void ThreadScreen::openTunePicker() {
+  const int slot = channelSlot();
+  if (slot < 0) {
+    // A DM, or a channel that is no longer in the table. Say so rather than appearing
+    // to do nothing -- the key has no other meaning here to fall back on.
+    note(_kind == Store::Channel ? "no channel" : "channels only");
+    return;
+  }
+  _task->gotoTonePickerForChannel((uint8_t)slot, _convo);
+}
+
+// The entry bar's hint: ">Knock" for a conversation with its own tune, ">Default" for one
+// that follows the global channel tune. The '>' is the key: Right opens it.
+void ThreadScreen::tuneHint(char* out, size_t cap) const {
+  if (cap == 0) return;
+  out[0] = '\0';
+  const int slot = channelSlot();
+  if (slot < 0) return;
+  ChannelDetails ch;
+  if (!the_mesh.getChannel((uint8_t)slot, ch)) return;
+  if (ch.tune == offband::kChannelTuneUnset) {
+    snprintf(out, cap, ">Default");
+    return;
+  }
+  char name[offband::kMaxSlotName + 1];
+  const uint8_t inherited =
+      offband::effectiveTone(the_mesh.getNodePrefs(), offband::ToneEvent::ChannelMessage);
+  const uint8_t id = offband::resolveChannelTune(ch.tune, inherited);
+  // Named after what it will SOUND like, which for a stored id this build cannot resolve
+  // is the inherited tune -- the byte is still there (#1523) and a build that knows the
+  // id will name it again. Deliberately NOT ">Default" in that case: the conversation has
+  // made a choice, and a bar that said otherwise would misreport the state someone is
+  // about to edit. "Default" means one thing only: nothing is set.
+  if (offband::tuneLabel(the_mesh.dataStore(), id, name, sizeof(name)) == 0) {
+    snprintf(out, cap, ">Default");
+    return;
+  }
+  snprintf(out, cap, ">%.6s", name);
+}
+#endif
 
 bool ThreadScreen::handleInput(char c) {
   const uint8_t key = (uint8_t)c;
@@ -660,6 +729,15 @@ bool ThreadScreen::handleInput(char c) {
     case KEY_CANCEL:   // Esc drops a selection first, then leaves; the draft stays
       if (_sel_seq != 0) _sel_seq = 0; else leave();
       return true;
+#ifdef PIN_BUZZER
+    case KEY_RIGHT:   // #1525: this conversation's tune
+      // Left and Right are the only keys this screen does not already spend: Up/Down
+      // select a message, Enter sends or resends, Esc backs out, and every printable is
+      // typing. They reach _line.apply() today, which rejects them as non-printable, so
+      // nothing is being taken away. No letter could ever be a shortcut here.
+      openTunePicker();
+      return true;
+#endif
     default:
       break;
   }
@@ -1608,13 +1686,68 @@ void TonesScreen::cycleScope() {
 
 // The picker. ZonePickerScreen's shape -- the owner's "fixed option list" archetype --
 // with a preview as the selection moves.
+// #1525: conversation mode, which is the same question as "is the Default row shown".
+bool TonePickerScreen::withDefault() const { return _task->tonePickerChannel() >= 0; }
+
+uint8_t TonePickerScreen::selectedId() const {
+  return offband::tonePickerIdAt(withDefault(), _row);
+}
+
+// What the Default row stands for: the tune a conversation that has chosen nothing plays.
+// That is the global tune for the event the picker was opened against, which is exactly
+// what notifyChannel() falls back to (#1524) -- the same chain, read from the other end.
+uint8_t TonePickerScreen::inheritedId() const {
+  return offband::effectiveTone(the_mesh.getNodePrefs(), _task->tonePickerEvent());
+}
+
+int TonePickerScreen::currentSlot() const {
+  if (!withDefault()) return -1;
+  mesh::GroupChannel g;
+  memcpy(g.secret, _subject, sizeof(g.secret));
+  return the_mesh.findChannelIdx(g);
+}
+
+// What "now" marks: the tune this subject actually plays today.
+uint8_t TonePickerScreen::effectiveId() const {
+  const int slot = currentSlot();
+  if (slot < 0) return inheritedId();
+  ChannelDetails ch;
+  if (!the_mesh.getChannel((uint8_t)slot, ch)) return inheritedId();
+  return offband::resolveChannelTune(ch.tune, inheritedId());
+}
+
 void TonePickerScreen::begin() {
-  const uint8_t id = offband::effectiveTone(the_mesh.getNodePrefs(), _task->tonePickerEvent());
-  // Open on the tune in use. An id the picker does not list -- past the table, an empty
-  // slot, or a deliberately un-named builtin -- starts at Silent instead. Opening decides
-  // what gets AUDITIONED, which is why the rule is a function and not an expression here
-  // (#1467), and why it takes the store now that a slot can be the tune in use (#1475).
-  _sel = (int)offband::pickerRowFor(the_mesh.dataStore(), id);
+  const bool with_default = withDefault();
+
+  // #1525: remember WHICH conversation by its secret, which is what identifies a
+  // channel. Everything after this re-resolves the slot from it.
+  memset(_subject, 0, sizeof(_subject));
+  ChannelDetails ch;
+  if (with_default && the_mesh.getChannel((uint8_t)_task->tonePickerChannel(), ch)) {
+    memcpy(_subject, ch.channel.secret, sizeof(_subject));
+  }
+
+  // Which tune to open ON. For an event, the tune in use. For a conversation, the
+  // conversation's OWN choice -- kTuneUnset when it has made none, which is the Default
+  // row, rather than the tune it happens to inherit. Both would audition the same thing;
+  // only Default says "nothing is set here", which is what someone has to see before
+  // Enter means anything to them.
+  const uint8_t open_on = with_default ? offband::decodeChannelTune(ch.tune) : effectiveId();
+
+  if (with_default && open_on == offband::kTuneUnset) {
+    _row = offband::kTonePickerDefaultRow;
+  } else {
+    // An id the picker does not list -- past the table, an empty slot, or a deliberately
+    // un-named builtin -- opens on Silent instead. Opening decides what gets AUDITIONED,
+    // which is why the rule is a function and not an expression here (#1467), and why it
+    // takes the store now that a slot can be the tune in use (#1475).
+    //
+    // pickerRowFor only ever returns a LISTED id, so tonePickerRowFor always has a row
+    // for it; the guard is for a future caller, not for a reachable case today.
+    const int row = offband::tonePickerRowFor(
+        with_default, offband::pickerRowFor(the_mesh.dataStore(), open_on));
+    _row = row < 0 ? 0 : row;
+  }
   normalizeSel();
   _note = "";
   _note_until = 0;
@@ -1625,13 +1758,18 @@ void TonePickerScreen::begin() {
 }
 
 void TonePickerScreen::normalizeSel() {
-  const int count = (int)offband::kPickerIdEnd;
-  if (_sel < 0 || _sel >= count) _sel = offband::kTuneSilent;
+  const bool with_default = withDefault();
+  const int count = offband::tonePickerRowCount(with_default);
+  if (_row < 0 || _row >= count) _row = 0;
   for (int tries = 0; tries < count; tries++) {
-    if (offband::tuneIsListed(the_mesh.dataStore(), (uint8_t)_sel)) return;
-    _sel = (_sel + 1) % count;
+    // Default is always drawn, so it never needs stepping over.
+    if (with_default && _row == offband::kTonePickerDefaultRow) return;
+    if (offband::tuneIsListed(the_mesh.dataStore(), selectedId())) return;
+    _row = (_row + 1) % count;
   }
-  _sel = offband::kTuneSilent;   // unreachable: Silent is always listed
+  // Unreachable: Silent is always listed, and in conversation mode so is Default.
+  _row = offband::tonePickerRowFor(with_default, offband::kTuneSilent);
+  if (_row < 0) _row = 0;
 }
 
 int TonePickerScreen::render(DisplayDriver& d) {
@@ -1642,18 +1780,38 @@ int TonePickerScreen::render(DisplayDriver& d) {
   // #1475: builtins first, then the eight slots. Unfilled slots and un-named builtins
   // are skipped when drawing and stepped over when navigating, so the list is as long as
   // what actually exists rather than always showing eight empty rows.
-  const int count = (int)offband::kPickerIdEnd;
-  int top = listTop(_sel, count, kListRows);
+  const bool with_default = withDefault();
+  const int count = offband::tonePickerRowCount(with_default);
+  int top = listTop(_row, count, kListRows);
   const bool more_below = count - top > kListRows;
-  if (more_below) top = listTop(_sel, count, kListRows - 1);
+  if (more_below) top = listTop(_row, count, kListRows - 1);
 
   // The title names the event being edited, so three levels deep still says where it is.
   // 24 rather than the 19 the longest current label needs: test_tone_slots caps a label
   // at 12 characters, so " <label> tone" cannot exceed 19 without that test failing
   // first. The headroom is so a reader does not have to know that to trust the buffer.
-  char title[24];
-  snprintf(title, sizeof(title), " %s tone",
-           offband::kToneEventRows[(size_t)_task->tonePickerEvent()].label);
+  //
+  // #1525: in conversation mode it names the CONVERSATION instead. "Channel tone" three
+  // levels down would not say which channel, which is the whole reason the owner put
+  // this on the conversation rather than in Settings. The name is cut to 14 so
+  // "#<name> tone" still fits the 21 columns of the title face.
+  char title[40];
+  if (with_default) {
+    ChannelDetails ch;
+    char shown[32] = "";
+    const int slot = currentSlot();
+    if (slot >= 0 && the_mesh.getChannel((uint8_t)slot, ch)) {
+      d.translateUTF8ToBlocks(shown, ch.name, sizeof(shown));
+    }
+    // %.14s is a byte count, and that is safe here: translateUTF8ToBlocks emits exactly
+    // one byte per character -- ASCII, or a single CP437 block for anything above it --
+    // which BadgeLayout.h states as the invariant for all display-ready text. So this
+    // cannot split a character.
+    snprintf(title, sizeof(title), " #%.14s tone", shown);
+  } else {
+    snprintf(title, sizeof(title), " %s tone",
+             offband::kToneEventRows[(size_t)_task->tonePickerEvent()].label);
+  }
   const bool noting = _note[0] != 0 && millis() < _note_until;
   bar(d, kBody, 0, title, noting ? _note : "");
   if (!noting) {
@@ -1665,14 +1823,28 @@ int TonePickerScreen::render(DisplayDriver& d) {
     if (top > 0) markUp(d, right_edge - 6, 0, true);
   }
 
-  const uint8_t current = offband::effectiveTone(the_mesh.getNodePrefs(),
-                                                 _task->tonePickerEvent());
+  const uint8_t current = effectiveId();
   for (int r = 0; r < kListRows && top + r < count; r++) {
-    const uint8_t id = (uint8_t)(top + r);
+    const int row = top + r;
     char name[offband::kMaxSlotName + 1];
+    // #1525: Default shows what it resolves to rather than "now". "now" belongs on the
+    // row of the tune actually playing -- which, for a conversation that has chosen
+    // nothing, IS the inherited one, so the two together read as "Default -> Kerplop"
+    // with Kerplop marked. Marking Default as well would say the same thing twice and
+    // cost the only slot that can name the inherited tune.
+    if (with_default && row == offband::kTonePickerDefaultRow) {
+      char inherited[offband::kMaxSlotName + 1];
+      if (offband::tuneLabel(the_mesh.dataStore(), inheritedId(), inherited,
+                             sizeof(inherited)) == 0) {
+        inherited[0] = '\0';
+      }
+      listRow(d, 1 + r, "Default", inherited, row == _row);
+      continue;
+    }
+    const uint8_t id = offband::tonePickerIdAt(with_default, row);
     // Empty: an un-listed builtin (#1422), or a slot with nothing in it. Both stay out.
     if (offband::tuneLabel(the_mesh.dataStore(), id, name, sizeof(name)) == 0) continue;
-    listRow(d, 1 + r, name, id == current ? "now" : "", id == _sel);
+    listRow(d, 1 + r, name, id == current ? "now" : "", row == _row);
   }
   return noting ? 250 : 1000;
 }
@@ -1681,7 +1853,10 @@ int TonePickerScreen::render(DisplayDriver& d) {
 // words, because a silent picker with no explanation reads as broken. Distinguishing
 // them is the entire reason play() returns a reason rather than a bool (#1417).
 void TonePickerScreen::audition() {
-  switch (_task->previewTune((uint8_t)_sel)) {
+  // #1525: Default auditions what it RESOLVES to. Hearing nothing on the Default row
+  // would read as "Default means silence", which is the one thing it does not mean.
+  const uint8_t id = selectedId();
+  switch (_task->previewTune(id == offband::kTuneUnset ? inheritedId() : id)) {
     case offband::TonePlay::RefusedQuiet:
       _note = "Buzzer: OFF";
       _note_until = millis() + 1200;
@@ -1698,38 +1873,59 @@ void TonePickerScreen::audition() {
   }
 }
 
+// #1525: write the highlighted choice. A flash write only for a change, as the zone
+// picker does.
+void TonePickerScreen::commit() {
+  const int slot = currentSlot();
+  if (!withDefault()) {
+    NodePrefs* prefs = the_mesh.getNodePrefs();
+    // Note this compares the STORED value, not the effective one: choosing the tune that
+    // is already playing by default is a real change, because it pins it against a later
+    // firmware's default.
+    const uint8_t id = selectedId();
+    if (offband::storedTone(prefs, _task->tonePickerEvent()) != id) {
+      if (offband::setStoredTone(prefs, _task->tonePickerEvent(), id)) the_mesh.savePrefs();
+    }
+    return;
+  }
+  // The channel was deleted or replaced while the picker was open. Write nothing: the
+  // slot may now hold a different conversation, and setting a tune on one nobody was
+  // looking at is worse than losing the keypress.
+  if (slot < 0) return;
+  // Default is kTuneUnset, which encodeChannelTune turns into the stored "no choice" --
+  // so choosing Default clears the conversation's tune through the same call that sets
+  // one, rather than through a separate un-set path.
+  the_mesh.setChannelTune((uint8_t)slot, offband::encodeChannelTune(selectedId()));
+}
+
 bool TonePickerScreen::handleInput(char c) {
   const uint8_t key = (uint8_t)c;
-  const int count = (int)offband::kPickerIdEnd;
+  const bool with_default = withDefault();
+  const int count = offband::tonePickerRowCount(with_default);
   const bool from_button = !_task->inputFromKeyboard();
 
   const bool down = (from_button && key == KEY_NEXT) || key == KEY_DOWN;
   const bool up = (from_button && key == KEY_PREV) || key == KEY_UP;
   if (down || up) {
     // Step over anything the menu does not list, so an un-listed tune cannot be
-    // selected by walking onto it.
+    // selected by walking onto it. Default is always listed.
     const int dir = down ? 1 : -1;
     for (int tries = 0; tries < count; tries++) {
-      _sel = (_sel + dir + count) % count;
-      if (offband::tuneIsListed(the_mesh.dataStore(), (uint8_t)_sel)) break;
+      _row = (_row + dir + count) % count;
+      if (with_default && _row == offband::kTonePickerDefaultRow) break;
+      if (offband::tuneIsListed(the_mesh.dataStore(), selectedId())) break;
     }
     audition();
     return true;
   }
   if (key == KEY_ENTER) {
-    NodePrefs* prefs = the_mesh.getNodePrefs();
-    // A flash write only for a change, as the zone picker does. Note this compares the
-    // STORED value, not the effective one: choosing the tune that is already playing by
-    // default is a real change, because it pins it against a later firmware's default.
-    if (offband::storedTone(prefs, _task->tonePickerEvent()) != (uint8_t)_sel) {
-      if (offband::setStoredTone(prefs, _task->tonePickerEvent(), (uint8_t)_sel)) {
-        the_mesh.savePrefs();
-      }
-    }
-    _task->gotoTones();
+    commit();
+    // #1525: back where it was opened from -- the conversation, or Tones. Esc goes
+    // through the same function, so the two cannot disagree about where "back" is.
+    _task->leaveTonePicker();
     return true;
   }
-  return false;   // Esc: back to Tones, unchanged
+  return false;   // Esc: back where it came from, unchanged
 }
 
 void CustomTunesScreen::summary(UITask* task, char* out, size_t n) {

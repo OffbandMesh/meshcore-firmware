@@ -98,6 +98,49 @@ inline size_t deriveSlotName(const char* rtttl, char* out, size_t out_cap) {
   return n;
 }
 
+// ---- the picker's rows (#1525) --------------------------------------------------------
+
+// One past the last id the picker may show, so a screen does not hard-code the sum.
+// Lived in ui-new/TuneSlotStore.h until #1525 needed a row mapping that could be
+// unit-tested; it has no filesystem dependency and belongs here with the id space.
+constexpr uint8_t kPickerIdEnd = kFirstSlotId + kSlotCount;
+
+// The picker lists one extra row, at the top, when it is editing a CONVERSATION rather
+// than an event: Default.
+//
+// That row is the only way to un-set a tune a conversation has pinned. Without it the
+// picker could change the choice but never remove it, and a conversation would be stuck
+// with whatever was chosen once. Its id is kTuneUnset, because that is already precisely
+// what it means and because encodeChannelTune turns it into the stored "no choice".
+//
+// Rows rather than ids, with the mapping in one place, because the alternative is a
+// selection index that means a tune id in one mode and a row in the other -- the trap
+// that got pickerRowFor renamed in #1475.
+constexpr int kTonePickerDefaultRow = 0;
+
+inline int tonePickerRowCount(bool with_default) {
+  return (int)kPickerIdEnd + (with_default ? 1 : 0);
+}
+
+// The tune a row offers, or kTuneUnset for the Default row and for a row out of range.
+inline uint8_t tonePickerIdAt(bool with_default, int row) {
+  if (with_default) {
+    if (row == kTonePickerDefaultRow) return kTuneUnset;
+    row--;
+  }
+  if (row < 0 || row >= (int)kPickerIdEnd) return kTuneUnset;
+  return (uint8_t)row;
+}
+
+// Where an id sits, or -1 when this picker has no row for it. kTuneUnset has a row only
+// when the Default row is shown, which is what makes "un-set" unreachable for an event:
+// an event always plays something, so it has no Default to fall back to.
+inline int tonePickerRowFor(bool with_default, uint8_t id) {
+  if (id == kTuneUnset) return with_default ? kTonePickerDefaultRow : -1;
+  if ((int)id >= (int)kPickerIdEnd) return -1;
+  return with_default ? (int)id + 1 : (int)id;
+}
+
 // ---- a tune set on one channel (#1522) ------------------------------------------------
 //
 // Stored in a byte of /channels2 that has only ever held zero: the record is fixed-stride

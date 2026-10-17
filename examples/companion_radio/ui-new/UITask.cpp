@@ -936,8 +936,38 @@ void UITask::gotoCustomTunes() {
 
 void UITask::gotoTonePicker(offband::ToneEvent e) {
   _tone_picking = e;
+  _tone_picking_channel = -1;   // #1525: event mode, so no Default row
   ((TonePickerScreen*)tone_picker)->begin();
   setCurrScreen(tone_picker);
+}
+
+// #1525: the same picker, for one conversation.
+//
+// _tone_picking stays at ChannelMessage because that is what the conversation INHERITS
+// when it has chosen nothing -- the Default row shows that tune's name, and the picker
+// resolves against it. So the event the picker was built around is still the right
+// fallback here rather than something this mode has to carry separately.
+void UITask::gotoTonePickerForChannel(uint8_t channel_idx, int convo) {
+  _tone_picking = offband::ToneEvent::ChannelMessage;
+  _tone_picking_channel = (int)channel_idx;
+  _tone_picking_convo = convo;
+  ((TonePickerScreen*)tone_picker)->begin();
+  setCurrScreen(tone_picker);
+}
+
+void UITask::leaveTonePicker() {
+  const int convo = _tone_picking_channel >= 0 ? _tone_picking_convo : -1;
+  // Cleared on the way out, so the mode cannot outlive the visit. Review's point: a
+  // future caller that opens the picker without clearing this would inherit a stale
+  // channel and be sent back to a conversation it was never in. Clearing here means only
+  // the call that SETS the mode can turn it on.
+  _tone_picking_channel = -1;
+  _tone_picking_convo = -1;
+  if (convo >= 0) {
+    gotoThread(convo);
+    return;
+  }
+  gotoTones();
 }
 
 offband::TonePlay UITask::playTuneById(uint8_t id, offband::TonePriority priority) {
@@ -1505,7 +1535,11 @@ void UITask::loop() {
       // Tones rather than all the way out. Without this it would land on Home, because
       // the fallback below is the default for any screen not named here.
       if (curr == rtttl_edit) gotoCustomTunes();
-      else if (curr == tone_picker || curr == custom_tunes) gotoTones();
+      // #1525: the picker now serves conversations too, and one opened from a
+      // conversation has to go back to it -- landing in Settings would strand someone
+      // three levels from what they were reading.
+      else if (curr == tone_picker) leaveTonePicker();
+      else if (curr == custom_tunes) gotoTones();
       else
 #endif
       if (curr == tools || curr == zones || curr == gps || curr == battery
