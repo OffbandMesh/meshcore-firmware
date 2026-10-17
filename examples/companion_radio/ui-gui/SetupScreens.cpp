@@ -355,6 +355,7 @@ void GuiShell::setRowPressed(uint8_t id) {
       if (ok) {
         _radio_now = _radio_was;
         rebuild();
+        setNote("Saved ✓");   // the amber clearing alone was easy to miss (bench, owner pick a)
       } else {
         rebuild();
         setNote("Not saved");
