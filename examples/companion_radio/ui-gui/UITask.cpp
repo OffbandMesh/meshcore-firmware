@@ -75,6 +75,14 @@ const char* screenName(ScreenState s) {
 
 Chsc6xTouch s_touch;
 
+// With an AUX button USR clicks aren't grouped into double and triple:
+// AUX does "previous", and AUX held 3 s the buzzer (#1534).
+#ifdef PIN_USER_BTN_2
+constexpr bool kUsrClicksAtOnce = true;
+#else
+constexpr bool kUsrClicksAtOnce = false;
+#endif
+
 }  // namespace
 
 void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs) {
@@ -148,11 +156,12 @@ void UITask::pollButtons(uint32_t now) {
       // Clicks just before this hold go first, in the order they happened.
       if (uint8_t n = _usr_clicks.take()) handle(clicksEvent(n), now);
       handle(kind == PressKind::Hold ? InputEvent::UsrHold : InputEvent::UsrLongHold, now);
-    } else if (_screen == ScreenState::Off || _shell.locked() || _shell.stepping()) {
+    } else if (kUsrClicksAtOnce || _screen == ScreenState::Off || _shell.locked() || _shell.stepping()) {
       // A dark or locked screen acts on the click itself, without waiting
-      // out the multi-click window. So does a screen where USR steps
-      // (owner, 2026-10-17, #1534): fast clicks are fast steps, never a
-      // double ("previous") or a triple (the buzzer).
+      // out the multi-click window. So does a screen where USR steps, and
+      // every screen on a board with AUX (owner, 2026-10-17, #1534): fast
+      // clicks are fast steps, never a double ("previous", AUX's job) or a
+      // triple (the buzzer, AUX held 3 s there).
       handle(InputEvent::UsrClick, now);
     } else {
       _usr_clicks.click(now);
