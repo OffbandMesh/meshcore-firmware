@@ -531,52 +531,70 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
           current = _radio_now.path_hash_mode;
           break;
       }
-      if (_ss_count > int(kSheetItems)) _ss_count = int(kSheetItems);
       title(t, sub);
-      _ss_list = box(sheet, LV_PCT(100), _ss_count > 6 ? 6 * 30 : _ss_count * 30);
+      // Only the rows on screen are built, and refilled as the cursor or a
+      // drag moves the window: the 59 presets as objects took internal RAM
+      // down to 340 bytes free (bench, 2026-10-17).
+      _ss_picked = current;
+      _ss_top = 0;
+      const int win = _ss_count < kPickRows ? _ss_count : kPickRows;
+      _ss_list = box(sheet, LV_PCT(100), win * 30);
       lv_obj_set_flex_flow(_ss_list, LV_FLEX_FLOW_COLUMN);
-      if (_ss_count > 6) {
-        lv_obj_add_flag(_ss_list, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_scrollbar_mode(_ss_list, LV_SCROLLBAR_MODE_OFF);
-      }
-      for (int i = 0; i < _ss_count; i++) {
-        switch (row) {
-          case rPreset: textf(v, sizeof v, "%s", radioPreset(size_t(i)).title); break;
-          case rBw: bwText(kBandwidthsHz[i], v, sizeof v); break;
-          case rSf: sfText(uint8_t(kSfMin + i), v, sizeof v); break;
-          case rCr: crText(uint8_t(kCrMin + i), v, sizeof v); break;
-          default: pathHashText(uint8_t(i), v, sizeof v); break;
-        }
+      lv_obj_add_flag(_ss_list, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_add_event_cb(
+          _ss_list,
+          [](lv_event_t* e) {   // a drag scrolls the window, a row (30 px) at a time
+            GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+            const lv_event_code_t code = lv_event_get_code(e);
+            if (code == LV_EVENT_PRESSED) {
+              self->_ss_drag = 0;
+              self->_ss_dragged = false;
+            } else if (code == LV_EVENT_PRESSING) {
+              lv_point_t d;
+              lv_indev_get_vect(lv_indev_get_act(), &d);
+              self->_ss_drag += d.y;
+              while (self->_ss_drag <= -30 || self->_ss_drag >= 30) {
+                const int step = self->_ss_drag < 0 ? 1 : -1;   // up shows later rows
+                self->_ss_drag += step * 30;
+                self->_ss_dragged = true;
+                self->setPickTop(self->_ss_top + step);
+              }
+            }
+          },
+          LV_EVENT_ALL, this);
+      for (int w = 0; w < win; w++) {
         lv_obj_t* o = box(_ss_list, LV_PCT(100), 30);
         lv_obj_set_style_pad_hor(o, 12, 0);
         lv_obj_set_flex_flow(o, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(o, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_pad_column(o, 8, 0);
-        lv_obj_t* rd = box(o, 12, 12);
+        lv_obj_set_style_border_side(o, LV_BORDER_SIDE_LEFT, 0);
+        lv_obj_set_style_border_color(o, c(_t.sig), 0);
+        lv_obj_set_style_bg_color(o, c(_t.wash), 0);
+        lv_obj_t* rd = box(o, 12, 12);   // child 0: the radio ring, its dot inside
         lv_obj_set_style_radius(rd, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_border_width(rd, 2, 0);
-        lv_obj_set_style_border_color(rd, c(i == current ? _t.sig : _t.line), 0);
-        if (i == current) {
-          lv_obj_t* dot = box(rd, 4, 4);
-          lv_obj_center(dot);
-          lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
-          lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
-          lv_obj_set_style_bg_color(dot, c(_t.sig), 0);
-        }
-        lv_obj_t* ol = label(o, FontRole::Body, i == current ? _t.sig : _t.ink, v);
+        lv_obj_t* dot = box(rd, 4, 4);
+        lv_obj_center(dot);
+        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(dot, c(_t.sig), 0);
+        lv_obj_t* ol = label(o, FontRole::Body, _t.ink);   // child 1: the option
         lv_obj_set_flex_grow(ol, 1);
         oneLine(ol, FontRole::Body);
         lv_obj_add_flag(o, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_user_data(o, reinterpret_cast<void*>(intptr_t(i) + 1));
+        lv_obj_add_flag(o, LV_OBJ_FLAG_EVENT_BUBBLE);   // the list sees the drag
+        lv_obj_set_user_data(o, reinterpret_cast<void*>(intptr_t(w) + 1));
         lv_obj_add_event_cb(
             o,
             [](lv_event_t* e) {
               GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
-              self->_ss_cur = int(intptr_t(lv_obj_get_user_data(lv_event_get_current_target(e))) - 1);
+              if (self->_ss_dragged) return;   // the end of a drag, not a pick
+              const int w = int(intptr_t(lv_obj_get_user_data(lv_event_get_current_target(e))) - 1);
+              self->_ss_cur = self->_ss_top + w;
               self->later([](GuiShell* g) { g->setSheetCommit(); });
             },
             LV_EVENT_CLICKED, this);
-        _ss_item[i] = o;
+        _ss_item[w] = o;
       }
       setSheetCursor(current >= 0 ? current : 0);
       break;
@@ -701,29 +719,60 @@ void GuiShell::closeSetSheet() {
   _ss = SetSheet::None;
 }
 
-// The cursor: the washed option (Pick), or an outlined key or button.
+// The cursor: the washed option (Pick, the window following it), or an
+// outlined key or button.
 void GuiShell::setSheetCursor(int i) {
   if (_ss == SetSheet::None || _ss_count <= 0) return;
   if (i < 0) i = 0;
   if (i >= _ss_count) i = _ss_count - 1;
+  _ss_cur = i;
+  if (_ss == SetSheet::Pick) {
+    const int win = _ss_count < kPickRows ? _ss_count : kPickRows;
+    int top = _ss_top;
+    if (i < top) top = i;
+    if (i >= top + win) top = i - win + 1;
+    setPickTop(top);
+    return;
+  }
   for (int j = 0; j < _ss_count && j < int(kSheetItems); j++) {
     lv_obj_t* o = _ss_item[j];
     if (!o) continue;
     const bool hot = j == i;
-    if (_ss == SetSheet::Pick) {
-      lv_obj_set_style_bg_opa(o, hot ? lv_opa_t(_t.wash >> 24) : LV_OPA_TRANSP, 0);
-      lv_obj_set_style_bg_color(o, c(_t.wash), 0);
-      lv_obj_set_style_border_side(o, LV_BORDER_SIDE_LEFT, 0);
-      lv_obj_set_style_border_width(o, hot ? 3 : 0, 0);
-      lv_obj_set_style_border_color(o, c(_t.sig), 0);
-    } else {
-      lv_obj_set_style_outline_width(o, hot ? 2 : 0, 0);
-      lv_obj_set_style_outline_color(o, c(_t.ink), 0);
-      lv_obj_set_style_outline_pad(o, -4, 0);
-    }
+    lv_obj_set_style_outline_width(o, hot ? 2 : 0, 0);
+    lv_obj_set_style_outline_color(o, c(_t.ink), 0);
+    lv_obj_set_style_outline_pad(o, -4, 0);
   }
-  _ss_cur = i;
-  if (_ss == SetSheet::Pick && _ss_item[i]) lv_obj_scroll_to_view(_ss_item[i], LV_ANIM_OFF);
+}
+
+// The picker's window from option `top`: each row's text, the chosen one's
+// filled ring, and the cursor's wash.
+void GuiShell::setPickTop(int top) {
+  const int win = _ss_count < kPickRows ? _ss_count : kPickRows;
+  if (top > _ss_count - win) top = _ss_count - win;
+  if (top < 0) top = 0;
+  _ss_top = top;
+  char v[48];
+  for (int w = 0; w < win; w++) {
+    lv_obj_t* o = _ss_item[w];
+    if (!o) continue;
+    const int opt = top + w;
+    switch (_ss_row) {
+      case rPreset: textf(v, sizeof v, "%s", radioPreset(size_t(opt)).title); break;
+      case rBw: bwText(kBandwidthsHz[opt], v, sizeof v); break;
+      case rSf: sfText(uint8_t(kSfMin + opt), v, sizeof v); break;
+      case rCr: crText(uint8_t(kCrMin + opt), v, sizeof v); break;
+      default: pathHashText(uint8_t(opt), v, sizeof v); break;
+    }
+    const bool chosen = opt == _ss_picked, hot = opt == _ss_cur;
+    lv_obj_t* rd = lv_obj_get_child(o, 0);
+    lv_obj_set_style_border_color(rd, c(chosen ? _t.sig : _t.line), 0);
+    lv_obj_set_style_bg_opa(lv_obj_get_child(rd, 0), chosen ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    lv_obj_t* ol = lv_obj_get_child(o, 1);
+    lv_obj_set_style_text_color(ol, c(chosen ? _t.sig : _t.ink), 0);
+    lv_label_set_text(ol, v);
+    lv_obj_set_style_bg_opa(o, hot ? lv_opa_t(_t.wash >> 24) : LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(o, hot ? 3 : 0, 0);
+  }
 }
 
 void GuiShell::setSheetStep(int dir) {

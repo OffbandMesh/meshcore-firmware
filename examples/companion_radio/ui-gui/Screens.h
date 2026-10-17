@@ -242,8 +242,14 @@ private:
   lv_obj_t* _ss_list = nullptr;          // the picker's scrolling list
   lv_obj_t* _ss_value = nullptr;         // the stepper's or pad's value
   lv_obj_t* _ss_limit = nullptr;         // the range line under it
-  static constexpr size_t kSheetItems = 64;
+  static constexpr size_t kSheetItems = 16;   // a picker builds only its window
+  static constexpr int kPickRows = 6;
   lv_obj_t* _ss_item[kSheetItems] = {};
+  int _ss_top = 0;                       // the picker's first option on screen
+  int _ss_picked = -1;                   // the option the value has now
+  int16_t _ss_drag = 0;                  // a drag's travel since the last row step
+  bool _ss_dragged = false;
+  void setPickTop(int top);
 
   void buildCompose(lv_obj_t* scr);
   void buildKeys();

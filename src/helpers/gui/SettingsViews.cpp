@@ -78,8 +78,11 @@ const RadioPreset kPresets[] = {
 };
 constexpr size_t kPresetCount = sizeof(kPresets) / sizeof(kPresets[0]);
 
+// A preset that sets the path hash size (Canada: 3-byte) only matches that
+// size; one that leaves it alone matches any.
 bool matches(const RadioPreset& p, const RadioValues& v) {
-  return p.freq_khz == v.freq_khz && p.bw_hz == v.bw_hz && p.sf == v.sf && p.cr == v.cr;
+  return p.freq_khz == v.freq_khz && p.bw_hz == v.bw_hz && p.sf == v.sf && p.cr == v.cr &&
+         (p.path_bytes == 0 || p.path_bytes - 1 == v.path_hash_mode);
 }
 
 }  // namespace

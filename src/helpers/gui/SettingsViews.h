@@ -76,7 +76,8 @@ size_t radioPresetCount();
 const RadioPreset& radioPreset(size_t i);
 // The preset these values are: `hint` (the one last picked) if it still
 // matches, else the first that does; -1 for Custom. Frequency, bandwidth,
-// SF and CR decide; a preset's TX power and path hash don't.
+// SF and CR decide, and the path hash size where the preset sets one
+// (USA and Canada differ only in that); TX power doesn't.
 int presetFor(const RadioValues& v, int hint);
 // The values with a preset applied; TX power is held to the board's maximum.
 RadioValues applyPreset(const RadioValues& v, size_t preset, int8_t tx_max);

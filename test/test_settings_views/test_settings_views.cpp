@@ -148,6 +148,25 @@ TEST(Presets, MatchKeepsThePickedOneAmongTwins) {
   EXPECT_EQ(presetFor(v, 0), sawa);    // a hint that doesn't match is ignored
 }
 
+TEST(Presets, APresetsPathHashDecidesToo) {
+  // Bench (owner, 2026-10-17): USA values read "Canada". Canada is the same
+  // radio values with 3-byte hashes, and comes first in the table.
+  int usa = -1, canada = -1;
+  for (size_t i = 0; i < radioPresetCount(); i++) {
+    if (strcmp(radioPreset(i).title, "USA") == 0) usa = int(i);
+    if (strcmp(radioPreset(i).title, "Canada") == 0) canada = int(i);
+  }
+  ASSERT_GE(usa, 0);
+  ASSERT_GE(canada, 0);
+  RadioValues v = kUsa;   // 1-byte hashes
+  EXPECT_EQ(presetFor(v, -1), usa);
+  v.path_hash_mode = 1;
+  EXPECT_EQ(presetFor(v, -1), usa);   // USA sets no hash size: any matches
+  v.path_hash_mode = 2;               // 3-byte: Canada's
+  EXPECT_EQ(presetFor(v, -1), canada);
+  EXPECT_EQ(presetFor(v, usa), usa);  // the one picked stays
+}
+
 TEST(Presets, CustomWhenNothingMatches) {
   RadioValues v = kUsa;
   v.sf = 9;
