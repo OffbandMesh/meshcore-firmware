@@ -221,10 +221,18 @@ void GuiShell::showLock() {
 void GuiShell::showTab(Tab tab) {
   if (!_locked && tab == _tab) return;
   if (tab != _tab && tab == Tab::Chat) _thread = -1;   // the tab opens on the list
-  if (tab != _tab && tab == Tab::Nodes) _node_cap = kNodeBatch;
+  if (tab != _tab && tab == Tab::Nodes) resetNodes();
   _locked = false;
   _tab = tab;
   rebuild();
+}
+
+// Coming to Nodes from another tab: the list, the first batch (a DM from a
+// detail left Nodes with the detail, or search, still set).
+void GuiShell::resetNodes() {
+  _node_cap = kNodeBatch;
+  _detail = _login = _login_sent = false;
+  _searching = _search_kb = _search_wheel = false;
 }
 
 // Focus is drawn as a 2 px signal outline, the same on every item.
@@ -253,6 +261,7 @@ void GuiShell::rebuild() {
 
   _kb = _draft_box = _draft_label = _caret = _counter = nullptr;
   _query_label = _match_label = _search_list = _wheel_strip = nullptr;
+  _login_field = _login_status = nullptr;
   for (auto& k : _key_obj) k = nullptr;
   if (_key_preview) {
     lv_obj_del(_key_preview);
@@ -269,7 +278,12 @@ void GuiShell::rebuild() {
     buildCompose(scr);
     return;
   }
-  if (_searching && _tab == Tab::Nodes) {   // so does Nodes search (ObScreen: no tab bar)
+  if (_login && _tab == Tab::Nodes) {   // the login sheet, over a node's detail
+    _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
+    buildLogin(scr);
+    return;
+  }
+  if (_searching && !_detail && _tab == Tab::Nodes) {   // so does Nodes search (ObScreen: no tab bar)
     _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
     buildSearch(scr);
     return;
@@ -288,6 +302,7 @@ void GuiShell::rebuild() {
   if (_tab == Tab::Home) buildHome(content);
   else if (_tab == Tab::Chat && _thread >= 0) buildConversation(content);
   else if (_tab == Tab::Chat) buildChats(content);
+  else if (_tab == Tab::Nodes && _detail) buildDetail(content);
   else if (_tab == Tab::Nodes) buildNodes(content);
   else buildPlaceholder(content);
   buildTabs(scr);
@@ -401,6 +416,7 @@ void GuiShell::buildTabs(lv_obj_t* parent) {
           self->_pending_tab = Tab(lv_obj_get_index(lv_event_get_target(e)));
           self->later([](GuiShell* s) {
             if (s->_pending_tab == Tab::Chat) s->_thread = -1;   // the tab opens on the list
+            if (s->_pending_tab == Tab::Nodes && s->_tab != Tab::Nodes) s->resetNodes();
             s->_locked = false;
             s->_tab = s->_pending_tab;
             s->rebuild();
@@ -456,6 +472,30 @@ bool GuiShell::action(Action a) {
       default:
         return false;
     }
+  }
+  // The login sheet: a key cursor as in Compose; Back closes it.
+  if (_login && _tab == Tab::Nodes) {
+    switch (a) {
+      case Action::Next:
+        setHotKey(_hot < 0 ? 0 : int((_hot + 1) % _nkeys), false);
+        return true;
+      case Action::Prev:
+        setHotKey(_hot <= 0 ? int(_nkeys) - 1 : _hot - 1, false);
+        return true;
+      case Action::Open:
+        if (_hot >= 0) pressKey(_hot);
+        return true;
+      case Action::Back:
+        closeLogin();
+        return true;
+      default:
+        return false;
+    }
+  }
+  // Node detail: Back returns to the list; the actions take the focus.
+  if (_detail && _tab == Tab::Nodes && a == Action::Back) {
+    closeDetail();
+    return true;
   }
   // Nodes search. The wheel (mockup 1): USR next, AUX back one, USR hold
   // adds the letter or acts on ⌫ / Done, AUX hold leaves search. The
@@ -1168,7 +1208,7 @@ void GuiShell::buildKeys() {
     }
     char text[8];
     // Search's keyboard ends its entry with Done (ObScreen kbRowsFind).
-    snprintf(text, sizeof text, "%s", send && _searching ? "Done" : k.label);
+    snprintf(text, sizeof text, "%s", send && _login ? "Log in" : send && _searching ? "Done" : k.label);
     if (caps && text[0] >= 'a' && text[0] <= 'z' && !text[1]) text[0] = char(text[0] - 'a' + 'A');
     lv_obj_t* l = label(o, typesLabel(k.label) ? FontRole::Body : FontRole::BodySmall, ink, text);
     lv_obj_center(l);
@@ -1217,8 +1257,16 @@ void GuiShell::pressKey(int i) {
   const Shift shift_before = _shift.state();
   // Search types into the query: no capitals of its own (matching ignores
   // case), and Done puts the keyboard away, keeping the results.
-  ComposeBuffer& buf = _searching ? _query : _draft;
+  ComposeBuffer& buf = _login ? _login_pw : _searching ? _query : _draft;
+  const bool plain = _login || _searching;   // no capitals of their own
 
+  if (_login && strcmp(l, "Send") == 0) {   // "Log in"
+    _login_ok_at = 0;
+    _login_sent = _model->startNodeAct(_detail_key, NodeAct::Login, _login_pw.text());
+    _login_at = lv_tick_get();
+    if (!_login_sent && _login_status) lv_label_set_text(_login_status, "Not sent");
+    return;
+  }
   if (_searching && strcmp(l, "Send") == 0) {
     _search_kb = false;
     later([](GuiShell* g) { g->rebuild(); });
@@ -1239,7 +1287,7 @@ void GuiShell::pressKey(int i) {
     _shift.tap(lv_tick_get());
   } else if (strcmp(l, "⌫") == 0) {
     buf.backspace();
-    if (!_searching) _shift.autoCap(buf.text(), buf.length());
+    if (!plain) _shift.autoCap(buf.text(), buf.length());
   } else if (strcmp(l, "?123") == 0) {
     _page.select(KeyPage::Symbols);
   } else if (strcmp(l, "=\\<") == 0) {
@@ -1254,12 +1302,13 @@ void GuiShell::pressKey(int i) {
     }
     if (buf.insert(ch, strlen(ch))) {
       _shift.typedLetter();
-      if (!_searching) _shift.autoCap(buf.text(), buf.length());
+      if (!plain) _shift.autoCap(buf.text(), buf.length());
       _page.typed(ch[0]);
     }
   }
   if (_page.page() != page_before || _shift.state() != shift_before) buildKeys();
-  if (_searching) querySoon();
+  if (_login) refreshLoginField();
+  else if (_searching) querySoon();
   else refreshDraft();
 }
 
@@ -1724,6 +1773,7 @@ void GuiShell::buildNodes(lv_obj_t* content) {
     lv_obj_t* row = nodeRow(list, r);
     lv_obj_set_user_data(row, reinterpret_cast<void*>(uintptr_t(i + 1)));
     focusable(row);
+    rowOpens(row, i, r.key);
     _node_row_obj[i] = row;
     if (_focus_key_set && r.key && memcmp(r.key, _focus_key, 6) == 0) _focus_row = row;
   }
@@ -1755,14 +1805,14 @@ void GuiShell::buildNodes(lv_obj_t* content) {
 void GuiShell::updateNodes(uint32_t now_ms) {
   // Search: its results redraw once typing pauses (querySoon), not on the
   // list's timer.
-  if (_searching) {
+  if (_searching && !_detail) {
     if (_search_due && int32_t(now_ms - _search_due) >= 0) {
       _search_due = 0;
       refreshSearch();
     }
     return;
   }
-  if (_locked || _composing || _tab != Tab::Nodes || _sheet != Sheet::None) return;
+  if (_locked || _composing || _tab != Tab::Nodes || _sheet != Sheet::None || _detail) return;
   if (int32_t(now_ms - _node_refresh_at) < 0) return;
   _node_refresh_at = now_ms + 1000;
 
@@ -1859,6 +1909,7 @@ void GuiShell::appendNodeRows() {
     if (_node_clear) lv_obj_move_to_index(row, lv_obj_get_index(_node_clear));
     lv_obj_set_user_data(row, reinterpret_cast<void*>(uintptr_t(i + 1)));
     focusable(row);
+    rowOpens(row, i, rows[order[i]].key);
     _node_row_obj[i] = row;
     _node_order[i] = order[i];
   }
@@ -1993,6 +2044,7 @@ void GuiShell::refreshSearch() {
     lv_obj_t* row = nodeRow(_search_list, rows[_node_order[i]]);
     lv_obj_set_user_data(row, reinterpret_cast<void*>(uintptr_t(i + 1)));
     if (rows_focusable) focusable(row);
+    rowOpens(row, i, rows[_node_order[i]].key);
   }
 }
 
@@ -2067,4 +2119,446 @@ void GuiShell::wheelPick() {
       rebuild();
       break;
   }
+}
+
+// ----------------------------------------------------------- Node detail
+
+namespace {
+void upcase(char* s) {
+  for (; *s; s++) {
+    if (*s >= 'a' && *s <= 'z') *s = char(*s - 'a' + 'A');
+  }
+}
+}  // namespace
+
+// A row opens its node's detail: by touch, or USR hold on the focused row.
+void GuiShell::rowOpens(lv_obj_t* row, size_t i, const uint8_t* key) {
+  if (!key || i >= kNodeRowsShown) return;
+  memcpy(_row_keys[i], key, 32);
+  lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(
+      row,
+      [](lv_event_t* e) {
+        GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+        const uintptr_t ud = uintptr_t(lv_obj_get_user_data(lv_event_get_current_target(e)));
+        if (ud == 0 || ud > kNodeRowsShown) return;
+        memcpy(self->_detail_key, self->_row_keys[ud - 1], 32);
+        self->later([](GuiShell* g) { g->openDetail(g->_detail_key); });
+      },
+      LV_EVENT_CLICKED, this);
+}
+
+void GuiShell::openDetail(const uint8_t* key) {
+  if (key != _detail_key) memcpy(_detail_key, key, 32);
+  _detail = true;
+  _login = _login_sent = false;
+  _act_focus = 0;
+  _model->detailOpened(_detail_key);
+  rebuild();
+}
+
+// Back to where the detail was opened from: the list, on its row, or search.
+void GuiShell::closeDetail() {
+  _detail = _login = _login_sent = false;
+  memcpy(_focus_key, _detail_key, 6);
+  _focus_key_set = true;
+  rebuild();
+}
+
+void GuiShell::openLogin() {
+  _login = true;
+  _login_sent = false;
+  _login_ok_at = 0;
+  _login_pw.start(kPasswordLen - 1);
+  // Remembered from the last good login on this device (owner pick a).
+  if (const char* pw = _model->savedPassword(_detail_key)) _login_pw.insert(pw, strlen(pw));
+  _page.select(KeyPage::Letters);
+  _shift = ShiftState();   // passwords are typed as they are
+  _hot = -1;
+  rebuild();
+}
+
+void GuiShell::closeLogin() {
+  _login = _login_sent = false;
+  rebuild();
+}
+
+// ObScreen node detail, extended by mockups 2-6: back to Nodes, the kind
+// line, name, key, the grid, the path (and a trace's SNRs), and the actions
+// pinned at the bottom.
+void GuiShell::buildDetail(lv_obj_t* content) {
+  NodeDetail d;
+  if (!_model->nodeDetail(_detail_key, &d)) {   // the contact went: back to the list
+    _detail = _login = false;
+    buildNodes(content);
+    return;
+  }
+  lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
+  _detail_kind = d.row.kind;
+
+  lv_obj_t* h = box(content, LV_PCT(100), 28);
+  lv_obj_set_style_pad_hor(h, 8, 0);
+  lv_obj_set_style_border_side(h, LV_BORDER_SIDE_BOTTOM, 0);
+  lv_obj_set_style_border_width(h, 1, 0);
+  lv_obj_set_style_border_color(h, c(_t.line), 0);
+  lv_obj_set_flex_flow(h, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(h, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(h, 6, 0);
+  lv_obj_t* back = box(h, 10, 20);
+  line(back, kChevron, 3, _t.sig);
+  label(h, FontRole::BodySmall, _t.ink2, "Nodes");
+  lv_obj_add_flag(h, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(
+      h, [](lv_event_t* e) { static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->closeDetail(); }); },
+      LV_EVENT_CLICKED, this);
+
+  lv_obj_t* b = box(content, LV_PCT(100), 0);
+  lv_obj_set_flex_grow(b, 1);
+  lv_obj_set_style_pad_hor(b, 8, 0);
+  lv_obj_set_style_pad_ver(b, 5, 0);
+  lv_obj_set_style_pad_row(b, 3, 0);
+  lv_obj_set_flex_flow(b, LV_FLEX_FLOW_COLUMN);
+  lv_obj_add_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollbar_mode(b, LV_SCROLLBAR_MODE_OFF);
+
+  char buf[96];
+  detailKind(d.row.kind, d.row.out_path_len, d.row.snr_known, d.row.snr_db, buf, sizeof buf);
+  upcase(buf);
+  label(b, FontRole::Label, _t.sig, buf);
+  lv_obj_t* name = label(b, FontRole::Title, _t.ink);
+  userText(name, d.row.name);
+  lv_obj_set_width(name, LV_PCT(100));
+  oneLine(name, FontRole::Title);
+  keySummary(d.key, buf, sizeof buf);
+  label(b, FontRole::Meta, _t.dim, buf);
+
+  // The grid, three across: what was heard, and the status once a Ping
+  // answers (dashes before).
+  ActView ping;
+  _model->nodeActState(NodeAct::Ping, &ping);
+  const bool pinged = ping.state == ActView::Ok;
+  Cell cells[6];
+  const size_t n = detailCells(d.row, d.rssi, pinged ? ping.body : nullptr, pinged ? ping.len : 0,
+                               pinged ? ping.rtt_ms : 0, cells, 6);
+  lv_obj_t* grid = box(b, LV_PCT(100), LV_SIZE_CONTENT);
+  lv_obj_set_style_pad_top(grid, 2, 0);
+  lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
+  lv_obj_set_style_border_side(grid, LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_LEFT, 0);
+  lv_obj_set_style_border_width(grid, 1, 0);
+  lv_obj_set_style_border_color(grid, c(_t.line), 0);
+  for (size_t i = 0; i < n; i++) {
+    lv_obj_t* cell = box(grid, (kW - 16 - 1) / 3, LV_SIZE_CONTENT);
+    lv_obj_set_style_border_side(cell, LV_BORDER_SIDE_RIGHT | LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_width(cell, 1, 0);
+    lv_obj_set_style_border_color(cell, c(_t.line), 0);
+    lv_obj_set_style_pad_hor(cell, 5, 0);
+    lv_obj_set_style_pad_ver(cell, 2, 0);
+    lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
+    upcase(cells[i].key);
+    label(cell, FontRole::Label, _t.dim, cells[i].key);
+    const bool dash = strcmp(cells[i].value, "—") == 0;
+    label(cell, dash ? FontRole::Meta : FontRole::Data, dash ? _t.dim : _t.ink, cells[i].value);
+  }
+
+  if (d.path[0]) {
+    lv_obj_t* p = label(b, FontRole::Meta, _t.ink2);
+    userText(p, d.path);
+    lv_obj_set_width(p, LV_PCT(100));
+    lv_label_set_long_mode(p, LV_LABEL_LONG_WRAP);
+  }
+  ActView tr;
+  _model->nodeActState(NodeAct::Trace, &tr);
+  if (tr.state == ActView::Ok) {
+    traceSnrLine(tr.body, tr.len, buf, sizeof buf);
+    if (buf[0]) label(b, FontRole::Meta, _t.dim, buf);
+  }
+
+  // The actions (mockups 2-6): the primary across, the others under it.
+  static const NodeAct kRpt[] = {NodeAct::Login, NodeAct::Trace, NodeAct::Ping};
+  static const NodeAct kSens[] = {NodeAct::Ping, NodeAct::Trace};
+  static const NodeAct kChat[] = {NodeAct::Count, NodeAct::Share, NodeAct::Trace};   // Count: DM
+  const NodeAct* plan = kChat;
+  _act_count = 3;
+  if (d.row.kind == NodeKind::Repeater || d.row.kind == NodeKind::Room) plan = kRpt;
+  else if (d.row.kind == NodeKind::Sensor) {
+    plan = kSens;
+    _act_count = 2;
+  }
+  lv_obj_t* acts = box(content, LV_PCT(100), LV_SIZE_CONTENT);
+  lv_obj_set_style_pad_hor(acts, 8, 0);
+  lv_obj_set_style_pad_top(acts, 4, 0);
+  lv_obj_set_style_pad_bottom(acts, 6, 0);
+  lv_obj_set_style_pad_row(acts, 4, 0);
+  lv_obj_set_flex_flow(acts, LV_FLEX_FLOW_COLUMN);
+  lv_obj_t* second = nullptr;
+  for (uint8_t i = 0; i < _act_count; i++) {
+    lv_obj_t* parent = acts;
+    if (i > 0) {
+      if (!second) {
+        second = box(acts, LV_PCT(100), 34);
+        lv_obj_set_flex_flow(second, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_column(second, 4, 0);
+      }
+      parent = second;
+    }
+    lv_obj_t* btn = box(parent, i == 0 ? LV_PCT(100) : 0, 34);
+    if (i > 0) lv_obj_set_flex_grow(btn, 1);
+    lv_obj_set_style_radius(btn, _look.radius, 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_center(label(btn, FontRole::Body, _t.ink));
+    lv_obj_set_user_data(btn, reinterpret_cast<void*>(uintptr_t(i)));
+    _act_btn[i] = btn;
+    _act_kind[i] = plan[i];
+    _act_off[i] = plan[i] == NodeAct::Trace && !d.can_trace;   // no route to trace
+    if (_act_off[i]) continue;
+    focusable(btn);
+    lv_obj_add_event_cb(
+        btn,
+        [](lv_event_t* e) {
+          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+          self->_pending_act = uint8_t(uintptr_t(lv_obj_get_user_data(lv_event_get_current_target(e))));
+          self->later([](GuiShell* g) { g->actPressed(g->_act_kind[g->_pending_act]); });
+        },
+        LV_EVENT_CLICKED, this);
+  }
+  for (uint8_t i = _act_count; i < 3; i++) _act_btn[i] = nullptr;
+  refreshActs(_detail_now);
+  _detail_sig = detailSignature();
+  const uint8_t f = _act_focus < _act_count && !_act_off[_act_focus] ? _act_focus : 0;
+  _focus_row = _act_btn[f];
+}
+
+// The buttons' text and look from where each action stands (mockup 6).
+void GuiShell::refreshActs(uint32_t now_ms) {
+  const NodeKind kind = _detail_kind;
+  for (uint8_t i = 0; i < _act_count; i++) {
+    lv_obj_t* btn = _act_btn[i];
+    if (!btn) continue;
+    const NodeAct a = _act_kind[i];
+    ActView v{};
+    if (a != NodeAct::Count) _model->nodeActState(a, &v);
+    char text[32];
+    bool pri = i == 0, ok = false, bad = false, busy = false;
+    switch (a) {
+      case NodeAct::Count:
+        textf(text, sizeof text, "DM");
+        break;
+      case NodeAct::Login:
+        ok = v.state == ActView::Ok;
+        textf(text, sizeof text, "%s", ok ? "Logged in ✓" : kind == NodeKind::Room ? "Log in" : "Admin login");
+        break;
+      case NodeAct::Share: {
+        const bool recent = int32_t(now_ms - v.done_ms) < 2000;   // "Shared ✓" for 2 s
+        ok = v.state == ActView::Ok && recent;
+        bad = v.state == ActView::Failed && recent;
+        textf(text, sizeof text, "%s", ok ? "Shared ✓" : bad ? "Not sent" : "Share contact");
+        break;
+      }
+      default: {   // Ping, Trace
+        const bool is_ping = a == NodeAct::Ping;
+        busy = v.state == ActView::Busy;
+        ok = v.state == ActView::Ok;
+        bad = v.state == ActView::Failed;
+        if (busy) textf(text, sizeof text, "%s", is_ping ? "Pinging…" : "Tracing…");
+        else if (bad) textf(text, sizeof text, "No reply");
+        else if (ok && is_ping) {
+          const unsigned t = (v.rtt_ms + 50) / 100;
+          textf(text, sizeof text, "Ping ✓ %u.%u s", t / 10, t % 10);
+        } else if (ok) textf(text, sizeof text, "Trace ✓");
+        else textf(text, sizeof text, "%s", is_ping ? "Ping" : "Trace");
+        break;
+      }
+    }
+    uint32_t ink = _t.ink, border = _t.line;
+    bool fill = false;
+    if (_act_off[i]) {
+      ink = _t.dim;
+      border = _t.line2;
+    } else if (bad) {
+      ink = border = _t.bad;
+    } else if (pri) {
+      fill = true;
+      ink = _t.sigInk;
+      border = _t.sig;
+    } else if (ok) {
+      ink = border = _t.sig;
+    } else if (busy) {
+      ink = _t.dim;
+    }
+    lv_obj_set_style_bg_opa(btn, fill ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_color(btn, c(_t.sig), 0);
+    lv_obj_set_style_border_color(btn, c(border), 0);
+    lv_obj_t* l = lv_obj_get_child(btn, 0);
+    lv_obj_set_style_text_color(l, c(ink), 0);
+    if (strcmp(lv_label_get_text(l), text) != 0) lv_label_set_text(l, text);
+  }
+}
+
+void GuiShell::actPressed(NodeAct a) {
+  if (!_detail) return;
+  if (a == NodeAct::Login) {
+    openLogin();
+    return;
+  }
+  if (a == NodeAct::Count) {   // DM: its conversation, with Compose up (mockup 2)
+    const int t = _model->openDm(_detail_key);
+    if (t < 0) return;
+    _detail = false;
+    _tab = Tab::Chat;
+    _focus_thread = t;
+    _model->threadOpened(t);
+    openCompose(t);
+    return;
+  }
+  _model->startNodeAct(_detail_key, a, nullptr);
+  refreshActs(_detail_now);
+}
+
+// What the detail's body shows: a result landing, or the node heard anew.
+uint32_t GuiShell::detailSignature() {
+  uint32_t h = 2166136261u;
+  auto mix = [&h](uint32_t v) { h = (h ^ v) * 16777619u; };
+  for (NodeAct a : {NodeAct::Ping, NodeAct::Trace}) {
+    ActView v;
+    _model->nodeActState(a, &v);
+    mix(v.state == ActView::Ok ? v.done_ms + 1 : 0);
+  }
+  NodeDetail d;
+  if (_model->nodeDetail(_detail_key, &d)) {
+    mix(d.row.heard ? d.row.heard_age_s / 60 + 1 : 0);
+    mix(d.row.snr_known ? uint32_t(int32_t(d.row.snr_db * 4)) : 0x7FFF);
+    mix(d.row.unread);
+    mix(d.row.out_path_len);
+    mix(uint32_t(d.rssi));
+  } else {
+    mix(0xDEAD);
+  }
+  return h;
+}
+
+// The login sheet (mockup 5) over the detail: the title, the masked
+// password, how the login stands, and the keyboard with "Log in" as Send.
+void GuiShell::buildLogin(lv_obj_t* scr) {
+  NodeDetail d;
+  if (!_model->nodeDetail(_detail_key, &d)) {
+    _login = _detail = false;
+    rebuild();
+    return;
+  }
+  lv_obj_t* content = box(scr, kW, kContentH);
+  lv_obj_set_pos(content, 0, kStatusH);
+  buildDetail(content);
+  lv_group_remove_all_objs(_group);   // the sheet takes the buttons
+
+  lv_obj_t* scrim = box(scr, kW, 320 - kStatusH);
+  lv_obj_set_pos(scrim, 0, kStatusH);
+  lv_obj_set_style_bg_opa(scrim, LV_OPA_50, 0);
+  lv_obj_set_style_bg_color(scrim, lv_color_black(), 0);
+  lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);   // a tap above the sheet closes it
+  lv_obj_add_event_cb(
+      scrim, [](lv_event_t* e) { static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->closeLogin(); }); },
+      LV_EVENT_CLICKED, this);
+
+  const int16_t top = kKbTop - 2 - 84;
+  lv_obj_t* sheet = box(scr, kW, 320 - top);
+  lv_obj_set_pos(sheet, 0, top);
+  lv_obj_set_style_bg_opa(sheet, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(sheet, c(_t.bg3), 0);
+  lv_obj_set_style_border_side(sheet, LV_BORDER_SIDE_TOP, 0);
+  lv_obj_set_style_border_width(sheet, 1, 0);
+  lv_obj_set_style_border_color(sheet, c(_t.line), 0);
+  lv_obj_set_style_radius(sheet, 12, 0);
+  lv_obj_add_flag(sheet, LV_OBJ_FLAG_CLICKABLE);   // taps on the sheet stay on it
+
+  char title[64];
+  textf(title, sizeof title, "%s · %s", d.row.kind == NodeKind::Room ? "Log in" : "Admin login", d.row.name);
+  lv_obj_t* t = label(sheet, FontRole::Body, _t.ink);
+  userText(t, title);
+  lv_obj_set_width(t, kW - 24);
+  oneLine(t, FontRole::Body);
+  lv_obj_set_pos(t, 12, 9);
+
+  _login_field = box(sheet, kW - 24, 32);
+  lv_obj_set_pos(_login_field, 12, 30);
+  lv_obj_set_style_border_width(_login_field, 1, 0);
+  lv_obj_set_style_border_color(_login_field, c(_t.sig), 0);
+  lv_obj_set_style_bg_opa(_login_field, lv_opa_t(_t.wash >> 24), 0);
+  lv_obj_set_style_bg_color(_login_field, c(_t.wash), 0);
+  lv_obj_set_style_radius(_login_field, _look.radius, 0);
+  lv_obj_set_style_pad_hor(_login_field, 9, 0);
+  lv_obj_set_flex_flow(_login_field, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(_login_field, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(_login_field, 4, 0);
+
+  _login_status = label(sheet, FontRole::BodySmall, _t.dim);
+  lv_obj_set_pos(_login_status, 12, 66);
+
+  buildKeyboard(scr);
+  refreshLoginField();
+}
+
+// One dot a character (the fonts carry no bullet), then the caret.
+void GuiShell::refreshLoginField() {
+  if (!_login_field) return;
+  lv_obj_clean(_login_field);
+  for (size_t i = 0; i < _login_pw.length(); i++) {
+    lv_obj_t* d = box(_login_field, 6, 6);
+    lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(d, c(_t.ink), 0);
+  }
+  lv_obj_t* caret = box(_login_field, 1, 14);
+  lv_obj_set_style_bg_opa(caret, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(caret, c(_t.sig), 0);
+}
+
+void GuiShell::updateDetail(uint32_t now_ms) {
+  _detail_now = now_ms;
+  if (_locked || _composing || _tab != Tab::Nodes || !_detail || _sheet != Sheet::None) return;
+
+  if (_login) {
+    if (!_login_status || !_login_sent) return;
+    ActView v;
+    _model->nodeActState(NodeAct::Login, &v);
+    char s[40] = "";
+    if (v.state == ActView::Busy) {
+      const unsigned t = lv_tick_elaps(_login_at) / 100;
+      textf(s, sizeof s, "Logging in… %u.%u s", t / 10, t % 10);
+    } else if (v.state == ActView::Ok) {
+      // "Logged in ✓", then the sheet closes and a Ping fills the grid.
+      textf(s, sizeof s, "Logged in ✓");
+      if (!_login_ok_at) {
+        _login_ok_at = lv_tick_get() | 1;
+      } else if (lv_tick_elaps(_login_ok_at) >= 1000) {
+        closeLogin();
+        _model->startNodeAct(_detail_key, NodeAct::Ping, nullptr);
+        return;
+      }
+    } else if (v.state == ActView::Failed) {
+      textf(s, sizeof s, "%s", v.login_refused ? "Wrong password" : "No reply");
+    }
+    lv_obj_set_style_text_color(_login_status, c(v.state == ActView::Failed ? _t.bad
+                                                 : v.state == ActView::Ok   ? _t.sig
+                                                                            : _t.dim),
+                                0);
+    if (strcmp(lv_label_get_text(_login_status), s) != 0) lv_label_set_text(_login_status, s);
+    return;
+  }
+
+  if (int32_t(now_ms - _detail_at) < 0) return;
+  _detail_at = now_ms + 250;
+  uint32_t sig;
+  {
+    SlowStep slow("detail check");
+    sig = detailSignature();
+  }
+  if (sig != _detail_sig) {
+    lv_obj_t* f = lv_group_get_focused(_group);
+    for (uint8_t i = 0; i < _act_count; i++) {
+      if (f && f == _act_btn[i]) _act_focus = i;
+    }
+    rebuild();
+    return;
+  }
+  refreshActs(now_ms);
 }

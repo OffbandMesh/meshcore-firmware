@@ -46,6 +46,26 @@ struct LockData {
   uint32_t more;   // unread in threads not shown
 };
 
+// A node as its detail screen shows it (E4).
+struct NodeDetail {
+  offband::gui::NodeRow row;   // name, kind, path, heard, SNR, unread (row.key -> key below)
+  uint8_t key[32];
+  int16_t rssi;                // last heard, when row.snr_known
+  char path[80];               // "path: You › Hilltop-2 › Wren"; empty with no route
+  bool can_trace;              // a route is known
+};
+
+// The detail's actions (mockups 2-6) and how each stands.
+enum class NodeAct : uint8_t { Ping, Trace, Login, Share, Count };
+struct ActView {
+  enum State : uint8_t { Idle, Busy, Ok, Failed } state;
+  uint32_t rtt_ms;           // Ping, Trace: round trip when Ok
+  bool login_refused;        // Login Failed: the node answered no (else: no reply)
+  uint8_t body[176];         // Ping: the status reply; Trace: the trace reply
+  uint8_t len;
+  uint32_t done_ms;          // when it finished (Share's "Shared ✓" lasts 2 s)
+};
+
 // What the screens need from the rest of the firmware. UITask implements it,
 // so the screens stay free of the mesh.
 class ShellModel {
@@ -70,6 +90,14 @@ public:
   // array stays valid until the next call. *total = contacts held.
   virtual const offband::gui::NodeRow* nodeRows(size_t* total) = 0;
   virtual uint8_t radioSf() = 0;   // for signal bars: the margin over this SF's floor
+  // Node detail (E4).
+  virtual bool nodeDetail(const uint8_t* key, NodeDetail* out) = 0;    // false if gone
+  // A detail opened: the actions start Idle (results last until you leave).
+  virtual void detailOpened(const uint8_t* key) = 0;
+  virtual bool startNodeAct(const uint8_t* key, NodeAct a, const char* password) = 0;
+  virtual void nodeActState(NodeAct a, ActView* out) = 0;
+  virtual const char* savedPassword(const uint8_t* key) = 0;          // null if none
+  virtual int openDm(const uint8_t* key) = 0;                         // its thread, -1 if none
   virtual ~ShellModel() {}
 };
 
@@ -87,7 +115,7 @@ public:
   // cursor, a conversation's scroll): each click is one step, at once.
   bool stepping() const {
     if (_locked || _sheet != Sheet::None) return false;
-    if (_composing) return true;
+    if (_composing || _login) return true;
     if (_searching && _tab == Tab::Nodes) return _search_wheel || _search_kb;
     return _tab == Tab::Chat && _thread >= 0;
   }
@@ -123,6 +151,24 @@ private:
   void refreshSearch();
   void buildWheel(lv_obj_t* scr);
   void wheelPick();
+  // Node detail (E4)
+  void openDetail(const uint8_t* key);
+  void closeDetail();
+  void buildDetail(lv_obj_t* content);
+  void buildLogin(lv_obj_t* scr);
+  void openLogin();
+  void closeLogin();
+  void actPressed(NodeAct a);
+  void refreshLoginField();     // the masked password, one dot a character
+  void refreshActs(uint32_t now_ms);   // the action buttons' text and look, from their state
+  uint32_t detailSignature();   // what the detail shows; it redraws when this moves
+
+public:
+  // Node detail: redraws as its actions progress; the login sheet closes
+  // itself after a success.
+  void updateDetail(uint32_t now_ms);
+
+private:
   void buildCompose(lv_obj_t* scr);
   void buildKeys();
   void refreshDraft();
@@ -141,6 +187,7 @@ private:
   void buildLock(lv_obj_t* scr);
   void focusable(lv_obj_t* o);
   void openThread(int thread);   // -1: back to the list
+  void resetNodes();             // Nodes opens on its list
   void later(void (*fn)(GuiShell*));
 
   offband::gui::ThemeTokens _t{};
@@ -227,6 +274,29 @@ private:
   size_t _search_total = 0;
   uint32_t _search_due = 0;   // when the results next redraw; 0 = not owed
   void querySoon();           // the field now, the results shortly
+
+  // Node detail (E4): which node, and the login sheet over it.
+  bool _detail = false;
+  uint8_t _detail_key[32] = {};
+  bool _login = false;
+  offband::gui::ComposeBuffer _login_pw;
+  uint32_t _detail_sig = 0;
+  uint32_t _detail_at = 0;     // next check of what the detail shows
+  uint32_t _login_ok_at = 0;   // when a login succeeded: the sheet closes 1 s later
+  bool _login_sent = false;    // a login is in flight from this sheet
+  lv_obj_t* _login_field = nullptr;
+  lv_obj_t* _login_status = nullptr;
+  uint32_t _login_at = 0;      // lv tick when the login went
+  uint32_t _detail_now = 0;    // the loop's clock, for the actions' timed text
+  lv_obj_t* _act_btn[3] = {};  // the detail's action buttons, primary first
+  NodeAct _act_kind[3] = {};   // NodeAct::Count: DM
+  bool _act_off[3] = {};       // Trace with no route
+  uint8_t _act_count = 0;
+  uint8_t _act_focus = 0;      // the focused button, kept across redraws
+  uint8_t _pending_act = 0;
+  offband::gui::NodeKind _detail_kind = offband::gui::NodeKind::Other;
+  uint8_t _row_keys[kNodeRowsShown][32] = {};   // each built row's node, for opening it
+  void rowOpens(lv_obj_t* row, size_t i, const uint8_t* key);
 
   // Home
   lv_obj_t* _name = nullptr;
