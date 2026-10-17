@@ -301,6 +301,55 @@ TEST(GpsAttemptTimeout, ASuccessRestoresTheGenerousTimeout) {
   EXPECT_EQ(kGpsFirstAttemptTimeoutMs, gpsAttemptTimeoutMs(GpsPowerConfig(), m.failures()));
 }
 
+// ---- forcing a retry out of backoff ----------------------------------------------------
+
+// The user-facing escape hatch, and the owner asked for it by name: someone staring at
+// "backed off" with hours to wait needs a way to say "try now".
+//
+// setMode() IS that gesture -- it clears the failure count, backdates the wait so the next
+// tick attempts immediately, and restores the generous timeout. Pinned here so a later
+// change cannot quietly make a mode re-selection cheap-and-stateless and take the escape
+// hatch away with it. The screen's job is not to swallow a selection that does not change
+// the value (#1557).
+TEST(GpsForceRetry, ReselectingPowerSaveWhileBackedOffRetriesAtOnce) {
+  GpsPowerMachine m;
+  m.setMode(GpsMode::PowerSave, 0);
+  Sim indoors;
+  indoors.go(m, UINT32_MAX, 30 * kHour);
+  const uint8_t backed_off = m.failures();
+  ASSERT_GT(backed_off, 1u) << "it never reached a long wait, so there is nothing to escape";
+
+  // The gesture: pick Power save again.
+  const uint32_t t = indoors.ms;
+  m.setMode(GpsMode::PowerSave, t);
+
+  EXPECT_EQ(0, (int)m.failures()) << "the failure count survived a re-selection";
+  const GpsPowerAction a = m.tick(t, false);
+  EXPECT_TRUE(a.gps_on) << "no immediate attempt -- the user is still waiting";
+  EXPECT_TRUE(a.attempt_started);
+  EXPECT_EQ(GpsActivity::Searching, a.activity);
+  EXPECT_EQ(kGpsFirstAttemptTimeoutMs, gpsAttemptTimeoutMs(GpsPowerConfig(), m.failures()))
+      << "the forced retry got a probe-length attempt instead of a real try";
+}
+
+// Going out through Off and back is the other route a user might take, and it has to work
+// the same way rather than leaving the old failure count in place.
+TEST(GpsForceRetry, ATripThroughOffAlsoClearsTheBackoff) {
+  GpsPowerMachine m;
+  m.setMode(GpsMode::PowerSave, 0);
+  Sim indoors;
+  indoors.go(m, UINT32_MAX, 30 * kHour);
+  ASSERT_GT(m.failures(), 1u);
+
+  uint32_t t = indoors.ms;
+  m.setMode(GpsMode::Off, t);
+  EXPECT_FALSE(m.tick(t, false).gps_on);
+  t += 5000;
+  m.setMode(GpsMode::PowerSave, t);
+  EXPECT_EQ(0, (int)m.failures());
+  EXPECT_TRUE(m.tick(t, false).attempt_started);
+}
+
 // ---- the backoff arithmetic itself -----------------------------------------------------
 
 TEST(GpsBackoff, TheWaitDoublesFromTheSecondFailureAndSaturatesAtTheCap) {
