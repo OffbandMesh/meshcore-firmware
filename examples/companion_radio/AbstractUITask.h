@@ -59,6 +59,21 @@ public:
   // default and are unaffected.
   virtual void applyBuzzerMute(bool quiet) { (void)quiet; }
 
+  // #1524: a channel message, and which channel it came from.
+  //
+  // notify() takes an event type and nothing else, deliberately: the policy decision
+  // stays in the mesh layer and the UI stays dumb. A tune set on one channel needs the
+  // channel, and UIEventType is consumed by four UI families -- so this is its own
+  // virtual rather than a wider notify(). Third time this shape answers exactly this
+  // problem, after applyBuzzerMute (#510) and feedTuneSlot (#1478).
+  //
+  // The default IS the current behaviour, so ui-orig, ui-tiny and ui-gui inherit it and
+  // sound exactly as they do now. Only the badge overrides it.
+  virtual void notifyChannel(uint8_t channel_idx) {
+    (void)channel_idx;
+    notify(UIEventType::channelMessage);
+  }
+
   // #1478: a custom tune slot, pushed from the app. Routed through this interface for
   // the same reason applyBuzzerMute is: the slot store lives in the badge's UI and
   // MyMesh.cpp is compiled by every companion variant, so the mesh layer asks rather
