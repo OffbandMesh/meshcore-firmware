@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include <helpers/gui/SignalLevel.h>
 #include <helpers/gui/hw/GuiFonts.h>
 
 using namespace offband::gui;
@@ -250,6 +251,9 @@ void GuiShell::rebuild() {
   }
   _msg_list = nullptr;
   _focus_row = nullptr;
+  _node_count = nullptr;
+  for (auto& r : _node_row_obj) r = nullptr;
+  _node_shown = 0;
   if (_tab == Tab::Chat) _shown_rev = _model->store().revision();
   _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
   lv_obj_t* content = box(scr, kW, kContentH);
@@ -257,6 +261,7 @@ void GuiShell::rebuild() {
   if (_tab == Tab::Home) buildHome(content);
   else if (_tab == Tab::Chat && _thread >= 0) buildConversation(content);
   else if (_tab == Tab::Chat) buildChats(content);
+  else if (_tab == Tab::Nodes) buildNodes(content);
   else buildPlaceholder(content);
   buildTabs(scr);
 
@@ -1370,5 +1375,319 @@ void GuiShell::sheetPick(int i) {
   } else if (kind == Sheet::Menu) {
     if (i == 0) openCompose(_thread);   // rebuild closes the sheet
     else openSheet(Sheet::Notify);
+  }
+}
+
+// ------------------------------------------------------------------ Nodes
+
+namespace {
+
+const char* const kChipLabel[5] = {"All", "Chat", "Rpt", "Room", "Sens"};
+
+// The type tile's glyph: Noto Emoji in the text fonts, one colour, so it
+// takes the type's tint like the design's stroke icons.
+const char* kindGlyph(NodeKind k) {
+  switch (k) {
+    case NodeKind::Chat: return "\xF0\x9F\x91\xA4";       // 👤
+    case NodeKind::Repeater: return "\xF0\x9F\x93\xA1";   // 📡
+    case NodeKind::Room: return "\xF0\x9F\x91\xA5";       // 👥
+    case NodeKind::Sensor: return "\xF0\x9F\x8C\xA1";     // 🌡
+    default: return "?";
+  }
+}
+
+uint32_t kindTint(const ThemeTokens& t, NodeKind k) {
+  switch (k) {
+    case NodeKind::Chat: return t.nodeType[NodeCompanion];
+    case NodeKind::Repeater: return t.nodeType[NodeRepeater];
+    case NodeKind::Room: return t.nodeType[NodeRoom];
+    case NodeKind::Sensor: return t.nodeType[NodeSensor];
+    default: return t.dim;
+  }
+}
+
+// The row's four signal bars (ObScreen: 11x9, heights 3/6/9/12 of 12).
+void rowBars(lv_obj_t* parent, lv_obj_t** out) {
+  lv_obj_t* bars = box(parent, 11, 9);
+  lv_obj_set_flex_flow(bars, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(bars, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+  lv_obj_set_style_pad_column(bars, 1, 0);
+  static const int16_t kH[4] = {2, 4, 7, 9};
+  for (int i = 0; i < 4; i++) {
+    out[i] = box(bars, 2, kH[i]);
+    lv_obj_set_style_bg_opa(out[i], LV_OPA_COVER, 0);
+  }
+}
+
+// Bars by margin over the radio's demodulation floor, as the status bar.
+void colorBars(lv_obj_t** bar, bool known, float snr, uint8_t sf, const ThemeTokens& t) {
+  const uint8_t n = known ? signalBars(snr, sf) : 0;
+  const SignalRole role = signalRole(n);
+  const uint32_t lit = role == SignalRole::Ok ? t.ok : role == SignalRole::Warn ? t.warn : t.bad;
+  for (int i = 0; i < 4; i++) lv_obj_set_style_bg_color(bar[i], c(i < n ? lit : t.line), 0);
+}
+
+}  // namespace
+
+void GuiShell::buildNodes(lv_obj_t* content) {
+  lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
+  size_t total = 0;
+  const NodeRow* rows = _model->nodeRows(&total);
+  const bool filtered = _node_filter != TypeFilter::All || _node_unread;
+  _node_shown = nodeOrder(rows, total, _node_filter, _node_unread, "", _node_order, kNodeRowsShown);
+  size_t matches = 0;
+  for (size_t i = 0; i < total; i++) matches += passesFilter(rows[i], _node_filter, _node_unread);
+
+  // Header: title, count, and the search pill (search itself is E3).
+  lv_obj_t* h = box(content, LV_PCT(100), 32);
+  lv_obj_set_style_pad_left(h, 8, 0);
+  lv_obj_set_style_pad_right(h, 6, 0);
+  lv_obj_set_style_border_side(h, LV_BORDER_SIDE_BOTTOM, 0);
+  lv_obj_set_style_border_width(h, 1, 0);
+  lv_obj_set_style_border_color(h, c(_t.line), 0);
+  lv_obj_set_flex_flow(h, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(h, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(h, 6, 0);
+  label(h, FontRole::Title, _t.ink, "Nodes");
+  char count[24];
+  nodeCount(matches, total, filtered, count, sizeof count);
+  _node_count = label(h, FontRole::Meta, _t.dim, count);
+  lv_obj_t* grow = box(h, 1, 1);
+  lv_obj_set_flex_grow(grow, 1);
+  lv_obj_t* search = box(h, 86, 26);
+  lv_obj_set_style_border_width(search, 1, 0);
+  lv_obj_set_style_border_color(search, c(_t.line), 0);
+  lv_obj_set_style_radius(search, _look.pill_chips ? 13 : 0, 0);
+  lv_obj_set_style_pad_hor(search, 7, 0);
+  lv_obj_set_flex_flow(search, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(search, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(search, 5, 0);
+  label(search, FontRole::BodySmall, _t.dim, "\xF0\x9F\x94\x8D");   // 🔍
+  label(search, FontRole::BodySmall, _t.dim, "Search");
+  focusable(search);
+
+  // Chips: the five types, then Unread at the right.
+  lv_obj_t* chips = box(content, LV_PCT(100), 30);
+  lv_obj_set_style_pad_hor(chips, 6, 0);
+  lv_obj_set_style_border_side(chips, LV_BORDER_SIDE_BOTTOM, 0);
+  lv_obj_set_style_border_width(chips, 1, 0);
+  lv_obj_set_style_border_color(chips, c(_t.line2), 0);
+  lv_obj_set_flex_flow(chips, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(chips, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(chips, 3, 0);
+  const lv_coord_t chip_r = _look.pill_chips ? 10 : 0;
+  for (uint8_t i = 0; i < 5; i++) {
+    const bool on = uint8_t(_node_filter) == i;
+    lv_obj_t* ch = box(chips, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_hor(ch, 5, 0);
+    lv_obj_set_style_pad_ver(ch, 3, 0);
+    lv_obj_set_style_radius(ch, chip_r, 0);
+    lv_obj_set_style_border_width(ch, 1, 0);
+    lv_obj_set_style_border_color(ch, c(on ? _t.sig : _t.line), 0);
+    if (on) {
+      lv_obj_set_style_bg_opa(ch, LV_OPA_COVER, 0);
+      lv_obj_set_style_bg_color(ch, c(_t.sig), 0);
+    }
+    label(ch, FontRole::Label, on ? _t.sigInk : _t.ink2, kChipLabel[i]);
+    lv_obj_set_user_data(ch, reinterpret_cast<void*>(uintptr_t(i)));
+    focusable(ch);
+    lv_obj_add_event_cb(
+        ch,
+        [](lv_event_t* e) {
+          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+          self->_node_filter = TypeFilter(uintptr_t(lv_obj_get_user_data(lv_event_get_current_target(e))));
+          self->later([](GuiShell* g) { g->rebuild(); });
+        },
+        LV_EVENT_CLICKED, this);
+  }
+  lv_obj_t* spacer = box(chips, 1, 1);
+  lv_obj_set_flex_grow(spacer, 1);
+  lv_obj_t* un = box(chips, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_set_style_pad_hor(un, 5, 0);
+  lv_obj_set_style_pad_ver(un, 3, 0);
+  lv_obj_set_style_radius(un, chip_r, 0);
+  lv_obj_set_style_border_width(un, 1, 0);
+  lv_obj_set_style_border_color(un, c(_node_unread ? _t.sig : _t.line), 0);
+  lv_obj_set_flex_flow(un, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(un, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(un, 4, 0);
+  lv_obj_t* dot = box(un, 6, 6);
+  lv_obj_set_style_radius(dot, _look.pill_chips ? LV_RADIUS_CIRCLE : 0, 0);
+  lv_obj_set_style_border_width(dot, 1, 0);
+  lv_obj_set_style_border_color(dot, c(_t.sig), 0);
+  if (_node_unread) {
+    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(dot, c(_t.sig), 0);
+  }
+  label(un, FontRole::Label, _node_unread ? _t.sig : _t.ink2, "Unread");
+  focusable(un);
+  lv_obj_add_event_cb(
+      un,
+      [](lv_event_t* e) {
+        // Unread on shows companions with unread DMs (Chat); off resets both.
+        GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+        self->_node_unread = !self->_node_unread;
+        self->_node_filter = self->_node_unread ? TypeFilter::Chat : TypeFilter::All;
+        self->later([](GuiShell* g) { g->rebuild(); });
+      },
+      LV_EVENT_CLICKED, this);
+
+  // The rows.
+  lv_obj_t* list = box(content, LV_PCT(100), 0);
+  lv_obj_set_flex_grow(list, 1);
+  lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+  if (_node_shown == 0) {
+    if (_node_unread) {
+      lv_obj_t* f = label(list, FontRole::BodySmall, _t.dim, "No unread DMs · Clear");
+      lv_obj_set_width(f, LV_PCT(100));
+      lv_obj_set_style_text_align(f, LV_TEXT_ALIGN_CENTER, 0);
+      lv_obj_set_style_pad_top(f, 8, 0);
+    } else {
+      emptyState(list, _t, true, emptyTitle(_node_filter),
+                 "Nodes appear as their adverts are heard. Send an advert from Home so others find you.", nullptr);
+    }
+  } else {
+    lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
+  }
+  char buf[32];
+  for (size_t i = 0; i < _node_shown; i++) {
+    const NodeRow& r = rows[_node_order[i]];
+    lv_obj_t* row = box(list, LV_PCT(100), 38);
+    lv_obj_set_style_pad_hor(row, 8, 0);
+    lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_width(row, 1, 0);
+    lv_obj_set_style_border_color(row, c(_t.line2), 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, 6, 0);
+
+    // Type tile: 14% of the tint behind the tinted glyph; flat themes outline.
+    const uint32_t tint = kindTint(_t, r.kind);
+    lv_obj_t* tile = box(row, 22, 22);
+    lv_obj_set_style_radius(tile, r.kind == NodeKind::Chat && _look.pill_chips ? LV_RADIUS_CIRCLE
+                                  : _look.pill_chips                           ? 6
+                                                                               : 0,
+                            0);
+    if (_t.flat) {
+      lv_obj_set_style_border_width(tile, 1, 0);
+      lv_obj_set_style_border_color(tile, c(tint), 0);
+    } else {
+      lv_obj_set_style_bg_opa(tile, 36, 0);
+      lv_obj_set_style_bg_color(tile, c(tint), 0);
+    }
+    lv_obj_center(label(tile, FontRole::BodySmall, tint, kindGlyph(r.kind)));
+
+    lv_obj_t* tx = box(row, 0, LV_SIZE_CONTENT);
+    lv_obj_set_flex_grow(tx, 1);
+    lv_obj_set_flex_flow(tx, LV_FLEX_FLOW_COLUMN);
+    lv_obj_t* nm = label(tx, FontRole::Body, _t.ink);
+    userText(nm, r.name);
+    lv_obj_set_width(nm, LV_PCT(100));
+    oneLine(nm, FontRole::Body);
+    rowSub(r, buf, sizeof buf);
+    lv_obj_t* sub = label(tx, FontRole::Meta, _t.dim, buf);
+    lv_obj_set_width(sub, LV_PCT(100));
+    oneLine(sub, FontRole::Meta);
+
+    if (r.unread) {
+      lv_obj_t* badge = box(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+      lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
+      lv_obj_set_style_bg_color(badge, c(_t.sig), 0);
+      lv_obj_set_style_radius(badge, _look.pill_chips ? 8 : 0, 0);
+      lv_obj_set_style_pad_hor(badge, 5, 0);
+      badgeText(r.unread, buf, sizeof buf);
+      label(badge, FontRole::Meta, _t.sigInk, buf);
+    }
+    lv_obj_t* bars[4];
+    rowBars(row, bars);
+    colorBars(bars, r.snr_known, r.snr_db, _model->radioSf(), _t);
+    if (r.snr_known) rowSnr(r.snr_db, buf, sizeof buf);
+    else buf[0] = '\0';
+    label(row, FontRole::Meta, _t.ink2, buf);
+    lv_obj_t* chev = box(row, 6, 12);
+    static const lv_point_t kNext[] = {{1, 1}, {5, 6}, {1, 11}};
+    line(chev, kNext, 3, _t.dim);
+
+    lv_obj_set_user_data(row, reinterpret_cast<void*>(uintptr_t(i + 1)));
+    focusable(row);
+    _node_row_obj[i] = row;
+    if (_focus_key_set && r.key && memcmp(r.key, _focus_key, 6) == 0) _focus_row = row;
+  }
+
+  // The unread view says what it shows, with Clear (as drawn).
+  if (_node_unread && _node_shown) {
+    lv_obj_t* f = label(list, FontRole::BodySmall, _t.dim, "Only companions with unread DMs · Clear");
+    lv_obj_set_width(f, LV_PCT(100));
+    lv_obj_set_style_text_align(f, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_pad_ver(f, 8, 0);
+  }
+  if (_node_unread) {   // Clear: the footer's tap target, also in the focus order
+    lv_obj_t* clear = lv_obj_get_child(list, -1);
+    lv_obj_add_flag(clear, LV_OBJ_FLAG_CLICKABLE);
+    focusable(clear);
+    lv_obj_add_event_cb(
+        clear,
+        [](lv_event_t* e) {
+          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+          self->_node_unread = false;
+          self->_node_filter = TypeFilter::All;
+          self->later([](GuiShell* g) { g->rebuild(); });
+        },
+        LV_EVENT_CLICKED, this);
+  }
+}
+
+void GuiShell::updateNodes(uint32_t now_ms) {
+  if (_locked || _composing || _tab != Tab::Nodes || _sheet != Sheet::None) return;
+  if (int32_t(now_ms - _node_refresh_at) < 0) return;
+  _node_refresh_at = now_ms + 1000;
+
+  size_t total = 0;
+  const NodeRow* rows = _model->nodeRows(&total);
+  uint16_t order[kNodeRowsShown];
+  const size_t shown = nodeOrder(rows, total, _node_filter, _node_unread, "", order, kNodeRowsShown);
+  bool same = shown == _node_shown;
+  for (size_t i = 0; same && i < shown; i++) same = order[i] == _node_order[i];
+  for (size_t i = 0; same && i < shown; i++) {
+    // A badge appearing or going changes the row's layout: rebuild for that.
+    const bool has_badge = lv_obj_get_child_cnt(_node_row_obj[i]) == 6;
+    same = has_badge == (rows[order[i]].unread != 0);
+  }
+
+  if (!same) {
+    // The order moved (a node was heard): rebuild, but not more than every
+    // 5 s, and keep the focused row.
+    if (int32_t(now_ms - _node_rebuild_at) < 0) return;
+    _node_rebuild_at = now_ms + 5000;
+    lv_obj_t* f = lv_group_get_focused(_group);
+    const uintptr_t ud = f ? uintptr_t(lv_obj_get_user_data(f)) : 0;
+    _focus_key_set = false;
+    if (ud && ud <= _node_shown && f == _node_row_obj[ud - 1] && rows[_node_order[ud - 1]].key) {
+      memcpy(_focus_key, rows[_node_order[ud - 1]].key, 6);
+      _focus_key_set = true;
+    }
+    rebuild();
+    return;
+  }
+
+  // Same rows: refresh the second line, bars and SNR in place.
+  char buf[32];
+  for (size_t i = 0; i < shown; i++) {
+    const NodeRow& r = rows[order[i]];
+    lv_obj_t* row = _node_row_obj[i];
+    lv_obj_t* tx = lv_obj_get_child(row, 1);
+    rowSub(r, buf, sizeof buf);
+    lv_obj_t* sub = lv_obj_get_child(tx, 1);
+    if (strcmp(lv_label_get_text(sub), buf) != 0) lv_label_set_text(sub, buf);
+    const uint32_t base = r.unread ? 3 : 2;   // tile, text, [badge], bars, snr, chevron
+    lv_obj_t* barbox = lv_obj_get_child(row, base);
+    lv_obj_t* bars[4];
+    for (int b = 0; b < 4; b++) bars[b] = lv_obj_get_child(barbox, b);
+    colorBars(bars, r.snr_known, r.snr_db, _model->radioSf(), _t);
+    if (r.snr_known) rowSnr(r.snr_db, buf, sizeof buf);
+    else buf[0] = '\0';
+    lv_obj_t* snr = lv_obj_get_child(row, base + 1);
+    if (strcmp(lv_label_get_text(snr), buf) != 0) lv_label_set_text(snr, buf);
   }
 }

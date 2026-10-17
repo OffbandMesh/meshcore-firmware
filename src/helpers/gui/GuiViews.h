@@ -11,6 +11,7 @@
 // when n is 0, and cuts to fit only at a whole UTF-8 character. Store-based
 // functions treat a store that isn't ready as empty.
 
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -20,6 +21,11 @@
 
 namespace offband {
 namespace gui {
+
+// snprintf by the rules above: does nothing when n is 0, and a cut lands on
+// a whole UTF-8 character. For every view module's text.
+void textf(char* out, size_t n, const char* f, ...);
+void vtextf(char* out, size_t n, const char* f, va_list ap);
 
 // Text from the mesh (names, messages) as the screens show it: the
 // characters that only steer how an emoji is drawn are dropped, since the

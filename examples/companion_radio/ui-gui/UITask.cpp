@@ -578,6 +578,49 @@ void UITask::pollDmRetries(uint32_t now) {
   }
 }
 
+// ------------------------------------------------------------- Nodes (E)
+
+// Every contact as a list row. Last heard is the contact's advert time on
+// our clock (ContactInfo::lastmod, kept across reboots); SNR and unread come
+// from the GUI's per-contact stats, which start empty at boot.
+const NodeRow* UITask::nodeRows(size_t* total) {
+  *total = 0;
+  if (!_node_rows) {
+    _node_rows = static_cast<NodeRow*>(heap_caps_malloc(sizeof(NodeRow) * MAX_CONTACTS, MALLOC_CAP_SPIRAM));
+    _node_keys = static_cast<uint8_t(*)[32]>(heap_caps_malloc(32 * MAX_CONTACTS, MALLOC_CAP_SPIRAM));
+  }
+  if (!_node_rows || !_node_keys) return nullptr;
+  const uint32_t now = rtc_clock.getCurrentTime();
+  const bool clock_ok = offband::tz::clockSet(now);
+  MetricsHub& m = the_mesh.guiMetrics();
+  const MsgStore& store = the_mesh.guiStore();
+  ContactInfo ci;
+  size_t n = 0;
+  for (int i = 0; i < the_mesh.getNumContacts() && n < MAX_CONTACTS; i++) {
+    if (!the_mesh.getContactByIdx(i, ci)) continue;
+    NodeRow& r = _node_rows[n];
+    memcpy(_node_keys[n], ci.id.pub_key, 32);
+    snprintf(r.name, sizeof r.name, "%s", ci.name);
+    r.key = _node_keys[n];
+    r.kind = nodeKind(ci.type);
+    r.out_path_len = ci.out_path_len;
+    // A clock stepped back (a GPS or phone sync) reads as "now", not "never".
+    r.heard = clock_ok && ci.lastmod != 0;
+    r.heard_age_s = (r.heard && now >= ci.lastmod) ? now - ci.lastmod : 0;
+    const ContactStat* st = m.contacts.find(ci.id.pub_key);
+    r.snr_known = st && st->heard;
+    r.snr_db = r.snr_known ? st->snr_db : 0;
+    // Unread from the store, as Chats counts it (it survives a reboot).
+    const int t = store.find(ci.type == ADV_TYPE_ROOM ? ThreadKind::Room : ThreadKind::Direct, ci.id.pub_key,
+                             PUB_KEY_SIZE);
+    const Thread* th = store.threadAt(t);
+    r.unread = th ? th->unread : 0;
+    n++;
+  }
+  *total = n;
+  return _node_rows;
+}
+
 void UITask::msgRead(int msgcount) { _unread = msgcount; }
 
 void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) {
@@ -705,6 +748,7 @@ void UITask::loop() {
   // Chats redraw only when the store's revision moved, which is a compare on
   // every other pass.
   _shell.updateChats();
+  _shell.updateNodes(now);   // once a second while the Nodes tab is up
   GUI_SPAN(s_t_update);
   lvglLoop();
   GUI_SPAN(s_t_lvgl);

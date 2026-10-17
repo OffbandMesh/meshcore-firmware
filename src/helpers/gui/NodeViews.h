@@ -32,10 +32,11 @@ struct NodeRow {
   const uint8_t* key;      // 32-byte public key, in the contacts table
   NodeKind kind;
   uint8_t out_path_len;    // ContactInfo::out_path_len; 0xFF = no known route
-  bool heard;              // a packet from it since boot
+  bool heard;              // a last-heard time is known (the contact's advert time)
   uint32_t heard_age_s;    // seconds since, when heard
   float snr_db;            // last heard
   uint16_t unread;         // unread DMs
+  bool snr_known;          // heard since boot, so snr_db is real (bars and SNR show)
 };
 
 bool passesFilter(const NodeRow& r, TypeFilter f, bool unread_only);
