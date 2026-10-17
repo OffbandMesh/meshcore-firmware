@@ -417,7 +417,7 @@ private:
   // #1458: the contact list is saved a slice per loop tick, not in one pass.
   void contactsSaveTick();
   offband::gui::ChunkedSave _contacts_save;
-  int _contacts_save_count = 0;      // contacts when the save began
+  int _contacts_save_count = 0;      // contact slots when the save began (anon slots included)
   uint32_t _contacts_save_t0 = 0;
   uint32_t _contacts_slice_max_ms = 0;
 #endif
