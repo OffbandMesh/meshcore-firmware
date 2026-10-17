@@ -131,6 +131,112 @@ TEST(ChannelTuneEncoding, EncodingTheUnsetSentinelIsHowAChannelIsCleared) {
       << "clearing a channel must hand it back to the inherited tune";
 }
 
+// An unset channel inheriting an unset global. The event path always resolves `inherited`
+// to a real tune today, so this is not reachable -- pinned because review of #1522 named
+// it as the one resolution input the tests never used, and because the answer has to be
+// "hand the sentinel straight back" rather than anything cleverer.
+TEST(ChannelTuneResolution, AnUnsetChannelInheritingTheSentinelGetsTheSentinel) {
+  EXPECT_EQ(kTuneUnset, resolveChannelTune(kChannelTuneUnset, kTuneUnset));
+}
+
+// ---- the spare field in /channels2 (#1523) -------------------------------------------
+
+// The reason the field was free: an older file has zeros there, and zeros mean unset.
+TEST(ChannelTuneStorage, ALegacyRecordsZeroesReadAsUnset) {
+  const uint8_t legacy[kChannelSpareBytes] = {0, 0, 0, 0};
+  EXPECT_EQ(kChannelTuneUnset, channelTuneFromSpare(legacy));
+  EXPECT_EQ(kTuneUnset, decodeChannelTune(channelTuneFromSpare(legacy)));
+}
+
+TEST(ChannelTuneStorage, TheTuneRoundTripsThroughTheSpareField) {
+  uint8_t spare[kChannelSpareBytes];
+  for (uint8_t id = 0; id < (uint8_t)(kFirstSlotId + kSlotCount); id++) {
+    channelTuneToSpare(encodeChannelTune(id), spare);
+    EXPECT_EQ(id, decodeChannelTune(channelTuneFromSpare(spare)))
+        << "id " << (int)id << " did not survive the file";
+  }
+}
+
+TEST(ChannelTuneStorage, TheOtherThreeBytesStayZero) {
+  uint8_t spare[kChannelSpareBytes];
+  for (size_t i = 0; i < kChannelSpareBytes; i++) spare[i] = 0xAA;  // junk to overwrite
+  channelTuneToSpare(encodeChannelTune(kTuneKnock), spare);
+  EXPECT_EQ(encodeChannelTune(kTuneKnock), spare[kChannelTuneSpareIndex]);
+  for (size_t i = 0; i < kChannelSpareBytes; i++) {
+    if (i == kChannelTuneSpareIndex) continue;
+    EXPECT_EQ(0, spare[i]) << "spare byte " << i << " must stay zero for the next field";
+  }
+}
+
+// The property the whole "a downgrade loses nothing" argument rests on. #1522's
+// resolution falls back for an id this build cannot read; that is only not data loss
+// because the BYTE survives a save. So the persistence path has to be byte-preserving
+// over the entire range -- including ids no build has ever defined -- and must not
+// re-encode whatever it resolved.
+TEST(ChannelTuneStorage, EveryByteSurvivesASaveUnchangedIncludingUnresolvableIds) {
+  for (int b = 0; b <= 255; b++) {
+    uint8_t spare[kChannelSpareBytes];
+    channelTuneToSpare((uint8_t)b, spare);
+    EXPECT_EQ(b, (int)channelTuneFromSpare(spare))
+        << "stored byte " << b << " was altered by a save -- an unresolvable id must be "
+        << "written back as it was read, or a re-upgrade cannot restore the choice";
+  }
+}
+
+TEST(ChannelTuneStorage, ANullSpareFieldIsNotDereferenced) {
+  EXPECT_EQ(kChannelTuneUnset, channelTuneFromSpare(nullptr));
+  channelTuneToSpare(encodeChannelTune(kTuneChime), nullptr);  // must not crash
+}
+
+// ChannelDetails::tune is declared `uint8_t tune = 0;` and cannot include this header --
+// BaseChatMesh.h pulls it into every role on every variant. That literal 0 is only
+// correct while unset is 0, so the dependency is pinned here instead.
+TEST(ChannelTuneStorage, ChannelDetailsDefaultOfZeroMeansUnset) {
+  static_assert(kChannelTuneUnset == 0,
+                "ChannelDetails::tune defaults to a literal 0 and means unset");
+  EXPECT_EQ(kTuneUnset, decodeChannelTune(0));
+}
+
+// ---- an edit from the app (#1523) -----------------------------------------------------
+
+// The bug this prevents: CMD_SET_CHANNEL carries only a name and a secret, so renaming a
+// channel from the phone would otherwise clear the tune set on the badge.
+TEST(ChannelTuneAfterEdit, ARenameKeepsTheTune) {
+  const uint8_t stored = encodeChannelTune(kTuneKnock);
+  EXPECT_EQ(stored, channelTuneAfterEdit(false, true, stored));
+  // Including a choice of Silent, which is the one a careless "if (tune) keep it" would
+  // drop -- Silent is stored as 1, not 0, exactly so it is not falsy.
+  const uint8_t silent = encodeChannelTune(kTuneSilent);
+  EXPECT_NE(kChannelTuneUnset, silent);
+  EXPECT_EQ(silent, channelTuneAfterEdit(false, true, silent));
+  // And an id this build cannot resolve: an edit must not normalise it away either.
+  EXPECT_EQ(200, channelTuneAfterEdit(false, true, 200));
+}
+
+TEST(ChannelTuneAfterEdit, ANewlyJoinedSlotStartsUnset) {
+  // Whatever happened to be in the slot's record before, a newly joined channel takes the
+  // global tune rather than inheriting a stranger's choice.
+  EXPECT_EQ(kChannelTuneUnset,
+            channelTuneAfterEdit(true, false, encodeChannelTune(kTuneKnock)));
+  EXPECT_EQ(kChannelTuneUnset, channelTuneAfterEdit(true, false, kChannelTuneUnset));
+  // A caller that somehow reports an empty slot AND a matching channel is still a new
+  // channel: emptiness wins, so the answer cannot depend on which flag is read first.
+  EXPECT_EQ(kChannelTuneUnset,
+            channelTuneAfterEdit(true, true, encodeChannelTune(kTuneKnock)));
+}
+
+// Review's finding, and it was right: channel slots are a fixed table the app reuses, so
+// an occupied slot is not the same thing as the same channel. A tune chosen for a channel
+// that has been replaced must not play for whatever took its place.
+TEST(ChannelTuneAfterEdit, AReplacementDoesNotInheritTheOldChannelsTune) {
+  EXPECT_EQ(kChannelTuneUnset,
+            channelTuneAfterEdit(false, false, encodeChannelTune(kTuneKnock)));
+  // A re-key of the "same" channel counts as a replacement too -- the secret is what
+  // identifies a channel, and a new secret is a different channel on the air.
+  EXPECT_EQ(kChannelTuneUnset,
+            channelTuneAfterEdit(false, false, encodeChannelTune(kTuneSilent)));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
