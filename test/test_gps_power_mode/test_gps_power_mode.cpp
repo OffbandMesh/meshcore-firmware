@@ -498,6 +498,37 @@ TEST(GpsBackoff, AnAbsurdIntervalSaturatesRatherThanWrappingToAShortWait) {
   }
 }
 
+// ---- config from the stored interval (#1556) -------------------------------------------
+
+// A stored 0 is what an older prefs file reads as, and it must mean "the compiled
+// default". A zero-length sleep would attempt continuously -- worse than never having had
+// Power save at all, and a battery drain dressed as a power saver.
+TEST(GpsConfigFromPrefs, AStoredZeroMeansTheCompiledDefaultNotNoSleep) {
+  const GpsPowerConfig cfg = gpsConfigFromPrefs(0);
+  EXPECT_EQ(kGpsIntervalMs, cfg.interval_ms);
+  EXPECT_GT(cfg.interval_ms, 0u) << "a zero interval would attempt in a tight loop";
+  // And it still produces a sane wait at every failure count.
+  for (int f = 0; f <= 255; f++) {
+    EXPECT_GE(gpsBackoffWaitMs(cfg, (uint8_t)f), kGpsIntervalMs);
+  }
+}
+
+TEST(GpsConfigFromPrefs, ASensibleIntervalConvertsToMilliseconds) {
+  EXPECT_EQ(60u * 1000u, gpsConfigFromPrefs(60).interval_ms);
+  EXPECT_EQ(1800u * 1000u, gpsConfigFromPrefs(1800).interval_ms);
+}
+
+// An absurd stored value must clamp, not multiply into a wrap. A wrapped interval comes
+// back SHORT, which is the one failure that turns this feature into its opposite.
+TEST(GpsConfigFromPrefs, AnAbsurdIntervalClampsRatherThanWrapping) {
+  for (uint32_t s : {kGpsMaxPsIntervalS, kGpsMaxPsIntervalS + 1, 0xFFFFFFFFu, 0x80000000u}) {
+    const GpsPowerConfig cfg = gpsConfigFromPrefs(s);
+    EXPECT_GE(cfg.interval_ms, kGpsIntervalMs)
+        << "stored " << s << " s produced " << cfg.interval_ms << " ms -- shorter than the"
+        << " compiled default, so a huge setting became a fast retry";
+  }
+}
+
 // ---- millis() rollover -----------------------------------------------------------------
 
 // The badge runs for days; millis() wraps at ~49.7. A wait computed across the wrap must

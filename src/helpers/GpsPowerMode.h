@@ -104,6 +104,25 @@ struct GpsPowerConfig {
   uint8_t max_backoff_shift = kGpsMaxBackoffShift;
 };
 
+// The longest Power-save interval that can be stored, in seconds. Beyond this the
+// milliseconds do not fit a uint32, and a wrapped interval comes back SHORT -- which is
+// the one failure mode that turns a power saver into a battery drain.
+constexpr uint32_t kGpsMaxPsIntervalS = 0xFFFFFFFFu / 1000u;
+
+// Config from the stored pref (#1556).
+//
+// A stored 0 means "use the compiled default", which is what an older prefs file reads as.
+// It must NOT become a zero-length sleep: that would attempt continuously and be worse
+// than never having had Power save. An absurd value is clamped rather than multiplied into
+// a wrap, for the same reason gpsBackoffWaitMs saturates.
+inline GpsPowerConfig gpsConfigFromPrefs(uint32_t ps_interval_s) {
+  GpsPowerConfig cfg;
+  if (ps_interval_s == 0) return cfg;                       // the compiled default
+  if (ps_interval_s > kGpsMaxPsIntervalS) ps_interval_s = kGpsMaxPsIntervalS;
+  cfg.interval_ms = ps_interval_s * 1000u;
+  return cfg;
+}
+
 // How long the next attempt gets, given how many have failed in a row.
 //
 // Nothing has failed yet -- either a success preceded it or this is the first try -- so a
@@ -251,6 +270,15 @@ public:
     _failures = 0;
     _attempting = false;
     _since_ms = now_ms - gpsBackoffWaitMs(_cfg, 0);
+  }
+
+  // Re-arm with a (possibly new) config. Named rather than done by assigning a fresh
+  // instance over the old one: review asked whether reassigning a static was safe, and
+  // while this type is scalars-only and trivially assignable, a reader should not have to
+  // establish that to trust the code.
+  void reset(const GpsPowerConfig& cfg, GpsMode m, uint32_t now_ms) {
+    _cfg = cfg;
+    setMode(m, now_ms);
   }
 
   GpsMode mode() const { return _mode; }

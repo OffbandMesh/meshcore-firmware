@@ -386,13 +386,33 @@ public:
       snprintf(interval_str, sizeof(interval_str), "%u", _prefs.gps_interval);
       sensors.setSettingValue("gps_interval", interval_str);
     }
+    gpsModeTouched();   // #1556: the power machine re-reads and restarts from this
   }
+
+  // #1556: tell the GPS power machine to pick the mode up again and start fresh.
+  //
+  // A counter rather than a flag, because it has to fire even when the resolved mode has
+  // NOT changed. That is #1557's force-retry: someone looking at "backed off, waiting 4h"
+  // selects Power save again, and the machine must clear the failure count and attempt now.
+  // A loop that only watched for a mode change would make that gesture a silent no-op and
+  // leave the user with no way out but a reboot.
+  //
+  // Every writer of the GPS prefs calls this -- applyGpsPrefs covers the app's toggle, the
+  // CLI and boot; the badge's GPS screen calls it directly.
+  void gpsModeTouched() { _gps_mode_gen++; }
+  uint32_t gpsModeGeneration() const { return _gps_mode_gen; }
 #endif
 
   // To check if there is pending work
   bool hasPendingWork() const;
 
 private:
+#if ENV_INCLUDE_GPS == 1
+  // #1556: bumped by every writer of the GPS prefs, including a re-selection of the mode
+  // already in effect. The power machine in the main loop watches it.
+  uint32_t _gps_mode_gen = 0;
+#endif
+
   // Hands a reply to the GUI (#1454); `body` is the phone frame after its
   // code and reserved bytes. A no-op without the GUI. The kinds mirror
   // offband::gui::ReplyKind, which non-GUI builds don't include.
