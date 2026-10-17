@@ -197,6 +197,11 @@ public:
   // The UI says whether anyone is looking: internal-flash writes (the store,
   // the contacts save) wait for a dim or dark screen (#1472).
   void setGuiScreenIdle(bool idle) { _gui_screen_idle = idle; }
+  // A contact's conversation, made on first use (Nodes DM, #1533); -1 if the
+  // thread table is full.
+  int guiThreadForContact(const ContactInfo& contact) { return guiThreadFor(contact); }
+  // The store, for the GUI's own small files (its node passwords, #1533).
+  DataStore* guiDataStore() { return _store; }
 #endif
 
 #if UI_HAS_CARDKB
@@ -362,6 +367,16 @@ protected:
   }
 
 public:
+  // #1525: set the tune one channel plays, and persist it. `stored` is the ENCODED byte
+  // from offband::encodeChannelTune, so kChannelTuneUnset clears the choice.
+  //
+  // Here rather than in the screen because saveChannels() is private -- the mesh decides
+  // when the channel file is written -- and because the read-modify-write matters:
+  // setChannel() copies the record whole, so the name and the secret have to come back
+  // out of the existing one. That is the #1523 lesson, and it only has to be learned once
+  // if there is one place that does it. False when the slot holds no channel.
+  bool setChannelTune(uint8_t idx, uint8_t stored);
+
   bool savePrefs() {   // #1194: false when the store could not write them
     _prefs.node_lat = sensors.node_lat;
     _prefs.node_lon = sensors.node_lon;
@@ -402,7 +417,7 @@ private:
   // #1458: the contact list is saved a slice per loop tick, not in one pass.
   void contactsSaveTick();
   offband::gui::ChunkedSave _contacts_save;
-  int _contacts_save_count = 0;      // contacts when the save began
+  int _contacts_save_count = 0;      // contact slots when the save began (anon slots included)
   uint32_t _contacts_save_t0 = 0;
   uint32_t _contacts_slice_max_ms = 0;
 #endif

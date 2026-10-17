@@ -18,12 +18,9 @@ static void blank(char* out, size_t n) {
 }
 
 // snprintf, then backs a cut off to a whole UTF-8 character.
-static void put(char* out, size_t n, const char* f, ...) {
+void vtextf(char* out, size_t n, const char* f, va_list ap) {
   if (!n) return;
-  va_list ap;
-  va_start(ap, f);
   const int w = vsnprintf(out, n, f, ap);
-  va_end(ap);
   if (w < 0) {
     out[0] = '\0';
     return;
@@ -41,6 +38,20 @@ static void put(char* out, size_t n, const char* f, ...) {
     }
     out[len] = '\0';
   }
+}
+
+void textf(char* out, size_t n, const char* f, ...) {
+  va_list ap;
+  va_start(ap, f);
+  vtextf(out, n, f, ap);
+  va_end(ap);
+}
+
+static void put(char* out, size_t n, const char* f, ...) {
+  va_list ap;
+  va_start(ap, f);
+  vtextf(out, n, f, ap);
+  va_end(ap);
 }
 
 // --------------------------------------------------------- display text

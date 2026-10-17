@@ -159,6 +159,16 @@ def main(argv=None):
     if not port:
         sys.exit("ERROR: no serial port given and none auto-detected. Pass --port COMx.")
 
+    # #1514: best-effort UTF-8 on the console, so a node name with an emoji DISPLAYS
+    # (mangled at worst) instead of being dropped. This is the cosmetic half; emit()
+    # carries the guarantee, because a terminal that refuses reconfiguration must still
+    # not be able to end a capture.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass   # older stream object, or one that cannot be reconfigured
+
     redact = (lambda s: s) if args.no_redact else redact_line
 
     out_path = None
@@ -202,11 +212,27 @@ def main(argv=None):
 
     def emit(line):
         line = redact(line)
-        print(line)
-        sys.stdout.flush()
+        # #1514: the FILE first, and the console second and unable to raise.
+        #
+        # A node name carrying an emoji ended a live bench capture: print() hit a cp1252
+        # console, raised UnicodeEncodeError out of here, and killed the process -- so the
+        # line never reached the file even though the file is opened UTF-8 and would have
+        # taken it. A lossy display path was gating the durable one.
+        #
+        # Which way round this goes is the whole fix. A capture that stops without saying
+        # so is worse than no capture: the absence reads as "nothing happened" when
+        # someone later uses the log to decide what a board did.
         if out_fh:
             out_fh.write(line + "\n")
             out_fh.flush()
+        try:
+            print(line)
+            sys.stdout.flush()
+        except (UnicodeEncodeError, OSError, ValueError):
+            # One unrenderable line costs one console line, never the capture. OSError and
+            # ValueError too: a closed, full or redirected stdout must not end a capture
+            # either, and by here the line is already on disk.
+            pass
 
     # Queued commands, issued on the SAME open connection (see --send). Kept in
     # this single read loop rather than a writer thread: the loop already owns the

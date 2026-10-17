@@ -17,7 +17,7 @@ The glyph sets:
 - **Text:**
   - 0x20-0x7E is ASCII.
   - 0xA0-0x17F is Latin-1 and Latin Extended-A, so Western and Central European names and messages show. This was the owner's pick on 2026-10-16 (#1428): +57 KB. Greek, Cyrillic and emoji are not included.
-  - `…` 0x2026 and `−` 0x2212.
+  - `—` 0x2014, `…` 0x2026, `›` 0x203A and `−` 0x2212. The dash stands for a value not known yet, and `›` separates the hops of a path (Nodes, #1533).
   - A code point the face lacks is simply left out.
 - **Symbols:** `✓` 0x2713, `✕` 0x2715, `⇧` 0x21E7, `⌫` 0x232B. Barlow has none of these, so the Barlow files take them from JetBrains Mono in the same weight (#1496).
 - **Emoji, Barlow files only:**
@@ -32,7 +32,7 @@ Regenerate one file, for example:
 
 ```
 npx -y lv_font_conv@1.5.3 --bpp 4 --format lvgl --no-compress --lv-include lvgl.h \
-  --font BarlowCondensed-SemiBold.ttf --range 0x20-0x7E,0xA0-0x17F,0x2026,0x2212 \
+  --font BarlowCondensed-SemiBold.ttf --range 0x20-0x7E,0xA0-0x17F,0x2014,0x2026,0x203A,0x2212 \
   --font JetBrainsMono-SemiBold.ttf --range 0x2713,0x2715,0x21E7,0x232B \
   --font "NotoEmoji[wght].ttf" \
   --range 0x1F300-0x1F5FF,0x1F600-0x1F64F,0x1F680-0x1F6FF,0x1F900-0x1F9FF,0x2600-0x2712,0x2716-0x27BF \

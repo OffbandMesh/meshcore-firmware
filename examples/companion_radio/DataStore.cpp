@@ -3,6 +3,7 @@
 #include <helpers/prefs/PrefsLayout.h>   // #627
 #include <helpers/ClockSanity.h>
 #include <MeshLog.h>                     // #631 diagnostics: OFFBAND_FORCE_CAPLOG
+#include <helpers/ui/TuneSlots.h>        // #1523: the tune in the channel record's spare field
 
 #if defined(EXTRAFS) || defined(QSPIFLASH)
   #define MAX_BLOBRECS 100
@@ -507,13 +508,19 @@ void DataStore::loadChannels(DataStoreHost* host) {
       uint8_t channel_idx = 0;
       while (!full) {
         ChannelDetails ch;
-        uint8_t unused[4];
+        // #1523: no longer entirely unused -- the first byte is the channel's tune. The
+        // other three stay spare, and the read is the same four bytes it always was.
+        uint8_t spare[offband::kChannelSpareBytes];
 
-        bool success = (file.read(unused, 4) == 4);
+        bool success = (file.read(spare, sizeof(spare)) == sizeof(spare));
         success = success && (file.read((uint8_t *)ch.name, 32) == 32);
         success = success && (file.read((uint8_t *)ch.channel.secret, 32) == 32);
 
         if (!success) break; // EOF
+
+        // A file written before this existed has zeros here, which decode to "unset" and
+        // leave the channel sounding exactly as it did.
+        ch.tune = offband::channelTuneFromSpare(spare);
 
         if (host->onChannelLoaded(channel_idx, ch)) {
           channel_idx++;
@@ -530,11 +537,14 @@ void DataStore::saveChannels(DataStoreHost* host) {
   if (file) {
     uint8_t channel_idx = 0;
     ChannelDetails ch;
-    uint8_t unused[4];
-    memset(unused, 0, 4);
+    uint8_t spare[offband::kChannelSpareBytes];
 
     while (host->getChannelForSave(channel_idx, ch)) {
-      bool success = (file.write(unused, 4) == 4);
+      // #1523: built per record now rather than zeroed once -- the first byte is this
+      // channel's tune, written back byte-for-byte even if this build cannot resolve it.
+      offband::channelTuneToSpare(ch.tune, spare);
+
+      bool success = (file.write(spare, sizeof(spare)) == sizeof(spare));
       success = success && (file.write((uint8_t *)ch.name, 32) == 32);
       success = success && (file.write((uint8_t *)ch.channel.secret, 32) == 32);
 
