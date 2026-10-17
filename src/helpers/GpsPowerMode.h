@@ -162,6 +162,64 @@ inline bool isValidGpsMode(uint8_t stored) {
   return stored <= (uint8_t)GpsMode::PowerSave;
 }
 
+// ---- the stored pref, and living alongside the gps_enabled bool (#1555) ----------------
+//
+// Prefs are keyed now (ConfigSerializer / prefs.json), so adding a mode key is additive:
+// a file written before this existed simply has no `mode`, and the member keeps its
+// default. That default has to mean "nothing stored", NOT a mode -- defaulting to Off
+// would stop GPS working for every badge that has gps_enabled = 1 today, which is the same
+// trap #1522's encoding was built to avoid for tune ids.
+constexpr uint8_t kGpsModeUnset = 0xFF;
+static_assert(kGpsModeUnset > (uint8_t)GpsMode::PowerSave,
+              "the unset sentinel must not name a mode");
+
+// HOW THE TWO FIELDS DIVIDE THE WORK, and this split is the design.
+//
+//   gps_enabled  -- is GPS on at all. Meaning UNCHANGED from today, so every existing
+//                   reader and writer stays correct with no translation: the app's toggle,
+//                   `gps on|off`, the observer's time-state report, ui-tiny's Power row,
+//                   applyGpsPrefs.
+//   gps_mode     -- HOW it runs while enabled. Only On and Power save are meaningful;
+//                   unset means On, which is what the firmware did before this existed.
+//
+// The first version made the mode authoritative and kept the bool as a mirror. Review
+// broke it with a sequence anyone would do: in Power save, toggle GPS off from the phone,
+// then back on. The off write had to collapse the mode to Off, and the on write had no
+// memory of what it had been, so the user landed in On and silently lost the battery
+// saving. Splitting it this way removes that entirely -- **a bool write never touches the
+// mode byte, so turning GPS off and on again restores Power save** -- and it removes the
+// whole class of mode-versus-mirror drift along with it, because there is no mirror.
+
+// The mode in effect, from the stored byte and the boolean.
+//
+// The unset check must stay AHEAD of gpsModeFromStored(), which maps anything
+// unrecognised to On. That is right for a byte from a newer firmware and wrong for unset:
+// if a maintainer ever collapses the two, GpsModePrefs.UnsetIsNotTreatedAsAnUnknownMode
+// fails on purpose.
+inline GpsMode gpsModeFromPrefs(uint8_t stored_mode, uint8_t enabled_bool) {
+  if (!enabled_bool) return GpsMode::Off;
+  if (stored_mode == kGpsModeUnset) return GpsMode::On;
+  const GpsMode m = gpsModeFromStored(stored_mode);
+  // A stored Off while the boolean says enabled is a contradiction -- it can only come
+  // from an older layout or a partial write. The boolean is the one every other reader
+  // obeys, so it wins, and "enabled" with no usable HOW means On.
+  return m == GpsMode::Off ? GpsMode::On : m;
+}
+
+// The boolean a chosen mode implies, for the writer that sets both.
+inline uint8_t gpsEnabledForMode(GpsMode m) { return m == GpsMode::Off ? 0 : 1; }
+
+// What to STORE in the mode byte when the user picks `m` on the GPS screen.
+//
+// Picking Off deliberately LEAVES THE BYTE ALONE: it records how GPS ran, and the user has
+// not changed their mind about that, only switched it off. So Off then On returns them to
+// Power save rather than to continuous On. This is the #1523 rule applied to a different
+// field -- a writer must not clear what it is not being asked about.
+inline uint8_t gpsStoredModeForPick(GpsMode m, uint8_t current_stored) {
+  if (m == GpsMode::Off) return current_stored;
+  return (uint8_t)m;
+}
+
 // ---- the machine ----------------------------------------------------------------------
 
 struct GpsPowerAction {

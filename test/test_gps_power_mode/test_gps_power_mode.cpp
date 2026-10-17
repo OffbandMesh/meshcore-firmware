@@ -301,6 +301,113 @@ TEST(GpsAttemptTimeout, ASuccessRestoresTheGenerousTimeout) {
   EXPECT_EQ(kGpsFirstAttemptTimeoutMs, gpsAttemptTimeoutMs(GpsPowerConfig(), m.failures()));
 }
 
+// ---- the stored pref, and the gps_enabled bool it lives beside (#1555) -----------------
+//
+// The whole risk here is an upgrade changing what a badge does. Prefs are keyed, so the
+// mode key is simply absent from an existing file and the member keeps its default -- and
+// that default has to mean "nothing stored" rather than naming a mode.
+
+// The trap, and the reason for a sentinel at all. Defaulting to Off (0) would have stopped
+// GPS working on every badge that has gps_enabled = 1 today, from a key that was never
+// written. Same shape as #1522's tune encoding: a value a legacy file already holds must
+// not come to mean something new.
+TEST(GpsModePrefs, AFileWithNoModeKeyBehavesExactlyAsItDoesToday) {
+  EXPECT_EQ(GpsMode::On, gpsModeFromPrefs(kGpsModeUnset, 1))
+      << "a badge with GPS on would have lost it on upgrade";
+  EXPECT_EQ(GpsMode::Off, gpsModeFromPrefs(kGpsModeUnset, 0))
+      << "a badge with GPS off would have had it switched on";
+  EXPECT_NE(GpsMode::PowerSave, gpsModeFromPrefs(kGpsModeUnset, 1))
+      << "an upgrade must never land in the NEW mode by accident";
+  EXPECT_NE(GpsMode::PowerSave, gpsModeFromPrefs(kGpsModeUnset, 0));
+}
+
+// Unset has to be checked BEFORE delegating to gpsModeFromStored(), which maps anything
+// unrecognised to On. That is right for a byte from a newer firmware and wrong for unset:
+// unset plus a disabled bool must stay Off, not switch GPS on.
+TEST(GpsModePrefs, UnsetIsNotTreatedAsAnUnknownMode) {
+  ASSERT_EQ(GpsMode::On, gpsModeFromStored(kGpsModeUnset))
+      << "premise changed: the sentinel no longer collides with the unknown-mode fallback";
+  EXPECT_EQ(GpsMode::Off, gpsModeFromPrefs(kGpsModeUnset, 0))
+      << "the unset check is happening after the unknown-mode fallback, not before";
+}
+
+// The boolean decides on-or-off; the mode byte only says HOW while on. So a disabled node
+// is Off whatever the byte remembers -- which is what makes the byte safe to keep across
+// an off/on cycle.
+TEST(GpsModePrefs, TheBooleanDecidesOnOrOffAndTheByteDecidesHow) {
+  EXPECT_EQ(GpsMode::Off, gpsModeFromPrefs((uint8_t)GpsMode::PowerSave, 0));
+  EXPECT_EQ(GpsMode::Off, gpsModeFromPrefs((uint8_t)GpsMode::On, 0));
+  EXPECT_EQ(GpsMode::PowerSave, gpsModeFromPrefs((uint8_t)GpsMode::PowerSave, 1));
+  EXPECT_EQ(GpsMode::On, gpsModeFromPrefs((uint8_t)GpsMode::On, 1));
+}
+
+// A stored Off while the bool says enabled is a contradiction -- an older layout or a
+// partial write. The bool is what every other reader obeys, so it wins, and "enabled with
+// no usable HOW" is On rather than something new.
+TEST(GpsModePrefs, AContradictoryStoredOffResolvesToOnNotToSilence) {
+  EXPECT_EQ(GpsMode::On, gpsModeFromPrefs((uint8_t)GpsMode::Off, 1));
+  EXPECT_NE(GpsMode::PowerSave, gpsModeFromPrefs((uint8_t)GpsMode::Off, 1));
+}
+
+TEST(GpsModePrefs, TheBoolAChosenModeImpliesIsConsistent) {
+  EXPECT_EQ(0, gpsEnabledForMode(GpsMode::Off));
+  EXPECT_EQ(1, gpsEnabledForMode(GpsMode::On));
+  // Power save is ENABLED -- GPS is in use, just not continuously. Reporting 0 would make
+  // the app, the CLI and the observer all say GPS is off while it is cycling.
+  EXPECT_EQ(1, gpsEnabledForMode(GpsMode::PowerSave));
+}
+
+// Choosing a mode and reading it back has to be a fixed point for the modes that are
+// actually choosable while on.
+TEST(GpsModePrefs, ChoosingAModeRoundTrips) {
+  for (GpsMode m : {GpsMode::On, GpsMode::PowerSave}) {
+    const uint8_t stored = gpsStoredModeForPick(m, kGpsModeUnset);
+    EXPECT_EQ(m, gpsModeFromPrefs(stored, gpsEnabledForMode(m))) << gpsModeName(m);
+  }
+  EXPECT_EQ(GpsMode::Off,
+            gpsModeFromPrefs(gpsStoredModeForPick(GpsMode::Off, kGpsModeUnset),
+                             gpsEnabledForMode(GpsMode::Off)));
+}
+
+// ---- a writer that only knows the boolean ----------------------------------------------
+
+// THE REVIEW FINDING, and the reason the two fields divide the work the way they do.
+//
+// In Power save, toggle GPS off from the phone and then back on -- something anyone would
+// do. The first version made the mode authoritative, so the off write had to collapse it
+// to Off and the on write had no memory of what it had been: the user landed in On and
+// silently lost the battery saving. A bool write now never touches the mode byte, so the
+// round trip returns them to Power save.
+TEST(GpsEnabledWrite, OffThenOnFromTheAppRestoresPowerSaveRatherThanLosingIt) {
+  const uint8_t stored = gpsStoredModeForPick(GpsMode::PowerSave, kGpsModeUnset);
+
+  uint8_t enabled = 1;
+  ASSERT_EQ(GpsMode::PowerSave, gpsModeFromPrefs(stored, enabled));
+
+  enabled = 0;   // the app's toggle, which writes nothing but this
+  EXPECT_EQ(GpsMode::Off, gpsModeFromPrefs(stored, enabled));
+
+  enabled = 1;   // and back
+  EXPECT_EQ(GpsMode::PowerSave, gpsModeFromPrefs(stored, enabled))
+      << "a phone-side off/on cycle silently cost the badge its battery saving";
+}
+
+// Picking Off on the badge's own screen keeps the remembered HOW for the same reason.
+TEST(GpsEnabledWrite, PickingOffRemembersHowItWasRunning) {
+  const uint8_t ps = (uint8_t)GpsMode::PowerSave;
+  EXPECT_EQ(ps, gpsStoredModeForPick(GpsMode::Off, ps))
+      << "picking Off threw away the user's Power-save choice";
+  // Picking a real mode does overwrite it, which is the point of picking one.
+  EXPECT_EQ((uint8_t)GpsMode::On, gpsStoredModeForPick(GpsMode::On, ps));
+}
+
+// A node that has never seen this feature and gets toggled by the app stays coherent: it
+// has no remembered HOW, so enabled means On.
+TEST(GpsEnabledWrite, ALegacyNodeToggledByTheAppLandsOnOnNotPowerSave) {
+  EXPECT_EQ(GpsMode::On, gpsModeFromPrefs(kGpsModeUnset, 1));
+  EXPECT_EQ(GpsMode::Off, gpsModeFromPrefs(kGpsModeUnset, 0));
+}
+
 // ---- forcing a retry out of backoff ----------------------------------------------------
 
 // The user-facing escape hatch, and the owner asked for it by name: someone staring at
