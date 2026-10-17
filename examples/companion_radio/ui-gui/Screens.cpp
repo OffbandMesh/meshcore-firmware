@@ -1897,8 +1897,8 @@ void GuiShell::refreshSearch() {
   _node_shown = nodeOrder(rows, total, _node_filter, _node_unread, _query.text(), _node_order, cap);
   mesh_log_line(MLOG_BOOT, "[gui] search \"%s\": %u matches\n", _query.text(), unsigned(matches));
   if (matches == 0 && _query.length()) {
-    char none[64];
-    textf(none, sizeof none, "No node name or key starts with \"%s\".", _query.text());
+    char none[112];
+    textf(none, sizeof none, "No node name contains \"%s\", and no key starts with it.", _query.text());
     lv_obj_t* l = label(_search_list, FontRole::BodySmall, _t.dim);
     userText(l, none);
     lv_obj_set_width(l, LV_PCT(100));

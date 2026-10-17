@@ -48,10 +48,14 @@ static int hexVal(char c) {
 
 bool searchMatches(const NodeRow& r, const char* query) {
   if (!query || !query[0]) return true;
-  // Name prefix, ASCII letters compared without case.
+  // Anywhere in the name, ASCII letters compared without case (owner,
+  // 2026-10-17: names are searched by a part remembered, not the start).
+  for (size_t at = 0; r.name[at]; at++) {
+    size_t i = 0;
+    while (query[i] && r.name[at + i] && lower(query[i]) == lower(r.name[at + i])) i++;
+    if (!query[i]) return true;
+  }
   size_t i = 0;
-  while (query[i] && r.name[i] && lower(query[i]) == lower(r.name[i])) i++;
-  if (!query[i]) return true;
   // Key hex prefix, when every character is a hex digit.
   if (!r.key) return false;
   for (i = 0; query[i]; i++) {
