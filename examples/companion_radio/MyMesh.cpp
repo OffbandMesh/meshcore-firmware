@@ -3060,7 +3060,7 @@ void MyMesh::handleCmdFrame(size_t len) {
       // The removal shifted every later record; an add in the same save
       // window would hide that from the count check (#1458).
       if (_contacts_save.active()) {
-        _contacts_save_count = getNumContacts();
+        _contacts_save_count = getTotalContactSlots();
         _store->beginContactsSave();
         _contacts_save.restart(_contacts_save_count);
       }
@@ -4424,7 +4424,10 @@ void MyMesh::contactsSaveTick() {
       saveContacts();            // can't open the temp file: one pass, as before
       return;
     }
-    _contacts_save_count = getNumContacts();
+    // Every slot, as saveContacts() writes them: getContactForSave(idx)
+    // counts from slot 0, the anonymous-request slots included, so
+    // getNumContacts() stopped 8 short and the newest 8 were never saved (#1551).
+    _contacts_save_count = getTotalContactSlots();
     _contacts_save.begin(_contacts_save_count, GUI_CONTACTS_PER_SLICE);
     _contacts_save_t0 = millis();
     _contacts_slice_max_ms = 0;
@@ -4434,8 +4437,8 @@ void MyMesh::contactsSaveTick() {
   // An add appends a record: start over so the file holds a single snapshot.
   // A delete restarts at the removal itself; an overwrite-oldest replaces a
   // record in place, and an edit re-arms the next save.
-  if (getNumContacts() != _contacts_save_count) {
-    _contacts_save_count = getNumContacts();
+  if (getTotalContactSlots() != _contacts_save_count) {
+    _contacts_save_count = getTotalContactSlots();
     _store->beginContactsSave();
     _contacts_save.restart(_contacts_save_count);
   }
@@ -4459,7 +4462,7 @@ void MyMesh::contactsSaveTick() {
 #if defined(OFFBAND_MEM_TELEMETRY)
   static uint32_t s_saves = 0;
   mesh_log_line(MLOG_BOOT, "[mem] contacts_save n=%lu contacts=%d ms=%lu slice_max_ms=%lu ok=%d\n",
-                (unsigned long)++s_saves, _contacts_save_count, (unsigned long)(millis() - _contacts_save_t0),
+                (unsigned long)++s_saves, getNumContacts(), (unsigned long)(millis() - _contacts_save_t0),
                 (unsigned long)_contacts_slice_max_ms, ok ? 1 : 0);
 #endif
 }
