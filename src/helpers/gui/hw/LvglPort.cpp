@@ -76,10 +76,15 @@ static uint32_t s_frame_ms_max = 0;
 // Called by LVGL after each refresh with how long it took.
 static void monitorCb(lv_disp_drv_t* drv, uint32_t time_ms, uint32_t px) {
   (void)drv;
-  (void)px;
   s_frames++;
   s_frame_ms_total += time_ms;
   if (time_ms > s_frame_ms_max) s_frame_ms_max = time_ms;
+#ifdef OFFBAND_GUI_PERF
+  // #1534: a slow frame, with its size, separates a big redraw from a stall.
+  if (time_ms > 150) mesh_log_line(MLOG_BOOT, "[gui] slow frame: %lums, %lu px\n", (unsigned long)time_ms, (unsigned long)px);
+#else
+  (void)px;
+#endif
 }
 
 void lvglTakeFrameStats(uint32_t* frames, uint32_t* avg_ms, uint32_t* max_ms) {

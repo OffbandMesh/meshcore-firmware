@@ -18,6 +18,19 @@ constexpr int16_t kContentH = 320 - kStatusH - kTabH;
 // The param of a CLICKED that a button (USR hold) sent rather than a touch.
 const char kByButton[] = "button";
 
+// Names a step that held the loop past 100 ms (bench, #1534: taps lost to
+// a 981 ms stall during search). One line, when it happens.
+struct SlowStep {
+  const char* what;
+  int detail;
+  uint32_t t0;
+  SlowStep(const char* w, int d = 0) : what(w), detail(d), t0(lv_tick_get()) {}
+  ~SlowStep() {
+    const uint32_t ms = lv_tick_elaps(t0);
+    if (ms > 100) mesh_log_line(MLOG_BOOT, "[gui] slow %s (%d): %lums\n", what, detail, (unsigned long)ms);
+  }
+};
+
 lv_color_t c(uint32_t rgb) { return lv_color_hex(rgb & 0xFFFFFF); }
 
 lv_obj_t* box(lv_obj_t* parent, lv_coord_t w, lv_coord_t h) {
@@ -223,6 +236,7 @@ void GuiShell::focusable(lv_obj_t* o) {
 }
 
 void GuiShell::rebuild() {
+  SlowStep slow("rebuild tab", _searching ? 10 + int(_tab) : _composing ? 20 + int(_tab) : int(_tab));
   lv_obj_t* scr = lv_scr_act();
   closeSheet();   // it lives on the top layer, outside the rebuilt screen
   lv_group_remove_all_objs(_group);
@@ -1110,6 +1124,7 @@ void GuiShell::buildKeyboard(lv_obj_t* scr) {
 // The keys of the current page, labeled for the shift state.
 void GuiShell::buildKeys() {
   if (!_kb) return;
+  SlowStep slow("keys page", int(_page.page()));
   if (_key_preview) {   // it belongs to a key that's about to go
     lv_obj_del(_key_preview);
     _key_preview = nullptr;
@@ -1188,6 +1203,7 @@ void GuiShell::setHotKey(int i, bool preview) {
 
 void GuiShell::pressKey(int i) {
   if (i < 0 || i >= int(_nkeys)) return;
+  SlowStep slow("key", i);
   const char* l = _keys[i].label;
   const KeyPage page_before = _page.page();
   const Shift shift_before = _shift.state();
@@ -1876,6 +1892,7 @@ void GuiShell::querySoon() {
 // The query, the match line and the results.
 void GuiShell::refreshSearch() {
   if (!_query_label || !_search_list) return;
+  SlowStep slow("search results", int(_query.length()));
   userText(_query_label, _query.text());
   const size_t total = _search_total;
   const NodeRow* rows = _search_rows;
