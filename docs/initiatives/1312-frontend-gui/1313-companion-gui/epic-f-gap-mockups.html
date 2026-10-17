@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Epic F gap mockups</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* Offband theme tokens, copied from ObScreen.dc.html (as in the Epic E mockups) */
+:root{
+  --bg:#0F1412; --bg2:#161C19; --bg3:#1D2521; --line:#34403A; --line2:#232C28;
+  --ink:#EFF3E8; --ink2:#BAC4B5; --dim:#7C8B82; --sig:#7BEFA8; --sigInk:#0F1412;
+  --wash:rgba(123,239,168,.09); --warn:#FFA552; --bad:#FF7A6E; --r:6px;
+  --cht:#8CC8FF; --rpt:#C3A5FF; --room:#F2D27A; --sens:#FF9EC4;
+  --sans:'Barlow Condensed',sans-serif; --mono:'JetBrains Mono',monospace;
+  --page:#0a0d0c; --pageInk:#cfd6cc;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--page);color:var(--pageInk);font-family:var(--sans);padding:24px 16px 48px}
+h1{font-size:26px;font-weight:600;color:var(--ink)}
+.lede{font-size:16px;color:var(--dim);margin:6px 0 24px;max-width:900px}
+.grid{display:flex;flex-wrap:wrap;gap:28px}
+.card{width:300px}
+.card h2{font-size:18px;font-weight:600;color:var(--ink)}
+.card .n{font-family:var(--mono);font-size:12px;color:var(--sig);margin-right:6px}
+.card p{font-size:14px;color:var(--ink2);margin:4px 0 10px;line-height:1.3;min-height:54px}
+.card ul{font-size:13px;color:var(--dim);margin:10px 0 0 16px;line-height:1.35}
+.dev{width:300px;height:400px;border:1px solid #2a332f;border-radius:10px;overflow:hidden;background:#000}
+.scr{width:240px;height:320px;transform:scale(1.25);transform-origin:0 0;background:var(--bg);color:var(--ink);
+  font-family:var(--sans);position:relative;overflow:hidden;display:flex;flex-direction:column}
+.sb{height:20px;flex:none;background:var(--bg2);border-bottom:1px solid var(--line2);display:flex;align-items:center;
+  padding:0 6px;font-family:var(--mono);font-size:10px;color:var(--ink2);gap:5px}
+.sb .clk{color:var(--ink);font-weight:600}
+.sb .right{margin-left:auto}
+.tabs{height:40px;flex:none;border-top:1px solid var(--line2);background:var(--bg2);display:flex;margin-top:auto}
+.tabs div{flex:1;display:flex;align-items:center;justify-content:center;font-size:9px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--dim);border-top:2px solid transparent}
+.tabs div.on{color:var(--sig);background:var(--wash);border-top-color:var(--sig)}
+/* map header: as drawn, with the scale where Tiles | Radar was */
+.mh{height:28px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;border-bottom:1px solid var(--line)}
+.mh .t{font-size:15px;font-weight:600}
+.mh .sc{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--ink2);border:1px solid var(--line);
+  border-radius:var(--r);padding:2px 6px}
+/* radar plot, as drawn */
+.plotwrap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:6px}
+.plot{position:relative;height:100%;aspect-ratio:1}
+.ring{position:absolute;border:1px solid var(--line);border-radius:50%}
+.ax{position:absolute;background:var(--line2)}
+.north{position:absolute;left:50%;top:-1px;transform:translate(-50%,-100%);font-size:9px;color:var(--sig)}
+.beyond{position:absolute;left:2px;bottom:2px;font-family:var(--mono);font-size:8px;color:var(--dim)}
+.me{position:absolute;left:50%;top:50%;width:9px;height:9px;transform:translate(-50%,-50%);background:var(--sig);border:2px solid var(--bg)}
+.pin{position:absolute;display:flex;align-items:center;gap:3px;transform:translate(-3px,-50%)}
+.pin .d{width:7px;height:7px;flex:none}
+.pin .l{font-size:9px;white-space:nowrap;color:var(--ink2)}
+.pin.sel .d{outline:1.5px solid var(--sig);outline-offset:2px}
+.pin.sel .l{color:var(--ink);font-weight:600;background:rgba(15,20,18,.85);padding:0 3px;border-radius:3px}
+.d.CHT{border-radius:50%;background:var(--cht)} .d.RPT{transform:rotate(45deg);background:var(--rpt)}
+.d.ROOM{border-radius:2px;background:var(--room)} .d.SENS{border-radius:50%;background:var(--bg);border:1.5px solid var(--sens)}
+/* selection sheet: the tile map's 36 px sheet, as drawn */
+.selsh{display:flex;align-items:center;gap:6px;height:36px;flex:none;padding:0 8px;border-top:1px solid var(--line);background:var(--bg2)}
+.tile{width:22px;height:22px;flex:none;display:flex;align-items:center;justify-content:center;font-size:11px}
+.tile.cht{border-radius:50%;background:#8CC8FF24;color:var(--cht)}
+.tile.rpt{border-radius:6px;background:#C3A5FF24;color:var(--rpt)}
+.tile.room{border-radius:6px;background:#F2D27A24;color:var(--room)}
+.tile.sens{border-radius:6px;background:#FF9EC424;color:var(--sens)}
+.selsh .tx{flex:1;min-width:0}
+.selsh .nm{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.selsh .sub{font-family:var(--mono);font-size:9px;color:var(--dim)}
+.selsh .snr{font-family:var(--mono);font-size:11px;color:var(--ink2)}
+.selsh .chev{color:var(--dim)}
+.hintsh{justify-content:center;font-size:11px;color:var(--dim)}
+/* empty states, as in the Epic E mockups */
+.empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 22px;gap:5px}
+.empty .h{font-size:16px;font-weight:600;color:var(--ink2)}
+.empty .s{font-size:12px;color:var(--dim);line-height:1.3}
+.empty .ic{width:34px;height:34px;border:2px solid var(--line);border-radius:50%;margin-bottom:4px;position:relative}
+.empty .ic:after{content:"";position:absolute;left:50%;top:50%;width:6px;height:6px;background:var(--line);transform:translate(-50%,-50%)}
+</style>
+</head>
+<body>
+<h1>Epic F: mockups for the radar's missing parts</h1>
+<p class="lede">Offband theme, Modern look, native 240×320 shown at 1.25×. The radar plot follows ObScreen as drawn (rings, north up, you at the centre, pins by type with labels). These are the parts it leaves out, with the defaults you approved on 2026-10-17. The bullets are the behavior I'd build.</p>
+<div class="grid" id="grid"></div>
+<script>
+const sb = `<div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>`;
+const tabs = `<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div class="on">Map</div><div>Setup</div></div>`;
+const head = (scale) => `<div class="mh"><span class="t">Map</span><span class="sc">${scale}</span></div>`;
+// pins: [label, type, x%, y%, selected, labelled]
+const plot = (pins, beyond='') => `<div class="plotwrap"><div class="plot">
+  <div class="ring" style="inset:0"></div><div class="ring" style="inset:16.6%"></div><div class="ring" style="inset:33.3%"></div>
+  <div class="ax" style="left:50%;top:0;bottom:0;width:1px"></div><div class="ax" style="top:50%;left:0;right:0;height:1px"></div>
+  <div class="north">N</div>${beyond ? `<div class="beyond">${beyond}</div>` : ''}
+  ${pins.map(([l,t,x,y,sel,lab=true])=>`<div class="pin${sel?' sel':''}" style="left:${x}%;top:${y}%"><div class="d ${t}"></div>${lab?`<span class="l">${l}</span>`:''}</div>`).join('')}
+  <div class="me"></div></div></div>`;
+const sheet = (t, ic, name, sub, snr) => `<div class="selsh"><div class="tile ${t}">${ic}</div><div class="tx"><div class="nm">${name}</div><div class="sub">${sub}</div></div><span class="snr">▂▄▆ ${snr}</span><span class="chev">›</span></div>`;
+const near = [['KD9-Ridge','RPT',62,18,true],['Hilltop-2','RPT',76,44,false],['Wren','CHT',30,30,false],['Juno','CHT',64,62,false],
+  ['Water Tower','RPT',22,70,false],['Valley Ops','ROOM',46,82,false],['Creek Gauge','SENS',66,76,false,false]];
+
+const cards = [
+ {n:1, t:'Radar with a node selected', p:'As drawn, with the scale in the header where Tiles | Radar was (tiles are out of this Feature) and the tile map\'s 36 px selection sheet under the plot.',
+  scr:`${sb}${head('1·2·3 km')}${plot(near,'+12 beyond 3 km')}${sheet('rpt','◬','KD9-Ridge RPT','1 hop · 1.8 km NE','+7.5')}${tabs}`,
+  ul:['USR selects the next node, nearest first; AUX the previous. The selected pin gets a signal ring and a bold label.','USR hold, or a tap on the sheet, opens the node\'s detail; Back returns here.','A tap on a pin selects it. Labels on every pin as drawn; where two collide the nearer keeps its label (Creek Gauge here).','The corner counts nodes with a position beyond the outer ring.']},
+ {n:2, t:'Zoom', p:'The outer ring steps through 1.5, 3, 6, 15 and 30 km; the inner rings are a third and two thirds of it. Shown at 15 km.',
+  scr:`${sb}${head('5·10·15 km')}${plot([['KD9-Ridge','RPT',55,42,false],['Hilltop-2','RPT',58,47,false,false],['Juno','CHT',52,53,false,false],['Lebanon RPT','RPT',78,24,true],['Mason Base','CHT',27,66,false]],'+3 beyond 15 km')}${sheet('rpt','◬','Lebanon RPT','2 hops · 11.6 km NE','-2.0')}${tabs}`,
+  ul:['A tap on the scale in the header goes to the next step, and from 30 km back to 1.5 km.','Selecting a node by button zooms to the smallest step that shows it, so button-only use needs no zoom control.','Opens at 3 km (rings 1·2·3, as drawn).']},
+ {n:3, t:'Nothing selected yet', p:'Opening the Map tab: the plot at 3 km and no selection. The sheet\'s place says what selects.',
+  scr:`${sb}${head('1·2·3 km')}${plot(near.map(p=>[p[0],p[1],p[2],p[3],false,p[5]]),'+12 beyond 3 km')}<div class="selsh hintsh">USR or tap a pin to select</div>${tabs}`,
+  ul:['The first USR selects the nearest node.','Shown in the 36 px place the sheet takes, so the plot never jumps.']},
+ {n:4, t:'No position yet', p:'Neither a GPS fix nor a position set in Setup: there is no centre to plot from.',
+  scr:`${sb}${head('1·2·3 km')}<div class="empty"><div class="ic"></div><div class="h">No position yet</div><div class="s">The radar needs this device's position. It appears with a GPS fix, or set one in Setup.</div></div>${tabs}`,
+  ul:['Your position: the GPS fix first, then the position set in Setup.','The screen switches to the plot as soon as a position exists.']},
+ {n:5, t:'No nodes in range', p:'A position, but no contact with a position within 30 km (the largest step).',
+  scr:`${sb}${head('10·20·30 km')}${plot([],'+41 beyond 30 km')}<div class="selsh hintsh">No nodes with a position within 30 km</div>${tabs}`,
+  ul:['The plot stays (you at the centre, rings at 30 km), so it is clear the radar is working.','Nodes appear here when they advertise a position.']},
+];
+document.getElementById('grid').innerHTML = cards.map(c=>`<div class="card"><h2><span class="n">${c.n}</span>${c.t}</h2><p>${c.p}</p>
+  <div class="dev"><div class="scr">${c.scr}</div></div><ul>${c.ul.map(x=>`<li>${x}</li>`).join('')}</ul></div>`).join('');
+</script>
+</body>
+</html>
