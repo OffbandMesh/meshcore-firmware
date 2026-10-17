@@ -4368,6 +4368,17 @@ CmdResult MyMesh::cmdSetChannel(uint8_t idx, const char* name, const uint8_t sec
   return CmdResult::Ok;
 }
 
+// #1525: the one writer of a channel's tune.
+bool MyMesh::setChannelTune(uint8_t idx, uint8_t stored) {
+  ChannelDetails ch;
+  if (!getChannel(idx, ch)) return false;
+  if (ch.tune == stored) return true;   // no flash write for a no-op
+  ch.tune = stored;
+  if (!setChannel(idx, ch)) return false;
+  saveChannels();
+  return true;
+}
+
 CmdResult MyMesh::cmdSetRadio(uint32_t freq_khz, uint32_t bw_hz, uint8_t sf, uint8_t cr, bool repeat) {
   if (repeat && !isValidClientRepeatFreq(freq_khz)) return CmdResult::BadArgs;
   if (offband::gui::checkRadioParams(freq_khz, bw_hz, sf, cr) != CmdResult::Ok) return CmdResult::BadArgs;

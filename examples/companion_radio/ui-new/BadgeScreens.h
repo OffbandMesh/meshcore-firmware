@@ -303,8 +303,29 @@ private:
   // selected. Silent is always listed, so this always terminates.
   void normalizeSel();
 
+  // #1525: the picker serves an event and a conversation. A conversation gets one extra
+  // row at the top -- Default -- so the selection is a ROW, mapped to a tune id through
+  // offband::tonePickerIdAt(). Never an id directly: a field meaning a row in one mode
+  // and an id in the other is the trap that got pickerRowFor renamed in #1475.
+  bool withDefault() const;      // is the Default row shown -- conversation mode
+  // #1525: which slot the conversation being edited is in NOW, re-resolved from its
+  // secret rather than trusting the index the picker was opened with. Channels can be
+  // edited or deleted from the phone while a screen is open -- normalizeSel() exists
+  // because a slot's TUNE can change underneath it -- and committing to an index whose
+  // channel has been replaced would set a tune on a conversation nobody was looking at.
+  // -1 once the channel is gone. Distinct from withDefault(), which is the mode and
+  // must not change while the picker is open or the row mapping would shift under the
+  // selection.
+  int currentSlot() const;
+  uint8_t selectedId() const;    // the tune the highlighted row offers
+  uint8_t inheritedId() const;   // what Default resolves to, and the audition for it
+  // The conversation's effective tune, or the event's. What "now" marks.
+  uint8_t effectiveId() const;
+  void commit();                 // write the choice: a channel record, or a pref
+
   UITask* _task;
-  int _sel = 0;
+  int _row = 0;
+  uint8_t _subject[32] = {0};   // the edited channel's secret, captured at begin()
   const char* _note = "";      // "Buzzer: OFF" when a preview could not be heard
   uint32_t _note_until = 0;
 };
@@ -402,6 +423,15 @@ private:
   badgeui::Row _rows[kMaxRows];
 
   void send();
+#ifdef PIN_BUZZER
+  // #1525: which channel slot this conversation is, or -1 when it is not a channel.
+  // Contacts are out of scope for this epic, so a DM thread has no tune of its own and
+  // Right does nothing there.
+  int channelSlot() const;
+  void openTunePicker();
+  // What the entry bar shows: the conversation's tune, or "Default".
+  void tuneHint(char* out, size_t cap) const;
+#endif
   bool failedSelected() const;
   void resend();
   void leave();

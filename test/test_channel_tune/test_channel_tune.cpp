@@ -237,6 +237,66 @@ TEST(ChannelTuneAfterEdit, AReplacementDoesNotInheritTheOldChannelsTune) {
             channelTuneAfterEdit(false, false, encodeChannelTune(kTuneSilent)));
 }
 
+// ---- the picker's rows (#1525) --------------------------------------------------------
+
+// For an event there is no Default: an event always plays something, so there is nothing
+// to fall back to and no way to un-set it. Rows are ids, one for one, exactly as the
+// picker behaved before this mode existed.
+TEST(TonePickerRows, AnEventsRowsAreTheIdsUnchanged) {
+  EXPECT_EQ((int)kPickerIdEnd, tonePickerRowCount(false));
+  for (uint8_t id = 0; id < kPickerIdEnd; id++) {
+    EXPECT_EQ((int)id, tonePickerRowFor(false, id));
+    EXPECT_EQ(id, tonePickerIdAt(false, (int)id));
+  }
+  EXPECT_EQ(-1, tonePickerRowFor(false, kTuneUnset)) << "an event cannot be un-set";
+}
+
+// A conversation gets one more row, and it is first. The owner's mockup puts Default at
+// the top because it is the state a conversation starts in.
+TEST(TonePickerRows, AConversationGetsADefaultRowFirst) {
+  EXPECT_EQ((int)kPickerIdEnd + 1, tonePickerRowCount(true));
+  EXPECT_EQ(0, kTonePickerDefaultRow);
+  EXPECT_EQ(kTuneUnset, tonePickerIdAt(true, kTonePickerDefaultRow));
+  EXPECT_EQ(kTonePickerDefaultRow, tonePickerRowFor(true, kTuneUnset));
+}
+
+// Every tune shifts down by one, and the mapping is a bijection. A one-off here would
+// put the highlight on the wrong row or audition the wrong tune -- silently, since both
+// ends are uint8_t and nothing would fail to compile.
+TEST(TonePickerRows, TheConversationMappingRoundTripsEveryId) {
+  for (uint8_t id = 0; id < kPickerIdEnd; id++) {
+    const int row = tonePickerRowFor(true, id);
+    EXPECT_EQ((int)id + 1, row) << "id " << (int)id << " sits on the wrong row";
+    EXPECT_EQ(id, tonePickerIdAt(true, row)) << "row " << row << " offers the wrong id";
+  }
+  // And the Default row is not one of them.
+  for (uint8_t id = 0; id < kPickerIdEnd; id++) {
+    EXPECT_NE(kTonePickerDefaultRow, tonePickerRowFor(true, id));
+  }
+}
+
+TEST(TonePickerRows, OutOfRangeRowsAndIdsAnswerSafely) {
+  // A row past the end reads as unset rather than as an arbitrary tune, so a selection
+  // left somewhere stale cannot audition or commit a tune nobody chose.
+  EXPECT_EQ(kTuneUnset, tonePickerIdAt(false, (int)kPickerIdEnd));
+  EXPECT_EQ(kTuneUnset, tonePickerIdAt(true, (int)kPickerIdEnd + 1));
+  EXPECT_EQ(kTuneUnset, tonePickerIdAt(false, -1));
+  EXPECT_EQ(kTuneUnset, tonePickerIdAt(true, -1));
+  // An id the picker never shows has no row, in either mode.
+  EXPECT_EQ(-1, tonePickerRowFor(false, kPickerIdEnd));
+  EXPECT_EQ(-1, tonePickerRowFor(true, kPickerIdEnd));
+  EXPECT_EQ(-1, tonePickerRowFor(false, 200));
+  EXPECT_EQ(-1, tonePickerRowFor(true, 200));
+}
+
+// Choosing Default has to be the same operation as clearing the channel, not a second
+// path that happens to agree -- the storage only has one way to say "no choice".
+TEST(TonePickerRows, ChoosingDefaultClearsTheChannel) {
+  const uint8_t chosen = tonePickerIdAt(true, kTonePickerDefaultRow);
+  EXPECT_EQ(kChannelTuneUnset, encodeChannelTune(chosen));
+  EXPECT_EQ(kTuneChime, resolveChannelTune(encodeChannelTune(chosen), kTuneChime));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
