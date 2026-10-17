@@ -40,10 +40,13 @@ Action mapInput(InputEvent ev, bool screen_on, bool pocket_locked) {
     case InputEvent::KeyEnter:
       return Action::Open;
     case InputEvent::AuxHold:
-    case InputEvent::AuxLongHold:
     case InputEvent::TouchSwipeRight:
     case InputEvent::KeyEsc:
       return Action::Back;
+    // A board with AUX doesn't group USR clicks, so the buzzer can't be a
+    // triple-click there; it's AUX held 3 s (owner, 2026-10-17, #1534).
+    case InputEvent::AuxLongHold:
+      return Action::ToggleBuzzer;
     case InputEvent::KeyAltDigit:
       return Action::Canned;
     case InputEvent::UsrTripleClick:

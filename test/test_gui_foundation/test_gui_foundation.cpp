@@ -250,7 +250,12 @@ TEST(InputMap, UsrWorksLikeStockMeshCore) {
 TEST(InputMap, AuxScrollsUpAndGoesBack) {
   EXPECT_EQ(mapInput(InputEvent::AuxPress, true, false), Action::Prev);
   EXPECT_EQ(mapInput(InputEvent::AuxHold, true, false), Action::Back);
-  EXPECT_EQ(mapInput(InputEvent::AuxLongHold, true, false), Action::Back);
+}
+
+// On an AUX board USR doesn't group clicks, so AUX held 3 s takes the
+// buzzer from USR's triple-click (owner, 2026-10-17, #1534).
+TEST(InputMap, AuxLongHoldTogglesTheBuzzer) {
+  EXPECT_EQ(mapInput(InputEvent::AuxLongHold, true, false), Action::ToggleBuzzer);
 }
 
 TEST(InputMap, TouchAndKeyboard) {
