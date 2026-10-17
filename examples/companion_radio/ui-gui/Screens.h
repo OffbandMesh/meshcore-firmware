@@ -83,6 +83,14 @@ public:
   bool locked() const { return _locked; }
   Tab tab() const { return _tab; }
   bool composing() const { return _composing; }
+  // USR steps through something here (the letter wheel, a keyboard's key
+  // cursor, a conversation's scroll): each click is one step, at once.
+  bool stepping() const {
+    if (_locked || _sheet != Sheet::None) return false;
+    if (_composing) return true;
+    if (_searching && _tab == Tab::Nodes) return _search_wheel || _search_kb;
+    return _tab == Tab::Chat && _thread >= 0;
+  }
   // Compose for a thread (from a conversation); leaving returns to it.
   void openCompose(int thread);
 
