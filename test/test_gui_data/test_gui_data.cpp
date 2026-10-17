@@ -409,6 +409,7 @@ TEST(Prefs, AlertsAndClockDefaultsAsDrawn) {
   EXPECT_EQ(p.notify_new_node, 0);
   EXPECT_EQ(p.clear_path_on_fail, 0);
   EXPECT_EQ(p.jump_to_unread, 0);
+  EXPECT_EQ(p.wake_touch, 1);   // Power › Wake on touch (G5), on as drawn
 }
 
 TEST(Prefs, AlertsAndClockRoundTrip) {
@@ -420,6 +421,7 @@ TEST(Prefs, AlertsAndClockRoundTrip) {
   a.notify_new_node = 1;
   a.clear_path_on_fail = 1;
   a.jump_to_unread = 1;
+  a.wake_touch = 0;
   RoundTripStream s;
   ASSERT_TRUE(a.saveSerial(s));
   s.rewind();
@@ -432,6 +434,7 @@ TEST(Prefs, AlertsAndClockRoundTrip) {
   EXPECT_EQ(b.notify_new_node, 1);
   EXPECT_EQ(b.clear_path_on_fail, 1);
   EXPECT_EQ(b.jump_to_unread, 1);
+  EXPECT_EQ(b.wake_touch, 0);
 }
 
 TEST(Prefs, AlertFlagsSanitizeToZeroOrOne) {
@@ -439,10 +442,12 @@ TEST(Prefs, AlertFlagsSanitizeToZeroOrOne) {
   p.clock_12h = 7;
   p.notify_on = 2;
   p.jump_to_unread = 9;
+  p.wake_touch = 5;
   p.sanitize();
   EXPECT_EQ(p.clock_12h, 1);
   EXPECT_EQ(p.notify_on, 1);
   EXPECT_EQ(p.jump_to_unread, 1);
+  EXPECT_EQ(p.wake_touch, 1);
 }
 
 TEST(Prefs, MissingKeysKeepDefaults) {

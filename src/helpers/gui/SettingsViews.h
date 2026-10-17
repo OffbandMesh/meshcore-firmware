@@ -116,6 +116,30 @@ struct RadioStats {
   uint32_t recv, sent_flood, sent_direct;
 };
 
+// ------------------------- Connectivity, Power, Debug, About (G5)
+
+// "4.02 V" from millivolts, to the nearest hundredth; 0 (no reading) "—".
+void voltsText(uint32_t mv, char* out, size_t n);
+// Power › Now: "4.02 V · 87%".
+void batteryNowText(uint32_t mv, int pct, char* out, size_t n);
+// The Bluetooth PIN: six digits. 0 stored means a new one each boot.
+bool pinOk(uint32_t pin);
+// A stored PIN shows masked; a boot's own is shown, since it's what a phone
+// pairs with; with neither, "None".
+void pinText(uint32_t stored, uint32_t active, char* out, size_t n);
+// Debug › Serial log: Off, then the MeshLog capture levels 1-3.
+constexpr size_t kLogCount = 4;
+int logIndex(bool on, uint8_t level);
+const char* logName(int i);   // "Off", "Errors", "Debug", "Packets"
+// "1 / 3", "412 / 1,000".
+void ofText(uint32_t a, uint32_t b, char* out, size_t n);
+// About › Build: "37f145c · Oct 17" from the SHA and "YYYY-MM-DD".
+void buildText(const char* sha, const char* ymd, char* out, size_t n);
+// Debug › Last reset, from esp_reset_reason(): "Brownout", "Watchdog".
+const char* resetName(uint32_t code);
+// Power › Full charge at, mV: the full-point learner's band (BatteryGauge.h).
+constexpr StepSpec kFullStep{3900, 4250, 10};
+
 // ------------------------------------------------------------- radio
 
 struct RadioValues {

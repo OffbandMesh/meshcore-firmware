@@ -40,6 +40,7 @@ public:
   uint8_t notify_new_node;      // a node heard for the first time
   uint8_t clear_path_on_fail;   // a DM that fails every try drops its route
   uint8_t jump_to_unread;       // conversations open at the first unread
+  uint8_t wake_touch;           // a touch wakes the screen (else USR only)
 
   NotifyMode channelMode(uint8_t slot) const;
   void setChannelMode(uint8_t slot, NotifyMode m);

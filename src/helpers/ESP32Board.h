@@ -251,6 +251,10 @@ public:
   void beginBootSafety() override;
   void markBootValid() override;
   bool isBootValidationPending() const override;
+  // #1570: this boot's place in the count as beginBootSafety() took it
+  // (markBootValid() zeroes the stored one later), and the swap threshold.
+  uint8_t safeBootAttempt() const;
+  uint8_t safeBootLimit() const;
 
   // Epic E (#64) / E1 #65: persistent SAFETY event log retrieval.
   // The append side is internal (safety_log_append in ESP32Board.cpp); these

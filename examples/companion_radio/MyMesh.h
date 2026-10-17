@@ -176,6 +176,7 @@ public:
   offband::gui::CmdResult cmdShareContact(ContactInfo& contact);
   void cmdSetTime(uint32_t secs);
   void cmdReboot();
+  void flushPending();   // pending contacts and messages to flash (reboot, power-off)
 
   // Requests (#1454). There is one request slot, shared with the phone: a new
   // request replaces whatever was outstanding, from either side.

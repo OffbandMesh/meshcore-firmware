@@ -367,6 +367,89 @@ TEST(Pad, LengthCapAndOnlyDigits) {
   EXPECT_STREQ(e.text(), "1234");
 }
 
+// ------------------------------------- Connectivity, Power, Debug, About (G5)
+
+TEST(G5, Volts) {
+  char b[24];
+  voltsText(4020, b, sizeof b);
+  EXPECT_STREQ(b, "4.02 V");
+  voltsText(3400, b, sizeof b);
+  EXPECT_STREQ(b, "3.40 V");
+  voltsText(4155, b, sizeof b);   // to the nearest hundredth
+  EXPECT_STREQ(b, "4.16 V");
+  voltsText(0, b, sizeof b);      // no reading
+  EXPECT_STREQ(b, "—");
+  batteryNowText(4020, 87, b, sizeof b);
+  EXPECT_STREQ(b, "4.02 V · 87%");
+}
+
+TEST(G5, Pin) {
+  EXPECT_TRUE(pinOk(123456));
+  EXPECT_TRUE(pinOk(999999));
+  EXPECT_FALSE(pinOk(99999));     // five digits
+  EXPECT_FALSE(pinOk(1000000));
+  EXPECT_FALSE(pinOk(0));
+  char b[24];
+  pinText(654321, 654321, b, sizeof b);   // a set PIN shows masked (the fonts have no •)
+  EXPECT_STREQ(b, "******");
+  pinText(0, 482913, b, sizeof b);        // a new one each boot: shown, to pair with
+  EXPECT_STREQ(b, "482913");
+  pinText(0, 0, b, sizeof b);             // no PIN in this build
+  EXPECT_STREQ(b, "None");
+}
+
+TEST(G5, LogLevels) {
+  // Off, then the capture levels MeshLog keeps: 1 errors, 2 debug, 3 packets.
+  EXPECT_EQ(kLogCount, 4u);
+  EXPECT_EQ(logIndex(false, 2), 0);
+  EXPECT_EQ(logIndex(true, 1), 1);
+  EXPECT_EQ(logIndex(true, 2), 2);
+  EXPECT_EQ(logIndex(true, 3), 3);
+  EXPECT_EQ(logIndex(true, 0), 1);   // boot lines only: under Errors, which holds them
+  EXPECT_EQ(logIndex(true, 9), 3);
+  EXPECT_STREQ(logName(0), "Off");
+  EXPECT_STREQ(logName(1), "Errors");
+  EXPECT_STREQ(logName(2), "Debug");
+  EXPECT_STREQ(logName(3), "Packets");
+  EXPECT_STREQ(logName(7), "Off");
+}
+
+TEST(G5, BootsBuildAndCounts) {
+  char b[32];
+  ofText(1, 3, b, sizeof b);
+  EXPECT_STREQ(b, "1 / 3");
+  ofText(412, 1000, b, sizeof b);
+  EXPECT_STREQ(b, "412 / 1,000");
+  buildText("37f145c", "2026-10-17", b, sizeof b);
+  EXPECT_STREQ(b, "37f145c · Oct 17");
+  buildText("37f145c", "2026-01-05", b, sizeof b);
+  EXPECT_STREQ(b, "37f145c · Jan 5");
+  buildText("37f145c", "", b, sizeof b);   // no date: the SHA alone
+  EXPECT_STREQ(b, "37f145c");
+  buildText("37f145c", "2026-13-01", b, sizeof b);
+  EXPECT_STREQ(b, "37f145c");
+}
+
+TEST(G5, ResetNames) {
+  EXPECT_STREQ(resetName(9), "Brownout");
+  EXPECT_STREQ(resetName(1), "Power on");
+  EXPECT_STREQ(resetName(2), "RST button");
+  EXPECT_STREQ(resetName(3), "Software");
+  EXPECT_STREQ(resetName(4), "Crash");
+  EXPECT_STREQ(resetName(6), "Watchdog");
+  EXPECT_STREQ(resetName(11), "USB");
+  EXPECT_STREQ(resetName(0), "Unknown");
+  EXPECT_STREQ(resetName(99), "Unknown");
+}
+
+TEST(G5, FullChargeRange) {
+  // The learner's own band (BatteryGauge.h): 3.90 - 4.25 V, by 10 mV.
+  EXPECT_EQ(kFullStep.min, 3900);
+  EXPECT_EQ(kFullStep.max, 4250);
+  EXPECT_EQ(kFullStep.step, 10);
+  EXPECT_EQ(stepBy(4250, 1, kFullStep), 4250);
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

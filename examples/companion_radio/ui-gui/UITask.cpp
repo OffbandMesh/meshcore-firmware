@@ -6,6 +6,8 @@
 #include <lvgl.h>
 
 #include <helpers/AdvertDataHelpers.h>
+#include <helpers/ClockSanity.h>
+#include <helpers/diagnostics/CrashLog.h>
 #include <helpers/TimeZones.h>
 #include <helpers/gui/ClockPolicy.h>
 #include <helpers/gui/GuiViews.h>
@@ -16,6 +18,7 @@
 #include <helpers/ui/ScreenOff.h>
 
 #include "../MyMesh.h"
+#include "ShellWidgets.h"
 #include "target.h"
 
 extern MyMesh the_mesh;
@@ -797,6 +800,167 @@ void UITask::setBuzzerOn(bool on) {
   if (buzzerOn() != on) toggleBuzzer();   // saves the pref, and chirps when it comes on
 }
 
+// ------------------------------- Connectivity, Power, Debug, About (G5)
+
+// The older screens' words (ui-new), lit for 3 s, then the board powers off.
+void UITask::lowBatteryShutdown(uint16_t mv) {
+  mesh_log_line(MLOG_BOOT, "[gui] low battery %u mV: shutting down\n", unsigned(mv));
+  offband::crashLogShutdown("low-battery", mv);
+  savePending();
+  the_mesh.flushPending();   // contacts and messages, as a reboot does
+  if (_gui_ok) {   // the words are best effort; the power-off isn't
+    applyScreen(ScreenState::On);
+    lv_obj_t* m = lv_obj_create(lv_layer_top());
+    if (m) {
+      lv_obj_remove_style_all(m);
+      lv_obj_set_size(m, LV_PCT(100), LV_PCT(100));
+      lv_obj_set_style_bg_opa(m, LV_OPA_COVER, 0);
+      lv_obj_set_style_bg_color(m, lv_color_black(), 0);
+      lv_obj_t* l = shell::label(m, FontRole::Title, 0xFFFFFF, "Low Battery.\nShutting Down!");
+      lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+      lv_obj_center(l);
+      lv_refr_now(nullptr);
+      delay(3000);
+    }
+  }
+#ifdef PIN_BUZZER
+  _buzzer.shutdown();
+  const uint32_t t0 = millis();   // fail-safe: never held up by the tune
+  while (_buzzer.isPlaying() && millis() - t0 < 2500) _buzzer.loop();
+#endif
+  board.powerOff();
+}
+
+void UITask::deviceInfo(DeviceInfo* d) {
+  *d = DeviceInfo{};
+  d->ble_on = isBluetoothEnabled();
+  d->phone = hasConnection();
+  d->pin_stored = _prefs ? _prefs->ble_pin : 0;
+  d->pin_active = the_mesh.getBLEPin();
+  d->batt_mv = _batt.seeded() ? _batt.value() : getBattMilliVolts();
+  d->batt_pct = battPercent();
+  d->full_mv = (_prefs && _prefs->batt_full_mv) ? _prefs->batt_full_mv : uint16_t(BATT_MAX_MILLIVOLTS);
+  d->full_pinned = _prefs && _prefs->batt_full_user;
+#ifdef AUTO_SHUTDOWN_MILLIVOLTS
+  d->shutdown_mv = AUTO_SHUTDOWN_MILLIVOLTS;
+#endif
+  d->log_index = _prefs ? uint8_t(logIndex(_prefs->caplog_enabled, _prefs->caplog_level)) : 0;
+  d->boot_attempt = board.safeBootAttempt();
+  d->boot_limit = board.safeBootLimit();
+  d->reset_code = board.getResetReason();
+#ifdef OFFBAND_VERSION
+  snprintf(d->offband, sizeof d->offband, "%s",
+           strncmp(OFFBAND_VERSION, "offband-", 8) == 0 ? OFFBAND_VERSION + 8 : OFFBAND_VERSION);
+#endif
+  snprintf(d->meshcore, sizeof d->meshcore, "%s", FIRMWARE_VERSION);
+#if defined(OFFBAND_GIT_SHA) && defined(OFFBAND_BUILD_DATE)
+  buildText(OFFBAND_GIT_SHA, OFFBAND_BUILD_DATE, d->build, sizeof d->build);
+#endif
+  snprintf(d->model, sizeof d->model, "%s", board.getManufacturerName());
+  d->msgs = store().count();
+  d->msgs_cap = store().capacity();
+  d->contacts = uint16_t(the_mesh.getNumContacts());
+  d->contacts_max = MAX_CONTACTS;
+}
+
+// Until the next boot, as the phone's own toggle on ui-new.
+void UITask::setBleOn(bool on) {
+  if (on) enableBluetooth();
+  else disableBluetooth();
+  mesh_log_line(MLOG_BOOT, "[gui] bluetooth %s\n", on ? "on" : "off");
+}
+
+// As the phone's CMD_SET_DEVICE_PIN: 0, or six digits; used from the next boot.
+bool UITask::setBlePin(uint32_t pin) {
+  if (!_prefs || (pin != 0 && !pinOk(pin))) return false;
+  _prefs->ble_pin = pin;
+  _prefs_dirty = true;
+  return true;
+}
+
+bool UITask::setFullMv(uint16_t mv) {
+  if (!_prefs || !offband::FullPointLearner::plausibleFullMv(mv)) return false;
+  _prefs->batt_full_mv = mv;
+  _prefs->batt_full_user = 1;
+  _full_learner.reset();   // a pending window would otherwise overwrite it
+  _prefs_dirty = true;
+  return true;
+}
+
+void UITask::learnFullAgain() {
+  if (!_prefs) return;
+  _prefs->batt_full_mv = 0;
+  _prefs->batt_full_user = 0;
+  _full_learner.reset();   // watch again from the next charge
+  _prefs_dirty = true;
+}
+
+// The caplog switch the app and the CLI use; it writes the prefs itself.
+bool UITask::setLogLevel(int index) {
+  if (index < 0 || size_t(index) >= kLogCount) return false;
+  const bool ok = the_mesh.setCaplogCapture(index > 0, index > 0 ? uint8_t(index) : MLOG_DEBUG);
+  mesh_log_line(MLOG_BOOT, "[gui] serial log: %s%s\n", logName(index), ok ? "" : " (not saved)");
+  return ok;
+}
+
+bool UITask::advertNow() {
+  const bool ok = the_mesh.cmdSendAdvert(false) == CmdResult::Ok;
+  mesh_log_line(MLOG_BOOT, "[gui] zero-hop advert: %s\n", ok ? "sent" : "busy");
+  return ok;
+}
+
+// What the sensors' own sync takes (#152, #607): a plausible epoch from a GPS
+// that's on. Without one, the phone sets the clock when it connects.
+bool UITask::syncTimeFromGps() {
+#if ENV_INCLUDE_GPS == 1
+  LocationProvider* gps = sensors.getLocationProvider();
+  if (gps && gpsEnabled()) {
+    const long t = gps->getTimestamp();
+    if (t >= long(GPS_CLOCK_SANE_MIN) && offband::plausibleEpoch(uint32_t(t))) {
+      mesh::RTCClock* clk = the_mesh.getRTCClock();
+      const uint32_t old_t = clk->getCurrentTime();
+      clk->setCurrentTime(uint32_t(t));
+      offband::logClockSet("gui-gps", old_t, uint32_t(t));
+      return true;
+    }
+  }
+#endif
+  mesh_log_line(MLOG_BOOT, "[gui] sync time: no GPS time\n");
+  return false;
+}
+
+// Before a restart or power-off: what is otherwise saved when idle.
+void UITask::savePending() {
+  if (_prefs_dirty) {
+    _prefs_dirty = false;
+    the_mesh.savePrefs();
+  }
+  if (_passwords_dirty) {
+    _passwords_dirty = false;
+    savePasswords();
+  }
+}
+
+void UITask::reboot() {
+  savePending();
+  mesh_log_line(MLOG_BOOT, "[gui] reboot from Settings\n");
+  the_mesh.cmdReboot();   // writes pending contacts and messages, then restarts
+}
+
+// Every contact back to flood, as Reset path does for one; one contacts
+// write follows (cmdResetPath arms the lazy save).
+uint16_t UITask::deleteAllPaths() {
+  uint16_t n = 0;
+  ContactsIterator it = the_mesh.startContactsIterator();
+  ContactInfo ci;
+  while (it.hasNext(&the_mesh, ci)) {
+    ContactInfo* live = the_mesh.lookupContactByPubKey(ci.id.pub_key, PUB_KEY_SIZE);
+    if (live && the_mesh.cmdResetPath(*live) == CmdResult::Ok) n++;
+  }
+  mesh_log_line(MLOG_BOOT, "[gui] paths deleted: %u\n", unsigned(n));
+  return n;
+}
+
 RadioValues UITask::radioValues() {
   RadioValues v{};
   if (!_prefs) return v;
@@ -835,7 +999,7 @@ bool UITask::saveRadio(const RadioValues& v) {
   return true;
 }
 
-// The Settings list's value column. Pages built later in Epic G fill theirs in then.
+// The Settings list's value column; Actions has none.
 void UITask::setupSummary(SetPage page, char* out, size_t n) {
   out[0] = '\0';
   if (!_prefs) return;
@@ -848,11 +1012,15 @@ void UITask::setupSummary(SetPage page, char* out, size_t n) {
       radioSummary(v.freq_khz, v.sf, out, n);
       break;
     }
-    case SetPage::Power: {
-      const uint16_t mv = _batt.seeded() ? _batt.value() : getBattMilliVolts();
-      snprintf(out, n, "%u.%02u V · %u%%", unsigned(mv / 1000), unsigned(mv % 1000 / 10), unsigned(battPercent()));
+    case SetPage::Power:
+      batteryNowText(_batt.seeded() ? _batt.value() : getBattMilliVolts(), battPercent(), out, n);
       break;
-    }
+    case SetPage::Conn:
+      snprintf(out, n, "Bluetooth %s", isBluetoothEnabled() ? "on" : "off");
+      break;
+    case SetPage::Debug:
+      snprintf(out, n, "Log: %s", logName(logIndex(_prefs->caplog_enabled, _prefs->caplog_level)));
+      break;
     case SetPage::Msg:
       snprintf(out, n, "%s", _prefs->gui.notify_on ? "On" : "Off");
       break;
@@ -1219,8 +1387,8 @@ void UITask::loop() {
 #endif
 
   // With the panel off LVGL isn't running, so a touch is read here to wake it
-  // (ignored while pocket-locked).
-  if (_screen == ScreenState::Off && _touch_ok) {
+  // (ignored while pocket-locked); Power › Wake on touch off leaves it to USR.
+  if (_screen == ScreenState::Off && _touch_ok && (!_prefs || _prefs->gui.wake_touch)) {
     TouchPoint p{};
     if (s_touch.read(&p) && p.pressed) handle(InputEvent::TouchTap, now);
   }
@@ -1253,10 +1421,30 @@ void UITask::loop() {
   pollNodeActs(now);
   pollNewNodes(now);
 
+#ifdef AUTO_SHUTDOWN_MILLIVOLTS
+  // Low-voltage protection, as the older screens run it (ui-new): every 8 s,
+  // on the raw reading, on battery only.
+  if ((int32_t)(now - _next_batt_check) >= 0) {
+    _next_batt_check = now + 8000;
+    const uint16_t mv = getBattMilliVolts();
+    if (mv > 0 && mv < AUTO_SHUTDOWN_MILLIVOLTS && !board.isExternalPowered()) lowBatteryShutdown(mv);
+  }
+#endif
+
   // One battery reading a second into the average (#1246), lit or not.
   if ((int32_t)(now - _next_batt_read) >= 0) {
     _batt.feed(getBattMilliVolts());
     _next_batt_read = now + 1000;
+    // #1254: the same reading teaches where this cell's 100% is (Power ›
+    // Full charge at). A value set in Settings stands until Learn again.
+    if (_prefs) {
+      const uint16_t learned = _full_learner.feed(now, _batt.value(), board.isExternalPowered());
+      if (!_prefs->batt_full_user && learned != 0 && learned != _prefs->batt_full_mv) {
+        _prefs->batt_full_mv = learned;
+        _prefs_dirty = true;   // saved when idle
+        mesh_log_line(MLOG_BOOT, "[gui] battery full point learned: %u mV\n", unsigned(learned));
+      }
+    }
   }
 
   if (_screen == ScreenState::Off) return;

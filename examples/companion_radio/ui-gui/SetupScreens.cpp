@@ -15,13 +15,18 @@ using namespace shell;
 
 namespace {
 
-enum RowKind : uint8_t { kVal, kSel, kNav, kTog, kRo };
+// kInfo reads as kRo but takes focus, so buttons can scroll a long page.
+enum RowKind : uint8_t { kVal, kSel, kNav, kTog, kRo, kInfo };
 enum RadioRow : uint8_t { rPreset, rFreq, rBw, rSf, rCr, rTx, rRepeat, rPath, rSave };
 enum MsgRow : uint8_t { mOn, mDm, mCh, mDefault, mNode, mAlert, mClear, mJump };
 enum DisplayRow : uint8_t { dTheme, dLook, dClock, dRotation, dBright, dDim, dOff };
 enum NodeRowId : uint8_t { nName, nKey, nGps, nPos, nGpsSecs };
 enum PrivacyRow : uint8_t { pLoc, pAcks, pBase, pLocTel, pEnv };
 enum ContactsRow : uint8_t { cAuto, cChat, cRpt, cRoom, cSens, cHops, cCount };
+enum ConnRow : uint8_t { bOn, bPin, bPhone };
+enum PowerRow : uint8_t { wNow, wFull, wLearn, wShut, wOff, wTouch };
+enum ActRow : uint8_t { aAdvert, aTime, aReboot, aPaths };
+enum DebugRow : uint8_t { gLog, gBoots, gReset };
 // The auto-add bits (MyMesh AUTO_ADD_*), in the rows' order.
 const uint8_t kTypeBit[4] = {0x02, 0x04, 0x08, 0x10};
 const char* const kTypeName[4] = {"Companions", "Repeaters", "Room servers", "Sensors"};
@@ -60,6 +65,7 @@ void GuiShell::resetSetup() {
   _set_focus = SetPage::Node;
   _set_focus_row = 0xFF;
   _set_note[0] = '\0';
+  _note_row = 0xFF;
 }
 
 void GuiShell::setOpen(SetPage p) {
@@ -67,6 +73,7 @@ void GuiShell::setOpen(SetPage p) {
   _set_page = p;
   _set_focus_row = 0;
   _set_note[0] = '\0';
+  _note_row = 0xFF;
   if (p == SetPage::Radio) _radio_was = _radio_now = _model->radioValues();
   rebuild();
 }
@@ -110,6 +117,14 @@ void GuiShell::updateSetup(uint32_t now_ms) {
   }
   if (!_set_note[0] || lv_tick_elaps(_set_note_at) < 2000) return;
   _set_note[0] = '\0';
+  if (_note_row != 0xFF) {   // an action's result: its row's hint comes back
+    _note_row = 0xFF;
+    if (_tab == Tab::Setup && !_locked && _set_page == SetPage::Actions && _ss == SetSheet::None &&
+        _sheet == Sheet::None) {
+      rebuild();
+    }
+    return;
+  }
   if (_set_save) lv_label_set_text(lv_obj_get_child(lv_obj_get_child(_set_save, 0), 0), "Save · radio restarts");
 }
 
@@ -129,7 +144,11 @@ void GuiShell::buildSetup(lv_obj_t* content) {
   else if (_set_page == SetPage::Contacts) buildContactsPage(content);
   else if (_set_page == SetPage::Display) buildDisplayPage(content);
   else if (_set_page == SetPage::Theme) buildThemePage(content);
-  else buildSetupLater(content);
+  else if (_set_page == SetPage::Conn) buildConnPage(content);
+  else if (_set_page == SetPage::Power) buildPowerPage(content);
+  else if (_set_page == SetPage::Actions) buildActionsPage(content);
+  else if (_set_page == SetPage::Debug) buildDebugPage(content);
+  else buildAboutPage(content);
 }
 
 // A page's header: ‹ and its name; a tap goes back.
@@ -194,7 +213,7 @@ lv_obj_t* GuiShell::setRow(lv_obj_t* parent, uint8_t id, const char* k, const ch
   }
   if (v && v[0]) {
     const uint32_t ink = changed ? _t.warn : _t.ink2;
-    label(row, kind == kVal || kind == kRo ? FontRole::Meta : FontRole::BodySmall, ink, v);
+    label(row, kind == kVal || kind == kRo || kind == kInfo ? FontRole::Meta : FontRole::BodySmall, ink, v);
   }
   if (kind == kSel) {
     lv_obj_t* d = box(row, 7, 4);
@@ -641,13 +660,118 @@ void GuiShell::refreshSetText() {
   if (_set_text_label) userText(_set_text_label, _set_buf.text());
 }
 
-// Pages that come later in this Epic (G5).
-void GuiShell::buildSetupLater(lv_obj_t* content) {
-  setHeader(content, kPageName[size_t(_set_page) < kPages ? size_t(_set_page) : 0]);
-  lv_obj_t* l = label(content, FontRole::BodySmall, _t.dim, "This page comes later in Epic G.");
-  lv_obj_set_width(l, LV_PCT(100));
-  lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_pad_top(l, 24, 0);
+// Connectivity (mockup 13): Bluetooth only; this build has no WiFi.
+void GuiShell::buildConnPage(lv_obj_t* content) {
+  setHeader(content, "Connectivity");
+  lv_obj_t* body = pageBody(content);
+  DeviceInfo d{};
+  _model->deviceInfo(&d);
+  char v[24];
+  setSection(body, "Bluetooth");
+  // Off holds until the next boot: the interface comes back on with it.
+  setRow(body, bOn, "Bluetooth", d.ble_on ? "For the phone app" : "On again after a reboot", nullptr, kTog, d.ble_on,
+         false, false);
+  // A boot's own PIN is shown: it's the one a phone has to type.
+  pinText(d.pin_stored, d.pin_active, v, sizeof v);
+  setRow(body, bPin, "PIN", d.pin_stored ? "Asked when pairing" : "New each boot", v, kNav, false, false, false);
+  setRow(body, bPhone, "Phone", nullptr, d.phone ? "Connected" : "Not connected", kRo, false, false, false);
+}
+
+// Power (mockup 14). Shut down below is shown, not set: it is one policy
+// with SafeBoot's gate.
+void GuiShell::buildPowerPage(lv_obj_t* content) {
+  setHeader(content, "Power");
+  lv_obj_t* body = pageBody(content);
+  DeviceInfo d{};
+  _model->deviceInfo(&d);
+  const GuiPrefs& g = _model->guiPrefs();
+  char v[24];
+  setSection(body, "Battery");
+  batteryNowText(d.batt_mv, d.batt_pct, v, sizeof v);
+  setRow(body, wNow, "Now", nullptr, v, kRo, false, false, false);
+  voltsText(d.full_mv, v, sizeof v);
+  setRow(body, wFull, "Full charge at", d.full_pinned ? "Set here" : "Learned after a full charge", v, kVal, false,
+         false, false);
+  if (d.full_pinned) {
+    setRow(body, wLearn, "Learn again", "The next full charge sets it", nullptr, kVal, false, false, false);
+  }
+  voltsText(d.shutdown_mv, v, sizeof v);
+  setRow(body, wShut, "Shut down below", "Low-voltage protection", v, kRo, false, false, false);
+  setSection(body, "Screen");
+  durationText(_model->screenOffSecs(), v, sizeof v);
+  setRow(body, wOff, "Screen off after", "Same as Display", v, kSel, false, false, false);
+  setRow(body, wTouch, "Wake on touch", "Else USR only", nullptr, kTog, g.wake_touch, false, false);
+}
+
+// Actions (mockup 15): Reboot and Delete all paths ask first, Cancel the
+// default; Send advert and Sync time act and say how it went on the row.
+void GuiShell::buildActionsPage(lv_obj_t* content) {
+  setHeader(content, "Actions");
+  lv_obj_t* body = pageBody(content);
+  struct Act {
+    const char* k;
+    const char* hint;
+    uint32_t ink;
+  };
+  const Act acts[] = {{"Send advert", "Zero-hop now", _t.ink},
+                      {"Sync time", "From GPS; the phone sets it on connect", _t.ink},
+                      {"Reboot", "Saves first", _t.warn},
+                      {"Delete all paths", "Every contact floods until a route returns", _t.bad}};
+  for (uint8_t i = 0; i < 4; i++) {
+    const bool note = _note_row == i && _set_note[0];
+    lv_obj_t* row = setRow(body, i, acts[i].k, note ? _set_note : acts[i].hint, nullptr, kVal, false, false, false);
+    lv_obj_set_style_min_height(row, 38, 0);
+    lv_obj_t* kk = lv_obj_get_child(row, 0);
+    lv_obj_set_style_text_color(lv_obj_get_child(kk, 0), c(acts[i].ink), 0);
+    if (note) lv_obj_set_style_text_color(lv_obj_get_child(kk, 1), c(_t.sig), 0);
+  }
+}
+
+void GuiShell::actionDone(uint8_t row, const char* note) {
+  _note_row = row;
+  setNote(note);
+  rebuild();
+}
+
+// Debug (mockup 16): the capture level, and SafeBoot, read-only.
+void GuiShell::buildDebugPage(lv_obj_t* content) {
+  setHeader(content, "Debug");
+  lv_obj_t* body = pageBody(content);
+  DeviceInfo d{};
+  _model->deviceInfo(&d);
+  char v[24];
+  setSection(body, "Logs");
+  setRow(body, gLog, "Serial log", "USB serial, capture level", logName(d.log_index), kSel, false, false, false);
+  setSection(body, "SafeBoot");
+  if (d.boot_limit) ofText(d.boot_attempt, d.boot_limit, v, sizeof v);
+  else textf(v, sizeof v, "—");
+  setRow(body, gBoots, "Boots", "Since the last clean start", v, kRo, false, false, false);
+  setRow(body, gReset, "Last reset", nullptr, resetName(d.reset_code), kRo, false, false, false);
+}
+
+// About device (mockup 17): all read-only; the rows take focus so the
+// buttons can scroll to the end.
+void GuiShell::buildAboutPage(lv_obj_t* content) {
+  setHeader(content, "About device");
+  lv_obj_t* body = pageBody(content);
+  DeviceInfo d{};
+  _model->deviceInfo(&d);
+  char v[40];
+  setSection(body, "Firmware");
+  setRow(body, 0, "Offband", nullptr, d.offband, kInfo, false, false, false);
+  setRow(body, 1, "MeshCore", nullptr, d.meshcore, kInfo, false, false, false);
+  setRow(body, 2, "Build", nullptr, d.build, kInfo, false, false, false);
+  setSection(body, "Device");
+  setRow(body, 3, "Model", nullptr, d.model, kInfo, false, false, false);
+  voltsText(d.batt_mv, v, sizeof v);
+  setRow(body, 4, "Battery", nullptr, v, kInfo, false, false, false);
+  keySummary(_model->selfKey(), v, sizeof v);
+  setRow(body, 5, "Public key", nullptr, v, kInfo, false, false, false);
+  setSection(body, "Data");
+  ofText(d.msgs, d.msgs_cap, v, sizeof v);
+  setRow(body, 6, "Messages", "On this device", v, kInfo, false, false, false);
+  ofText(d.contacts, d.contacts_max, v, sizeof v);
+  setRow(body, 7, "Contacts", nullptr, v, kInfo, false, false, false);
 }
 
 // ------------------------------------------------------------- actions
@@ -730,6 +854,45 @@ void GuiShell::setRowPressed(uint8_t id) {
       case dOff: openSetSheet(SetSheet::Pick, id); break;
       default: break;   // Rotation: Epic H
     }
+    return;
+  }
+  if (_set_page == SetPage::Conn) {
+    if (id == bOn) {
+      DeviceInfo d{};
+      _model->deviceInfo(&d);
+      _model->setBleOn(!d.ble_on);
+      rebuild();
+    } else if (id == bPin) {
+      openSetSheet(SetSheet::Pad, id);
+    }
+    return;
+  }
+  if (_set_page == SetPage::Power) {
+    switch (id) {
+      case wFull: openSetSheet(SetSheet::Step, id); break;
+      case wLearn:
+        _model->learnFullAgain();
+        _set_focus_row = wFull;   // its row goes
+        rebuild();
+        break;
+      case wOff: openSetSheet(SetSheet::Pick, id); break;
+      case wTouch: setFlag(g.wake_touch); break;
+      default: break;
+    }
+    return;
+  }
+  if (_set_page == SetPage::Actions) {
+    switch (id) {
+      case aAdvert: actionDone(id, _model->advertNow() ? "Sent ✓" : "Not sent"); break;
+      case aTime: actionDone(id, _model->syncTimeFromGps() ? "Time from GPS ✓" : "No GPS time"); break;
+      case aReboot:
+      case aPaths: openSetSheet(SetSheet::Confirm, id); break;
+      default: break;
+    }
+    return;
+  }
+  if (_set_page == SetPage::Debug) {
+    if (id == gLog) openSetSheet(SetSheet::Pick, id);
     return;
   }
   if (_set_page != SetPage::Radio) return;
@@ -989,12 +1152,21 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
       setSheetCursor(current >= 0 ? current : 0);
       break;
     }
-    case SetSheet::Step: {   // TX power, Brightness (mockup 4)
+    case SetSheet::Step: {   // TX power, Brightness (mockup 4), Full charge at
       const bool bright = _set_page == SetPage::Display;
+      const bool full = _set_page == SetPage::Power;
       if (bright) {
         _ss_spec = StepSpec{10, 100, 10};
         _ss_val = _model->guiPrefs().brightness;
         title("Brightness", nullptr);
+      } else if (full) {
+        DeviceInfo d{};
+        _model->deviceInfo(&d);
+        _ss_spec = kFullStep;
+        int f = d.full_mv;   // inside the band, to the nearest step
+        f = f < kFullStep.min ? kFullStep.min : f > kFullStep.max ? kFullStep.max : f;
+        _ss_val = kFullStep.min + (f - kFullStep.min + kFullStep.step / 2) / kFullStep.step * kFullStep.step;
+        title("Full charge at", "Where the battery reads 100%");
       } else {
         _ss_spec = StepSpec{0, _model->txMax(), 1};
         _ss_val = _radio_now.tx_dbm;
@@ -1016,6 +1188,7 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
       lv_obj_set_flex_grow(plus, 0);
       lv_obj_set_width(plus, 40);
       if (bright) textf(v, sizeof v, "10 – 100%%");
+      else if (full) textf(v, sizeof v, "3.90 – 4.25 V");
       else textf(v, sizeof v, "0 – %d dBm · this board's maximum", int(_model->txMax()));
       _ss_limit = label(sheet, FontRole::Meta, _t.dim, v);
       lv_obj_set_width(_ss_limit, LV_PCT(100));
@@ -1030,9 +1203,15 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
       // Frequency (Radio), or Position (Node): latitude, then longitude,
       // signed, with ± as a thirteenth key.
       const bool pos = _set_page == SetPage::Node;
+      const bool pin = _set_page == SetPage::Conn;   // six digits, no point
       const char* unit = "MHz";
       const char* range = "150.000 – 2500.000 MHz";
-      if (pos) {
+      if (pin) {
+        _ss_pad.start("", 0, 6);
+        title("PIN", "Used from the next boot");
+        unit = "";
+        range = "6 digits · empty: new each boot";   // turns red on a refusal
+      } else if (pos) {
         const NodeSettings ns = _model->nodeSettings();
         const int32_t e6 = _pad_stage == 0 ? ns.lat_e6 : ns.lon_e6;
         if (e6 != 0) {
@@ -1080,6 +1259,7 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
         const int key = pos ? kPosOrder[i] : i;   // slot i shows this key
         const lv_coord_t w = pos ? (i == 12 ? kW - 12 : (kW - 12 - 9) / 4) : (kW - 12 - 6) / 3;
         lv_obj_t* k = box(pad, w, pos ? 24 : 28);
+        if (pin && key == 9) continue;   // no point in a PIN: the slot stays, empty
         lv_obj_set_style_radius(k, 4, 0);
         lv_obj_set_style_bg_opa(k, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(k, c(_t.bg2), 0);
@@ -1101,11 +1281,28 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
       lv_obj_t* br = buttonRow();
       button(br, kPadCancel, "Cancel", _t.ink, _t.line, false);
       button(br, kPadSet, pos && _pad_stage == 0 ? "Next" : "Set", _t.sigInk, _t.sig, true);
-      _ss_count = kPadSet + 1;   // the frequency pad has no ± (item 12 stays empty)
+      _ss_count = kPadSet + 1;   // the frequency and PIN pads have no ± (item 12 stays empty)
       setSheetCursor(kPadSet);
       break;
     }
-    case SetSheet::Confirm: {   // Discard changes? (mockup 6)
+    case SetSheet::Confirm: {   // Discard changes? (mockup 6); an action (mockup 15)
+      if (_set_page == SetPage::Actions) {   // Cancel first, and the default
+        const bool reboot = row == aReboot;
+        if (reboot) {
+          title("Reboot?", "Saves first, then restarts");
+        } else {
+          const NodeSettings ns = _model->nodeSettings();
+          textf(v, sizeof v, "%u contacts go back to flood routing", unsigned(ns.contacts));
+          title("Delete all paths?", v);
+        }
+        lv_obj_t* br = buttonRow();
+        button(br, 0, "Cancel", _t.ink, _t.line, false);
+        if (reboot) button(br, 1, "Reboot", _t.warn, _t.warn, false);
+        else button(br, 1, "Delete", _t.bad, _t.bad, false);
+        _ss_count = 2;
+        setSheetCursor(0);
+        break;
+      }
       char lines[3][48];
       const size_t k = radioChanges(_radio_was, _radio_now, lines, 3);
       char sub[176] = "";
@@ -1199,11 +1396,14 @@ void GuiShell::setSheetStep(int dir) {
 
 void GuiShell::stepText(int v, char* out, size_t n) {
   if (_set_page == SetPage::Display) pctText(v, out, n);
+  else if (_set_page == SetPage::Power) voltsText(uint32_t(v), out, n);
   else dbmText(v, out, n);
 }
 
 void GuiShell::stepApply(int v) {
-  if (_set_page == SetPage::Display) {
+  if (_set_page == SetPage::Power) {
+    _model->setFullMv(uint16_t(v));   // the stepper keeps it inside the band
+  } else if (_set_page == SetPage::Display) {
     _model->guiPrefs().brightness = uint8_t(v);
     _model->prefsChanged();   // lights the screen at the new level now
   } else {
@@ -1215,6 +1415,11 @@ void GuiShell::stepApply(int v) {
 
 const char* GuiShell::pickTitle(const char** sub) {
   *sub = nullptr;
+  if (_set_page == SetPage::Power) return "Screen off after";
+  if (_set_page == SetPage::Debug) {
+    *sub = "Kept for the app's log download, and on USB serial";
+    return "Serial log";
+  }
   if (_set_page == SetPage::Node) return "GPS interval";
   if (_set_page == SetPage::Contacts) {
     *sub = "Nodes farther away aren't added";
@@ -1254,6 +1459,8 @@ const char* GuiShell::pickTitle(const char** sub) {
 }
 
 int GuiShell::pickCount() {
+  if (_set_page == SetPage::Power) return int(kOffCount);
+  if (_set_page == SetPage::Debug) return int(kLogCount);
   if (_set_page == SetPage::Node) return int(kGpsCount);
   if (_set_page == SetPage::Contacts) return int(kHopCount);
   if (_set_page == SetPage::Privacy) return _ss_row == pLoc ? 2 : 3;
@@ -1277,6 +1484,12 @@ int GuiShell::pickCount() {
 
 int GuiShell::pickCurrent() {
   GuiPrefs& g = _model->guiPrefs();
+  if (_set_page == SetPage::Power) return choiceIndex(kOffChoices, kOffCount, _model->screenOffSecs());
+  if (_set_page == SetPage::Debug) {
+    DeviceInfo d{};
+    _model->deviceInfo(&d);
+    return d.log_index;
+  }
   if (_set_page == SetPage::Node || _set_page == SetPage::Contacts || _set_page == SetPage::Privacy) {
     const NodeSettings s = _model->nodeSettings();
     if (_set_page == SetPage::Node) return choiceIndex(kGpsChoices, kGpsCount, s.gps_secs);
@@ -1307,6 +1520,11 @@ int GuiShell::pickCurrent() {
 }
 
 void GuiShell::pickText(int i, char* out, size_t n) {
+  if (_set_page == SetPage::Power) return durationText(kOffChoices[i], out, n);
+  if (_set_page == SetPage::Debug) {
+    textf(out, n, "%s", logName(i));
+    return;
+  }
   if (_set_page == SetPage::Node) return durationText(kGpsChoices[i], out, n);
   if (_set_page == SetPage::Contacts) return hopLimitText(kHopChoices[i], out, n);
   if (_set_page == SetPage::Privacy) {
@@ -1337,6 +1555,15 @@ void GuiShell::pickText(int i, char* out, size_t n) {
 // A pick: Radio's go to the draft (Save applies them); the others apply now.
 void GuiShell::pickApply(int i) {
   GuiPrefs& g = _model->guiPrefs();
+  if (_set_page == SetPage::Power) {   // the same setting as Display › Screen off
+    _model->setScreenOffSecs(uint16_t(kOffChoices[i]));
+    _model->prefsChanged();
+    return;
+  }
+  if (_set_page == SetPage::Debug) {
+    _model->setLogLevel(i);
+    return;
+  }
   if (_set_page == SetPage::Node || _set_page == SetPage::Contacts || _set_page == SetPage::Privacy) {
     NodeSettings s = _model->nodeSettings();
     if (_set_page == SetPage::Node) {
@@ -1411,7 +1638,18 @@ void GuiShell::setSheetPress(int i) {
       break;
     case SetSheet::Confirm:
       if (i == 0) {
-        closeSetSheet();   // Keep editing
+        closeSetSheet();   // Keep editing; an action's Cancel
+      } else if (_set_page == SetPage::Actions) {
+        const uint8_t row = _ss_row;
+        closeSetSheet();
+        if (row == aReboot) {
+          _model->reboot();   // doesn't return
+        } else {
+          const uint16_t n = _model->deleteAllPaths();
+          char note[24];
+          textf(note, sizeof note, "%u deleted ✓", unsigned(n));
+          actionDone(row, note);
+        }
       } else {
         closeSetSheet();
         _radio_now = _radio_was;   // Discard
@@ -1435,6 +1673,16 @@ void GuiShell::setSheetCommit() {
       stepApply(_ss_val);
       break;
     case SetSheet::Pad: {
+      if (_set_page == SetPage::Conn) {   // PIN: six digits, or empty for a new one each boot
+        int32_t pin = 0;
+        const bool empty = _ss_pad.text()[0] == '\0';
+        const bool ok = empty || (_ss_pad.scaled(0, &pin) && pinOk(uint32_t(pin)));
+        if (!ok || !_model->setBlePin(empty ? 0 : uint32_t(pin))) {
+          if (_ss_limit) lv_obj_set_style_text_color(_ss_limit, c(_t.bad), 0);
+          return;
+        }
+        break;
+      }
       if (_set_page == SetPage::Node) {   // Position: latitude, then longitude
         int32_t e6 = 0;
         const bool ok = _ss_pad.scaled(6, &e6) && (_pad_stage == 0 ? latOk(e6) : lonOk(e6));

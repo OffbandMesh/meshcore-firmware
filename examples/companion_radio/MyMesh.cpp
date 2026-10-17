@@ -4429,6 +4429,12 @@ void MyMesh::cmdSetTime(uint32_t secs) {
 }
 
 void MyMesh::cmdReboot() {
+  flushPending();
+  board.reboot();
+}
+
+// What a restart or a power-off would lose: contacts and messages not yet written.
+void MyMesh::flushPending() {
   bool pending = dirty_contacts_expiry != 0;  // a contacts write is still pending
 #ifdef OFFBAND_GUI
   pending = pending || _contacts_save.active();   // or one is half-written
@@ -4437,7 +4443,6 @@ void MyMesh::cmdReboot() {
 #ifdef OFFBAND_GUI
   _gui_store_flash.flushNow();   // #1463: messages not yet written
 #endif
-  board.reboot();
 }
 
 #ifdef OFFBAND_GUI

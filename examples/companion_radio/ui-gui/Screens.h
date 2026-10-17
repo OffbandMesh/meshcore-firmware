@@ -76,6 +76,22 @@ enum class SetPage : uint8_t {
   List = 0xFF
 };
 
+// Connectivity, Power, Debug and About (G5): what the device reads now.
+struct DeviceInfo {
+  bool ble_on, phone;                    // Bluetooth on; a phone connected
+  uint32_t pin_stored, pin_active;       // pinText()
+  uint16_t batt_mv;
+  int batt_pct;
+  uint16_t full_mv;                      // in effect: learned, pinned, or the board's
+  bool full_pinned;
+  uint16_t shutdown_mv;                  // 0: none in this build
+  uint8_t log_index;                     // logName()
+  uint8_t boot_attempt, boot_limit;      // SafeBoot; limit 0: none here
+  uint32_t reset_code;                   // resetName()
+  char offband[24], meshcore[16], build[32], model[40];
+  uint16_t msgs, msgs_cap, contacts, contacts_max;
+};
+
 // What the screens need from the rest of the firmware. UITask implements it,
 // so the screens stay free of the mesh.
 class ShellModel {
@@ -132,6 +148,18 @@ public:
   virtual void setNodeSettings(const offband::gui::NodeSettings& s) = 0;
   virtual void radioStats(offband::gui::RadioStats* out) = 0;
   virtual const uint8_t* selfKey() = 0;   // 32 bytes
+  // Connectivity, Power, Debug, About (G5).
+  virtual void deviceInfo(DeviceInfo* out) = 0;
+  virtual void setBleOn(bool on) = 0;            // until the next boot
+  virtual bool setBlePin(uint32_t pin) = 0;      // 0: a new one each boot; from the next boot
+  virtual bool setFullMv(uint16_t mv) = 0;       // pins it; false outside the learner's band
+  virtual void learnFullAgain() = 0;             // drops it; the next full charge teaches it
+  virtual bool setLogLevel(int index) = 0;       // logName(); false if not saved
+  // Actions (G5): each false if it didn't happen.
+  virtual bool advertNow() = 0;                  // zero-hop
+  virtual bool syncTimeFromGps() = 0;            // false: no GPS time to take
+  virtual void reboot() = 0;                     // saves first; doesn't return
+  virtual uint16_t deleteAllPaths() = 0;         // contacts sent back to flood
   virtual ~ShellModel() {}
 };
 
@@ -236,7 +264,12 @@ private:
   void closeSetText(bool keep);
   void buildDisplayPage(lv_obj_t* content);
   void buildThemePage(lv_obj_t* content);
-  void buildSetupLater(lv_obj_t* content);
+  void buildConnPage(lv_obj_t* content);
+  void buildPowerPage(lv_obj_t* content);
+  void buildActionsPage(lv_obj_t* content);
+  void buildDebugPage(lv_obj_t* content);
+  void buildAboutPage(lv_obj_t* content);
+  void actionDone(uint8_t row, const char* note);   // an action's one-line result
   // The open picker or stepper, for whichever page and row opened it.
   int pickCount();
   int pickCurrent();
@@ -277,8 +310,9 @@ private:
   offband::gui::RadioValues _radio_was{};
   offband::gui::RadioValues _radio_now{};
   int _preset_hint = -1;                 // the preset last picked, among twins
-  char _set_note[24] = {};               // shown on Save for 2 s
+  char _set_note[24] = {};               // shown on Save, or an action's row, for 2 s
   uint32_t _set_note_at = 0;
+  uint8_t _note_row = 0xFF;              // Actions: the row the note is for
   lv_obj_t* _set_save = nullptr;
   SetSheet _ss = SetSheet::None;
   uint8_t _ss_row = 0;                   // the row the sheet edits

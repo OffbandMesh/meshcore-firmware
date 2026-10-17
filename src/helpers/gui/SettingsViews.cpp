@@ -1,5 +1,6 @@
 #include "SettingsViews.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "GuiViews.h"
@@ -190,6 +191,79 @@ void positionText(int32_t lat, int32_t lon, char* out, size_t n) {
   four(lat, a, sizeof a);
   four(lon, b, sizeof b);
   textf(out, n, "%s, %s", a, b);
+}
+
+void voltsText(uint32_t mv, char* out, size_t n) {
+  if (mv == 0) {
+    textf(out, n, "—");
+    return;
+  }
+  const uint32_t c = (mv + 5) / 10;   // hundredths
+  textf(out, n, "%lu.%02lu V", (unsigned long)(c / 100), (unsigned long)(c % 100));
+}
+
+void batteryNowText(uint32_t mv, int pct, char* out, size_t n) {
+  char v[16];
+  voltsText(mv, v, sizeof v);
+  textf(out, n, "%s · %d%%", v, pct);
+}
+
+bool pinOk(uint32_t pin) { return pin >= 100000 && pin <= 999999; }
+
+void pinText(uint32_t stored, uint32_t active, char* out, size_t n) {
+  if (stored) textf(out, n, "******");   // the GUI fonts have no •
+  else if (active) textf(out, n, "%06lu", (unsigned long)active);
+  else textf(out, n, "None");
+}
+
+int logIndex(bool on, uint8_t level) {
+  if (!on) return 0;
+  return level < 1 ? 1 : level > 3 ? 3 : level;
+}
+
+const char* logName(int i) {
+  static const char* const kNames[kLogCount] = {"Off", "Errors", "Debug", "Packets"};
+  return i >= 0 && size_t(i) < kLogCount ? kNames[i] : kNames[0];
+}
+
+void ofText(uint32_t a, uint32_t b, char* out, size_t n) {
+  char x[16], y[16];
+  thousands(a, x, sizeof x);
+  thousands(b, y, sizeof y);
+  textf(out, n, "%s / %s", x, y);
+}
+
+void buildText(const char* sha, const char* ymd, char* out, size_t n) {
+  static const char* const kMonths[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  int y = 0, m = 0, d = 0;
+  if (ymd && sscanf(ymd, "%d-%d-%d", &y, &m, &d) == 3 && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+    textf(out, n, "%s · %s %d", sha, kMonths[m - 1], d);
+  } else {
+    textf(out, n, "%s", sha);
+  }
+}
+
+const char* resetName(uint32_t code) {
+  // esp_reset_reason_t (ResetReason.h has the long forms), in a row's width.
+  switch (code) {
+    case 1: return "Power on";
+    case 2: return "RST button";
+    case 3: return "Software";
+    case 4: return "Crash";
+    case 5:
+    case 6:
+    case 7: return "Watchdog";
+    case 8: return "Deep sleep";
+    case 9: return "Brownout";
+    case 10: return "SDIO";
+    case 11: return "USB";
+    case 12: return "JTAG";
+    case 13: return "eFuse";
+    case 14: return "Power glitch";
+    case 15: return "CPU lockup";
+    default: return "Unknown";
+  }
 }
 
 const char* themeName(uint8_t theme) {

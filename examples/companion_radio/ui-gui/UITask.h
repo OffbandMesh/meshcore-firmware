@@ -79,6 +79,16 @@ public:
   void setScreenOffSecs(uint16_t secs) override;
   bool buzzerOn() override;
   void setBuzzerOn(bool on) override;
+  void deviceInfo(DeviceInfo* out) override;
+  void setBleOn(bool on) override;
+  bool setBlePin(uint32_t pin) override;
+  bool setFullMv(uint16_t mv) override;
+  void learnFullAgain() override;
+  bool setLogLevel(int index) override;
+  bool advertNow() override;
+  bool syncTimeFromGps() override;
+  void reboot() override;
+  uint16_t deleteAllPaths() override;
 
 private:
   void fillNodeRow(const ContactInfo& ci, offband::gui::NodeRow& r, uint8_t* key_copy, uint32_t now, bool clock_ok);
@@ -104,6 +114,8 @@ private:
   void pollDmRetries(uint32_t now);
   bool gpsEnabled() const;
   uint8_t battPercent() const;
+  void lowBatteryShutdown(uint16_t mv);   // doesn't return
+  void savePending();                     // idle-saved prefs and passwords, now
 
 #ifdef PIN_BUZZER
   genericBuzzer _buzzer;
@@ -140,7 +152,9 @@ private:
   bool _passwords_dirty = false;                     // saved when idle (#1472)
   offband::gui::AdvertButton _advert;
   offband::BatteryAverage _batt;
+  offband::FullPointLearner _full_learner;   // #1254: where this cell's 100% is (Power, G5)
   uint32_t _next_batt_read = 0;
+  uint32_t _next_batt_check = 0;   // low-voltage shutdown, every 8 s
   uint32_t _next_status = 0;
   uint32_t _next_screen = 0;
   bool _gps_was_on = false;
