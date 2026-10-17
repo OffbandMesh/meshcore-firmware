@@ -317,8 +317,11 @@ void UITask::homeData(HomeData* d) {
   MetricsHub& m = the_mesh.guiMetrics();
   uint16_t rpt = 0, room = 0, chat = 0;
   ContactInfo ci;
-  for (int i = 0; i < the_mesh.getNumContacts(); i++) {
-    if (!the_mesh.getContactByIdx(i, ci)) continue;
+  // The iterator skips the anonymous-request slots at the front of the
+  // table; getContactByIdx doesn't, so a 0..getNumContacts() walk read those
+  // and missed the newest contacts (#1550).
+  ContactsIterator it = the_mesh.startContactsIterator();
+  while (it.hasNext(&the_mesh, ci)) {
     const ContactStat* st = m.contacts.find(ci.id.pub_key);
     if (!st || !st->heard) continue;
     if (ci.type == ADV_TYPE_REPEATER) rpt++;
@@ -605,8 +608,11 @@ const NodeRow* UITask::nodeRows(size_t* total) {
   const bool clock_ok = offband::tz::clockSet(now);
   ContactInfo ci;
   size_t n = 0;
-  for (int i = 0; i < the_mesh.getNumContacts() && n < MAX_CONTACTS; i++) {
-    if (!the_mesh.getContactByIdx(i, ci)) continue;
+  // Every contact, as the phone's list walks them: past the anonymous-request
+  // slots (see homeData, #1550).
+  ContactsIterator it = the_mesh.startContactsIterator();
+  while (n < MAX_CONTACTS && it.hasNext(&the_mesh, ci)) {
+    if (ci.type == ADV_TYPE_NONE) continue;   // an empty slot
     fillNodeRow(ci, _node_rows[n], _node_keys[n], now, clock_ok);
     n++;
   }
