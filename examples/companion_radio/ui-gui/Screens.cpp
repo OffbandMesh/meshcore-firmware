@@ -2370,11 +2370,10 @@ void GuiShell::refreshActs(uint32_t now_ms) {
         bad = v.state == ActView::Failed;
         if (busy) textf(text, sizeof text, "%s", is_ping ? "Pinging…" : "Tracing…");
         else if (bad) textf(text, sizeof text, "No reply");
-        else if (ok && is_ping) {
+        else if (ok) {   // the round trip on both (owner pick a, 2026-10-17)
           const unsigned t = (v.rtt_ms + 50) / 100;
-          textf(text, sizeof text, "Ping ✓ %u.%u s", t / 10, t % 10);
-        } else if (ok) textf(text, sizeof text, "Trace ✓");
-        else textf(text, sizeof text, "%s", is_ping ? "Ping" : "Trace");
+          textf(text, sizeof text, "%s ✓ %u.%u s", is_ping ? "Ping" : "Trace", t / 10, t % 10);
+        } else textf(text, sizeof text, "%s", is_ping ? "Ping" : "Trace");
         break;
       }
     }
