@@ -2229,9 +2229,10 @@ void GuiShell::closeLogin() {
 // pinned at the bottom.
 void GuiShell::buildDetail(lv_obj_t* content) {
   NodeDetail d;
-  if (!_model->nodeDetail(_detail_key, &d)) {   // the contact went: back to the list
+  if (!_model->nodeDetail(_detail_key, &d)) {   // the contact went: back where it was opened from
     _detail = _login = false;
-    buildNodes(content);
+    if (_tab == Tab::Map) buildRadar(content);
+    else buildNodes(content);
     return;
   }
   lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
@@ -2919,6 +2920,8 @@ void GuiShell::radarOpen() {
       return;
     }
   }
+  _radar_sel_set = false;   // the contact went: the sheet goes back to its hint
+  rebuild();
 }
 
 // What the radar draws: your position to ~10 m, the scale, the selection,
