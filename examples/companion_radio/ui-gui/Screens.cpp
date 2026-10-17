@@ -1234,7 +1234,7 @@ void GuiShell::pressKey(int i) {
     }
   }
   if (_page.page() != page_before || _shift.state() != shift_before) buildKeys();
-  if (_searching) refreshSearch();
+  if (_searching) querySoon();
   else refreshDraft();
 }
 
@@ -1713,8 +1713,16 @@ void GuiShell::buildNodes(lv_obj_t* content) {
 }
 
 void GuiShell::updateNodes(uint32_t now_ms) {
-  // Search redraws its results per keystroke, not on this timer.
-  if (_locked || _composing || _searching || _tab != Tab::Nodes || _sheet != Sheet::None) return;
+  // Search: its results redraw once typing pauses (querySoon), not on the
+  // list's timer.
+  if (_searching) {
+    if (_search_due && int32_t(now_ms - _search_due) >= 0) {
+      _search_due = 0;
+      refreshSearch();
+    }
+    return;
+  }
+  if (_locked || _composing || _tab != Tab::Nodes || _sheet != Sheet::None) return;
   if (int32_t(now_ms - _node_refresh_at) < 0) return;
   _node_refresh_at = now_ms + 1000;
 
@@ -1774,6 +1782,8 @@ void GuiShell::openSearch(bool wheel) {
   _search_wheel = wheel;
   _search_kb = !wheel;
   _query.start(64);   // room for a whole public key in hex
+  _search_rows = _model->nodeRows(&_search_total);   // once per search, not per key
+  _search_due = 0;
   _wheel.reset();
   _page.select(KeyPage::Letters);
   _shift = ShiftState();   // no capitals of its own: matching ignores case
@@ -1855,12 +1865,18 @@ void GuiShell::buildSearch(lv_obj_t* scr) {
   refreshSearch();
 }
 
-// The query, the match line and the results, redrawn after each change.
+void GuiShell::querySoon() {
+  if (_query_label) userText(_query_label, _query.text());
+  _search_due = lv_tick_get() + 250;
+  if (_search_due == 0) _search_due = 1;
+}
+
+// The query, the match line and the results.
 void GuiShell::refreshSearch() {
   if (!_query_label || !_search_list) return;
   userText(_query_label, _query.text());
-  size_t total = 0;
-  const NodeRow* rows = _model->nodeRows(&total);
+  const size_t total = _search_total;
+  const NodeRow* rows = _search_rows;
   size_t matches = 0;
   for (size_t i = 0; i < total; i++) {
     matches += passesFilter(rows[i], _node_filter, _node_unread) && searchMatches(rows[i], _query.text());
@@ -1873,7 +1889,10 @@ void GuiShell::refreshSearch() {
   lv_label_set_text(_match_label, line_text);
 
   lv_obj_clean(_search_list);
-  _node_shown = nodeOrder(rows, total, _node_filter, _node_unread, _query.text(), _node_order, kNodeRowsShown);
+  // While typing only what fits above the keyboard or wheel is built (about
+  // 3 rows); all of them once Done puts it away.
+  const size_t cap = (_search_kb || _search_wheel) ? 6 : kNodeRowsShown;
+  _node_shown = nodeOrder(rows, total, _node_filter, _node_unread, _query.text(), _node_order, cap);
   if (matches == 0 && _query.length()) {
     char none[64];
     textf(none, sizeof none, "No node name or key starts with \"%s\".", _query.text());
@@ -1954,12 +1973,12 @@ void GuiShell::wheelPick() {
     case LetterWheel::Pick::Char: {
       const char ch = char(_wheel.ch() >= 'A' && _wheel.ch() <= 'Z' ? _wheel.ch() - 'A' + 'a' : _wheel.ch());
       _query.insert(&ch, 1);
-      refreshSearch();
+      querySoon();
       break;
     }
     case LetterWheel::Pick::Backspace:
       _query.backspace();
-      refreshSearch();
+      querySoon();
       break;
     case LetterWheel::Pick::Done:
       _search_wheel = false;

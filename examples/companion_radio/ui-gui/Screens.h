@@ -203,6 +203,13 @@ private:
   lv_obj_t* _match_label = nullptr;
   lv_obj_t* _search_list = nullptr;
   lv_obj_t* _wheel_strip = nullptr;
+  // Performance (bench, #1534: 889 ms per keystroke with a full contact
+  // list): the rows are read once per search, the results redraw 250 ms
+  // after typing stops, and only what fits is built while typing.
+  const offband::gui::NodeRow* _search_rows = nullptr;
+  size_t _search_total = 0;
+  uint32_t _search_due = 0;   // when the results next redraw; 0 = not owed
+  void querySoon();           // the field now, the results shortly
 
   // Home
   lv_obj_t* _name = nullptr;
