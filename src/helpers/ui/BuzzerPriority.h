@@ -35,26 +35,54 @@ enum class TonePlay : uint8_t {
   NotFound = 3,
 };
 
+// Ascending importance. The ORDER IS LOAD-BEARING -- `toneTakesBuzzer()` compares these
+// values rather than branching per case, so inserting a level in the middle silently
+// re-ranks everything below it. New levels go on the end, and the asserts below pin the
+// order so a reordering is a build failure rather than a behavior change nobody notices.
 enum class TonePriority : uint8_t {
   // Auditioning a tune in Settings. Yields to anything real, replaces another preview
   // so moving down a list re-auditions without waiting.
   Preview = 0,
-  // A notification, an ack, startup/shutdown, or the remote trigger. Wins.
+  // A notification, an ack, startup/shutdown. Wins over an audition.
   Event = 1,
+  // A tune played deliberately to a room, which is a different thing from a chime that
+  // says one message arrived. It is LONG -- the owner's reference payload runs 17.1 s
+  // against the 0.06-0.25 s of every notification here -- so under the old two-level
+  // rule the next arriving message would cut it off, and in a busy channel that is
+  // every time. A truncated event tune is worse than a missed chime: the chime repeats
+  // on the next message, the event does not happen again.
+  Trigger = 2,
 };
+
+static_assert((uint8_t)TonePriority::Preview < (uint8_t)TonePriority::Event,
+              "an audition must never outrank a notification");
+static_assert((uint8_t)TonePriority::Event < (uint8_t)TonePriority::Trigger,
+              "a notification must never cut off a deliberate event tune");
 
 // Whether `incoming` should take the buzzer from what is playing now.
 //
-//   nothing playing     -> yes, whatever it is
-//   an Event playing    -> only another Event (today's behavior, kept)
-//   a Preview playing   -> anything, including another Preview
+//   nothing playing      -> yes, whatever it is
+//   something playing    -> yes if `incoming` ranks at or above it
+//
+//   a Preview playing    -> anything, including another Preview
+//   an Event playing     -> another Event or a Trigger, not a Preview
+//   a Trigger playing    -> only another Trigger
+//
+// AT OR ABOVE, not strictly above, and that is deliberate on both ends: two messages
+// arriving together should sound twice rather than swallow the second, and a second
+// trigger should restart rather than be dropped. Equal rank replacing equal rank is the
+// behavior this had before a third level existed, and it is kept.
+//
+// One comparison rather than a branch per pair. The earlier two-level version read as a
+// special case for Event, which stopped being honest the moment a level ranked above it:
+// the rule was always an ordering, and writing it as one means adding a level does not
+// mean finding every place that enumerated the old ones.
 //
 // `playing` is meaningless when `is_playing` is false and is not read in that case,
 // so a caller need not keep it accurate while the buzzer is idle.
 inline bool toneTakesBuzzer(bool is_playing, TonePriority playing, TonePriority incoming) {
   if (!is_playing) return true;
-  if (playing == TonePriority::Event) return incoming == TonePriority::Event;
-  return true;
+  return (uint8_t)incoming >= (uint8_t)playing;
 }
 
 }  // namespace offband
