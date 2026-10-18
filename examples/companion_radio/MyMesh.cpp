@@ -999,8 +999,11 @@ void MyMesh::onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t 
   // not truncated the way a channel message's stored sender is -- so the plain form of
   // the rule is correct here, where the channel path needs the wire-splitting form.
   if (_ui != NULL && offband::messageFiresTrigger(from.name, text)) {
-    const bool sounded = _ui->playTriggerTune();
-    mesh_log_line(MLOG_DEBUG, "[trig] dm from=%s sounded=%d\n", from.name, sounded ? 1 : 0);
+    // `accepted`, not `sounded` -- see the channel path below for why the distinction is
+    // load-bearing on this board.
+    const bool accepted = _ui->playTriggerTune();
+    mesh_log_line(MLOG_DEBUG, "[trig] dm from=%s accepted=%d\n", from.name,
+                  accepted ? 1 : 0);
   }
 #endif
   queueMessage(from, TXT_TYPE_PLAIN, pkt, sender_timestamp, NULL, 0, text);
@@ -1068,14 +1071,15 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   if (_ui != NULL) {
     ChannelDetails trig_ch;
     if (getChannel(channel_idx, trig_ch) &&
-        strcmp(trig_ch.name, OFFBAND_TUNE_TRIGGER_CHANNEL) == 0 &&
+        offband::channelNameMatches(trig_ch.name, OFFBAND_TUNE_TRIGGER_CHANNEL) &&
         offband::messageFiresTriggerOnChannelText(text)) {
-      // Reported, not assumed. playTriggerTune() can decline for the quiet pref, the
-      // hardware MUTE switch, or an id this build cannot resolve, and a log line saying
-      // the trigger fired when the badge stayed silent is the kind of false record that
-      // costs an afternoon at a bench.
-      const bool sounded = _ui->playTriggerTune();
-      mesh_log_line(MLOG_DEBUG, "[trig] ch=%s sounded=%d\n", trig_ch.name, sounded ? 1 : 0);
+      // `accepted`, not `sounded`. The badge's MUTE slide switch is in series with BZ1,
+      // downstream of the pin, so no software can tell whether anything was audible.
+      // Logging this as "sounded" cost a bench session on 2026-10-18 -- it read 1 twice
+      // while the owner heard nothing, and the switch was never in the picture.
+      const bool accepted = _ui->playTriggerTune();
+      mesh_log_line(MLOG_DEBUG, "[trig] ch=%s accepted=%d\n", trig_ch.name,
+                    accepted ? 1 : 0);
     }
   }
 #endif

@@ -97,10 +97,16 @@ public:
   // variant, and the decision of WHETHER to sound belongs in the mesh layer. So the mesh
   // layer asks and does not reach.
   //
-  // Returns whether the badge actually made a noise. It can decline for reasons the
-  // caller cannot see -- the quiet pref, the hardware MUTE switch, or an id this build
-  // cannot resolve -- and a caller logging "trigger fired" when nothing sounded would be
-  // the kind of false record that costs an afternoon on a bench.
+  // Returns whether the buzzer ACCEPTED the tune -- not whether anybody heard it, and the
+  // difference is not pedantry. It can decline for things software knows about: the quiet
+  // pref, or an id this build cannot resolve. It CANNOT know about a mute switch wired in
+  // series with the sounder, which is exactly how the QCC badge is built (BZ1 behind
+  // MOSFET Q3 on P0.06 with a MUTE slide switch in series). With that switch open the
+  // firmware drives the pin, this returns true, and the badge is silent.
+  //
+  // So true means "the request took the buzzer". An earlier version of this comment said
+  // it meant the badge made a noise, and that wording cost a bench session on 2026-10-18:
+  // the trigger fired twice, logged success, and the owner heard nothing.
   //
   // The default is false and silent, so every UI without this inherits no behaviour at
   // all. Only the badge overrides it.

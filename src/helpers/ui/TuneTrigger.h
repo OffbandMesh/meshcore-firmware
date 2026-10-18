@@ -203,6 +203,37 @@ inline bool messageFiresTrigger(const char* sender_name, const char* body) {
   return bodyEndsWithMorseFor(body, letter);
 }
 
+// Does a stored channel name name the channel in scope?
+//
+// SURROUNDING WHITESPACE IS IGNORED, and that is not tidiness. An exact comparison was the
+// first version of this and it cost a bench session on 2026-10-18: the owner's badge had
+// the channel stored as "#queencitycon " with a TRAILING SPACE. Nothing on any screen
+// shows that, the badge simply stayed silent, and there was no way to tell a scope miss
+// from a rule miss. A name a person typed, or a client stored, can carry whitespace at
+// either end; it is the same channel either way.
+//
+// CASE IS NOT FOLDED, deliberately. A hashtag channel's key is derived from its name
+// byte-for-byte, so two names differing in case are two DIFFERENT channels with different
+// keys. Folding case here would make this claim a channel it cannot actually decrypt.
+inline bool channelNameMatches(const char* stored, const char* want) {
+  if (stored == nullptr || want == nullptr) return false;
+  auto isSpace = [](char c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+  };
+  size_t a0 = 0, a1 = detail::cstrLen(stored);
+  size_t b0 = 0, b1 = detail::cstrLen(want);
+  while (a0 < a1 && isSpace(stored[a0])) a0++;
+  while (a1 > a0 && isSpace(stored[a1 - 1])) a1--;
+  while (b0 < b1 && isSpace(want[b0])) b0++;
+  while (b1 > b0 && isSpace(want[b1 - 1])) b1--;
+  if ((a1 - a0) != (b1 - b0)) return false;
+  if (a1 == a0) return false;   // two blank names are not a match, they are a mistake
+  for (size_t i = 0; i < a1 - a0; i++) {
+    if (stored[a0 + i] != want[b0 + i]) return false;
+  }
+  return true;
+}
+
 // The same rule applied to a CHANNEL message exactly as it arrives on the wire:
 // "<name>: <body>".
 //

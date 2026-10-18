@@ -314,9 +314,10 @@ public:
   // payload is far longer than any notification, so under Event priority a busy channel
   // truncates it on every badge in the room (#1608).
   //
-  // Reports true only when the buzzer actually took it. Silent counts as played, because
-  // choosing silence is a choice; a refusal for quiet, MUTE, or an unresolvable id does
-  // not.
+  // Reports whether the buzzer took the request, which is not the same as audible: this
+  // board's MUTE slide switch is in series with BZ1 and no software can see it. Silence
+  // chosen by id counts as played, because choosing silence is a choice; a refusal for the
+  // quiet pref or an unresolvable id does not.
   bool playTriggerTune() override;
   // #1422: stops whatever is sounding. The other half of the trigger seam -- a tune
   // sent to a room full of badges has to be stoppable, and the payload is the owner's

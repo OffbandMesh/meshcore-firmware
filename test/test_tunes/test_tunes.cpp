@@ -202,10 +202,13 @@ TEST(TriggerTune, LongerThanAChimeAndWithinTheSizedCapacity) {
 // and the first anyone would know is at the conference. So it is pinned here in full, the
 // same way the three chimes' strings are.
 TEST(TriggerTune, ThePayloadIsTheOwnersReferenceStringExactly) {
+  // Transposed up one octave from the owner's supplied line, to sit nearer BZ1's 4 kHz
+  // resonance. If this ever fails after a deliberate re-transposition, check the octave
+  // digits rather than assuming the string was corrupted.
   EXPECT_STREQ(
-      "n:d=4,o=5,b=200:8g,8a,8c6,8a,e6,8p,e6,8p,d6.,p,8p,8g,8a,8c6,8a,d6,8p,d6,8p,c6,8b,"
-      "a.,8g,8a,8c6,8a,2c6,d6,b,a,g.,8p,g,2d6,2c6.,p,8g,8a,8c6,8a,e6,8p,e6,8p,d6.,p,8p,"
-      "8g,8a,8c6,8a,2g6,b,c6.,8b,a,8g,8a,8c6,8a,2c6,d6,b,a,g.,8p",
+      "n:d=4,o=6,b=200:8g,8a,8c7,8a,e7,8p,e7,8p,d7.,p,8p,8g,8a,8c7,8a,d7,8p,d7,8p,c7,8b,"
+      "a.,8g,8a,8c7,8a,2c7,d7,b,a,g.,8p,g,2d7,2c7.,p,8g,8a,8c7,8a,e7,8p,e7,8p,d7.,p,8p,"
+      "8g,8a,8c7,8a,2g7,b,c7.,8b,a,8g,8a,8c7,8a,2c7,d7,b,a,g.,8p",
       tuneRtttl(kTuneTrigger));
   // The shape the owner's string was measured to have, so a change shows up as more than
   // a diff. 66 note tokens means 65 commas among the notes, PLUS the 2 in the "d=,o=,b="

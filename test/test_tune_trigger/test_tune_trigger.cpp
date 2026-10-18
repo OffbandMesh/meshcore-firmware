@@ -298,6 +298,51 @@ TEST(Gate, TheOwnersWorkedExampleEndToEnd) {
   EXPECT_TRUE(fires(kOwner, "0x4 -.--"));
 }
 
+// ---- the channel name, and the invisible space that cost a bench session ---------------
+
+TEST(ChannelName, TheExactNameMatches) {
+  EXPECT_TRUE(channelNameMatches("#queencitycon", "#queencitycon"));
+}
+
+TEST(ChannelName, SurroundingWhitespaceIsIgnored) {
+  // THE REAL CASE. The owner's badge had it stored with a trailing space, which no screen
+  // shows. An exact comparison left the badge silent with nothing to diagnose.
+  EXPECT_TRUE(channelNameMatches("#queencitycon ", "#queencitycon"));
+  EXPECT_TRUE(channelNameMatches(" #queencitycon", "#queencitycon"));
+  EXPECT_TRUE(channelNameMatches("  #queencitycon  ", "#queencitycon"));
+  EXPECT_TRUE(channelNameMatches("\t#queencitycon\r\n", "#queencitycon"));
+  // and in the other direction, in case the build flag ever carries one
+  EXPECT_TRUE(channelNameMatches("#queencitycon", "#queencitycon "));
+}
+
+TEST(ChannelName, ADifferentChannelIsRefused) {
+  EXPECT_FALSE(channelNameMatches("#okimesh", "#queencitycon"));
+  EXPECT_FALSE(channelNameMatches("#queencitycon2", "#queencitycon"));
+  EXPECT_FALSE(channelNameMatches("queencitycon", "#queencitycon"));   // the # is part of it
+}
+
+TEST(ChannelName, InnerWhitespaceIsNotIgnored) {
+  // Only the ends are trimmed. A space in the middle is a different name.
+  EXPECT_FALSE(channelNameMatches("#queen citycon", "#queencitycon"));
+}
+
+TEST(ChannelName, CaseIsNotFolded) {
+  // A hashtag channel's key is derived from its name byte-for-byte, so a case difference
+  // is a DIFFERENT channel with a different key. Matching it would claim a channel this
+  // badge cannot decrypt.
+  EXPECT_FALSE(channelNameMatches("#QueenCityCon", "#queencitycon"));
+  EXPECT_FALSE(channelNameMatches("#QUEENCITYCON", "#queencitycon"));
+}
+
+TEST(ChannelName, BlankAndDegenerateNamesAreRefused) {
+  EXPECT_FALSE(channelNameMatches("", "#queencitycon"));
+  EXPECT_FALSE(channelNameMatches("   ", "#queencitycon"));
+  EXPECT_FALSE(channelNameMatches("   ", "   "))
+      << "two blank names are a configuration mistake, not a match";
+  EXPECT_FALSE(channelNameMatches(nullptr, "#queencitycon"));
+  EXPECT_FALSE(channelNameMatches("#queencitycon", nullptr));
+}
+
 // ---- the channel wire format, and the truncation trap it exists to prevent -------------
 
 TEST(ChannelText, TheOwnersMessageOnTheWireFires) {

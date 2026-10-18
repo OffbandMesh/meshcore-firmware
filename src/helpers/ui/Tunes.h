@@ -71,7 +71,14 @@ constexpr Tune kBuiltinTunes[] = {
     //
     // THE PAYLOAD, supplied by the owner 2026-10-18. It is his reference string from the
     // badge maker -- the same 218-character line kMaxRtttl in TuneSlots.h was sized
-    // around -- and it runs 17.1 s over 66 tokens (53 notes, 13 rests, octaves 5-6).
+    // around -- and it runs 17.1 s over 66 tokens (53 notes, 13 rests).
+    //
+    // TRANSPOSED UP ONE OCTAVE from the line he supplied (owner's instruction, same day),
+    // which is a loudness change and not a musical preference. The badge's BZ1 is a 4 kHz
+    // transducer and the original sat at 784-1568 Hz, well below resonance, where both the
+    // intended magnetic buzzer and a substitute piezo are much quieter. At o=6/o=7 the
+    // range is 1568-3136 Hz, far nearer the peak. Length and token count are unchanged
+    // (218 characters, 66 tokens), so only pitch moved -- the duration is still 17.1 s.
     //
     // That length is why TonePriority::Trigger exists (#1608): at 17 s against the
     // 0.06-0.25 s of every notification above, an Event-priority play would be truncated
@@ -81,7 +88,7 @@ constexpr Tune kBuiltinTunes[] = {
     // the risk of shipping a recognizable tune here (#1447 discussion), so this line is
     // his to replace -- or, once typed custom slots land (#1413), the trigger can name a
     // slot he filled in himself and the repo never carries the payload at all.
-    {nullptr, "n:d=4,o=5,b=200:8g,8a,8c6,8a,e6,8p,e6,8p,d6.,p,8p,8g,8a,8c6,8a,d6,8p,d6,8p,c6,8b,a.,8g,8a,8c6,8a,2c6,d6,b,a,g.,8p,g,2d6,2c6.,p,8g,8a,8c6,8a,e6,8p,e6,8p,d6.,p,8p,8g,8a,8c6,8a,2g6,b,c6.,8b,a,8g,8a,8c6,8a,2c6,d6,b,a,g.,8p"},
+    {nullptr, "n:d=4,o=6,b=200:8g,8a,8c7,8a,e7,8p,e7,8p,d7.,p,8p,8g,8a,8c7,8a,d7,8p,d7,8p,c7,8b,a.,8g,8a,8c7,8a,2c7,d7,b,a,g.,8p,g,2d7,2c7.,p,8g,8a,8c7,8a,e7,8p,e7,8p,d7.,p,8p,8g,8a,8c7,8a,2g7,b,c7.,8b,a,8g,8a,8c7,8a,2c7,d7,b,a,g.,8p"},
 };
 
 constexpr uint8_t kBuiltinCount = (uint8_t)(sizeof(kBuiltinTunes) / sizeof(kBuiltinTunes[0]));
