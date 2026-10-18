@@ -305,9 +305,9 @@ public:
   // instead of a pref, when this is not -1.
   int tonePickerChannel() const { return _tone_picking_channel; }
   // #1422: plays any tune by id, including the un-listed one the remote trigger names.
-  // This is the ENTIRE surface epic #1191 needs: it honors the quiet pref and the
-  // hardware MUTE, and does nothing for an id this build cannot resolve. Unparking that
-  // work should not require touching sound code at all.
+  // This is the ENTIRE surface a caller needs: it honors the quiet pref and the hardware
+  // MUTE, and does nothing for an id this build cannot resolve. Anything that wants to
+  // sound a tune by id should not require touching sound code at all.
   offband::TonePlay playTuneById(uint8_t id, offband::TonePriority priority);
   // #1422: stops whatever is sounding. The other half of the trigger seam -- a tune
   // sent to a room full of badges has to be stoppable, and the payload is the owner's

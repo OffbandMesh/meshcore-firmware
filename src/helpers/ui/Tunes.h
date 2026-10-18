@@ -67,8 +67,7 @@ constexpr Tune kBuiltinTunes[] = {
     // Two of the same pitch with a gap between them. 0.21 s.
     {"Knock", "Knock:d=32,o=6,b=140:a,16p,a"},
     // #1422: THE UN-LISTED ONE. A null name keeps it out of the picker, so it exists
-    // only for something that names it by id -- which is the remote trigger designed
-    // under epic #1191, parked. Nothing in the UI can reach or select it.
+    // only for something that names it by id. Nothing in the UI can reach or select it.
     //
     // The melody here is a PLACEHOLDER and ours: a rising flourish, deliberately longer
     // and more insistent than a notification chime so a hall of badges firing at once is
@@ -90,8 +89,9 @@ constexpr uint8_t kTuneTick = 3;     // the old ack literal
 constexpr uint8_t kTuneBloop = 4;    // #1447
 constexpr uint8_t kTuneDrop = 5;
 constexpr uint8_t kTuneKnock = 6;
-// #1422: the un-listed entry the remote trigger names. Reachable by id, invisible in
-// the picker. Named here so #1191 refers to it by meaning rather than by position.
+// #1422: the un-listed entry. Reachable by id, invisible in the picker. Named here so a
+// caller refers to it by meaning rather than by position -- ids are append-only, and a
+// literal 7 at a call site would be the one thing a future insertion could not fix.
 constexpr uint8_t kTuneTrigger = 7;
 
 static_assert(kBuiltinCount > 0, "the table needs an entry");
@@ -220,8 +220,8 @@ inline bool isBuiltinTune(uint8_t id) { return id < kBuiltinCount; }
 // reachable by simply having it stored.
 //
 // Nothing can store an un-named id today -- the picker is the only writer and it skips
-// them. The guard is here anyway, because #1191 (a remote trigger naming id 7) and #1413
-// (custom slots) both add writers, and a rule that holds only while no writer exists is
+// them. The guard is here anyway, because anything that names id 7 by id, and #1413
+// (custom slots), both add writers, and a rule that holds only while no writer exists is
 // not a rule.
 //
 // Falls back to row 0, which is Silent: audible as nothing, visible as "Silent", and
