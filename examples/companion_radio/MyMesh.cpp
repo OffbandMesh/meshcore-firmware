@@ -31,6 +31,20 @@
 // ones. The config *backend* (ConfigSchema/ObserverCli) stays observer-gated below. #241.
 #include "OffbandConfigProtocol.h"
 
+#ifdef OFFBAND_NAME_FROM_BLE_MAC
+// #1598: on a fresh flash a badge names itself from its BLE MAC, so the name on the badge
+// matches the device in the phone's pairing list. Both headers are gated on the flag, so
+// the ~60 other variants that compile this file are untouched -- the nRF52 FICR header in
+// particular must not reach an ESP32 build.
+#include <helpers/NodeNameFromMac.h>
+#include <helpers/nrf52/BleMacAddress.h>
+#ifndef OFFBAND_NAME_FROM_BLE_MAC_CHARS
+// 5, so prefix + chars lands on the same 8 characters the pubkey-hex default has always
+// produced and nothing sized against that width has to change.
+#define OFFBAND_NAME_FROM_BLE_MAC_CHARS 5
+#endif
+#endif
+
 #ifdef OFFBAND_OBSERVER_BLE_COMPANION
 // Plan 3 Task 10 (Strycher/LoRa#272): reserved-slot CLI intercepts +
 // system-channel status posting. Build-flag-gated so the upstream
@@ -1740,10 +1754,27 @@ void MyMesh::begin(bool has_display) {
 #ifdef ADVERT_NAME
   strcpy(_prefs.node_name, ADVERT_NAME);
 #else
-  // use hex of first 4 bytes of identity public key as default node name
-  char pub_key_hex[10];
-  mesh::Utils::toHex(pub_key_hex, self_id.pub_key, 4);
-  strcpy(_prefs.node_name, pub_key_hex);
+  bool named_from_mac = false;
+  #ifdef OFFBAND_NAME_FROM_BLE_MAC
+    // #1598: prefix + the last few hex characters of the BLE MAC, same 8-character width
+    // as the pubkey default below. Read from FICR because the SoftDevice is not up yet at
+    // this point in setup -- see helpers/nrf52/BleMacAddress.h for why the low bytes of
+    // the FICR address and the advertised one are the same bytes.
+    //
+    // If the MAC reads back as all zeros or all ones the accessor failed, and every badge
+    // would get the SAME name. The pubkey default below is at least unique, so fall
+    // through to it rather than ship a room full of identical names.
+    uint8_t ble_mac[offband::kBleMacBytes];
+    named_from_mac = offband::bleMacFromFicr(ble_mac) && offband::formatNodeNameFromMac(
+        _prefs.node_name, sizeof(_prefs.node_name), ble_mac, sizeof(ble_mac),
+        OFFBAND_NAME_FROM_BLE_MAC, OFFBAND_NAME_FROM_BLE_MAC_CHARS);
+  #endif
+  if (!named_from_mac) {
+    // use hex of first 4 bytes of identity public key as default node name
+    char pub_key_hex[10];
+    mesh::Utils::toHex(pub_key_hex, self_id.pub_key, 4);
+    strcpy(_prefs.node_name, pub_key_hex);
+  }
 #endif
 
   // if build provides default-scope, init with that
