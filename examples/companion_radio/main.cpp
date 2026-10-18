@@ -7,6 +7,16 @@
 // constructor(101) instance; see helpers/BootBeacon.h for why it exists.
 #define OFFBAND_BEACON_DEFINE_CTOR
 #include "helpers/BootBeacon.h"
+#if defined(OFFBAND_NAME_FROM_BLE_MAC) && defined(OFFBAND_NAME_MAC_VERIFY)
+// #1598: the one-off hardware check that FICR and the advertised address agree. Gated on
+// its own flag as well as the feature's, so it ships only on a diag build.
+#include <helpers/NodeNameFromMac.h>
+#include <helpers/nrf52/BleMacAddress.h>
+#ifndef OFFBAND_NAME_FROM_BLE_MAC_CHARS
+#define OFFBAND_NAME_FROM_BLE_MAC_CHARS 5
+#endif
+#endif
+
 #if defined(OFFBAND_BLE_MORSE)
 #include <helpers/ui/MorseBlink.h>   // #1597: the advertising pattern
 #endif
@@ -639,6 +649,48 @@ void setup() {
 #else
   meshLogSetMirror(true);
 #endif
+
+#if defined(OFFBAND_NAME_FROM_BLE_MAC) && defined(OFFBAND_NAME_MAC_VERIFY)
+  // #1598: the equivalence check, run on hardware rather than argued.
+  //
+  // The node name is built from FICR because the SoftDevice is not up when the name is
+  // chosen. The claim that FICR's low bytes equal the advertised address's low bytes is a
+  // derivation from how static random addresses are formed, and the issue requires it be
+  // measured. BLE is up by this point, so read it the normal way and compare.
+  //
+  // last5= is the part that actually matters -- the top byte may legitimately differ, the
+  // characters the name is made of may not.
+  //
+  // ⚠ This prints the device's BLE address. Do not paste the output into a GitHub issue,
+  // PR or chat; this repo is public. Record the VERDICT, not the address.
+  {
+    uint8_t ficr[offband::kBleMacBytes] = {0}, sd[offband::kBleMacBytes] = {0};
+    const bool have_ficr = offband::bleMacFromFicr(ficr);
+    char fname[16], sname[16];
+    const bool have_sd = offband::bleMacFromSoftDevice(sd);
+    const bool fok = have_ficr && offband::formatNodeNameFromMac(
+        fname, sizeof(fname), ficr, sizeof(ficr),
+        OFFBAND_NAME_FROM_BLE_MAC, OFFBAND_NAME_FROM_BLE_MAC_CHARS);
+    const bool sok = have_sd && offband::formatNodeNameFromMac(
+        sname, sizeof(sname), sd, sizeof(sd),
+        OFFBAND_NAME_FROM_BLE_MAC, OFFBAND_NAME_FROM_BLE_MAC_CHARS);
+    mesh_log_line(MLOG_BOOT,
+                  "[name] ficr=%s/%02X%02X%02X%02X%02X%02X sd=%s"
+                  " full=%s last5=%s name=%s\n",
+                  have_ficr ? "ok" : "BLANK",
+                  ficr[0], ficr[1], ficr[2], ficr[3], ficr[4], ficr[5],
+                  have_sd ? "up" : "UNAVAIL",
+                  (have_ficr && have_sd && memcmp(ficr, sd, sizeof(ficr)) == 0) ? "MATCH"
+                                                                                : "differ",
+                  (fok && sok && strcmp(fname, sname) == 0) ? "MATCH" : "DIFFER",
+                  fok ? fname : "(fallback)");
+    if (have_sd) {
+      mesh_log_line(MLOG_BOOT, "[name] sdaddr=%02X%02X%02X%02X%02X%02X\n",
+                    sd[0], sd[1], sd[2], sd[3], sd[4], sd[5]);
+    }
+  }
+#endif
+
 #ifdef OFFBAND_OBSERVER
   // Plan 2 v2 Task 12: wire observer mesh context AFTER the_mesh.begin()
   // populates self_id. Strings cached as borrowed pointers in WifiObserver;
