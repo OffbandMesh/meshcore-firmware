@@ -162,6 +162,58 @@ _BUFFER_DECL_RE = re.compile(
 # Any bracketed use at all, recognised or not. Rule 3 keys off the difference.
 _BRACKETED_RE = re.compile(r"\[\s*[^\]]*\b%s\b[^\]]*\]" % CONST)
 
+# Sizing helpers that take the BUFFER BOUND as an argument. Passing the constant to one
+# of these is the sanctioned computation, not a builder doing its own arithmetic -- it is
+# how the cap gets DERIVED, so flagging it would flag the fix.
+#
+# Named explicitly, never matched as "any call containing the constant": that would let
+# `myOwnCap(MAX_FRAME_SIZE)` through and turn the rule into nothing. A negative test pins
+# that an unlisted helper is still a violation.
+#
+# Deliberately NOT required to exist in the tree. These are protocol-level helpers whose
+# definition and whose callers can land in either order, and on separate branches: making
+# a listed-but-absent helper a failure would make this checker fail on a branch that has
+# the caller but not yet the helper, which is coupling between branches rather than a real
+# invariant. An unused entry costs nothing; a cross-branch false failure costs trust.
+SANCTIONED_SIZING_CALLS = {
+    "deliverableFrame":
+        "ble_frame::deliverableFrame(mtu, MAX_FRAME_SIZE) -- the constant is the frame "
+        "BUFFER bound by design (BleFrameSizing.h:49), bounding a link-derived size",
+    "bleSafeFrame":
+        "#1621: ble_frame::bleSafeFrame(MAX_FRAME_SIZE) = MAX_FRAME_SIZE - "
+        "ATT_NOTIFY_HEADER, floored at 0. The bound that holds with NO connection, "
+        "which maxFramePayload() cannot give: maxFrameSize() returns the MIN_ATT_MTU "
+        "floor until an MTU is negotiated (deliverableFrame(23, 176) = 20), so a "
+        "builder queueing a frame for a client that is not connected yet would size "
+        "against ~4 usable bytes and clamp the stored message permanently. Verified in "
+        "esp32/SerialBLEInterface.h:93 (_att_mtu = 23 until onMTUChange, reset on "
+        "disconnect) and nrf52/SerialBLEInterface.cpp:356 (mtu = MIN_ATT_MTU unless "
+        "connected)",
+}
+
+_SANCTIONED_RES = tuple(
+    re.compile(r"\b(?:\w+\s*::\s*)*%s\s*\([^)]*\b%s\b[^)]*\)" % (name, CONST))
+    for name in sorted(SANCTIONED_SIZING_CALLS))
+
+
+def _strip_recognised_uses(line):
+    """Blank the constant where its use is recognised.
+
+    Returns (remainder, {"sanctioned": n, "decl": n}). A leftover occurrence in
+    `remainder` is a violation, so a line that mixes a recognised use with raw
+    arithmetic is still caught.
+    """
+    consumed = {"sanctioned": 0, "decl": 0}
+    out = line
+    for rx in _SANCTIONED_RES:
+        for match in rx.findall(out):
+            consumed["sanctioned"] += len(_CONST_RE.findall(match))
+        out = rx.sub(" ", out)
+    for match in _BUFFER_DECL_RE.findall(out):
+        consumed["decl"] += len(_CONST_RE.findall(match))
+    out = _BUFFER_DECL_RE.sub(" ", out)
+    return out, consumed
+
 _CONST_RE = re.compile(r"\b%s\b" % CONST)
 _API_RE = re.compile(r"\b%s\s*\(" % API)
 
@@ -374,6 +426,7 @@ def check_tree(root=None, transport_owned=None, exempt_lines=None):
         "transport_files_seen": 0,
         "occurrences": 0,
         "buffer_decls": 0,
+        "sanctioned_calls": 0,
         "static_asserts": 0,
         "allowed_lines": 0,
         "baseline_lines": 0,
@@ -437,8 +490,15 @@ def check_tree(root=None, transport_owned=None, exempt_lines=None):
                 stats["static_asserts"] += hits
                 continue
 
-            if _BUFFER_DECL_RE.search(code_line):
-                stats["buffer_decls"] += hits
+            # Blank out the uses that ARE recognised, then see what is left. Checking
+            # for a recognised use and accepting the whole LINE would exempt anything
+            # sharing it: `uint8_t b[MAX_FRAME_SIZE]; size_t c = MAX_FRAME_SIZE - 3;`
+            # would pass on the strength of the declaration. Only a line whose every
+            # occurrence is accounted for is clean.
+            remainder, consumed = _strip_recognised_uses(code_line)
+            if not _CONST_RE.search(remainder):
+                stats["sanctioned_calls"] += consumed["sanctioned"]
+                stats["buffer_decls"] += consumed["decl"]
                 continue
 
             if _BRACKETED_RE.search(code_line):
@@ -541,12 +601,12 @@ def main(argv=None):
     # Coverage is part of the result, not a footnote: an OK that classified nothing
     # would otherwise look identical to an OK that classified everything.
     print("OK: %d files scanned, %d mention %s, %d occurrences classified "
-          "(%d transport-owned file(s), %d buffer declaration(s), %d static_assert(s), "
-          "%d allowed, %d baseline); %d call(s) to %s()."
+          "(%d transport-owned file(s), %d buffer declaration(s), %d sanctioned sizing "
+          "call(s), %d static_assert(s), %d allowed, %d baseline); %d call(s) to %s()."
           % (stats["files_scanned"], stats["files_with_const"], CONST,
              stats["occurrences"], stats["transport_files_seen"], stats["buffer_decls"],
-             stats["static_asserts"], stats["allowed_lines"], stats["baseline_lines"],
-             stats["api_calls"], API))
+             stats["sanctioned_calls"], stats["static_asserts"], stats["allowed_lines"],
+             stats["baseline_lines"], stats["api_calls"], API))
     if stats["baseline_lines"]:
         print("     %d builder line(s) are a KNOWN-UNCONVERTED baseline (#1621), not a "
               "clean bill of health. Converting one means shrinking EXEMPT_LINES; this "

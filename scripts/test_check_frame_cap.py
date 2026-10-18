@@ -492,6 +492,64 @@ def test_real_tree_is_clean_and_not_empty():
            "every baseline entry cites the issue tracking its conversion")
 
 
+def test_allows_sanctioned_sizing_calls():
+    print("false positives: the sanctioned sizing helpers (#1621 fix shapes)")
+
+    # These are the EXACT line shapes from the #1621 fix on fix/1621-frame-cap-deliverable,
+    # taken from that session rather than paraphrased, so this pins the real thing.
+    cases = (
+        ("#define MAX_CHANNEL_DATA_LENGTH (ble_frame::bleSafeFrame(MAX_FRAME_SIZE) - 9)\n",
+         "the #define cap derived through bleSafeFrame"),
+        ("void f() {\n  const int frame_cap = (int)ble_frame::bleSafeFrame(MAX_FRAME_SIZE);\n}\n",
+         "a cast, namespace-qualified bleSafeFrame assigned to a local"),
+        ("void f() {\n  size_t c = bleSafeFrame(MAX_FRAME_SIZE);\n}\n",
+         "bleSafeFrame unqualified"),
+        ("void f() {\n  size_t c = ble_frame :: bleSafeFrame ( MAX_FRAME_SIZE ) - 9;\n}\n",
+         "arithmetic on the helper's result, with loose spacing"),
+        ("void f() {\n  return ble_frame::deliverableFrame(_att_mtu, MAX_FRAME_SIZE);\n}\n",
+         "deliverableFrame in a non-transport file"),
+    )
+    for text, label in cases:
+        probs = problems_for({"examples/app/Builder.cpp": text})
+        expect(probs == [], "allows %s" % label)
+
+    # ... and the thing that keeps this from being a blanket exemption for any call.
+    probs = problems_for({"examples/app/Builder.cpp": builder(
+        "  size_t c = myOwnCap(MAX_FRAME_SIZE);")})
+    expect(len(probs) == 1,
+           "an UNLISTED helper taking the constant is still a violation")
+
+    probs = problems_for({"examples/app/Builder.cpp": builder(
+        "  size_t c = ble_frame::bleSafeFrameish(MAX_FRAME_SIZE);")})
+    expect(len(probs) == 1,
+           "a helper whose name merely starts with a sanctioned one is still a violation")
+
+    # The counter is wired, so coverage still reports what it classified.
+    with Fixture({"examples/app/Builder.cpp": builder(
+            "  size_t c = ble_frame::bleSafeFrame(MAX_FRAME_SIZE) - 9;")}) as fx:
+        probs, stats = chk.check_tree(
+            root=fx.root, transport_owned=transport_table(), exempt_lines=())
+    expect(probs == [] and stats["sanctioned_calls"] == 1,
+           "a sanctioned call is counted as such (got %d)" % stats["sanctioned_calls"])
+
+
+def test_recognised_use_does_not_exempt_the_whole_line():
+    print("true positives: a recognised use must not cover raw arithmetic beside it")
+
+    # The hole this closes: accepting the LINE because something on it was recognised.
+    cases = (
+        ("  uint8_t b[MAX_FRAME_SIZE]; size_t c = MAX_FRAME_SIZE - 3;",
+         "a buffer declaration sharing a line with raw arithmetic"),
+        ("  size_t c = ble_frame::bleSafeFrame(MAX_FRAME_SIZE) - MAX_FRAME_SIZE;",
+         "a sanctioned call sharing a line with a raw use"),
+        ("  size_t c = bleSafeFrame(MAX_FRAME_SIZE), d = MAX_FRAME_SIZE - 1;",
+         "a sanctioned call and a raw use in one declaration"),
+    )
+    for body, label in cases:
+        probs = problems_for({"examples/app/Builder.cpp": builder(body)})
+        expect(len(probs) == 1, "catches %s" % label)
+
+
 def test_stripper_fails_closed():
     print("stripper fails CLOSED, never open (Gemini review of #1619, finding 3.1)")
 
@@ -636,7 +694,9 @@ def main():
     test_catches_define_derived_cap()
     test_catches_unrecognised_bracket_shape()
     test_catches_aliasing_with_its_own_message()
+    test_recognised_use_does_not_exempt_the_whole_line()
     test_allows_buffer_declarations()
+    test_allows_sanctioned_sizing_calls()
     test_allows_static_assert()
     test_allows_comments_and_literals()
     test_stripper_fails_closed()
