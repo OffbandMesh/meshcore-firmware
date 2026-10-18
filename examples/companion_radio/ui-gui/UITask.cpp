@@ -308,9 +308,32 @@ uint8_t UITask::battPercent() const {
   return uint8_t(offband::batteryPercent(mv, BATT_MIN_MILLIVOLTS, full));
 }
 
+// Epic L (#1610): the zone the GUI shows the time in, set here or from the
+// one-time prompt, and saved with the other prefs when idle.
+void UITask::setZone(int index) {
+  if (!_prefs) return;
+  _prefs->ui_tz = uint8_t(offband::tz::isSet(index) ? index : offband::tz::kNotSet);
+  _prefs_dirty = true;
+}
+
+// The zone a live fix suggests (as the badge's GPS screen, #1233); none
+// without GPS on and a fix.
+int UITask::gpsZone() {
+#if ENV_INCLUDE_GPS == 1
+  LocationProvider* gps = sensors.getLocationProvider();
+  if (gps && gpsEnabled() && gps->isValid()) {
+    return offband::tz::suggest(gps->getLatitude() / 1000000.0, gps->getLongitude() / 1000000.0);
+  }
+#endif
+  return offband::tz::kNotSet;
+}
+
+uint32_t UITask::utcNow() { return rtc_clock.getCurrentTime(); }
+
 StatusReadings UITask::statusReadings(uint32_t now) {
   StatusReadings r{};
   formatClock(_prefs ? _prefs->ui_tz : 0, rtc_clock.getCurrentTime(), r.clock, sizeof r.clock, clock12h());
+  r.utc = !offband::tz::isSet(_prefs ? _prefs->ui_tz : 0);
 
   MsgStore& store = the_mesh.guiStore();
   r.unread = store.ready() ? store.totalUnread() : uint32_t(_unread > 0 ? _unread : 0);
@@ -397,6 +420,8 @@ void UITask::lockData(LockData* d) {
   } else {
     snprintf(d->sub, sizeof d->sub, "%s · %u%%", _prefs ? _prefs->node_name : "", unsigned(battPercent()));
   }
+  zoneLockText(zone, d->zone, sizeof d->zone);
+  d->zone_unset = !offband::tz::isSet(zone);
 
   MsgStore& store = the_mesh.guiStore();
   uint32_t seqs[2];
@@ -1550,6 +1575,12 @@ void UITask::loop() {
       GUI_SPAN(s_t_data);
       _shell.updateHome(d);
       GUI_SPAN(s_t_update);
+    }
+    // Epic L (owner pick 5a): the first fix with no zone set offers the
+    // zone once, on a lit, unlocked screen; offerZone waits out a busy one.
+    if (_prefs && !_prefs->gui.zone_asked && _screen == ScreenState::On && !_shell.locked()) {
+      const int gz = gpsZone();
+      if (zonePromptDue(_prefs->ui_tz, gz, _prefs->gui.zone_asked)) _shell.offerZone(gz);
     }
   }
   // Chats redraw only when the store's revision moved, which is a compare on

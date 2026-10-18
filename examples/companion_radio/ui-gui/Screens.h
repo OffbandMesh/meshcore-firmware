@@ -43,6 +43,8 @@ struct LockItem {
 struct LockData {
   char clock[12];   // "21:07", or "9:07 PM" (12-hour)
   char sub[64];
+  char zone[40];    // "UTC · set a time zone in Display", or the zone's name (#1610)
+  bool zone_unset;  // drawn in amber
   uint8_t count;   // items, 0..2
   LockItem items[2];
   uint32_t more;   // unread in threads not shown
@@ -101,6 +103,9 @@ public:
   virtual void threadOpened(int thread) = 0;                     // mark it read
   virtual void routeMeta(int thread, char* out, size_t n) = 0;   // the header's route line
   virtual int zone() = 0;                                        // TimeZones.h index
+  virtual void setZone(int index) = 0;                           // saved with the prefs
+  virtual int gpsZone() = 0;                                     // a live fix's suggestion; 0 without
+  virtual uint32_t utcNow() = 0;                                 // the device clock, Unix seconds
   virtual void sendAdvert() = 0;
   virtual void loraPopover() = 0;
   // Compose (D5)
@@ -191,6 +196,9 @@ public:
 
   void updateHome(const HomeData& d);
   void updateLock(const LockData& d);
+  // The one-time "Use <zone> time?" prompt (Epic L). False while Lock,
+  // Compose, a login or another sheet is up: it waits for a free screen.
+  bool offerZone(int zone);
   void setAdvertState(offband::gui::AdvertButton::State s);
   // Redraws Chats or the open conversation if the store changed.
   void updateChats();
@@ -274,6 +282,7 @@ private:
   int pickCount();
   int pickCurrent();
   void pickText(int i, char* out, size_t n);
+  void pickSide(int i, char* out, size_t n);   // right of the option; empty but for Time zone
   const char* pickTitle(const char** sub);
   void pickApply(int i);
   void stepApply(int v);
@@ -329,6 +338,7 @@ private:
   static constexpr int kPickRows = 6;
   lv_obj_t* _ss_item[kSheetItems] = {};
   int _ss_top = 0;                       // the picker's first option on screen
+  int _ss_gz = 0;                        // the GPS zone when the sheet opened (Time zone)
   int _ss_picked = -1;                   // the option the value has now
   int16_t _ss_drag = 0;                  // a drag's travel since the last row step
   bool _ss_dragged = false;
@@ -342,8 +352,9 @@ private:
   void insertText(const char* text);
   void leaveCompose();
   // Bottom sheets (D6): the channel notification sheet, and the menu USR
-  // hold opens in a channel (owner pick a, 2026-10-16).
-  enum class Sheet : uint8_t { None, Notify, Menu };
+  // hold opens in a channel (owner pick a, 2026-10-16). Zone: the one-time
+  // "Use <zone> time?" prompt (Epic L, owner pick 5a).
+  enum class Sheet : uint8_t { None, Notify, Menu, Zone };
   void openSheet(Sheet kind);
   void closeSheet();
   void sheetHot(int i);
@@ -399,6 +410,7 @@ private:
   lv_obj_t* _sheet_rows[3] = {};
   uint8_t _sheet_count = 0;
   int _sheet_hot = 0;
+  int _sheet_zone = 0;   // the zone the Zone prompt offers
 
   // Nodes (Epic E)
   static constexpr size_t kNodeRowsShown = 50;   // the newest; search reaches the rest
@@ -488,6 +500,7 @@ private:
   lv_obj_t* _lock_clock = nullptr;
   lv_obj_t* _lock_ampm = nullptr;   // 12-hour: the clock font has digits and a colon only
   lv_obj_t* _lock_sub = nullptr;
+  lv_obj_t* _lock_zone = nullptr;
   lv_obj_t* _lock_list = nullptr;
   uint8_t _lock_count = 0xFF;
   uint32_t _lock_more = 0xFFFFFFFF;

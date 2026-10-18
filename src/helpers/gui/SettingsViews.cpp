@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../TimeZones.h"
 #include "GuiViews.h"
 #include "NodeViews.h"   // thousands
 
@@ -276,6 +277,57 @@ int choiceIndex(const uint32_t* choices, size_t n, uint32_t v) {
     if (choices[i] == v) return int(i);
   }
   return -1;
+}
+
+void zoneRowText(int zone, char* out, size_t n) {
+  if (tz::isSet(zone)) snprintf(out, n, "%s", tz::zone(zone).name);
+  else snprintf(out, n, "Not set · UTC");
+}
+
+bool zoneOffersGps(int zone, int gps_zone) { return tz::isSet(gps_zone) && !tz::isSet(zone); }
+
+void zoneHint(int zone, int gps_zone, char* out, size_t n) {
+  if (zoneOffersGps(zone, gps_zone)) snprintf(out, n, "GPS suggests %s", tz::zone(gps_zone).name);
+  else if (n) out[0] = '\0';
+}
+
+int zonePickCount(int zone, int gps_zone) { return tz::kZoneCount + (zoneOffersGps(zone, gps_zone) ? 1 : 0); }
+
+int zoneAtPick(int i, int zone, int gps_zone) {
+  if (zoneOffersGps(zone, gps_zone)) {
+    if (i == 0) return gps_zone;
+    i--;
+  }
+  return i >= 0 && i < tz::kZoneCount ? i : tz::kNotSet;
+}
+
+int zonePickIndex(int zone, int gps_zone) {
+  const int z = tz::isSet(zone) ? zone : tz::kNotSet;
+  return z + (zoneOffersGps(zone, gps_zone) ? 1 : 0);
+}
+
+void zonePickText(int i, int zone, int gps_zone, char* out, size_t n) {
+  const int z = zoneAtPick(i, zone, gps_zone);
+  if (tz::isSet(z)) snprintf(out, n, "%s", tz::zone(z).name);
+  else snprintf(out, n, "Not set (UTC)");
+}
+
+void zonePickSide(int i, int zone, int gps_zone, uint32_t utc, char* out, size_t n) {
+  const int z = zoneAtPick(i, zone, gps_zone);
+  char off[12];
+  const int m = tz::offsetMinutes(z, utc);
+  tz::formatOffset(m, off, sizeof off);
+  const bool gps = i == 0 && zoneOffersGps(zone, gps_zone);
+  const bool now = tz::zone(z).rule != tz::Rule::None;
+  // The drawn minus sign (U+2212), not the hyphen formatOffset writes.
+  snprintf(out, n, "%s%s%s%s", gps ? "GPS · " : "", m < 0 ? "−" : "+", off + 1, now ? " now" : "");
+}
+
+bool zonePromptDue(int zone, int gps_zone, bool asked) { return !asked && zoneOffersGps(zone, gps_zone); }
+
+void zoneLockText(int zone, char* out, size_t n) {
+  if (tz::isSet(zone)) snprintf(out, n, "%s", tz::zone(zone).name);
+  else snprintf(out, n, "UTC · set a time zone in Display");
 }
 
 int stepBy(int v, int dir, const StepSpec& s) {

@@ -69,6 +69,33 @@ constexpr size_t kOffCount = sizeof(kOffChoices) / sizeof(kOffChoices[0]);
 // Where v is in a choice list; -1 if it isn't one.
 int choiceIndex(const uint32_t* choices, size_t n, uint32_t v);
 
+// ------------------------------------------------- time zone (Epic L, #1610)
+// Zones are TimeZones.h indexes; 0 is not set, and the clock is then UTC.
+// gps_zone is the zone tz::suggest() picks from a live fix, 0 without one.
+// Owner-approved mockups: epic-l-timezone-mockups.html (2026-10-18).
+
+// The Display row's value: "Not set · UTC", or the zone's name.
+void zoneRowText(int zone, char* out, size_t n);
+// The GPS suggestion is offered while there is one and no zone is set.
+bool zoneOffersGps(int zone, int gps_zone);
+// The row's hint: "GPS suggests Eastern" while offered, else empty.
+void zoneHint(int zone, int gps_zone, char* out, size_t n);
+// The picker: the suggestion copied to the top while offered, then every
+// zone in the table's order.
+int zonePickCount(int zone, int gps_zone);
+int zoneAtPick(int i, int zone, int gps_zone);   // the zone option i stands for
+int zonePickIndex(int zone, int gps_zone);       // the current zone's option
+// An option's name, "Not set (UTC)" or "Eastern", and its right side: the
+// offset in effect at `utc`, "now" on a zone with daylight saving, and
+// "GPS" first on the copied suggestion ("GPS · −4:00 now").
+void zonePickText(int i, int zone, int gps_zone, char* out, size_t n);
+void zonePickSide(int i, int zone, int gps_zone, uint32_t utc, char* out, size_t n);
+// The one-time prompt (owner pick 5a) is due: offered, and never shown.
+bool zonePromptDue(int zone, int gps_zone, bool asked);
+// Lock's line under the date: "UTC · set a time zone in Display" with no
+// zone, else the zone's name.
+void zoneLockText(int zone, char* out, size_t n);
+
 // ----------------------------------------- Node, stats, Contacts (G4)
 
 // Radio stats rows (mockup 10): transmit share of uptime "1.2%", sent

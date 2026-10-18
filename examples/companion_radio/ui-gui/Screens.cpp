@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include <MeshLog.h>
+#include <helpers/TimeZones.h>
 #include <helpers/gui/SignalLevel.h>
 #include <helpers/gui/hw/GuiFonts.h>
 
@@ -213,7 +214,7 @@ void GuiShell::rebuild() {
   lv_obj_set_style_bg_color(scr, c(_t.bg), 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
   _name = _key = _advert = _advert_label = nullptr;
-  _lock_clock = _lock_sub = _lock_list = _lock_ampm = nullptr;
+  _lock_clock = _lock_sub = _lock_zone = _lock_list = _lock_ampm = nullptr;
   for (auto& v : _value) v = nullptr;
   for (auto& s : _sub) s = nullptr;
   _lock_count = 0xFF;
@@ -414,6 +415,7 @@ void GuiShell::buildLock(lv_obj_t* scr) {
   _lock_ampm = label(clock_row, FontRole::Title, _t.ink2, "");
   lv_obj_set_style_pad_bottom(_lock_ampm, 8, 0);
   _lock_sub = label(col, FontRole::BodySmall, _t.ink2);
+  _lock_zone = label(col, FontRole::Label, _t.dim);   // the zone, or "UTC · set a time zone" (#1610)
   _lock_list = box(col, LV_PCT(100), LV_SIZE_CONTENT);
   lv_obj_set_style_pad_top(_lock_list, 10, 0);
   lv_obj_set_flex_flow(_lock_list, LV_FLEX_FLOW_COLUMN);
@@ -656,6 +658,10 @@ void GuiShell::updateLock(const LockData& d) {
   if (strcmp(lv_label_get_text(_lock_clock), digits) != 0) lv_label_set_text(_lock_clock, digits);
   if (_lock_ampm && strcmp(lv_label_get_text(_lock_ampm), ampm) != 0) lv_label_set_text(_lock_ampm, ampm);
   if (strcmp(lv_label_get_text(_lock_sub), d.sub) != 0) lv_label_set_text(_lock_sub, d.sub);
+  if (_lock_zone && strcmp(lv_label_get_text(_lock_zone), d.zone) != 0) {
+    lv_label_set_text(_lock_zone, d.zone);
+    lv_obj_set_style_text_color(_lock_zone, c(d.zone_unset ? _t.warn : _t.dim), 0);
+  }
 
   // The list rebuilds only when what it shows changes.
   bool same = d.count == _lock_count && d.more == _lock_more;
@@ -1511,6 +1517,95 @@ void GuiShell::openSheet(Sheet kind) {
   sheetHot(kind == Sheet::Notify ? int(mode) : 0);
 }
 
+// The one-time zone prompt (Epic L, mockup 5, owner pick 5a): two buttons,
+// Not now first. It counts as shown once it opens, so a tap on the backdrop
+// or Back is a Not now too.
+bool GuiShell::offerZone(int zone) {
+  if (_locked || _composing || _login || _set_text || _sheet != Sheet::None || _ss != SetSheet::None) return false;
+  _sheet = Sheet::Zone;
+  _sheet_zone = zone;
+  _model->guiPrefs().zone_asked = 1;
+  _model->prefsChanged();
+
+  _sheet_obj = box(lv_layer_top(), kW, 320 - kStatusH);
+  lv_obj_set_pos(_sheet_obj, 0, kStatusH);
+  lv_obj_set_style_bg_opa(_sheet_obj, LV_OPA_50, 0);
+  lv_obj_set_style_bg_color(_sheet_obj, lv_color_black(), 0);
+  lv_obj_add_flag(_sheet_obj, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(
+      _sheet_obj,
+      [](lv_event_t* e) {
+        if (lv_event_get_target(e) == lv_event_get_current_target(e)) {
+          static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->closeSheet(); });
+        }
+      },
+      LV_EVENT_CLICKED, this);
+  const int16_t r = _look.pill_chips ? 12 : 0;
+  lv_obj_t* sheet = box(_sheet_obj, kW, LV_SIZE_CONTENT);
+  lv_obj_align(sheet, LV_ALIGN_BOTTOM_MID, 0, r);
+  lv_obj_set_style_bg_opa(sheet, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(sheet, c(_t.bg3), 0);
+  lv_obj_set_style_radius(sheet, r, 0);
+  lv_obj_set_style_border_side(sheet, LV_BORDER_SIDE_TOP, 0);
+  lv_obj_set_style_border_width(sheet, 1, 0);
+  lv_obj_set_style_border_color(sheet, c(_t.line), 0);
+  lv_obj_set_style_pad_bottom(sheet, r + 6, 0);
+  lv_obj_set_flex_flow(sheet, LV_FLEX_FLOW_COLUMN);
+  lv_obj_add_flag(sheet, LV_OBJ_FLAG_CLICKABLE);
+
+  const char* name = offband::tz::zone(zone).name;
+  char t[48], sub[160];
+  textf(t, sizeof t, "Use %s time?", name);
+  textf(sub, sizeof sub, "GPS puts this radio in %s. The clock shows UTC until a zone is set. You can change it in Display.",
+        name);
+  lv_obj_t* tl = label(sheet, FontRole::Body, _t.ink, t);
+  lv_obj_set_style_pad_left(tl, 12, 0);
+  lv_obj_set_style_pad_top(tl, 10, 0);
+  lv_obj_t* sl = label(sheet, FontRole::Label, _t.dim, sub);
+  lv_obj_set_width(sl, LV_PCT(100));
+  lv_label_set_long_mode(sl, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_pad_hor(sl, 12, 0);
+  lv_obj_set_style_pad_bottom(sl, 6, 0);
+
+  lv_obj_t* br = box(sheet, LV_PCT(100), LV_SIZE_CONTENT);
+  lv_obj_set_style_pad_hor(br, 12, 0);
+  lv_obj_set_style_pad_top(br, 6, 0);
+  lv_obj_set_flex_flow(br, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_column(br, 6, 0);
+  textf(t, sizeof t, "Use %s", name);
+  for (uint8_t i = 0; i < 2; i++) {
+    const bool pri = i == 1;
+    lv_obj_t* b = box(br, 0, 32);
+    lv_obj_set_flex_grow(b, 1);
+    lv_obj_set_style_radius(b, _look.radius, 0);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_border_color(b, c(pri ? _t.sig : _t.line), 0);
+    if (pri) {
+      lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+      lv_obj_set_style_bg_color(b, c(_t.sig), 0);
+    }
+    lv_obj_t* bl = label(b, FontRole::Body, pri ? _t.sigInk : _t.ink, pri ? t : "Not now");
+    lv_obj_center(bl);
+    lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_user_data(b, reinterpret_cast<void*>(intptr_t(i)));
+    lv_obj_add_event_cb(
+        b,
+        [](lv_event_t* e) {
+          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+          self->_sheet_hot = int(intptr_t(lv_obj_get_user_data(lv_event_get_current_target(e))));
+          self->later([](GuiShell* g) { g->sheetPick(g->_sheet_hot); });
+        },
+        LV_EVENT_CLICKED, this);
+    _sheet_rows[i] = b;
+  }
+  _sheet_count = 2;
+  sheetHot(0);
+  // Written now, not when idle: an RST soon after must not bring it back.
+  _model->savePrefsNow();
+  mesh_log_line(MLOG_BOOT, "[gui] zone prompt: %s\n", name);
+  return true;
+}
+
 void GuiShell::closeSheet() {
   if (!_sheet_obj) return;
   lv_obj_del(_sheet_obj);
@@ -1537,6 +1632,13 @@ void GuiShell::sheetPick(int i) {
   } else if (kind == Sheet::Menu) {
     if (i == 0) openCompose(_thread);   // rebuild closes the sheet
     else openSheet(Sheet::Notify);
+  } else if (kind == Sheet::Zone) {
+    if (i == 1) {
+      _model->setZone(_sheet_zone);
+      _model->savePrefsNow();   // as the prompt's flag: kept through an RST
+      mesh_log_line(MLOG_BOOT, "[gui] zone set from the prompt: %s\n", offband::tz::zone(_sheet_zone).name);
+    }
+    rebuild();   // closes the sheet; the clocks redraw in the zone
   }
 }
 

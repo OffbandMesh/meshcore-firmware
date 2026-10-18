@@ -6,6 +6,7 @@
 
 #include <string.h>
 
+#include "helpers/TimeZones.h"
 #include "helpers/gui/SettingsViews.h"
 
 using namespace offband::gui;
@@ -139,6 +140,90 @@ TEST(Display, TimerChoices) {
   EXPECT_EQ(choiceIndex(kDimChoices, kDimCount, 0), int(kDimCount) - 1);
   EXPECT_EQ(choiceIndex(kOffChoices, kOffCount, 120), 2);
   EXPECT_EQ(choiceIndex(kOffChoices, kOffCount, 45), -1);   // not one of them
+}
+
+// ------------------------------------------------ time zone (Epic L, #1610)
+
+namespace tz = offband::tz;
+
+namespace {
+const uint32_t kOct19 = 1792372020u;   // 2026-10-19 01:07 UTC: 21:07 EDT on the 18th
+const uint32_t kNov02 = 1793620800u;   // 2026-11-02 12:00 UTC: after the US change
+}  // namespace
+
+TEST(Zone, RowAndHint) {
+  char v[48];
+  zoneRowText(tz::kNotSet, v, sizeof v);
+  EXPECT_STREQ(v, "Not set · UTC");
+  zoneRowText(tz::kEastern, v, sizeof v);
+  EXPECT_STREQ(v, "Eastern");
+  zoneHint(tz::kNotSet, tz::kEastern, v, sizeof v);
+  EXPECT_STREQ(v, "GPS suggests Eastern");
+}
+
+TEST(Zone, NoHintWithoutFixOrOnceSet) {
+  char v[48] = "x";
+  zoneHint(tz::kNotSet, tz::kNotSet, v, sizeof v);   // no fix
+  EXPECT_STREQ(v, "");
+  strcpy(v, "x");
+  zoneHint(tz::kCentral, tz::kEastern, v, sizeof v);   // a zone chosen: never second-guessed
+  EXPECT_STREQ(v, "");
+  EXPECT_FALSE(zoneOffersGps(tz::kCentral, tz::kEastern));
+}
+
+TEST(Zone, PickerCopiesTheSuggestionToTheTop) {
+  ASSERT_EQ(zonePickCount(tz::kNotSet, tz::kEastern), tz::kZoneCount + 1);
+  EXPECT_EQ(zoneAtPick(0, tz::kNotSet, tz::kEastern), tz::kEastern);
+  EXPECT_EQ(zoneAtPick(1, tz::kNotSet, tz::kEastern), tz::kNotSet);   // then the table, in order
+  EXPECT_EQ(zoneAtPick(1 + tz::kEastern, tz::kNotSet, tz::kEastern), tz::kEastern);
+  EXPECT_EQ(zonePickIndex(tz::kNotSet, tz::kEastern), 1);   // the dot on Not set, not the copy
+  char v[48];
+  zonePickText(0, tz::kNotSet, tz::kEastern, v, sizeof v);
+  EXPECT_STREQ(v, "Eastern");
+  zonePickText(1, tz::kNotSet, tz::kEastern, v, sizeof v);
+  EXPECT_STREQ(v, "Not set (UTC)");
+}
+
+TEST(Zone, PickerWithoutSuggestionIsTheTable) {
+  EXPECT_EQ(zonePickCount(tz::kNotSet, tz::kNotSet), tz::kZoneCount);
+  EXPECT_EQ(zonePickCount(tz::kCentral, tz::kEastern), tz::kZoneCount);
+  EXPECT_EQ(zoneAtPick(tz::kCentral, tz::kCentral, tz::kEastern), tz::kCentral);
+  EXPECT_EQ(zonePickIndex(tz::kCentral, tz::kNotSet), tz::kCentral);
+  // Out of range reads as Not set, never past the table.
+  EXPECT_EQ(zoneAtPick(-1, tz::kNotSet, tz::kNotSet), tz::kNotSet);
+  EXPECT_EQ(zoneAtPick(tz::kZoneCount, tz::kNotSet, tz::kNotSet), tz::kNotSet);
+  EXPECT_EQ(zonePickIndex(250, tz::kNotSet), tz::kNotSet);
+}
+
+TEST(Zone, SideShowsTodaysOffset) {
+  char v[48];
+  zonePickSide(0, tz::kNotSet, tz::kEastern, kOct19, v, sizeof v);
+  EXPECT_STREQ(v, "GPS · −4:00 now");
+  zonePickSide(tz::kEastern, tz::kNotSet, tz::kNotSet, kNov02, v, sizeof v);
+  EXPECT_STREQ(v, "−5:00 now");   // after the November change
+  zonePickSide(tz::kArizona, tz::kNotSet, tz::kNotSet, kOct19, v, sizeof v);
+  EXPECT_STREQ(v, "−7:00");   // no daylight saving, so no "now"
+  zonePickSide(tz::kNotSet, tz::kNotSet, tz::kNotSet, kOct19, v, sizeof v);
+  EXPECT_STREQ(v, "+0:00");
+  zonePickSide(tz::kZoneCount - 1, tz::kNotSet, tz::kNotSet, kOct19, v, sizeof v);
+  EXPECT_STREQ(v, "+9:30");
+}
+
+TEST(Zone, PromptOnlyOnce) {
+  EXPECT_TRUE(zonePromptDue(tz::kNotSet, tz::kEastern, false));
+  EXPECT_FALSE(zonePromptDue(tz::kNotSet, tz::kEastern, true));    // shown before
+  EXPECT_FALSE(zonePromptDue(tz::kNotSet, tz::kNotSet, false));    // no fix
+  EXPECT_FALSE(zonePromptDue(tz::kPacific, tz::kEastern, false));  // a zone is set
+}
+
+TEST(Zone, LockLine) {
+  char v[48];
+  zoneLockText(tz::kNotSet, v, sizeof v);
+  EXPECT_STREQ(v, "UTC · set a time zone in Display");
+  zoneLockText(tz::kEastern, v, sizeof v);
+  EXPECT_STREQ(v, "Eastern");
+  zoneLockText(200, v, sizeof v);   // a corrupt index reads as not set
+  EXPECT_STREQ(v, "UTC · set a time zone in Display");
 }
 
 // ---------------------------------------------- Node, stats, Contacts (G4)
