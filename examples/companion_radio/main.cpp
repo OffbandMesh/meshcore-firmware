@@ -7,6 +7,9 @@
 // constructor(101) instance; see helpers/BootBeacon.h for why it exists.
 #define OFFBAND_BEACON_DEFINE_CTOR
 #include "helpers/BootBeacon.h"
+#if defined(OFFBAND_BLE_MORSE)
+#include <helpers/ui/MorseBlink.h>   // #1597: the advertising pattern
+#endif
 
 #if defined(OFFBAND_PAD_BEACON)
   #include "helpers/PadBeacon.h"   // #1210: diag ID line on each spare pad
@@ -966,7 +969,60 @@ void loop() {
   board.feedWatchdog();  // #257/#1083: feed from the MAIN LOOP only -> a hung loop trips the WDT
   mesh::wdtTestHangTick();  // bench-only (WDT_TEST_HANG_AFTER_MS); compiles to nothing otherwise
 #if defined(NRF52_PLATFORM)
+  #if defined(OFFBAND_BLE_MORSE) && defined(PIN_STATUS_LED)
+  // #1597: what the badge's three front LEDs say, now that the pin is ours (LED_BLUE = -1
+  // stopped the core's advertising blink).
+  //
+  //   advertising, nobody paired  ->  Morse, repeating
+  //   paired                      ->  the #275 heartbeat blip
+  //
+  // BOTH are driven from this loop, deliberately. A pattern that stops mid-message means
+  // the loop is wedged, which is the liveness property #275 exists for -- and it is why
+  // the paired state gets the heartbeat rather than going dark. Dark would have been
+  // cheaper and would have thrown away liveness for the state the badge spends most of its
+  // life in.
+  //
+  // The two are unmistakable for each other: ~1 Hz blip against a ten-second sentence.
+  // Which pattern currently owns the pin. Outside the branches, because the handover in
+  // either direction has to know it is a handover.
+  static bool s_morse_owns_led = false;
+  // Walked ONCE: the message length never changes. After that the per-iteration work is a
+  // divide and a compare -- the pattern is re-derived only when the 80 ms unit actually
+  // advances, not the thousands of times the loop runs inside one. Review flagged the naive
+  // version as the worst thing in the change and was right; this is a battery badge.
+  static const uint32_t s_morse_total = offband::morseTotalUnits(OFFBAND_BLE_MORSE_TEXT);
+  static uint32_t s_morse_unit = 0xFFFFFFFFu;
+  static bool s_morse_lit = false;
+
+  if (!ui_task.hasConnection()) {
+    if (!s_morse_owns_led) {
+      // Taking the pin back from the heartbeat: forget the cache so the next unit writes
+      // the pin rather than believing it already matches.
+      s_morse_owns_led = true;
+      s_morse_unit = 0xFFFFFFFFu;
+      s_morse_lit = false;
+    }
+    const uint32_t unit = offband::morseUnitAt(millis(), s_morse_total);
+    if (unit != s_morse_unit) {
+      s_morse_unit = unit;
+      const bool lit = offband::morseAt(OFFBAND_BLE_MORSE_TEXT, unit).lit;
+      if (lit != s_morse_lit) {
+        s_morse_lit = lit;
+        digitalWrite(PIN_STATUS_LED, lit ? LED_STATE_ON : !LED_STATE_ON);
+      }
+    }
+  } else {
+    if (s_morse_owns_led) {
+      // Handing the pin to the heartbeat: leave it OFF rather than wherever the message
+      // happened to stop, so the heartbeat's first beat is a beat and not a continuation.
+      s_morse_owns_led = false;
+      digitalWrite(PIN_STATUS_LED, !LED_STATE_ON);
+    }
+    board.heartbeatTick();
+  }
+  #else
   board.heartbeatTick(); // #275: loop-driven green-LED heartbeat (freezes if the loop hangs)
+  #endif
   #if !defined(OFFBAND_OBSERVER)
   {
     // #377: periodic breadcrumb into the retained ring. Low cadence (30 s) so it
