@@ -47,6 +47,9 @@ public:
   void threadOpened(int thread) override;
   void routeMeta(int thread, char* out, size_t n) override;
   int zone() override { return _prefs ? _prefs->ui_tz : 0; }
+  void setZone(int index) override;
+  int gpsZone() override;
+  uint32_t utcNow() override;
   void sendAdvert() override;
   void loraPopover() override { openLoraPopover(); }
   size_t composeBudget(int thread) override;

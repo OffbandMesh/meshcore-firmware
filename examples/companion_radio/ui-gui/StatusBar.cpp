@@ -87,6 +87,15 @@ void StatusBar::build(lv_obj_t* parent, const ThemeTokens& t, LongPressFn on_lor
   _clock = label(strip, FontRole::Meta, t.ink);
   lv_label_set_text(_clock, "--:--");
 
+  // With no time zone the clock is UTC (Epic L, mockup 1): an outlined tag.
+  _utc = label(strip, FontRole::Meta, t.warn);
+  lv_label_set_text(_utc, "UTC");
+  lv_obj_set_style_border_width(_utc, 1, 0);
+  lv_obj_set_style_border_color(_utc, c(t.warn), 0);
+  lv_obj_set_style_radius(_utc, 3, 0);
+  lv_obj_set_style_pad_hor(_utc, 2, 0);
+  lv_obj_add_flag(_utc, LV_OBJ_FLAG_HIDDEN);
+
   // Unread: an envelope and the count, in the signal color; hidden at 0.
   _mail = box(strip, LV_SIZE_CONTENT, kHeight);
   lv_obj_set_flex_flow(_mail, LV_FLEX_FLOW_ROW);
@@ -163,6 +172,10 @@ void StatusBar::update(const StatusReadings& r, uint32_t now_ms) {
   if (!_clock) return;
   const bool first = !_have_shown;
   if (first || strcmp(r.clock, _shown.clock) != 0) lv_label_set_text(_clock, r.clock);
+  if (first || r.utc != _shown.utc) {
+    if (r.utc) lv_obj_clear_flag(_utc, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(_utc, LV_OBJ_FLAG_HIDDEN);
+  }
 
   if (first || r.unread != _shown.unread) {
     if (showUnread(r.unread)) {

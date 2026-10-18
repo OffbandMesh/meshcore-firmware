@@ -16,6 +16,7 @@
 
 struct StatusReadings {
   char clock[12];   // "21:07", or "9:07 PM" (12-hour)
+  bool utc;         // no zone is set: the clock is UTC and is tagged so (#1610)
   uint32_t unread;
   bool lora_heard;   // at least one packet in the SNR window
   uint8_t bars;      // 0..4
@@ -49,6 +50,7 @@ public:
 private:
   offband::gui::ThemeTokens _t{};
   lv_obj_t* _clock = nullptr;
+  lv_obj_t* _utc = nullptr;       // the amber UTC tag, hidden once a zone is set
   lv_obj_t* _mail = nullptr;      // icon + count, hidden at 0
   lv_obj_t* _mail_count = nullptr;
   lv_obj_t* _bars = nullptr;

@@ -450,6 +450,27 @@ TEST(Prefs, AlertFlagsSanitizeToZeroOrOne) {
   EXPECT_EQ(p.wake_touch, 1);
 }
 
+// Epic L (#1610): the one-time zone prompt's flag. Off on a new or older
+// file, so the prompt can show; kept once set, so it never shows again.
+TEST(Prefs, ZoneAskedDefaultsOffAndIsKept) {
+  GuiPrefs p;
+  EXPECT_EQ(p.zone_asked, 0);
+  p.zone_asked = 1;
+  RoundTripStream s;
+  ASSERT_TRUE(p.saveSerial(s));
+  s.rewind();
+  GuiPrefs b;
+  ASSERT_TRUE(b.loadSerial(s));
+  EXPECT_EQ(b.zone_asked, 1);
+}
+
+TEST(Prefs, ZoneAskedSanitizesToZeroOrOne) {
+  GuiPrefs p;
+  p.zone_asked = 9;
+  p.sanitize();
+  EXPECT_EQ(p.zone_asked, 1);
+}
+
 TEST(Prefs, MissingKeysKeepDefaults) {
   RoundTripStream s;
   s.setText("{theme:2}");  // ConfigSerializer keys are unquoted

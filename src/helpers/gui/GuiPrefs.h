@@ -41,6 +41,8 @@ public:
   uint8_t clear_path_on_fail;   // a DM that fails every try drops its route
   uint8_t jump_to_unread;       // conversations open at the first unread
   uint8_t wake_touch;           // a touch wakes the screen (else USR only)
+  // Epic L (#1610): the one-time "Use <zone> time?" prompt has been shown.
+  uint8_t zone_asked;
 
   NotifyMode channelMode(uint8_t slot) const;
   void setChannelMode(uint8_t slot, NotifyMode m);

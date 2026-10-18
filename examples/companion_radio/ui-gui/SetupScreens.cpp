@@ -7,6 +7,8 @@
 
 #include <string.h>
 
+#include <helpers/TimeZones.h>
+
 #include "Screens.h"
 #include "ShellWidgets.h"
 
@@ -19,7 +21,7 @@ namespace {
 enum RowKind : uint8_t { kVal, kSel, kNav, kTog, kRo, kInfo };
 enum RadioRow : uint8_t { rPreset, rFreq, rBw, rSf, rCr, rTx, rRepeat, rPath, rSave };
 enum MsgRow : uint8_t { mOn, mDm, mCh, mDefault, mNode, mAlert, mClear, mJump };
-enum DisplayRow : uint8_t { dTheme, dLook, dClock, dRotation, dBright, dDim, dOff };
+enum DisplayRow : uint8_t { dTheme, dLook, dClock, dZone, dRotation, dBright, dDim, dOff };
 enum NodeRowId : uint8_t { nName, nKey, nGps, nPos, nGpsSecs };
 enum PrivacyRow : uint8_t { pLoc, pAcks, pBase, pLocTel, pEnv };
 enum ContactsRow : uint8_t { cAuto, cChat, cRpt, cRoom, cSens, cHops, cCount };
@@ -419,6 +421,11 @@ void GuiShell::buildDisplayPage(lv_obj_t* content) {
   setRow(body, dTheme, "Theme", nullptr, themeName(g.theme), kNav, false, false, false);
   setRow(body, dLook, "Look", "Rounded or square", kLookName[g.look & 1], kSel, false, false, false);
   setRow(body, dClock, "Clock", nullptr, g.clock_12h ? "12-hour" : "24-hour", kSel, false, false, false);
+  // Epic L (#1610, mockup 1): amber while not set, as the clock is UTC then.
+  char hint[40];
+  zoneHint(_model->zone(), _model->gpsZone(), hint, sizeof hint);
+  zoneRowText(_model->zone(), v, sizeof v);
+  setRow(body, dZone, "Time zone", hint, v, kSel, false, !offband::tz::isSet(_model->zone()), false);
   setRow(body, dRotation, "Rotation", "Comes with landscape (Epic H)", "Portrait 0°", kNav, false, false, true);
   setSection(body, "Screen");
   pctText(g.brightness, v, sizeof v);
@@ -850,6 +857,7 @@ void GuiShell::setRowPressed(uint8_t id) {
       case dBright: openSetSheet(SetSheet::Step, id); break;
       case dLook:
       case dClock:
+      case dZone:
       case dDim:
       case dOff: openSetSheet(SetSheet::Pick, id); break;
       default: break;   // Rotation: Epic H
@@ -1004,6 +1012,7 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
   _ss_row = row;
   _ss_cur = 0;
   _ss_count = 0;
+  _ss_gz = _model->gpsZone();   // held while the sheet is up: a fix coming or going doesn't shift the rows
 
   _ss_obj = box(lv_layer_top(), kW, 320 - kStatusH);
   lv_obj_set_pos(_ss_obj, 0, kStatusH);
@@ -1134,6 +1143,7 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
         lv_obj_t* ol = label(o, FontRole::Body, _t.ink);   // child 1: the option
         lv_obj_set_flex_grow(ol, 1);
         oneLine(ol, FontRole::Body);
+        label(o, FontRole::Meta, _t.dim);   // child 2: the right side (Time zone's offset)
         lv_obj_add_flag(o, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_flag(o, LV_OBJ_FLAG_EVENT_BUBBLE);   // the list sees the drag
         lv_obj_set_user_data(o, reinterpret_cast<void*>(intptr_t(w) + 1));
@@ -1381,6 +1391,8 @@ void GuiShell::setPickTop(int top) {
     lv_obj_t* ol = lv_obj_get_child(o, 1);
     lv_obj_set_style_text_color(ol, c(chosen ? _t.sig : _t.ink), 0);
     lv_label_set_text(ol, v);
+    pickSide(opt, v, sizeof v);
+    lv_label_set_text(lv_obj_get_child(o, 2), v);
     lv_obj_set_style_bg_opa(o, hot ? lv_opa_t(_t.wash >> 24) : LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(o, hot ? 3 : 0, 0);
   }
@@ -1445,6 +1457,7 @@ const char* GuiShell::pickTitle(const char** sub) {
     switch (_ss_row) {
       case dLook: return "Look";
       case dClock: return "Clock";
+      case dZone: *sub = "Daylight saving is automatic for US and EU zones."; return "Time zone";
       case dDim: return "Dim after";
       default: return "Screen off";
     }
@@ -1469,6 +1482,7 @@ int GuiShell::pickCount() {
     switch (_ss_row) {
       case dLook:
       case dClock: return 2;
+      case dZone: return zonePickCount(_model->zone(), _ss_gz);
       case dDim: return int(kDimCount);
       default: return int(kOffCount);
     }
@@ -1506,6 +1520,7 @@ int GuiShell::pickCurrent() {
     switch (_ss_row) {
       case dLook: return g.look;
       case dClock: return g.clock_12h;
+      case dZone: return zonePickIndex(_model->zone(), _ss_gz);
       case dDim: return choiceIndex(kDimChoices, kDimCount, g.dim_secs);
       default: return choiceIndex(kOffChoices, kOffCount, _model->screenOffSecs());
     }
@@ -1539,6 +1554,7 @@ void GuiShell::pickText(int i, char* out, size_t n) {
     switch (_ss_row) {
       case dLook: textf(out, n, "%s", kLookName[i & 1]); return;
       case dClock: textf(out, n, "%s", i ? "12-hour" : "24-hour"); return;
+      case dZone: zonePickText(i, _model->zone(), _ss_gz, out, n); return;
       case dDim: durationText(kDimChoices[i], out, n); return;
       default: durationText(kOffChoices[i], out, n); return;
     }
@@ -1550,6 +1566,14 @@ void GuiShell::pickText(int i, char* out, size_t n) {
     case rCr: crText(uint8_t(kCrMin + i), out, n); return;
     default: pathHashText(uint8_t(i), out, n); return;
   }
+}
+
+void GuiShell::pickSide(int i, char* out, size_t n) {
+  if (_set_page == SetPage::Display && _ss_row == dZone) {
+    zonePickSide(i, _model->zone(), _ss_gz, _model->utcNow(), out, n);
+    return;
+  }
+  if (n) out[0] = '\0';
 }
 
 // A pick: Radio's go to the draft (Save applies them); the others apply now.
@@ -1591,6 +1615,7 @@ void GuiShell::pickApply(int i) {
     switch (_ss_row) {
       case dLook: g.look = uint8_t(i); break;
       case dClock: g.clock_12h = uint8_t(i); break;
+      case dZone: _model->setZone(zoneAtPick(i, _model->zone(), _ss_gz)); break;
       case dDim: g.dim_secs = uint16_t(kDimChoices[i]); break;
       default: _model->setScreenOffSecs(uint16_t(kOffChoices[i])); break;
     }

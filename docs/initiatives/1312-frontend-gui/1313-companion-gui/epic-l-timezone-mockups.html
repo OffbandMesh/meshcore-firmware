@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Time zone mockups</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* Offband theme tokens and screen parts, copied from epic-g-gap-mockups.html. Static markup. */
+:root{
+  --bg:#0F1412; --bg2:#161C19; --bg3:#1D2521; --line:#34403A; --line2:#232C28;
+  --ink:#EFF3E8; --ink2:#BAC4B5; --dim:#7C8B82; --sig:#7BEFA8; --sigInk:#0F1412;
+  --wash:rgba(123,239,168,.09); --warn:#FFA552; --bad:#FF7A6E; --r:6px;
+  --sans:'Barlow Condensed',sans-serif; --mono:'JetBrains Mono',monospace;
+  --page:#0a0d0c; --pageInk:#cfd6cc;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--page);color:var(--pageInk);font-family:var(--sans);padding:24px 16px 48px}
+h1{font-size:26px;font-weight:600;color:var(--ink)}
+h3{font-size:18px;font-weight:600;color:var(--sig);margin:28px 0 10px}
+.lede{font-size:16px;color:var(--dim);margin:6px 0 8px;max-width:960px}
+.grid{display:flex;flex-wrap:wrap;gap:28px}
+.card{width:300px}
+.card h2{font-size:18px;font-weight:600;color:var(--ink)}
+.card .n{font-family:var(--mono);font-size:12px;color:var(--sig);margin-right:6px}
+.card p{font-size:14px;color:var(--ink2);margin:4px 0 10px;line-height:1.3;min-height:54px}
+.card ul{font-size:13px;color:var(--dim);margin:10px 0 0 16px;line-height:1.35}
+.dev{width:300px;height:400px;border:1px solid #2a332f;border-radius:10px;overflow:hidden;background:#000}
+.scr{width:240px;height:320px;transform:scale(1.25);transform-origin:0 0;background:var(--bg);color:var(--ink);
+  font-family:var(--sans);position:relative;overflow:hidden;display:flex;flex-direction:column}
+.sb{height:20px;flex:none;background:var(--bg2);border-bottom:1px solid var(--line2);display:flex;align-items:center;
+  padding:0 6px;font-family:var(--mono);font-size:10px;color:var(--ink2);gap:5px}
+.sb .clk{color:var(--ink);font-weight:600}
+.sb .utc{font-size:8px;color:var(--warn);border:1px solid var(--warn);border-radius:3px;padding:0 2px;line-height:11px}
+.sb .right{margin-left:auto}
+.tabs{height:40px;flex:none;border-top:1px solid var(--line2);background:var(--bg2);display:flex;margin-top:auto}
+.tabs div{flex:1;display:flex;align-items:center;justify-content:center;font-size:9px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--dim);border-top:2px solid transparent}
+.tabs div.on{color:var(--sig);background:var(--wash);border-top-color:var(--sig)}
+.sh{display:flex;align-items:center;gap:6px;height:32px;flex:none;padding:0 8px;border-bottom:1px solid var(--line)}
+.sh .bk{font-size:16px;color:var(--sig)} .sh .t{font-size:15px;font-weight:600}
+.body{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+.row{display:flex;align-items:center;gap:6px;min-height:34px;flex:none;padding:0 8px;border-bottom:1px solid var(--line2)}
+.row.focus{background:var(--wash);box-shadow:inset 3px 0 var(--sig)}
+.row .kk{flex:1;min-width:0} .row .k{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .hint{font-size:9px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .hint.sig{color:var(--sig)}
+.row .v{font-size:11px;color:var(--ink2);white-space:nowrap} .row .v.warn{color:var(--warn)}
+.dd{color:var(--dim);font-size:9px}
+.scrim{position:absolute;left:0;right:0;top:20px;bottom:0;background:rgba(0,0,0,.5)}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--bg3);border-top:1px solid var(--line);border-radius:12px 12px 0 0;padding-bottom:6px}
+.sheet .st{font-size:14px;font-weight:600;padding:10px 12px 2px} .sheet .ss{font-size:10px;color:var(--dim);padding:0 12px 6px}
+.opt{display:flex;align-items:center;gap:8px;height:26px;padding:0 12px;font-size:13px}
+.opt .rd{width:12px;height:12px;border-radius:50%;border:1.5px solid var(--line);flex:none}
+.opt.on .rd{border-color:var(--sig);background:radial-gradient(var(--sig) 40%,transparent 45%)}
+.opt.hot{background:var(--wash);box-shadow:inset 3px 0 var(--sig)}
+.opt .off{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--dim)}
+.opt .tag{font-family:var(--mono);font-size:8px;color:var(--sigInk);background:var(--sig);border-radius:3px;padding:0 3px;margin-left:4px}
+.more{font-family:var(--mono);font-size:9px;color:var(--dim);text-align:center;padding:2px 0}
+.btns{display:flex;gap:6px;padding:6px 12px 0}
+.btn{flex:1;height:32px;border-radius:var(--r);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:13px}
+.btn.pri{background:var(--sig);border-color:var(--sig);color:var(--sigInk);font-weight:600}
+.home{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+.home .big{font-family:var(--mono);font-size:40px;font-weight:600;line-height:1}
+.home .date{font-size:14px;color:var(--ink2)}
+.home .zn{font-family:var(--mono);font-size:9px;color:var(--dim)}
+.home .zn.warn{color:var(--warn)}
+</style>
+</head>
+<body>
+<h1>Time zone on the companion GUI (Epic L, #1610)</h1>
+<p class="lede">Offband theme, Modern look, native 240×320 shown at 1.25×. The example is 9:07 PM EDT on 18 Oct, which is 01:07 UTC on 19 Oct. Values are examples; the bullets are the behavior to build. <b>Owner-approved 2026-10-18:</b> the one-time prompt is in (pick 5a), and all copy is as drawn.</p>
+
+<h3>Where the setting lives</h3><div class="grid">
+
+<div class="card"><h2><span class="n">1</span>Display, zone not set</h2><p>A new <b>Time zone</b> row under Clock. While nothing is chosen it reads "Not set · UTC" in amber; with a GPS fix it adds the zone GPS suggests.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">01:07</span><span class="utc">UTC</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Display</span></div><div class="body">
+<div class="row"><div class="kk"><div class="k">Theme</div></div><span class="v">Offband</span><span class="dd">▾</span></div>
+<div class="row"><div class="kk"><div class="k">Look</div></div><span class="v">Modern</span><span class="dd">▾</span></div>
+<div class="row"><div class="kk"><div class="k">Clock</div></div><span class="v">24-hour</span><span class="dd">▾</span></div>
+<div class="row focus"><div class="kk"><div class="k">Time zone</div><div class="hint sig">GPS suggests Eastern</div></div><span class="v warn">Not set · UTC</span><span class="dd">▾</span></div>
+<div class="row"><div class="kk"><div class="k">Rotation</div></div><span class="v">0°</span><span class="dd">▾</span></div>
+<div class="row"><div class="kk"><div class="k">Brightness</div></div><span class="v">80%</span><span class="dd">▾</span></div></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div></div></div>
+<ul><li>Next to Clock, because both decide how the time reads.</li><li>The hint shows only with a fix and no zone chosen. Without a fix there is no hint.</li><li>Saved on leaving the page, like the other Display rows.</li></ul></div>
+
+<div class="card"><h2><span class="n">2</span>The picker</h2><p>A sheet like the radio-preset picker, windowed so it costs no more RAM. The GPS suggestion sits at the top; the current zone has the filled dot.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">01:07</span><span class="utc">UTC</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Display</span></div><div class="body"></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div>
+<div class="scrim"></div><div class="sheet"><div class="st">Time zone</div><div class="ss">Daylight saving is automatic for US and EU zones.</div>
+<div class="opt hot"><span class="rd"></span>Eastern<span class="tag">GPS</span><span class="off">−4:00 now</span></div>
+<div class="opt on"><span class="rd"></span>Not set (UTC)<span class="off">+0:00</span></div>
+<div class="opt"><span class="rd"></span>Central<span class="off">−5:00 now</span></div>
+<div class="opt"><span class="rd"></span>Mountain<span class="off">−6:00 now</span></div>
+<div class="opt"><span class="rd"></span>Arizona<span class="off">−7:00</span></div>
+<div class="opt"><span class="rd"></span>Pacific<span class="off">−7:00 now</span></div>
+<div class="more">▾ 37 more · Alaska … UTC+14</div>
+<div class="btns"><div class="btn">Cancel</div><div class="btn pri">Use Eastern</div></div></div></div></div>
+<ul><li>Order is the existing zone table: named zones, then UK and EU, then plain UTC offsets. The GPS row is a copy at the top, not a reorder.</li><li>The right column is the offset in effect today, so Eastern reads −4:00 now and −5:00 after 1 Nov.</li><li>USR/AUX move, USR hold picks; touch picks directly.</li></ul></div>
+
+</div>
+
+<h3>How the clock reads</h3><div class="grid">
+
+<div class="card"><h2><span class="n">3</span>Home, zone not set</h2><p>The clock is UTC and says so: an amber <b>UTC</b> tag in the status bar and under the big clock. The date is UTC too.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">01:07</span><span class="utc">UTC</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="home"><div class="big">01:07</div><div class="date">Mon 19 Oct</div><div class="zn warn">UTC · set a time zone in Display</div></div>
+<div class="tabs"><div class="on">Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div>Setup</div></div></div></div>
+<ul><li>Today the screen shows 01:07 with no label, which reads as local time. This is the bug.</li><li>Message times stay UTC until a zone is chosen; the tag explains them.</li></ul></div>
+
+<div class="card"><h2><span class="n">4</span>Home, Eastern chosen</h2><p>Local time, no tag. Nothing else changes.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="home"><div class="big">21:07</div><div class="date">Sun 18 Oct</div><div class="zn">Eastern · EDT</div></div>
+<div class="tabs"><div class="on">Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div>Setup</div></div></div></div>
+<ul><li>Status bar, Home, message times and the date all follow the zone at once.</li><li>Survives a reboot (stored in prefs, as on the badge).</li></ul></div>
+
+<div class="card"><h2><span class="n">5</span>One-time prompt (pick 5a: in)</h2><p>The first time GPS gets a fix with no zone set, a one-time sheet offers the suggestion.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">01:07</span><span class="utc">UTC</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="home"><div class="big">01:07</div><div class="date">Mon 19 Oct</div></div>
+<div class="tabs"><div class="on">Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div>Setup</div></div>
+<div class="scrim"></div><div class="sheet"><div class="st">Use Eastern time?</div><div class="ss">GPS puts this radio in Eastern. The clock shows UTC until a zone is set. You can change it in Display.</div>
+<div class="btns"><div class="btn">Not now</div><div class="btn pri">Use Eastern</div></div></div></div></div>
+<ul><li>Shown once. After "Not now" it does not come back.</li><li>Never applied without the tap.</li></ul></div>
+
+</div>
+</body></html>
