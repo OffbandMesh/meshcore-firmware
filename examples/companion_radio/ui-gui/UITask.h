@@ -18,6 +18,7 @@
 
 #include "../AbstractUITask.h"
 #include "../NodePrefs.h"
+#include "BootScreen.h"
 #include "Screens.h"
 
 #ifdef PIN_BUZZER
@@ -64,6 +65,31 @@ public:
   const char* savedPassword(const uint8_t* key) override;
   int openDm(const uint8_t* key) override;
   bool ownPos(offband::gui::GeoPos* out) override;
+  offband::gui::RadioValues radioValues() override;
+  int8_t txMax() override;
+  bool saveRadio(const offband::gui::RadioValues& v) override;
+  void setupSummary(SetPage page, char* out, size_t n) override;
+  offband::gui::GuiPrefs& guiPrefs() override;
+  void prefsChanged() override;
+  void savePrefsNow() override;
+  offband::gui::NodeSettings nodeSettings() override;
+  void setNodeSettings(const offband::gui::NodeSettings& s) override;
+  void radioStats(offband::gui::RadioStats* out) override;
+  const uint8_t* selfKey() override;
+  uint16_t screenOffSecs() override;
+  void setScreenOffSecs(uint16_t secs) override;
+  bool buzzerOn() override;
+  void setBuzzerOn(bool on) override;
+  void deviceInfo(DeviceInfo* out) override;
+  void setBleOn(bool on) override;
+  bool setBlePin(uint32_t pin) override;
+  bool setFullMv(uint16_t mv) override;
+  void learnFullAgain() override;
+  bool setLogLevel(int index) override;
+  bool advertNow() override;
+  bool syncTimeFromGps() override;
+  void reboot() override;
+  uint16_t deleteAllPaths() override;
 
 private:
   void fillNodeRow(const ContactInfo& ci, offband::gui::NodeRow& r, uint8_t* key_copy, uint32_t now, bool clock_ok);
@@ -76,6 +102,10 @@ private:
   void toggleBuzzer();
   bool buzzerQuiet();
   uint32_t idleMs(uint32_t now) const;
+  uint8_t litPercent() const;   // Display › Brightness
+  uint32_t dimMs() const;       // Display › Dim after; 0 never
+  bool clock12h() const;        // Display › Clock
+  void pollNewNodes(uint32_t now);   // Messages & alerts › New node discovered
   StatusReadings statusReadings(uint32_t now);
   void homeData(HomeData* d);
   void lockData(LockData* d);
@@ -85,6 +115,9 @@ private:
   void pollDmRetries(uint32_t now);
   bool gpsEnabled() const;
   uint8_t battPercent() const;
+  void lowBatteryShutdown(uint16_t mv);   // doesn't return
+  void savePending();                     // idle-saved prefs and passwords, now
+  offband::gui::BootFacts bootFacts();    // what setup left behind (G6)
 
 #ifdef PIN_BUZZER
   genericBuzzer _buzzer;
@@ -102,6 +135,8 @@ private:
   int _unread = 0;
 
   GuiShell _shell;
+  BootScreen _boot;
+  uint32_t _next_boot_rows = 0;
   offband::gui::DmRetry _dm[8];   // DMs sent from the device, awaiting their ACK
   offband::gui::NodeRow* _node_rows = nullptr;   // MAX_CONTACTS rows, in PSRAM (Epic E)
   uint8_t (*_node_keys)[32] = nullptr;           // the rows' keys, copied
@@ -121,7 +156,9 @@ private:
   bool _passwords_dirty = false;                     // saved when idle (#1472)
   offband::gui::AdvertButton _advert;
   offband::BatteryAverage _batt;
+  offband::FullPointLearner _full_learner;   // #1254: where this cell's 100% is (Power, G5)
   uint32_t _next_batt_read = 0;
+  uint32_t _next_batt_check = 0;   // low-voltage shutdown, every 8 s
   uint32_t _next_status = 0;
   uint32_t _next_screen = 0;
   bool _gps_was_on = false;
@@ -134,4 +171,6 @@ private:
   offband::gui::ScreenState _screen = offband::gui::ScreenState::On;
   offband::gui::ThemeId _theme = offband::gui::kDefaultTheme;
   offband::gui::Look _look = offband::gui::kDefaultLook;
+  uint32_t _accent_shown = offband::gui::kDefaultAccentRgb;
+  int _contacts_seen = -1;   // contacts last counted; -1 before the first count
 };

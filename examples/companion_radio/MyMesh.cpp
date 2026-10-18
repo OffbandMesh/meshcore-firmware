@@ -1076,7 +1076,9 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   // #1500: GUI builds also obey the channel's own mode (All / Mentions / Off,
   // set from the conversation's bell); the global scope above stays the
   // master switch.
-  const bool alert = channelMsgShouldNotify(text) &&
+  // Setup › Messages & alerts: notifications and Channel messages are master
+  // switches over every channel's own mode (Epic G).
+  const bool alert = _prefs.gui.notify_on && _prefs.gui.notify_channels && channelMsgShouldNotify(text) &&
                      offband::gui::channelAlerts(_prefs.gui.channelMode(channel_idx), textMentionsSelf(text));
 #else
   const bool alert = channelMsgShouldNotify(text);
@@ -3171,13 +3173,9 @@ void MyMesh::handleCmdFrame(size_t len) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     }
   } else if (cmd_frame[0] == CMD_SET_RADIO_TX_POWER) {
-    int8_t power = (int8_t)cmd_frame[1];
-    if (power < -9 || power > MAX_LORA_TX_POWER) {
+    if (cmdSetTxPower((int8_t)cmd_frame[1]) != offband::gui::CmdResult::Ok) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     } else {
-      _prefs.tx_power_dbm = power;
-      savePrefs();
-      radio_driver.setTxPower(_prefs.tx_power_dbm);
       writeOKFrame();
     }
   } else if (cmd_frame[0] == CMD_SET_TUNING_PARAMS) {
@@ -3215,11 +3213,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     savePrefs();
     writeOKFrame();
   } else if (cmd_frame[0] == CMD_SET_PATH_HASH_MODE && cmd_frame[1] == 0 && len >= 3) {
-    if (cmd_frame[2] >= 3) {
+    if (cmdSetPathHashMode(cmd_frame[2]) != offband::gui::CmdResult::Ok) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     } else {
-      _prefs.path_hash_mode = cmd_frame[2];
-      savePrefs();
       writeOKFrame();
     }
   } else if (cmd_frame[0] == CMD_REBOOT && memcmp(&cmd_frame[1], "reboot", 6) == 0) {
@@ -4393,6 +4389,21 @@ CmdResult MyMesh::cmdSetRadio(uint32_t freq_khz, uint32_t bw_hz, uint8_t sf, uin
   return CmdResult::Ok;
 }
 
+CmdResult MyMesh::cmdSetTxPower(int8_t dbm) {
+  if (dbm < -9 || dbm > MAX_LORA_TX_POWER) return CmdResult::BadArgs;
+  _prefs.tx_power_dbm = dbm;
+  savePrefs();
+  radio_driver.setTxPower(_prefs.tx_power_dbm);
+  return CmdResult::Ok;
+}
+
+CmdResult MyMesh::cmdSetPathHashMode(uint8_t mode) {
+  if (mode >= 3) return CmdResult::BadArgs;   // 1-, 2- or 3-byte hashes
+  _prefs.path_hash_mode = mode;
+  savePrefs();
+  return CmdResult::Ok;
+}
+
 CmdResult MyMesh::cmdResetPath(ContactInfo& contact) {
   contact.out_path_len = OUT_PATH_UNKNOWN;
   dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
@@ -4418,6 +4429,12 @@ void MyMesh::cmdSetTime(uint32_t secs) {
 }
 
 void MyMesh::cmdReboot() {
+  flushPending();
+  board.reboot();
+}
+
+// What a restart or a power-off would lose: contacts and messages not yet written.
+void MyMesh::flushPending() {
   bool pending = dirty_contacts_expiry != 0;  // a contacts write is still pending
 #ifdef OFFBAND_GUI
   pending = pending || _contacts_save.active();   // or one is half-written
@@ -4426,7 +4443,6 @@ void MyMesh::cmdReboot() {
 #ifdef OFFBAND_GUI
   _gui_store_flash.flushNow();   // #1463: messages not yet written
 #endif
-  board.reboot();
 }
 
 #ifdef OFFBAND_GUI

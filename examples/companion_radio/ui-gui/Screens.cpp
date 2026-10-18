@@ -6,72 +6,14 @@
 #include <helpers/gui/SignalLevel.h>
 #include <helpers/gui/hw/GuiFonts.h>
 
+#include "ShellWidgets.h"
+
 using namespace offband::gui;
+using namespace shell;
 
 namespace {
 
-constexpr int16_t kW = 240;
-constexpr int16_t kStatusH = 20;
-constexpr int16_t kTabH = 40;
-constexpr int16_t kContentH = 320 - kStatusH - kTabH;
-
-// The param of a CLICKED that a button (USR hold) sent rather than a touch.
-const char kByButton[] = "button";
-
-// Names a step that held the loop past 100 ms (bench, #1534: taps lost to
-// a 981 ms stall during search). One line, when it happens.
-struct SlowStep {
-  const char* what;
-  int detail;
-  uint32_t t0;
-  SlowStep(const char* w, int d = 0) : what(w), detail(d), t0(lv_tick_get()) {}
-  ~SlowStep() {
-    const uint32_t ms = lv_tick_elaps(t0);
-    if (ms > 100) mesh_log_line(MLOG_BOOT, "[gui] slow %s (%d): %lums\n", what, detail, (unsigned long)ms);
-  }
-};
-
-lv_color_t c(uint32_t rgb) { return lv_color_hex(rgb & 0xFFFFFF); }
-
-lv_obj_t* box(lv_obj_t* parent, lv_coord_t w, lv_coord_t h) {
-  lv_obj_t* o = lv_obj_create(parent);
-  lv_obj_remove_style_all(o);
-  lv_obj_set_size(o, w, h);
-  lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-  return o;
-}
-
-lv_obj_t* label(lv_obj_t* parent, FontRole role, uint32_t rgb, const char* text = "") {
-  lv_obj_t* l = lv_label_create(parent);
-  lv_obj_set_style_text_font(l, font(role), 0);
-  lv_obj_set_style_text_color(l, c(rgb), 0);
-  lv_label_set_text(l, text);
-  return l;
-}
-
-// Text from the mesh, with emoji-steering characters dropped (displayText).
-void userText(lv_obj_t* l, const char* s, size_t len) {
-  static char buf[kMsgTextMax * 2 + 1];   // off the stack; the GUI is single-threaded
-  displayText(s, len, buf, sizeof buf);
-  lv_label_set_text(l, buf);
-}
-void userText(lv_obj_t* l, const char* s) { userText(l, s, strlen(s)); }
-
-// A label held to one line, cut with "…". LVGL only cuts a label whose
-// height is fixed; with a content height it wraps instead (bench, #1501).
-void oneLine(lv_obj_t* l, FontRole role) {
-  lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
-  lv_obj_set_height(l, lv_font_get_line_height(font(role)));
-}
-
-lv_obj_t* line(lv_obj_t* parent, const lv_point_t* pts, uint16_t n, uint32_t rgb) {
-  lv_obj_t* l = lv_line_create(parent);
-  lv_line_set_points(l, pts, n);
-  lv_obj_set_style_line_width(l, 1, 0);
-  lv_obj_set_style_line_color(l, c(rgb), 0);
-  lv_obj_clear_flag(l, LV_OBJ_FLAG_CLICKABLE);
-  return l;
-}
+const char* const kByButton = byButton();
 
 // Tab icons, 16 px, after the design's stroke icons. lv_line keeps the
 // pointer, so the point lists live for the program.
@@ -198,8 +140,12 @@ void GuiShell::later(void (*fn)(GuiShell*)) {
 
 void GuiShell::openThread(int thread) {
   _thread = thread;
+  _jump_unread = 0;
   if (thread >= 0) {
     _focus_thread = thread;
+    // Before threadOpened marks it read: how many to jump back over.
+    const Thread* th = _model->store().threadAt(thread);
+    if (th && _model->guiPrefs().jump_to_unread) _jump_unread = th->unread;
     _model->threadOpened(thread);
   }
   _shown_rev = _model->store().revision();
@@ -223,6 +169,8 @@ void GuiShell::showTab(Tab tab) {
   if (tab != _tab && tab == Tab::Chat) _thread = -1;   // the tab opens on the list
   if (tab != _tab && tab == Tab::Nodes) resetNodes();
   if (tab != _tab && tab == Tab::Map) resetMap();
+  if (tab != _tab && tab == Tab::Setup) resetSetup();
+  if (tab != _tab && _tab == Tab::Setup) _model->savePrefsNow();   // leaving Settings keeps its changes
   _locked = false;
   _tab = tab;
   rebuild();
@@ -257,12 +205,15 @@ void GuiShell::rebuild() {
   SlowStep slow("rebuild tab", _searching ? 10 + int(_tab) : _composing ? 20 + int(_tab) : int(_tab));
   lv_obj_t* scr = lv_scr_act();
   closeSheet();   // it lives on the top layer, outside the rebuilt screen
+  closeSetSheet();
+  _set_save = nullptr;
+  _set_body = nullptr;
   lv_group_remove_all_objs(_group);
   lv_obj_clean(scr);
   lv_obj_set_style_bg_color(scr, c(_t.bg), 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
   _name = _key = _advert = _advert_label = nullptr;
-  _lock_clock = _lock_sub = _lock_list = nullptr;
+  _lock_clock = _lock_sub = _lock_list = _lock_ampm = nullptr;
   for (auto& v : _value) v = nullptr;
   for (auto& s : _sub) s = nullptr;
   _lock_count = 0xFF;
@@ -271,6 +222,7 @@ void GuiShell::rebuild() {
   _kb = _draft_box = _draft_label = _caret = _counter = nullptr;
   _query_label = _match_label = _search_list = _wheel_strip = nullptr;
   _login_field = _login_status = nullptr;
+  _set_text_label = nullptr;
   for (auto& k : _key_obj) k = nullptr;
   if (_key_preview) {
     lv_obj_del(_key_preview);
@@ -285,6 +237,11 @@ void GuiShell::rebuild() {
   if (_composing) {   // Compose takes the whole screen below the status bar
     _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
     buildCompose(scr);
+    return;
+  }
+  if (_set_text && _tab == Tab::Setup) {   // Node › Name, typed
+    _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
+    buildSetText(scr);
     return;
   }
   if (_login && detailTab()) {   // the login sheet, over a node's detail
@@ -306,7 +263,9 @@ void GuiShell::rebuild() {
   _node_shown = 0;
   if (_tab == Tab::Chat) _shown_rev = _model->store().revision();
   _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
-  lv_obj_t* content = box(scr, kW, kContentH);
+  // Radio takes the tab bar's place for its pinned Save (mockup 2).
+  const bool full = fullScreenSetup();
+  lv_obj_t* content = box(scr, kW, full ? 320 - kStatusH : kContentH);
   lv_obj_set_pos(content, 0, kStatusH);
   if (_tab == Tab::Home) buildHome(content);
   else if (_tab == Tab::Chat && _thread >= 0) buildConversation(content);
@@ -314,8 +273,9 @@ void GuiShell::rebuild() {
   else if (detailTab() && _detail) buildDetail(content);   // from Nodes, or from the radar
   else if (_tab == Tab::Nodes) buildNodes(content);
   else if (_tab == Tab::Map) buildRadar(content);
+  else if (_tab == Tab::Setup) buildSetup(content);
   else buildPlaceholder(content);
-  buildTabs(scr);
+  if (!full) buildTabs(scr);
 
   // Back on the list, the row that was open (or focused) keeps the focus.
   if (_focus_row) {
@@ -428,6 +388,8 @@ void GuiShell::buildTabs(lv_obj_t* parent) {
             if (s->_pending_tab == Tab::Chat) s->_thread = -1;   // the tab opens on the list
             if (s->_pending_tab == Tab::Nodes && s->_tab != Tab::Nodes) s->resetNodes();
             if (s->_pending_tab == Tab::Map && s->_tab != Tab::Map) s->resetMap();
+            if (s->_pending_tab == Tab::Setup && s->_tab != Tab::Setup) s->resetSetup();
+            if (s->_pending_tab != Tab::Setup && s->_tab == Tab::Setup) s->_model->savePrefsNow();
             s->_locked = false;
             s->_tab = s->_pending_tab;
             s->rebuild();
@@ -444,7 +406,13 @@ void GuiShell::buildLock(lv_obj_t* scr) {
   lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_row(col, 4, 0);
-  _lock_clock = label(col, FontRole::Clock, _t.ink, "--:--");
+  lv_obj_t* clock_row = box(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(clock_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(clock_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+  lv_obj_set_style_pad_column(clock_row, 4, 0);
+  _lock_clock = label(clock_row, FontRole::Clock, _t.ink, "--:--");
+  _lock_ampm = label(clock_row, FontRole::Title, _t.ink2, "");
+  lv_obj_set_style_pad_bottom(_lock_ampm, 8, 0);
   _lock_sub = label(col, FontRole::BodySmall, _t.ink2);
   _lock_list = box(col, LV_PCT(100), LV_SIZE_CONTENT);
   lv_obj_set_style_pad_top(_lock_list, 10, 0);
@@ -484,6 +452,8 @@ bool GuiShell::action(Action a) {
         return false;
     }
   }
+  // Setup: its pages and edit sheets (SetupScreens.cpp).
+  if (_tab == Tab::Setup && setAction(a)) return true;
   // The login sheet: a key cursor as in Compose; Back closes it.
   if (_login && detailTab()) {
     switch (a) {
@@ -677,7 +647,14 @@ void GuiShell::setAdvertState(AdvertButton::State s) {
 
 void GuiShell::updateLock(const LockData& d) {
   if (!_locked || !_lock_clock) return;
-  if (strcmp(lv_label_get_text(_lock_clock), d.clock) != 0) lv_label_set_text(_lock_clock, d.clock);
+  // "9:07 PM": the digits in the clock font, "PM" beside them.
+  char digits[12];
+  textf(digits, sizeof digits, "%s", d.clock);
+  char* space = strchr(digits, ' ');
+  const char* ampm = space ? space + 1 : "";
+  if (space) *space = '\0';
+  if (strcmp(lv_label_get_text(_lock_clock), digits) != 0) lv_label_set_text(_lock_clock, digits);
+  if (_lock_ampm && strcmp(lv_label_get_text(_lock_ampm), ampm) != 0) lv_label_set_text(_lock_ampm, ampm);
   if (strcmp(lv_label_get_text(_lock_sub), d.sub) != 0) lv_label_set_text(_lock_sub, d.sub);
 
   // The list rebuilds only when what it shows changes.
@@ -952,6 +929,9 @@ void GuiShell::buildConversation(lv_obj_t* content) {
   }
   const int zone = _model->zone();
   const int16_t max_w = (kW - 16) * 88 / 100;
+  // Messages & alerts › Jump to oldest unread: where the reading starts.
+  const int first_unread = _jump_unread ? (_jump_unread >= n ? 0 : int(n - _jump_unread)) : -1;
+  lv_obj_t* jump_to = nullptr;
   for (size_t i = 0; i < n; i++) {
     const MsgRecord* m = s.msg(seqs[i]);
     if (!m) continue;
@@ -962,8 +942,9 @@ void GuiShell::buildConversation(lv_obj_t* content) {
                           own ? LV_FLEX_ALIGN_END : LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_row(wrap, 2, 0);
 
-    char when[8], meta[48], line_text[96];
-    formatClock(zone, m->time, when, sizeof when);
+    char when[12], meta[48], line_text[96];
+    formatClock(zone, m->time, when, sizeof when, _model->guiPrefs().clock_12h);
+    if (int(i) == first_unread) jump_to = wrap;
     if (own) deliveryMeta(*m, channel, _model->dmAttempt(seqs[i]), kDmAttempts, meta, sizeof meta);
     else incomingMeta(m->hops, meta, sizeof meta);
     const char* from = own ? "You" : (channel || ThreadKind(th->kind) == ThreadKind::Room) ? m->sender : th->name;
@@ -1032,8 +1013,10 @@ void GuiShell::buildConversation(lv_obj_t* content) {
   // The newest message shows, unless a redraw found the reader scrolled up
   // into history (Epic D gate): then they stay where they were.
   if (_keep_scroll >= 0) lv_obj_scroll_to_y(_msg_list, _keep_scroll, LV_ANIM_OFF);
+  else if (jump_to) lv_obj_scroll_to_y(_msg_list, lv_obj_get_y(jump_to) - 6, LV_ANIM_OFF);
   else lv_obj_scroll_to_y(_msg_list, LV_COORD_MAX, LV_ANIM_OFF);
   _keep_scroll = -1;
+  _jump_unread = 0;   // only on opening
 
   // The compose bar (Compose itself is D5).
   lv_obj_t* bar = box(content, LV_PCT(100), 42);
@@ -1249,7 +1232,8 @@ void GuiShell::buildKeys() {
     }
     char text[8];
     // Search's keyboard ends its entry with Done (ObScreen kbRowsFind).
-    snprintf(text, sizeof text, "%s", send && _login ? "Log in" : send && _searching ? "Done" : k.label);
+    snprintf(text, sizeof text, "%s",
+             send && _login ? "Log in" : send && (_searching || _set_text) ? "Done" : k.label);
     if (caps && text[0] >= 'a' && text[0] <= 'z' && !text[1]) text[0] = char(text[0] - 'a' + 'A');
     lv_obj_t* l = label(o, typesLabel(k.label) ? FontRole::Body : FontRole::BodySmall, ink, text);
     lv_obj_center(l);
@@ -1298,8 +1282,13 @@ void GuiShell::pressKey(int i) {
   const Shift shift_before = _shift.state();
   // Search types into the query: no capitals of its own (matching ignores
   // case), and Done puts the keyboard away, keeping the results.
-  ComposeBuffer& buf = _login ? _login_pw : _searching ? _query : _draft;
-  const bool plain = _login || _searching;   // no capitals of their own
+  ComposeBuffer& buf = _set_text ? _set_buf : _login ? _login_pw : _searching ? _query : _draft;
+  const bool plain = _login || _searching || _set_text;   // no capitals of their own
+
+  if (_set_text && strcmp(l, "Send") == 0) {   // "Done": the name is kept
+    later([](GuiShell* g) { g->closeSetText(true); });
+    return;
+  }
 
   if (_login && strcmp(l, "Send") == 0) {   // "Log in"
     _login_ok_at = 0;
@@ -1348,7 +1337,8 @@ void GuiShell::pressKey(int i) {
     }
   }
   if (_page.page() != page_before || _shift.state() != shift_before) buildKeys();
-  if (_login) refreshLoginField();
+  if (_set_text) refreshSetText();
+  else if (_login) refreshLoginField();
   else if (_searching) querySoon();
   else refreshDraft();
 }

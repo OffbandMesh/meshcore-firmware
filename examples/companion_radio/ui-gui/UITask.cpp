@@ -6,6 +6,8 @@
 #include <lvgl.h>
 
 #include <helpers/AdvertDataHelpers.h>
+#include <helpers/ClockSanity.h>
+#include <helpers/diagnostics/CrashLog.h>
 #include <helpers/TimeZones.h>
 #include <helpers/gui/ClockPolicy.h>
 #include <helpers/gui/GuiViews.h>
@@ -13,9 +15,11 @@
 #include <helpers/gui/hw/Chsc6xTouch.h>
 #include <helpers/gui/hw/GuiPanel.h>
 #include <helpers/gui/hw/LvglPort.h>
+#include <helpers/ui/OffbandSplash.h>   // offbandShortVersion
 #include <helpers/ui/ScreenOff.h>
 
 #include "../MyMesh.h"
+#include "ShellWidgets.h"
 #include "target.h"
 
 extern MyMesh the_mesh;
@@ -127,12 +131,37 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   setCpuFrequencyMhz(cpuMhzFor(true));
   mesh_log_line(MLOG_BOOT, "[gui] screen on cpu=%u\n", (unsigned)getCpuFrequencyMhz());
 
-  _shell.begin(themeTokens(_theme, kDefaultAccent), _look, this);
+  // Display › Theme and Look, as stored (Epic G, G3).
+  if (_prefs) {
+    _theme = ThemeId(_prefs->gui.theme);
+    _look = Look(_prefs->gui.look);
+    _accent_shown = _prefs->gui.accent;
+  }
+  _shell.begin(themeTokens(_theme, _prefs ? _prefs->gui.accent : kDefaultAccent), _look, this);
+
+  // The boot screen over it (G6): versions, setup's checks, and a line
+  // only after an unclean reset.
+  {
+    char version[48], reset_line[48] = "";
+    bootVersionLine(FIRMWARE_VERSION, offband::offbandShortVersion(), version, sizeof version);
+    const uint8_t attempt = board.safeBootAttempt();
+    const uint32_t code = board.getResetReason();
+    if (uncleanBoot(code, attempt)) bootLine(attempt, board.safeBootLimit(), code, reset_line, sizeof reset_line);
+    _boot.show(themeTokens(_theme, _accent_shown), version, reset_line, millis());
+    _boot.update(bootFacts(), millis());
+    mesh_log_line(MLOG_BOOT, "[gui] boot screen: %s%s%s\n", version, reset_line[0] ? " / " : "", reset_line);
+  }
   _next_status = _next_screen = 0;
   loop();   // fill the first frame before the backlight comes up
   lv_refr_now(nullptr);
-  panel->setBrightness(100);
+  panel->setBrightness(litPercent());
 }
+
+// Display › Brightness while lit; GUI_DIM_PERCENT while dim.
+uint8_t UITask::litPercent() const { return _prefs ? _prefs->gui.brightness : 100; }
+
+// Display › Dim after; 0 never dims.
+uint32_t UITask::dimMs() const { return _prefs ? uint32_t(_prefs->gui.dim_secs) * 1000 : GUI_DIM_AFTER_MS; }
 
 // Idle time is the shorter of "since the last button" and LVGL's own "since
 // the last touch", so either kind of input keeps the screen lit.
@@ -182,6 +211,10 @@ void UITask::handle(InputEvent ev, uint32_t now) {
   const Action a = mapInput(ev, _screen != ScreenState::Off, _pocket_locked);
   if (a == Action::None) return;
   _last_input = now;
+  // Any press ends the boot screen. CLI rescue, pocket lock and the buzzer
+  // still act; a move or an open doesn't, on a screen not yet seen.
+  const bool booting = _boot.open();
+  if (booting) _boot.close();
   if (a == Action::PocketLock) {
     _pocket_locked = true;
     applyScreen(ScreenState::Off);
@@ -207,6 +240,7 @@ void UITask::handle(InputEvent ev, uint32_t now) {
     default:
       break;
   }
+  if (booting) return;
   _shell.action(a);
   _next_screen = 0;   // show the result now, not at the next 1 s refresh
 }
@@ -251,7 +285,7 @@ void UITask::applyScreen(ScreenState s) {
       panel->turnOn();
       lv_obj_invalidate(lv_scr_act());  // redraw what the sleeping panel lost
     }
-    panel->setBrightness(s == ScreenState::Dim ? GUI_DIM_PERCENT : 100);
+    panel->setBrightness(s == ScreenState::Dim ? GUI_DIM_PERCENT : litPercent());
   }
   const bool lit = s != ScreenState::Off;
   if ((_screen == ScreenState::Off) != !lit) setCpuFrequencyMhz(cpuMhzFor(lit));
@@ -276,7 +310,7 @@ uint8_t UITask::battPercent() const {
 
 StatusReadings UITask::statusReadings(uint32_t now) {
   StatusReadings r{};
-  formatClock(_prefs ? _prefs->ui_tz : 0, rtc_clock.getCurrentTime(), r.clock, sizeof r.clock);
+  formatClock(_prefs ? _prefs->ui_tz : 0, rtc_clock.getCurrentTime(), r.clock, sizeof r.clock, clock12h());
 
   MsgStore& store = the_mesh.guiStore();
   r.unread = store.ready() ? store.totalUnread() : uint32_t(_unread > 0 ? _unread : 0);
@@ -355,7 +389,7 @@ void UITask::lockData(LockData* d) {
   memset(d, 0, sizeof *d);
   const int zone = _prefs ? _prefs->ui_tz : 0;
   const uint32_t now = rtc_clock.getCurrentTime();
-  formatClock(zone, now, d->clock, sizeof d->clock);
+  formatClock(zone, now, d->clock, sizeof d->clock, clock12h());
   char date[24];
   formatDate(zone, now, date, sizeof date);
   if (date[0]) {
@@ -374,7 +408,7 @@ void UITask::lockData(LockData* d) {
     char raw[sizeof d->items[i].text];
     lockLabel(*th, raw, sizeof d->items[i].label);
     displayText(raw, strlen(raw), d->items[i].label, sizeof d->items[i].label);
-    formatClock(zone, msg->time, d->items[i].time, sizeof d->items[i].time);
+    formatClock(zone, msg->time, d->items[i].time, sizeof d->items[i].time, clock12h());
     lockText(*msg, ThreadKind(th->kind), raw, sizeof raw);
     displayText(raw, strlen(raw), d->items[i].text, sizeof d->items[i].text);
   }
@@ -581,11 +615,18 @@ void UITask::pollDmRetries(uint32_t now) {
         mesh_log_line(MLOG_BOOT, "[gui] dm retry %u/%u\n", unsigned(r.attempt()), unsigned(kDmAttempts));
         break;
       }
-      case DmRetry::Step::Fail:
+      case DmRetry::Step::Fail: {
         store.setDelivery(seq, Delivery::Failed);
         the_mesh.guiStoreFlash().ringChanged(millis());
-        mesh_log_line(MLOG_BOOT, "[gui] dm not delivered\n");
+        // Messages & alerts › Clear path on max retry: the next send floods
+        // and finds a route again.
+        const Thread* th = m ? store.threadAt(m->thread) : nullptr;
+        ContactInfo* ci = th ? the_mesh.lookupContactByPubKey(th->key, PUB_KEY_SIZE) : nullptr;
+        const bool clear = ci && _prefs && _prefs->gui.clear_path_on_fail;
+        if (clear) the_mesh.cmdResetPath(*ci);
+        mesh_log_line(MLOG_BOOT, "[gui] dm not delivered%s\n", clear ? "; path cleared" : "");
         break;
+      }
       default:
         break;
     }
@@ -647,6 +688,421 @@ void UITask::fillNodeRow(const ContactInfo& ci, NodeRow& r, uint8_t* key_copy, u
   r.unread = th ? th->unread : 0;
   r.lat_e6 = ci.gps_lat;
   r.lon_e6 = ci.gps_lon;
+}
+
+// ------------------------------------------------------------ Setup (G)
+
+bool UITask::clock12h() const { return _prefs && _prefs->gui.clock_12h; }
+
+// A contact added (an advert heard from a node not yet known): one chirp,
+// once a second at most. The first count after boot only sets the baseline.
+void UITask::pollNewNodes(uint32_t now) {
+  static uint32_t s_next = 0;
+  if (int32_t(now - s_next) < 0) return;
+  s_next = now + 1000;
+  const int n = the_mesh.getNumContacts();
+  const bool more = _contacts_seen >= 0 && n > _contacts_seen;
+  _contacts_seen = n;
+  if (!more || !_prefs || !_prefs->gui.notify_on || !_prefs->gui.notify_new_node) return;
+  mesh_log_line(MLOG_BOOT, "[gui] new node: %d contacts\n", n);
+#ifdef PIN_BUZZER
+  _buzzer.play("node:d=16,o=6,b=180:c,g");
+#endif
+}
+
+GuiPrefs& UITask::guiPrefs() {
+  static GuiPrefs s_none;   // before begin(): defaults, never saved
+  return _prefs ? _prefs->gui : s_none;
+}
+
+// A GUI setting changed: saved when idle (#1472), and the Display ones now.
+void UITask::prefsChanged() {
+  if (!_prefs) return;
+  _prefs->gui.sanitize();
+  _prefs_dirty = true;
+  const ThemeId theme = ThemeId(_prefs->gui.theme);
+  const Look look = Look(_prefs->gui.look);
+  if (theme != _theme || look != _look || _prefs->gui.accent != _accent_shown) {
+    _theme = theme;
+    _look = look;
+    _accent_shown = _prefs->gui.accent;
+    _shell.setTheme(themeTokens(_theme, _accent_shown), _look);
+  }
+  if (_screen == ScreenState::On) static_cast<GuiPanel*>(_display)->setBrightness(litPercent());
+}
+
+NodeSettings UITask::nodeSettings() {
+  NodeSettings s{};
+  if (!_prefs) return s;
+  snprintf(s.name, sizeof s.name, "%s", _prefs->node_name);
+  s.gps_on = _prefs->gps_enabled;
+  s.gps_secs = _prefs->gps_interval;
+  if (_sensors) {   // the fix while there is one, else the position set here
+    s.lat_e6 = int32_t(lround(_sensors->node_lat * 1e6));
+    s.lon_e6 = int32_t(lround(_sensors->node_lon * 1e6));
+  }
+  s.share_location = _prefs->advert_loc_policy != ADVERT_LOC_NONE;
+  s.extra_acks = _prefs->multi_acks != 0;
+  s.tel_base = _prefs->telemetry_mode_base;
+  s.tel_loc = _prefs->telemetry_mode_loc;
+  s.tel_env = _prefs->telemetry_mode_env;
+  s.manual_add = (_prefs->manual_add_contacts & 1) != 0;
+  s.auto_bits = _prefs->autoadd_config;
+  s.auto_hops = _prefs->autoadd_max_hops;
+  s.contacts = uint16_t(the_mesh.getNumContacts());
+  s.contacts_max = MAX_CONTACTS;
+  return s;
+}
+
+// Applied at once, as the phone's commands would set them; written when
+// the page is left (owner pick a).
+void UITask::setNodeSettings(const NodeSettings& s) {
+  if (!_prefs) return;
+  if (s.name[0]) snprintf(_prefs->node_name, sizeof _prefs->node_name, "%s", s.name);
+  const bool gps_changed = (_prefs->gps_enabled != 0) != s.gps_on || _prefs->gps_interval != s.gps_secs;
+  _prefs->gps_enabled = s.gps_on ? 1 : 0;
+  _prefs->gps_interval = s.gps_secs;
+  if (_sensors && !s.gps_on && latOk(s.lat_e6) && lonOk(s.lon_e6)) {   // with GPS on, the fix wins
+    _sensors->node_lat = s.lat_e6 / 1e6;
+    _sensors->node_lon = s.lon_e6 / 1e6;
+  }
+  _prefs->advert_loc_policy = s.share_location ? ADVERT_LOC_SHARE : ADVERT_LOC_NONE;
+  _prefs->multi_acks = s.extra_acks ? 1 : 0;
+  _prefs->telemetry_mode_base = s.tel_base & 0x03;
+  _prefs->telemetry_mode_loc = s.tel_loc & 0x03;
+  _prefs->telemetry_mode_env = s.tel_env & 0x03;
+  _prefs->manual_add_contacts = uint8_t((_prefs->manual_add_contacts & ~1) | (s.manual_add ? 1 : 0));
+  _prefs->autoadd_config = s.auto_bits;
+  _prefs->autoadd_max_hops = s.auto_hops > 64 ? 64 : s.auto_hops;
+#if ENV_INCLUDE_GPS == 1
+  if (gps_changed) the_mesh.applyGpsPrefs();
+#else
+  (void)gps_changed;
+#endif
+  _prefs_dirty = true;
+}
+
+void UITask::radioStats(RadioStats* out) {
+  out->uptime_secs = millis() / 1000;
+  out->tx_air_secs = the_mesh.getTotalAirTime() / 1000;
+  out->noise_floor = int16_t(radio_driver.getNoiseFloor());
+  out->snr_x4 = int(radio_driver.getLastSNR() * 4);
+  out->rssi = int(radio_driver.getLastRSSI());
+  out->recv = radio_driver.getPacketsRecv();
+  out->sent_flood = the_mesh.getNumSentFlood();
+  out->sent_direct = the_mesh.getNumSentDirect();
+}
+
+const uint8_t* UITask::selfKey() { return the_mesh.self_id.pub_key; }
+
+void UITask::savePrefsNow() {
+  if (!_prefs_dirty) return;
+  _prefs_dirty = false;
+  const uint32_t t0 = millis();
+  the_mesh.savePrefs();
+  mesh_log_line(MLOG_BOOT, "[gui] prefs saved on leaving Settings: %lums\n", (unsigned long)(millis() - t0));
+}
+
+uint16_t UITask::screenOffSecs() {
+  return offband::screenOffSecsShown(_prefs ? _prefs->ui_screen_secs : 0, GUI_OFF_AFTER_MS);
+}
+
+void UITask::setScreenOffSecs(uint16_t secs) {
+  if (!_prefs) return;
+  _prefs->ui_screen_secs = secs;
+  _prefs_dirty = true;
+}
+
+bool UITask::buzzerOn() { return !buzzerQuiet(); }
+
+void UITask::setBuzzerOn(bool on) {
+  if (buzzerOn() != on) toggleBuzzer();   // saves the pref, and chirps when it comes on
+}
+
+// ------------------------------------------------------- Boot screen (G6)
+
+BootFacts UITask::bootFacts() {
+  BootFacts f{};
+  DataStore* ds = the_mesh.guiDataStore();
+  const DataStore::PrefsLoad pl = ds ? ds->prefsLoad() : DataStore::PrefsDefaults;
+  f.prefs = pl == DataStore::PrefsFromFile ? PrefsSource::File
+          : pl == DataStore::PrefsMigrated ? PrefsSource::Migrated
+                                           : PrefsSource::Defaults;
+#if defined(USE_SX1262)
+  f.radio = "SX1262";
+#elif defined(USE_SX1268)
+  f.radio = "SX1268";
+#elif defined(USE_SX1276)
+  f.radio = "SX1276";
+#elif defined(USE_LR1110)
+  f.radio = "LR1110";
+#else
+  f.radio = "LoRa";
+#endif
+#if ENV_INCLUDE_GPS == 1
+  f.gps_built = true;
+  f.gps_on = gpsEnabled();
+  f.gps_seen = sensors.gpsDetected();
+#endif
+  f.contacts = uint16_t(the_mesh.getNumContacts());
+  f.contacts_max = MAX_CONTACTS;
+#ifdef BLE_PIN_CODE
+  f.ble_built = true;
+  f.ble_on = isBluetoothEnabled();
+  f.phone = hasConnection();
+#endif
+  return f;
+}
+
+// ------------------------------- Connectivity, Power, Debug, About (G5)
+
+// The older screens' words (ui-new), lit for 3 s, then the board powers off.
+void UITask::lowBatteryShutdown(uint16_t mv) {
+  mesh_log_line(MLOG_BOOT, "[gui] low battery %u mV: shutting down\n", unsigned(mv));
+  offband::crashLogShutdown("low-battery", mv);
+  savePending();
+  the_mesh.flushPending();   // contacts and messages, as a reboot does
+  if (_gui_ok) {   // the words are best effort; the power-off isn't
+    applyScreen(ScreenState::On);
+    lv_obj_t* m = lv_obj_create(lv_layer_top());
+    if (m) {
+      lv_obj_remove_style_all(m);
+      lv_obj_set_size(m, LV_PCT(100), LV_PCT(100));
+      lv_obj_set_style_bg_opa(m, LV_OPA_COVER, 0);
+      lv_obj_set_style_bg_color(m, lv_color_black(), 0);
+      lv_obj_t* l = shell::label(m, FontRole::Title, 0xFFFFFF, "Low Battery.\nShutting Down!");
+      lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+      lv_obj_center(l);
+      lv_refr_now(nullptr);
+      delay(3000);
+    }
+  }
+#ifdef PIN_BUZZER
+  _buzzer.shutdown();
+  const uint32_t t0 = millis();   // fail-safe: never held up by the tune
+  while (_buzzer.isPlaying() && millis() - t0 < 2500) _buzzer.loop();
+#endif
+  board.powerOff();
+}
+
+void UITask::deviceInfo(DeviceInfo* d) {
+  *d = DeviceInfo{};
+  d->ble_on = isBluetoothEnabled();
+  d->phone = hasConnection();
+  d->pin_stored = _prefs ? _prefs->ble_pin : 0;
+  d->pin_active = the_mesh.getBLEPin();
+  d->batt_mv = _batt.seeded() ? _batt.value() : getBattMilliVolts();
+  d->batt_pct = battPercent();
+  d->full_mv = (_prefs && _prefs->batt_full_mv) ? _prefs->batt_full_mv : uint16_t(BATT_MAX_MILLIVOLTS);
+  d->full_pinned = _prefs && _prefs->batt_full_user;
+#ifdef AUTO_SHUTDOWN_MILLIVOLTS
+  d->shutdown_mv = AUTO_SHUTDOWN_MILLIVOLTS;
+#endif
+  d->log_index = _prefs ? uint8_t(logIndex(_prefs->caplog_enabled, _prefs->caplog_level)) : 0;
+  d->boot_attempt = board.safeBootAttempt();
+  d->boot_limit = board.safeBootLimit();
+  d->reset_code = board.getResetReason();
+#ifdef OFFBAND_VERSION
+  snprintf(d->offband, sizeof d->offband, "%s",
+           strncmp(OFFBAND_VERSION, "offband-", 8) == 0 ? OFFBAND_VERSION + 8 : OFFBAND_VERSION);
+#endif
+  snprintf(d->meshcore, sizeof d->meshcore, "%s", FIRMWARE_VERSION);
+#if defined(OFFBAND_GIT_SHA) && defined(OFFBAND_BUILD_DATE)
+  buildText(OFFBAND_GIT_SHA, OFFBAND_BUILD_DATE, d->build, sizeof d->build);
+#endif
+  snprintf(d->model, sizeof d->model, "%s", board.getManufacturerName());
+  d->msgs = store().count();
+  d->msgs_cap = store().capacity();
+  d->contacts = uint16_t(the_mesh.getNumContacts());
+  d->contacts_max = MAX_CONTACTS;
+}
+
+// Until the next boot, as the phone's own toggle on ui-new.
+void UITask::setBleOn(bool on) {
+  if (on) enableBluetooth();
+  else disableBluetooth();
+  mesh_log_line(MLOG_BOOT, "[gui] bluetooth %s\n", on ? "on" : "off");
+}
+
+// As the phone's CMD_SET_DEVICE_PIN: 0, or six digits; used from the next boot.
+bool UITask::setBlePin(uint32_t pin) {
+  if (!_prefs || (pin != 0 && !pinOk(pin))) return false;
+  _prefs->ble_pin = pin;
+  _prefs_dirty = true;
+  return true;
+}
+
+bool UITask::setFullMv(uint16_t mv) {
+  if (!_prefs || !offband::FullPointLearner::plausibleFullMv(mv)) return false;
+  _prefs->batt_full_mv = mv;
+  _prefs->batt_full_user = 1;
+  _full_learner.reset();   // a pending window would otherwise overwrite it
+  _prefs_dirty = true;
+  return true;
+}
+
+void UITask::learnFullAgain() {
+  if (!_prefs) return;
+  _prefs->batt_full_mv = 0;
+  _prefs->batt_full_user = 0;
+  _full_learner.reset();   // watch again from the next charge
+  _prefs_dirty = true;
+}
+
+// The caplog switch the app and the CLI use; it writes the prefs itself.
+bool UITask::setLogLevel(int index) {
+  if (index < 0 || size_t(index) >= kLogCount) return false;
+  const bool ok = the_mesh.setCaplogCapture(index > 0, index > 0 ? uint8_t(index) : MLOG_DEBUG);
+  mesh_log_line(MLOG_BOOT, "[gui] serial log: %s%s\n", logName(index), ok ? "" : " (not saved)");
+  return ok;
+}
+
+bool UITask::advertNow() {
+  const bool ok = the_mesh.cmdSendAdvert(false) == CmdResult::Ok;
+  mesh_log_line(MLOG_BOOT, "[gui] zero-hop advert: %s\n", ok ? "sent" : "busy");
+  return ok;
+}
+
+// What the sensors' own sync takes (#152, #607): a plausible epoch from a GPS
+// that's on. Without one, the phone sets the clock when it connects.
+bool UITask::syncTimeFromGps() {
+#if ENV_INCLUDE_GPS == 1
+  LocationProvider* gps = sensors.getLocationProvider();
+  if (gps && gpsEnabled()) {
+    const long t = gps->getTimestamp();
+    if (t >= long(GPS_CLOCK_SANE_MIN) && offband::plausibleEpoch(uint32_t(t))) {
+      mesh::RTCClock* clk = the_mesh.getRTCClock();
+      const uint32_t old_t = clk->getCurrentTime();
+      clk->setCurrentTime(uint32_t(t));
+      offband::logClockSet("gui-gps", old_t, uint32_t(t));
+      return true;
+    }
+  }
+#endif
+  mesh_log_line(MLOG_BOOT, "[gui] sync time: no GPS time\n");
+  return false;
+}
+
+// Before a restart or power-off: what is otherwise saved when idle.
+void UITask::savePending() {
+  if (_prefs_dirty) {
+    _prefs_dirty = false;
+    the_mesh.savePrefs();
+  }
+  if (_passwords_dirty) {
+    _passwords_dirty = false;
+    savePasswords();
+  }
+}
+
+void UITask::reboot() {
+  savePending();
+  mesh_log_line(MLOG_BOOT, "[gui] reboot from Settings\n");
+  the_mesh.cmdReboot();   // writes pending contacts and messages, then restarts
+}
+
+// Every contact back to flood, as Reset path does for one; one contacts
+// write follows (cmdResetPath arms the lazy save).
+uint16_t UITask::deleteAllPaths() {
+  uint16_t n = 0;
+  ContactsIterator it = the_mesh.startContactsIterator();
+  ContactInfo ci;
+  while (it.hasNext(&the_mesh, ci)) {
+    ContactInfo* live = the_mesh.lookupContactByPubKey(ci.id.pub_key, PUB_KEY_SIZE);
+    if (live && the_mesh.cmdResetPath(*live) == CmdResult::Ok) n++;
+  }
+  mesh_log_line(MLOG_BOOT, "[gui] paths deleted: %u\n", unsigned(n));
+  return n;
+}
+
+RadioValues UITask::radioValues() {
+  RadioValues v{};
+  if (!_prefs) return v;
+  v.freq_khz = uint32_t(lround(_prefs->freq * 1000.0));
+  v.bw_hz = uint32_t(lround(_prefs->bw * 1000.0));
+  v.sf = _prefs->sf;
+  v.cr = _prefs->cr;
+  v.tx_dbm = _prefs->tx_power_dbm;
+  v.path_hash_mode = _prefs->path_hash_mode;
+  v.repeat = _prefs->isRepeatEn();
+  return v;
+}
+
+int8_t UITask::txMax() { return MAX_LORA_TX_POWER; }
+
+// Through the same commands the phone uses: the radio first (it checks the
+// values, and off-grid repeat against its frequencies), then TX power and
+// the path hash mode, each only if it changed.
+bool UITask::saveRadio(const RadioValues& v) {
+  const RadioValues was = radioValues();
+  if (v.freq_khz != was.freq_khz || v.bw_hz != was.bw_hz || v.sf != was.sf || v.cr != was.cr ||
+      v.repeat != was.repeat) {
+    const CmdResult r = the_mesh.cmdSetRadio(v.freq_khz, v.bw_hz, v.sf, v.cr, v.repeat);
+    if (r != CmdResult::Ok) {
+      mesh_log_line(MLOG_BOOT, "[gui] radio not saved (%u)\n", unsigned(r));
+      return false;
+    }
+  }
+  if (v.tx_dbm != was.tx_dbm && the_mesh.cmdSetTxPower(v.tx_dbm) != CmdResult::Ok) return false;
+  if (v.path_hash_mode != was.path_hash_mode && the_mesh.cmdSetPathHashMode(v.path_hash_mode) != CmdResult::Ok) {
+    return false;
+  }
+  mesh_log_line(MLOG_BOOT, "[gui] radio saved: %lu kHz bw %lu sf%u cr%u %d dBm path %u repeat %u\n",
+                (unsigned long)v.freq_khz, (unsigned long)v.bw_hz, unsigned(v.sf), unsigned(v.cr), int(v.tx_dbm),
+                unsigned(v.path_hash_mode), unsigned(v.repeat));
+  return true;
+}
+
+// The Settings list's value column; Actions has none.
+void UITask::setupSummary(SetPage page, char* out, size_t n) {
+  out[0] = '\0';
+  if (!_prefs) return;
+  switch (page) {
+    case SetPage::Node:
+      snprintf(out, n, "%s", _prefs->node_name);
+      break;
+    case SetPage::Radio: {
+      const RadioValues v = radioValues();
+      radioSummary(v.freq_khz, v.sf, out, n);
+      break;
+    }
+    case SetPage::Power:
+      batteryNowText(_batt.seeded() ? _batt.value() : getBattMilliVolts(), battPercent(), out, n);
+      break;
+    case SetPage::Conn:
+      snprintf(out, n, "Bluetooth %s", isBluetoothEnabled() ? "on" : "off");
+      break;
+    case SetPage::Debug:
+      snprintf(out, n, "Log: %s", logName(logIndex(_prefs->caplog_enabled, _prefs->caplog_level)));
+      break;
+    case SetPage::Msg:
+      snprintf(out, n, "%s", _prefs->gui.notify_on ? "On" : "Off");
+      break;
+    case SetPage::Stats: {
+      RadioStats st{};
+      radioStats(&st);
+      char pct[12];
+      airtimeText(st.tx_air_secs, st.uptime_secs, pct, sizeof pct);
+      snprintf(out, n, "%s air", pct);
+      break;
+    }
+    case SetPage::Privacy:
+      snprintf(out, n, "Location %s", _prefs->advert_loc_policy == ADVERT_LOC_NONE ? "off" : "on");
+      break;
+    case SetPage::Contacts:
+      autoAddText(_prefs->manual_add_contacts & 1, _prefs->autoadd_config, out, n);
+      break;
+    case SetPage::Display:
+      snprintf(out, n, "%s", themeName(_prefs->gui.theme));
+      break;
+    case SetPage::About:
+#ifdef OFFBAND_VERSION
+      snprintf(out, n, "%s", strncmp(OFFBAND_VERSION, "offband-", 8) == 0 ? OFFBAND_VERSION + 8 : OFFBAND_VERSION);
+#endif
+      break;
+    default:
+      break;
+  }
 }
 
 // The GPS fix while there is one, else the position set in Setup: the
@@ -940,6 +1396,8 @@ void UITask::notify(UIEventType t) {
 #ifdef PIN_BUZZER
   switch (t) {
     case UIEventType::contactMessage:
+      // Messages & alerts: notifications on, and Direct messages on.
+      if (_prefs && (!_prefs->gui.notify_on || !_prefs->gui.notify_dm)) break;
       _buzzer.play("MsgRcv3:d=4,o=6,b=200:32e,32g,32b,16c7");
       break;
     case UIEventType::channelMessage:
@@ -983,21 +1441,24 @@ void UITask::loop() {
 #endif
 
   // With the panel off LVGL isn't running, so a touch is read here to wake it
-  // (ignored while pocket-locked).
-  if (_screen == ScreenState::Off && _touch_ok) {
+  // (ignored while pocket-locked); Power › Wake on touch off leaves it to USR.
+  if (_screen == ScreenState::Off && _touch_ok && (!_prefs || _prefs->gui.wake_touch)) {
     TouchPoint p{};
     if (s_touch.read(&p) && p.pressed) handle(InputEvent::TouchTap, now);
   }
 
   if (!_pocket_locked) {
     const uint32_t off_ms = offband::screenOffMillis(_prefs ? _prefs->ui_screen_secs : 0, GUI_OFF_AFTER_MS);
-    applyScreen(screenStateFor(idleMs(now), GUI_DIM_AFTER_MS, off_ms, _always_on));
+    applyScreen(screenStateFor(idleMs(now), dimMs(), off_ms, _always_on));
   }
 
   // #1472: internal-flash writes stall both cores, so they wait until nobody
   // is using the device: the screen dim or off, or no input for the dim time
   // (which covers "always on", where the screen never dims).
-  const bool idle = _screen != ScreenState::On || idleMs(now) >= GUI_DIM_AFTER_MS;
+  // The dim time is Display › Dim after; with Never, the compiled 30 s, so a
+  // save can't be held off for as long as the screen stays lit.
+  const uint32_t quiet_ms = dimMs() ? dimMs() : GUI_DIM_AFTER_MS;
+  const bool idle = _screen != ScreenState::On || idleMs(now) >= quiet_ms;
   the_mesh.setGuiScreenIdle(idle);
   if (idle && _prefs_dirty) {   // a channel's notify mode (D6)
     _prefs_dirty = false;
@@ -1012,11 +1473,46 @@ void UITask::loop() {
   // do a node detail's Ping, Trace and login.
   pollDmRetries(now);
   pollNodeActs(now);
+  pollNewNodes(now);
+
+#ifdef AUTO_SHUTDOWN_MILLIVOLTS
+  // Low-voltage protection, as the older screens run it (ui-new): every 8 s,
+  // on the raw reading, on battery only.
+  if ((int32_t)(now - _next_batt_check) >= 0) {
+    _next_batt_check = now + 8000;
+    const uint16_t mv = getBattMilliVolts();
+    if (mv > 0 && mv < AUTO_SHUTDOWN_MILLIVOLTS && !board.isExternalPowered()) lowBatteryShutdown(mv);
+  }
+#endif
 
   // One battery reading a second into the average (#1246), lit or not.
   if ((int32_t)(now - _next_batt_read) >= 0) {
     _batt.feed(getBattMilliVolts());
     _next_batt_read = now + 1000;
+    // #1254: the same reading teaches where this cell's 100% is (Power ›
+    // Full charge at). A value set in Settings stands until Learn again.
+    if (_prefs) {
+      const uint16_t learned = _full_learner.feed(now, _batt.value(), board.isExternalPowered());
+      if (!_prefs->batt_full_user && learned != 0 && learned != _prefs->batt_full_mv) {
+        _prefs->batt_full_mv = learned;
+        _prefs_dirty = true;   // saved when idle
+        mesh_log_line(MLOG_BOOT, "[gui] battery full point learned: %u mV\n", unsigned(learned));
+      }
+    }
+  }
+
+  // The boot screen: its rows four times a second, the Morse bar every pass,
+  // then gone; gone
+  // too if the screen went dark first, so a wake never finds it.
+  if (_boot.open()) {
+    if (_boot.expired(now) || _screen == ScreenState::Off) {
+      _boot.close();
+    } else if ((int32_t)(now - _next_boot_rows) >= 0) {
+      _next_boot_rows = now + 250;
+      _boot.update(bootFacts(), now);
+    } else {
+      _boot.tick(now);
+    }
   }
 
   if (_screen == ScreenState::Off) return;
@@ -1062,6 +1558,7 @@ void UITask::loop() {
   _shell.updateNodes(now);   // once a second while the Nodes tab is up
   _shell.updateDetail(now);  // a node detail's actions as they progress
   _shell.updateRadar(now);   // the Map, when a position moves
+  _shell.updateSetup(now);   // Setup's timed notes
   GUI_SPAN(s_t_update);
   lvglLoop();
   GUI_SPAN(s_t_lvgl);

@@ -111,8 +111,9 @@ private:
 
 // ------------------------------------------------------------------- Lock
 
-// "21:07", or "--:--" before the clock is set. zone: a TimeZones.h index.
-void formatClock(int zone, uint32_t utc, char* out, size_t n);
+// "21:07", or "9:07 PM" with h12 (Display › Clock); "--:--" before the
+// clock is set. zone: a TimeZones.h index.
+void formatClock(int zone, uint32_t utc, char* out, size_t n, bool h12 = false);
 // "Fri 16 Oct"; empty before the clock is set.
 void formatDate(int zone, uint32_t utc, char* out, size_t n);
 // The newest unread message of each thread with unread, newest first, at

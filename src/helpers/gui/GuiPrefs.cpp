@@ -15,6 +15,14 @@ GuiPrefs::GuiPrefs() {
   brightness = 100;
   dim_secs = 30;
   rotation = 0;
+  clock_12h = 0;
+  notify_on = 1;
+  notify_dm = 1;
+  notify_channels = 1;
+  notify_new_node = 0;
+  clear_path_on_fail = 0;
+  jump_to_unread = 0;
+  wake_touch = 1;
 }
 
 static bool validMode(uint8_t m) { return m <= uint8_t(NotifyMode::Off); }
@@ -45,6 +53,10 @@ void GuiPrefs::sanitize() {
   if (brightness > 100) brightness = 100;
   if (dim_secs > 3600) dim_secs = 3600;
   if (rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270) rotation = 0;
+  for (uint8_t* f : {&clock_12h, &notify_on, &notify_dm, &notify_channels, &notify_new_node, &clear_path_on_fail,
+                     &jump_to_unread, &wake_touch}) {
+    *f = *f ? 1 : 0;
+  }
 }
 
 // ConfigSerializer keys are letters and '_' only (no digits), at most
@@ -62,6 +74,14 @@ void GuiPrefs::structure() {
   def("bright", brightness);
   def("dim", dim_secs);
   def("rot", rotation);
+  def("hour", clock_12h);
+  def("n_on", notify_on);
+  def("n_dm", notify_dm);
+  def("n_ch", notify_channels);
+  def("n_node", notify_new_node);
+  def("clrpath", clear_path_on_fail);
+  def("jump", jump_to_unread);
+  def("wtouch", wake_touch);
 }
 
 }  // namespace gui

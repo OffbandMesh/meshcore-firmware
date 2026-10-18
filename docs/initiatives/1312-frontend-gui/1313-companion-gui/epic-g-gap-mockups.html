@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Epic G gap mockups</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* Offband theme tokens, copied from ObScreen.dc.html (as in the Epic E and F mockups).
+   Static markup: renders in viewers that don't run scripts. */
+:root{
+  --bg:#0F1412; --bg2:#161C19; --bg3:#1D2521; --line:#34403A; --line2:#232C28;
+  --ink:#EFF3E8; --ink2:#BAC4B5; --dim:#7C8B82; --sig:#7BEFA8; --sigInk:#0F1412;
+  --wash:rgba(123,239,168,.09); --warn:#FFA552; --bad:#FF7A6E; --r:6px;
+  --sans:'Barlow Condensed',sans-serif; --mono:'JetBrains Mono',monospace;
+  --page:#0a0d0c; --pageInk:#cfd6cc;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--page);color:var(--pageInk);font-family:var(--sans);padding:24px 16px 48px}
+h1{font-size:26px;font-weight:600;color:var(--ink)}
+h3{font-size:18px;font-weight:600;color:var(--sig);margin:28px 0 10px}
+.lede{font-size:16px;color:var(--dim);margin:6px 0 8px;max-width:960px}
+.grid{display:flex;flex-wrap:wrap;gap:28px}
+.card{width:300px}
+.card h2{font-size:18px;font-weight:600;color:var(--ink)}
+.card .n{font-family:var(--mono);font-size:12px;color:var(--sig);margin-right:6px}
+.card p{font-size:14px;color:var(--ink2);margin:4px 0 10px;line-height:1.3;min-height:54px}
+.card ul{font-size:13px;color:var(--dim);margin:10px 0 0 16px;line-height:1.35}
+.dev{width:300px;height:400px;border:1px solid #2a332f;border-radius:10px;overflow:hidden;background:#000}
+.scr{width:240px;height:320px;transform:scale(1.25);transform-origin:0 0;background:var(--bg);color:var(--ink);
+  font-family:var(--sans);position:relative;overflow:hidden;display:flex;flex-direction:column}
+.sb{height:20px;flex:none;background:var(--bg2);border-bottom:1px solid var(--line2);display:flex;align-items:center;
+  padding:0 6px;font-family:var(--mono);font-size:10px;color:var(--ink2);gap:5px}
+.sb .clk{color:var(--ink);font-weight:600}
+.sb .right{margin-left:auto}
+.tabs{height:40px;flex:none;border-top:1px solid var(--line2);background:var(--bg2);display:flex;margin-top:auto}
+.tabs div{flex:1;display:flex;align-items:center;justify-content:center;font-size:9px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--dim);border-top:2px solid transparent}
+.tabs div.on{color:var(--sig);background:var(--wash);border-top-color:var(--sig)}
+.lh{display:flex;align-items:center;height:32px;flex:none;padding:0 8px;border-bottom:1px solid var(--line)}
+.lh .t{font-size:16px;font-weight:600} .lh .id{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--dim)}
+.cat{display:flex;align-items:center;gap:7px;height:34px;flex:none;padding:0 8px;border-bottom:1px solid var(--line2)}
+.cat .ic{width:20px;height:20px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:var(--r);background:var(--wash);color:var(--sig);font-size:11px}
+.cat .k{font-size:13px;flex:none} .cat .v{flex:1;min-width:0;text-align:right;font-size:10px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chev{color:var(--dim)}
+.sh{display:flex;align-items:center;gap:6px;height:32px;flex:none;padding:0 8px;border-bottom:1px solid var(--line)}
+.sh .bk{font-size:16px;color:var(--sig)} .sh .t{font-size:15px;font-weight:600}
+.body{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+.sec{padding:6px 8px 2px;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);flex:none}
+.row{display:flex;align-items:center;gap:6px;min-height:34px;flex:none;padding:0 8px;border-bottom:1px solid var(--line2)}
+.row.focus{background:var(--wash);box-shadow:inset 3px 0 var(--sig)}
+.row.off{opacity:.45}
+.row .kk{flex:1;min-width:0} .row .k{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .hint{font-size:9px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .v{font-size:11px;color:var(--ink2);white-space:nowrap} .row .v.m{font-family:var(--mono)}
+.row .v.warn{color:var(--warn)}
+.dd{color:var(--dim);font-size:9px}
+.tog{width:28px;height:16px;flex:none;display:flex;align-items:center;padding:0 2px;border-radius:999px;border:1.5px solid var(--line)}
+.tog i{width:9px;height:9px;border-radius:50%;background:var(--dim)}
+.tog.on{background:var(--sig);border:none;justify-content:flex-end;padding:0 2px} .tog.on i{width:12px;height:12px;background:var(--sigInk)}
+.save{flex:none;padding:4px 6px;border-top:1px solid var(--line)}
+.save div{height:30px;display:flex;align-items:center;justify-content:center;border-radius:var(--r);background:var(--sig);color:var(--sigInk);font-size:13px;font-weight:600}
+.scrim{position:absolute;left:0;right:0;top:20px;bottom:0;background:rgba(0,0,0,.5)}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--bg3);border-top:1px solid var(--line);border-radius:12px 12px 0 0;padding-bottom:6px}
+.sheet .st{font-size:14px;font-weight:600;padding:10px 12px 2px} .sheet .ss{font-size:10px;color:var(--dim);padding:0 12px 6px}
+.opt{display:flex;align-items:center;gap:8px;height:30px;padding:0 12px;font-size:13px}
+.opt .rd{width:12px;height:12px;border-radius:50%;border:1.5px solid var(--line);flex:none}
+.opt.on .rd{border-color:var(--sig);background:radial-gradient(var(--sig) 40%,transparent 45%)}
+.opt.hot{background:var(--wash);box-shadow:inset 3px 0 var(--sig)}
+.step{display:flex;align-items:center;justify-content:center;gap:14px;padding:8px 12px}
+.step .b{width:40px;height:34px;border:1px solid var(--line);border-radius:var(--r);display:flex;align-items:center;justify-content:center;font-size:18px}
+.step .b.hot{border-color:var(--sig);color:var(--sig)}
+.step .val{font-family:var(--mono);font-size:24px;font-weight:600;min-width:90px;text-align:center}
+.lim{font-family:var(--mono);font-size:9px;color:var(--dim);text-align:center}
+.btns{display:flex;gap:6px;padding:6px 12px 0}
+.btn{flex:1;height:32px;border-radius:var(--r);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:13px}
+.btn.pri{background:var(--sig);border-color:var(--sig);color:var(--sigInk);font-weight:600}
+.btn.red{border-color:var(--bad);color:var(--bad)}
+.btn.hot{outline:2px solid var(--ink);outline-offset:-4px}
+.field{margin:2px 12px 6px;height:32px;border:1px solid var(--sig);background:var(--wash);border-radius:var(--r);display:flex;align-items:center;padding:0 8px;font-family:var(--mono);font-size:16px}
+.caret{display:inline-block;width:1px;height:14px;background:var(--sig);margin-left:2px}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;padding:0 6px}
+.pad div{height:28px;background:var(--bg2);border-radius:4px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:14px}
+.pad .w{font-family:var(--sans);font-size:12px;color:var(--ink2)}
+.act{display:flex;align-items:center;gap:8px;min-height:38px;padding:0 8px;border-bottom:1px solid var(--line2)}
+.act .k{font-size:13px} .act .hint{font-size:9px;color:var(--dim)} .act.red .k{color:var(--bad)} .act.amb .k{color:var(--warn)}
+.boot{flex:1;display:flex;align-items:center;justify-content:center}
+.bootc{display:flex;flex-direction:column;align-items:center;gap:6px;width:200px}
+.logo{width:56px;height:56px;border-radius:14px;background:radial-gradient(circle at 50% 55%,var(--sig) 0 18%,transparent 19%),conic-gradient(from 200deg,var(--bg3),var(--line));border:1px solid var(--line)}
+.bname{font-size:22px;font-weight:600;letter-spacing:.02em;line-height:1}
+.mono9{font-family:var(--mono);font-size:9px}
+.checks{width:100%;display:flex;flex-direction:column;gap:1px;margin-top:4px}
+.ck{display:flex;gap:6px} .ck .ok{color:var(--sig)} .ck .pend{color:var(--warn)} .ck .t{color:var(--ink2)}
+.prog{width:100%;height:3px;background:var(--line);margin-top:4px} .prog i{display:block;width:72%;height:100%;background:var(--sig)}
+.mo{display:flex;gap:5px;align-items:center;justify-content:center} .mo .l{display:flex;gap:2px}
+.mo i{display:block;height:2px;background:var(--line)} .mo i.d{width:3px} .mo i.h{width:7px} .mo i.on{background:var(--ink)}
+.mo.wide{width:100%;justify-content:space-between;margin-top:4px} .mo.wide .l{gap:3px} .mo.wide i{height:3px} .mo.wide i.d{width:4px} .mo.wide i.h{width:9px} .mo.wide i.on{background:var(--sig)}
+</style>
+</head>
+<body>
+<h1>Epic G: mockups for Settings and boot</h1>
+<p class="lede">Offband theme, Modern look, native 240×320 shown at 1.25×. Settings, Radio, Messages &amp; alerts and Display follow ObScreen as drawn; the edit sheets, the discard prompt, the nine screens drawn only as one line in the spec, and the boot screen's real content are here, with the defaults the owner approved on 2026-10-17. Values are examples. The bullets are the behavior to build.</p>
+
+<h3>The list and Radio (drawn), with what was missing</h3><div class="grid">
+
+<div class="card"><h2><span class="n">1</span>Settings list</h2><p>As drawn: twelve categories, icon tile, label, current value. Blocked is now Contacts (pick a).</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="lh"><span class="t">Settings</span><span class="id">OB-Valley</span></div><div class="body">
+<div class="cat"><span class="ic">◉</span><span class="k">Node</span><span class="v">OB-Valley</span><span class="chev">›</span></div>
+<div class="cat"><span class="ic">⌁</span><span class="k">Radio</span><span class="v">910.525 · SF7</span><span class="chev">›</span></div>
+<div class="cat"><span class="ic">∿</span><span class="k">Radio stats</span><span class="v">1.2% air</span><span class="chev">›</span></div>
+<div class="cat"><span class="ic">⛉</span><span class="k">Privacy</span><span class="v">Location off</span><span class="chev">›</span></div>
+<div class="cat"><span class="ic">☷</span><span class="k">Contacts</span><span class="v">Auto-add: all</span><span class="chev">›</span></div>
+<div class="cat"><span class="ic">♪</span><span class="k">Messages &amp; alerts</span><span class="v">On</span><span class="chev">›</span></div>
+<div class="cat"><span class="ic">▭</span><span class="k">Display</span><span class="v">Offband</span><span class="chev">›</span></div></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div></div></div>
+<ul><li>USR / AUX move, USR hold opens, AUX hold back to Home. The list scrolls to the other five (Connectivity … About device).</li><li>Contacts holds the auto-add rules; a block list is a later Feature.</li><li>Actions keeps its amber tile, as drawn.</li></ul></div>
+
+<div class="card"><h2><span class="n">2</span>Radio, editing</h2><p>As drawn. A changed value is marked, and Save is in the focus order (USR hold on it saves).</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Radio</span></div><div class="body"><div class="sec">LoRa</div>
+<div class="row"><div class="kk"><div class="k">Preset</div><div class="hint">Updated Thu, Oct 1</div></div><span class="v">USA</span><span class="dd">▾</span></div>
+<div class="row"><div class="kk"><div class="k">Frequency</div><div class="hint">150.0–2500.0 MHz</div></div><span class="v m">910.525</span></div>
+<div class="row focus"><div class="kk"><div class="k">Bandwidth</div></div><span class="v">62.5 kHz</span><span class="dd">▾</span></div>
+<div class="row"><div class="kk"><div class="k">Spreading factor</div></div><span class="v">SF7</span><span class="dd">▾</span></div>
+<div class="row"><div class="kk"><div class="k">Coding rate</div></div><span class="v">4/5</span><span class="dd">▾</span></div>
+<div class="row"><div class="kk"><div class="k">TX power</div><div class="hint">0–22 dBm</div></div><span class="v m warn">20 dBm</span></div>
+<div class="sec">Mesh</div>
+<div class="row"><div class="kk"><div class="k">Off-grid repeat</div><div class="hint">Repeat mesh packets for others</div></div><span class="tog"><i></i></span></div>
+<div class="row"><div class="kk"><div class="k">Path hash mode</div><div class="hint">Needs v1.14+ across the mesh</div></div><span class="v">2-byte · 32 hops</span><span class="dd">▾</span></div></div>
+<div class="save"><div>Save · radio restarts</div></div></div></div>
+<ul><li>A changed value shows in amber until saved (TX power here).</li><li>Preset shows "Custom" when the values match no named preset; picking one fills them in. The preset table comes from the MeshCore app.</li><li>Save writes the prefs and restarts the radio; the status bar shows the new radio line.</li></ul></div>
+
+<div class="card"><h2><span class="n">3</span>Picker sheet</h2><p>Any ▾ row: the options in a bottom sheet, as the channel notification sheet.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Radio</span></div><div class="body"><div class="sec">LoRa</div>
+<div class="row"><div class="kk"><div class="k">Preset</div><div class="hint">Updated Thu, Oct 1</div></div><span class="v">USA</span><span class="dd">▾</span></div>
+<div class="row"><div class="kk"><div class="k">Frequency</div><div class="hint">150.0–2500.0 MHz</div></div><span class="v m">910.525</span></div>
+<div class="row focus"><div class="kk"><div class="k">Bandwidth</div></div><span class="v">62.5 kHz</span><span class="dd">▾</span></div>
+<div class="row"><div class="kk"><div class="k">Spreading factor</div></div><span class="v">SF7</span><span class="dd">▾</span></div></div>
+<div class="save"><div>Save · radio restarts</div></div>
+<div class="scrim"></div><div class="sheet"><div class="st">Bandwidth</div><div class="ss">Every node on a mesh must match</div>
+<div class="opt"><span class="rd"></span>31.25 kHz</div><div class="opt on"><span class="rd"></span>62.5 kHz</div><div class="opt hot"><span class="rd"></span>125 kHz</div><div class="opt"><span class="rd"></span>250 kHz</div><div class="opt"><span class="rd"></span>500 kHz</div></div></div></div>
+<ul><li>USR / AUX move, USR hold picks, AUX hold closes. Touch picks directly.</li><li>The current value is filled; the cursor is the washed row.</li></ul></div>
+
+<div class="card"><h2><span class="n">4</span>Stepper sheet</h2><p>A number with a small range: TX power, brightness, timers.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Radio</span></div><div class="body"><div class="sec">LoRa</div>
+<div class="row"><div class="kk"><div class="k">Coding rate</div></div><span class="v">4/5</span><span class="dd">▾</span></div>
+<div class="row focus"><div class="kk"><div class="k">TX power</div><div class="hint">0–22 dBm</div></div><span class="v m">22 dBm</span></div></div>
+<div class="save"><div>Save · radio restarts</div></div>
+<div class="scrim"></div><div class="sheet"><div class="st">TX power</div><div class="ss">The radio chip's setting, not the antenna's output</div>
+<div class="step"><div class="b">−</div><div class="val">20 dBm</div><div class="b hot">+</div></div><div class="lim">0 – 22 dBm · this board's maximum</div>
+<div class="btns"><div class="btn">Cancel</div><div class="btn pri">Set</div></div></div></div></div>
+<ul><li>USR / AUX step the value; USR hold sets; AUX hold cancels. Touch uses − / + and Set.</li><li>The limits come from the board (22 dBm on the Heltec V4).</li></ul></div>
+
+<div class="card"><h2><span class="n">5</span>Frequency keypad</h2><p>Frequency is too wide for a stepper: a number pad with the range under it.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Radio</span></div><div class="body"><div class="sec">LoRa</div>
+<div class="row focus"><div class="kk"><div class="k">Frequency</div><div class="hint">150.0–2500.0 MHz</div></div><span class="v m">910.525</span></div></div>
+<div class="save"><div>Save · radio restarts</div></div>
+<div class="scrim"></div><div class="sheet"><div class="st">Frequency</div><div class="field">910.525<span class="caret"></span><span style="margin-left:auto;font-size:11px;color:var(--dim)">MHz</span></div>
+<div class="lim" style="margin-bottom:4px">150.000 – 2500.000 MHz</div>
+<div class="pad"><div>1</div><div>2</div><div>3</div><div>4</div><div>5</div><div>6</div><div>7</div><div>8</div><div>9</div><div class="w">.</div><div>0</div><div class="w">⌫</div></div>
+<div class="btns"><div class="btn">Cancel</div><div class="btn pri">Set</div></div></div></div></div>
+<ul><li>Set is refused (the range turns red) outside 150–2500 MHz, the same check as the phone path.</li><li>Buttons: a key cursor as on the keyboard (USR / AUX move, USR hold presses).</li></ul></div>
+
+<div class="card"><h2><span class="n">6</span>Discard changes?</h2><p>Leaving Radio with unsaved changes.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Radio</span></div><div class="body"><div class="sec">LoRa</div>
+<div class="row"><div class="kk"><div class="k">TX power</div><div class="hint">0–22 dBm</div></div><span class="v m warn">20 dBm</span></div></div>
+<div class="save"><div>Save · radio restarts</div></div>
+<div class="scrim"></div><div class="sheet"><div class="st">Discard changes?</div><div class="ss">TX power 22 → 20 dBm isn't saved</div>
+<div class="btns" style="padding-bottom:4px"><div class="btn hot">Keep editing</div><div class="btn red">Discard</div></div></div></div></div>
+<ul><li>Keep editing is the default (the cursor starts there).</li><li>Lists what changed, one line per value (up to three, then "and 2 more").</li></ul></div>
+</div>
+
+<h3>Messages &amp; alerts and Display (drawn), adjusted</h3><div class="grid">
+
+<div class="card"><h2><span class="n">7</span>Messages &amp; alerts</h2><p>As drawn, without Auto route rotation (nothing in the firmware does it).</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Messages &amp; alerts</span></div><div class="body"><div class="sec">Notifications</div>
+<div class="row"><div class="kk"><div class="k">Enable notifications</div><div class="hint">Messages and adverts</div></div><span class="tog on"><i></i></span></div>
+<div class="row"><div class="kk"><div class="k">Direct messages</div><div class="hint">New DM from a contact</div></div><span class="tog on"><i></i></span></div>
+<div class="row"><div class="kk"><div class="k">Channel messages</div><div class="hint">Per channel: All / Mentions / Off</div></div><span class="tog on"><i></i></span></div>
+<div class="row"><div class="kk"><div class="k">New channels default</div></div><span class="v">Mentions only</span><span class="dd">▾</span></div>
+<div class="row"><div class="kk"><div class="k">New node discovered</div><div class="hint">Repeaters or contacts heard</div></div><span class="tog"><i></i></span></div>
+<div class="row"><div class="kk"><div class="k">Alert with</div><div class="hint">Device only</div></div><span class="v">Buzzer + LED</span><span class="dd">▾</span></div>
+<div class="sec">Messaging</div>
+<div class="row"><div class="kk"><div class="k">Clear path on max retry</div><div class="hint">After 3 failed sends</div></div><span class="tog"><i></i></span></div>
+<div class="row"><div class="kk"><div class="k">Jump to oldest unread</div><div class="hint">Open chats at first unread</div></div><span class="tog"><i></i></span></div></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div></div></div>
+<ul><li>"After 3 failed sends": this firmware tries a DM 3 times (the design said 5).</li><li>New channels default feeds the per-channel modes from Epic D.</li></ul></div>
+
+<div class="card"><h2><span class="n">8</span>Display</h2><p>As drawn, plus the 12/24-hour clock as a new setting; Rotation greyed until Epic H.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Display</span></div><div class="body"><div class="sec">Appearance</div>
+<div class="row"><div class="kk"><div class="k">Theme</div></div><span class="v">Offband</span><span class="chev">›</span></div>
+<div class="row"><div class="kk"><div class="k">Look</div><div class="hint">Rounded or square</div></div><span class="v">Modern</span><span class="chev">›</span></div>
+<div class="row"><div class="kk"><div class="k">Clock</div></div><span class="v">24-hour</span><span class="dd">▾</span></div>
+<div class="row off"><div class="kk"><div class="k">Rotation</div><div class="hint">Comes with landscape (Epic H)</div></div><span class="v">Portrait 0°</span><span class="chev">›</span></div>
+<div class="sec">Screen</div>
+<div class="row"><div class="kk"><div class="k">Brightness</div></div><span class="v m">70%</span></div>
+<div class="row"><div class="kk"><div class="k">Dim after</div></div><span class="v m">30 s</span></div>
+<div class="row"><div class="kk"><div class="k">Screen off</div></div><span class="v m">2 min</span></div></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div></div></div>
+<ul><li>Theme opens the theme tiles (as drawn on the wide layout), Look a two-option sheet.</li><li>Brightness, Dim after and Screen off use the stepper sheet; they apply at once (no Save, as they are not radio settings).</li></ul></div>
+</div>
+
+<h3>The nine screens the design gives one line each (built to the drawn grammar for owner review)</h3><div class="grid">
+
+<div class="card"><h2><span class="n">9</span>Node</h2><p>Spec: name, location, GPS enable, public key.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Node</span></div><div class="body"><div class="sec">Identity</div>
+<div class="row"><div class="kk"><div class="k">Name</div><div class="hint">Shown to others in adverts</div></div><span class="v">OB-Valley</span><span class="chev">›</span></div>
+<div class="row"><div class="kk"><div class="k">Public key</div></div><span class="v m">7c02 d1e9 … 44a0</span></div>
+<div class="sec">Location</div>
+<div class="row"><div class="kk"><div class="k">GPS</div><div class="hint">Position from the receiver</div></div><span class="tog on"><i></i></span></div>
+<div class="row"><div class="kk"><div class="k">Position</div><div class="hint">From GPS (fix) · or set here</div></div><span class="v m">39.5000, -84.4000</span><span class="chev">›</span></div>
+<div class="row"><div class="kk"><div class="k">GPS interval</div><div class="hint">How often it reads</div></div><span class="v m">30 s</span></div></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div></div></div>
+<ul><li>Name opens the keyboard sheet (as Admin login); 31 characters max.</li><li>Position with GPS off: a number pad for latitude, then longitude.</li><li>The key line is read-only.</li></ul></div>
+
+<div class="card"><h2><span class="n">10</span>Radio stats</h2><p>Spec: airtime, noise floor, RX/TX counts, last SNR. Read-only, live.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Radio stats</span></div><div class="body"><div class="sec">Since boot</div>
+<div class="row"><div class="kk"><div class="k">Airtime</div><div class="hint">Transmit share of uptime</div></div><span class="v m">1.2%</span></div>
+<div class="row"><div class="kk"><div class="k">Noise floor</div></div><span class="v m">-118 dBm</span></div>
+<div class="row"><div class="kk"><div class="k">Received</div><div class="hint">Packets</div></div><span class="v m">2,318</span></div>
+<div class="row"><div class="kk"><div class="k">Sent</div><div class="hint">Flood · direct</div></div><span class="v m">412 · 96</span></div>
+<div class="row"><div class="kk"><div class="k">Last packet</div><div class="hint">SNR · RSSI</div></div><span class="v m">+6.2 · -97</span></div>
+<div class="sec">Radio</div>
+<div class="row"><div class="kk"><div class="k">Uptime</div></div><span class="v m">4d 2h</span></div></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div></div></div>
+<ul><li>Refreshes every second while open.</li><li>Values from the same counters the phone's stats read.</li></ul></div>
+
+<div class="card"><h2><span class="n">11</span>Privacy</h2><p>Spec: advert location, multi-ACKs, the three telemetry modes.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Privacy</span></div><div class="body"><div class="sec">Adverts</div>
+<div class="row"><div class="kk"><div class="k">Share location</div><div class="hint">In your adverts</div></div><span class="v">Off</span><span class="dd">▾</span></div>
+<div class="sec">Messaging</div>
+<div class="row"><div class="kk"><div class="k">Extra ACKs</div><div class="hint">Send each ACK more than once</div></div><span class="tog"><i></i></span></div>
+<div class="sec">Telemetry</div>
+<div class="row"><div class="kk"><div class="k">Base</div><div class="hint">Battery, uptime to others</div></div><span class="v">Contacts</span><span class="dd">▾</span></div>
+<div class="row"><div class="kk"><div class="k">Location</div></div><span class="v">Never</span><span class="dd">▾</span></div>
+<div class="row"><div class="kk"><div class="k">Environment</div><div class="hint">Sensors</div></div><span class="v">Never</span><span class="dd">▾</span></div></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div></div></div>
+<ul><li>Telemetry options: Never / Contacts (favourites) / Everyone, as the app offers.</li><li>Share location: Off / On.</li></ul></div>
+
+<div class="card"><h2><span class="n">12</span>Contacts</h2><p>Pick a: the auto-add rules the firmware already keeps (was "Blocked").</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Contacts</span></div><div class="body"><div class="sec">Adding</div>
+<div class="row"><div class="kk"><div class="k">Add automatically</div><div class="hint">New nodes heard become contacts</div></div><span class="tog on"><i></i></span></div>
+<div class="row"><div class="kk"><div class="k">Companions</div></div><span class="tog on"><i></i></span></div>
+<div class="row"><div class="kk"><div class="k">Repeaters</div></div><span class="tog on"><i></i></span></div>
+<div class="row"><div class="kk"><div class="k">Room servers</div></div><span class="tog on"><i></i></span></div>
+<div class="row"><div class="kk"><div class="k">Sensors</div></div><span class="tog"><i></i></span></div>
+<div class="row"><div class="kk"><div class="k">Up to</div><div class="hint">Hops away</div></div><span class="v">Any</span><span class="dd">▾</span></div>
+<div class="sec">Stored</div>
+<div class="row"><div class="kk"><div class="k">Contacts</div><div class="hint">Of 350</div></div><span class="v m">302</span></div></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div></div></div>
+<ul><li>The four types grey out when Add automatically is off.</li><li>A block list is a later Feature.</li></ul></div>
+
+<div class="card"><h2><span class="n">13</span>Connectivity</h2><p>Spec: BLE on/off + PIN, WiFi on/off + SSID. This build has no WiFi, so BLE only.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Connectivity</span></div><div class="body"><div class="sec">Bluetooth</div>
+<div class="row"><div class="kk"><div class="k">Bluetooth</div><div class="hint">For the phone app</div></div><span class="tog on"><i></i></span></div>
+<div class="row"><div class="kk"><div class="k">PIN</div><div class="hint">Asked when pairing</div></div><span class="v m">••••••</span><span class="chev">›</span></div>
+<div class="row"><div class="kk"><div class="k">Paired</div></div><span class="v">Pixel 8</span></div></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div></div></div>
+<ul><li>PIN opens a number pad (6 digits); it shows masked here.</li><li>Bluetooth off hides the status-bar icon, as the spec says.</li></ul></div>
+
+<div class="card"><h2><span class="n">14</span>Power</h2><p>Spec: sleep timer, wake sources, battery calibration.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Power</span></div><div class="body"><div class="sec">Battery</div>
+<div class="row"><div class="kk"><div class="k">Now</div></div><span class="v m">4.02 V · 87%</span></div>
+<div class="row"><div class="kk"><div class="k">Full charge at</div><div class="hint">Learned after a full charge</div></div><span class="v m">4.15 V</span></div>
+<div class="row"><div class="kk"><div class="k">Shut down below</div><div class="hint">Low-voltage protection</div></div><span class="v m">3.40 V</span></div>
+<div class="sec">Screen</div>
+<div class="row"><div class="kk"><div class="k">Screen off after</div><div class="hint">Same as Display</div></div><span class="v m">2 min</span></div>
+<div class="row"><div class="kk"><div class="k">Wake on touch</div><div class="hint">Else USR only</div></div><span class="tog on"><i></i></span></div></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div></div></div>
+<ul><li>Full charge at: stepper, or "Learn again" in its sheet (the firmware already learns it, #1254).</li><li>Shut down below is shown, not set: it is one policy with SafeBoot.</li></ul></div>
+
+<div class="card"><h2><span class="n">15</span>Actions</h2><p>Spec: delete all paths (red), sync time, advert now, reboot (amber). Each confirms.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Actions</span></div><div class="body">
+<div class="act"><div><div class="k">Send advert</div><div class="hint">Zero-hop now</div></div></div>
+<div class="act"><div><div class="k">Sync time</div><div class="hint">From GPS, else the phone</div></div></div>
+<div class="act amb"><div><div class="k">Reboot</div><div class="hint">Saves first</div></div></div>
+<div class="act red"><div><div class="k">Delete all paths</div><div class="hint">Every contact floods until a route returns</div></div></div></div>
+<div class="scrim"></div><div class="sheet"><div class="st">Delete all paths?</div><div class="ss">302 contacts go back to flood routing</div>
+<div class="btns" style="padding-bottom:4px"><div class="btn hot">Cancel</div><div class="btn red">Delete</div></div></div></div></div>
+<ul><li>Cancel is the default on every confirm.</li><li>Send advert and Sync time confirm with a one-line result instead ("Sent ✓", "Time from GPS ✓").</li></ul></div>
+
+<div class="card"><h2><span class="n">16</span>Debug</h2><p>Spec: serial log, packet log, SafeBoot, export config to SD. No SD here, so no export or GPX.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Debug</span></div><div class="body"><div class="sec">Logs</div>
+<div class="row"><div class="kk"><div class="k">Serial log</div><div class="hint">USB serial, capture level</div></div><span class="v">Off</span><span class="dd">▾</span></div>
+<div class="row"><div class="kk"><div class="k">Packet log</div><div class="hint">Every packet to the phone</div></div><span class="tog"><i></i></span></div>
+<div class="sec">SafeBoot</div>
+<div class="row"><div class="kk"><div class="k">Boots</div><div class="hint">Since the last clean start</div></div><span class="v m">1 / 3</span></div>
+<div class="row"><div class="kk"><div class="k">Last reset</div></div><span class="v">Brownout</span></div></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div></div></div>
+<ul><li>Serial log levels: Off / Info / Debug (the existing caplog setting).</li><li>SafeBoot is read-only here; its own menu is a later design pass (choice 11A).</li></ul></div>
+
+<div class="card"><h2><span class="n">17</span>About device</h2><p>Spec: firmware, model, battery, key, data scope, counts, build.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">About device</span></div><div class="body"><div class="sec">Firmware</div>
+<div class="row"><div class="kk"><div class="k">Offband</div></div><span class="v m">v1.5.0</span></div>
+<div class="row"><div class="kk"><div class="k">MeshCore</div></div><span class="v m">v1.17.0</span></div>
+<div class="row"><div class="kk"><div class="k">Build</div></div><span class="v m">37f145c · Oct 17</span></div>
+<div class="sec">Device</div>
+<div class="row"><div class="kk"><div class="k">Model</div></div><span class="v">Heltec V4 TFT</span></div>
+<div class="row"><div class="kk"><div class="k">Battery</div></div><span class="v m">4.02 V</span></div>
+<div class="row"><div class="kk"><div class="k">Public key</div></div><span class="v m">7c02 … 44a0</span></div>
+<div class="sec">Data</div>
+<div class="row"><div class="kk"><div class="k">Messages</div><div class="hint">On this device</div></div><span class="v m">412 / 1,000</span></div>
+<div class="row"><div class="kk"><div class="k">Contacts</div></div><span class="v m">302 / 350</span></div></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div></div></div>
+<ul><li>All read-only. "Data scope" from the spec reads as Messages and Contacts stored here.</li></ul></div>
+</div>
+
+<h3>Boot</h3><div class="grid">
+<div class="card"><h2><span class="n">18</span>Boot screen</h2><p>As drawn, with the real checks from setup; no SafeBoot hint until that menu exists.</p>
+<div class="dev"><div class="scr"><div class="boot"><div class="bootc"><div class="logo"></div><div class="bname">offband</div><div class="mono9" style="color:var(--dim)">Offband 1.5.0 - MC 1.17</div>
+<div class="checks mono9">
+<div class="ck"><span class="ok">[ok]</span><span class="t">NVS config</span></div>
+<div class="ck"><span class="ok">[ok]</span><span class="t">SX1262 radio</span></div>
+<div class="ck"><span class="ok">[ok]</span><span class="t">GPS UART</span></div>
+<div class="ck"><span class="ok">[ok]</span><span class="t">Contacts 302 / 350</span></div>
+<div class="ck"><span class="pend">[..]</span><span class="t">BLE advertising</span></div></div>
+<div class="prog"><i></i></div><div class="mono9" style="color:var(--warn)">boot 1/3 · last reset: brownout</div></div></div></div></div>
+<ul><li>Each row is recorded as its setup phase finishes; the screen reads them.</li><li>A failed radio halts boot (as the plan says), so the screen never shows a failed radio row.</li><li>The boot line shows only after an unclean reset; a clean boot leaves it out.</li></ul></div>
+
+<div class="card"><h2><span class="n">18a</span>Morse under the name</h2><p>The site's lockup (offband-site, animated mark #31): "offband" with its Morse underline. The bar stays.</p>
+<div class="dev"><div class="scr"><div class="boot"><div class="bootc"><div class="logo"></div><div class="bname">offband</div>
+<div class="mo "><span class="l"><i class="h on"></i><i class="h on"></i><i class="h on"></i></span><span class="l"><i class="d on"></i><i class="d on"></i><i class="h on"></i><i class="d on"></i></span><span class="l"><i class="d on"></i><i class="d on"></i><i class="h on"></i><i class="d on"></i></span><span class="l"><i class="h on"></i><i class="d on"></i><i class="d on"></i><i class="d on"></i></span><span class="l"><i class="d on"></i><i class="h on"></i></span><span class="l"><i class="h on"></i><i class="d on"></i></span><span class="l"><i class="h on"></i><i class="d on"></i><i class="d on"></i></span></div>
+<div class="mono9" style="color:var(--dim)">Offband 1.5.0 - MC 1.17</div>
+<div class="checks mono9">
+<div class="ck"><span class="ok">[ok]</span><span class="t">Settings</span></div>
+<div class="ck"><span class="ok">[ok]</span><span class="t">SX1262 radio</span></div>
+<div class="ck"><span class="pend">[..]</span><span class="t">GPS</span></div>
+<div class="ck"><span class="ok">[ok]</span><span class="t">Contacts 302 / 350</span></div>
+<div class="ck"><span class="ok">[ok]</span><span class="t">BLE advertising</span></div></div>
+<div class="prog"><i></i></div><div class="mono9" style="color:var(--warn)">boot 1/3 · last reset: brownout</div></div></div></div></div>
+<ul><li>Static: 22 marks drawn as small boxes, in the name's ink. No image, almost no memory.</li><li>Cost: very small. The same underline can go on Lock and About later.</li></ul></div>
+
+<div class="card"><h2><span class="n">18b</span>Morse is the bar</h2><p>The underline replaces the bar: its marks light in signal color, left to right, over the 2.5 s. "offband" is spelled out by the time it's done.</p>
+<div class="dev"><div class="scr"><div class="boot"><div class="bootc"><div class="logo"></div><div class="bname">offband</div>
+<div class="mono9" style="color:var(--dim)">Offband 1.5.0 - MC 1.17</div>
+<div class="checks mono9">
+<div class="ck"><span class="ok">[ok]</span><span class="t">Settings</span></div>
+<div class="ck"><span class="ok">[ok]</span><span class="t">SX1262 radio</span></div>
+<div class="ck"><span class="pend">[..]</span><span class="t">GPS</span></div>
+<div class="ck"><span class="ok">[ok]</span><span class="t">Contacts 302 / 350</span></div>
+<div class="ck"><span class="ok">[ok]</span><span class="t">BLE advertising</span></div></div>
+<div class="mo wide"><span class="l"><i class="h on"></i><i class="h on"></i><i class="h on"></i></span><span class="l"><i class="d on"></i><i class="d on"></i><i class="h on"></i><i class="d on"></i></span><span class="l"><i class="d on"></i><i class="d on"></i><i class="h on"></i><i class="d on"></i></span><span class="l"><i class="h on"></i><i class="d on"></i><i class="d"></i><i class="d"></i></span><span class="l"><i class="d"></i><i class="h"></i></span><span class="l"><i class="h"></i><i class="d"></i></span><span class="l"><i class="h"></i><i class="d"></i><i class="d"></i></span></div>
+<div class="mono9" style="color:var(--warn)">boot 1/3 · last reset: brownout</div></div></div></div></div>
+<ul><li>Shown 60% through. Unlit marks in the line color, lit in signal.</li><li>Same cost as 18a; it drops the plain bar.</li><li>Can combine with 18a (underline under the name stays still, this one runs).</li></ul></div>
+
+<div class="card"><h2><span class="n">18c</span>The site's intro, drawn live</h2><p>The mark's rings flare, then "offband" types in with its Morse, as the site's GIF does; the checks follow.</p>
+<div class="dev"><div class="scr"><div class="boot"><div class="bootc"><div class="logo"></div><div class="bname">offb</div>
+<div class="mo "><span class="l"><i class="h on"></i><i class="h on"></i><i class="h on"></i></span><span class="l"><i class="d on"></i><i class="d on"></i><i class="h on"></i><i class="d on"></i></span><span class="l"><i class="d on"></i><i class="d on"></i><i class="h on"></i><i class="d on"></i></span><span class="l"><i class="h on"></i><i class="d"></i><i class="d"></i><i class="d"></i></span><span class="l"><i class="d"></i><i class="h"></i></span><span class="l"><i class="h"></i><i class="d"></i></span><span class="l"><i class="h"></i><i class="d"></i><i class="d"></i></span></div>
+<div class="mono9" style="color:var(--dim)">Offband 1.5.0 - MC 1.17</div></div></div></div></div>
+<ul><li>Drawn by code, not the GIF: themes still apply, nothing to decode.</li><li>The site's GIF itself is fixed-color, 38 frames, and needs a ~170 KB frame buffer to play here; not worth it.</li><li>Adds about 1.5 s before the checks show, or runs while they fill.</li></ul></div>
+</div>
+</body></html>
