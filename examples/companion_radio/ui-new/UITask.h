@@ -309,6 +309,15 @@ public:
   // MUTE, and does nothing for an id this build cannot resolve. Anything that wants to
   // sound a tune by id should not require touching sound code at all.
   offband::TonePlay playTuneById(uint8_t id, offband::TonePriority priority);
+  // The badge's override of the trigger seam. Names the un-listed id and asks for it at
+  // Trigger priority, which is what stops the next arriving message cutting it off: the
+  // payload is far longer than any notification, so under Event priority a busy channel
+  // truncates it on every badge in the room (#1608).
+  //
+  // Reports true only when the buzzer actually took it. Silent counts as played, because
+  // choosing silence is a choice; a refusal for quiet, MUTE, or an unresolvable id does
+  // not.
+  bool playTriggerTune() override;
   // #1422: stops whatever is sounding. The other half of the trigger seam -- a tune
   // sent to a room full of badges has to be stoppable, and the payload is the owner's
   // to replace, so it will not always be under two seconds.

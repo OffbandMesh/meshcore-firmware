@@ -69,13 +69,19 @@ constexpr Tune kBuiltinTunes[] = {
     // #1422: THE UN-LISTED ONE. A null name keeps it out of the picker, so it exists
     // only for something that names it by id. Nothing in the UI can reach or select it.
     //
-    // The melody here is a PLACEHOLDER and ours: a rising flourish, deliberately longer
-    // and more insistent than a notification chime so a hall of badges firing at once is
-    // obviously an event rather than six people getting messages. The owner has accepted
+    // THE PAYLOAD, supplied by the owner 2026-10-18. It is his reference string from the
+    // badge maker -- the same 218-character line kMaxRtttl in TuneSlots.h was sized
+    // around -- and it runs 17.1 s over 66 tokens (53 notes, 13 rests, octaves 5-6).
+    //
+    // That length is why TonePriority::Trigger exists (#1608): at 17 s against the
+    // 0.06-0.25 s of every notification above, an Event-priority play would be truncated
+    // by the next arriving message, which in a busy channel is every time.
+    //
+    // The line it replaced was a placeholder of our own. The owner has accepted
     // the risk of shipping a recognizable tune here (#1447 discussion), so this line is
     // his to replace -- or, once typed custom slots land (#1413), the trigger can name a
     // slot he filled in himself and the repo never carries the payload at all.
-    {nullptr, "Trigger:d=8,o=5,b=160:c,e,g,c6,e6,g6,2c7"},
+    {nullptr, "n:d=4,o=5,b=200:8g,8a,8c6,8a,e6,8p,e6,8p,d6.,p,8p,8g,8a,8c6,8a,d6,8p,d6,8p,c6,8b,a.,8g,8a,8c6,8a,2c6,d6,b,a,g.,8p,g,2d6,2c6.,p,8g,8a,8c6,8a,e6,8p,e6,8p,d6.,p,8p,8g,8a,8c6,8a,2g6,b,c6.,8b,a,8g,8a,8c6,8a,2c6,d6,b,a,g.,8p"},
 };
 
 constexpr uint8_t kBuiltinCount = (uint8_t)(sizeof(kBuiltinTunes) / sizeof(kBuiltinTunes[0]));

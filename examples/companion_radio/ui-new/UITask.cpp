@@ -970,6 +970,14 @@ void UITask::leaveTonePicker() {
   gotoTones();
 }
 
+bool UITask::playTriggerTune() {
+  // One call into the resolver that already knows how to find the id, honour quiet and
+  // MUTE, and refuse politely. Nothing here duplicates any of that.
+  const offband::TonePlay r =
+      playTuneById(offband::kTuneTrigger, offband::TonePriority::Trigger);
+  return r == offband::TonePlay::Played;
+}
+
 offband::TonePlay UITask::playTuneById(uint8_t id, offband::TonePriority priority) {
   // Silent is a CHOICE: it sounds like nothing and that is success.
   if (id == offband::kTuneSilent) return offband::TonePlay::Played;
