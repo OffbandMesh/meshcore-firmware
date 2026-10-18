@@ -15,6 +15,7 @@
 #include <helpers/gui/hw/Chsc6xTouch.h>
 #include <helpers/gui/hw/GuiPanel.h>
 #include <helpers/gui/hw/LvglPort.h>
+#include <helpers/ui/OffbandSplash.h>   // offbandShortVersion
 #include <helpers/ui/ScreenOff.h>
 
 #include "../MyMesh.h"
@@ -137,6 +138,19 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
     _accent_shown = _prefs->gui.accent;
   }
   _shell.begin(themeTokens(_theme, _prefs ? _prefs->gui.accent : kDefaultAccent), _look, this);
+
+  // The boot screen over it (G6): versions, setup's checks, and a line
+  // only after an unclean reset.
+  {
+    char version[48], reset_line[48] = "";
+    bootVersionLine(FIRMWARE_VERSION, offband::offbandShortVersion(), version, sizeof version);
+    const uint8_t attempt = board.safeBootAttempt();
+    const uint32_t code = board.getResetReason();
+    if (uncleanBoot(code, attempt)) bootLine(attempt, board.safeBootLimit(), code, reset_line, sizeof reset_line);
+    _boot.show(themeTokens(_theme, _accent_shown), version, reset_line, millis());
+    _boot.update(bootFacts(), millis());
+    mesh_log_line(MLOG_BOOT, "[gui] boot screen: %s%s%s\n", version, reset_line[0] ? " / " : "", reset_line);
+  }
   _next_status = _next_screen = 0;
   loop();   // fill the first frame before the backlight comes up
   lv_refr_now(nullptr);
@@ -197,6 +211,10 @@ void UITask::handle(InputEvent ev, uint32_t now) {
   const Action a = mapInput(ev, _screen != ScreenState::Off, _pocket_locked);
   if (a == Action::None) return;
   _last_input = now;
+  // Any press ends the boot screen. CLI rescue, pocket lock and the buzzer
+  // still act; a move or an open doesn't, on a screen not yet seen.
+  const bool booting = _boot.open();
+  if (booting) _boot.close();
   if (a == Action::PocketLock) {
     _pocket_locked = true;
     applyScreen(ScreenState::Off);
@@ -222,6 +240,7 @@ void UITask::handle(InputEvent ev, uint32_t now) {
     default:
       break;
   }
+  if (booting) return;
   _shell.action(a);
   _next_screen = 0;   // show the result now, not at the next 1 s refresh
 }
@@ -798,6 +817,41 @@ bool UITask::buzzerOn() { return !buzzerQuiet(); }
 
 void UITask::setBuzzerOn(bool on) {
   if (buzzerOn() != on) toggleBuzzer();   // saves the pref, and chirps when it comes on
+}
+
+// ------------------------------------------------------- Boot screen (G6)
+
+BootFacts UITask::bootFacts() {
+  BootFacts f{};
+  DataStore* ds = the_mesh.guiDataStore();
+  const DataStore::PrefsLoad pl = ds ? ds->prefsLoad() : DataStore::PrefsDefaults;
+  f.prefs = pl == DataStore::PrefsFromFile ? PrefsSource::File
+          : pl == DataStore::PrefsMigrated ? PrefsSource::Migrated
+                                           : PrefsSource::Defaults;
+#if defined(USE_SX1262)
+  f.radio = "SX1262";
+#elif defined(USE_SX1268)
+  f.radio = "SX1268";
+#elif defined(USE_SX1276)
+  f.radio = "SX1276";
+#elif defined(USE_LR1110)
+  f.radio = "LR1110";
+#else
+  f.radio = "LoRa";
+#endif
+#if ENV_INCLUDE_GPS == 1
+  f.gps_built = true;
+  f.gps_on = gpsEnabled();
+  f.gps_seen = sensors.gpsDetected();
+#endif
+  f.contacts = uint16_t(the_mesh.getNumContacts());
+  f.contacts_max = MAX_CONTACTS;
+#ifdef BLE_PIN_CODE
+  f.ble_built = true;
+  f.ble_on = isBluetoothEnabled();
+  f.phone = hasConnection();
+#endif
+  return f;
 }
 
 // ------------------------------- Connectivity, Power, Debug, About (G5)
@@ -1444,6 +1498,20 @@ void UITask::loop() {
         _prefs_dirty = true;   // saved when idle
         mesh_log_line(MLOG_BOOT, "[gui] battery full point learned: %u mV\n", unsigned(learned));
       }
+    }
+  }
+
+  // The boot screen: its rows four times a second, the Morse bar every pass,
+  // then gone; gone
+  // too if the screen went dark first, so a wake never finds it.
+  if (_boot.open()) {
+    if (_boot.expired(now) || _screen == ScreenState::Off) {
+      _boot.close();
+    } else if ((int32_t)(now - _next_boot_rows) >= 0) {
+      _next_boot_rows = now + 250;
+      _boot.update(bootFacts(), now);
+    } else {
+      _boot.tick(now);
     }
   }
 

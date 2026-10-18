@@ -18,6 +18,7 @@
 
 #include "../AbstractUITask.h"
 #include "../NodePrefs.h"
+#include "BootScreen.h"
 #include "Screens.h"
 
 #ifdef PIN_BUZZER
@@ -116,6 +117,7 @@ private:
   uint8_t battPercent() const;
   void lowBatteryShutdown(uint16_t mv);   // doesn't return
   void savePending();                     // idle-saved prefs and passwords, now
+  offband::gui::BootFacts bootFacts();    // what setup left behind (G6)
 
 #ifdef PIN_BUZZER
   genericBuzzer _buzzer;
@@ -133,6 +135,8 @@ private:
   int _unread = 0;
 
   GuiShell _shell;
+  BootScreen _boot;
+  uint32_t _next_boot_rows = 0;
   offband::gui::DmRetry _dm[8];   // DMs sent from the device, awaiting their ACK
   offband::gui::NodeRow* _node_rows = nullptr;   // MAX_CONTACTS rows, in PSRAM (Epic E)
   uint8_t (*_node_keys)[32] = nullptr;           // the rows' keys, copied
