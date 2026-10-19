@@ -39,6 +39,8 @@ public:
 
   void sleep(bool on);
   void displayOn(bool on);
+  // The orientation (Epic H): MADCTL, sent once any pixel write has finished.
+  void setMadctl(uint8_t madctl);
 
 private:
   void command(uint8_t cmd, const uint8_t* data = nullptr, size_t len = 0);

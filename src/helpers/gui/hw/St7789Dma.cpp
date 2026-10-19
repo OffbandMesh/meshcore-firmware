@@ -132,3 +132,8 @@ void St7789Dma::sleep(bool on) {
 void St7789Dma::displayOn(bool on) {
   command(on ? CMD_DISPON : CMD_DISPOFF);
 }
+
+void St7789Dma::setMadctl(uint8_t madctl) {
+  waitPending();   // a frame half written in the old orientation would land wrong
+  command(CMD_MADCTL, &madctl, 1);
+}
