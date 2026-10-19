@@ -471,6 +471,22 @@ TEST(Prefs, ZoneAskedSanitizesToZeroOrOne) {
   EXPECT_EQ(p.zone_asked, 1);
 }
 
+// Epic M (#1661): Sensors › Units. °F unless set otherwise; kept; 0 or 1.
+TEST(Prefs, TemperatureUnitDefaultsToFahrenheitAndIsKept) {
+  GuiPrefs p;
+  EXPECT_EQ(p.temp_f, 1);
+  p.temp_f = 0;
+  RoundTripStream s;
+  ASSERT_TRUE(p.saveSerial(s));
+  s.rewind();
+  GuiPrefs b;
+  ASSERT_TRUE(b.loadSerial(s));
+  EXPECT_EQ(b.temp_f, 0);
+  b.temp_f = 7;
+  b.sanitize();
+  EXPECT_EQ(b.temp_f, 1);
+}
+
 TEST(Prefs, MissingKeysKeepDefaults) {
   RoundTripStream s;
   s.setText("{theme:2}");  // ConfigSerializer keys are unquoted

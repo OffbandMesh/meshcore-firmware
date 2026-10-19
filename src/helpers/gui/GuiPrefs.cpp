@@ -24,6 +24,7 @@ GuiPrefs::GuiPrefs() {
   jump_to_unread = 0;
   wake_touch = 1;
   zone_asked = 0;
+  temp_f = 1;
 }
 
 static bool validMode(uint8_t m) { return m <= uint8_t(NotifyMode::Off); }
@@ -55,7 +56,7 @@ void GuiPrefs::sanitize() {
   if (dim_secs > 3600) dim_secs = 3600;
   if (rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270) rotation = 0;
   for (uint8_t* f : {&clock_12h, &notify_on, &notify_dm, &notify_channels, &notify_new_node, &clear_path_on_fail,
-                     &jump_to_unread, &wake_touch, &zone_asked}) {
+                     &jump_to_unread, &wake_touch, &zone_asked, &temp_f}) {
     *f = *f ? 1 : 0;
   }
 }
@@ -84,6 +85,7 @@ void GuiPrefs::structure() {
   def("jump", jump_to_unread);
   def("wtouch", wake_touch);
   def("tzask", zone_asked);
+  def("tempf", temp_f);
 }
 
 }  // namespace gui

@@ -256,6 +256,7 @@ void GuiShell::rebuild() {
   _name = _key = _advert = _advert_label = nullptr;
   _lock_clock = _lock_sub = _lock_zone = _lock_list = _lock_ampm = nullptr;
   for (auto& v : _value) v = nullptr;
+  for (auto& v : _cell_name) v = nullptr;
   for (auto& s : _sub) s = nullptr;
   _lock_count = 0xFF;
   _lock_more = 0xFFFFFFFF;
@@ -358,8 +359,22 @@ void GuiShell::buildHome(lv_obj_t* content) {
     lv_obj_set_style_pad_hor(cell, 6, 0);
     lv_obj_set_style_pad_ver(cell, 4, 0);
     lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
-    label(cell, FontRole::Label, _t.dim, kCellName[i]);
+    _cell_name[i] = label(cell, FontRole::Label, _t.dim, kCellName[i]);
     _value[i] = label(cell, FontRole::Data, _t.ink);
+    if (i == 5) {   // Epic M: with a sensor found, a tap opens Setup › Sensors
+      lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_add_event_cb(
+          cell,
+          [](lv_event_t* e) {
+            GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+            if (!self->_home_sensors) return;
+            self->later([](GuiShell* g) {
+              g->showTab(Tab::Setup);
+              g->setOpen(SetPage::Sensors);
+            });
+          },
+          LV_EVENT_CLICKED, this);
+    }
     _sub[i] = label(cell, FontRole::Label, _t.ink2);
     lv_obj_set_width(_sub[i], LV_PCT(100));
     oneLine(_sub[i], FontRole::Label);
@@ -682,6 +697,8 @@ void GuiShell::updateHome(const HomeData& d) {
     set(_value[i], d.cells[i].value);
     set(_sub[i], d.cells[i].sub);
   }
+  _home_sensors = d.sensors;
+  if (_cell_name[5]) set(_cell_name[5], d.sensors ? "SENSORS" : kCellName[5]);
 }
 
 void GuiShell::setAdvertState(AdvertButton::State s) {

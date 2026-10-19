@@ -43,6 +43,9 @@ public:
   uint8_t wake_touch;           // a touch wakes the screen (else USR only)
   // Epic L (#1610): the one-time "Use <zone> time?" prompt has been shown.
   uint8_t zone_asked;
+  // Epic M (#1661): Sensors › Units, temperature in °F (1) or °C (0). °F by
+  // default (owner, 2026-10-19).
+  uint8_t temp_f;
 
   NotifyMode channelMode(uint8_t slot) const;
   void setChannelMode(uint8_t slot, NotifyMode m);

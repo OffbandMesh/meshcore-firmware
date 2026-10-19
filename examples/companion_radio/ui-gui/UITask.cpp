@@ -333,6 +333,55 @@ int UITask::gpsZone() {
   return zoneForPosition(p.lat_e6, p.lon_e6);
 }
 
+// Epic M (#1661): the readings the phone's telemetry request gets, from the
+// same querySensors() call, at most every 5 s (Home asks each second).
+void UITask::refreshSensors() {
+  const uint32_t now = millis();
+  if (_sens_at != 0 && now - _sens_at < 5000) return;
+  _sens_at = now ? now : 1;
+  // A sensor writes up to about 21 bytes (BME680: five fields); 16 of them
+  // fit. CayenneLPP refuses a field that doesn't fit rather than cutting it.
+  static CayenneLPP lpp(400);
+  lpp.reset();
+  sensors.querySensors(TELEM_PERM_ENVIRONMENT, lpp);
+  _sens_n = decodeLpp(lpp.getBuffer(), lpp.getSize(), _sens, kSensMax);
+}
+
+size_t UITask::sensorReadings(SensorReading* out, size_t max) {
+  refreshSensors();
+  const size_t n = _sens_n < max ? _sens_n : max;
+  memcpy(out, _sens, n * sizeof *out);
+  return n;
+}
+
+int UITask::sensorCount() { return sensors.activeSensorCount(); }
+
+const char* UITask::sensorName(uint8_t channel) {
+  return sensors.activeSensorName(int(channel) - (TELEM_CHANNEL_SELF + 1));
+}
+
+// The GPS section: whether it has a fix and with how many satellites, and
+// the fix's altitude. Never the position (Node › Position shows that).
+bool UITask::gpsLines(char* fix, size_t fn, char* alt, size_t an) {
+#if ENV_INCLUDE_GPS == 1
+  if (!sensors.gpsDetected()) return false;
+  snprintf(alt, an, "—");
+  if (!gpsEnabled()) {
+    snprintf(fix, fn, "Off");
+    return true;
+  }
+  LocationProvider* loc = sensors.getLocationProvider();
+  const unsigned sats = loc ? unsigned(loc->satellitesCount()) : 0;
+  snprintf(fix, fn, "%s · %u sats", gpsValue(true, the_mesh.guiFixType()), sats);
+  const long mm = (loc && loc->isValid()) ? loc->getAltitude() : 0;   // 0: none reported yet
+  if (mm != 0) snprintf(alt, an, "%ld m", mm / 1000);
+  return true;
+#else
+  (void)fix; (void)fn; (void)alt; (void)an;
+  return false;
+#endif
+}
+
 // Which the copy names: GPS with a fix now, else the kept lat/lon.
 bool UITask::gpsLiveFix() {
 #if ENV_INCLUDE_GPS == 1
@@ -421,6 +470,18 @@ void UITask::homeData(HomeData* d) {
 
   formatAirtime(m.airtime.dutyPermille(millis()), cell[5].value, sizeof cell[5].value);
   snprintf(cell[5].sub, sizeof cell[5].sub, "tx, last hour");
+  // Epic M (owner pick 5a): with a sensor found, the last cell is their
+  // consolidated reading instead.
+  if (sensorCount() > 0) {
+    static SensorReading r[kSensMax];
+    const size_t n = sensorReadings(r, kSensMax);
+    char v[sizeof cell[5].value], s[sizeof cell[5].sub];
+    if (sensorSummary(r, n, _prefs && _prefs->gui.temp_f, v, sizeof v, s, sizeof s)) {
+      memcpy(cell[5].value, v, sizeof v);
+      memcpy(cell[5].sub, s, sizeof s);
+      d->sensors = true;
+    }
+  }
 }
 
 void UITask::lockData(LockData* d) {
@@ -1127,6 +1188,12 @@ void UITask::setupSummary(SetPage page, char* out, size_t n) {
     case SetPage::Msg:
       snprintf(out, n, "%s", _prefs->gui.notify_on ? "On" : "Off");
       break;
+    case SetPage::Sensors: {   // Epic M: "2 found · 71.5 °F", "None found"
+      static SensorReading r[kSensMax];
+      const size_t k = sensorReadings(r, kSensMax);
+      sensorsListValue(sensorCount(), r, k, _prefs->gui.temp_f != 0, out, n);
+      break;
+    }
     case SetPage::Stats: {
       RadioStats st{};
       radioStats(&st);

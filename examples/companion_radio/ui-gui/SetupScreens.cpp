@@ -36,10 +36,13 @@ const char* const kTypeName[4] = {"Companions", "Repeaters", "Room servers", "Se
 const char* const kModeName[] = {"All messages", "Mentions only", "Off"};   // as the notification sheet
 const char* const kLookName[] = {"Modern", "Classic"};
 
-const char* const kPageName[] = {"Node",    "Radio",   "Radio stats", "Privacy", "Contacts", "Messages & alerts",
-                                 "Display", "Connectivity", "Power",  "Actions", "Debug",    "About device"};
+const char* const kPageName[] = {"Node",    "Radio",        "Radio stats", "Sensors", "Privacy", "Contacts",
+                                 "Messages & alerts", "Display", "Connectivity", "Power", "Actions", "Debug",
+                                 "About device"};
 // The list's icon tiles: the font's emoji nearest the drawn icons.
-const char* const kPageIcon[] = {"👤", "📡", "📈", "🛡", "👥", "🔔", "🖥", "📶", "🔋", "⚡", "🔧", "📋"};
+const char* const kPageIcon[] = {"👤", "📡", "📈", "🌡", "🛡", "👥", "🔔", "🖥", "📶", "🔋", "⚡", "🔧", "📋"};
+// Sensors (Epic M): the Units row's id, past any reading's.
+constexpr uint8_t kSensUnits = 200;
 constexpr size_t kPages = sizeof(kPageName) / sizeof(kPageName[0]);
 static_assert(kPages == size_t(SetPage::Count), "one name per page");
 
@@ -110,10 +113,12 @@ void GuiShell::setNote(const char* text) {
 }
 
 void GuiShell::updateSetup(uint32_t now_ms) {
-  // Radio stats: live, once a second while open (no sheet on it).
-  if (_tab == Tab::Setup && !_locked && _set_page == SetPage::Stats && _ss == SetSheet::None &&
-      _sheet == Sheet::None && int32_t(now_ms - _stats_at) >= 0) {
-    _stats_at = now_ms + 1000;
+  // Radio stats: live, once a second while open (no sheet on it). Sensors
+  // (Epic M): every 5 s, the rate the readings are taken at.
+  const bool live = _set_page == SetPage::Stats || _set_page == SetPage::Sensors;
+  if (_tab == Tab::Setup && !_locked && live && _ss == SetSheet::None && _sheet == Sheet::None &&
+      int32_t(now_ms - _stats_at) >= 0) {
+    _stats_at = now_ms + (_set_page == SetPage::Sensors ? 5000 : 1000);
     _stats_scroll = _set_body ? lv_obj_get_scroll_y(_set_body) : 0;
     rebuild();
   }
@@ -135,13 +140,14 @@ void GuiShell::updateSetup(uint32_t now_ms) {
 void GuiShell::buildSetup(lv_obj_t* content) {
   SlowStep slow("setup", int(_set_page));
   _set_body = nullptr;
-  if (_set_page != SetPage::Stats) _stats_scroll = 0;   // a fresh visit starts at the top
+  if (_set_page != SetPage::Stats && _set_page != SetPage::Sensors) _stats_scroll = 0;   // a fresh visit starts at the top
   lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
   if (_set_page == SetPage::List) buildSetupList(content);
   else if (_set_page == SetPage::Radio) buildRadioPage(content);
   else if (_set_page == SetPage::Msg) buildMsgPage(content);
   else if (_set_page == SetPage::Node) buildNodePage(content);
   else if (_set_page == SetPage::Stats) buildStatsPage(content);
+  else if (_set_page == SetPage::Sensors) buildSensorsPage(content);
   else if (_set_page == SetPage::Privacy) buildPrivacyPage(content);
   else if (_set_page == SetPage::Contacts) buildContactsPage(content);
   else if (_set_page == SetPage::Display) buildDisplayPage(content);
@@ -564,6 +570,83 @@ void GuiShell::buildStatsPage(lv_obj_t* content) {
   lv_obj_scroll_to_y(body, _stats_scroll, LV_ANIM_OFF);
 }
 
+// Sensors (Epic M, #1661): the radio's own sensors as the phone's telemetry
+// request reads them, refreshed every 5 s while open. One section per sensor
+// (two across in class B), the GPS, then Units (°F by default). Mockups 2-4
+// and the owner's decisions on #1660 (2026-10-19).
+void GuiShell::buildSensorsPage(lv_obj_t* content) {
+  lv_obj_t* head = setHeader(content, "Sensors");
+  lv_obj_set_flex_grow(box(head, 1, 1), 1);
+  label(head, FontRole::Meta, _t.dim, "every 5 s");
+  lv_obj_t* body = pageBody(content);
+  _set_body = body;
+  const bool f = _model->guiPrefs().temp_f != 0;
+  static SensorReading r[24];   // off the stack; the GUI is single-threaded
+  const size_t n = _model->sensorReadings(r, 24);
+  const int found = _model->sensorCount();
+  char a[32], b[24], v[16], u[8], line[40];
+  uint8_t id = 0;
+
+  if (_model->gpsLines(a, sizeof a, b, sizeof b)) {   // the GPS module, without the position
+    setSection(body, "GPS");
+    setRow(body, id++, "Fix", nullptr, a, kRo, false, false, false);
+    setRow(body, id++, "Altitude", nullptr, b, kRo, false, false, false);
+  }
+
+  if (found <= 0) {   // mockup 3
+    lv_obj_t* none = box(body, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(none, 12, 0);
+    lv_obj_set_flex_flow(none, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(none, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(none, 4, 0);
+    label(none, FontRole::Body, _t.ink, "No sensors found");
+    lv_obj_t* l1 = label(none, FontRole::Label, _t.dim,
+                         "Checked at boot on the I2C bus for AHT, BME/BMP, SHT, LPS22, INA2xx/INA3221, MLX90614 and "
+                         "VL53L0X.");
+    lv_obj_t* l2 = label(none, FontRole::Label, _t.dim, "Fit one and restart to read it here.");
+    for (lv_obj_t* l : {l1, l2}) {
+      lv_obj_set_width(l, LV_PCT(100));
+      lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+      lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    }
+  } else {
+    // A section per sensor, in channel order; class B sets them two across.
+    lv_obj_t* grid = body;
+    if (landscape()) {
+      grid = box(body, LV_PCT(100), LV_SIZE_CONTENT);
+      lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
+    }
+    for (size_t i = 0; i < n;) {
+      const uint8_t ch = r[i].channel;
+      const char* name = _model->sensorName(ch);
+      lv_obj_t* sec = grid;
+      if (landscape()) {
+        sec = box(grid, LV_PCT(50), LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(sec, LV_FLEX_FLOW_COLUMN);
+      }
+      setSection(sec, name[0] ? name : "Sensor");
+      for (; i < n && r[i].channel == ch; i++) {
+        readingText(r[i], name, f, v, sizeof v, u, sizeof u);
+        textf(line, sizeof line, "%s%s%s", v, u[0] ? " " : "", u);
+        setRow(sec, id++, readingName(r[i].type, name), nullptr, line, kRo, false, false, false);
+      }
+    }
+    if (n == 0) setRow(body, id++, "Reading", "The sensors didn't answer this time", "—", kRo, false, false, false);
+  }
+
+  setRow(body, kSensUnits, "Units", nullptr, f ? "°F" : "°C", kSel, false, false, false);
+  char foot_text[80];
+  textf(foot_text, sizeof foot_text, "Shared over the mesh per Privacy › Environment telemetry (%s).",
+        telemetryText(_model->nodeSettings().tel_env));
+  lv_obj_t* foot = label(body, FontRole::Label, _t.dim, foot_text);
+  lv_obj_set_width(foot, LV_PCT(100));
+  lv_label_set_long_mode(foot, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_pad_all(foot, 8, 0);
+  // The 5 s refresh keeps where the reader scrolled to.
+  lv_obj_update_layout(body);
+  lv_obj_scroll_to_y(body, _stats_scroll, LV_ANIM_OFF);
+}
+
 // Privacy (mockup 11): location in adverts, extra ACKs, telemetry.
 void GuiShell::buildPrivacyPage(lv_obj_t* content) {
   setHeader(content, "Privacy");
@@ -816,6 +899,10 @@ void GuiShell::setRowPressed(uint8_t id) {
       case nGpsSecs: openSetSheet(SetSheet::Pick, id); break;
       default: break;
     }
+    return;
+  }
+  if (_set_page == SetPage::Sensors) {   // the readings are read-only; Units picks
+    if (id == kSensUnits) openSetSheet(SetSheet::Pick, id);
     return;
   }
   if (_set_page == SetPage::Privacy) {
@@ -1445,6 +1532,10 @@ void GuiShell::stepApply(int v) {
 const char* GuiShell::pickTitle(const char** sub) {
   *sub = nullptr;
   if (_set_page == SetPage::Power) return "Screen off after";
+  if (_set_page == SetPage::Sensors) {
+    *sub = "Temperature; pressure stays hPa";
+    return "Units";
+  }
   if (_set_page == SetPage::Debug) {
     *sub = "Kept for the app's log download, and on USB serial";
     return "Serial log";
@@ -1491,6 +1582,7 @@ const char* GuiShell::pickTitle(const char** sub) {
 
 int GuiShell::pickCount() {
   if (_set_page == SetPage::Power) return int(kOffCount);
+  if (_set_page == SetPage::Sensors) return 2;   // °F, °C
   if (_set_page == SetPage::Debug) return int(kLogCount);
   if (_set_page == SetPage::Node) return int(kGpsCount);
   if (_set_page == SetPage::Contacts) return int(kHopCount);
@@ -1518,6 +1610,7 @@ int GuiShell::pickCount() {
 int GuiShell::pickCurrent() {
   GuiPrefs& g = _model->guiPrefs();
   if (_set_page == SetPage::Power) return choiceIndex(kOffChoices, kOffCount, _model->screenOffSecs());
+  if (_set_page == SetPage::Sensors) return g.temp_f ? 0 : 1;
   if (_set_page == SetPage::Debug) {
     DeviceInfo d{};
     _model->deviceInfo(&d);
@@ -1556,6 +1649,10 @@ int GuiShell::pickCurrent() {
 
 void GuiShell::pickText(int i, char* out, size_t n) {
   if (_set_page == SetPage::Power) return durationText(kOffChoices[i], out, n);
+  if (_set_page == SetPage::Sensors) {
+    textf(out, n, "%s", i == 0 ? "°F" : "°C");
+    return;
+  }
   if (_set_page == SetPage::Debug) {
     textf(out, n, "%s", logName(i));
     return;
@@ -1600,6 +1697,11 @@ void GuiShell::pickSide(int i, char* out, size_t n) {
 // A pick: Radio's go to the draft (Save applies them); the others apply now.
 void GuiShell::pickApply(int i) {
   GuiPrefs& g = _model->guiPrefs();
+  if (_set_page == SetPage::Sensors) {   // Units
+    g.temp_f = i == 0 ? 1 : 0;
+    _model->prefsChanged();
+    return;
+  }
   if (_set_page == SetPage::Power) {   // the same setting as Display › Screen off
     _model->setScreenOffSecs(uint16_t(kOffChoices[i]));
     _model->prefsChanged();
