@@ -256,6 +256,76 @@ TEST(BleFrameSizing, NoReportedLocalPairExceedsLinkOrBuffer) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// #1621: bleSafeFrame() -- the bound a builder may use with NO connection.
+//
+// THE INVARIANT UNDER TEST
+//   A frame built to bleSafeFrame(MAX_FRAME_SIZE) is deliverable on EVERY link whose
+//   negotiated MTU reaches our own pinned preferred MTU, decided without consulting a
+//   connection at all.
+//
+// WHY A SEPARATE BOUND EXISTS
+//   deliverableFrame() answers "what fits right now", which a queued builder cannot
+//   ask: the companion's offline queue is filled while NO client is connected, and
+//   SerialBLEInterface::maxFrameSize() then reports the MIN_ATT_MTU floor by design.
+//   Sizing a stored message against 20 bytes would destroy it before any link had a
+//   say -- which is what makes the obvious "convert every site to maxFramePayload()"
+//   fix wrong for those sites.
+// ---------------------------------------------------------------------------
+
+TEST(BleSafeFrame, IsDeliverableOnEveryLinkThatReachesOurPinnedMtu) {
+  const size_t safe = bleSafeFrame(kMaxFrame);
+  ASSERT_GT(safe, 0u);
+  for (uint16_t reported : kReportedMtus) {
+    if (reported < kLocalMtu) continue;  // below our pinned MTU: not this bound's claim
+    const uint16_t eff = effectiveMtu(reported, kLocalMtu);
+    EXPECT_LE(safe, deliverableFrame(eff, kMaxFrame))
+        << "reported=" << reported << ": a frame built to the safe bound would be clipped";
+  }
+}
+
+// The negative half, and the reason the change was needed: the OLD bound -- the frame
+// buffer itself -- is NOT deliverable on the ESP32 link, unconditionally. begin() pins
+// our side to MAX_FRAME_SIZE, so the negotiated MTU is at most 176 and one notification
+// carries 173. Every full-size queued frame was 3 bytes over, peer MTU irrelevant.
+TEST(BleSafeFrame, TheFrameBufferBoundIsNotDeliverable_WhichIsTheDefect) {
+  const uint16_t eff = effectiveMtu(kLocalMtu, kLocalMtu);
+  const size_t deliverable = deliverableFrame(eff, kMaxFrame);
+  EXPECT_LT(deliverable, kMaxFrame)
+      << "if this ever passes, the ESP32 link delivers a full buffer and the bound is moot";
+  EXPECT_GT(kMaxFrame, deliverable) << "the old bound exceeded the link by "
+                                    << (kMaxFrame - deliverable) << " bytes";
+  EXPECT_LE(bleSafeFrame(kMaxFrame), deliverable) << "the new bound must not";
+}
+
+TEST(BleSafeFrame, CostsExactlyTheAttHeaderAndNoMore) {
+  EXPECT_EQ(bleSafeFrame(kMaxFrame), kMaxFrame - ATT_NOTIFY_HEADER);
+  EXPECT_EQ(bleSafeFrame(kMaxFrame), 173u) << "176-byte buffer over BLE";
+}
+
+// Underflow, the failure mode maxFramePayload() was given a floor for. A builder
+// subtracting its header from this must never be handed a wrapped-huge size_t.
+TEST(BleSafeFrame, NeverUnderflowsForAnyBufferSize) {
+  const size_t tiny[] = {0, 1, 2, 3, 4, 5, 23, 176};
+  for (size_t buf : tiny) {
+    const size_t safe = bleSafeFrame(buf);
+    EXPECT_LE(safe, buf) << "buf=" << buf << ": bound exceeds the buffer it came from";
+    if (buf <= ATT_NOTIFY_HEADER) {
+      EXPECT_EQ(safe, 0u) << "buf=" << buf << ": must floor at 0, not wrap";
+    }
+  }
+}
+
+// It makes no claim about a link that negotiated BELOW our pinned MTU -- nothing
+// computed without the connection can. Pinned here so the bound is not mistaken for a
+// guarantee it does not give; that case is a delivery-time decision.
+TEST(BleSafeFrame, MakesNoClaimAboutLinksBelowOurPinnedMtu) {
+  const size_t safe = bleSafeFrame(kMaxFrame);
+  const uint16_t low = 169;  // the T1000-E link #454 was written for
+  EXPECT_GT(safe, deliverableFrame(effectiveMtu(low, kLocalMtu), kMaxFrame))
+      << "a sub-176 link still needs handling at delivery time";
+}
+
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

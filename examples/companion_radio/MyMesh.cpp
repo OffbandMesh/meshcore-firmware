@@ -5,6 +5,9 @@
 #include <MeshLog.h>  // #396: serial-capture buffer access for the caplog download
 #include <helpers/ClockSanity.h>  // #607: owner-path clock sets + audit log
 #include "helpers/CdcConsoleFlush.h"   // #1035: right-flush (ZLP) for the USB-Serial-JTAG console
+// #1621: ble_frame::bleSafeFrame() -- the frame bound a builder may use when the link
+// it will be delivered over is not known yet (offline-queued frames).
+#include <helpers/BleFrameSizing.h>
 // #1523: the per-channel tune's encoding. Header-only constexpr, and the builtin table is
 // internal-linkage, so a variant that only names the unset value emits nothing of it.
 #include <helpers/ui/TuneSlots.h>
@@ -182,7 +185,35 @@ namespace offband { MqttBrokerPool& wifiObserverPool(); }
 #define RESP_CODE_CHANNEL_DATA_RECV   27
 #define RESP_CODE_DEFAULT_FLOOD_SCOPE 28
 
-#define MAX_CHANNEL_DATA_LENGTH       (MAX_FRAME_SIZE - 9)
+// #1621: bounded by what a BLE notification can DELIVER, not by the frame buffer.
+// The 9 is this frame's header, counted in onChannelDataRecv(): code, SNR, reserved1,
+// reserved2, channel_idx, path_len, data_type lo, data_type hi, data_len. Against the
+// raw buffer that gave 167, so a full payload built a 176-byte frame -- 3 more than an
+// ESP32 BLE link delivers, since begin() pins our MTU to MAX_FRAME_SIZE and one
+// notification carries MTU-3.
+//
+// Channel data is BINARY and type-tagged, so a clipped frame is corruption, not a
+// shortened message. Dropping an over-long payload at the door (the two call sites
+// below) is therefore the only safe answer, and this limit is what makes the drop
+// happen three bytes earlier instead of letting the link do it silently.
+//
+// Kept an INT expression, as `MAX_FRAME_SIZE - 9` was. bleSafeFrame() returns size_t,
+// and letting that leak out would flip `payload_len > MAX_CHANNEL_DATA_LENGTH` at the
+// CMD_SEND_CHANNEL_DATA site into an unsigned comparison -- harmless today because that
+// payload_len is floored at 0, a wrap waiting for the first caller that is not.
+#define MAX_CHANNEL_DATA_LENGTH       ((int)ble_frame::bleSafeFrame(MAX_FRAME_SIZE) - 9)
+
+// #1621: the unit tests in test/test_frame_size cover bleSafeFrame() itself, but they
+// would all still pass if someone reverted this limit to the raw buffer size -- the
+// helper would be correct and unused. These assertions are what actually pin the
+// PRODUCTION choice, and they fire in every one of the 72 matrix builds.
+static_assert(MAX_CHANNEL_DATA_LENGTH < MAX_FRAME_SIZE - 9,
+              "#1621: channel-data limit must come from the DELIVERABLE frame, not the "
+              "frame buffer -- a full payload sized against the buffer builds a frame "
+              "3 bytes larger than an ESP32 BLE link carries");
+static_assert(MAX_CHANNEL_DATA_LENGTH == (int)ble_frame::bleSafeFrame(MAX_FRAME_SIZE) - 9,
+              "#1621: channel-data limit must stay derived from bleSafeFrame()");
+static_assert(MAX_CHANNEL_DATA_LENGTH > 0, "channel-data limit must leave room for data");
 
 #define SEND_TIMEOUT_BASE_MILLIS        500
 #define FLOOD_SEND_TIMEOUT_FACTOR       16.0f
@@ -408,7 +439,14 @@ uint8_t MyMesh::getExtraAckTransmitCount() const {
 #endif
 
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
-  if (_serial->isConnected() && len + 3 <= MAX_FRAME_SIZE) {
+  // #1621: this frame goes STRAIGHT to writeFrame() and only while connected, so the
+  // live transport cap is both available and the right question -- the #453 pattern,
+  // as used by caplogDrain() and the CLI builders. Against MAX_FRAME_SIZE instead,
+  // a 174-176 byte raw-RX frame was emitted and then silently clipped by the link
+  // (ESP32 BLE delivers 173). Dropping it, which this gate already did for larger
+  // packets, beats handing the client a truncated packet it cannot tell from a short
+  // one. The 3 is the header written below: code, SNR, RSSI.
+  if (_serial->isConnected() && (size_t)len <= _serial->maxFramePayload(3)) {
     int i = 0;
     out_frame[i++] = PUSH_CODE_LOG_RX_DATA;
     out_frame[i++] = (int8_t)(snr * 4);
@@ -697,8 +735,15 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
     i += extra_len;
   }
   int tlen = strlen(text); // TODO: UTF-8 ??
-  if (i + tlen > MAX_FRAME_SIZE) {
-    tlen = MAX_FRAME_SIZE - i;
+  // #1621: bound by what ANY BLE link will deliver, not by the frame buffer. This
+  // frame is queued (addToOfflineQueue below) and drained later, so the live cap is
+  // not usable here -- the queue exists for the disconnected case, where
+  // maxFrameSize() reports the 20-byte MIN_ATT_MTU floor and would cut the message
+  // to a few characters permanently. bleSafeFrame() needs no connection and holds for
+  // every link that negotiates up to our pinned MTU.
+  const int frame_cap = (int)ble_frame::bleSafeFrame(MAX_FRAME_SIZE);
+  if (i + tlen > frame_cap) {
+    tlen = frame_cap - i;
   }
   memcpy(&out_frame[i], text, tlen);
   i += tlen;
@@ -1010,8 +1055,11 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   memcpy(&out_frame[i], &timestamp, 4);
   i += 4;
   int tlen = strlen(text); // TODO: UTF-8 ??
-  if (i + tlen > MAX_FRAME_SIZE) {
-    tlen = MAX_FRAME_SIZE - i;
+  // #1621: same as the contact-message builder above -- queued frame, so the bound
+  // must hold without a connection. See ble_frame::bleSafeFrame().
+  const int frame_cap = (int)ble_frame::bleSafeFrame(MAX_FRAME_SIZE);
+  if (i + tlen > frame_cap) {
+    tlen = frame_cap - i;
   }
   memcpy(&out_frame[i], text, tlen);
   i += tlen;
@@ -1134,10 +1182,15 @@ void MyMesh::postSystemChannelText(const char* text, size_t text_len) {
   uint32_t ts = (uint32_t)getRTCClock()->getCurrentTime();
   memcpy(&out_frame[i], &ts, 4);
   i += 4;
-  // Clamp text to leave room for the header. MAX_FRAME_SIZE is
-  // the upstream cap; the per-channel-message payload limit is
-  // checked the same way in onChannelMessageRecv above.
-  size_t avail = (size_t)MAX_FRAME_SIZE - (size_t)i;
+  // Clamp text to leave room for the header. #1621: the bound is what a BLE link will
+  // DELIVER, not the frame buffer -- this frame is queued and drained later, so the
+  // live cap is unavailable (and would be the 20-byte floor while disconnected).
+  // Subtracting from a size_t needs the floor: bleSafeFrame() cannot return less than
+  // the header here, but writing it this way means a smaller buffer can never wrap the
+  // subtraction into a huge avail, which is the underflow maxFramePayload() exists to
+  // prevent.
+  const size_t frame_cap = ble_frame::bleSafeFrame(MAX_FRAME_SIZE);
+  size_t avail = frame_cap > (size_t)i ? frame_cap - (size_t)i : 0;
   if (text_len > avail) text_len = avail;
   memcpy(&out_frame[i], text, text_len);
   i += (int)text_len;
@@ -2963,7 +3016,8 @@ void MyMesh::handleCmdFrame(size_t len) {
     } else if (data_type == DATA_TYPE_RESERVED) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     } else if (payload_len > MAX_CHANNEL_DATA_LENGTH) {
-      MESH_DEBUG_PRINTLN("CMD_SEND_CHANNEL_DATA payload too long: %d > %d", payload_len, MAX_CHANNEL_DATA_LENGTH);
+      MESH_DEBUG_PRINTLN("CMD_SEND_CHANNEL_DATA payload too long: %d > %d",
+                         (int)payload_len, (int)MAX_CHANNEL_DATA_LENGTH);
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     } else if (sendGroupData(channel.channel, path, path_len, data_type, payload, payload_len)) {
       writeOKFrame();

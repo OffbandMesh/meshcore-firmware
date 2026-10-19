@@ -70,4 +70,56 @@ inline size_t deliverableFrame(uint16_t effective_mtu, size_t max_frame) {
   return link < max_frame ? link : max_frame;
 }
 
+/// Largest frame deliverable over a BLE link WITHOUT knowing its MTU, given a frame
+/// buffer of `max_frame`. Floored at 0.
+///
+/// READ THE NAME NARROWLY. "Safe" here means safe against the ATT notification header
+/// on a link that negotiated up to our own pinned MTU -- NOT an unconditional
+/// guarantee. A peer that negotiates BELOW MAX_FRAME_SIZE will still clip a frame built
+/// to this bound, and nothing computed without the connection can prevent that. Use
+/// maxFramePayload() instead wherever the frame goes straight out over a live link;
+/// this exists only for the builder that has no link to ask.
+///
+/// WHY A CONNECTION-INDEPENDENT BOUND IS NEEDED (#1621)
+/// ---------------------------------------------------
+/// `deliverableFrame()` answers "what fits RIGHT NOW", which is the correct question
+/// for a builder that hands its frame straight to writeFrame() while connected. It is
+/// the WRONG question for a builder that stores a frame for later -- the companion's
+/// offline queue is filled precisely when no client is connected, and
+/// SerialBLEInterface::maxFrameSize() deliberately reports the MIN_ATT_MTU floor
+/// (23 - 3 = 20) until an MTU is negotiated. Sizing a stored message against that
+/// would clamp it to a handful of bytes and the text would be gone for good, long
+/// before any link got a say.
+///
+/// So a queued builder needs a bound that holds for EVERY link it might later be
+/// delivered over, computed with no connection at all. Our own side pins its preferred
+/// MTU to MAX_FRAME_SIZE (NimBLEDevice::setMTU / Bluefruit), so the negotiated MTU is
+/// at most MAX_FRAME_SIZE and one notification carries at most MAX_FRAME_SIZE - 3.
+/// That is this value: 173 for a 176-byte buffer.
+///
+/// It costs up to ATT_NOTIFY_HEADER bytes of payload on a link that could have carried
+/// more (an nRF52 at MTU 247 delivers the full 176). That is the same trade the nRF52
+/// maxFrameSize() comment already settles in favour of a fixed ceiling: three bytes per
+/// frame, against an entire board class silently losing the tail of a message.
+///
+/// It does NOT make a frame deliverable over a link that negotiated BELOW
+/// MAX_FRAME_SIZE -- nothing computed without the connection can. That case needs a
+/// decision at delivery time and is tracked separately.
+///
+/// IT IS A BLE-SHAPED BOUND APPLIED WITHOUT ASKING THE TRANSPORT, and that costs
+/// something: the companion's `_serial` is a MultiSerialInterface, so a queued frame may
+/// end up delivered over USB or TCP, where the full MAX_FRAME_SIZE would have fitted and
+/// these three bytes buy nothing. Kept unconditional anyway. Making it depend on whether
+/// BLE is compiled in would turn a payload limit the client shares into a
+/// build-dependent one, and a protocol constant that varies by build is the harder thing
+/// to reason about -- which is the whole defect class this bound exists to close. Three
+/// bytes is the cheaper problem.
+/// constexpr so a caller can static_assert on it: the point of this bound is that it is
+/// knowable without a connection, so it is knowable at compile time, and a builder that
+/// derives a protocol limit from it can have that limit pinned by the compiler in every
+/// build rather than by a comment.
+constexpr size_t bleSafeFrame(size_t max_frame) {
+  return max_frame > ATT_NOTIFY_HEADER ? max_frame - ATT_NOTIFY_HEADER : 0;
+}
+
 }  // namespace ble_frame
