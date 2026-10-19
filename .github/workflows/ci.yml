@@ -80,6 +80,12 @@ jobs:
       - name: QCC badge pin-map guard
         run: python scripts/test_qcc_variant_pins.py
 
+      # #1625: which preflashed channels ship quiet. A silent channel and a channel that
+      # made no choice are one byte apart, and swapping them is invisible until a badge is
+      # quiet in the wrong room -- or noisy in the one Abend asked to be quiet.
+      - name: QCC preflash channel tunes
+        run: python scripts/test_qcc_preflash_tunes.py
+
       - name: QCC splash-art generator self-test
         run: python scripts/test_gen_qcc_splash.py
 

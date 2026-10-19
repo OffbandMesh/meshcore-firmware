@@ -785,11 +785,27 @@ EXPECTED_PREFLASH_CHANNELS = ["#queencitycon", "#okimesh", "#test", "#echo", "#o
 
 
 def preflash_table():
-    """[(name, psk_base64), ...] as QccChannels.h declares them, in order."""
+    """[(name, psk_base64), ...] as QccChannels.h declares them, in order.
+
+    Trailing fields after the key are ignored on purpose: #1625 added a per-channel tune
+    and this helper has no opinion about it (scripts/test_qcc_preflash_tunes.py does).
+
+    REFUSES TO RETURN AN EMPTY LIST, and that is the point of the check below. Two of the
+    three callers only ITERATE this table, so when #1625 changed the row shape and the old
+    two-field pattern stopped matching, those two passed vacuously -- zero assertions, a
+    green tick, and nothing testing the keys or Public any more. Only the one caller that
+    compares a list caught it. A parser that silently returns nothing turns its callers
+    into decoration.
+    """
     src = (QCC / "QccChannels.h").read_text()
     body = src[src.index("kQccPreflashChannels"):]
     body = body[body.index("{") + 1: body.index("};")]
-    return re.findall(r'\{\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\}', body)
+    rows = re.findall(r'\{\s*"([^"]+)"\s*,\s*"([^"]+)"\s*(?:,[^}]*)?\}', body)
+    assert rows, (
+        "parsed NO rows out of kQccPreflashChannels -- the table's shape changed and this "
+        "pattern no longer matches it. Fix the pattern; do not let the callers that merely "
+        "iterate keep passing on an empty list.")
+    return rows
 
 
 def test_the_preflashed_channels_are_the_five_agreed():

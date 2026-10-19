@@ -1900,7 +1900,12 @@ void MyMesh::begin(bool has_display) {
     bool added = false;
     for (int i = 0; i < offband::kQccPreflashChannelCount; i++) {
       const auto& c = offband::kQccPreflashChannels[i];
-      if (addChannel(c.name, c.psk_base64) != NULL) {
+      ChannelDetails* seeded = addChannel(c.name, c.psk_base64);
+      if (seeded != NULL) {
+        // #1625: and its tune, for the channels that ship quiet. Written only when the
+        // seed asks for one, so a channel left to inherit keeps the 0 that addChannel
+        // already put there rather than being re-stamped with it.
+        if (c.tune != offband::kChannelTuneUnset) seeded->tune = c.tune;
         added = true;
       } else {
         // Out of slots, or a key that is not 16 or 32 bytes once decoded.
