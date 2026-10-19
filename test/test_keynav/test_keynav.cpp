@@ -48,6 +48,28 @@ TEST(KeyNav, OnlyEscBacksOut) {
   EXPECT_FALSE(keynav::backsOut((uint8_t)'q'));
 }
 
+// #1590: a badge with no keyboard has no Esc key, and backsOut() accepts only KEY_CANCEL.
+// So before this, a button-only board could not leave Settings AT ALL -- which did not
+// matter while such a board had no display either, and stops being true the moment someone
+// solders one on.
+//
+// All four SW1 gestures were already taken, so the exit shares the triple-click: it backs
+// out where there is somewhere to back out to, and keeps toggling the buzzer at Home, where
+// there is not. The two can never compete, because "get me out of here" is meaningless on
+// the Home screen.
+TEST(KeyNav, TripleClickBacksOutAwayFromHome) {
+  EXPECT_EQ((uint8_t)KEY_CANCEL, keynav::tripleClickKey(false));
+  // And the key it produces must be one backsOut() actually accepts, or the gesture is
+  // inert and the board is still stuck.
+  EXPECT_TRUE(keynav::backsOut(keynav::tripleClickKey(false)));
+}
+
+TEST(KeyNav, TripleClickKeepsItsOtherJobAtHome) {
+  EXPECT_EQ((uint8_t)0, keynav::tripleClickKey(true))
+      << "a triple-click at Home must fall through to the buzzer toggle, not back out";
+  EXPECT_FALSE(keynav::backsOut(keynav::tripleClickKey(true)));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
