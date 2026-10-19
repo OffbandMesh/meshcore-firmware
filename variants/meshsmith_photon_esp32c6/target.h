@@ -3,7 +3,6 @@
 #define RADIOLIB_STATIC_ONLY 1
 #include <RadioLib.h>
 #include <MeshsmithPhotonC6Board.h>
-#include <helpers/AutoDiscoverRTCClock.h>
 #include <helpers/ESP32Board.h>
 #include <helpers/ArduinoHelpers.h>
 #include <helpers/radiolib/CustomSX1262Wrapper.h>
@@ -31,7 +30,7 @@ public:
 
 extern MeshsmithPhotonC6Board board;
 extern WRAPPER_CLASS radio_driver;
-extern AutoDiscoverRTCClock rtc_clock;
+extern ESP32RTCClock rtc_clock;   // #1054: declared, no RTC auto-discovery on this board
 extern PhotonSensorManager sensors;
 
 bool radio_init();
