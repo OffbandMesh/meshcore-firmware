@@ -364,6 +364,95 @@ def test_a_missing_node_name_is_caught_when_it_was_asserted():
         assert any("no node name" in b for b in bad), bad
 
 
+# --- the three bugs the first real hardware run exposed (2026-10-19) -------------------
+#
+# None of these were reachable by unit test alone: the first needed a real artifact on
+# disk, the second needed a real check to have been skipped, and the third needed a real
+# badge name. Recorded as cases so they cannot come back.
+
+def test_the_artifact_sha_key_is_the_one_firmware_identity_actually_returns():
+    # THE BUG: artifact_sha() looked for "sha"/"git_sha"/"firmware_sha". The key is
+    # `offband_git_sha`. So it returned None on a perfectly good artifact and the #1127
+    # stale-image check -- the most valuable assertion in the file -- SKIPPED rather than
+    # ran. Nothing failed. Only the reported skip made it visible on the bench.
+    #
+    # Asserted against firmware_identity's real contract rather than a fixture, so a
+    # rename over there breaks this test instead of silently disarming the check.
+    import inspect
+
+    import firmware_identity
+    src = inspect.getsource(firmware_identity)
+    assert "offband_git_sha" in src, \
+        "firmware_identity no longer produces offband_git_sha; artifact_sha() must follow"
+
+    import rig_boot_smoke
+    fn = inspect.getsource(rig_boot_smoke.artifact_sha)
+    assert "offband_git_sha" in fn, \
+        "artifact_sha() must read offband_git_sha, or the #1127 check silently skips"
+    assert "cannot run" in fn, \
+        "a missing sha key must be REPORTED, not returned as a quiet None"
+
+
+def test_a_skipped_sha_check_is_not_summarised_as_a_pass():
+    # THE BUG: the OK line said "image identity matched" unconditionally, so a run whose
+    # sha check never ran read as a full pass while the SKIP line above said otherwise.
+    import inspect
+
+    import rig_boot_smoke
+    fn = inspect.getsource(rig_boot_smoke.report)
+    assert "NOT CHECKED" in fn, \
+        "the summary must not claim image identity when the sha check was skipped"
+
+
+def test_a_node_name_that_could_carry_the_trigger_mark_is_never_printed():
+    # THE BUG: a rename failure printed the full node name. A badge name is the FIRST
+    # condition of the hidden trigger, and this output is exactly what gets pasted into
+    # an issue when a check fails. On the first real run it put an owner badge's name,
+    # mark and all, into a transcript.
+    from rig_boot_smoke import safe_name
+
+    # Pure ASCII stays readable -- it cannot hold the mark and it is useful at a bench.
+    assert safe_name("Bench-Badge-A") == "'Bench-Badge-A'"
+    assert safe_name(None) == "<none>"
+
+    # BOTH forms a marked name arrives in, which is the whole lesson here. The second one
+    # is what a real capture actually produces -- the log escapes non-printables, so the
+    # name reaches the tool as printable ASCII full of literal backslash-x sequences. The
+    # first version of safe_name() tested only encode("ascii"), so that form sailed
+    # straight through and the name was printed in full on a real run. The original unit
+    # test used real UTF-8 and passed happily, which is why it is now both.
+    for marked in ("Strycher-QCC1\U0001F6F0️",
+                   r"Strycher-QCC1\xF0\x9F\x9B\xB0\xEF\xB8\x8F"):
+        out = safe_name(marked)
+        assert "withheld" in out and "sha256" in out, (marked, out)
+        for leak in ("\U0001F6F0", "QCC1", "Strycher", "F09F9BB0", "xF0"):
+            assert leak not in out, "leaked %r via %r -> %s" % (leak, marked, out)
+        # Distinguishable without being disclosed, and stable.
+        assert safe_name(marked) == safe_name(marked)
+        assert safe_name(marked) != safe_name(marked + "2")
+
+
+def test_every_path_that_prints_a_name_goes_through_the_redactor():
+    # Belt and braces: grep the module for a bare name print. The redactor is useless if
+    # one of three call sites forgets it, and that is exactly what happened -- the rename
+    # message was fixed first and two others still printed the name raw.
+    import inspect
+
+    import rig_boot_smoke
+    src = inspect.getsource(rig_boot_smoke)
+    offenders = []
+    for line in src.splitlines():
+        s = line.strip()
+        if "safe_name(" in s or not ("report.name" in s or "rep.name" in s):
+            continue
+        # Only FORMATTED uses disclose. Comparisons (`!=`, `re.match`, `is None`) read the
+        # name without emitting it, and must not be flagged -- the first version of this
+        # check failed on `re.match(pat, report.name)`, which prints nothing.
+        if "%" in s:
+            offenders.append(s)
+    assert not offenders, "name reaches a format string without safe_name(): %s" % offenders
+
+
 def test_an_unknown_beacon_stage_is_tolerated():
     # Real captures carry stages this list does not declare: APP:CTOR from the static
     # ctor in BootBeacon.h, and post:display.begin(OK) whose text is built at runtime.
