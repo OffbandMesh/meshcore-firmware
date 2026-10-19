@@ -97,6 +97,17 @@ jobs:
       - name: QCC badge env invariants
         run: python scripts/test_qcc_badge_env.py
 
+      # #1639: the four .cpp call sites where the RULE is tested and the USE of the rule
+      # is not -- which is the specific way a green suite coexists with a broken badge.
+      # 49 trigger cases, 15 buzzer-priority cases, 8 store cases and 8 keynav cases all
+      # keep passing while the trigger is truncated, stops firing for long sender names,
+      # renders channels bare, or strands a keyboard-less badge in Settings.
+      #
+      # TRIPWIRES, not behavioural coverage: they assert text is present, so a refactor
+      # preserving the text while changing behaviour passes. The file header says so.
+      - name: QCC badge call-site guards
+        run: python scripts/test_qcc_call_sites.py
+
       - name: QCC splash-art generator self-test
         run: python scripts/test_gen_qcc_splash.py
 
