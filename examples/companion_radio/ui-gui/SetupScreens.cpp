@@ -382,12 +382,15 @@ void GuiShell::buildRadioPage(lv_obj_t* content) {
   if (_set_focus_row == rSave) _focus_row = btn;
 }
 
-// A scrolling page body under the header.
+// A scrolling page body under the header. It must be clickable as well as
+// scrollable: LVGL only starts a drag on an object its hit test finds, and
+// the hit test skips anything not clickable, so a drag that began on a
+// read-only row found nothing to scroll (bench, Epic M, 2026-10-19).
 static lv_obj_t* pageBody(lv_obj_t* content) {
   lv_obj_t* body = box(content, LV_PCT(100), 0);
   lv_obj_set_flex_grow(body, 1);
   lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
-  lv_obj_add_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(body, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_scrollbar_mode(body, LV_SCROLLBAR_MODE_OFF);
   return body;
 }
@@ -589,8 +592,9 @@ void GuiShell::buildSensorsPage(lv_obj_t* content) {
 
   if (_model->gpsLines(a, sizeof a, b, sizeof b)) {   // the GPS module, without the position
     setSection(body, "GPS");
-    setRow(body, id++, "Fix", nullptr, a, kRo, false, false, false);
-    setRow(body, id++, "Altitude", nullptr, b, kRo, false, false, false);
+    // kInfo: read-only, but USR steps through them, so buttons scroll too.
+    setRow(body, id++, "Fix", nullptr, a, kInfo, false, false, false);
+    setRow(body, id++, "Altitude", nullptr, b, kInfo, false, false, false);
   }
 
   if (found <= 0) {   // mockup 3
@@ -628,7 +632,7 @@ void GuiShell::buildSensorsPage(lv_obj_t* content) {
       for (; i < n && r[i].channel == ch; i++) {
         readingText(r[i], name, f, v, sizeof v, u, sizeof u);
         textf(line, sizeof line, "%s%s%s", v, u[0] ? " " : "", u);
-        setRow(sec, id++, readingName(r[i].type, name), nullptr, line, kRo, false, false, false);
+        setRow(sec, id++, readingName(r[i].type, name), nullptr, line, kInfo, false, false, false);
       }
     }
     if (n == 0) setRow(body, id++, "Reading", "The sensors didn't answer this time", "—", kRo, false, false, false);

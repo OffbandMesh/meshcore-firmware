@@ -356,6 +356,15 @@ size_t UITask::sensorReadings(SensorReading* out, size_t max) {
 
 int UITask::sensorCount() { return sensors.activeSensorCount(); }
 
+// The SHT's channel, preferred for temperature and humidity (owner's
+// Field_Compass rule); 0 without one.
+uint8_t UITask::climateChannel() {
+  const char* names[16];
+  const int n = sensors.activeSensorCount() < 16 ? sensors.activeSensorCount() : 16;
+  for (int i = 0; i < n; i++) names[i] = sensors.activeSensorName(i);
+  return preferredClimateChannel(names, size_t(n), uint8_t(TELEM_CHANNEL_SELF + 1));
+}
+
 const char* UITask::sensorName(uint8_t channel) {
   return sensors.activeSensorName(int(channel) - (TELEM_CHANNEL_SELF + 1));
 }
@@ -476,7 +485,7 @@ void UITask::homeData(HomeData* d) {
     static SensorReading r[kSensMax];
     const size_t n = sensorReadings(r, kSensMax);
     char v[sizeof cell[5].value], s[sizeof cell[5].sub];
-    if (sensorSummary(r, n, _prefs && _prefs->gui.temp_f, v, sizeof v, s, sizeof s)) {
+    if (sensorSummary(r, n, _prefs && _prefs->gui.temp_f, v, sizeof v, s, sizeof s, climateChannel())) {
       memcpy(cell[5].value, v, sizeof v);
       memcpy(cell[5].sub, s, sizeof s);
       d->sensors = true;
@@ -1191,7 +1200,7 @@ void UITask::setupSummary(SetPage page, char* out, size_t n) {
     case SetPage::Sensors: {   // Epic M: "2 found · 71.5 °F", "None found"
       static SensorReading r[kSensMax];
       const size_t k = sensorReadings(r, kSensMax);
-      sensorsListValue(sensorCount(), r, k, _prefs->gui.temp_f != 0, out, n);
+      sensorsListValue(sensorCount(), r, k, _prefs->gui.temp_f != 0, out, n, climateChannel());
       break;
     }
     case SetPage::Stats: {

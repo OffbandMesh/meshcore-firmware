@@ -187,5 +187,6 @@ private:
   size_t _sens_n = 0;
   uint32_t _sens_at = 0;   // millis() of the last reading; 0 = never
   void refreshSensors();
+  uint8_t climateChannel();
   int _contacts_seen = -1;   // contacts last counted; -1 before the first count
 };
