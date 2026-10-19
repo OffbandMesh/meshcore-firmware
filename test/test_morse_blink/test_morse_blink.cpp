@@ -8,7 +8,9 @@
 
 #include <gtest/gtest.h>
 
+#include <cctype>
 #include <cstdint>
+#include <set>
 #include <string>
 
 #include <helpers/ui/MorseBlink.h>
@@ -41,13 +43,135 @@ TEST(Morse, SingleLettersAreTheStandardCode) {
   EXPECT_EQ("#.#.#.#", render("H"));
 }
 
-TEST(Morse, UnknownCharactersContributeNothing) {
+TEST(Morse, UnencodableCharactersContributeNothing) {
+  // Punctuation has no code, and morseAt() skips a nullptr without adding an element or a
+  // gap, so it costs exactly nothing. That is the right behaviour for a character that
+  // cannot be rendered -- the alternative is blinking garbage.
   EXPECT_EQ(morseTotalUnits("E"), morseTotalUnits("E!"));
-  EXPECT_EQ(morseTotalUnits("E"), morseTotalUnits("E123"));
+  EXPECT_EQ(morseTotalUnits("E"), morseTotalUnits("E!?,."));
   EXPECT_EQ(0u, morseTotalUnits(""));
   EXPECT_EQ(0u, morseTotalUnits("!!!"));
   EXPECT_EQ(0u, morseTotalUnits(nullptr));
+  EXPECT_EQ(nullptr, morseFor('!'));
+  EXPECT_EQ(nullptr, morseFor(' '));     // handled as a word gap, not as a character
+  EXPECT_EQ(nullptr, morseFor('\0'));
+  EXPECT_EQ(nullptr, morseFor('-'));     // the rendering of a dash is not an input
 }
+
+// ---- digits (#1640) --------------------------------------------------------------------
+//
+// This block replaces a single line that used to read
+//
+//     EXPECT_EQ(morseTotalUnits("E"), morseTotalUnits("E123"));
+//
+// inside a test called UnknownCharactersContributeNothing. That assertion PINNED the
+// defect: digits were silently dropped, and the one case covering them asserted that they
+// were, grouped in with punctuation so it read as intentional. It was the only digit case
+// in the file.
+
+TEST(Digits, EachDigitIsItsItuCode) {
+  EXPECT_STREQ(".----", morseFor('1'));
+  EXPECT_STREQ("..---", morseFor('2'));
+  EXPECT_STREQ("...--", morseFor('3'));
+  EXPECT_STREQ("....-", morseFor('4'));
+  EXPECT_STREQ(".....", morseFor('5'));
+  EXPECT_STREQ("-....", morseFor('6'));
+  EXPECT_STREQ("--...", morseFor('7'));
+  EXPECT_STREQ("---..", morseFor('8'));
+  EXPECT_STREQ("----.", morseFor('9'));
+  EXPECT_STREQ("-----", morseFor('0'));
+}
+
+TEST(Digits, TheCodesFollowTheRuleRatherThanATable) {
+  // Derived from the mechanism, not restated from the header. A second copy of a lookup
+  // table only proves it was copied; this fails if any entry drifts off the sequence.
+  //
+  // THE RULE, which is not quite the obvious one. Every digit is five elements, and the
+  // ten of them are one progression counted from 1 to 10, where '0' is the tenth:
+  //
+  //   1-5   n dots first, dashes filling the rest      1 .----   5 .....
+  //   6-0   (n-5) dashes first, dots filling the rest  6 -....   0 -----
+  //
+  // So the dots lead in the first half and the DASHES lead in the second. The first draft
+  // of this test and of the header comment both said "dots counting up, then dashes
+  // counting up", which is right for 1-5 and wrong for 6-0 -- it makes '6' six dots and
+  // minus-one dashes. That underflowed a size_t and took the whole suite down with a
+  // CTRL_BREAK rather than a failed assertion, which is exactly why this is computed:
+  // EachDigitIsItsItuCode passed happily the whole time, because the TABLE was correct.
+  for (char d = '0'; d <= '9'; d++) {
+    const char* code = morseFor(d);
+    ASSERT_NE(nullptr, code) << "digit " << d << " has no code";
+    const std::string s(code);
+    ASSERT_EQ(5u, s.size()) << "every digit is five elements; " << d << " is " << s;
+
+    const size_t n = (d == '0') ? 10u : (size_t)(d - '0');  // the 1..10 progression
+    ASSERT_GE(n, 1u);
+    ASSERT_LE(n, 10u);
+    const std::string want = (n <= 5)
+        ? std::string(n, '.') + std::string(5 - n, '-')
+        : std::string(n - 5, '-') + std::string(10 - n, '.');
+    EXPECT_EQ(want, s) << "digit " << d << " is step " << n << " of the progression";
+  }
+
+  // And the progression is a progression: each step moves exactly one element from the
+  // trailing run to the leading run, so no two digits share a code.
+  std::set<std::string> seen;
+  for (char d = '0'; d <= '9'; d++) {
+    EXPECT_TRUE(seen.insert(morseFor(d)).second) << "digit " << d << " duplicates another";
+  }
+  EXPECT_EQ(10u, seen.size());
+}
+
+TEST(Digits, ADigitNowCostsTimeWhereItUsedToCostNothing) {
+  // The behaviour change, stated as an assertion rather than left in a commit message.
+  // Each digit is five elements: 1+3+1+3+1+3+1+3+1 worst case, so the length depends on
+  // the dot/dash mix. What is certain is that it is no longer free.
+  EXPECT_GT(morseTotalUnits("E5"), morseTotalUnits("E"));
+  EXPECT_GT(morseTotalUnits("E0"), morseTotalUnits("E"));
+  // '5' is five dots: 5 x 1 unit + 4 x 1 gap = 9. Plus "E" (1) and a letter gap (3) = 13.
+  EXPECT_EQ(13u, morseTotalUnits("E5"));
+  // '0' is five dashes: 5 x 3 + 4 x 1 = 19. Plus 1 + 3 = 23.
+  EXPECT_EQ(23u, morseTotalUnits("E0"));
+}
+
+TEST(Digits, ADigitBearingMessageDecodesBackToItself) {
+  // The same round-trip the letters get, over a string with digits in it -- which is the
+  // thing that silently produced a shorter pattern before.
+  const std::string msg = "OFFBAND 0X4";
+  const std::string t = render(msg.c_str());
+  std::string decoded, code;
+  size_t i = 0;
+  auto flush_letter = [&]() {
+    if (code.empty()) return;
+    for (int c = 0; c < 128; c++) {
+      const char* m = morseFor((char)c);
+      if (m != nullptr && code == m && (isalpha(c) ? isupper(c) : true)) {
+        decoded += (char)c;
+        break;
+      }
+    }
+    code.clear();
+  };
+  while (i < t.size()) {
+    if (t[i] == '#') {
+      size_t n = 0;
+      while (i < t.size() && t[i] == '#') { n++; i++; }
+      code += (n == 1) ? '.' : '-';
+    } else {
+      size_t n = 0;
+      while (i < t.size() && t[i] == '.') { n++; i++; }
+      if (n >= 7) { flush_letter(); decoded += ' '; }
+      else if (n >= 3) { flush_letter(); }
+    }
+  }
+  flush_letter();
+  EXPECT_EQ(msg, decoded);
+}
+
+// The matching scope note -- that adding digits here does NOT widen the #1609 trigger --
+// is pinned in test_tune_trigger, where TuneTrigger.h is already in scope. Keeping this
+// file to MorseBlink.h alone is deliberate: the trigger depends on the Morse table, not
+// the other way round, and a test include that reversed that would hide it.
 
 TEST(Morse, LowerCaseWorks) {
   EXPECT_EQ(render("SOS"), render("sos"));

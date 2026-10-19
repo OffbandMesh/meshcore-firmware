@@ -34,8 +34,31 @@ constexpr uint32_t kMorseWordGap = 7;
 // drag. At 80 ms, "I AM NOT WORTHY" is 129 units = 10.3 s per repetition.
 constexpr uint32_t kMorseUnitMs = 80;
 
-// A-Z only. Returns nullptr for anything else, which the walker skips -- so punctuation or
-// a lower-case letter costs nothing rather than producing garbage.
+// A-Z and 0-9. Returns nullptr for anything else, which the walker skips -- so punctuation
+// costs nothing rather than producing garbage. Lower case is folded up.
+//
+// #1640: the digits were added after this shipped letters-only. The old behaviour was a
+// silent trap rather than a documented limitation: morseAt() skips a nullptr entirely, so a
+// digit in the blink text contributed NO element and NO gap. The badge blinked a shorter
+// message than the string read, and the only way to find out was to decode it by eye with
+// a stopwatch. Nothing shipped with a digit, so the blast radius of fixing it was nil --
+// but it IS a behaviour change for any text containing one, not a pure addition.
+//
+// The digit codes are a generated sequence, not ten facts. Five elements each, and the ten
+// of them are one progression counted 1 to 10 with '0' as the tenth step:
+//
+//   steps 1-5   n dots first, dashes filling the rest        1 .----    5 .....
+//   steps 6-10  (n-5) dashes first, dots filling the rest    6 -....    0 -----
+//
+// Note that the dots lead in the first half and the DASHES lead in the second -- it is not
+// "dots counting up, then dashes counting up", which is right for 1-5 and wrong for 6-0.
+//
+// They are written out below to match the letters above and to keep this allocation-free.
+// test_morse_blink asserts the PROGRESSION independently rather than restating the table,
+// because a second copy of a lookup table proves only that it was copied. That is not
+// theoretical here: the first draft of this comment had the rule wrong in exactly the way
+// described above, the table was correct, and the table-comparison test passed while the
+// computed one failed.
 inline const char* morseFor(char c) {
   if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
   switch (c) {
@@ -48,6 +71,10 @@ inline const char* morseFor(char c) {
     case 'S': return "...";   case 'T': return "-";     case 'U': return "..-";
     case 'V': return "...-";  case 'W': return ".--";   case 'X': return "-..-";
     case 'Y': return "-.--";  case 'Z': return "--..";
+    case '1': return ".----"; case '2': return "..---"; case '3': return "...--";
+    case '4': return "....-"; case '5': return "....."; case '6': return "-....";
+    case '7': return "--..."; case '8': return "---.."; case '9': return "----.";
+    case '0': return "-----";
     default: return nullptr;
   }
 }

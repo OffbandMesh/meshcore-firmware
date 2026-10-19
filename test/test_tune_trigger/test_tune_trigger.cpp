@@ -205,11 +205,46 @@ TEST(MorseTail, ATruncatedPatternIsRefused) {
 }
 
 TEST(MorseTail, ALetterWithNoMorseIsRefused) {
-  // morseFor() covers A-Z only. A digit or punctuation must refuse rather than match
-  // anything, which is what makes the letters-only rule safe.
+  // #1640 CHANGED WHY THIS PASSES, so the comment is worth more than the assertions.
+  //
+  // It used to read "morseFor() covers A-Z only, so a digit must refuse". That stopped
+  // being true when morseFor() gained the ITU digits: morseFor('6') is now "-....", so
+  // this refuses because the body ends "-.--" and the patterns DIFFER, not because '6' has
+  // no code. The assertion is unchanged and still correct; the reasoning behind it is not.
   EXPECT_FALSE(bodyEndsWithMorseFor("hello -.--", '6'));
+  // A character with genuinely no code -- which is now punctuation and NUL, not digits.
+  EXPECT_FALSE(bodyEndsWithMorseFor("hello -.--", '!'));
   EXPECT_FALSE(bodyEndsWithMorseFor("hello -.--", 0));
   EXPECT_FALSE(bodyEndsWithMorseFor(nullptr, 'Y'));
+}
+
+TEST(MorseTail, DigitsGainingACodeDoesNotWidenTheGate) {
+  // #1640's scope note, pinned rather than trusted.
+  //
+  // bodyEndsWithMorseFor() is now more permissive in isolation -- asked about '6' with a
+  // body ending "-...." it says yes, where before it could only ever say no. That is
+  // UNREACHABLE from the gate, and this is the test that keeps it unreachable: the letter
+  // argument always comes from triggerLetterFor(), which goes through nthLetter(), which
+  // skips every character that is not A-Z.
+  //
+  // So the owner's design holds unchanged: the marker is the 4th LETTER, a badge needs
+  // four letters before the mark to be able to fire, and no amount of digits in a name
+  // changes which letter is chosen.
+  EXPECT_TRUE(bodyEndsWithMorseFor("hello -....", '6'))
+      << "in isolation the helper now knows the digit codes";
+
+  EXPECT_EQ(0, triggerLetterFor("QCC1234"));      // three letters: cannot fire at all
+  EXPECT_EQ(0, triggerLetterFor("12345678"));     // no letters at all
+  EXPECT_EQ('H', triggerLetterFor("1A2B3C4H"));   // the 4th LETTER, not the 4th character
+  // A digit mid-name is skipped rather than counted, so inserting one does not shift
+  // which letter is chosen: both of these resolve to the same 'Y'.
+  EXPECT_EQ('Y', triggerLetterFor("Strycher"));
+  EXPECT_EQ('Y', triggerLetterFor("St9rycher"));
+
+  // And end to end: a badge whose name cannot supply a 4th letter still cannot be
+  // triggered by the Morse for one of its digits.
+  EXPECT_FALSE(fires("QCC1234" + kSatVs16, "0x4 .----"));
+  EXPECT_FALSE(fires("QCC1234" + kSatVs16, "0x4 ....-"));
 }
 
 TEST(MorseTail, ALongBodyStillMatchesOnItsTail) {
