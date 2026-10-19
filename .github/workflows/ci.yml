@@ -108,6 +108,19 @@ jobs:
       - name: QCC badge call-site guards
         run: python scripts/test_qcc_call_sites.py
 
+      # #1641: the assessment logic of the rig boot smoke test.
+      #
+      # The smoke test's hardware RUN cannot be in CI -- it needs the sniffer rig and a
+      # badge, and it gates a flash rather than a PR. Its ASSERTIONS can be, and this is
+      # them: a synthetic capture in, a verdict out. Without this, the one piece of the
+      # epic that actually runs firmware would itself be the only piece with no coverage,
+      # and a boot smoke test whose pass condition is untested can report OK for the
+      # wrong reason.
+      #
+      # Includes a hang at every one of the declared boot stages, not one example.
+      - name: Rig boot smoke-test assertions
+        run: python scripts/test_rig_boot_smoke.py
+
       - name: QCC splash-art generator self-test
         run: python scripts/test_gen_qcc_splash.py
 
