@@ -1798,9 +1798,14 @@ char UITask::handleDoubleClick(char c) {
 char UITask::handleTripleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: triple click triggered");
   checkDisplayOn(c);
+  // #1590: away from Home this is the way OUT. A badge with no keyboard fitted has no
+  // Esc, and KEY_CANCEL is the only key backsOut() accepts, so without this there is no
+  // way to leave Settings at all on such a unit. At Home there is nowhere to go, so the
+  // gesture keeps its original job there. The rule is in keynav so it is host-tested.
+  const uint8_t k = keynav::tripleClickKey(curr == home);
+  if (k != 0) return (char)k;
   toggleBuzzer();
-  c = 0;
-  return c;
+  return 0;
 }
 
 bool UITask::getGPSState() {
