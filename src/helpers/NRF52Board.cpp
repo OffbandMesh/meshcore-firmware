@@ -8,6 +8,16 @@
 #include <nrf_wdt.h>     // #257: hardware watchdog HAL (same dep SafeBoot.cpp uses)
 #endif
 
+// #275 heartbeat cadence, overridable per variant. Defaults are the solar car
+// companion's ~1 Hz; see src/helpers/ui/HeartbeatCadence.h for why these sit just under
+// a 100 ms wake boundary and what goes wrong if an override does not.
+#ifndef OFFBAND_HEARTBEAT_ON_MS
+  #define OFFBAND_HEARTBEAT_ON_MS 90
+#endif
+#ifndef OFFBAND_HEARTBEAT_OFF_MS
+  #define OFFBAND_HEARTBEAT_OFF_MS 890
+#endif
+
 static BLEDfu bledfu;
 
 static void connect_callback(uint16_t conn_handle) {
@@ -96,7 +106,15 @@ void NRF52Board::heartbeatTick() {
     // #275 Option A: ~1 Hz low-duty blip. on ~100 ms (rounds up to the next 100 ms
     // wake) / off ~900 ms => ~10% duty (~0.2-0.5 mA) instead of ~50%. Both values sit
     // just under a 100 ms wake boundary so the edge lands on the following wake.
-    _hb_next_ms = now + (_hb_on ? 90 : 890);
+    //
+    // OVERRIDABLE PER VARIANT, because 1 Hz was sized for the solar car companion -- a
+    // sealed node with no screen, where the blip is the only liveness signal. The QCC
+    // badge puts the same pin on three bright LEDs worn on a person and has a display to
+    // show a wedged loop, so it slows its own cadence rather than this default moving
+    // under the board it was written for. The arithmetic and the wake-boundary rule are
+    // host-tested in test/test_heartbeat_cadence; keep any override a hair UNDER a
+    // boundary (4890, not 4900) or the observed gap starts depending on jitter.
+    _hb_next_ms = now + (_hb_on ? OFFBAND_HEARTBEAT_ON_MS : OFFBAND_HEARTBEAT_OFF_MS);
   }
 #endif
 }
