@@ -11,6 +11,7 @@
 #include <lvgl.h>
 #include <stdint.h>
 
+#include <helpers/gui/GuiLayout.h>
 #include <helpers/gui/GuiPrefs.h>
 #include <helpers/gui/GuiTheme.h>
 #include <helpers/gui/GuiViews.h>
@@ -173,6 +174,10 @@ class GuiShell {
 public:
   void begin(const offband::gui::ThemeTokens& t, offband::gui::Look look, ShellModel* model);
   void setTheme(const offband::gui::ThemeTokens& t, offband::gui::Look look);
+  // The layout class (Epic H): set before the first build, and again when
+  // Rotation changes; rebuilds.
+  void setLayout(const offband::gui::Layout& l);
+  const offband::gui::Layout& layout() const { return _lay; }
 
   void showLock();
   void showTab(Tab tab);
@@ -336,7 +341,6 @@ private:
   lv_obj_t* _ss_value = nullptr;         // the stepper's or pad's value
   lv_obj_t* _ss_limit = nullptr;         // the range line under it
   static constexpr size_t kSheetItems = 16;   // a picker builds only its window
-  static constexpr int kPickRows = 6;
   lv_obj_t* _ss_item[kSheetItems] = {};
   int _ss_top = 0;                       // the picker's first option on screen
   int _ss_gz = 0;                        // the GPS zone when the sheet opened (Time zone)
@@ -370,6 +374,17 @@ private:
 
   offband::gui::ThemeTokens _t{};
   offband::gui::LookTokens _look{};
+  offband::gui::Layout _lay = offband::gui::layoutFor(0);
+  // Class B: the area right of the rail that the screens build in, full
+  // height (the status strip is drawn over its top). Class A: the screen.
+  lv_obj_t* host(lv_obj_t* scr);
+  bool landscape() const { return _lay.cls == offband::gui::LayoutClass::B; }
+  int16_t kbTop() const;
+  static constexpr int16_t kWheelH = 70;   // the letter wheel's strip
+  // A sheet's backdrop on the top layer (below the status strip) and the
+  // sheet itself, which starts right of the rail in class B.
+  lv_obj_t* sheetBackdrop();
+  lv_obj_t* sheetPanel(lv_obj_t* backdrop);
   ShellModel* _model = nullptr;
   StatusBar _status;
   lv_group_t* _group = nullptr;

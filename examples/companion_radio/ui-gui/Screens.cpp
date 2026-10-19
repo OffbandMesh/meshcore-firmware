@@ -159,6 +159,46 @@ void GuiShell::setTheme(const ThemeTokens& t, Look look) {
   rebuild();
 }
 
+void GuiShell::setLayout(const Layout& l) {
+  _lay = l;
+  if (_model) rebuild();   // before begin() only the layout is kept
+}
+
+lv_obj_t* GuiShell::host(lv_obj_t* scr) {
+  if (!landscape()) return scr;
+  lv_obj_t* h = box(scr, _lay.content_w, _lay.h);
+  lv_obj_set_pos(h, _lay.content_x, 0);
+  return h;
+}
+
+// A sheet's backdrop (dims the screen below the status strip; a tap on it
+// closes the sheet) and the sheet panel, whose top corners take the Look's
+// radius. Class B starts the panel right of the rail (ObScreen landscape).
+lv_obj_t* GuiShell::sheetBackdrop() {
+  lv_obj_t* b = box(lv_layer_top(), _lay.w, _lay.h - kStatusH);
+  lv_obj_set_pos(b, 0, kStatusH);
+  lv_obj_set_style_bg_opa(b, LV_OPA_50, 0);
+  lv_obj_set_style_bg_color(b, lv_color_black(), 0);
+  lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+  return b;
+}
+
+lv_obj_t* GuiShell::sheetPanel(lv_obj_t* backdrop) {
+  const int16_t r = _look.pill_chips ? 12 : 0;
+  lv_obj_t* sheet = box(backdrop, _lay.w - _lay.sheet_left, LV_SIZE_CONTENT);
+  lv_obj_align(sheet, LV_ALIGN_BOTTOM_RIGHT, 0, r);
+  lv_obj_set_style_bg_opa(sheet, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(sheet, c(_t.bg3), 0);
+  lv_obj_set_style_radius(sheet, r, 0);
+  lv_obj_set_style_border_side(sheet, LV_BORDER_SIDE_TOP, 0);
+  lv_obj_set_style_border_width(sheet, 1, 0);
+  lv_obj_set_style_border_color(sheet, c(_t.line), 0);
+  lv_obj_set_style_pad_bottom(sheet, r + (landscape() ? 5 : 6), 0);
+  lv_obj_set_flex_flow(sheet, LV_FLEX_FLOW_COLUMN);
+  lv_obj_add_flag(sheet, LV_OBJ_FLAG_CLICKABLE);   // a tap on the sheet isn't a backdrop tap
+  return sheet;
+}
+
 void GuiShell::showLock() {
   if (_locked) return;
   _locked = true;
@@ -235,24 +275,21 @@ void GuiShell::rebuild() {
     buildLock(scr);
     return;
   }
-  if (_composing) {   // Compose takes the whole screen below the status bar
+  // Compose, Name, login and search take the whole screen below the status
+  // bar in class A. In class B they take the area right of the rail, and the
+  // rail stays, drawn but inert (ObScreen landscape: the rail is on every
+  // shell screen).
+  const bool own_screen = _composing || (_set_text && _tab == Tab::Setup) || (_login && detailTab()) ||
+                          (_searching && !_detail && _tab == Tab::Nodes);
+  if (own_screen) {
     _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
-    buildCompose(scr);
-    return;
-  }
-  if (_set_text && _tab == Tab::Setup) {   // Node › Name, typed
-    _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
-    buildSetText(scr);
-    return;
-  }
-  if (_login && detailTab()) {   // the login sheet, over a node's detail
-    _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
-    buildLogin(scr);
-    return;
-  }
-  if (_searching && !_detail && _tab == Tab::Nodes) {   // so does Nodes search (ObScreen: no tab bar)
-    _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
-    buildSearch(scr);
+    for (auto& t : _tab_obj) t = nullptr;
+    lv_obj_t* h = host(scr);
+    if (_composing) buildCompose(h);
+    else if (_set_text && _tab == Tab::Setup) buildSetText(h);   // Node › Name, typed
+    else if (_login && detailTab()) buildLogin(h);               // the login sheet, over a node's detail
+    else buildSearch(h);                                         // Nodes search (ObScreen: no tab bar)
+    if (landscape()) buildTabs(scr);
     return;
   }
   _msg_list = nullptr;
@@ -264,9 +301,10 @@ void GuiShell::rebuild() {
   _node_shown = 0;
   if (_tab == Tab::Chat) _shown_rev = _model->store().revision();
   _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
-  // Radio takes the tab bar's place for its pinned Save (mockup 2).
-  const bool full = fullScreenSetup();
-  lv_obj_t* content = box(scr, kW, full ? 320 - kStatusH : kContentH);
+  // Radio takes the tab bar's place for its pinned Save (mockup 2). Class B
+  // has no tab bar: the rail stays and Radio keeps the content area.
+  const bool full = fullScreenSetup() && !landscape();
+  lv_obj_t* content = box(host(scr), _lay.content_w, full ? _lay.h - kStatusH : _lay.content_h);
   lv_obj_set_pos(content, 0, kStatusH);
   if (_tab == Tab::Home) buildHome(content);
   else if (_tab == Tab::Chat && _thread >= 0) buildConversation(content);
@@ -311,7 +349,9 @@ void GuiShell::buildHome(lv_obj_t* content) {
   lv_obj_set_style_border_width(grid, 1, 0);
   lv_obj_set_style_border_color(grid, c(_t.line), 0);
   for (int i = 0; i < 6; i++) {
-    lv_obj_t* cell = box(grid, (kW - 16 - 1) / 2, LV_SIZE_CONTENT);
+    // Class B: three across, so the six cells take two rows of 220 px.
+    const int16_t cols = landscape() ? 3 : 2;
+    lv_obj_t* cell = box(grid, (_lay.content_w - 16 - 1) / cols, LV_SIZE_CONTENT);
     lv_obj_set_style_border_side(cell, LV_BORDER_SIDE_RIGHT | LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(cell, 1, 0);
     lv_obj_set_style_border_color(cell, c(_t.line), 0);
@@ -350,36 +390,46 @@ void GuiShell::buildPlaceholder(lv_obj_t* content) {
   lv_obj_center(l);
 }
 
+// The tabs: class A's bar along the bottom, or class B's 48 px rail down the
+// left below the status strip (ObScreen landscape: the active tab's mark is
+// on its left edge instead of its top).
 void GuiShell::buildTabs(lv_obj_t* parent) {
-  lv_obj_t* bar = box(parent, kW, kTabH);
-  lv_obj_set_pos(bar, 0, 320 - kTabH);
+  const bool rail = landscape();
+  const int16_t rail_h = int16_t(_lay.h - kStatusH);
+  lv_obj_t* bar = rail ? box(parent, _lay.rail_w, rail_h) : box(parent, _lay.w, _lay.tab_h);
+  lv_obj_set_pos(bar, 0, rail ? kStatusH : _lay.h - _lay.tab_h);
   lv_obj_set_style_bg_color(bar, c(_t.bg2), 0);
   lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_TOP, 0);
+  lv_obj_set_style_border_side(bar, rail ? LV_BORDER_SIDE_RIGHT : LV_BORDER_SIDE_TOP, 0);
   lv_obj_set_style_border_width(bar, 1, 0);
-  lv_obj_set_style_border_color(bar, c(_t.line2), 0);
-  lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_border_color(bar, c(rail ? _t.line : _t.line2), 0);
+  lv_obj_set_flex_flow(bar, rail ? LV_FLEX_FLOW_COLUMN : LV_FLEX_FLOW_ROW);
 
   lv_obj_t* active = nullptr;
   for (uint8_t i = 0; i < uint8_t(Tab::Count); i++) {
     const bool on = i == uint8_t(_tab);
     const uint32_t rgb = on ? _t.sig : _t.dim;
-    lv_obj_t* t = box(bar, kW / 5, kTabH);
+    lv_obj_t* t = rail ? box(bar, _lay.rail_w - 1, rail_h / 5) : box(bar, _lay.w / 5, _lay.tab_h);
     lv_obj_set_flex_flow(t, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(t, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(t, 2, 0);
     if (on) {
       lv_obj_set_style_bg_color(t, c(_t.wash), 0);
       lv_obj_set_style_bg_opa(t, lv_opa_t(_t.wash >> 24), 0);
-      lv_obj_set_style_border_side(t, LV_BORDER_SIDE_TOP, 0);
+      lv_obj_set_style_border_side(t, rail ? LV_BORDER_SIDE_LEFT : LV_BORDER_SIDE_TOP, 0);
       lv_obj_set_style_border_width(t, 2, 0);
       lv_obj_set_style_border_color(t, c(_t.sig), 0);
       active = t;
     }
     tabIcon(t, Tab(i), rgb);
     label(t, FontRole::Label, rgb, kTabName[i]);
-    focusable(t);
+    // Beside Compose, search, login or Name (class B only) the rail is drawn
+    // but inert: a stray tap next to the keyboard must not throw away what's
+    // typed, and login's sheet stays modal. ‹ leaves, as in portrait.
+    const bool own = _composing || _set_text || _login || _searching;
     _tab_obj[i] = t;
+    if (own) continue;
+    focusable(t);
     lv_obj_add_event_cb(
         t,
         [](lv_event_t* e) {
@@ -398,12 +448,22 @@ void GuiShell::buildTabs(lv_obj_t* parent) {
         },
         LV_EVENT_CLICKED, this);
   }
-  if (active) lv_group_focus_obj(active);
+  if (active && !(_composing || _set_text || _login || _searching)) lv_group_focus_obj(active);
 }
 
 void GuiShell::buildLock(lv_obj_t* scr) {
-  lv_obj_t* col = box(scr, 210, LV_SIZE_CONTENT);
-  lv_obj_align(col, LV_ALIGN_TOP_MID, 0, 40);
+  // Class B (mockup 10): the clock and its lines on the left, the unread
+  // items on the right.
+  lv_obj_t* pair = nullptr;
+  if (landscape()) {
+    pair = box(scr, _lay.w - 24, LV_SIZE_CONTENT);
+    lv_obj_align(pair, LV_ALIGN_LEFT_MID, 12, -10);
+    lv_obj_set_flex_flow(pair, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(pair, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(pair, 14, 0);
+  }
+  lv_obj_t* col = box(pair ? pair : scr, pair ? 140 : 210, LV_SIZE_CONTENT);
+  if (!pair) lv_obj_align(col, LV_ALIGN_TOP_MID, 0, 40);
   lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_row(col, 4, 0);
@@ -416,8 +476,8 @@ void GuiShell::buildLock(lv_obj_t* scr) {
   lv_obj_set_style_pad_bottom(_lock_ampm, 8, 0);
   _lock_sub = label(col, FontRole::BodySmall, _t.ink2);
   _lock_zone = label(col, FontRole::Label, _t.dim);   // the zone, or "UTC · set a time zone" (#1610)
-  _lock_list = box(col, LV_PCT(100), LV_SIZE_CONTENT);
-  lv_obj_set_style_pad_top(_lock_list, 10, 0);
+  _lock_list = pair ? box(pair, _lay.w - 24 - 140 - 14, LV_SIZE_CONTENT) : box(col, LV_PCT(100), LV_SIZE_CONTENT);
+  lv_obj_set_style_pad_top(_lock_list, pair ? 0 : 10, 0);
   lv_obj_set_flex_flow(_lock_list, LV_FLEX_FLOW_COLUMN);
 
   lv_obj_t* hint = label(scr, FontRole::BodySmall, _t.dim, "Press USR or swipe up to unlock");
@@ -934,7 +994,7 @@ void GuiShell::buildConversation(lv_obj_t* content) {
     emptyState(_msg_list, _t, EmptyIcon::Bubble, "No messages yet", sub, nullptr);
   }
   const int zone = _model->zone();
-  const int16_t max_w = (kW - 16) * 88 / 100;
+  const int16_t max_w = (_lay.content_w - 16) * 88 / 100;
   // Messages & alerts › Jump to oldest unread: where the reading starts.
   const int first_unread = _jump_unread ? (_jump_unread >= n ? 0 : int(n - _jump_unread)) : -1;
   lv_obj_t* jump_to = nullptr;
@@ -1062,8 +1122,11 @@ void GuiShell::buildConversation(lv_obj_t* content) {
 
 namespace {
 const char* const kDefaultCanned[4] = {"On my way", "Copy that", "Check-in OK", "Need help"};
-constexpr int16_t kKbTop = 320 - 4 * kKeyH - 3 * kKeyRowGap - 4;   // keyboard area top
 }  // namespace
+
+// The keyboard area's top: four rows of the layout class's keys and their
+// gaps above the screen's foot (179 in class A, 127 in class B).
+int16_t GuiShell::kbTop() const { return int16_t(_lay.h - keyboardHeight(_lay.key_h) - 4); }
 
 void GuiShell::openCompose(int thread) {
   if (thread < 0 || !_model->store().threadAt(thread)) return;
@@ -1086,7 +1149,7 @@ void GuiShell::leaveCompose() {
 void GuiShell::buildCompose(lv_obj_t* scr) {
   const Thread* th = _model->store().threadAt(_thread);
   // Header: "To <name>" and the byte counter.
-  lv_obj_t* h = box(scr, kW, 28);
+  lv_obj_t* h = box(scr, _lay.content_w, 28);
   lv_obj_set_pos(h, 0, kStatusH);
   lv_obj_set_style_pad_hor(h, 8, 0);
   lv_obj_set_style_border_side(h, LV_BORDER_SIDE_BOTTOM, 0);
@@ -1095,6 +1158,9 @@ void GuiShell::buildCompose(lv_obj_t* scr) {
   lv_obj_set_flex_flow(h, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(h, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_column(h, 4, 0);
+  // Class B (mockup 5): a shorter draft and chips, so both fit above the
+  // landscape keyboard.
+  const int16_t draft_h = landscape() ? 34 : 48, chip_h = landscape() ? 22 : 24, gap = landscape() ? 4 : 6;
   // Back, as the spec gives it ("‹ or swipe right"): the bench found no way
   // out of Compose by touch (#1501).
   lv_obj_t* back = box(h, 10, 20);
@@ -1116,8 +1182,8 @@ void GuiShell::buildCompose(lv_obj_t* scr) {
   _counter = label(h, FontRole::Meta, _t.dim);
 
   // The draft: a signal-bordered box on the wash, scrolling as it fills.
-  _draft_box = box(scr, kW - 16, 48);
-  lv_obj_set_pos(_draft_box, 8, kStatusH + 28 + 6);
+  _draft_box = box(scr, _lay.content_w - 16, draft_h);
+  lv_obj_set_pos(_draft_box, 8, kStatusH + 28 + gap);
   lv_obj_set_style_border_width(_draft_box, 1, 0);
   lv_obj_set_style_border_color(_draft_box, c(_t.sig), 0);
   lv_obj_set_style_bg_opa(_draft_box, lv_opa_t(_t.wash >> 24), 0);
@@ -1136,14 +1202,14 @@ void GuiShell::buildCompose(lv_obj_t* scr) {
   lv_obj_set_style_bg_color(_caret, c(_t.sig), 0);
 
   // Canned chips (the "Can" list; the design's four until Setup edits them).
-  lv_obj_t* chips = box(scr, kW - 16, 24);
-  lv_obj_set_pos(chips, 8, kStatusH + 28 + 6 + 48 + 6);
+  lv_obj_t* chips = box(scr, _lay.content_w - 16, chip_h);
+  lv_obj_set_pos(chips, 8, kStatusH + 28 + gap + draft_h + gap);
   lv_obj_set_flex_flow(chips, LV_FLEX_FLOW_ROW);
   lv_obj_set_style_pad_column(chips, 4, 0);
   for (int i = 0; i < 4; i++) {
     const char* text = _model->cannedText(i);
     if (!text || !text[0]) text = kDefaultCanned[i];
-    lv_obj_t* chip = box(chips, LV_SIZE_CONTENT, 24);
+    lv_obj_t* chip = box(chips, LV_SIZE_CONTENT, chip_h);
     lv_obj_set_style_border_width(chip, 1, 0);
     lv_obj_set_style_border_color(chip, c(_t.line), 0);
     lv_obj_set_style_radius(chip, _look.pill_chips ? 12 : 0, 0);
@@ -1169,8 +1235,9 @@ void GuiShell::buildCompose(lv_obj_t* scr) {
 // The keyboard, for Compose and for Nodes search: one area takes every touch
 // and snaps it to the nearest key, so a tap in a gap still lands (mockup 7a).
 void GuiShell::buildKeyboard(lv_obj_t* scr) {
-  _kb = box(scr, kW, 320 - kKbTop);
-  lv_obj_set_pos(_kb, 0, kKbTop - 2);
+  const int16_t top = kbTop();
+  _kb = box(scr, _lay.content_w, _lay.h - top + 2);
+  lv_obj_set_pos(_kb, 0, top - 2);
   lv_obj_set_style_bg_opa(_kb, LV_OPA_COVER, 0);
   lv_obj_set_style_bg_color(_kb, c(_t.bg2), 0);
   lv_obj_set_style_border_side(_kb, LV_BORDER_SIDE_TOP, 0);
@@ -1186,7 +1253,8 @@ void GuiShell::buildKeyboard(lv_obj_t* scr) {
         if (code == LV_EVENT_PRESSED || code == LV_EVENT_PRESSING) {
           lv_point_t p;
           lv_indev_get_point(lv_indev_get_act(), &p);
-          self->setHotKey(nearestKey(self->_keys, self->_nkeys, p.x, p.y), true);
+          // The keys are in host coordinates: right of the rail in class B.
+          self->setHotKey(nearestKey(self->_keys, self->_nkeys, int16_t(p.x - self->_lay.content_x), p.y), true);
         } else if (code == LV_EVENT_RELEASED) {
           const int k = self->_hot;
           self->setHotKey(-1, false);
@@ -1209,12 +1277,13 @@ void GuiShell::buildKeys() {
   }
   lv_obj_clean(_kb);
   for (auto& k : _key_obj) k = nullptr;
-  _nkeys = pageLayout(_page.page(), kW, kKbTop, _keys, 40);
+  const int16_t top = kbTop();
+  _nkeys = pageLayout(_page.page(), _lay.content_w, top, _keys, 40, _lay.key_w, _lay.key_h);
   const bool caps = _page.page() == KeyPage::Letters && _shift.state() != Shift::Off;
   for (size_t i = 0; i < _nkeys; i++) {
     const KeyRect& k = _keys[i];
     lv_obj_t* o = box(_kb, k.w, k.h);
-    lv_obj_set_pos(o, k.x, k.y - (kKbTop - 2));
+    lv_obj_set_pos(o, k.x, k.y - (top - 2));
     lv_obj_set_style_radius(o, 4, 0);
     lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(o, c(_t.bg3), 0);
@@ -1266,7 +1335,9 @@ void GuiShell::setHotKey(int i, bool preview) {
   if (!preview || !typesLabel(_keys[i].label)) return;
   const KeyRect& k = _keys[i];
   _key_preview = box(lv_layer_top(), 36, 46);
-  lv_obj_set_pos(_key_preview, k.x + k.w / 2 - 18, k.y - 50);
+  // Keys are laid out in the host (right of the rail in class B); the
+  // preview is on the top layer, in screen coordinates.
+  lv_obj_set_pos(_key_preview, _lay.content_x + k.x + k.w / 2 - 18, k.y - 50);
   lv_obj_set_style_bg_opa(_key_preview, LV_OPA_COVER, 0);
   lv_obj_set_style_bg_color(_key_preview, c(_t.bg3), 0);
   lv_obj_set_style_border_width(_key_preview, 1, 0);
@@ -1423,11 +1494,7 @@ void GuiShell::openSheet(Sheet kind) {
   _sheet = kind;
   const NotifyMode mode = _model->threadMode(_thread);
 
-  _sheet_obj = box(lv_layer_top(), kW, 320 - kStatusH);
-  lv_obj_set_pos(_sheet_obj, 0, kStatusH);
-  lv_obj_set_style_bg_opa(_sheet_obj, LV_OPA_50, 0);
-  lv_obj_set_style_bg_color(_sheet_obj, lv_color_black(), 0);
-  lv_obj_add_flag(_sheet_obj, LV_OBJ_FLAG_CLICKABLE);
+  _sheet_obj = sheetBackdrop();
   lv_obj_add_event_cb(
       _sheet_obj,
       [](lv_event_t* e) {
@@ -1440,18 +1507,7 @@ void GuiShell::openSheet(Sheet kind) {
 
   // Modern: the radius rounds the top corners; the sheet runs past the
   // screen's bottom by that much, so its bottom corners stay square.
-  const int16_t r = _look.pill_chips ? 12 : 0;
-  lv_obj_t* sheet = box(_sheet_obj, kW, LV_SIZE_CONTENT);
-  lv_obj_align(sheet, LV_ALIGN_BOTTOM_MID, 0, r);
-  lv_obj_set_style_bg_opa(sheet, LV_OPA_COVER, 0);
-  lv_obj_set_style_bg_color(sheet, c(_t.bg3), 0);
-  lv_obj_set_style_radius(sheet, r, 0);
-  lv_obj_set_style_border_side(sheet, LV_BORDER_SIDE_TOP, 0);
-  lv_obj_set_style_border_width(sheet, 1, 0);
-  lv_obj_set_style_border_color(sheet, c(_t.line), 0);
-  lv_obj_set_style_pad_bottom(sheet, r + 6, 0);
-  lv_obj_set_flex_flow(sheet, LV_FLEX_FLOW_COLUMN);
-  lv_obj_add_flag(sheet, LV_OBJ_FLAG_CLICKABLE);   // a tap on the title isn't a backdrop tap
+  lv_obj_t* sheet = sheetPanel(_sheet_obj);
 
   char title[64], raw[64];
   snprintf(raw, sizeof raw, "%s%s", kind == Sheet::Notify ? "Notifications · " : "", th->name);
@@ -1470,7 +1526,7 @@ void GuiShell::openSheet(Sheet kind) {
   _sheet_count = kind == Sheet::Notify ? 3 : 2;
   for (uint8_t i = 0; i < _sheet_count; i++) {
     const bool chosen = kind == Sheet::Notify && i == uint8_t(mode);
-    lv_obj_t* row = box(sheet, LV_PCT(100), 38);
+    lv_obj_t* row = box(sheet, LV_PCT(100), landscape() ? 30 : 38);   // ObScreen landscape: 30 px, no sub-line
     lv_obj_set_style_pad_hor(row, 12, 0);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1496,10 +1552,12 @@ void GuiShell::openSheet(Sheet kind) {
     lv_obj_t* nl = label(col, FontRole::Body, ink, name);
     lv_obj_set_width(nl, LV_PCT(100));
     oneLine(nl, FontRole::Body);
-    lv_obj_t* sl = label(col, FontRole::Label, _t.dim);
-    userText(sl, sub);
-    lv_obj_set_width(sl, LV_PCT(100));
-    oneLine(sl, FontRole::Label);
+    if (_lay.hints) {
+      lv_obj_t* sl = label(col, FontRole::Label, _t.dim);
+      userText(sl, sub);
+      lv_obj_set_width(sl, LV_PCT(100));
+      oneLine(sl, FontRole::Label);
+    }
     if (chosen) label(row, FontRole::Body, _t.sig, "✓");
 
     lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
@@ -1527,11 +1585,7 @@ bool GuiShell::offerZone(int zone) {
   _model->guiPrefs().zone_asked = 1;
   _model->prefsChanged();
 
-  _sheet_obj = box(lv_layer_top(), kW, 320 - kStatusH);
-  lv_obj_set_pos(_sheet_obj, 0, kStatusH);
-  lv_obj_set_style_bg_opa(_sheet_obj, LV_OPA_50, 0);
-  lv_obj_set_style_bg_color(_sheet_obj, lv_color_black(), 0);
-  lv_obj_add_flag(_sheet_obj, LV_OBJ_FLAG_CLICKABLE);
+  _sheet_obj = sheetBackdrop();
   lv_obj_add_event_cb(
       _sheet_obj,
       [](lv_event_t* e) {
@@ -1540,18 +1594,7 @@ bool GuiShell::offerZone(int zone) {
         }
       },
       LV_EVENT_CLICKED, this);
-  const int16_t r = _look.pill_chips ? 12 : 0;
-  lv_obj_t* sheet = box(_sheet_obj, kW, LV_SIZE_CONTENT);
-  lv_obj_align(sheet, LV_ALIGN_BOTTOM_MID, 0, r);
-  lv_obj_set_style_bg_opa(sheet, LV_OPA_COVER, 0);
-  lv_obj_set_style_bg_color(sheet, c(_t.bg3), 0);
-  lv_obj_set_style_radius(sheet, r, 0);
-  lv_obj_set_style_border_side(sheet, LV_BORDER_SIDE_TOP, 0);
-  lv_obj_set_style_border_width(sheet, 1, 0);
-  lv_obj_set_style_border_color(sheet, c(_t.line), 0);
-  lv_obj_set_style_pad_bottom(sheet, r + 6, 0);
-  lv_obj_set_flex_flow(sheet, LV_FLEX_FLOW_COLUMN);
-  lv_obj_add_flag(sheet, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_t* sheet = sheetPanel(_sheet_obj);
 
   const char* name = offband::tz::zone(zone).name;
   char t[48], src[48], sub[160];
@@ -2064,7 +2107,7 @@ void GuiShell::closeSearch() {
 // wash, caret, ×), the match line under it, results, and the keyboard or
 // the wheel pinned at the bottom.
 void GuiShell::buildSearch(lv_obj_t* scr) {
-  lv_obj_t* h = box(scr, kW, 32);
+  lv_obj_t* h = box(scr, _lay.content_w, 32);
   lv_obj_set_pos(h, 0, kStatusH);
   lv_obj_set_style_pad_hor(h, 8, 0);
   lv_obj_set_style_border_side(h, LV_BORDER_SIDE_BOTTOM, 0);
@@ -2113,12 +2156,16 @@ void GuiShell::buildSearch(lv_obj_t* scr) {
         LV_EVENT_CLICKED, this);
   }
 
+  // Class B (mockup 6): the wheel runs across the top, under the field, and
+  // the matches list below it.
+  const bool wheel_top = landscape() && _search_wheel;
+  const int16_t below = int16_t(kStatusH + 32 + (wheel_top ? kWheelH : 0));
   _match_label = label(scr, FontRole::Label, _t.dim);
-  lv_obj_set_pos(_match_label, 8, kStatusH + 32 + 4);
+  lv_obj_set_pos(_match_label, 8, below + 4);
 
-  const int16_t top = kStatusH + 32 + 18;
-  const int16_t bottom = _search_kb ? kKbTop - 2 : _search_wheel ? 320 - 70 : 320;
-  _search_list = box(scr, kW, bottom - top);
+  const int16_t top = int16_t(below + 18);
+  const int16_t bottom = _search_kb ? int16_t(kbTop() - 2) : (_search_wheel && !wheel_top) ? int16_t(_lay.h - kWheelH) : _lay.h;
+  _search_list = box(scr, _lay.content_w, bottom - top);
   lv_obj_set_pos(_search_list, 0, top);
   lv_obj_set_flex_flow(_search_list, LV_FLEX_FLOW_COLUMN);
   lv_obj_add_flag(_search_list, LV_OBJ_FLAG_SCROLLABLE);
@@ -2185,11 +2232,12 @@ void GuiShell::refreshSearch() {
 // either side, and the hint. With scr null it redraws the existing strip.
 void GuiShell::buildWheel(lv_obj_t* scr) {
   if (scr) {
-    _wheel_strip = box(scr, kW, 70);
-    lv_obj_set_pos(_wheel_strip, 0, 320 - 70);
+    const bool top = landscape();   // class B: under the field (mockup 6)
+    _wheel_strip = box(scr, _lay.content_w, kWheelH);
+    lv_obj_set_pos(_wheel_strip, 0, top ? kStatusH + 32 : _lay.h - kWheelH);
     lv_obj_set_style_bg_opa(_wheel_strip, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(_wheel_strip, c(_t.bg2), 0);
-    lv_obj_set_style_border_side(_wheel_strip, LV_BORDER_SIDE_TOP, 0);
+    lv_obj_set_style_border_side(_wheel_strip, top ? LV_BORDER_SIDE_BOTTOM : LV_BORDER_SIDE_TOP, 0);
     lv_obj_set_style_border_width(_wheel_strip, 1, 0);
     lv_obj_set_style_border_color(_wheel_strip, c(_t.line), 0);
     // A touch on the wheel switches to the keyboard.
@@ -2206,7 +2254,7 @@ void GuiShell::buildWheel(lv_obj_t* scr) {
   }
   if (!_wheel_strip) return;
   lv_obj_clean(_wheel_strip);
-  lv_obj_t* row = box(_wheel_strip, kW, 46);
+  lv_obj_t* row = box(_wheel_strip, _lay.content_w, 46);
   lv_obj_align(row, LV_ALIGN_TOP_MID, 0, 4);
   lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -2384,7 +2432,7 @@ void GuiShell::buildDetail(lv_obj_t* content) {
   lv_obj_set_style_border_width(grid, 1, 0);
   lv_obj_set_style_border_color(grid, c(_t.line), 0);
   for (size_t i = 0; i < n; i++) {
-    lv_obj_t* cell = box(grid, (kW - 16 - 1) / 3, LV_SIZE_CONTENT);
+    lv_obj_t* cell = box(grid, (_lay.content_w - 16 - 1) / 3, LV_SIZE_CONTENT);
     lv_obj_set_style_border_side(cell, LV_BORDER_SIDE_RIGHT | LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(cell, 1, 0);
     lv_obj_set_style_border_color(cell, c(_t.line), 0);
@@ -2432,11 +2480,15 @@ void GuiShell::buildDetail(lv_obj_t* content) {
   lv_obj_set_style_pad_top(acts, 3, 0);
   lv_obj_set_style_pad_bottom(acts, 4, 0);
   lv_obj_set_style_pad_row(acts, 4, 0);
-  lv_obj_set_flex_flow(acts, LV_FLEX_FLOW_COLUMN);
+  // Class B (ObScreen landscape, mockup 7): one row, the primary twice as wide.
+  const bool one_row = landscape();
+  lv_obj_set_flex_flow(acts, one_row ? LV_FLEX_FLOW_ROW : LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_column(acts, 4, 0);
+  const int16_t btn_h = one_row ? 30 : 34;
   lv_obj_t* second = nullptr;
   for (uint8_t i = 0; i < _act_count; i++) {
     lv_obj_t* parent = acts;
-    if (i > 0) {
+    if (i > 0 && !one_row) {
       if (!second) {
         second = box(acts, LV_PCT(100), 34);
         lv_obj_set_flex_flow(second, LV_FLEX_FLOW_ROW);
@@ -2444,8 +2496,9 @@ void GuiShell::buildDetail(lv_obj_t* content) {
       }
       parent = second;
     }
-    lv_obj_t* btn = box(parent, i == 0 ? LV_PCT(100) : 0, 34);
-    if (i > 0) lv_obj_set_flex_grow(btn, 1);
+    lv_obj_t* btn = box(parent, (i == 0 && !one_row) ? LV_PCT(100) : 0, btn_h);
+    if (one_row) lv_obj_set_flex_grow(btn, i == 0 ? 2 : 1);
+    else if (i > 0) lv_obj_set_flex_grow(btn, 1);
     lv_obj_set_style_radius(btn, _look.radius, 0);
     lv_obj_set_style_border_width(btn, 1, 0);
     lv_obj_center(label(btn, FontRole::Body, _t.ink));
@@ -2587,12 +2640,12 @@ void GuiShell::buildLogin(lv_obj_t* scr) {
     rebuild();
     return;
   }
-  lv_obj_t* content = box(scr, kW, kContentH);
+  lv_obj_t* content = box(scr, _lay.content_w, _lay.content_h);
   lv_obj_set_pos(content, 0, kStatusH);
   buildDetail(content);
   lv_group_remove_all_objs(_group);   // the sheet takes the buttons
 
-  lv_obj_t* scrim = box(scr, kW, 320 - kStatusH);
+  lv_obj_t* scrim = box(scr, _lay.content_w, _lay.h - kStatusH);
   lv_obj_set_pos(scrim, 0, kStatusH);
   lv_obj_set_style_bg_opa(scrim, LV_OPA_50, 0);
   lv_obj_set_style_bg_color(scrim, lv_color_black(), 0);
@@ -2601,8 +2654,8 @@ void GuiShell::buildLogin(lv_obj_t* scr) {
       scrim, [](lv_event_t* e) { static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->closeLogin(); }); },
       LV_EVENT_CLICKED, this);
 
-  const int16_t top = kKbTop - 2 - 84;
-  lv_obj_t* sheet = box(scr, kW, 320 - top);
+  const int16_t top = int16_t(kbTop() - 2 - 84);
+  lv_obj_t* sheet = box(scr, _lay.content_w, _lay.h - top);
   lv_obj_set_pos(sheet, 0, top);
   lv_obj_set_style_bg_opa(sheet, LV_OPA_COVER, 0);
   lv_obj_set_style_bg_color(sheet, c(_t.bg3), 0);
@@ -2616,11 +2669,11 @@ void GuiShell::buildLogin(lv_obj_t* scr) {
   textf(title, sizeof title, "%s · %s", d.row.kind == NodeKind::Room ? "Log in" : "Admin login", d.row.name);
   lv_obj_t* t = label(sheet, FontRole::Body, _t.ink);
   userText(t, title);
-  lv_obj_set_width(t, kW - 24);
+  lv_obj_set_width(t, _lay.content_w - 24);
   oneLine(t, FontRole::Body);
   lv_obj_set_pos(t, 12, 9);
 
-  _login_field = box(sheet, kW - 24, 32);
+  _login_field = box(sheet, _lay.content_w - 24, 32);
   lv_obj_set_pos(_login_field, 12, 30);
   lv_obj_set_style_border_width(_login_field, 1, 0);
   lv_obj_set_style_border_color(_login_field, c(_t.sig), 0);
@@ -2727,11 +2780,11 @@ size_t radarItems(const NodeRow* rows, size_t total, GeoPos own) {
 }
 
 // The plot: a square that fits between the header (28) and the sheet (36),
-// 6 px clear all round, as drawn.
-constexpr int16_t kPlot = kContentH - 28 - 36 - 12;
-constexpr int16_t kPlotR = kPlot / 2 - 4;   // the outer ring's radius for pins, inside the stroke
-const lv_point_t kAxisV[] = {{kPlot / 2, 0}, {kPlot / 2, kPlot}};
-const lv_point_t kAxisH[] = {{0, kPlot / 2}, {kPlot, kPlot / 2}};
+// 6 px clear all round, as drawn (184 in class A). Class B: under the header,
+// beside the selection strip (mockup 8). Set by buildRadar; one radar shows
+// at a time, and the axes' points must outlive their lines.
+int16_t s_plot = 184;
+lv_point_t s_axis_v[2], s_axis_h[2];
 const lv_point_t kDiamond[] = {{3, 0}, {6, 3}, {3, 6}, {0, 3}, {3, 0}};
 
 // A pin, 7 px, in the Nodes shapes and tints: companion a dot, repeater a
@@ -2831,8 +2884,21 @@ void GuiShell::buildRadar(lv_obj_t* content) {
   if (sel_row < 0) _radar_sel_set = false;
 
   // The plot: three rings, the axes, N, the corner note, the pins, you.
-  lv_obj_t* area = box(content, LV_PCT(100), 0);
-  lv_obj_set_flex_grow(area, 1);
+  const bool side = landscape();
+  s_plot = int16_t(side ? _lay.content_h - 28 - 8 : _lay.content_h - 28 - 36 - 12);
+  const int16_t kPlot = s_plot, kPlotR = int16_t(s_plot / 2 - 4);   // pins stay inside the outer ring's stroke
+  s_axis_v[0] = {lv_coord_t(kPlot / 2), 0};
+  s_axis_v[1] = {lv_coord_t(kPlot / 2), kPlot};
+  s_axis_h[0] = {0, lv_coord_t(kPlot / 2)};
+  s_axis_h[1] = {kPlot, lv_coord_t(kPlot / 2)};
+  lv_obj_t* body = content;
+  if (side) {
+    body = box(content, LV_PCT(100), 0);
+    lv_obj_set_flex_grow(body, 1);
+    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_ROW);
+  }
+  lv_obj_t* area = side ? box(body, kPlot + 12, LV_PCT(100)) : box(body, LV_PCT(100), 0);
+  if (!side) lv_obj_set_flex_grow(area, 1);
   lv_obj_t* plot = box(area, kPlot, kPlot);
   lv_obj_center(plot);
   for (int f = 3; f >= 1; f--) {
@@ -2843,8 +2909,8 @@ void GuiShell::buildRadar(lv_obj_t* content) {
     lv_obj_set_style_border_width(ring, 1, 0);
     lv_obj_set_style_border_color(ring, c(_t.line), 0);
   }
-  line(plot, kAxisV, 2, _t.line2);
-  line(plot, kAxisH, 2, _t.line2);
+  line(plot, s_axis_v, 2, _t.line2);
+  line(plot, s_axis_h, 2, _t.line2);
   lv_obj_t* north = label(area, FontRole::Label, _t.sig, "N");
   lv_obj_align_to(north, plot, LV_ALIGN_OUT_TOP_MID, 0, 4);
   beyondText(beyond, _radar_step, buf, sizeof buf);
@@ -2915,27 +2981,76 @@ void GuiShell::buildRadar(lv_obj_t* content) {
   lv_obj_set_style_border_width(me, 2, 0);
   lv_obj_set_style_border_color(me, c(_t.bg), 0);
 
-  // The sheet (mockup 1), or what selects (mockups 3 and 5).
-  lv_obj_t* sh = box(content, LV_PCT(100), 36);
-  lv_obj_set_style_pad_hor(sh, 8, 0);
-  lv_obj_set_style_bg_opa(sh, LV_OPA_COVER, 0);
-  lv_obj_set_style_bg_color(sh, c(_t.bg2), 0);
-  lv_obj_set_style_border_side(sh, LV_BORDER_SIDE_TOP, 0);
-  lv_obj_set_style_border_width(sh, 1, 0);
-  lv_obj_set_style_border_color(sh, c(_t.line), 0);
-  lv_obj_set_flex_flow(sh, LV_FLEX_FLOW_ROW);
-  lv_obj_set_style_pad_column(sh, 6, 0);
+  // The sheet (mockup 1), or what selects (mockups 3 and 5). Class B: a strip
+  // beside the plot (mockup 8), the selection on top and the zoom at its foot.
+  lv_obj_t* sh;
+  lv_obj_t* who = nullptr;   // class B: the tile and name's row
+  lv_obj_t* sig = nullptr;   // class B: the bars and SNR's row
+  if (side) {
+    lv_obj_t* strip = box(body, 0, LV_PCT(100));
+    lv_obj_set_flex_grow(strip, 1);
+    lv_obj_set_style_pad_all(strip, 6, 0);
+    lv_obj_set_style_pad_left(strip, 0, 0);
+    lv_obj_set_flex_flow(strip, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(strip, 4, 0);
+    sh = box(strip, LV_PCT(100), 0);
+    lv_obj_set_flex_grow(sh, 1);
+    lv_obj_set_flex_flow(sh, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(sh, 3, 0);
+    // + steps in to a smaller ring, − out to a larger one; each stops at its end.
+    for (int dir = -1; dir <= 1; dir += 2) {
+      lv_obj_t* zb = box(strip, LV_PCT(100), 24);
+      lv_obj_set_style_radius(zb, _look.radius, 0);
+      lv_obj_set_style_border_width(zb, 1, 0);
+      lv_obj_set_style_border_color(zb, c(_t.line), 0);
+      lv_obj_center(label(zb, FontRole::Body, _t.ink, dir < 0 ? "+" : "−"));
+      lv_obj_add_flag(zb, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_set_user_data(zb, reinterpret_cast<void*>(intptr_t(dir + 2)));
+      lv_obj_add_event_cb(
+          zb,
+          [](lv_event_t* e) {
+            GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+            const int d = int(intptr_t(lv_obj_get_user_data(lv_event_get_current_target(e)))) - 2;
+            if (d < 0 && self->_radar_step > 0) self->_radar_step--;
+            else if (d > 0 && self->_radar_step + 1 < kRadarStepCount) self->_radar_step++;
+            else return;
+            self->later([](GuiShell* g) { g->rebuild(); });
+          },
+          LV_EVENT_CLICKED, this);
+    }
+  } else {
+    sh = box(content, LV_PCT(100), 36);
+    lv_obj_set_style_pad_hor(sh, 8, 0);
+    lv_obj_set_style_bg_opa(sh, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(sh, c(_t.bg2), 0);
+    lv_obj_set_style_border_side(sh, LV_BORDER_SIDE_TOP, 0);
+    lv_obj_set_style_border_width(sh, 1, 0);
+    lv_obj_set_style_border_color(sh, c(_t.line), 0);
+    lv_obj_set_flex_flow(sh, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(sh, 6, 0);
+  }
   if (sel_row < 0) {
-    lv_obj_set_flex_align(sh, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    label(sh, FontRole::BodySmall, _t.dim,
-          in_range ? "USR or tap a pin to select" : "No nodes with a position within 30 km");
+    if (!side) lv_obj_set_flex_align(sh, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t* hint = label(sh, FontRole::BodySmall, _t.dim,
+                           in_range ? "USR or tap a pin to select" : "No nodes with a position within 30 km");
+    if (side) {
+      lv_obj_set_width(hint, LV_PCT(100));
+      lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+    }
     _radar_sig = radarSignature();
     return;
   }
-  lv_obj_set_flex_align(sh, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  if (side) {
+    who = box(sh, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(who, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(who, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(who, 4, 0);
+  } else {
+    lv_obj_set_flex_align(sh, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  }
   const NodeRow& r = rows[sel_row];
   const uint32_t tint = kindTint(_t, r.kind);
-  lv_obj_t* tile = box(sh, 22, 22);
+  lv_obj_t* tile = box(who ? who : sh, 22, 22);
   lv_obj_set_style_radius(tile, r.kind == NodeKind::Chat && _look.pill_chips ? LV_RADIUS_CIRCLE
                                 : _look.pill_chips                           ? 6
                                                                              : 0,
@@ -2948,22 +3063,33 @@ void GuiShell::buildRadar(lv_obj_t* content) {
     lv_obj_set_style_bg_color(tile, c(tint), 0);
   }
   lv_obj_center(label(tile, FontRole::BodySmall, tint, kindGlyph(r.kind)));
-  lv_obj_t* tx = box(sh, 0, LV_SIZE_CONTENT);
-  lv_obj_set_flex_grow(tx, 1);
-  lv_obj_set_flex_flow(tx, LV_FLEX_FLOW_COLUMN);
-  lv_obj_t* nm = label(tx, FontRole::Body, _t.ink);
+  lv_obj_t* tx = side ? sh : box(sh, 0, LV_SIZE_CONTENT);
+  if (!side) {
+    lv_obj_set_flex_grow(tx, 1);
+    lv_obj_set_flex_flow(tx, LV_FLEX_FLOW_COLUMN);
+  }
+  lv_obj_t* nm = label(who ? who : tx, FontRole::Body, _t.ink);
   userText(nm, r.name);
-  lv_obj_set_width(nm, LV_PCT(100));
+  lv_obj_set_width(nm, side ? 0 : LV_PCT(100));
+  if (side) lv_obj_set_flex_grow(nm, 1);
   oneLine(nm, FontRole::Body);
   sheetSub(r.out_path_len, s_radar_items[sel_row].dist_m, s_radar_bearing[sel_row], buf, sizeof buf);
-  label(tx, FontRole::Meta, _t.dim, buf);
+  lv_obj_t* sub = label(tx, FontRole::Meta, _t.dim, buf);
+  if (side) {
+    lv_obj_set_width(sub, LV_PCT(100));
+    lv_label_set_long_mode(sub, LV_LABEL_LONG_WRAP);
+    sig = box(sh, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(sig, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(sig, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(sig, 4, 0);
+  }
   lv_obj_t* bars[4];
-  rowBars(sh, bars);
+  rowBars(sig ? sig : sh, bars);
   colorBars(bars, r.snr_known, r.snr_db, _model->radioSf(), _t);
   if (r.snr_known) rowSnr(r.snr_db, buf, sizeof buf);
   else buf[0] = '\0';
-  label(sh, FontRole::Meta, _t.ink2, buf);
-  lv_obj_t* chev = box(sh, 6, 12);
+  label(sig ? sig : sh, FontRole::Meta, _t.ink2, buf);
+  lv_obj_t* chev = box(who ? who : sh, 6, 12);
   static const lv_point_t kNext[] = {{1, 1}, {5, 6}, {1, 11}};
   line(chev, kNext, 3, _t.dim);
   lv_obj_add_flag(sh, LV_OBJ_FLAG_CLICKABLE);   // a tap opens the node

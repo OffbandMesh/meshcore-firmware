@@ -15,10 +15,9 @@ namespace shell {
 
 using offband::gui::FontRole;
 
-constexpr int16_t kW = 240;
+// The status strip is 20 px in every layout class. The rest of the screen's
+// geometry is GuiShell::_lay (Epic H): class A portrait or class B landscape.
 constexpr int16_t kStatusH = 20;
-constexpr int16_t kTabH = 40;
-constexpr int16_t kContentH = 320 - kStatusH - kTabH;
 
 // The param of a CLICKED that a button (USR hold) sent rather than a touch.
 inline const char* byButton() {
