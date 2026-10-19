@@ -612,6 +612,20 @@ static const SensorDef SENSOR_TABLE[] = {
 #if ENV_INCLUDE_RAK12035
   { TELEM_RAK12035_ADDRESS,"RAK12035",     init_rak12035, query_rak12035 },
 #endif
+// #1661: the Bosch parts also answer at 0x77 (an address pin; many breakouts
+// ship there). These come last: an existing node's channels don't move, and
+// a part at 0x77 that an earlier entry (BMP085) already claimed is never
+// probed by another driver. begin() keeps one sensor per driver, since each
+// driver has a single instance.
+#ifdef ENV_INCLUDE_BME680
+  { 0x77,                  "BME680",       init_bme680,   query_bme680   },
+#endif
+#if ENV_INCLUDE_BME280
+  { 0x77,                  "BME280",       init_bme280,   query_bme280   },
+#endif
+#if ENV_INCLUDE_BMP280
+  { 0x77,                  "BMP280",       init_bmp280,   query_bmp280   },
+#endif
   { 0, nullptr, nullptr, nullptr }  // sentinel — keeps the array non-empty
 };
 
@@ -656,6 +670,7 @@ bool EnvironmentSensorManager::begin() {
 
   // Scan the I2C bus before touching any sensor library.
   bool detected[128] = {};
+  bool claimed[128] = {};   // #1661: addresses a driver has taken
   scanI2CBus(TELEM_WIRE, detected);
 
   // Walk the sensor table and initialize only detected devices.
@@ -666,14 +681,28 @@ bool EnvironmentSensorManager::begin() {
       MESH_DEBUG_PRINTLN("%s not detected at I2C address %02X", def.name, def.address);
       continue;
     }
+    // #1661: an address an earlier driver claimed isn't probed again (another
+    // driver's begin() can reset a chip it doesn't own), and one sensor per
+    // driver: a second address entry would re-begin its one instance.
+    if (claimed[def.address]) {
+      MESH_DEBUG_PRINTLN("%s skipped: %02X already in use", def.name, def.address);
+      continue;
+    }
+    bool running = false;
+    for (int a = 0; a < _active_sensor_count; a++) running = running || _active_sensors[a].query == def.query;
+    if (running) {
+      MESH_DEBUG_PRINTLN("%s already running; %02X skipped", def.name, def.address);
+      continue;
+    }
     uint8_t n = def.init(TELEM_WIRE, def.address);
     if (n == 0) {
       MESH_DEBUG_PRINTLN("%s found at %02X but failed to initialize", def.name, def.address);
       continue;
     }
     MESH_DEBUG_PRINTLN("Found %s at address: %02X", def.name, def.address);
+    claimed[def.address] = true;
     for (uint8_t sub = 0; sub < n && _active_sensor_count < MAX_ACTIVE_SENSORS; sub++) {
-      _active_sensors[_active_sensor_count++] = { def.query, sub };
+      _active_sensors[_active_sensor_count++] = { def.query, sub, def.name };
     }
   }
 

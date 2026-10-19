@@ -18,6 +18,7 @@
 #include <helpers/gui/InputMap.h>
 #include <helpers/gui/NodeViews.h>
 #include <helpers/gui/RadarViews.h>
+#include <helpers/gui/SensorViews.h>
 #include <helpers/gui/SettingsViews.h>
 
 #include "StatusBar.h"
@@ -33,6 +34,9 @@ struct HomeData {
   char name[32];
   char key[24];
   HomeCell cells[6];   // Radio, Heard, Unread, GPS, Battery, Airtime
+  // Epic M (owner pick 5a): a sensor was found, so the last cell is the
+  // consolidated reading ("SENSORS") and a tap opens Setup › Sensors.
+  bool sensors;
 };
 
 struct LockItem {
@@ -74,7 +78,7 @@ struct ActView {
 // Setup's pages, in the drawn list's order (Blocked is Contacts, owner pick
 // a, 2026-10-17).
 enum class SetPage : uint8_t {
-  Node, Radio, Stats, Privacy, Contacts, Msg, Display, Conn, Power, Actions, Debug, About, Count,
+  Node, Radio, Stats, Sensors, Privacy, Contacts, Msg, Display, Conn, Power, Actions, Debug, About, Count,
   Theme = 0x40,   // Display › Theme (not in the list)
   List = 0xFF
 };
@@ -154,6 +158,13 @@ public:
   virtual offband::gui::NodeSettings nodeSettings() = 0;
   virtual void setNodeSettings(const offband::gui::NodeSettings& s) = 0;
   virtual void radioStats(offband::gui::RadioStats* out) = 0;
+  // Epic M (#1661): the radio's own sensors. Readings as querySensors()
+  // gives the phone, at most 5 s old; the sensor names by LPP channel; and
+  // the GPS section's two lines (false when there's no GPS in the build).
+  virtual size_t sensorReadings(offband::gui::SensorReading* out, size_t max) = 0;
+  virtual int sensorCount() = 0;
+  virtual const char* sensorName(uint8_t channel) = 0;
+  virtual bool gpsLines(char* fix, size_t fn, char* alt, size_t an) = 0;
   virtual const uint8_t* selfKey() = 0;   // 32 bytes
   // Connectivity, Power, Debug, About (G5).
   virtual void deviceInfo(DeviceInfo* out) = 0;
@@ -269,6 +280,7 @@ private:
   void buildMsgPage(lv_obj_t* content);
   void buildNodePage(lv_obj_t* content);
   void buildStatsPage(lv_obj_t* content);
+  void buildSensorsPage(lv_obj_t* content);
   void buildPrivacyPage(lv_obj_t* content);
   void buildContactsPage(lv_obj_t* content);
   // Node › Name: the keyboard under a one-line field (as Admin login).
@@ -317,7 +329,7 @@ private:
   uint8_t _pad_stage = 0;                   // Position: 0 latitude, 1 longitude
   int32_t _pad_lat = 0;
   uint32_t _stats_at = 0;                   // Radio stats: next refresh
-  lv_coord_t _stats_scroll = 0;             // Radio stats: where the reader is, across refreshes
+  lv_coord_t _stats_scroll = 0;             // Radio stats, Sensors: where the reader is, across refreshes
   lv_obj_t* _set_body = nullptr;            // the page's scrolling body (Radio stats)
   SetPage _set_page = SetPage::List;
   SetPage _set_focus = SetPage::Node;    // the list row to refocus
@@ -507,6 +519,8 @@ private:
   lv_obj_t* _name = nullptr;
   lv_obj_t* _key = nullptr;
   lv_obj_t* _value[6] = {};
+  lv_obj_t* _cell_name[6] = {};   // the cells' labels; the last turns to SENSORS (Epic M)
+  bool _home_sensors = false;     // the last cell is the sensors' reading
   lv_obj_t* _sub[6] = {};
   lv_obj_t* _advert = nullptr;
   lv_obj_t* _advert_label = nullptr;

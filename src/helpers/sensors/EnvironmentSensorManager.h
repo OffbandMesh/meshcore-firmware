@@ -16,6 +16,7 @@ protected:
   struct ActiveSensor {
     void    (*query)(uint8_t channel, uint8_t sub_channel, CayenneLPP& telemetry);
     uint8_t   sub_channel;
+    const char* name;   // #1661: the table's name ("BME280"), for the GUI's Sensors page
   };
 
   ActiveSensor _active_sensors[MAX_ACTIVE_SENSORS];
@@ -70,6 +71,16 @@ public:
   #endif
   bool begin() override;
   bool querySensors(uint8_t requester_permissions, CayenneLPP& telemetry) override;
+  // #1661: the sensors begin() found, in channel order. Sensor i reports on
+  // LPP channel TELEM_CHANNEL_SELF + 1 + i; a multi-channel part (INA3221)
+  // is one entry per channel, with its sub-channel.
+  int activeSensorCount() const { return _active_sensor_count; }
+  const char* activeSensorName(int i) const {
+    return (i >= 0 && i < _active_sensor_count && _active_sensors[i].name) ? _active_sensors[i].name : "";
+  }
+  uint8_t activeSensorSub(int i) const {
+    return (i >= 0 && i < _active_sensor_count) ? _active_sensors[i].sub_channel : 0;
+  }
   #if ENV_INCLUDE_GPS || defined(ENV_INCLUDE_BME680_BSEC)
   void loop() override;
   #endif

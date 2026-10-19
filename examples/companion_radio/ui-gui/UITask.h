@@ -49,6 +49,10 @@ public:
   int zone() override { return _prefs ? _prefs->ui_tz : 0; }
   void setZone(int index) override;
   int gpsZone() override;
+  size_t sensorReadings(offband::gui::SensorReading* out, size_t max) override;
+  int sensorCount() override;
+  const char* sensorName(uint8_t channel) override;
+  bool gpsLines(char* fix, size_t fn, char* alt, size_t an) override;
   bool gpsLiveFix() override;
   uint32_t utcNow() override;
   void sendAdvert() override;
@@ -177,5 +181,11 @@ private:
   offband::gui::Look _look = offband::gui::kDefaultLook;
   uint32_t _accent_shown = offband::gui::kDefaultAccentRgb;
   uint16_t _rotation = 0;   // Display › Rotation as applied (Epic H)
+  // Epic M: the sensors' last reading, taken at most every 5 s.
+  static constexpr size_t kSensMax = 24;
+  offband::gui::SensorReading _sens[kSensMax] = {};
+  size_t _sens_n = 0;
+  uint32_t _sens_at = 0;   // millis() of the last reading; 0 = never
+  void refreshSensors();
   int _contacts_seen = -1;   // contacts last counted; -1 before the first count
 };
