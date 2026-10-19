@@ -95,6 +95,47 @@ def declared_stages(main_cpp_text):
             re.finditer(r'(?:OFFBAND_BEACON|CW_PHASE)\("([^"]*)"\)', main_cpp_text)]
 
 
+def safe_name(name):
+    """A node name rendered so it cannot publish the CTF mark.
+
+    A badge name is the FIRST condition of the hidden trigger, and this tool's output is
+    exactly the kind of thing somebody pastes into an issue when a check fails. This repo
+    is public, so a name that could carry the mark is never printed.
+
+    Pure-ASCII names print as themselves -- they cannot hold the mark, and being able to
+    read the name is genuinely useful at a bench. Anything with a non-ASCII byte is
+    withheld and identified by length plus a short digest instead, which is enough to say
+    "these two differ" or "this is the same one as before" without disclosing it.
+
+    Added after the first real run printed an owner badge's full name, mark and all, into
+    a session transcript on a rename-check failure.
+    """
+    if name is None:
+        return "<none>"
+    raw = name.encode("utf-8", "surrogateescape")
+
+    unsafe = False
+    try:
+        name.encode("ascii")
+    except UnicodeEncodeError:
+        unsafe = True          # real non-ASCII bytes
+
+    # AND the form that actually arrives from a capture. The log escapes non-printables,
+    # so a marked name reaches here as PRINTABLE ASCII containing literal backslash-x
+    # sequences -- `Strycher-QCC1\xF0\x9F\x9B\xB0\xEF\xB8\x8F`. The first version tested
+    # only `encode("ascii")`, so that form sailed straight through the redactor and the
+    # name was printed in full. The unit test used real UTF-8 and passed; the device does
+    # not produce real UTF-8 here. Both forms are withheld.
+    if re.search(r"\\x[0-9A-Fa-f]{2}", name):
+        unsafe = True
+
+    if not unsafe:
+        return repr(name)
+    import hashlib
+    return "<withheld: %d bytes, sha256 %s -- non-ASCII or escaped, may carry the " \
+           "trigger mark>" % (len(raw), hashlib.sha256(raw).hexdigest()[:12])
+
+
 class BootReport(object):
     """What one capture says about one boot. Every field may be None: absence is a result."""
 
@@ -303,11 +344,11 @@ def assess(report, declared, expected=None):
             bad.append("the boot banner carried no node name, so it could not be checked.")
         elif report.name != expected["name"]:
             bad.append(
-                "THE BADGE WAS RENAMED. It reports %r, and it was expected to still be "
-                "%r. A configured badge keeps its name across a flash because the default "
+                "THE BADGE WAS RENAMED. It reports %s, and it was expected to still be "
+                "%s. A configured badge keeps its name across a flash because the default "
                 "naming runs BEFORE loadPrefs() -- if that ordering broke, every already-"
                 "configured badge is renamed on its next flash, silently (#1637)."
-                % (report.name, expected["name"]))
+                % (safe_name(report.name), safe_name(expected["name"])))
     elif expected.get("name_prefix"):
         pat = r"^%s[0-9A-Fa-f]{%d}$" % (re.escape(expected["name_prefix"]),
                                         expected.get("name_hex_chars", 5))
@@ -319,7 +360,7 @@ def assess(report, declared, expected=None):
                 "MAC, and reports %r instead. Either the FICR read failed and it fell "
                 "through to the pubkey-hex default, or this unit is not actually fresh "
                 "(#1598)." % (expected["name_prefix"],
-                              expected.get("name_hex_chars", 5), report.name))
+                              expected.get("name_hex_chars", 5), safe_name(report.name)))
     else:
         skipped.append(
             "node name (a STORED pref -- pass --expect-name to assert this badge kept the "
@@ -464,7 +505,19 @@ def artifact_sha(env):
                 ident = get_firmware_identity(p, ROOT)
             except Exception as e:                       # noqa: BLE001 - reported, not raised
                 return None, "firmware_identity failed on %s: %s" % (p, e)
-            sha = ident.get("sha") or ident.get("git_sha") or ident.get("firmware_sha")
+            # The key is `offband_git_sha`. The first version guessed at "sha"/"git_sha"/
+            # "firmware_sha", none of which exist, so artifact_sha() returned None on a
+            # perfectly good artifact and the #1127 stale-image check -- the most
+            # valuable assertion in this file -- SKIPPED instead of running. Nothing
+            # failed; the first real hardware run on 2026-10-19 is what exposed it,
+            # because the skip was reported. Had the skip been silent it would have read
+            # as a pass.
+            sha = (ident.get("offband_git_sha") or ident.get("sha")
+                   or ident.get("git_sha") or ident.get("firmware_sha"))
+            if not sha:
+                return None, ("firmware_identity returned no sha key for %s (keys: %s) -- "
+                              "the #1127 stale-image check cannot run"
+                              % (p.name, ", ".join(sorted(ident))))
             src = ident.get("firmware_identity_source", "?")
             if sha and src != "binary-markers":
                 return sha, ("identity came from %s, not the binary. A git fallback cannot "
@@ -525,7 +578,7 @@ def report(bad, skipped, rep, verbose=True):
         print("device reports: build=%s sha=%s role=%s if=%s" % (
             rep.build, rep.sha, rep.role, " ".join(rep.ifaces) or "-"))
         print("radio: freq=%s bw=%s sf=%s cr=%s tx=%s name=%s" % (
-            rep.freq, rep.bw, rep.sf, rep.cr, rep.tx, rep.name))
+            rep.freq, rep.bw, rep.sf, rep.cr, rep.tx, safe_name(rep.name)))
         print("stages: %d, last=%r" % (len(rep.stages), rep.last_stage))
     for s in skipped:
         print("SKIP  %s" % s)
@@ -534,8 +587,13 @@ def report(bad, skipped, rep, verbose=True):
         for b in bad:
             print("  - %s" % b)
         return 1
-    print("\nOK: reached setup:DONE, %d stages in order, image identity matched"
-          % len(rep.stages))
+    # The summary must not claim a check that was skipped. The first version said
+    # "image identity matched" unconditionally, so a run whose sha check never ran read
+    # as a full pass -- while the SKIP line above said otherwise. Two lines of the same
+    # output contradicting each other is how a green result gets over-trusted.
+    identity = "image identity matched" if not any(s.startswith("sha") for s in skipped) \
+        else "image identity NOT CHECKED (see SKIP above)"
+    print("\nOK: reached setup:DONE, %d stages in order, %s" % (len(rep.stages), identity))
     return 0
 
 
