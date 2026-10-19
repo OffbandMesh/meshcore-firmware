@@ -86,6 +86,17 @@ jobs:
       - name: QCC preflash channel tunes
         run: python scripts/test_qcc_preflash_tunes.py
 
+      # #1638: the badge env values that had no coverage at all -- LED_BLUE freeing P0.15
+      # from the Arduino core, the two heartbeat cadences, the naming prefix, and the
+      # trigger staying badge-scoped. Each is a one-line edit away from silently reverting
+      # with the whole matrix still green.
+      #
+      # It also ties test_heartbeat_cadence's 12 cases to reality. That suite hardcodes
+      # 90/890/4890 as its own constants, so until this check existed it would pass
+      # unchanged after those values were deleted from the build.
+      - name: QCC badge env invariants
+        run: python scripts/test_qcc_badge_env.py
+
       - name: QCC splash-art generator self-test
         run: python scripts/test_gen_qcc_splash.py
 
