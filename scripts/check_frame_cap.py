@@ -250,40 +250,25 @@ EXEMPT_LINES = (
         "MAX_FRAME_SIZE. The size is the test variable; maxFramePayload() would change "
         "what the harness emits.",
     ),
-    (
-        "examples/companion_radio/MyMesh.cpp",
-        "#define MAX_CHANNEL_DATA_LENGTH       (MAX_FRAME_SIZE - 9)",
-        1, "baseline",
-        "#1621: compile-time channel-data payload cap by subtraction, gating accept/drop "
-        "at :1155 and :2965. A constant cannot express a per-transport cap.",
-    ),
-    (
-        "examples/companion_radio/MyMesh.cpp",
-        "if (_serial->isConnected() && len + 3 <= MAX_FRAME_SIZE) {",
-        1, "baseline",
-        "#1621: logRxRaw() gates on the buffer size and then writeFrame()s directly. The "
-        "clearest live instance of the #450 shape -- at MTU 176 the deliverable frame is "
-        "173, so a 174-176 byte raw-RX-log frame is clipped.",
-    ),
-    (
-        "examples/companion_radio/MyMesh.cpp",
-        "if (i + tlen > MAX_FRAME_SIZE) {",
-        2, "baseline",
-        "#1621: the contact-msg (:700) and channel-msg (:1013) builders, identical text. "
-        "Both reach the wire via addToOfflineQueue() -> getFromOfflineQueue() at :3142.",
-    ),
-    (
-        "examples/companion_radio/MyMesh.cpp",
-        "tlen = MAX_FRAME_SIZE - i;",
-        2, "baseline",
-        "#1621: the clamp bodies of the two builders above (:701, :1014).",
-    ),
-    (
-        "examples/companion_radio/MyMesh.cpp",
-        "size_t avail = (size_t)MAX_FRAME_SIZE - (size_t)i;",
-        1, "baseline",
-        "#1621: the system-channel msg builder (:1140), same queued path.",
-    ),
+    # #1621 RETIRED, 2026-10-19. All five companion baseline entries are gone because
+    # the sites they covered were converted, not because the guard was relaxed:
+    #
+    #   logRxRaw()            -> _serial->maxFramePayload(3). The one site where the
+    #                            live cap was the right question: gated on
+    #                            isConnected(), writes straight to writeFrame().
+    #   the four queued sites -> ble_frame::bleSafeFrame(MAX_FRAME_SIZE). NOT
+    #                            maxFramePayload(), deliberately. They build into
+    #                            addToOfflineQueue(), which exists for the
+    #                            no-client-connected case, and maxFrameSize() reports
+    #                            the MIN_ATT_MTU floor until an MTU is negotiated
+    #                            (esp32 SerialBLEInterface.h:93 and .cpp:168 set
+    #                            _att_mtu = 23; nrf52 .cpp:356 uses MIN_ATT_MTU unless
+    #                            connected). deliverableFrame(23, 176) = 20, so a
+    #                            literal conversion would have clamped every stored
+    #                            message to about four characters, permanently.
+    #
+    # The `baseline` kind is now empty and that is the intended end state: it exists to
+    # be shrunk to nothing. Do not add an entry to it for new code -- fix the code.
 )
 
 
