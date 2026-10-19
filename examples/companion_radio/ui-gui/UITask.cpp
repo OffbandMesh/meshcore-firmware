@@ -137,6 +137,12 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
     _look = Look(_prefs->gui.look);
     _accent_shown = _prefs->gui.accent;
   }
+  // Display › Rotation (Epic H): the panel, touch and layout class, before
+  // the first frame.
+  _rotation = layoutFor(_prefs ? _prefs->gui.rotation : 0).rotation;
+  if (_rotation != 0) lvglSetRotation(_rotation, GUI_PANEL_MADCTL);
+  _shell.setLayout(layoutFor(_rotation));
+  mesh_log_line(MLOG_BOOT, "[gui] rotation %u\n", (unsigned)_rotation);
   _shell.begin(themeTokens(_theme, _prefs ? _prefs->gui.accent : kDefaultAccent), _look, this);
 
   // The boot screen over it (G6): versions, setup's checks, and a line
@@ -147,7 +153,8 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
     const uint8_t attempt = board.safeBootAttempt();
     const uint32_t code = board.getResetReason();
     if (uncleanBoot(code, attempt)) bootLine(attempt, board.safeBootLimit(), code, reset_line, sizeof reset_line);
-    _boot.show(themeTokens(_theme, _accent_shown), version, reset_line, millis());
+    _boot.show(themeTokens(_theme, _accent_shown), version, reset_line, millis(),
+               layoutClassFor(_rotation) == LayoutClass::B);
     _boot.update(bootFacts(), millis());
     mesh_log_line(MLOG_BOOT, "[gui] boot screen: %s%s%s\n", version, reset_line[0] ? " / " : "", reset_line);
   }
@@ -753,6 +760,15 @@ void UITask::prefsChanged() {
   if (!_prefs) return;
   _prefs->gui.sanitize();
   _prefs_dirty = true;
+  // Display › Rotation (Epic H): the panel turns and every screen rebuilds in
+  // the new layout class at once.
+  const uint16_t rotation = layoutFor(_prefs->gui.rotation).rotation;
+  if (rotation != _rotation) {
+    _rotation = rotation;
+    lvglSetRotation(_rotation, GUI_PANEL_MADCTL);
+    _shell.setLayout(layoutFor(_rotation));
+    mesh_log_line(MLOG_BOOT, "[gui] rotation %u\n", (unsigned)_rotation);
+  }
   const ThemeId theme = ThemeId(_prefs->gui.theme);
   const Look look = Look(_prefs->gui.look);
   if (theme != _theme || look != _look || _prefs->gui.accent != _accent_shown) {

@@ -6,6 +6,7 @@
 #include <esp_heap_caps.h>
 #include <lvgl.h>
 
+#include "../GuiLayout.h"
 #include "Chsc6xTouch.h"
 #include "GuiPanel.h"
 
@@ -13,6 +14,7 @@ namespace offband {
 namespace gui {
 
 static lv_disp_draw_buf_t s_draw_buf;
+static uint16_t s_rotation = 0;   // Epic H: 0, 90 or 270
 static lv_disp_drv_t s_disp_drv;
 static GuiPanel* s_panel = nullptr;
 static size_t s_buf_bytes = 0;
@@ -149,7 +151,8 @@ static void touchReadCb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
     s_pressed = p.pressed;
     if (p.pressed) {
       uint16_t x = p.x, y = p.y;
-      mapTouch(s_mapping, &x, &y);
+      mapTouch(s_mapping, &x, &y);   // to portrait panel coordinates
+      rotateTouch(s_rotation, &x, &y);   // to where LVGL draws now (Epic H)
       s_last.x = lv_coord_t(x);
       s_last.y = lv_coord_t(y);
       s_any_touch = true;
@@ -180,6 +183,30 @@ bool lvglLastTouch(uint16_t* x, uint16_t* y) {
 void lvglLoop() {
   ackFlush(&s_disp_drv);
   lv_timer_handler();
+}
+
+// Epic H: the panel turned by MADCTL, LVGL told the new resolution, and
+// touches mapped the same way. The draw buffers are sized in pixels, so they
+// serve either orientation.
+void lvglSetRotation(uint16_t rotation, uint8_t portrait_madctl) {
+  if (!s_panel) return;
+  const Layout l = layoutFor(rotation);
+  // Let the last frame finish first; a frame takes tens of ms, so 200 ms
+  // means the transfer is stuck, and turning anyway beats hanging the loop.
+  const uint32_t t0 = millis();
+  while (s_flush_inflight && millis() - t0 < 200) ackFlush(&s_disp_drv);
+  s_panel->panel().setMadctl(madctlFor(l.rotation, portrait_madctl));
+  s_rotation = l.rotation;
+  // A touch held across the turn is in the old coordinates: drop it.
+  s_pressed = false;
+  s_last = {0, 0};
+  s_disp_drv.hor_res = l.w;
+  s_disp_drv.ver_res = l.h;
+  lv_disp_t* d = lv_disp_get_default();
+  if (d) {
+    lv_disp_drv_update(d, &s_disp_drv);
+    lv_obj_invalidate(lv_scr_act());
+  }
 }
 
 size_t lvglDrawBufBytes() { return s_buf_bytes; }

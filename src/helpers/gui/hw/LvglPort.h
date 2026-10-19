@@ -32,6 +32,11 @@ bool lvglBegin(GuiPanel& panel);
 // Runs LVGL's timers and rendering. Call from the main loop.
 void lvglLoop();
 
+// Epic H: turns the panel (MADCTL from the board's portrait value), sets
+// LVGL's resolution, and maps touches to match. 90 and 270 are landscape;
+// anything else is portrait.
+void lvglSetRotation(uint16_t rotation, uint8_t portrait_madctl);
+
 // Bytes held by the two draw buffers, for the memory telemetry.
 size_t lvglDrawBufBytes();
 

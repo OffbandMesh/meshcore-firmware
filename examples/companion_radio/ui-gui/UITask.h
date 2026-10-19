@@ -176,5 +176,6 @@ private:
   offband::gui::ThemeId _theme = offband::gui::kDefaultTheme;
   offband::gui::Look _look = offband::gui::kDefaultLook;
   uint32_t _accent_shown = offband::gui::kDefaultAccentRgb;
+  uint16_t _rotation = 0;   // Display › Rotation as applied (Epic H)
   int _contacts_seen = -1;   // contacts last counted; -1 before the first count
 };
