@@ -71,15 +71,24 @@ int choiceIndex(const uint32_t* choices, size_t n, uint32_t v);
 
 // ------------------------------------------------- time zone (Epic L, #1610)
 // Zones are TimeZones.h indexes; 0 is not set, and the clock is then UTC.
-// gps_zone is the zone tz::suggest() picks from a live fix, 0 without one.
+// gps_zone is the zone zoneForPosition() picks from the radio's position.
+
+// The zone tz::suggest() picks for a position (degrees x 1e6): the last
+// fix's, kept after the fix goes, so a fix taken while the screen was dark
+// still counts (bench 2026-10-18). Not set for {0, 0} or out of range.
+int zoneForPosition(int32_t lat_e6, int32_t lon_e6);
 // Owner-approved mockups: epic-l-timezone-mockups.html (2026-10-18).
 
 // The Display row's value: "Not set · UTC", or the zone's name.
 void zoneRowText(int zone, char* out, size_t n);
 // The GPS suggestion is offered while there is one and no zone is set.
 bool zoneOffersGps(int zone, int gps_zone);
-// The row's hint: "GPS suggests Eastern" while offered, else empty.
-void zoneHint(int zone, int gps_zone, char* out, size_t n);
+// The row's hint while offered, else empty: "GPS suggests Eastern" with a
+// live fix, "Lat/lon suggests Eastern" from the kept position (owner, 2026-10-19).
+void zoneHint(int zone, int gps_zone, bool live_fix, char* out, size_t n);
+// The prompt's first sentence, on the same rule: "GPS puts this radio in
+// Eastern." or "Lat/lon puts this radio in Eastern."
+void zoneSource(int gps_zone, bool live_fix, char* out, size_t n);
 // The picker: the suggestion copied to the top while offered, then every
 // zone in the table's order.
 int zonePickCount(int zone, int gps_zone);

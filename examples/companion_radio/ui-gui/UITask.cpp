@@ -316,16 +316,24 @@ void UITask::setZone(int index) {
   _prefs_dirty = true;
 }
 
-// The zone a live fix suggests (as the badge's GPS screen, #1233); none
-// without GPS on and a fix.
+// The zone the radio's position suggests: the last fix's, which the sensors
+// keep after the fix goes (or one set under Node › Position). A live fix
+// alone came and went indoors while the screen was dark, and the prompt
+// never showed (bench, 2026-10-18).
 int UITask::gpsZone() {
+  GeoPos p{};
+  if (!ownPos(&p)) return offband::tz::kNotSet;
+  return zoneForPosition(p.lat_e6, p.lon_e6);
+}
+
+// Which the copy names: GPS with a fix now, else the kept lat/lon.
+bool UITask::gpsLiveFix() {
 #if ENV_INCLUDE_GPS == 1
   LocationProvider* gps = sensors.getLocationProvider();
-  if (gps && gpsEnabled() && gps->isValid()) {
-    return offband::tz::suggest(gps->getLatitude() / 1000000.0, gps->getLongitude() / 1000000.0);
-  }
+  return gps && gpsEnabled() && gps->isValid();
+#else
+  return false;
 #endif
-  return offband::tz::kNotSet;
 }
 
 uint32_t UITask::utcNow() { return rtc_clock.getCurrentTime(); }

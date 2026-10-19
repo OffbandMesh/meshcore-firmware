@@ -104,7 +104,8 @@ public:
   virtual void routeMeta(int thread, char* out, size_t n) = 0;   // the header's route line
   virtual int zone() = 0;                                        // TimeZones.h index
   virtual void setZone(int index) = 0;                           // saved with the prefs
-  virtual int gpsZone() = 0;                                     // a live fix's suggestion; 0 without
+  virtual int gpsZone() = 0;                                     // the kept position's zone; 0 without
+  virtual bool gpsLiveFix() = 0;                                 // GPS on, with a fix now
   virtual uint32_t utcNow() = 0;                                 // the device clock, Unix seconds
   virtual void sendAdvert() = 0;
   virtual void loraPopover() = 0;

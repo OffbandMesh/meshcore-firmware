@@ -1554,10 +1554,10 @@ bool GuiShell::offerZone(int zone) {
   lv_obj_add_flag(sheet, LV_OBJ_FLAG_CLICKABLE);
 
   const char* name = offband::tz::zone(zone).name;
-  char t[48], sub[160];
+  char t[48], src[48], sub[160];
   textf(t, sizeof t, "Use %s time?", name);
-  textf(sub, sizeof sub, "GPS puts this radio in %s. The clock shows UTC until a zone is set. You can change it in Display.",
-        name);
+  zoneSource(zone, _model->gpsLiveFix(), src, sizeof src);
+  textf(sub, sizeof sub, "%s The clock shows UTC until a zone is set. You can change it in Display.", src);
   lv_obj_t* tl = label(sheet, FontRole::Body, _t.ink, t);
   lv_obj_set_style_pad_left(tl, 12, 0);
   lv_obj_set_style_pad_top(tl, 10, 0);
