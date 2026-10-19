@@ -655,9 +655,35 @@ _ROW_ARG = {"line": 2, "lineRight": 2, "fillRow": 2, "bar": 2, "textAt": 3, "bre
 
 
 def _split_args(text, start):
-    """Split the argument list of a call whose '(' is at `text[start]`."""
+    """Split the argument list of a call whose '(' is at `text[start]`.
+
+    String and char literals are opaque: a comma, paren or bracket inside one is part of
+    the argument, not a separator. Without that (adversarial review, #1636) a call like
+
+        textAt(d, kTitle, 5, 0, "Messages, Unread: %d");
+
+    splits into six arguments instead of five, every index after the string shifts, and a
+    caller checking args[3] silently inspects the wrong thing -- or a ')' inside a literal
+    ends the list early and the call is skipped entirely. Either way the guard stops
+    guarding that line and says nothing. No current call site triggers it; an ordinary
+    future edit would.
+    """
     depth, arg, args = 0, [], []
+    quote, escaped = None, False
     for ch in text[start:]:
+        if quote is not None:
+            arg.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in "\"'":
+            quote = ch
+            arg.append(ch)
+            continue
         if ch in "([":
             depth += 1
             if depth == 1:
@@ -673,6 +699,29 @@ def _split_args(text, start):
         else:
             arg.append(ch)
     return None
+
+
+def test_the_argument_splitter_treats_a_literal_as_opaque():
+    # Guarding the guard. _split_args underpins the face-inventory and title-row checks,
+    # so a splitter that miscounts arguments makes those pass vacuously on the affected
+    # line -- which is the failure mode this whole epic is about.
+    call = 'textAt(d, kTitle, 5, 0, "Messages, Unread: %d");'
+    args = _split_args(call, call.index("("))
+    assert args == ["d", "kTitle", "5", "0", '"Messages, Unread: %d"'], args
+
+    # A paren or bracket inside a literal must not change the depth.
+    call = 'textAt(d, kTitle, 0, 0, "Battery (full)");'
+    assert _split_args(call, call.index("("))[4] == '"Battery (full)"'
+    call = "drawChar(d, ')', 1, 2);"
+    assert _split_args(call, call.index("(")) == ["d", "')'", "1", "2"]
+
+    # An escaped quote does not end the literal early.
+    call = 'textAt(d, kBody, 0, 0, "say \\"hi\\", then go");'
+    assert _split_args(call, call.index("("))[4] == '"say \\"hi\\", then go"'
+
+    # And the ordinary cases still work.
+    call = "f(a, g(b, c), d);"
+    assert _split_args(call, call.index("(")) == ["a", "g(b, c)", "d"]
 
 
 def title_row_draws(src):

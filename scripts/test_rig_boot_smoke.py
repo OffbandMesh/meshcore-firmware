@@ -32,7 +32,7 @@ DECLARED = declared_stages(MAIN_CPP.read_text())
 ID_LINE = ("2026-10-19T04:12:00Z [boot] id build=offband-v1.5.0-beta7-112-g7a312de "
            "sha=7a312de role=companion if=ble caplog=on/DEBUG mirror=1")
 RADIO_LINE = ("2026-10-19T04:12:00Z [boot] radio freq=919.500 bw=500.0 sf=7 cr=5 tx=22 "
-              "name=Strycher-QCC1 pk=A1B2C3D4 mv=4012 shutdown_mv=3400 ext=0")
+              "name=Bench-Badge-A pk=A1B2C3D4 mv=4012 shutdown_mv=3400 ext=0")
 
 # The stages an nRF52 badge actually emits: the declared list minus the ESP32-only ones,
 # which are conditionally compiled and legitimately absent.
@@ -40,6 +40,10 @@ NRF_STAGES = [s for s in DECLARED if not s.startswith("ESP32:")]
 
 EXPECTED = {"sha": "7a312de", "role": "companion", "freq": "919.500", "bw": "500.0",
             "sf": 7, "cr": 5, "tx": 22, "ifaces": ["ble"]}
+
+# The same, plus the node name. Kept separate because the name is a STORED pref: the env
+# cannot supply it, so a caller that has not claimed one must see it reported as skipped.
+EXPECTED_FULL = dict(EXPECTED, name="Bench-Badge-A")
 
 
 def capture(stages, id_line=ID_LINE, radio_line=RADIO_LINE, prefix=""):
@@ -69,7 +73,7 @@ def test_the_declared_stage_list_is_real():
 # --- positive ---------------------------------------------------------------------------
 
 def test_a_healthy_nrf52_boot_passes():
-    bad, skipped = assess(parse_boot(capture(NRF_STAGES)), DECLARED, EXPECTED)
+    bad, skipped = assess(parse_boot(capture(NRF_STAGES)), DECLARED, EXPECTED_FULL)
     assert not bad, bad
     assert not skipped, "nothing should be skipped when every expectation is supplied: %s" % skipped
 
@@ -83,7 +87,7 @@ def test_the_banner_is_parsed_field_by_field():
     assert r.caplog == "on/DEBUG"
     assert r.mirror == 1
     assert (r.freq, r.bw, r.sf, r.cr, r.tx) == ("919.500", "500.0", 7, 5, 22)
-    assert r.name == "Strycher-QCC1"
+    assert r.name == "Bench-Badge-A"
     assert r.reached_done and r.reached_entry
     assert r.last_stage == "setup:DONE"
 
@@ -296,6 +300,68 @@ def test_a_fresh_badge_on_the_wrong_radio_settings_fails():
     wrong = RADIO_LINE.replace("freq=919.500", "freq=910.525")
     bad, _ = assess(parse_boot(capture(NRF_STAGES, radio_line=wrong)), DECLARED, exp)
     assert any("radio frequency" in b for b in bad), bad
+
+
+# --- the node name: the hole adversarial review found ----------------------------------
+#
+# The first version PARSED the name, printed it, and never checked it. The reviewer's
+# point was the sharpest of the night: a regression in the #1637 ordering invariant
+# renames every configured badge on flash, and the smoke test would still have passed.
+# #1637 guards that in source; this is the only thing that can catch it on hardware.
+#
+# Names in these fixtures are neutral. The owner's real badge name ends in the CTF
+# trigger mark and this repo is public.
+
+def test_a_renamed_badge_is_caught_when_the_name_was_asserted():
+    bad, _ = assess(parse_boot(capture(NRF_STAGES)), DECLARED,
+                    dict(EXPECTED, name="SomeOtherName"))
+    assert any("THE BADGE WAS RENAMED" in b for b in bad), bad
+    assert any("#1637" in b for b in bad), "the failure must point at the invariant: %s" % bad
+
+
+def test_a_badge_that_kept_its_name_passes():
+    bad, _ = assess(parse_boot(capture(NRF_STAGES)), DECLARED,
+                    dict(EXPECTED, name="Bench-Badge-A"))
+    assert not bad, bad
+
+
+def test_the_node_name_is_reported_as_skipped_when_not_asserted():
+    # It is a stored pref, so it cannot be asserted against the env by default -- but the
+    # skip has to SAY that, and say how to assert it, or the gap is invisible again.
+    _, skipped = assess(parse_boot(capture(NRF_STAGES)), DECLARED, EXPECTED)
+    joined = " ".join(skipped)
+    assert "node name" in joined, skipped
+    assert "--expect-name" in joined and "#1637" in joined, \
+        "the skip must name the flag and the invariant it measures: %s" % skipped
+
+
+def test_a_fresh_badge_must_be_named_from_its_ble_mac():
+    ini = (ROOT / "variants" / "qcc_badge" / "platformio.ini").read_text()
+    exp = expected_from_env(ini, "QCC_Badge_companion_radio_ble_diag", fresh_badge=True)
+    exp["sha"] = "7a312de"
+    assert exp["name_prefix"] == "QCC", exp
+    assert exp["name_hex_chars"] == 5, exp
+
+    # The shape a fresh badge should produce: prefix + 5 hex.
+    ok = RADIO_LINE.replace("name=Bench-Badge-A", "name=QCC1A2B3")
+    bad, _ = assess(parse_boot(capture(NRF_STAGES, radio_line=ok)), DECLARED, exp)
+    assert not bad, bad
+
+    # The failure that matters: the FICR read failed and it fell through to pubkey hex.
+    fell_through = RADIO_LINE.replace("name=Bench-Badge-A", "name=51205463")
+    bad, _ = assess(parse_boot(capture(NRF_STAGES, radio_line=fell_through)), DECLARED, exp)
+    assert any("pubkey-hex default" in b for b in bad), bad
+
+    # And a configured name is not a fresh one.
+    bad, _ = assess(parse_boot(capture(NRF_STAGES)), DECLARED, exp)
+    assert any("not actually fresh" in b for b in bad), bad
+
+
+def test_a_missing_node_name_is_caught_when_it_was_asserted():
+    for exp in (dict(EXPECTED, name="Bench-Badge-A"),
+                dict(EXPECTED, name_prefix="QCC", name_hex_chars=5)):
+        bad, _ = assess(parse_boot(capture(NRF_STAGES, radio_line=None)), DECLARED, exp)
+        assert any("no node name" in b for b in bad), bad
 
 
 def test_an_unknown_beacon_stage_is_tolerated():
