@@ -223,6 +223,11 @@ constexpr int16_t kKeyH = 32;
 constexpr int16_t kKeyRowGap = 3;
 // A page laid out in a keyboard area `width` wide whose top is at y0.
 size_t pageLayout(KeyPage page, int16_t width, int16_t y0, KeyRect* out, size_t max);
+// The same with the layout class's key size (Epic H: 24x25 in landscape).
+size_t pageLayout(KeyPage page, int16_t width, int16_t y0, KeyRect* out, size_t max, int16_t key_w,
+                  int16_t key_h);
+// The keyboard's height for a key height: four rows and the gaps between.
+inline int16_t keyboardHeight(int16_t key_h) { return int16_t(4 * key_h + 3 * kKeyRowGap); }
 inline size_t lettersLayout(int16_t width, int16_t y0, KeyRect* out, size_t max) {
   return pageLayout(KeyPage::Letters, width, y0, out, max);
 }

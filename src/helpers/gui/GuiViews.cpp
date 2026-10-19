@@ -495,6 +495,16 @@ bool typesLabel(const char* label) {
 }
 
 size_t pageLayout(KeyPage page, int16_t width, int16_t y0, KeyRect* out, size_t max) {
+  return pageLayout(page, width, y0, out, max, kKeyW, kKeyH);
+}
+
+size_t pageLayout(KeyPage page, int16_t width, int16_t y0, KeyRect* out, size_t max, int16_t key_w,
+                  int16_t key_h) {
+  // The key size is the layout class's (Epic H): the names below stand for
+  // it through the rest of the layout.
+  const int16_t kKeyW = key_w;
+  const int16_t kKeyH = key_h;
+  const int16_t kRowW = int16_t(10 * kKeyW + 9 * kGap);
   static const RowSpec kLetters[3] = {{nullptr, "qwertyuiop", nullptr},
                                       {nullptr, "asdfghjkl", nullptr},
                                       {"⇧", "zxcvbnm", "⌫"}};

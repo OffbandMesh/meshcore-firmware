@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "helpers/gui/GuiLayout.h"
+#include "helpers/gui/GuiViews.h"
 
 using namespace offband::gui;
 
@@ -137,6 +138,41 @@ TEST(Touch, OutOfRangeIsClampedInside) {
   rotateTouch(0, &x, &y);
   EXPECT_EQ(x, 239);
   EXPECT_EQ(y, 319);
+}
+
+TEST(Keyboard, ClassBKeysFitTheContent) {
+  const Layout b = layoutFor(90);
+  KeyRect k[40];
+  for (KeyPage p : {KeyPage::Letters, KeyPage::Symbols, KeyPage::Symbols2}) {
+    const size_t n = pageLayout(p, b.content_w, 100, k, 40, b.key_w, b.key_h);
+    ASSERT_GT(n, 30u);
+    for (size_t i = 0; i < n; i++) {
+      EXPECT_GE(k[i].x, 0) << k[i].label;
+      EXPECT_LE(k[i].x + k[i].w, b.content_w) << k[i].label;
+      EXPECT_EQ(k[i].h, b.key_h) << k[i].label;
+      EXPECT_LE(k[i].y + k[i].h, 100 + keyboardHeight(b.key_h));
+    }
+  }
+}
+
+TEST(Keyboard, PortraitIsUnchanged) {
+  KeyRect a[40], b[40];
+  const size_t na = pageLayout(KeyPage::Letters, 240, 100, a, 40);
+  const size_t nb = pageLayout(KeyPage::Letters, 240, 100, b, 40, 21, kKeyH);
+  ASSERT_EQ(na, nb);
+  for (size_t i = 0; i < na; i++) {
+    EXPECT_EQ(a[i].x, b[i].x);
+    EXPECT_EQ(a[i].w, b[i].w);
+    EXPECT_EQ(a[i].h, b[i].h);
+  }
+  EXPECT_EQ(keyboardHeight(kKeyH), 4 * 32 + 3 * 3);
+}
+
+TEST(Keyboard, ClassBKeyboardLeavesRoomForTheDraft) {
+  // Compose in class B: status, header, one draft line and the keyboard
+  // fit in 240 px (mockup 5).
+  const Layout b = layoutFor(270);
+  EXPECT_LE(b.status_h + 28 + 36 + keyboardHeight(b.key_h) + 4, b.h);
 }
 
 int main(int argc, char** argv) {

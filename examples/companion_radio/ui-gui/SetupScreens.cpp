@@ -191,9 +191,9 @@ lv_obj_t* GuiShell::setSection(lv_obj_t* parent, const char* h) {
 lv_obj_t* GuiShell::setRow(lv_obj_t* parent, uint8_t id, const char* k, const char* hint, const char* v, uint8_t kind,
                            bool on, bool changed, bool off) {
   lv_obj_t* row = box(parent, LV_PCT(100), LV_SIZE_CONTENT);
-  lv_obj_set_style_min_height(row, 34, 0);
+  lv_obj_set_style_min_height(row, _lay.row_h, 0);   // 34, or 28 in class B (ObScreen landscape)
   lv_obj_set_style_pad_hor(row, 8, 0);
-  lv_obj_set_style_pad_ver(row, 3, 0);
+  lv_obj_set_style_pad_ver(row, landscape() ? 1 : 3, 0);
   lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
   lv_obj_set_style_border_width(row, 1, 0);
   lv_obj_set_style_border_color(row, c(_t.line2), 0);
@@ -208,7 +208,7 @@ lv_obj_t* GuiShell::setRow(lv_obj_t* parent, uint8_t id, const char* k, const ch
   lv_obj_t* kl = label(kk, FontRole::Body, _t.ink, k);
   lv_obj_set_width(kl, LV_PCT(100));
   oneLine(kl, FontRole::Body);
-  if (hint && hint[0]) {
+  if (hint && hint[0] && _lay.hints) {   // the design hides hints in class B
     lv_obj_t* hl = label(kk, FontRole::Label, _t.dim, hint);
     lv_obj_set_width(hl, LV_PCT(100));
     oneLine(hl, FontRole::Label);
@@ -278,7 +278,7 @@ void GuiShell::buildSetupList(lv_obj_t* content) {
   char v[48];
   for (size_t i = 0; i < kPages; i++) {
     const SetPage p = SetPage(i);
-    lv_obj_t* row = box(list, LV_PCT(100), 34);
+    lv_obj_t* row = box(list, LV_PCT(100), _lay.cat_row_h);   // 34, or 30 in class B
     lv_obj_set_style_pad_hor(row, 8, 0);
     lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(row, 1, 0);
@@ -426,7 +426,7 @@ void GuiShell::buildDisplayPage(lv_obj_t* content) {
   zoneHint(_model->zone(), _model->gpsZone(), _model->gpsLiveFix(), hint, sizeof hint);
   zoneRowText(_model->zone(), v, sizeof v);
   setRow(body, dZone, "Time zone", hint, v, kSel, false, !offband::tz::isSet(_model->zone()), false);
-  setRow(body, dRotation, "Rotation", "Comes with landscape (Epic H)", "Portrait 0°", kNav, false, false, true);
+  setRow(body, dRotation, "Rotation", nullptr, rotationText(g.rotation), kSel, false, false, false);   // Epic H, H3
   setSection(body, "Screen");
   pctText(g.brightness, v, sizeof v);
   setRow(body, dBright, "Brightness", nullptr, v, kVal, false, false, false);
@@ -451,7 +451,7 @@ void GuiShell::buildThemePage(lv_obj_t* content) {
   for (uint8_t i = 0; i < 4; i++) {
     const ThemeTokens tt = themeTokens(ThemeId(i), g.accent);
     const bool on = g.theme == i;
-    lv_obj_t* tile = box(grid, (kW - 16 - 8) / 2, 62);
+    lv_obj_t* tile = box(grid, (_lay.content_w - 16 - 8) / 2, landscape() ? 52 : 62);
     lv_obj_set_style_radius(tile, _look.radius, 0);
     lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(tile, c(tt.bg), 0);
@@ -628,7 +628,7 @@ void GuiShell::closeSetText(bool keep) {
 
 // As Admin login's sheet: a title, the field, a hint, the keyboard.
 void GuiShell::buildSetText(lv_obj_t* scr) {
-  lv_obj_t* h = box(scr, kW, 28);
+  lv_obj_t* h = box(scr, _lay.content_w, 28);
   lv_obj_set_pos(h, 0, kStatusH);
   lv_obj_set_style_pad_hor(h, 8, 0);
   lv_obj_set_flex_flow(h, LV_FLEX_FLOW_ROW);
@@ -641,7 +641,7 @@ void GuiShell::buildSetText(lv_obj_t* scr) {
   lv_obj_add_event_cb(
       h, [](lv_event_t* e) { static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->closeSetText(false); }); },
       LV_EVENT_CLICKED, this);
-  lv_obj_t* field = box(scr, kW - 16, 34);
+  lv_obj_t* field = box(scr, _lay.content_w - 16, 34);
   lv_obj_set_pos(field, 8, kStatusH + 32);
   lv_obj_set_style_pad_hor(field, 8, 0);
   lv_obj_set_style_border_width(field, 1, 0);
@@ -858,9 +858,10 @@ void GuiShell::setRowPressed(uint8_t id) {
       case dLook:
       case dClock:
       case dZone:
+      case dRotation:
       case dDim:
       case dOff: openSetSheet(SetSheet::Pick, id); break;
-      default: break;   // Rotation: Epic H
+      default: break;
     }
     return;
   }
@@ -1014,11 +1015,7 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
   _ss_count = 0;
   _ss_gz = _model->gpsZone();   // held while the sheet is up: a fix coming or going doesn't shift the rows
 
-  _ss_obj = box(lv_layer_top(), kW, 320 - kStatusH);
-  lv_obj_set_pos(_ss_obj, 0, kStatusH);
-  lv_obj_set_style_bg_opa(_ss_obj, LV_OPA_50, 0);
-  lv_obj_set_style_bg_color(_ss_obj, lv_color_black(), 0);
-  lv_obj_add_flag(_ss_obj, LV_OBJ_FLAG_CLICKABLE);
+  _ss_obj = sheetBackdrop();
   lv_obj_add_event_cb(
       _ss_obj,
       [](lv_event_t* e) {   // a tap on the backdrop closes it, as Cancel
@@ -1027,34 +1024,25 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
         }
       },
       LV_EVENT_CLICKED, this);
-  const int16_t r = _look.pill_chips ? 12 : 0;
-  lv_obj_t* sheet = box(_ss_obj, kW, LV_SIZE_CONTENT);
-  lv_obj_align(sheet, LV_ALIGN_BOTTOM_MID, 0, r);
-  lv_obj_set_style_bg_opa(sheet, LV_OPA_COVER, 0);
-  lv_obj_set_style_bg_color(sheet, c(_t.bg3), 0);
-  lv_obj_set_style_radius(sheet, r, 0);
-  lv_obj_set_style_border_side(sheet, LV_BORDER_SIDE_TOP, 0);
-  lv_obj_set_style_border_width(sheet, 1, 0);
-  lv_obj_set_style_border_color(sheet, c(_t.line), 0);
-  lv_obj_set_style_pad_bottom(sheet, r + 6, 0);
-  lv_obj_set_flex_flow(sheet, LV_FLEX_FLOW_COLUMN);
-  lv_obj_add_flag(sheet, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_t* sheet = sheetPanel(_ss_obj);
+  const bool land = landscape();
+  const int16_t sheet_w = int16_t(_lay.w - _lay.sheet_left);
 
   auto title = [&](const char* t, const char* sub) {
     lv_obj_t* tl = label(sheet, FontRole::Body, _t.ink, t);
     lv_obj_set_style_pad_left(tl, 12, 0);
-    lv_obj_set_style_pad_top(tl, 10, 0);
+    lv_obj_set_style_pad_top(tl, land ? 6 : 10, 0);
     if (sub && sub[0]) {
       lv_obj_t* sl = label(sheet, FontRole::Label, _t.dim, sub);
       lv_obj_set_width(sl, LV_PCT(100));
       lv_label_set_long_mode(sl, LV_LABEL_LONG_WRAP);
       lv_obj_set_style_pad_hor(sl, 12, 0);
-      lv_obj_set_style_pad_bottom(sl, 6, 0);
+      lv_obj_set_style_pad_bottom(sl, land ? 4 : 6, 0);
     }
   };
   // A sheet button; i is its index in _ss_item.
   auto button = [&](lv_obj_t* parent, int i, const char* text, uint32_t ink, uint32_t border, bool fill) {
-    lv_obj_t* b = box(parent, 0, 32);
+    lv_obj_t* b = box(parent, 0, land ? 28 : 32);
     lv_obj_set_flex_grow(b, 1);
     lv_obj_set_style_radius(b, _look.radius, 0);
     lv_obj_set_style_border_width(b, 1, 0);
@@ -1099,15 +1087,17 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
       // down to 340 bytes free (bench, 2026-10-17).
       _ss_picked = current;
       _ss_top = 0;
-      const int win = _ss_count < kPickRows ? _ss_count : kPickRows;
-      _ss_list = box(sheet, LV_PCT(100), win * 30);
+      const int rows = _lay.pick_rows, row_h = _lay.sheet_row_h;   // class B: 5 of 26 px
+      const int win = _ss_count < rows ? _ss_count : rows;
+      _ss_list = box(sheet, LV_PCT(100), win * row_h);
       lv_obj_set_flex_flow(_ss_list, LV_FLEX_FLOW_COLUMN);
       lv_obj_add_flag(_ss_list, LV_OBJ_FLAG_CLICKABLE);
       lv_obj_add_event_cb(
           _ss_list,
-          [](lv_event_t* e) {   // a drag scrolls the window, a row (30 px) at a time
+          [](lv_event_t* e) {   // a drag scrolls the window, a row at a time
             GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
             const lv_event_code_t code = lv_event_get_code(e);
+            const int rh = self->_lay.sheet_row_h;
             if (code == LV_EVENT_PRESSED) {
               self->_ss_drag = 0;
               self->_ss_dragged = false;
@@ -1115,9 +1105,9 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
               lv_point_t d;
               lv_indev_get_vect(lv_indev_get_act(), &d);
               self->_ss_drag += d.y;
-              while (self->_ss_drag <= -30 || self->_ss_drag >= 30) {
+              while (self->_ss_drag <= -rh || self->_ss_drag >= rh) {
                 const int step = self->_ss_drag < 0 ? 1 : -1;   // up shows later rows
-                self->_ss_drag += step * 30;
+                self->_ss_drag += step * rh;
                 self->_ss_dragged = true;
                 self->setPickTop(self->_ss_top + step);
               }
@@ -1125,7 +1115,7 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
           },
           LV_EVENT_ALL, this);
       for (int w = 0; w < win; w++) {
-        lv_obj_t* o = box(_ss_list, LV_PCT(100), 30);
+        lv_obj_t* o = box(_ss_list, LV_PCT(100), row_h);
         lv_obj_set_style_pad_hor(o, 12, 0);
         lv_obj_set_flex_flow(o, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(o, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1239,14 +1229,32 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
         _ss_pad.start(v, 3, 8);
         title("Frequency", nullptr);
       }
-      lv_obj_t* field = box(sheet, kW - 24, pos ? 28 : 32);
+      // Class B (mockup 4): 220 px can't stack field, pad and buttons, so the
+      // field, its range and the buttons take a column left of the pad.
+      const bool beside = _lay.pad_beside;
+      constexpr int16_t kLeftW = 110;
+      lv_obj_t* left = sheet;
+      lv_obj_t* right = sheet;
+      if (beside) {
+        lv_obj_t* split = box(sheet, LV_PCT(100), LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(split, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_hor(split, 10, 0);
+        lv_obj_set_style_pad_top(split, 2, 0);
+        lv_obj_set_style_pad_column(split, 8, 0);
+        left = box(split, kLeftW, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_style_pad_row(left, 5, 0);
+        right = box(split, 0, LV_SIZE_CONTENT);
+        lv_obj_set_flex_grow(right, 1);
+      }
+      lv_obj_t* field = box(left, beside ? LV_PCT(100) : sheet_w - 24, pos ? 28 : 32);
       lv_obj_set_style_pad_hor(field, 8, 0);
       lv_obj_set_style_border_width(field, 1, 0);
       lv_obj_set_style_border_color(field, c(_t.sig), 0);
       lv_obj_set_style_bg_opa(field, lv_opa_t(_t.wash >> 24), 0);
       lv_obj_set_style_bg_color(field, c(_t.wash), 0);
       lv_obj_set_style_radius(field, _look.radius, 0);
-      lv_obj_set_style_translate_x(field, 12, 0);
+      if (!beside) lv_obj_set_style_translate_x(field, 12, 0);
       lv_obj_set_flex_flow(field, LV_FLEX_FLOW_ROW);
       lv_obj_set_flex_align(field, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
       _ss_value = label(field, FontRole::Data, _t.ink, _ss_pad.text());
@@ -1256,18 +1264,22 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
       lv_obj_t* grow = box(field, 1, 1);
       lv_obj_set_flex_grow(grow, 1);
       label(field, FontRole::BodySmall, _t.dim, unit);
-      _ss_limit = label(sheet, FontRole::Meta, _t.dim, range);
+      _ss_limit = label(left, FontRole::Meta, _t.dim, range);
       lv_obj_set_width(_ss_limit, LV_PCT(100));
-      lv_obj_set_style_text_align(_ss_limit, LV_TEXT_ALIGN_CENTER, 0);
-      lv_obj_set_style_pad_ver(_ss_limit, 4, 0);
-      lv_obj_t* pad = box(sheet, LV_PCT(100), LV_SIZE_CONTENT);
-      lv_obj_set_style_pad_hor(pad, 6, 0);
+      lv_label_set_long_mode(_ss_limit, LV_LABEL_LONG_WRAP);
+      lv_obj_set_style_text_align(_ss_limit, beside ? LV_TEXT_ALIGN_LEFT : LV_TEXT_ALIGN_CENTER, 0);
+      lv_obj_set_style_pad_ver(_ss_limit, beside ? 0 : 4, 0);
+      lv_obj_t* pad = box(right, LV_PCT(100), LV_SIZE_CONTENT);
+      lv_obj_set_style_pad_hor(pad, beside ? 0 : 6, 0);
       lv_obj_set_flex_flow(pad, LV_FLEX_FLOW_ROW_WRAP);
       lv_obj_set_style_pad_row(pad, 3, 0);
       lv_obj_set_style_pad_column(pad, 3, 0);
+      // The pad's inner width: the sheet less its margins (228 in class A), or
+      // what the left column leaves (class B).
+      const lv_coord_t pw = beside ? lv_coord_t(sheet_w - 2 * 10 - kLeftW - 8) : lv_coord_t(sheet_w - 12);
       for (int i = 0; i < (pos ? 13 : 12); i++) {
         const int key = pos ? kPosOrder[i] : i;   // slot i shows this key
-        const lv_coord_t w = pos ? (i == 12 ? kW - 12 : (kW - 12 - 9) / 4) : (kW - 12 - 6) / 3;
+        const lv_coord_t w = pos ? (i == 12 ? pw : (pw - 9) / 4) : (pw - 6) / 3;
         lv_obj_t* k = box(pad, w, pos ? 24 : 28);
         if (pin && key == 9) continue;   // no point in a PIN: the slot stays, empty
         lv_obj_set_style_radius(k, 4, 0);
@@ -1288,7 +1300,12 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
             LV_EVENT_CLICKED, this);
         _ss_item[i] = k;
       }
-      lv_obj_t* br = buttonRow();
+      lv_obj_t* br = beside ? box(left, LV_PCT(100), LV_SIZE_CONTENT) : buttonRow();
+      if (beside) {
+        lv_obj_set_flex_flow(br, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_column(br, 4, 0);
+        lv_obj_set_style_pad_top(br, 4, 0);
+      }
       button(br, kPadCancel, "Cancel", _t.ink, _t.line, false);
       button(br, kPadSet, pos && _pad_stage == 0 ? "Next" : "Set", _t.sigInk, _t.sig, true);
       _ss_count = kPadSet + 1;   // the frequency and PIN pads have no ± (item 12 stays empty)
@@ -1354,7 +1371,7 @@ void GuiShell::setSheetCursor(int i) {
   if (i >= _ss_count) i = _ss_count - 1;
   _ss_cur = i;
   if (_ss == SetSheet::Pick) {
-    const int win = _ss_count < kPickRows ? _ss_count : kPickRows;
+    const int win = _ss_count < _lay.pick_rows ? _ss_count : _lay.pick_rows;
     int top = _ss_top;
     if (i < top) top = i;
     if (i >= top + win) top = i - win + 1;
@@ -1374,7 +1391,7 @@ void GuiShell::setSheetCursor(int i) {
 // The picker's window from option `top`: each row's text, the chosen one's
 // filled ring, and the cursor's wash.
 void GuiShell::setPickTop(int top) {
-  const int win = _ss_count < kPickRows ? _ss_count : kPickRows;
+  const int win = _ss_count < _lay.pick_rows ? _ss_count : _lay.pick_rows;
   if (top > _ss_count - win) top = _ss_count - win;
   if (top < 0) top = 0;
   _ss_top = top;
@@ -1458,6 +1475,7 @@ const char* GuiShell::pickTitle(const char** sub) {
       case dLook: return "Look";
       case dClock: return "Clock";
       case dZone: *sub = "Daylight saving is automatic for US and EU zones."; return "Time zone";
+      case dRotation: return "Rotation";
       case dDim: return "Dim after";
       default: return "Screen off";
     }
@@ -1483,6 +1501,7 @@ int GuiShell::pickCount() {
       case dLook:
       case dClock: return 2;
       case dZone: return zonePickCount(_model->zone(), _ss_gz);
+      case dRotation: return int(kRotationCount);
       case dDim: return int(kDimCount);
       default: return int(kOffCount);
     }
@@ -1521,6 +1540,7 @@ int GuiShell::pickCurrent() {
       case dLook: return g.look;
       case dClock: return g.clock_12h;
       case dZone: return zonePickIndex(_model->zone(), _ss_gz);
+      case dRotation: return rotationIndex(g.rotation);
       case dDim: return choiceIndex(kDimChoices, kDimCount, g.dim_secs);
       default: return choiceIndex(kOffChoices, kOffCount, _model->screenOffSecs());
     }
@@ -1555,6 +1575,7 @@ void GuiShell::pickText(int i, char* out, size_t n) {
       case dLook: textf(out, n, "%s", kLookName[i & 1]); return;
       case dClock: textf(out, n, "%s", i ? "12-hour" : "24-hour"); return;
       case dZone: zonePickText(i, _model->zone(), _ss_gz, out, n); return;
+      case dRotation: textf(out, n, "%s", rotationText(kRotations[i < int(kRotationCount) ? i : 0])); return;
       case dDim: durationText(kDimChoices[i], out, n); return;
       default: durationText(kOffChoices[i], out, n); return;
     }
@@ -1616,6 +1637,7 @@ void GuiShell::pickApply(int i) {
       case dLook: g.look = uint8_t(i); break;
       case dClock: g.clock_12h = uint8_t(i); break;
       case dZone: _model->setZone(zoneAtPick(i, _model->zone(), _ss_gz)); break;
+      case dRotation: g.rotation = kRotations[i < int(kRotationCount) ? i : 0]; break;   // prefsChanged turns the panel
       case dDim: g.dim_secs = uint16_t(kDimChoices[i]); break;
       default: _model->setScreenOffSecs(uint16_t(kOffChoices[i])); break;
     }

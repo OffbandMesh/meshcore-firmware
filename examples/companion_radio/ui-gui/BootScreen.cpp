@@ -7,7 +7,8 @@ using namespace shell;
 
 extern "C" const lv_img_dsc_t ob_logo_64;
 
-void BootScreen::show(const ThemeTokens& t, const char* version, const char* reset_line, uint32_t now_ms) {
+void BootScreen::show(const ThemeTokens& t, const char* version, const char* reset_line, uint32_t now_ms,
+                      bool landscape) {
   close();
   _t = t;
   _shown_at = now_ms;
@@ -23,14 +24,37 @@ void BootScreen::show(const ThemeTokens& t, const char* version, const char* res
       _root, [](lv_event_t* e) { static_cast<BootScreen*>(lv_event_get_user_data(e))->close(); }, LV_EVENT_CLICKED,
       this);
 
-  lv_obj_t* logo = lv_img_create(_root);
+  lv_obj_t* id = _root;          // the mark, name and version
+  lv_obj_t* checks_at = _root;   // the checks
+  if (landscape) {
+    lv_obj_t* pair = box(_root, 290, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(pair, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(pair, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(pair, 14, 0);
+    id = box(pair, 120, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(id, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(id, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(id, 4, 0);
+    checks_at = pair;
+  }
+  lv_obj_t* logo = lv_img_create(id);
   lv_img_set_src(logo, &ob_logo_64);
   lv_obj_set_style_img_recolor(logo, c(t.sig), 0);
   lv_obj_set_style_img_recolor_opa(logo, LV_OPA_COVER, 0);
-  label(_root, FontRole::Title, t.ink, "offband");
-  label(_root, FontRole::Meta, t.dim, version);
+  if (landscape) {
+    // 40 px: the 64 px mark at 160/256, its box cut to the drawn size.
+    lv_img_set_zoom(logo, 160);
+    lv_img_set_size_mode(logo, LV_IMG_SIZE_MODE_REAL);
+  }
+  label(id, FontRole::Title, t.ink, "offband");
+  lv_obj_t* ver = label(id, FontRole::Meta, t.dim, version);
+  if (landscape) {
+    lv_obj_set_width(ver, LV_PCT(100));
+    lv_label_set_long_mode(ver, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(ver, LV_TEXT_ALIGN_CENTER, 0);
+  }
 
-  _checks = box(_root, 200, LV_SIZE_CONTENT);
+  _checks = box(checks_at, landscape ? 156 : 200, LV_SIZE_CONTENT);
   lv_obj_set_flex_flow(_checks, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_row(_checks, 1, 0);
   lv_obj_set_style_pad_top(_checks, 4, 0);

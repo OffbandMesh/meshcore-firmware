@@ -17,7 +17,10 @@ public:
   static constexpr uint32_t kSpelledMs = 400;   // the whole word shows this long at the end
 
   // version: bootVersionLine(); reset_line: empty after a clean start.
-  void show(const offband::gui::ThemeTokens& t, const char* version, const char* reset_line, uint32_t now_ms);
+  // landscape: class B (Epic H mockup 9): the mark, name and version beside
+  // the checks, with the 40 px mark the design gives landscape.
+  void show(const offband::gui::ThemeTokens& t, const char* version, const char* reset_line, uint32_t now_ms,
+            bool landscape = false);
   // The rows as they stand (GPS may be heard from while it's up) and the bar.
   void update(const offband::gui::BootFacts& f, uint32_t now_ms);
   void tick(uint32_t now_ms);   // the Morse bar only: cheap, every loop pass
