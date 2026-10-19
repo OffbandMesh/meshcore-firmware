@@ -151,22 +151,47 @@ const uint32_t kOct19 = 1792372020u;   // 2026-10-19 01:07 UTC: 21:07 EDT on the
 const uint32_t kNov02 = 1793620800u;   // 2026-11-02 12:00 UTC: after the US change
 }  // namespace
 
+TEST(Zone, FromThePositionKept) {
+  EXPECT_EQ(zoneForPosition(40712800, -74006000), tz::kEastern);     // New York
+  EXPECT_EQ(zoneForPosition(33448400, -112074000), tz::kArizona);    // Phoenix
+  EXPECT_EQ(zoneForPosition(51507400, -127800), tz::kUk);            // London
+}
+
+TEST(Zone, NoPositionNoSuggestion) {
+  EXPECT_EQ(zoneForPosition(0, 0), tz::kNotSet);                    // never had one
+  EXPECT_EQ(zoneForPosition(91000000, 0), tz::kNotSet);             // out of range
+  EXPECT_EQ(zoneForPosition(0, -181000000), tz::kNotSet);
+}
+
 TEST(Zone, RowAndHint) {
   char v[48];
   zoneRowText(tz::kNotSet, v, sizeof v);
   EXPECT_STREQ(v, "Not set · UTC");
   zoneRowText(tz::kEastern, v, sizeof v);
   EXPECT_STREQ(v, "Eastern");
-  zoneHint(tz::kNotSet, tz::kEastern, v, sizeof v);
+  zoneHint(tz::kNotSet, tz::kEastern, true, v, sizeof v);
   EXPECT_STREQ(v, "GPS suggests Eastern");
+  zoneHint(tz::kNotSet, tz::kEastern, false, v, sizeof v);   // the kept position, no fix now
+  EXPECT_STREQ(v, "Lat/lon suggests Eastern");
+}
+
+TEST(Zone, PromptNamesItsSource) {
+  char v[48];
+  zoneSource(tz::kEastern, true, v, sizeof v);
+  EXPECT_STREQ(v, "GPS puts this radio in Eastern.");
+  zoneSource(tz::kEastern, false, v, sizeof v);
+  EXPECT_STREQ(v, "Lat/lon puts this radio in Eastern.");
+  char small[8];
+  zoneSource(tz::kCentralEu, false, small, sizeof small);   // cut short, still terminated
+  EXPECT_EQ(strlen(small), sizeof small - 1);
 }
 
 TEST(Zone, NoHintWithoutFixOrOnceSet) {
   char v[48] = "x";
-  zoneHint(tz::kNotSet, tz::kNotSet, v, sizeof v);   // no fix
+  zoneHint(tz::kNotSet, tz::kNotSet, true, v, sizeof v);   // no position
   EXPECT_STREQ(v, "");
   strcpy(v, "x");
-  zoneHint(tz::kCentral, tz::kEastern, v, sizeof v);   // a zone chosen: never second-guessed
+  zoneHint(tz::kCentral, tz::kEastern, false, v, sizeof v);   // a zone chosen: never second-guessed
   EXPECT_STREQ(v, "");
   EXPECT_FALSE(zoneOffersGps(tz::kCentral, tz::kEastern));
 }

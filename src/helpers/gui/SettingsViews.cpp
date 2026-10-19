@@ -279,6 +279,12 @@ int choiceIndex(const uint32_t* choices, size_t n, uint32_t v) {
   return -1;
 }
 
+int zoneForPosition(int32_t lat_e6, int32_t lon_e6) {
+  if (lat_e6 == 0 && lon_e6 == 0) return tz::kNotSet;   // no position
+  if (lat_e6 < -90000000 || lat_e6 > 90000000 || lon_e6 < -180000000 || lon_e6 > 180000000) return tz::kNotSet;
+  return tz::suggest(lat_e6 / 1000000.0, lon_e6 / 1000000.0);
+}
+
 void zoneRowText(int zone, char* out, size_t n) {
   if (tz::isSet(zone)) snprintf(out, n, "%s", tz::zone(zone).name);
   else snprintf(out, n, "Not set · UTC");
@@ -286,9 +292,13 @@ void zoneRowText(int zone, char* out, size_t n) {
 
 bool zoneOffersGps(int zone, int gps_zone) { return tz::isSet(gps_zone) && !tz::isSet(zone); }
 
-void zoneHint(int zone, int gps_zone, char* out, size_t n) {
-  if (zoneOffersGps(zone, gps_zone)) snprintf(out, n, "GPS suggests %s", tz::zone(gps_zone).name);
+void zoneHint(int zone, int gps_zone, bool live_fix, char* out, size_t n) {
+  if (zoneOffersGps(zone, gps_zone)) snprintf(out, n, "%s suggests %s", live_fix ? "GPS" : "Lat/lon", tz::zone(gps_zone).name);
   else if (n) out[0] = '\0';
+}
+
+void zoneSource(int gps_zone, bool live_fix, char* out, size_t n) {
+  snprintf(out, n, "%s puts this radio in %s.", live_fix ? "GPS" : "Lat/lon", tz::zone(gps_zone).name);
 }
 
 int zonePickCount(int zone, int gps_zone) { return tz::kZoneCount + (zoneOffersGps(zone, gps_zone) ? 1 : 0); }

@@ -422,8 +422,8 @@ void GuiShell::buildDisplayPage(lv_obj_t* content) {
   setRow(body, dLook, "Look", "Rounded or square", kLookName[g.look & 1], kSel, false, false, false);
   setRow(body, dClock, "Clock", nullptr, g.clock_12h ? "12-hour" : "24-hour", kSel, false, false, false);
   // Epic L (#1610, mockup 1): amber while not set, as the clock is UTC then.
-  char hint[40];
-  zoneHint(_model->zone(), _model->gpsZone(), hint, sizeof hint);
+  char hint[48];
+  zoneHint(_model->zone(), _model->gpsZone(), _model->gpsLiveFix(), hint, sizeof hint);
   zoneRowText(_model->zone(), v, sizeof v);
   setRow(body, dZone, "Time zone", hint, v, kSel, false, !offband::tz::isSet(_model->zone()), false);
   setRow(body, dRotation, "Rotation", "Comes with landscape (Epic H)", "Portrait 0°", kNav, false, false, true);
