@@ -282,6 +282,50 @@ def assess(report, declared, expected=None):
             bad.append("%s is %s on the device, %s in the env that was flashed."
                        % (label, got, expected[key]))
 
+    # The node name. Adversarial review (#1636) caught this as the highest-severity hole
+    # in the first version: the name was PARSED and displayed and then never checked, which
+    # is the same mistake as the radio settings in a worse place. The reviewer's point:
+    #
+    #   "a regression in the #1637 ordering invariant would cause every configured badge
+    #    to be renamed on flash, and this smoke test would still pass."
+    #
+    # #1637 guards that invariant in source. This is the only thing that could catch it
+    # ON HARDWARE, and it was silent. The name is a stored pref, so it cannot simply be
+    # asserted against the env -- it is checked one of two ways, both the operator's claim
+    # to make:
+    #
+    #   --expect-name NAME   this badge already had NAME, and must still have it. This IS
+    #                        the #1637 property measured on a real device.
+    #   --fresh-badge        no stored prefs, so the name must be the compiled prefix plus
+    #                        the BLE MAC tail.
+    if expected.get("name"):
+        if report.name is None:
+            bad.append("the boot banner carried no node name, so it could not be checked.")
+        elif report.name != expected["name"]:
+            bad.append(
+                "THE BADGE WAS RENAMED. It reports %r, and it was expected to still be "
+                "%r. A configured badge keeps its name across a flash because the default "
+                "naming runs BEFORE loadPrefs() -- if that ordering broke, every already-"
+                "configured badge is renamed on its next flash, silently (#1637)."
+                % (report.name, expected["name"]))
+    elif expected.get("name_prefix"):
+        pat = r"^%s[0-9A-Fa-f]{%d}$" % (re.escape(expected["name_prefix"]),
+                                        expected.get("name_hex_chars", 5))
+        if report.name is None:
+            bad.append("the boot banner carried no node name, so it could not be checked.")
+        elif not re.match(pat, report.name):
+            bad.append(
+                "a fresh badge should have named itself %s + %d hex characters of its BLE "
+                "MAC, and reports %r instead. Either the FICR read failed and it fell "
+                "through to the pubkey-hex default, or this unit is not actually fresh "
+                "(#1598)." % (expected["name_prefix"],
+                              expected.get("name_hex_chars", 5), report.name))
+    else:
+        skipped.append(
+            "node name (a STORED pref -- pass --expect-name to assert this badge kept the "
+            "name it had, which is the #1637 ordering invariant measured on hardware, or "
+            "--fresh-badge to assert it named itself from its BLE MAC)")
+
     if "ifaces" in expected and expected["ifaces"]:
         want = set(expected["ifaces"])
         if not report.ifaces:
@@ -382,6 +426,13 @@ def expected_from_env(ini_text, env, fresh_badge=False):
         "cr": num("LORA_CR"),
         "tx": num("LORA_TX_POWER"),
     }
+    # The fresh-badge naming shape, from the flags that produce it (#1598).
+    prefix = flag("OFFBAND_NAME_FROM_BLE_MAC")
+    if prefix:
+        seeds["name_prefix"] = prefix.strip("'").strip('"')
+    chars = num("OFFBAND_NAME_FROM_BLE_MAC_CHARS")
+    seeds["name_hex_chars"] = int(chars) if chars else 5   # the header's own default
+
     out["seeds"] = seeds
     if fresh_badge:
         out.update(seeds)
@@ -500,6 +551,11 @@ def main(argv=None):
                     help="capture and assess without flashing (badge must be reset by hand)")
     ap.add_argument("--timeout", type=int, default=DEFAULT_BOOT_TIMEOUT_S)
     ap.add_argument("--expect-sha", help="override the artifact sha to match against")
+    ap.add_argument("--expect-name", metavar="NAME",
+                    help="this badge already had NAME and must still have it after the "
+                         "flash. This is the #1637 ordering invariant -- default naming "
+                         "before loadPrefs -- measured on real hardware, and it is the "
+                         "only check here that can catch a silent fleet-wide rename.")
     ap.add_argument("--fresh-badge", action="store_true",
                     help="this unit has NO stored prefs (factory reset or genuinely first "
                          "flash), so the env's LORA_* first-boot seeds are what it should "
@@ -512,6 +568,8 @@ def main(argv=None):
     expected = expected_from_env(ini_path.read_text() if ini_path.exists() else "",
                                  args.env, fresh_badge=args.fresh_badge)
 
+    if args.expect_name:
+        expected["name"] = args.expect_name
     if args.expect_sha:
         expected["sha"] = args.expect_sha
     else:
