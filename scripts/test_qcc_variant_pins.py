@@ -392,11 +392,35 @@ def test_pad_beacon_drives_only_the_four_spare_pads():
     assert not taken & {pin for pin, _ in pads}
 
 
+def ini_section(ini, name):
+    """One platformio.ini section's body, found by its HEADER LINE.
+
+    Line-anchored, which the first version of this was not: it did
+    `ini.split("[qcc_badge_diag]", 1)[1]`, so the first mention of that text ANYWHERE won
+    -- including inside a comment. #1638 added a comment to the shipping env explaining
+    that OFFBAND_NAME_MAC_VERIFY had moved to [qcc_badge_diag], and the split then
+    returned the few lines between that sentence and the real section, which contain none
+    of the section's flags. The check failed on correct config.
+
+    Same failure as the one test_qcc_badge_env.py strips comments for, and the one that
+    made test_qcc_call_sites.py count a comment as a call site: prose naming the thing
+    being searched for, read as the thing.
+    """
+    m = re.search(r"^\[%s\]\s*$" % re.escape(name), ini, re.M)
+    assert m, "platformio.ini has no [%s] section header" % name
+    rest = ini[m.end():]
+    nxt = re.search(r"^\[", rest, re.M)
+    return rest[: nxt.start()] if nxt else rest
+
+
 def test_pad_beacon_is_diag_only():
     ini = (QCC / "platformio.ini").read_text()
-    diag = ini.split("[qcc_badge_diag]", 1)[1].split("\n[", 1)[0]
+    diag = ini_section(ini, "qcc_badge_diag")
     assert re.search(r"-D\s+OFFBAND_PAD_BEACON\b", diag), "the diag env must enable the beacon"
-    assert len(re.findall(r"-D\s+OFFBAND_PAD_BEACON\b", ini)) == 1, "only the diag env may"
+    # Counted over code only, so the sentence above explaining the #1635 move does not
+    # read as a second place setting the flag.
+    code = "\n".join(l.split(";", 1)[0] for l in ini.splitlines())
+    assert len(re.findall(r"-D\s+OFFBAND_PAD_BEACON\b", code)) == 1, "only the diag env may"
 
 
 def test_sw1_is_the_active_low_user_button():
