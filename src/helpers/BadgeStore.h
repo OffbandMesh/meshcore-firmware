@@ -115,8 +115,31 @@ public:
       _convos[c].kind = kind;
       memcpy(_convos[c].key, key, KEY_LEN);
     }
-    copy(_convos[c].name, name, kNameLen);
+    copy(_convos[c].name, nameWithoutSigil(kind, name), kNameLen);
     return c;
+  }
+
+  // #1624: the leading '#' or '@', dropped on the way in.
+  //
+  // Names reach this store already carrying a sigil, because that is how the client
+  // stores them and how QccChannels.h seeds the conference channels -- "#queencitycon",
+  // with the hash, since a hashtag channel's key is derived from the name INCLUDING it.
+  // This store has always documented its names as being WITHOUT one (see Convo::name),
+  // and the badge UI prepends the sigil itself when it draws a row. Feed a prefixed name
+  // in and the badge renders "##queencitycon", which is what Abend reported.
+  //
+  // Stripped HERE rather than at each call site, because the contract is this store's and
+  // a contract enforced by its owner cannot be forgotten by a new caller. The UI keeps
+  // prepending: the sigil is what distinguishes a channel row from a contact row at a
+  // glance, so removing it there would trade a cosmetic bug for a real one.
+  //
+  // Exactly ONE leading character, and only the one matching the kind. A channel named
+  // "##test" keeps its second hash, a contact named "#1" keeps its name entirely, and a
+  // name that merely contains a sigil later on is untouched.
+  static const char* nameWithoutSigil(Kind kind, const char* name) {
+    if (name == nullptr) return name;
+    const char sigil = (kind == Channel) ? '#' : '@';
+    return (name[0] == sigil) ? name + 1 : name;
   }
 
   const Convo* convoAt(int c) const { return live(c) ? &_convos[c] : nullptr; }
