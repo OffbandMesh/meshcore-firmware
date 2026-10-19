@@ -44,14 +44,24 @@ const char* readingName(uint8_t type, const char* sensor);
 void readingText(const SensorReading& r, const char* sensor, bool fahrenheit, char* value, size_t vn, char* unit,
                  size_t un);
 
-// Home's consolidated cell (owner pick 5a): the first temperature (else the
-// first voltage, else the first reading) as the value, and up to two of
-// humidity, pressure and voltage under it ("48% · 1013 hPa"). False with no
-// readings.
-bool sensorSummary(const SensorReading* r, size_t n, bool fahrenheit, char* value, size_t vn, char* sub, size_t sn);
+// Home's consolidated cell (owner pick 5a): the temperature (else the first
+// voltage, else the first reading) as the value, and up to two of humidity,
+// pressure and voltage under it ("48% · 1013 hPa"). False with no readings.
+// Temperature and humidity come from channel `prefer` (an SHT) when it has
+// them, else the first sensor that does; pressure from whoever has it. The
+// owner's Field_Compass rule (2026-10-19): the SHT reads air temperature and
+// humidity better than a BME, which warms itself. 0: no preference.
+bool sensorSummary(const SensorReading* r, size_t n, bool fahrenheit, char* value, size_t vn, char* sub, size_t sn,
+                   uint8_t prefer = 0);
 
-// The Settings list's value: "2 found · 71.5 °F", "1 found", "None found".
-void sensorsListValue(int found, const SensorReading* r, size_t n, bool fahrenheit, char* out, size_t on);
+// The Settings list's value: "2 found · 71.5 °F", "1 found", "None found",
+// with the temperature chosen as sensorSummary's.
+void sensorsListValue(int found, const SensorReading* r, size_t n, bool fahrenheit, char* out, size_t on,
+                      uint8_t prefer = 0);
+
+// The channel whose sensor is preferred for temperature and humidity: the
+// first whose name starts with "SHT". names[i] is channel first_ch + i's.
+uint8_t preferredClimateChannel(const char* const* names, size_t count, uint8_t first_ch);
 
 }  // namespace gui
 }  // namespace offband

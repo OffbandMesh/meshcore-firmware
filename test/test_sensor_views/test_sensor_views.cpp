@@ -112,6 +112,41 @@ TEST(Summary, TemperatureFirstThenHumidityAndPressure) {
   EXPECT_STREQ(s, "48% · 1013 hPa");
 }
 
+TEST(Summary, ShtWinsTemperatureAndHumidityBmeKeepsPressure) {
+  // The owner's Field_Compass rule: SHT for temperature and humidity, the BME
+  // for pressure (an SHT has none).
+  SensorReading r[16];
+  const size_t n = decodeLpp(kPacket, sizeof kPacket, r, 16);   // BME280 on 2, SHT4x on 3
+  char v[24], s[48];
+  ASSERT_TRUE(sensorSummary(r, n, false, v, sizeof v, s, sizeof s, 3));
+  EXPECT_STREQ(v, "-5.5 °C");             // the SHT's, not the BME's 21.9
+  // The SHT's humidity (60.5 %, either way of rounding the half) and the BME's pressure.
+  EXPECT_TRUE(strncmp(s, "60%", 3) == 0 || strncmp(s, "61%", 3) == 0) << s;
+  EXPECT_NE(strstr(s, " · 1013 hPa"), nullptr) << s;
+  char out[32];
+  sensorsListValue(3, r, n, false, out, sizeof out, 3);
+  EXPECT_STREQ(out, "3 found · -5.5 °C");
+}
+
+TEST(Summary, PreferenceWithoutThatChannelFallsBack) {
+  SensorReading r[16];
+  const size_t n = decodeLpp(kPacket, sizeof kPacket, r, 16);
+  char v[24], s[48];
+  ASSERT_TRUE(sensorSummary(r, n, false, v, sizeof v, s, sizeof s, 9));   // no channel 9
+  EXPECT_STREQ(v, "21.9 °C");
+  EXPECT_STREQ(s, "48% · 1013 hPa");
+}
+
+TEST(Summary, PreferredChannelIsTheFirstSht) {
+  const char* names[] = {"BME280", "SHT4X", "INA219"};
+  EXPECT_EQ(preferredClimateChannel(names, 3, 2), 3);
+  const char* none[] = {"BME280", "INA219"};
+  EXPECT_EQ(preferredClimateChannel(none, 2, 2), 0);
+  const char* shtc3[] = {"SHTC3"};
+  EXPECT_EQ(preferredClimateChannel(shtc3, 1, 2), 2);
+  EXPECT_EQ(preferredClimateChannel(nullptr, 3, 2), 0);
+}
+
 TEST(Summary, PowerOnlyLeadsWithVoltage) {
   const SensorReading r[] = {{2, kLppVoltage, 12.31f}, {2, kLppCurrent, 0.42f}};
   char v[24], s[48];

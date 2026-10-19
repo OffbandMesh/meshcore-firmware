@@ -52,6 +52,16 @@ const SensorReading* firstOf(const SensorReading* r, size_t n, uint8_t type) {
   return nullptr;
 }
 
+// Temperature and humidity from the preferred channel when it has them.
+const SensorReading* pick(const SensorReading* r, size_t n, uint8_t type, uint8_t prefer) {
+  if (prefer && (type == kLppTemperature || type == kLppHumidity)) {
+    for (size_t i = 0; i < n; i++) {
+      if (r[i].type == type && r[i].channel == prefer) return &r[i];
+    }
+  }
+  return firstOf(r, n, type);
+}
+
 }  // namespace
 
 size_t decodeLpp(const uint8_t* buf, size_t len, SensorReading* out, size_t max) {
@@ -146,13 +156,14 @@ void readingText(const SensorReading& r, const char* sensor, bool fahrenheit, ch
   if (un) snprintf(unit, un, "%s", u);
 }
 
-bool sensorSummary(const SensorReading* r, size_t n, bool fahrenheit, char* value, size_t vn, char* sub, size_t sn) {
+bool sensorSummary(const SensorReading* r, size_t n, bool fahrenheit, char* value, size_t vn, char* sub, size_t sn,
+                   uint8_t prefer) {
   if (sn) sub[0] = '\0';
   if (!r || n == 0) {
     if (vn) value[0] = '\0';
     return false;
   }
-  const SensorReading* head = firstOf(r, n, kLppTemperature);
+  const SensorReading* head = pick(r, n, kLppTemperature, prefer);
   if (!head) head = firstOf(r, n, kLppVoltage);
   if (!head) head = &r[0];
   char v[16], u[8];
@@ -163,7 +174,7 @@ bool sensorSummary(const SensorReading* r, size_t n, bool fahrenheit, char* valu
   size_t used = 0, at = 0;
   for (uint8_t t : kSubOrder) {
     if (used == 2) break;
-    const SensorReading* s = firstOf(r, n, t);
+    const SensorReading* s = pick(r, n, t, prefer);
     if (!s || s == head) continue;
     readingText(*s, nullptr, fahrenheit, v, sizeof v, u, sizeof u);
     if (t == kLppPressure) snprintf(v, sizeof v, "%.0f", s->value);   // whole hPa fit the cell
@@ -178,12 +189,13 @@ bool sensorSummary(const SensorReading* r, size_t n, bool fahrenheit, char* valu
   return true;
 }
 
-void sensorsListValue(int found, const SensorReading* r, size_t n, bool fahrenheit, char* out, size_t on) {
+void sensorsListValue(int found, const SensorReading* r, size_t n, bool fahrenheit, char* out, size_t on,
+                      uint8_t prefer) {
   if (found <= 0) {
     snprintf(out, on, "None found");
     return;
   }
-  const SensorReading* t = r ? firstOf(r, n, kLppTemperature) : nullptr;
+  const SensorReading* t = r ? pick(r, n, kLppTemperature, prefer) : nullptr;
   if (!t) {
     snprintf(out, on, "%d found", found);
     return;
@@ -191,6 +203,13 @@ void sensorsListValue(int found, const SensorReading* r, size_t n, bool fahrenhe
   char v[16], u[8];
   readingText(*t, nullptr, fahrenheit, v, sizeof v, u, sizeof u);
   snprintf(out, on, "%d found · %s %s", found, v, u);
+}
+
+uint8_t preferredClimateChannel(const char* const* names, size_t count, uint8_t first_ch) {
+  for (size_t i = 0; names && i < count; i++) {
+    if (startsWith(names[i], "SHT")) return uint8_t(first_ch + i);
+  }
+  return 0;
 }
 
 }  // namespace gui
