@@ -305,10 +305,20 @@ public:
   // instead of a pref, when this is not -1.
   int tonePickerChannel() const { return _tone_picking_channel; }
   // #1422: plays any tune by id, including the un-listed one the remote trigger names.
-  // This is the ENTIRE surface epic #1191 needs: it honors the quiet pref and the
-  // hardware MUTE, and does nothing for an id this build cannot resolve. Unparking that
-  // work should not require touching sound code at all.
+  // This is the ENTIRE surface a caller needs: it honors the quiet pref and the hardware
+  // MUTE, and does nothing for an id this build cannot resolve. Anything that wants to
+  // sound a tune by id should not require touching sound code at all.
   offband::TonePlay playTuneById(uint8_t id, offband::TonePriority priority);
+  // The badge's override of the trigger seam. Names the un-listed id and asks for it at
+  // Trigger priority, which is what stops the next arriving message cutting it off: the
+  // payload is far longer than any notification, so under Event priority a busy channel
+  // truncates it on every badge in the room (#1608).
+  //
+  // Reports whether the buzzer took the request, which is not the same as audible: this
+  // board's MUTE slide switch is in series with BZ1 and no software can see it. Silence
+  // chosen by id counts as played, because choosing silence is a choice; a refusal for the
+  // quiet pref or an unresolvable id does not.
+  bool playTriggerTune() override;
   // #1422: stops whatever is sounding. The other half of the trigger seam -- a tune
   // sent to a room full of badges has to be stoppable, and the payload is the owner's
   // to replace, so it will not always be under two seconds.

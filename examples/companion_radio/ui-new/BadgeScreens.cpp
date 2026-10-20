@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <helpers/ui/KeyNav.h>   // #1590: backsOut(), so a screen cannot swallow an exit
 #include "BadgeUi.h"
 #include "UITask.h"
 #include "target.h"
@@ -1381,6 +1382,12 @@ bool SettingsScreen::handleInput(char c) {
     if (key == KEY_NEXT) step(1);
     else if (key == KEY_PREV) step(-1);
     else if (key == KEY_ENTER) act();
+    // #1590: a back-out must NOT be swallowed. This branch used to return true for every
+    // button event, so on a badge with no keyboard fitted nothing ever reached the
+    // dispatcher's Esc ladder and Settings had no exit. The keyboard path below has always
+    // let an unhandled key fall through; this is the same courtesy, and it keeps what was
+    // cycled first, exactly as that path does (#1238).
+    else if (keynav::backsOut(key)) { saveCycledIfPending(); return false; }
     return true;
   }
   switch (key) {
@@ -1479,7 +1486,11 @@ bool BatteryScreen::handleInput(char c) {
     act();
     return true;
   }
-  return from_button;   // Esc: back to Settings
+  // Esc: back to Settings. #1590: `return from_button` swallowed a back-out that arrived
+  // FROM the button -- which on a unit with no keyboard fitted is the only kind there is,
+  // so this screen had no exit at all there. Let a back-out through whatever sent it.
+  if (keynav::backsOut(key)) return false;
+  return from_button;
 }
 
 // ---- Time zone picker (#1233) ----------------------------------------------------------
@@ -2305,7 +2316,11 @@ bool GpsScreen::handleInput(char c) {
     act();
     return true;
   }
-  return from_button;   // Esc: back to Settings
+  // Esc: back to Settings. #1590: `return from_button` swallowed a back-out that arrived
+  // FROM the button -- which on a unit with no keyboard fitted is the only kind there is,
+  // so this screen had no exit at all there. Let a back-out through whatever sent it.
+  if (keynav::backsOut(key)) return false;
+  return from_button;
 }
 
 #endif  // UI_HAS_CARDKB

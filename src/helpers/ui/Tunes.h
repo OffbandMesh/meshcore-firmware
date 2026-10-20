@@ -67,16 +67,40 @@ constexpr Tune kBuiltinTunes[] = {
     // Two of the same pitch with a gap between them. 0.21 s.
     {"Knock", "Knock:d=32,o=6,b=140:a,16p,a"},
     // #1422: THE UN-LISTED ONE. A null name keeps it out of the picker, so it exists
-    // only for something that names it by id -- which is the remote trigger designed
-    // under epic #1191, parked. Nothing in the UI can reach or select it.
+    // only for something that names it by id. Nothing in the UI can reach or select it.
     //
-    // The melody here is a PLACEHOLDER and ours: a rising flourish, deliberately longer
-    // and more insistent than a notification chime so a hall of badges firing at once is
-    // obviously an event rather than six people getting messages. The owner has accepted
+    // THE PAYLOAD, supplied by the owner 2026-10-18, from his reference string from the
+    // badge maker. 229 characters, 69 tokens (56 notes, 13 rests), 18.9 s at o=5/o=6.
+    //
+    // OCTAVE: o=5, and that is a MEASURED choice rather than a default. It was tried an
+    // octave up the same day, because BZ1 is a 4 kHz transducer and o=5 puts the melody at
+    // 784-1568 Hz, well below resonance where any buzzer is quieter. Up an octave
+    // (1568-3136 Hz) was audibly louder on hardware -- and the owner rejected it as too
+    // harsh to wear. Loudness is not the only axis on something worn on a person. Do not
+    // "fix" this back up an octave without him.
+    //
+    // THE LAST THREE NOTES WERE MISSING and were restored here, owner-reported by ear.
+    // Two independent confirmations, because a melody is easy to get subtly wrong:
+    //
+    //   - The string contradicted itself. The phrase "2c6,d6,b,a,g.,8p" occurs TWICE; the
+    //     first is followed by "g,2d6,2c6." and the second ran straight off the end. The
+    //     first chorus resolved and the last one hung.
+    //   - MTAFD_Firmware's rickroll_melody[] (the owner's other project, Rowan Packard's
+    //     arrangement) ends a4f/e5f/c5s. Our key is that one +11 semitones, verified across
+    //     the whole descending phrase, which maps those exactly onto g/d6/c6.
+    //
+    // No trailing rest after the tag: the mid-song copy has one only to separate it from
+    // the chorus that follows, and this plays once.
+    //
+    // That length is why TonePriority::Trigger exists (#1608): at 17 s against the
+    // 0.06-0.25 s of every notification above, an Event-priority play would be truncated
+    // by the next arriving message, which in a busy channel is every time.
+    //
+    // The line it replaced was a placeholder of our own. The owner has accepted
     // the risk of shipping a recognizable tune here (#1447 discussion), so this line is
     // his to replace -- or, once typed custom slots land (#1413), the trigger can name a
     // slot he filled in himself and the repo never carries the payload at all.
-    {nullptr, "Trigger:d=8,o=5,b=160:c,e,g,c6,e6,g6,2c7"},
+    {nullptr, "n:d=4,o=5,b=200:8g,8a,8c6,8a,e6,8p,e6,8p,d6.,p,8p,8g,8a,8c6,8a,d6,8p,d6,8p,c6,8b,a.,8g,8a,8c6,8a,2c6,d6,b,a,g.,8p,g,2d6,2c6.,p,8g,8a,8c6,8a,e6,8p,e6,8p,d6.,p,8p,8g,8a,8c6,8a,2g6,b,c6.,8b,a,8g,8a,8c6,8a,2c6,d6,b,a,g.,8p,g,2d6,2c6."},
 };
 
 constexpr uint8_t kBuiltinCount = (uint8_t)(sizeof(kBuiltinTunes) / sizeof(kBuiltinTunes[0]));
@@ -90,8 +114,9 @@ constexpr uint8_t kTuneTick = 3;     // the old ack literal
 constexpr uint8_t kTuneBloop = 4;    // #1447
 constexpr uint8_t kTuneDrop = 5;
 constexpr uint8_t kTuneKnock = 6;
-// #1422: the un-listed entry the remote trigger names. Reachable by id, invisible in
-// the picker. Named here so #1191 refers to it by meaning rather than by position.
+// #1422: the un-listed entry. Reachable by id, invisible in the picker. Named here so a
+// caller refers to it by meaning rather than by position -- ids are append-only, and a
+// literal 7 at a call site would be the one thing a future insertion could not fix.
 constexpr uint8_t kTuneTrigger = 7;
 
 static_assert(kBuiltinCount > 0, "the table needs an entry");
@@ -220,8 +245,8 @@ inline bool isBuiltinTune(uint8_t id) { return id < kBuiltinCount; }
 // reachable by simply having it stored.
 //
 // Nothing can store an un-named id today -- the picker is the only writer and it skips
-// them. The guard is here anyway, because #1191 (a remote trigger naming id 7) and #1413
-// (custom slots) both add writers, and a rule that holds only while no writer exists is
+// them. The guard is here anyway, because anything that names id 7 by id, and #1413
+// (custom slots), both add writers, and a rule that holds only while no writer exists is
 // not a rule.
 //
 // Falls back to row 0, which is Silent: audible as nothing, visible as "Silent", and

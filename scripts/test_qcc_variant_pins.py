@@ -392,11 +392,35 @@ def test_pad_beacon_drives_only_the_four_spare_pads():
     assert not taken & {pin for pin, _ in pads}
 
 
+def ini_section(ini, name):
+    """One platformio.ini section's body, found by its HEADER LINE.
+
+    Line-anchored, which the first version of this was not: it did
+    `ini.split("[qcc_badge_diag]", 1)[1]`, so the first mention of that text ANYWHERE won
+    -- including inside a comment. #1638 added a comment to the shipping env explaining
+    that OFFBAND_NAME_MAC_VERIFY had moved to [qcc_badge_diag], and the split then
+    returned the few lines between that sentence and the real section, which contain none
+    of the section's flags. The check failed on correct config.
+
+    Same failure as the one test_qcc_badge_env.py strips comments for, and the one that
+    made test_qcc_call_sites.py count a comment as a call site: prose naming the thing
+    being searched for, read as the thing.
+    """
+    m = re.search(r"^\[%s\]\s*$" % re.escape(name), ini, re.M)
+    assert m, "platformio.ini has no [%s] section header" % name
+    rest = ini[m.end():]
+    nxt = re.search(r"^\[", rest, re.M)
+    return rest[: nxt.start()] if nxt else rest
+
+
 def test_pad_beacon_is_diag_only():
     ini = (QCC / "platformio.ini").read_text()
-    diag = ini.split("[qcc_badge_diag]", 1)[1].split("\n[", 1)[0]
+    diag = ini_section(ini, "qcc_badge_diag")
     assert re.search(r"-D\s+OFFBAND_PAD_BEACON\b", diag), "the diag env must enable the beacon"
-    assert len(re.findall(r"-D\s+OFFBAND_PAD_BEACON\b", ini)) == 1, "only the diag env may"
+    # Counted over code only, so the sentence above explaining the #1635 move does not
+    # read as a second place setting the flag.
+    code = "\n".join(l.split(";", 1)[0] for l in ini.splitlines())
+    assert len(re.findall(r"-D\s+OFFBAND_PAD_BEACON\b", code)) == 1, "only the diag env may"
 
 
 def test_sw1_is_the_active_low_user_button():
@@ -631,9 +655,35 @@ _ROW_ARG = {"line": 2, "lineRight": 2, "fillRow": 2, "bar": 2, "textAt": 3, "bre
 
 
 def _split_args(text, start):
-    """Split the argument list of a call whose '(' is at `text[start]`."""
+    """Split the argument list of a call whose '(' is at `text[start]`.
+
+    String and char literals are opaque: a comma, paren or bracket inside one is part of
+    the argument, not a separator. Without that (adversarial review, #1636) a call like
+
+        textAt(d, kTitle, 5, 0, "Messages, Unread: %d");
+
+    splits into six arguments instead of five, every index after the string shifts, and a
+    caller checking args[3] silently inspects the wrong thing -- or a ')' inside a literal
+    ends the list early and the call is skipped entirely. Either way the guard stops
+    guarding that line and says nothing. No current call site triggers it; an ordinary
+    future edit would.
+    """
     depth, arg, args = 0, [], []
+    quote, escaped = None, False
     for ch in text[start:]:
+        if quote is not None:
+            arg.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in "\"'":
+            quote = ch
+            arg.append(ch)
+            continue
         if ch in "([":
             depth += 1
             if depth == 1:
@@ -649,6 +699,29 @@ def _split_args(text, start):
         else:
             arg.append(ch)
     return None
+
+
+def test_the_argument_splitter_treats_a_literal_as_opaque():
+    # Guarding the guard. _split_args underpins the face-inventory and title-row checks,
+    # so a splitter that miscounts arguments makes those pass vacuously on the affected
+    # line -- which is the failure mode this whole epic is about.
+    call = 'textAt(d, kTitle, 5, 0, "Messages, Unread: %d");'
+    args = _split_args(call, call.index("("))
+    assert args == ["d", "kTitle", "5", "0", '"Messages, Unread: %d"'], args
+
+    # A paren or bracket inside a literal must not change the depth.
+    call = 'textAt(d, kTitle, 0, 0, "Battery (full)");'
+    assert _split_args(call, call.index("("))[4] == '"Battery (full)"'
+    call = "drawChar(d, ')', 1, 2);"
+    assert _split_args(call, call.index("(")) == ["d", "')'", "1", "2"]
+
+    # An escaped quote does not end the literal early.
+    call = 'textAt(d, kBody, 0, 0, "say \\"hi\\", then go");'
+    assert _split_args(call, call.index("("))[4] == '"say \\"hi\\", then go"'
+
+    # And the ordinary cases still work.
+    call = "f(a, g(b, c), d);"
+    assert _split_args(call, call.index("(")) == ["a", "g(b, c)", "d"]
 
 
 def title_row_draws(src):
@@ -785,11 +858,27 @@ EXPECTED_PREFLASH_CHANNELS = ["#queencitycon", "#okimesh", "#test", "#echo", "#o
 
 
 def preflash_table():
-    """[(name, psk_base64), ...] as QccChannels.h declares them, in order."""
+    """[(name, psk_base64), ...] as QccChannels.h declares them, in order.
+
+    Trailing fields after the key are ignored on purpose: #1625 added a per-channel tune
+    and this helper has no opinion about it (scripts/test_qcc_preflash_tunes.py does).
+
+    REFUSES TO RETURN AN EMPTY LIST, and that is the point of the check below. Two of the
+    three callers only ITERATE this table, so when #1625 changed the row shape and the old
+    two-field pattern stopped matching, those two passed vacuously -- zero assertions, a
+    green tick, and nothing testing the keys or Public any more. Only the one caller that
+    compares a list caught it. A parser that silently returns nothing turns its callers
+    into decoration.
+    """
     src = (QCC / "QccChannels.h").read_text()
     body = src[src.index("kQccPreflashChannels"):]
     body = body[body.index("{") + 1: body.index("};")]
-    return re.findall(r'\{\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\}', body)
+    rows = re.findall(r'\{\s*"([^"]+)"\s*,\s*"([^"]+)"\s*(?:,[^}]*)?\}', body)
+    assert rows, (
+        "parsed NO rows out of kQccPreflashChannels -- the table's shape changed and this "
+        "pattern no longer matches it. Fix the pattern; do not let the callers that merely "
+        "iterate keep passing on an empty list.")
+    return rows
 
 
 def test_the_preflashed_channels_are_the_five_agreed():
@@ -957,6 +1046,275 @@ def test_compiled_radio_defaults_are_first_boot_seeds_only():
     between = src[seed:load]
     for word in ("return", "goto"):
         assert word not in between, f"'{word}' between the seed and loadPrefs() could skip the load"
+
+
+# --------------------------------------------------------------------------------------
+# #1637: the same first-boot-seed property as the radio defaults above, for the NODE NAME.
+#
+# A configured badge must keep its name across a flash, and it does for exactly one
+# reason: the default-naming block in begin() runs BEFORE loadPrefs(), so the stored prefs
+# file wins and DFU preserves that file. Move the naming below the load, or let an early
+# return skip the load, and every already-configured badge is renamed QCC###### on its
+# next flash -- silently, with nothing failing. At the conference that is ~700 units.
+#
+# test_node_name_from_mac has 20 cases and every one of them would still pass: they test
+# the formatter, not when it runs.
+#
+# WHERE THE NAMING ACTUALLY LIVES, which is not where it first looks. There are two
+# default-naming sites in two different functions:
+#
+#   MyMesh::MyMesh()   strcpy(_prefs.node_name, "NONAME")   -- the pre-default
+#   MyMesh::begin()    ADVERT_NAME / formatNodeNameFromMac / pub_key_hex, then loadPrefs
+#
+# The constructor's one cannot be an ordering hazard while it stays in the constructor,
+# because a constructor runs before begin() by C++ semantics rather than by text order.
+# So this guard scopes the ordering to begin() and separately pins that the pre-default
+# has not migrated out of the constructor. Scoping to begin() while still listing the
+# constructor's seed is how the first draft of this guard passed over a region that did
+# not contain one of its own landmarks -- caught by the negative cases below, which is
+# what they are for.
+#
+# WHY THIS IS SHAPED DIFFERENTLY FROM THE RADIO GUARD ABOVE. That one asserts all its
+# landmarks sit at #if depth 0. The naming block cannot: it lives inside `#else` of
+# `#ifdef ADVERT_NAME`, with a nested `#ifdef OFFBAND_NAME_FROM_BLE_MAC` inside that, so
+# its sites are legitimately at depth 1 and 2. Asserting depth 0 would fail honest code.
+#
+# What matters instead is that the LOAD is unconditional. If loadPrefs() sits at depth 0
+# then every conditional opened before it has closed, which is what actually rules out the
+# dangerous shape -- a naming branch that straddles the load, or an #else that relocates
+# the load inside one. That is a stronger check than the radio's, not a weaker one.
+#
+# Written as a pure function over source text rather than a wall of asserts, so the
+# negative cases can MUTATE the source and prove each check actually fires. A guard nobody
+# has seen fail is a guard nobody knows works.
+
+# The default-naming sites inside begin(). Order within the tuple is not significant.
+NAME_SEEDS = (
+    "strcpy(_prefs.node_name, ADVERT_NAME)",  # #ifdef ADVERT_NAME
+    "formatNodeNameFromMac(",                 # #1598, inside #ifdef OFFBAND_NAME_FROM_BLE_MAC
+    "strcpy(_prefs.node_name, pub_key_hex)",  # the pubkey fallback
+)
+NAME_LOAD = "_store->loadPrefs(_prefs)"
+NAME_PREDEFAULT = 'strcpy(_prefs.node_name, "NONAME")'
+
+
+def mymesh_function_body(src, name):
+    """One MyMesh member function's body, from its opening brace to the next definition.
+
+    Scoped per function on purpose. CMD_SET_ADVERT_NAME writes _prefs.node_name from a
+    client command far below, and that write SHOULD be after the load -- a whole-file
+    check would read it as a violation and would have to be taught an exception, which is
+    how a guard starts lying.
+    """
+    # The leading return type is OPTIONAL: `void MyMesh::begin(` has one, the constructor
+    # `MyMesh::MyMesh(` does not. Requiring one makes the constructor unmatchable, which is
+    # exactly how the first draft of this guard scoped itself away from its own landmark.
+    sig = r"^(?:[A-Za-z_][\w:<>,*&\s]*?\s+)?MyMesh::%s\s*\("
+    m = re.search(sig % re.escape(name), src, re.M)
+    if not m:
+        return None
+    # The body's opening brace. Safe because neither the signature nor the constructor's
+    # initializer list contains a brace-init today; if one is ever added, the caller's
+    # landmark checks fail loudly rather than this silently returning a wrong slice.
+    brace = src.index("{", m.end() - 1)
+    rest = src[brace + 1:]
+    nxt = re.search(sig % r"\w+", rest, re.M)
+    return rest[: nxt.start()] if nxt else rest
+
+
+def if_depth_at(body, upto):
+    """Conditional-compilation nesting depth at an offset. #else does not change depth."""
+    d = 0
+    for line in body[:upto].splitlines():
+        s = line.strip()
+        if s.startswith("#if"):
+            d += 1
+        elif s.startswith("#endif"):
+            d -= 1
+    return d
+
+
+def naming_order_failures(src):
+    """Every way the node-name seeding can stop being a first-boot-only default.
+
+    Returns a list of failure messages; empty means the invariant holds. Each message
+    names the CONSEQUENCE, because the next person to read it will be reading it because
+    CI went red and they need to know what it was protecting.
+    """
+    bad = []
+    body = mymesh_function_body(src, "begin")
+    if body is None:
+        return ["MyMesh::begin() not found -- this guard cannot see what it is protecting"]
+
+    # 1. The pre-default stays in the constructor, where ordering is a language guarantee
+    #    rather than a text-order accident.
+    ctor = mymesh_function_body(src, "MyMesh")
+    if ctor is None:
+        # Distinguished from "it moved" on purpose: this one means the guard lost its
+        # bearings, which needs a different fix from the invariant actually breaking.
+        bad.append("MyMesh::MyMesh() not found -- this guard cannot locate the constructor")
+    elif NAME_PREDEFAULT not in ctor:
+        bad.append(
+            "the %r pre-default is no longer in MyMesh::MyMesh(). In the constructor its "
+            "order is guaranteed; anywhere else it has to be proven." % NAME_PREDEFAULT)
+    if NAME_PREDEFAULT in body:
+        bad.append(
+            "the %r pre-default has moved into begin(), where it can land after "
+            "loadPrefs() and rename a configured badge." % NAME_PREDEFAULT)
+
+    # 2. Landmarks are unique. index() finds only the FIRST occurrence, so a duplicated
+    #    naming site or a second loadPrefs would make every offset below meaningless --
+    #    the guard would pass while the second copy did the damage.
+    loads = [i for i in range(len(body)) if body.startswith(NAME_LOAD, i)]
+    if len(loads) != 1:
+        bad.append(
+            "loadPrefs must be called exactly once in begin(); found %d. A second call "
+            "re-reads the stored prefs and makes the ordering below unanalysable." % len(loads))
+        return bad
+    load = loads[0]
+
+    seeds = {}
+    for needle in NAME_SEEDS:
+        hits = [i for i in range(len(body)) if body.startswith(needle, i)]
+        if len(hits) > 1:
+            bad.append(
+                "%r appears %d times in begin(); a second naming site could run AFTER "
+                "loadPrefs and rename a configured badge." % (needle, len(hits)))
+        if hits:
+            seeds[needle] = hits
+
+    # 3. Not vacuous, and not PARTLY vacuous. Every listed seed must be found: if the
+    #    naming is refactored and one spelling changes, a guard that silently drops it
+    #    keeps passing on the two it can still see. That is the hole the first draft had.
+    missing = [n for n in NAME_SEEDS if n not in seeds]
+    if missing:
+        bad.append(
+            "node-name seeding site(s) not found in begin(): %s -- the guard is matching "
+            "less than it claims to. Update NAME_SEEDS to the current spelling."
+            % ", ".join(repr(m) for m in missing))
+    if not seeds:
+        return bad
+
+    # 4. EVERY seeding site is before the load, not just the first.
+    for needle, hits in sorted(seeds.items()):
+        for at in hits:
+            if at > load:
+                bad.append(
+                    "%r runs AFTER loadPrefs() -- a flash would rename a badge that "
+                    "already has a name. Node naming is a first-boot default only."
+                    % needle)
+
+    # 5. The load is unconditional. This is the check that replaces the radio guard's
+    #    depth-0-everywhere assertion, and it is why the naming block is allowed to be
+    #    conditional while the load is not.
+    d = if_depth_at(body, load)
+    if d != 0:
+        bad.append(
+            "loadPrefs() sits at #if nesting depth %d. It must be unconditional: a build "
+            "that compiles the load out keeps the compiled-in default name and renames "
+            "every configured badge." % d)
+
+    # 6. Nothing exits begin() between the last naming site and the load.
+    last = max(at for hits in seeds.values() for at in hits)
+    for word in ("return", "goto"):
+        if re.search(r"\b%s\b" % word, body[last:load]):
+            bad.append(
+                "'%s' between the last naming site and loadPrefs() could skip the load "
+                "and strand the compiled-in default name." % word)
+
+    return bad
+
+
+def test_compiled_node_name_is_a_first_boot_seed_only():
+    src = (ROOT / "examples" / "companion_radio" / "MyMesh.cpp").read_text()
+    bad = naming_order_failures(src)
+    assert not bad, "node-name seeding is no longer first-boot-only:\n  - " + "\n  - ".join(bad)
+
+
+# --- the negatives: each mutation must make the guard above FAIL ------------------------
+#
+# These are the point of the exercise. Most of these checks are invisible until something
+# breaks, and a check that has never been observed to fire is indistinguishable from a
+# check that cannot. Each case mutates the real file in memory and asserts the guard
+# notices, matching on the phrase that names the consequence.
+
+def _mymesh():
+    return (ROOT / "examples" / "companion_radio" / "MyMesh.cpp").read_text()
+
+
+def _fails_with(mutated, phrase):
+    bad = naming_order_failures(mutated)
+    assert any(phrase in b for b in bad), (
+        "expected a failure mentioning %r; got %s" % (phrase, bad or "NO FAILURES AT ALL"))
+
+
+def _sanity_unmutated_passes():
+    assert not naming_order_failures(_mymesh()), "sanity: the real file must pass"
+
+
+def test_negative_naming_moved_after_the_load_is_caught():
+    # The one-line edit the whole task exists to prevent: the naming relocated below
+    # loadPrefs. Simulated by hoisting the load above the naming block, which gives the
+    # same relative order with a far simpler edit.
+    _sanity_unmutated_passes()
+    src = _mymesh()
+    load_line = "  _store->loadPrefs(_prefs);"
+    assert src.count(load_line) == 1, "sanity: expected the load once on its own line"
+    moved = src.replace(load_line + "\n", "", 1)
+    moved = moved.replace("#ifdef ADVERT_NAME", load_line + "\n#ifdef ADVERT_NAME", 1)
+    _fails_with(moved, "runs AFTER loadPrefs()")
+
+
+def test_negative_a_second_naming_site_is_caught():
+    # A duplicate is the subtle one: the first site is still correctly placed, so an
+    # ordering check that stops at index() would pass while the copy does the renaming.
+    _sanity_unmutated_passes()
+    dup = _mymesh().replace(
+        "  // load persisted prefs\n  _store->loadPrefs(_prefs);",
+        "  // load persisted prefs\n  _store->loadPrefs(_prefs);\n"
+        "  strcpy(_prefs.node_name, pub_key_hex);", 1)
+    _fails_with(dup, "appears 2 times")
+
+
+def test_negative_an_early_return_between_naming_and_load_is_caught():
+    _sanity_unmutated_passes()
+    ret = _mymesh().replace(
+        "  // load persisted prefs\n  _store->loadPrefs(_prefs);",
+        "  if (!has_display) return;\n"
+        "  // load persisted prefs\n  _store->loadPrefs(_prefs);", 1)
+    _fails_with(ret, "could skip the load")
+
+
+def test_negative_a_conditionally_compiled_load_is_caught():
+    # The failure mode the radio guard's depth check exists for, here aimed at the load:
+    # one build drops loadPrefs, keeps the seeds, and renames every badge it touches.
+    _sanity_unmutated_passes()
+    wrapped = _mymesh().replace(
+        "  _store->loadPrefs(_prefs);",
+        "#ifdef SOME_BUILD_FLAG\n  _store->loadPrefs(_prefs);\n#endif", 1)
+    _fails_with(wrapped, "must be unconditional")
+
+
+def test_negative_a_vanished_load_is_caught():
+    _sanity_unmutated_passes()
+    _fails_with(_mymesh().replace("  _store->loadPrefs(_prefs);", "", 1), "exactly once")
+
+
+def test_negative_one_renamed_seed_does_not_pass_on_the_others():
+    # The hole the first draft of this guard actually had: scope or spelling drifts, one
+    # landmark stops matching, and the guard keeps reporting success on the rest.
+    _sanity_unmutated_passes()
+    _fails_with(_mymesh().replace("formatNodeNameFromMac(", "someOtherFormatter(", 1),
+                "matching less than it claims")
+
+
+def test_negative_the_predefault_moving_into_begin_is_caught():
+    _sanity_unmutated_passes()
+    moved = _mymesh().replace('  strcpy(_prefs.node_name, "NONAME");\n', "", 1)
+    moved = moved.replace("  // load persisted prefs\n  _store->loadPrefs(_prefs);",
+                          "  // load persisted prefs\n  _store->loadPrefs(_prefs);\n"
+                          '  strcpy(_prefs.node_name, "NONAME");', 1)
+    _fails_with(moved, "has moved into begin()")
 
 
 if __name__ == "__main__":

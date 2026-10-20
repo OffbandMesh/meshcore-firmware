@@ -84,7 +84,23 @@
 
 #define PIN_LED              (22)
 #define LED_PIN              PIN_LED
-#define LED_BLUE             PIN_LED
+// #1597: -1, so the Arduino core stops driving this pin.
+//
+// The core toggles LED_BLUE from a FreeRTOS timer whenever BLE advertises. Aliased onto
+// PIN_LED (P0.15), and #1596's probe measured what that pin actually is: the PYRAMID
+// badge's three bright front LEDs, where the sponsor badge has only the small LED on the
+// ProMicro module. Same pin, different parts -- which is why this stayed invisible, since
+// on the sponsor badge the core's blink lands somewhere nobody looks. Because it is a
+// timer rather than the main loop it won every contest with our own LED code: it kept
+// flashing straight through the probe's all-dark phase, which is how it was found.
+//
+// -1 is the house pattern, not an invention: heltec_rc52, heltec_t096, heltec_t1 and
+// heltec_mesh_solar all set it for exactly this reason and say so in their comments. The
+// badge was the one nRF52 variant that aliased it onto a real pin instead.
+//
+// It is also board-local by construction, so nothing else in the tree changes and no
+// build flag is needed to scope it.
+#define LED_BLUE             (-1)   // stops Bluefruit blinking P0.15 during advertising
 #define LED_BUILTIN          PIN_LED
 
 // #1366: the LED on the ProMicro module itself, P0.15. Named, because the badge has two
@@ -92,8 +108,11 @@
 // P0.08) is the one beside the display. The owner's split: this is the heartbeat, that
 // one is traffic and notifications.
 //
-// LED_BLUE above is inherited from the ProMicro variant and is wrong about the colour --
-// the part on this module is red. Left alone because shared code keys off the name.
+// LED_BLUE above WAS inherited from the ProMicro variant, aliased onto this pin, and wrong
+// about the colour -- the part on this module is red. It said "left alone because shared
+// code keys off the name", which was true and was the wrong conclusion: the shared code
+// that keys off it is the core's advertising blink, and four other nRF52 variants key off
+// it to switch that OFF. Set to -1 above (#1597).
 #define PIN_QCC_MODULE_LED   PIN_LED   // P0.15, the module's own LED
 
 // ⚠ UNVERIFIED POLARITY. Zephyr and RIOT both place LED0 on P0.15 for this board and

@@ -89,6 +89,29 @@ public:
     return 0xFF;   // unsupported on this UI
   }
 
+  // Sound the un-listed tune, for a message the mesh layer has decided asks for it.
+  //
+  // Fourth use of this shape, after applyBuzzerMute (#510), feedTuneSlot (#1478) and
+  // notifyChannel (#1524), and for the same reason: the tune table and the buzzer are
+  // members of a UITask implementation, MyMesh.cpp is compiled by every companion
+  // variant, and the decision of WHETHER to sound belongs in the mesh layer. So the mesh
+  // layer asks and does not reach.
+  //
+  // Returns whether the buzzer ACCEPTED the tune -- not whether anybody heard it, and the
+  // difference is not pedantry. It can decline for things software knows about: the quiet
+  // pref, or an id this build cannot resolve. It CANNOT know about a mute switch wired in
+  // series with the sounder, which is exactly how the QCC badge is built (BZ1 behind
+  // MOSFET Q3 on P0.06 with a MUTE slide switch in series). With that switch open the
+  // firmware drives the pin, this returns true, and the badge is silent.
+  //
+  // So true means "the request took the buzzer". An earlier version of this comment said
+  // it meant the badge made a noise, and that wording cost a bench session on 2026-10-18:
+  // the trigger fired twice, logged success, and the owner heard nothing.
+  //
+  // The default is false and silent, so every UI without this inherits no behaviour at
+  // all. Only the badge overrides it.
+  virtual bool playTriggerTune() { return false; }
+
   // The stored tune's length and derived name, for SLOT_GET. False when this UI has no
   // slots. `name` is written as a NUL-terminated string of at most 12 characters.
   virtual bool readTuneSlot(uint8_t slot, uint8_t& len, char* name, size_t name_cap) {

@@ -7,6 +7,19 @@
 // constructor(101) instance; see helpers/BootBeacon.h for why it exists.
 #define OFFBAND_BEACON_DEFINE_CTOR
 #include "helpers/BootBeacon.h"
+#if defined(OFFBAND_NAME_FROM_BLE_MAC) && defined(OFFBAND_NAME_MAC_VERIFY)
+// #1598: the one-off hardware check that FICR and the advertised address agree. Gated on
+// its own flag as well as the feature's, so it ships only on a diag build.
+#include <helpers/NodeNameFromMac.h>
+#include <helpers/nrf52/BleMacAddress.h>
+#ifndef OFFBAND_NAME_FROM_BLE_MAC_CHARS
+#define OFFBAND_NAME_FROM_BLE_MAC_CHARS 5
+#endif
+#endif
+
+#if defined(OFFBAND_BLE_MORSE)
+#include <helpers/ui/MorseBlink.h>   // #1597: the advertising pattern
+#endif
 
 #if defined(OFFBAND_PAD_BEACON)
   #include "helpers/PadBeacon.h"   // #1210: diag ID line on each spare pad
@@ -636,6 +649,48 @@ void setup() {
 #else
   meshLogSetMirror(true);
 #endif
+
+#if defined(OFFBAND_NAME_FROM_BLE_MAC) && defined(OFFBAND_NAME_MAC_VERIFY)
+  // #1598: the equivalence check, run on hardware rather than argued.
+  //
+  // The node name is built from FICR because the SoftDevice is not up when the name is
+  // chosen. The claim that FICR's low bytes equal the advertised address's low bytes is a
+  // derivation from how static random addresses are formed, and the issue requires it be
+  // measured. BLE is up by this point, so read it the normal way and compare.
+  //
+  // last5= is the part that actually matters -- the top byte may legitimately differ, the
+  // characters the name is made of may not.
+  //
+  // ⚠ This prints the device's BLE address. Do not paste the output into a GitHub issue,
+  // PR or chat; this repo is public. Record the VERDICT, not the address.
+  {
+    uint8_t ficr[offband::kBleMacBytes] = {0}, sd[offband::kBleMacBytes] = {0};
+    const bool have_ficr = offband::bleMacFromFicr(ficr);
+    char fname[16], sname[16];
+    const bool have_sd = offband::bleMacFromSoftDevice(sd);
+    const bool fok = have_ficr && offband::formatNodeNameFromMac(
+        fname, sizeof(fname), ficr, sizeof(ficr),
+        OFFBAND_NAME_FROM_BLE_MAC, OFFBAND_NAME_FROM_BLE_MAC_CHARS);
+    const bool sok = have_sd && offband::formatNodeNameFromMac(
+        sname, sizeof(sname), sd, sizeof(sd),
+        OFFBAND_NAME_FROM_BLE_MAC, OFFBAND_NAME_FROM_BLE_MAC_CHARS);
+    mesh_log_line(MLOG_BOOT,
+                  "[name] ficr=%s/%02X%02X%02X%02X%02X%02X sd=%s"
+                  " full=%s last5=%s name=%s\n",
+                  have_ficr ? "ok" : "BLANK",
+                  ficr[0], ficr[1], ficr[2], ficr[3], ficr[4], ficr[5],
+                  have_sd ? "up" : "UNAVAIL",
+                  (have_ficr && have_sd && memcmp(ficr, sd, sizeof(ficr)) == 0) ? "MATCH"
+                                                                                : "differ",
+                  (fok && sok && strcmp(fname, sname) == 0) ? "MATCH" : "DIFFER",
+                  fok ? fname : "(fallback)");
+    if (have_sd) {
+      mesh_log_line(MLOG_BOOT, "[name] sdaddr=%02X%02X%02X%02X%02X%02X\n",
+                    sd[0], sd[1], sd[2], sd[3], sd[4], sd[5]);
+    }
+  }
+#endif
+
 #ifdef OFFBAND_OBSERVER
   // Plan 2 v2 Task 12: wire observer mesh context AFTER the_mesh.begin()
   // populates self_id. Strings cached as borrowed pointers in WifiObserver;
@@ -966,7 +1021,60 @@ void loop() {
   board.feedWatchdog();  // #257/#1083: feed from the MAIN LOOP only -> a hung loop trips the WDT
   mesh::wdtTestHangTick();  // bench-only (WDT_TEST_HANG_AFTER_MS); compiles to nothing otherwise
 #if defined(NRF52_PLATFORM)
+  #if defined(OFFBAND_BLE_MORSE) && defined(PIN_STATUS_LED)
+  // #1597: what the badge's three front LEDs say, now that the pin is ours (LED_BLUE = -1
+  // stopped the core's advertising blink).
+  //
+  //   advertising, nobody paired  ->  Morse, repeating
+  //   paired                      ->  the #275 heartbeat blip
+  //
+  // BOTH are driven from this loop, deliberately. A pattern that stops mid-message means
+  // the loop is wedged, which is the liveness property #275 exists for -- and it is why
+  // the paired state gets the heartbeat rather than going dark. Dark would have been
+  // cheaper and would have thrown away liveness for the state the badge spends most of its
+  // life in.
+  //
+  // The two are unmistakable for each other: ~1 Hz blip against a ten-second sentence.
+  // Which pattern currently owns the pin. Outside the branches, because the handover in
+  // either direction has to know it is a handover.
+  static bool s_morse_owns_led = false;
+  // Walked ONCE: the message length never changes. After that the per-iteration work is a
+  // divide and a compare -- the pattern is re-derived only when the 80 ms unit actually
+  // advances, not the thousands of times the loop runs inside one. Review flagged the naive
+  // version as the worst thing in the change and was right; this is a battery badge.
+  static const uint32_t s_morse_total = offband::morseTotalUnits(OFFBAND_BLE_MORSE_TEXT);
+  static uint32_t s_morse_unit = 0xFFFFFFFFu;
+  static bool s_morse_lit = false;
+
+  if (!ui_task.hasConnection()) {
+    if (!s_morse_owns_led) {
+      // Taking the pin back from the heartbeat: forget the cache so the next unit writes
+      // the pin rather than believing it already matches.
+      s_morse_owns_led = true;
+      s_morse_unit = 0xFFFFFFFFu;
+      s_morse_lit = false;
+    }
+    const uint32_t unit = offband::morseUnitAt(millis(), s_morse_total);
+    if (unit != s_morse_unit) {
+      s_morse_unit = unit;
+      const bool lit = offband::morseAt(OFFBAND_BLE_MORSE_TEXT, unit).lit;
+      if (lit != s_morse_lit) {
+        s_morse_lit = lit;
+        digitalWrite(PIN_STATUS_LED, lit ? LED_STATE_ON : !LED_STATE_ON);
+      }
+    }
+  } else {
+    if (s_morse_owns_led) {
+      // Handing the pin to the heartbeat: leave it OFF rather than wherever the message
+      // happened to stop, so the heartbeat's first beat is a beat and not a continuation.
+      s_morse_owns_led = false;
+      digitalWrite(PIN_STATUS_LED, !LED_STATE_ON);
+    }
+    board.heartbeatTick();
+  }
+  #else
   board.heartbeatTick(); // #275: loop-driven green-LED heartbeat (freezes if the loop hangs)
+  #endif
   #if !defined(OFFBAND_OBSERVER)
   {
     // #377: periodic breadcrumb into the retained ring. Low cadence (30 s) so it

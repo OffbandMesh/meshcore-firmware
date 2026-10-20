@@ -359,6 +359,77 @@ TEST(BadgeStoreSplitSender, ALongNameIsCutToTheBuffer) {
   EXPECT_STREQ("hi", body);
 }
 
+// ---- #1624: the sigil is the UI's to draw, not the store's to keep -----------------
+
+namespace {
+const uint8_t kKeyA[32] = {1};
+const uint8_t kKeyB[32] = {2};
+
+// What the store ended up holding for a conversation.
+std::string storedName(Store& s, int c) {
+  const Store::Convo* v = s.convoAt(c);
+  return v == nullptr ? "<none>" : std::string(v->name);
+}
+}  // namespace
+
+TEST(BadgeStoreSigil, AChannelSeededWithAHashLosesExactlyOne) {
+  // THE REPORTED BUG. QccChannels.h seeds "#queencitycon" because a hashtag channel's key
+  // is derived from the name INCLUDING the hash, and the badge UI prepends its own. Kept
+  // here, the badge drew "##queencitycon".
+  Store s;
+  const int c = s.convo(Store::Channel, kKeyA, "#queencitycon");
+  ASSERT_GE(c, 0);
+  EXPECT_EQ("queencitycon", storedName(s, c));
+}
+
+TEST(BadgeStoreSigil, AChannelWithoutOneIsUnchanged) {
+  Store s;
+  const int c = s.convo(Store::Channel, kKeyA, "queencitycon");
+  EXPECT_EQ("queencitycon", storedName(s, c));
+}
+
+TEST(BadgeStoreSigil, OnlyTheFirstCharacterGoes) {
+  // A channel genuinely called "#test" after one strip is "test"; one called "##test"
+  // keeps its second hash rather than being stripped twice.
+  Store s;
+  EXPECT_EQ("#test", storedName(s, s.convo(Store::Channel, kKeyA, "##test")));
+}
+
+TEST(BadgeStoreSigil, AContactLosesAnAtAndNotAHash) {
+  // The sigil is per kind. A contact named "#1" is a contact called "#1", not "1".
+  Store s;
+  EXPECT_EQ("home", storedName(s, s.convo(Store::Contact, kKeyA, "@home")));
+  EXPECT_EQ("#1", storedName(s, s.convo(Store::Contact, kKeyB, "#1")));
+}
+
+TEST(BadgeStoreSigil, AChannelLosesAHashAndNotAnAt) {
+  Store s;
+  EXPECT_EQ("@odd", storedName(s, s.convo(Store::Channel, kKeyA, "@odd")));
+}
+
+TEST(BadgeStoreSigil, ASigilLaterInTheNameSurvives) {
+  Store s;
+  EXPECT_EQ("qcc#4", storedName(s, s.convo(Store::Channel, kKeyA, "qcc#4")));
+}
+
+TEST(BadgeStoreSigil, DegenerateNamesDoNotCrash) {
+  Store s;
+  EXPECT_EQ("", storedName(s, s.convo(Store::Channel, kKeyA, "#")));
+  EXPECT_EQ("", storedName(s, s.convo(Store::Channel, kKeyB, "")));
+  const int c = s.convo(Store::Channel, kKeyA, nullptr);
+  EXPECT_GE(c, 0) << "a null name is empty, not a refusal";
+}
+
+TEST(BadgeStoreSigil, ReopeningAConversationDoesNotStripAgain) {
+  // convo() is called on every arriving message, so the strip has to be idempotent
+  // against the ALREADY-STORED name as well as the incoming one.
+  Store s;
+  const int c1 = s.convo(Store::Channel, kKeyA, "#queencitycon");
+  const int c2 = s.convo(Store::Channel, kKeyA, "#queencitycon");
+  EXPECT_EQ(c1, c2);
+  EXPECT_EQ("queencitycon", storedName(s, c2));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

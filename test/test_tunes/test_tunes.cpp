@@ -11,6 +11,7 @@
 #include <set>
 #include <string>
 #include "helpers/ui/Tunes.h"
+#include "helpers/ui/TuneSlots.h"   // kMaxRtttl, the capacity the trigger payload is bounded by
 
 using namespace offband;
 
@@ -169,9 +170,18 @@ TEST(TriggerTune, NoEventDefaultsToIt) {
   }
 }
 
-// It is longer than the chimes, which is the point -- but still bounded, because the
-// badge should not be stuck playing for a quarter of a minute.
-TEST(TriggerTune, LongerThanAChimeButStillBounded) {
+// It is longer than the chimes, which is the point -- and bounded by the capacity that
+// was sized for it rather than by a guess.
+//
+// This test used to assert strlen < 120 with the note "still not a song". That bound
+// belonged to the PLACEHOLDER payload and it fired when the real one landed, which is
+// the guard doing its job: the owner supplied his reference string from the badge maker
+// on 2026-10-18, it runs 17.1 s over 66 tokens, and it IS a song on purpose -- a hall of
+// badges going off at once has to read as an event and not as six people getting
+// messages. So the intent "not a song" is withdrawn deliberately, and what replaces it is
+// the only upper bound that still means anything: kMaxRtttl, the slot capacity that was
+// sized around this very string (see TuneSlots.h).
+TEST(TriggerTune, LongerThanAChimeAndWithinTheSizedCapacity) {
   const char* r = tuneRtttl(kTuneTrigger);
   ASSERT_NE(nullptr, r);
   int commas = 0;
@@ -179,7 +189,42 @@ TEST(TriggerTune, LongerThanAChimeButStillBounded) {
     if (*p == ',') commas++;
   }
   EXPECT_GT(commas, 5) << "a trigger that sounds like a chime will be mistaken for one";
-  EXPECT_LT(strlen(r), 120u) << "still not a song";
+  EXPECT_LE(strlen(r), kMaxRtttl)
+      << "longer than the capacity that was measured for it -- if this payload grows, "
+         "kMaxRtttl is what has to move first, because a custom slot must still hold one";
+}
+
+// The payload itself, pinned whole.
+//
+// Nothing else in the tree would notice if this string changed: it is unreachable from
+// the UI by design, so no screen shows it and no picker lists it. A silent edit -- a
+// transposed note, a truncation on a copy-paste -- would ship a wrong tune to every badge
+// and the first anyone would know is at the conference. So it is pinned here in full, the
+// same way the three chimes' strings are.
+TEST(TriggerTune, ThePayloadIsTheOwnersReferenceStringExactly) {
+  // o=5 is the owner's listened-to choice, not a default: an octave up was measurably
+  // louder on hardware and he rejected it as too harsh to wear. The tail "g,2d6,2c6."
+  // is the resolving tag that the supplied line was missing on its final chorus.
+  EXPECT_STREQ(
+      "n:d=4,o=5,b=200:8g,8a,8c6,8a,e6,8p,e6,8p,d6.,p,8p,8g,8a,8c6,8a,d6,8p,d6,8p,c6,8b,"
+      "a.,8g,8a,8c6,8a,2c6,d6,b,a,g.,8p,g,2d6,2c6.,p,8g,8a,8c6,8a,e6,8p,e6,8p,d6.,p,8p,"
+      "8g,8a,8c6,8a,2g6,b,c6.,8b,a,8g,8a,8c6,8a,2c6,d6,b,a,g.,8p,g,2d6,2c6.",
+      tuneRtttl(kTuneTrigger));
+  // The shape the string was measured to have, so a change shows up as more than a diff.
+  // 69 note tokens means 68 commas among the notes, PLUS the 2 in the "d=,o=,b=" defaults
+  // section -- 70 in the whole string. Counting all commas and expecting 68 is the obvious
+  // slip, and it is the one this comment exists to stop.
+  //
+  // These were 218 / 67 for the supplied line; restoring the three missing tail notes
+  // moved them, which is this guard doing its job rather than a corruption.
+  const char* r = tuneRtttl(kTuneTrigger);
+  int commas = 0;
+  for (const char* p = r; *p; p++) {
+    if (*p == ',') commas++;
+  }
+  EXPECT_EQ(70, commas) << "69 note tokens plus the 2 in the defaults; this is not that "
+                           "string";
+  EXPECT_EQ(229u, strlen(r)) << "229 characters were measured; this is not that string";
 }
 
 // ------------------------------------------------- the event-to-tune mapping

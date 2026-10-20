@@ -171,9 +171,14 @@ static_assert((int)kFirstSlotId + (int)kSlotCount <= (int)kMaxStorableTuneId,
 //
 // The guard is written out rather than left to unsigned wraparound (0xFF + 1 == 0 would
 // give the same answer) so the behaviour does not depend on overflow being convenient.
-inline uint8_t encodeChannelTune(uint8_t id) {
-  if (id > kMaxStorableTuneId) return kChannelTuneUnset;
-  return (uint8_t)(id + 1);
+// constexpr so a seed table can encode at compile time and static_assert itself against
+// this function rather than hard-coding the +1 (variants/qcc_badge/QccChannels.h, #1625).
+//
+// Written as ONE return on purpose: the nRF52 toolchain builds this at C++11, where a
+// constexpr body must be a single return statement. An `if` here compiles everywhere else
+// and fails only on the boards this header actually ships to.
+constexpr uint8_t encodeChannelTune(uint8_t id) {
+  return (id > kMaxStorableTuneId) ? kChannelTuneUnset : (uint8_t)(id + 1);
 }
 
 // The stored byte as a tune id, or kTuneUnset when the channel has made no choice.

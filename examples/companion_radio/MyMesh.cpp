@@ -13,11 +13,41 @@
 // internal-linkage, so a variant that only names the unset value emits nothing of it.
 #include <helpers/ui/TuneSlots.h>
 
+// The arriving-message rule that can ask every badge in earshot to sound the un-listed
+// tune. Opt-in per variant: only the env that defines this compiles any of it, so the
+// sixty-odd other variants building this file are untouched.
+#ifdef OFFBAND_TUNE_TRIGGER
+  #include <helpers/ui/TuneTrigger.h>
+  // Which channel is in scope. A name, not a key: the conference channels are hashtag
+  // channels, so a channel's key is derived from its name (variants/qcc_badge/
+  // QccChannels.h shows the derivation), which means name and key carry the SAME
+  // information and matching the key would buy nothing against a forged sender. What a
+  // key would buy is surviving a local rename, and that is not worth a base64 decode on
+  // every received message. A renamed channel stops triggering; that is the trade.
+  #ifndef OFFBAND_TUNE_TRIGGER_CHANNEL
+    #define OFFBAND_TUNE_TRIGGER_CHANNEL "#queencitycon"
+  #endif
+#endif
+
 // Offband fork-only companion-API frame codes (config 0xC0 / GPS 0xC1 / block 0xC2)
 // + shared enums. Self-contained (only <stdint.h>); included unconditionally so the
 // block cap bit and 0xC2 codes resolve on EVERY companion build, not just observer
 // ones. The config *backend* (ConfigSchema/ObserverCli) stays observer-gated below. #241.
 #include "OffbandConfigProtocol.h"
+
+#ifdef OFFBAND_NAME_FROM_BLE_MAC
+// #1598: on a fresh flash a badge names itself from its BLE MAC, so the name on the badge
+// matches the device in the phone's pairing list. Both headers are gated on the flag, so
+// the ~60 other variants that compile this file are untouched -- the nRF52 FICR header in
+// particular must not reach an ESP32 build.
+#include <helpers/NodeNameFromMac.h>
+#include <helpers/nrf52/BleMacAddress.h>
+#ifndef OFFBAND_NAME_FROM_BLE_MAC_CHARS
+// 5, so prefix + chars lands on the same 8 characters the pubkey-hex default has always
+// produced and nothing sized against that width has to change.
+#define OFFBAND_NAME_FROM_BLE_MAC_CHARS 5
+#endif
+#endif
 
 #ifdef OFFBAND_OBSERVER_BLE_COMPANION
 // Plan 3 Task 10 (Strycher/LoRa#272): reserved-slot CLI intercepts +
@@ -1019,6 +1049,23 @@ void MyMesh::sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pk
 void MyMesh::onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                            const char *text) {
   markConnectionActive(from); // in case this is from a server, and we have a connection
+#ifdef OFFBAND_TUNE_TRIGGER
+  // A DM can ask for the tune too. Note what that does and does not reach: this handler
+  // takes a ContactInfo, so a DM requires an existing contact and therefore a prior
+  // advert exchange. Among strangers the channel path below is the one that fires; this
+  // one only works between nodes that have already met.
+  //
+  // `from.name` is this badge's stored name for the contact, which is NUL-terminated and
+  // not truncated the way a channel message's stored sender is -- so the plain form of
+  // the rule is correct here, where the channel path needs the wire-splitting form.
+  if (_ui != NULL && offband::messageFiresTrigger(from.name, text)) {
+    // `accepted`, not `sounded` -- see the channel path below for why the distinction is
+    // load-bearing on this board.
+    const bool accepted = _ui->playTriggerTune();
+    mesh_log_line(MLOG_DEBUG, "[trig] dm from=%s accepted=%d\n", from.name,
+                  accepted ? 1 : 0);
+  }
+#endif
   queueMessage(from, TXT_TYPE_PLAIN, pkt, sender_timestamp, NULL, 0, text);
 }
 
@@ -1071,6 +1118,34 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
     frame[0] = PUSH_CODE_MSG_WAITING; // send push 'tickle'
     _serial->writeFrame(frame, 1);
   }
+#ifdef OFFBAND_TUNE_TRIGGER
+  // A channel message can ask every badge that hears it to sound the un-listed tune.
+  //
+  // The RULE is in helpers/ui/TuneTrigger.h and is host-tested there. What belongs here
+  // is the SCOPE: which channel, and nothing else. Keeping the two apart is why the rule
+  // can be walked by 43 native tests without a radio.
+  //
+  // `text` is passed WHOLE, not split. The wire form is "<name>: <body>" and
+  // messageFiresTriggerOnChannelText() does its own split for a load-bearing reason: the
+  // badge store caps a sender at 15 bytes, the sender's mark is 4 bytes before any
+  // variation selector, and so a long name keeps its mark on the air and loses it in the
+  // store. Handing the rule the stored sender would work for short names and fail
+  // silently for long ones, which nothing on any screen would reveal.
+  if (_ui != NULL) {
+    ChannelDetails trig_ch;
+    if (getChannel(channel_idx, trig_ch) &&
+        offband::channelNameMatches(trig_ch.name, OFFBAND_TUNE_TRIGGER_CHANNEL) &&
+        offband::messageFiresTriggerOnChannelText(text)) {
+      // `accepted`, not `sounded`. The badge's MUTE slide switch is in series with BZ1,
+      // downstream of the pin, so no software can tell whether anything was audible.
+      // Logging this as "sounded" cost a bench session on 2026-10-18 -- it read 1 twice
+      // while the owner heard nothing, and the switch was never in the picture.
+      const bool accepted = _ui->playTriggerTune();
+      mesh_log_line(MLOG_DEBUG, "[trig] ch=%s accepted=%d\n", trig_ch.name,
+                    accepted ? 1 : 0);
+    }
+  }
+#endif
 #if UI_HAS_CARDKB
   // #1229: and the badge's inbox keeps its own copy, filed by the channel's secret.
   ChannelDetails badge_channel;
@@ -1735,10 +1810,27 @@ void MyMesh::begin(bool has_display) {
 #ifdef ADVERT_NAME
   strcpy(_prefs.node_name, ADVERT_NAME);
 #else
-  // use hex of first 4 bytes of identity public key as default node name
-  char pub_key_hex[10];
-  mesh::Utils::toHex(pub_key_hex, self_id.pub_key, 4);
-  strcpy(_prefs.node_name, pub_key_hex);
+  bool named_from_mac = false;
+  #ifdef OFFBAND_NAME_FROM_BLE_MAC
+    // #1598: prefix + the last few hex characters of the BLE MAC, same 8-character width
+    // as the pubkey default below. Read from FICR because the SoftDevice is not up yet at
+    // this point in setup -- see helpers/nrf52/BleMacAddress.h for why the low bytes of
+    // the FICR address and the advertised one are the same bytes.
+    //
+    // If the MAC reads back as all zeros or all ones the accessor failed, and every badge
+    // would get the SAME name. The pubkey default below is at least unique, so fall
+    // through to it rather than ship a room full of identical names.
+    uint8_t ble_mac[offband::kBleMacBytes];
+    named_from_mac = offband::bleMacFromFicr(ble_mac) && offband::formatNodeNameFromMac(
+        _prefs.node_name, sizeof(_prefs.node_name), ble_mac, sizeof(ble_mac),
+        OFFBAND_NAME_FROM_BLE_MAC, OFFBAND_NAME_FROM_BLE_MAC_CHARS);
+  #endif
+  if (!named_from_mac) {
+    // use hex of first 4 bytes of identity public key as default node name
+    char pub_key_hex[10];
+    mesh::Utils::toHex(pub_key_hex, self_id.pub_key, 4);
+    strcpy(_prefs.node_name, pub_key_hex);
+  }
 #endif
 
   // if build provides default-scope, init with that
@@ -1864,7 +1956,12 @@ void MyMesh::begin(bool has_display) {
     bool added = false;
     for (int i = 0; i < offband::kQccPreflashChannelCount; i++) {
       const auto& c = offband::kQccPreflashChannels[i];
-      if (addChannel(c.name, c.psk_base64) != NULL) {
+      ChannelDetails* seeded = addChannel(c.name, c.psk_base64);
+      if (seeded != NULL) {
+        // #1625: and its tune, for the channels that ship quiet. Written only when the
+        // seed asks for one, so a channel left to inherit keeps the 0 that addChannel
+        // already put there rather than being re-stamped with it.
+        if (c.tune != offband::kChannelTuneUnset) seeded->tune = c.tune;
         added = true;
       } else {
         // Out of slots, or a key that is not 16 or 32 bytes once decoded.

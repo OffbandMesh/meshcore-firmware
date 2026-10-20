@@ -115,6 +115,47 @@ jobs:
       - name: QCC badge pin-map guard
         run: python scripts/test_qcc_variant_pins.py
 
+      # #1625: which preflashed channels ship quiet. A silent channel and a channel that
+      # made no choice are one byte apart, and swapping them is invisible until a badge is
+      # quiet in the wrong room -- or noisy in the one Abend asked to be quiet.
+      - name: QCC preflash channel tunes
+        run: python scripts/test_qcc_preflash_tunes.py
+
+      # #1638: the badge env values that had no coverage at all -- LED_BLUE freeing P0.15
+      # from the Arduino core, the two heartbeat cadences, the naming prefix, and the
+      # trigger staying badge-scoped. Each is a one-line edit away from silently reverting
+      # with the whole matrix still green.
+      #
+      # It also ties test_heartbeat_cadence's 12 cases to reality. That suite hardcodes
+      # 90/890/4890 as its own constants, so until this check existed it would pass
+      # unchanged after those values were deleted from the build.
+      - name: QCC badge env invariants
+        run: python scripts/test_qcc_badge_env.py
+
+      # #1639: the four .cpp call sites where the RULE is tested and the USE of the rule
+      # is not -- which is the specific way a green suite coexists with a broken badge.
+      # 49 trigger cases, 15 buzzer-priority cases, 8 store cases and 8 keynav cases all
+      # keep passing while the trigger is truncated, stops firing for long sender names,
+      # renders channels bare, or strands a keyboard-less badge in Settings.
+      #
+      # TRIPWIRES, not behavioural coverage: they assert text is present, so a refactor
+      # preserving the text while changing behaviour passes. The file header says so.
+      - name: QCC badge call-site guards
+        run: python scripts/test_qcc_call_sites.py
+
+      # #1641: the assessment logic of the rig boot smoke test.
+      #
+      # The smoke test's hardware RUN cannot be in CI -- it needs the sniffer rig and a
+      # badge, and it gates a flash rather than a PR. Its ASSERTIONS can be, and this is
+      # them: a synthetic capture in, a verdict out. Without this, the one piece of the
+      # epic that actually runs firmware would itself be the only piece with no coverage,
+      # and a boot smoke test whose pass condition is untested can report OK for the
+      # wrong reason.
+      #
+      # Includes a hang at every one of the declared boot stages, not one example.
+      - name: Rig boot smoke-test assertions
+        run: python scripts/test_rig_boot_smoke.py
+
       - name: QCC splash-art generator self-test
         run: python scripts/test_gen_qcc_splash.py
 
