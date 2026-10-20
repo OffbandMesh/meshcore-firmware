@@ -156,6 +156,20 @@ jobs:
       - name: Rig boot smoke-test assertions
         run: python scripts/test_rig_boot_smoke.py
 
+      # #1667: every low-battery cutoff goes through the one debounced rule.
+      #
+      # This defect was written THREE times independently, once per UI family, because
+      # nothing checked. ui-gui copied ui-new's raw-sample form deliberately and
+      # documented the copy. #1667 fixed two families and said "both"; there were three,
+      # and the third arrived in a base merge after the grep that found the other two.
+      #
+      # A build does not catch it: the GUI variant built clean in a 4/4 gate run while
+      # still carrying it. The decision powers hardware off and fails silently, so it
+      # gets a guard that also asserts the FAMILY COUNT -- a fourth family makes this
+      # fail and someone has to look.
+      - name: Low-battery cutoff call sites
+        run: python scripts/test_low_batt_cutoff_call_sites.py
+
       - name: QCC splash-art generator self-test
         run: python scripts/test_gen_qcc_splash.py
 
