@@ -108,6 +108,8 @@ Heltec_E290_companion_usb
 #     * RCC6 _diag envs -- in the RCC6 section further down (#806), while RCC6
 #       is beta.
 #     * RC52 _diag envs -- in the RC52 section, same reasoning.
+#     * Heltec V4-R8 _diag envs -- in the V4-R8 section (#1344, owner decision
+#       2026-10-20), while the R8 SAW is in the October 2026 beta.
 #   They were approved separately for the same reason: a beta tester on unproven
 #   hardware has to be able to produce evidence. Extending this to a further
 #   board is a fresh owner decision, not an inheritance from these.
@@ -298,6 +300,23 @@ heltec_v4_tft_repeater
 heltec_v4_tft_room_server
 # heltec_v4_tft_companion_radio_wifi -- CI-built but NOT releasable: bakes a
 #   placeholder WIFI_SSID at compile time; unblocked by #325. (#484)
+
+# Heltec V4-R8 SAW (ESP32-S3) -- includes observer (#1322). The role set is the
+# owner's (#1344, 2026-10-20). The telemetry repeater is added by #1680, which
+# also lifts its baked-secrets gate.
+heltec_v4_r8_companion_observer_wifi
+heltec_v4_r8_companion_radio_ble
+heltec_v4_r8_companion_radio_usb
+heltec_v4_r8_repeater
+
+# V4-R8 TESTER DIAGNOSTIC BUILDS -- published while the R8 SAW is beta hardware
+# (owner exception, see the diagnostic-envs rule above). Each extends the shipped
+# env and adds only the [heltec_v4_r8_diag] instrumentation: boot beacon, UART log
+# mirror, forced caplog.
+heltec_v4_r8_companion_observer_wifi_diag
+heltec_v4_r8_companion_radio_ble_diag
+heltec_v4_r8_companion_radio_usb_diag
+heltec_v4_r8_repeater_diag
 
 # LILYGO T-Echo (nRF52)
 LilyGo_T-Echo_companion_radio_ble
