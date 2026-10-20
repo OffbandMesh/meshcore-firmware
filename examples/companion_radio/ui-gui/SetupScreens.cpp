@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include <helpers/TimeZones.h>
+#include <helpers/gui/ScrollBody.h>
 
 #include "Screens.h"
 #include "ShellWidgets.h"
@@ -382,18 +383,9 @@ void GuiShell::buildRadioPage(lv_obj_t* content) {
   if (_set_focus_row == rSave) _focus_row = btn;
 }
 
-// A scrolling page body under the header. It must be clickable as well as
-// scrollable: LVGL only starts a drag on an object its hit test finds, and
-// the hit test skips anything not clickable, so a drag that began on a
-// read-only row found nothing to scroll (bench, Epic M, 2026-10-19).
-static lv_obj_t* pageBody(lv_obj_t* content) {
-  lv_obj_t* body = box(content, LV_PCT(100), 0);
-  lv_obj_set_flex_grow(body, 1);
-  lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
-  lv_obj_add_flag(body, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_set_scrollbar_mode(body, LV_SCROLLBAR_MODE_OFF);
-  return body;
-}
+// A scrolling page body under the header: ScrollBody.h, which the native
+// LVGL tests drag (#1671).
+static lv_obj_t* pageBody(lv_obj_t* content) { return scrollBody(content); }
 
 // Messages & alerts (cSetSub, mockup 7): every change applies and is kept
 // at once. With notifications off, the rows under it grey out.
