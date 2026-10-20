@@ -492,14 +492,21 @@ TEST(BadgeLayoutThread, ChannelMessageTagsItsFirstRow) {
   const MsgView msgs[] = {{false, "Abend", "anyone at the CTF table?"}};
   Row rows[8];
   const int n = layoutThread(kFixed, msgs, 1, true, -1, rows, 8);
-  ASSERT_EQ(2, n);
+  // #1669: three rows, not two. kTagPx went 30 -> 60 for the owner's 10-character tag,
+  // so a channel message's lines hold ~10 characters instead of ~15 and this wraps once
+  // more. The text is unchanged -- see WideningTheTagCostsROWS_NeverTEXT, which
+  // reassembles the rows and gets the original string back.
+  ASSERT_EQ(3, n);
   EXPECT_TRUE(rows[0].first);
   EXPECT_EQ(kTagPx + kGapPx, rows[0].x_px);
-  EXPECT_EQ("anyone at the", rowText(msgs, rows[0]));
+  EXPECT_EQ("anyone at", rowText(msgs, rows[0]));
   EXPECT_FALSE(rows[1].first);
   EXPECT_EQ(kTagPx + kGapPx, rows[1].x_px);
-  EXPECT_EQ("CTF table?", rowText(msgs, rows[1]));
-  EXPECT_TRUE(rows[1].last);
+  EXPECT_EQ("the CTF", rowText(msgs, rows[1]));
+  EXPECT_FALSE(rows[2].first);
+  EXPECT_EQ(kTagPx + kGapPx, rows[2].x_px);
+  EXPECT_EQ("table?", rowText(msgs, rows[2]));
+  EXPECT_TRUE(rows[2].last);
 }
 
 // One sender in a DM, so no tag: the text gets the whole width.
@@ -546,14 +553,20 @@ TEST(BadgeLayoutThread, SelectedMessageGetsACaretAndAMetaRow) {
   const MsgView msgs[] = {{false, "Abend", "anyone?"}, {false, "Stryc", "flag drop at the CTF table"}};
   Row rows[8];
   const int n = layoutThread(kFixed, msgs, 2, true, 1, rows, 8);
-  ASSERT_EQ(4, n);   // "anyone?", two rows of Stryc's, and the meta row
+  // #1669: five rows now, not four -- "anyone?", THREE rows of the selected message, and
+  // the meta row. The caret shift comes off the same line width as the widened tag, so a
+  // selected channel message is the tightest case: 128 - 1 - 62 - 7 px.
+  ASSERT_EQ(5, n);
   EXPECT_FALSE(rows[0].caret);
   EXPECT_TRUE(rows[1].caret);
   EXPECT_EQ(kTagPx + kGapPx + charPx(kFixed, '>') + 1, rows[1].x_px);   // clear of the caret
-  EXPECT_EQ("flag drop at", rowText(msgs, rows[1]));
+  EXPECT_EQ("flag drop", rowText(msgs, rows[1]));
   EXPECT_TRUE(rows[2].caret);
-  EXPECT_EQ(RowKind::Meta, rows[3].kind);
-  EXPECT_EQ(1, rows[3].msg);
+  EXPECT_EQ("at the", rowText(msgs, rows[2]));
+  EXPECT_TRUE(rows[3].caret);
+  EXPECT_EQ("CTF table", rowText(msgs, rows[3]));
+  EXPECT_EQ(RowKind::Meta, rows[4].kind);
+  EXPECT_EQ(1, rows[4].msg);
 }
 
 // The caret takes the body face's own '>' width, not a cell.
@@ -608,6 +621,87 @@ TEST(BadgeLayoutMarquee, HoldsSlidesHolds) {
   EXPECT_EQ(100, marqueeOffset(228, 128, slide_end));
   EXPECT_EQ(100, marqueeOffset(228, 128, slide_end + kMarqueeHoldMs - 1));
   EXPECT_EQ(0, marqueeOffset(228, 128, slide_end + kMarqueeHoldMs));   // round again
+}
+
+// ---- the sender tag's two limits (#1669) ------------------------------------------------
+//
+// A tester asked for more than 5 characters of the node name; the owner's call was 10.
+// The hazard is that the badge's message face is PROPORTIONAL -- bodyFaceFor(kTextMedium)
+// returns Org_01 -- so a character count does not bound the pixel width, and a name of
+// wide glyphs can paint over the message text. Both limits are therefore pinned here.
+
+TEST(BadgeLayoutTag, TheOwnersFiguresArePinned) {
+  EXPECT_EQ(10, kTagChars) << "the owner asked for 10 characters";
+  EXPECT_EQ(60, kTagPx) << "10 characters at the 6 px nominal the old 30/5 pairing implied";
+}
+
+TEST(BadgeLayoutTag, TenNarrowCharactersFitTheReservation) {
+  const Face& body = bodyFace();
+  // Narrow glyphs: all ten should survive the pixel cap.
+  EXPECT_GE(fitPx(body, "iiiiiiiiii", kTagPx), kTagChars);
+  EXPECT_LE(textPx(body, "iiiiiiiiii"), kTagPx);
+}
+
+TEST(BadgeLayoutTag, AWideNameIsTruncatedRatherThanOverflowing) {
+  const Face& body = bodyFace();
+  // The clamp the render applies: at most kTagChars, and never wider than kTagPx.
+  for (const char* wide : {"WWWWWWWWWW", "MMMMMMMMMM", "@@@@@@@@@@", "WMWMWMWMWM"}) {
+    int n = fitPx(body, wide, kTagPx);
+    if (n > kTagChars) n = kTagChars;
+    ASSERT_GT(n, 0) << wide;
+    const std::string shown(wide, (size_t)n);
+    EXPECT_LE(textPx(body, shown.c_str()), kTagPx)
+        << wide << " -> " << shown << " overruns the tag reservation and would paint "
+        << "over the message text";
+    EXPECT_LE(n, kTagChars) << wide;
+  }
+}
+
+TEST(BadgeLayoutTag, TheWidenedTagStillLeavesUsableMessageWidth) {
+  // The cost of the owner's call, stated rather than discovered later: the first row of
+  // each message loses the tag's width, continuation rows do not.
+  const Face& body = bodyFace();
+  const int first_row_px = kScreenPx - (kTagPx + kGapPx);
+  EXPECT_GT(fitPx(body, "anyone at the CTF table yet?", first_row_px), 8)
+      << "a widened tag must still leave a readable first line";
+  // And a continuation row keeps the whole width.
+  EXPECT_GT(fitPx(body, "anyone at the CTF table yet?", kScreenPx),
+            fitPx(body, "anyone at the CTF table yet?", first_row_px));
+}
+
+TEST(BadgeLayoutTag, WideningTheTagCostsROWS_NeverTEXT) {
+  // The question this answers, because the cost was once described badly: widening the
+  // tag does NOT trim anything out of a message. layoutThread WRAPS; a narrower line
+  // means more rows, and every character still appears.
+  const char* body_text = "anyone at the CTF table yet? bring the spare antenna";
+  const MsgView msgs[] = {{false, "SenderName", body_text}};
+  Row rows[32];
+  const int n = layoutThread(kFixed, msgs, 1, true, -1, rows, 32);
+  ASSERT_GT(n, 1) << "expected this to wrap";
+
+  // Reassemble the rows. Word wrap consumes the space at each break, so joining the
+  // row texts with a single space must reproduce the original exactly.
+  std::string rebuilt;
+  for (int i = 0; i < n; i++) {
+    if (i) rebuilt += " ";
+    rebuilt += rowText(msgs, rows[i]);
+  }
+  EXPECT_EQ(std::string(body_text), rebuilt)
+      << "wrapping lost or duplicated text -- " << n << " rows";
+
+  // And every row is indented past the tag, which is the actual cost: fewer characters
+  // per line, so more rows per message, so fewer messages on a 128x64 panel.
+  for (int i = 0; i < n; i++) {
+    EXPECT_EQ(kTagPx + kGapPx, rows[i].x_px)
+        << "row " << i << ": a channel message's text clears the tag on EVERY row";
+  }
+}
+
+TEST(BadgeLayoutTag, TheStoreIsTheHardCeiling) {
+  // BadgeStore::kSenderLen is 16 including the NUL, so 15 characters is the most that can
+  // ever reach this layout regardless of kTagChars. Raising kTagChars past it would be
+  // asking for characters the store cannot supply.
+  EXPECT_LE(kTagChars, 15) << "kTagChars exceeds what BadgeStore::kSenderLen can hold";
 }
 
 int main(int argc, char** argv) {

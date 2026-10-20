@@ -418,7 +418,9 @@ private:
   // Laid out on each render. Kept here rather than on the 4 KB loop stack.
   uint32_t _seqs[kShow];
   char _txt[kShow][MAX_TEXT_LEN + 1];   // display-ready text
-  char _tag[kShow][6];                  // senders' tags, five characters
+  // #1669: senders' tags. Sized from badgeui::kTagChars so the buffer cannot be the
+  // thing that limits the name -- the character cap and the kTagPx pixel cap are.
+  char _tag[kShow][badgeui::kTagChars + 1];
   badgeui::MsgView _views[kShow];
   badgeui::Row _rows[kMaxRows];
 

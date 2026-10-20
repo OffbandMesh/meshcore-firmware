@@ -21,7 +21,23 @@ namespace badgeui {
 constexpr int kScreenPx = 128;      // the panel
 constexpr int kScreenRowsPx = 64;
 constexpr int kEdgePx = 1;          // the margin anything flush right keeps
-constexpr int kTagPx = 30;          // a channel message's sender tag
+// #1669: a channel message's sender tag. Widened from 30 px / 5 characters on the owner's
+// call, 2026-10-19, after a tester asked for more of the node name: "name @ 10 characters."
+//
+// 60 px is 10 characters at the 6 px nominal advance the old 30/5 pairing implies, and it
+// costs ~10 characters off the FIRST line of each message only -- continuation rows start
+// at x=0 and are unaffected.
+//
+// ⚠ THE BODY FACE IS PROPORTIONAL on the badge. bodyFaceFor(kTextMedium) returns Org_01,
+// so a character count alone does NOT bound the pixel width -- a name of wide glyphs can
+// exceed its reservation and paint over the message text. That hazard existed at 5
+// characters too; nothing had hit it because 5 wide glyphs only just fit 30 px.
+//
+// So kTagChars and kTagPx are BOTH limits and the render honours whichever binds first:
+// at most kTagChars characters, and never wider than kTagPx. A wide 10-character name
+// therefore shows 8 or 9 rather than overlapping.
+constexpr int kTagPx = 60;
+constexpr int kTagChars = 10;       // the owner's figure; the pixel cap above still wins
 constexpr int kGapPx = 2;           // between that tag and its text
 constexpr int kMarkPx = 8;          // my message's status mark, at the right edge
 constexpr int kCycleStops = 4;      // SW1's cycle: Messages, Contacts, Nearby, Status
