@@ -1601,12 +1601,28 @@ void UITask::loop() {
   pollNewNodes(now);
 
 #ifdef AUTO_SHUTDOWN_MILLIVOLTS
-  // Low-voltage protection, as the older screens run it (ui-new): every 8 s,
-  // on the raw reading, on battery only.
+  // Low-voltage protection, as the older screens run it (ui-new): every 8 s, on battery
+  // only -- but #1667 changed what "as ui-new runs it" means, and this comment used to
+  // say "on the raw reading", which was the defect rather than the design.
+  //
+  // One raw sample is not enough evidence to power a board off. On the QCC badge, raw
+  // reads scatter +/-600 mV on a cell moving ~1.1 mV/min (#1672), so 1036 of 5421 samples
+  // fell below a 3400 mV threshold while the board ran 12.4 hours continuously without a
+  // brownout. The old form would have shut it down on the first of those.
+  //
+  // This family already keeps the average every display path reads, so the cutoff gets it
+  // too: both the raw and the smoothed value must be under the line, and must stay there
+  // for OFFBAND_LOW_BATT_SUSTAIN_MS. See helpers/ui/LowBattCutoff.h.
   if ((int32_t)(now - _next_batt_check) >= 0) {
     _next_batt_check = now + 8000;
     const uint16_t mv = getBattMilliVolts();
-    if (mv > 0 && mv < AUTO_SHUTDOWN_MILLIVOLTS && !board.isExternalPowered()) lowBatteryShutdown(mv);
+    const uint16_t smoothed = _batt.seeded() ? _batt.value() : mv;
+    if (offband::lowBattShouldShutdown(_low_batt, now, mv, smoothed,
+                                       (uint16_t)AUTO_SHUTDOWN_MILLIVOLTS,
+                                       OFFBAND_LOW_BATT_SUSTAIN_MS,
+                                       board.isExternalPowered())) {
+      lowBatteryShutdown(mv);
+    }
   }
 #endif
 
