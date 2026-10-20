@@ -1,6 +1,8 @@
 #pragma once
 
 #include <MeshCore.h>
+#include <helpers/ui/BatteryGauge.h>   // #1667: an average for the cutoff
+#include <helpers/ui/LowBattCutoff.h>  // #1667: the cutoff debounces
 #include <helpers/ui/DisplayDriver.h>
 #include <helpers/ui/UIScreen.h>
 #include <helpers/SensorManager.h>
@@ -43,6 +45,8 @@ class UITask : public AbstractUITask {
   unsigned long ui_started_at, next_batt_chck;
   int next_backlight_btn_check = 0;
   uint16_t _cached_batt_mv;
+  offband::LowBattCutoffState _low_batt;   // #1667
+  offband::BatteryAverage _batt_avg;        // #1667: cutoff only, not the display
 #ifdef PIN_STATUS_LED
   int led_state = 0;
   int next_led_change = 0;

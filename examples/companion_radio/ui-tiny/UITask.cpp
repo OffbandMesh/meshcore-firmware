@@ -718,9 +718,24 @@ void UITask::loop() {
 
 #ifdef AUTO_SHUTDOWN_MILLIVOLTS
   if (millis() > next_batt_chck) {
+    // #1667: the same debounce ui-new got. This path had the identical defect -- one raw
+    // sample under the threshold powered the board off -- and no averaging anywhere:
+    // `_cached_batt_mv` is a plain assignment of the last read, despite the name.
+    //
+    // `_cached_batt_mv` keeps feeding the display exactly as before, so no board's status
+    // bar changes. The cutoff gets its own average, because the destructive decision is
+    // the one that needs the evidence.
+    const uint32_t now_ms = millis();
     _cached_batt_mv = getBattMilliVolts();
-    if (_cached_batt_mv > 0 && _cached_batt_mv < AUTO_SHUTDOWN_MILLIVOLTS) {
-      if(!board.isExternalPowered()) {
+    _batt_avg.feed(_cached_batt_mv);
+    const uint16_t smoothed_mv = _batt_avg.seeded() ? _batt_avg.value() : _cached_batt_mv;
+    const bool external = board.isExternalPowered();
+    const bool fire = offband::lowBattShouldShutdown(
+        _low_batt, now_ms, _cached_batt_mv, smoothed_mv,
+        (uint16_t)AUTO_SHUTDOWN_MILLIVOLTS, OFFBAND_LOW_BATT_SUSTAIN_MS, external);
+
+    if (fire) {
+      {
         if (_display != NULL) {
         _display->startFrame();
         _display->setTextSize(2);
