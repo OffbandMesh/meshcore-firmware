@@ -485,6 +485,15 @@ jobs:
           - heltec_rc32_companion_radio_ble_diag
           - heltec_rc32_companion_radio_usb_diag
           - heltec_rc32_repeater_diag
+          # Heltec V4-R8 SAW -- shipped envs (.github/release-envs.txt, #1344)
+          - heltec_v4_r8_companion_observer_wifi
+          - heltec_v4_r8_companion_radio_ble
+          - heltec_v4_r8_companion_radio_usb
+          - heltec_v4_r8_repeater
+          - heltec_v4_r8_companion_observer_wifi_diag
+          - heltec_v4_r8_companion_radio_ble_diag
+          - heltec_v4_r8_companion_radio_usb_diag
+          - heltec_v4_r8_repeater_diag
           # RCC6 -- shipped envs (.github/release-envs.txt)
           - heltec_rcc6_companion_radio_ble
           - heltec_rcc6_companion_radio_usb
