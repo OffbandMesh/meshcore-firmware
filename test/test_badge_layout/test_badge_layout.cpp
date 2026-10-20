@@ -486,27 +486,60 @@ TEST(BadgeLayoutFace, FitPxCutsToWhatFits) {
   EXPECT_EQ(3, n);
 }
 
-// A channel message: the sender's tag in the left kTagPx, text after it, and the rows
-// after it indented to match (design 1a, "Thread settled").
+// A channel message: the sender's tag in the left kTagPx of the FIRST row, its text after
+// the tag on that row, and every row below reclaiming the tag column (design 1a, "Thread
+// settled", as corrected by #1685).
 TEST(BadgeLayoutThread, ChannelMessageTagsItsFirstRow) {
   const MsgView msgs[] = {{false, "Offband-peer", "anyone at the CTF table?"}};
   Row rows[8];
   const int n = layoutThread(kFixed, msgs, 1, true, -1, rows, 8);
-  // #1669: three rows, not two. kTagPx went 30 -> 60 for the owner's 10-character tag,
-  // so a channel message's lines hold ~10 characters instead of ~15 and this wraps once
-  // more. The text is unchanged -- see WideningTheTagCostsROWS_NeverTEXT, which
-  // reassembles the rows and gets the original string back.
-  ASSERT_EQ(3, n);
+  // #1669 took this to three rows when kTagPx went 30 -> 60 for the owner's 10-character
+  // tag. #1685 brings it back to two: the tag is drawn once, so only the first row has to
+  // clear it. The text is unchanged either way -- see WideningTheTagCostsROWS_NeverTEXT.
+  ASSERT_EQ(2, n);
   EXPECT_TRUE(rows[0].first);
   EXPECT_EQ(kTagPx + kGapPx, rows[0].x_px);
   EXPECT_EQ("anyone at", rowText(msgs, rows[0]));
   EXPECT_FALSE(rows[1].first);
-  EXPECT_EQ(kTagPx + kGapPx, rows[1].x_px);
-  EXPECT_EQ("the CTF", rowText(msgs, rows[1]));
-  EXPECT_FALSE(rows[2].first);
-  EXPECT_EQ(kTagPx + kGapPx, rows[2].x_px);
-  EXPECT_EQ("table?", rowText(msgs, rows[2]));
-  EXPECT_TRUE(rows[2].last);
+  EXPECT_EQ(0, rows[1].x_px) << "the tag is on row 0 only; row 1 must not be indented";
+  EXPECT_EQ("the CTF table?", rowText(msgs, rows[1]));
+  EXPECT_TRUE(rows[1].last);
+}
+
+// #1685, the regression this exists to catch. A tester photographed a long channel
+// message whose every row started past the tag, leaving the bottom-left of the panel
+// blank: "after the first line the message text could use more of the screen."
+TEST(BadgeLayoutThread, ContinuationRowsReclaimTheTagColumn) {
+  // The reported shape: one long message that wraps well past the tag's single row.
+  const char* body = "SPAM okimesh.org OhioSender: KF8DDW Hops: 0 Path: EF3F 42EA 4AAB DA50";
+  const MsgView msgs[] = {{false, "Offband-peer", body}};
+  Row rows[32];
+  const int n = layoutThread(kFixed, msgs, 1, true, -1, rows, 32);
+  ASSERT_GT(n, 2) << "this body must wrap several times for the test to mean anything";
+
+  EXPECT_EQ(kTagPx + kGapPx, rows[0].x_px) << "row 0 still clears the tag";
+  for (int i = 1; i < n; i++) {
+    EXPECT_EQ(0, rows[i].x_px)
+        << "row " << i << " is still indented past a tag that is not drawn on it";
+  }
+
+  // And the reclaimed column has to buy real width, not just move the origin: a
+  // continuation row must be able to hold more than the first row can.
+  const int first_px = kScreenPx - kEdgePx - (kTagPx + kGapPx);
+  EXPECT_GT(spanPx(kFixed, body, rows[1].span), first_px)
+      << "row 1 fits no more than the narrow first row did -- the width did not widen";
+}
+
+// The caret owns the left edge when a message is selected, so a continuation row returns
+// to the caret, not to zero. Without this the text would paint over the caret column.
+TEST(BadgeLayoutThread, ASelectedMessageKeepsItsCaretColumnOnEveryRow) {
+  const MsgView msgs[] = {{false, "Offband-peer", "anyone at the CTF table?"}};
+  Row rows[8];
+  const int n = layoutThread(kFixed, msgs, 1, true, 0, rows, 8);
+  const int caret_px = charPx(kFixed, '>') + 1;
+  ASSERT_GE(n, 2);
+  EXPECT_EQ(kTagPx + kGapPx + caret_px, rows[0].x_px);
+  EXPECT_EQ(caret_px, rows[1].x_px) << "a continuation row must clear the caret, not hide it";
 }
 
 // One sender in a DM, so no tag: the text gets the whole width.
@@ -553,20 +586,21 @@ TEST(BadgeLayoutThread, SelectedMessageGetsACaretAndAMetaRow) {
   const MsgView msgs[] = {{false, "Offband-peer", "anyone?"}, {false, "Stryc", "flag drop at the CTF table"}};
   Row rows[8];
   const int n = layoutThread(kFixed, msgs, 2, true, 1, rows, 8);
-  // #1669: five rows now, not four -- "anyone?", THREE rows of the selected message, and
-  // the meta row. The caret shift comes off the same line width as the widened tag, so a
-  // selected channel message is the tightest case: 128 - 1 - 62 - 7 px.
-  ASSERT_EQ(5, n);
+  // Four rows: "anyone?", TWO rows of the selected message, and the meta row. #1669 made
+  // this five by widening the tag; #1685 gives the second row the tag column back and it
+  // returns to four. The first row is still the tightest case on the whole screen --
+  // 128 - 1 - 62 - 7 px, the caret and the widened tag coming off the same line.
+  const int caret_px = charPx(kFixed, '>') + 1;
+  ASSERT_EQ(4, n);
   EXPECT_FALSE(rows[0].caret);
   EXPECT_TRUE(rows[1].caret);
-  EXPECT_EQ(kTagPx + kGapPx + charPx(kFixed, '>') + 1, rows[1].x_px);   // clear of the caret
+  EXPECT_EQ(kTagPx + kGapPx + caret_px, rows[1].x_px);   // clear of both tag and caret
   EXPECT_EQ("flag drop", rowText(msgs, rows[1]));
   EXPECT_TRUE(rows[2].caret);
-  EXPECT_EQ("at the", rowText(msgs, rows[2]));
-  EXPECT_TRUE(rows[3].caret);
-  EXPECT_EQ("CTF table", rowText(msgs, rows[3]));
-  EXPECT_EQ(RowKind::Meta, rows[4].kind);
-  EXPECT_EQ(1, rows[4].msg);
+  EXPECT_EQ(caret_px, rows[2].x_px) << "clear of the caret, but no longer of the tag";
+  EXPECT_EQ("at the CTF table", rowText(msgs, rows[2]));
+  EXPECT_EQ(RowKind::Meta, rows[3].kind);
+  EXPECT_EQ(1, rows[3].msg);
 }
 
 // The caret takes the body face's own '>' width, not a cell.
@@ -689,11 +723,42 @@ TEST(BadgeLayoutTag, WideningTheTagCostsROWS_NeverTEXT) {
   EXPECT_EQ(std::string(body_text), rebuilt)
       << "wrapping lost or duplicated text -- " << n << " rows";
 
-  // And every row is indented past the tag, which is the actual cost: fewer characters
-  // per line, so more rows per message, so fewer messages on a 128x64 panel.
-  for (int i = 0; i < n; i++) {
-    EXPECT_EQ(kTagPx + kGapPx, rows[i].x_px)
-        << "row " << i << ": a channel message's text clears the tag on EVERY row";
+  // The cost is confined to the first row. #1685: the tag is drawn once, so only row 0
+  // pays for it; everything below runs the full width. Measured on this body, the old
+  // every-row indent took 6 rows where this takes 4.
+  EXPECT_EQ(kTagPx + kGapPx, rows[0].x_px) << "row 0 carries the tag and clears it";
+  for (int i = 1; i < n; i++) {
+    EXPECT_EQ(0, rows[i].x_px) << "row " << i << ": no tag on this row, so no indent";
+  }
+  EXPECT_EQ(4, n) << "the hanging indent should take this body in 4 rows, not the 6 the "
+                     "every-row indent needed";
+}
+
+// #1685: the two widths are what makes the hanging indent possible, so test the wrap
+// itself and not only the thread layout that calls it.
+TEST(BadgeLayoutWrap, HangingGivesTheFirstLineItsOwnWidth) {
+  const char* text = "aaa bbb ccc ddd";
+  Span wide[8], hanging[8];
+  // Uniform: every line gets 12 px (two 6 px cells).
+  const int uniform_n = wrapHanging(kFixed, text, 2 * kCellPx, 2 * kCellPx, wide, 8);
+  // Hanging: the first line gets 12 px, the rest the whole string's worth.
+  const int hanging_n = wrapHanging(kFixed, text, 2 * kCellPx, 64 * kCellPx, hanging, 8);
+  EXPECT_GT(uniform_n, hanging_n) << "a wider continuation must need fewer lines";
+  EXPECT_EQ(2, hanging_n);
+  EXPECT_EQ("aa", std::string(text + hanging[0].start, hanging[0].len));
+  EXPECT_EQ("a bbb ccc ddd", std::string(text + hanging[1].start, hanging[1].len));
+}
+
+// wrap() is now a delegation, so prove it still means what every other caller assumes.
+TEST(BadgeLayoutWrap, TheUniformWrapIsTheHangingWrapWithEqualWidths) {
+  const char* text = "anyone at the CTF table yet? bring the spare antenna";
+  Span a[16], b[16];
+  const int na = wrap(kFixed, text, 10 * kCellPx, a, 16);
+  const int nb = wrapHanging(kFixed, text, 10 * kCellPx, 10 * kCellPx, b, 16);
+  ASSERT_EQ(na, nb);
+  for (int i = 0; i < na; i++) {
+    EXPECT_EQ(a[i].start, b[i].start) << "line " << i;
+    EXPECT_EQ(a[i].len, b[i].len) << "line " << i;
   }
 }
 
