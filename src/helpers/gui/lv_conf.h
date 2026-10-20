@@ -17,9 +17,19 @@
 #define LV_MEM_CUSTOM_FREE free
 #define LV_MEM_CUSTOM_REALLOC realloc
 
+#ifdef OFFBAND_NATIVE_LVGL
+// #1671: the native LVGL tests (env:native_lvgl) advance the tick themselves
+// with lv_tick_inc(); every other setting here is the device's. On a device
+// nothing would advance it and the GUI would freeze, so it's refused there.
+#ifdef ARDUINO
+#error "OFFBAND_NATIVE_LVGL is for the native tests only"
+#endif
+#define LV_TICK_CUSTOM 0
+#else
 #define LV_TICK_CUSTOM 1
 #define LV_TICK_CUSTOM_INCLUDE "Arduino.h"
 #define LV_TICK_CUSTOM_SYS_TIME_EXPR (millis())
+#endif
 
 #define LV_DISP_DEF_REFR_PERIOD 16
 

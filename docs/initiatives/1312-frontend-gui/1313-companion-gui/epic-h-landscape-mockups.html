@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Landscape mockups</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* Offband theme tokens, copied from the Epic G and L mockups. Class B: 320x240 shown at 1.25x. Static markup. */
+:root{
+  --bg:#0F1412; --bg2:#161C19; --bg3:#1D2521; --line:#34403A; --line2:#232C28;
+  --ink:#EFF3E8; --ink2:#BAC4B5; --dim:#7C8B82; --sig:#7BEFA8; --sigInk:#0F1412;
+  --wash:rgba(123,239,168,.09); --warn:#FFA552; --bad:#FF7A6E; --r:6px;
+  --sans:'Barlow Condensed',sans-serif; --mono:'JetBrains Mono',monospace;
+  --page:#0a0d0c; --pageInk:#cfd6cc;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--page);color:var(--pageInk);font-family:var(--sans);padding:24px 16px 48px}
+h1{font-size:26px;font-weight:600;color:var(--ink)}
+h3{font-size:18px;font-weight:600;color:var(--sig);margin:28px 0 10px}
+.lede{font-size:16px;color:var(--dim);margin:6px 0 8px;max-width:1000px}
+.grid{display:flex;flex-wrap:wrap;gap:28px}
+.card{width:400px;max-width:100%}
+.card h2{font-size:18px;font-weight:600;color:var(--ink)}
+.card .n{font-family:var(--mono);font-size:12px;color:var(--sig);margin-right:6px}
+.card p{font-size:14px;color:var(--ink2);margin:4px 0 10px;line-height:1.3;min-height:36px}
+.card ul{font-size:13px;color:var(--dim);margin:10px 0 0 16px;line-height:1.35}
+.dev{width:400px;height:300px;border:1px solid #2a332f;border-radius:10px;overflow:hidden;background:#000}
+.scr{width:320px;height:240px;transform:scale(1.25);transform-origin:0 0;background:var(--bg);color:var(--ink);
+  font-family:var(--sans);position:relative;overflow:hidden;display:flex;flex-direction:column}
+.sb{height:20px;flex:none;background:var(--bg2);border-bottom:1px solid var(--line2);display:flex;align-items:center;
+  padding:0 6px;font-family:var(--mono);font-size:10px;color:var(--ink2);gap:5px}
+.sb .clk{color:var(--ink);font-weight:600} .sb .right{margin-left:auto}
+.bodyr{flex:1;min-height:0;display:flex}
+.rail{width:48px;flex:none;display:flex;flex-direction:column;border-right:1px solid var(--line);background:var(--bg2)}
+.rail div{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:8px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--dim);border-left:2px solid transparent}
+.rail div i{font-style:normal;font-size:12px}
+.rail div.on{color:var(--sig);background:var(--wash);border-left-color:var(--sig);font-weight:600}
+.ct{width:272px;flex:none;display:flex;flex-direction:column;min-height:0;position:relative;overflow:hidden}
+.sh{display:flex;align-items:center;gap:6px;height:28px;flex:none;padding:0 8px;border-bottom:1px solid var(--line)}
+.sh .bk{font-size:15px;color:var(--sig)} .sh .t{font-size:14px;font-weight:600} .sh .m{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--dim)}
+.row{display:flex;align-items:center;gap:6px;height:28px;flex:none;padding:0 8px;border-bottom:1px solid var(--line2)}
+.row.focus{background:var(--wash);box-shadow:inset 3px 0 var(--sig)}
+.row .k{flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .v{font-size:11px;color:var(--ink2);white-space:nowrap} .row .v.warn{color:var(--warn)}
+.dd{color:var(--dim);font-size:9px}
+.sec{padding:4px 8px 1px;font-size:8px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);flex:none}
+.scrim{position:absolute;left:0;right:0;top:20px;bottom:0;background:rgba(0,0,0,.5)}
+.sheet{position:absolute;left:56px;right:0;bottom:0;background:var(--bg3);border-top:1px solid var(--line);border-radius:12px 12px 0 0;padding-bottom:5px}
+.sheet .st{font-size:13px;font-weight:600;padding:6px 12px 2px} .sheet .ss{font-size:9px;color:var(--dim);padding:0 12px 4px}
+.opt{display:flex;align-items:center;gap:8px;height:26px;padding:0 12px;font-size:12px}
+.opt .rd{width:11px;height:11px;border-radius:50%;border:1.5px solid var(--line);flex:none}
+.opt.on .rd{border-color:var(--sig);background:radial-gradient(var(--sig) 40%,transparent 45%)} .opt.on{color:var(--sig)}
+.opt.hot{background:var(--wash);box-shadow:inset 3px 0 var(--sig)}
+.opt .off{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--dim)}
+.btns{display:flex;gap:6px;padding:5px 12px 0}
+.btn{flex:1;height:28px;border-radius:var(--r);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:12px}
+.btn.pri{background:var(--sig);border-color:var(--sig);color:var(--sigInk);font-weight:600}
+.btn.red{border-color:var(--bad);color:var(--bad)} .btn.hot{outline:2px solid var(--ink);outline-offset:-4px}
+.field{height:28px;border:1px solid var(--sig);background:var(--wash);border-radius:var(--r);display:flex;align-items:center;padding:0 8px;font-family:var(--mono);font-size:15px}
+.caret{display:inline-block;width:1px;height:13px;background:var(--sig);margin-left:2px}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:3px}
+.pad div{height:30px;background:var(--bg2);border-radius:4px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:14px}
+.pad .w{font-family:var(--sans);font-size:12px;color:var(--ink2)} .pad .hot{outline:2px solid var(--ink);outline-offset:-3px}
+.kb{display:flex;flex-direction:column;gap:3px;padding:3px 4px}
+.kr{display:flex;gap:2px;justify-content:center}
+.kr div{width:24px;height:25px;background:var(--bg2);border-radius:3px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px}
+.kr .w{width:auto;flex:1;font-family:var(--sans);font-size:10px;color:var(--ink2)}
+.kr .send{background:var(--sig);color:var(--sigInk);font-family:var(--sans);font-weight:600}
+.mono{font-family:var(--mono)} .dim{color:var(--dim)} .sig{color:var(--sig)} .warn{color:var(--warn)}
+.tile{width:22px;height:22px;border-radius:var(--r);background:var(--wash);color:var(--sig);display:flex;align-items:center;justify-content:center;font-size:11px;flex:none}
+</style>
+</head>
+<body>
+<h1>Epic H: landscape mockups (class B, 320×240)</h1>
+<p class="lede">Offband theme, Modern look, shown at 1.25×. The design of record already draws every screen in landscape: the status bar runs the full width, a 48 px rail replaces the tab bar on the left, and content is 272×220. It also sets the landscape values: rows 28–30 px, hints hidden, Nodes 5 rows, keyboard keys 24×25, sheets start right of the rail, logo 40 px. Those screens are built from it as drawn. What follows is only the screens we added in Epics D–G and L, which were drawn portrait-only. Values are examples; the bullets are the behavior to build. <b>Owner-approved 2026-10-19</b> ("I'm happy with the layout"), with the radar's zoom buttons in the strip as drawn.</p>
+
+<h3>Settings and its sheets (Epic G, L)</h3><div class="grid">
+
+<div class="card"><h2><span class="n">1</span>A Settings page</h2><p>As the design's landscape Settings: 28 px rows, no hints. Display shown; every page follows it.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="bodyr"><div class="rail"><div><i>⌂</i>Home</div><div><i>✉</i>Chat</div><div><i>◎</i>Nodes</div><div><i>⌖</i>Map</div><div class="on"><i>⚙</i>Setup</div></div>
+<div class="ct"><div class="sh"><span class="bk">‹</span><span class="t">Display</span></div>
+<div class="sec">Appearance</div>
+<div class="row"><span class="k">Theme</span><span class="v">Offband</span><span class="dd">›</span></div>
+<div class="row"><span class="k">Look</span><span class="v">Modern</span><span class="dd">▾</span></div>
+<div class="row"><span class="k">Clock</span><span class="v">24-hour</span><span class="dd">▾</span></div>
+<div class="row focus"><span class="k">Time zone</span><span class="v">Eastern</span><span class="dd">▾</span></div>
+<div class="row"><span class="k">Rotation</span><span class="v">Landscape 90°</span><span class="dd">▾</span></div>
+<div class="row"><span class="k">Brightness</span><span class="v">80%</span><span class="dd">▾</span></div>
+</div></div></div></div>
+<ul><li>Hints are hidden in landscape, as the design does. That includes "GPS suggests Eastern" (Epic L): the one-time prompt still offers it.</li><li>Rotation becomes a picker (H3): Portrait 0°, Landscape 90°, Landscape 270°.</li></ul></div>
+
+<div class="card"><h2><span class="n">2</span>Picker sheet</h2><p>The design's landscape sheet: starts right of the rail, 26 px rows. Five rows in the window.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="bodyr"><div class="rail"><div><i>⌂</i>Home</div><div><i>✉</i>Chat</div><div><i>◎</i>Nodes</div><div><i>⌖</i>Map</div><div class="on"><i>⚙</i>Setup</div></div><div class="ct"></div></div>
+<div class="scrim"></div><div class="sheet"><div class="st">Time zone</div><div class="ss">Daylight saving is automatic for US and EU zones.</div>
+<div class="opt"><span class="rd"></span>Not set (UTC)<span class="off">+0:00</span></div>
+<div class="opt"><span class="rd"></span>UTC<span class="off">+0:00</span></div>
+<div class="opt on hot"><span class="rd"></span>Eastern<span class="off">−4:00 now</span></div>
+<div class="opt"><span class="rd"></span>Central<span class="off">−5:00 now</span></div>
+<div class="opt"><span class="rd"></span>Mountain<span class="off">−6:00 now</span></div>
+</div></div></div>
+<ul><li>Applies on tap, as in portrait. The window scrolls by drag or USR/AUX.</li><li>The rail stays visible beside it.</li></ul></div>
+
+<div class="card"><h2><span class="n">3</span>Stepper, confirm and prompts</h2><p>Same sheet frame, shorter. Discard, Reboot, Delete paths and the zone prompt all take this shape.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="bodyr"><div class="rail"><div><i>⌂</i>Home</div><div><i>✉</i>Chat</div><div><i>◎</i>Nodes</div><div><i>⌖</i>Map</div><div class="on"><i>⚙</i>Setup</div></div><div class="ct"></div></div>
+<div class="scrim"></div><div class="sheet"><div class="st">TX power</div><div class="ss">The radio chip's setting, not the antenna's output</div>
+<div style="display:flex;align-items:center;justify-content:center;gap:14px;padding:4px 12px">
+<div class="btn" style="flex:none;width:40px;font-size:16px">−</div><div class="mono" style="font-size:22px;font-weight:600;min-width:80px;text-align:center">22 dBm</div><div class="btn" style="flex:none;width:40px;font-size:16px">+</div></div>
+<div class="mono dim" style="font-size:8px;text-align:center">0 – 28 dBm · this board's maximum</div>
+<div class="btns"><div class="btn">Cancel</div><div class="btn pri hot">Set</div></div></div></div></div>
+<ul><li>Two-button sheets (Keep editing / Discard, Not now / Use Eastern) use the same button row.</li></ul></div>
+
+<div class="card"><h2><span class="n">4</span>Frequency keypad</h2><p>Portrait stacks field, pad and buttons; 220 px can't. Here the pad moves right of the field.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="bodyr"><div class="rail"><div><i>⌂</i>Home</div><div><i>✉</i>Chat</div><div><i>◎</i>Nodes</div><div><i>⌖</i>Map</div><div class="on"><i>⚙</i>Setup</div></div><div class="ct"></div></div>
+<div class="scrim"></div><div class="sheet" style="top:20px;border-radius:0;display:flex;gap:8px;padding:8px">
+<div style="width:96px;display:flex;flex-direction:column;gap:6px"><div style="font-size:13px;font-weight:600">Frequency</div>
+<div class="field" style="font-size:13px">910.525<span class="caret"></span></div><div class="mono dim" style="font-size:8px">MHz · 150.000 – 2500.000</div>
+<div style="margin-top:auto;display:flex;flex-direction:column;gap:5px"><div class="btn">Cancel</div><div class="btn pri hot">Set</div></div></div>
+<div class="pad" style="flex:1;align-content:start"><div>1</div><div>2</div><div>3</div><div>4</div><div>5</div><div>6</div><div>7</div><div>8</div><div>9</div><div>.</div><div>0</div><div class="w">⌫</div></div>
+</div></div></div>
+<ul><li>The sheet takes the full content height. The rail stays.</li><li>The PIN pad and Position pad (with ±, four across) use the same split.</li></ul></div>
+
+</div>
+
+<h3>Chat and Nodes (Epics D, E)</h3><div class="grid">
+
+<div class="card"><h2><span class="n">5</span>Compose with the keyboard</h2><p>The design's landscape keyboard (24×25 keys) under a one-line draft. Key preview, shift and the symbols page (7a–7c) work as in portrait.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="bodyr"><div class="rail"><div><i>⌂</i>Home</div><div class="on"><i>✉</i>Chat</div><div><i>◎</i>Nodes</div><div><i>⌖</i>Map</div><div><i>⚙</i>Setup</div></div>
+<div class="ct"><div class="sh"><span class="bk">‹</span><span class="t">Wren</span><span class="m">142 left</span></div>
+<div style="padding:4px 6px"><div class="field" style="font-family:var(--sans);font-size:13px;border-color:var(--sig)">See you at the trail<span class="caret"></span></div></div>
+<div class="kb" style="margin-top:auto">
+<div class="kr"><div>q</div><div>w</div><div>e</div><div>r</div><div>t</div><div>y</div><div>u</div><div>i</div><div>o</div><div>p</div></div>
+<div class="kr"><div>a</div><div>s</div><div>d</div><div>f</div><div>g</div><div>h</div><div>j</div><div>k</div><div>l</div></div>
+<div class="kr"><div class="w">⇧</div><div>z</div><div>x</div><div>c</div><div>v</div><div>b</div><div>n</div><div>m</div><div class="w">⌫</div></div>
+<div class="kr"><div class="w">?123</div><div class="w" style="flex:3">space</div><div class="w send">Send</div></div>
+</div></div></div></div></div>
+<ul><li>The canned chips leave the screen while typing (no room); they show before the first key, in place of the draft line.</li></ul></div>
+
+<div class="card"><h2><span class="n">6</span>Letter wheel (button-only search)</h2><p>The wheel runs across the top; matches list below in the design's 5 rows.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="bodyr"><div class="rail"><div><i>⌂</i>Home</div><div><i>✉</i>Chat</div><div class="on"><i>◎</i>Nodes</div><div><i>⌖</i>Map</div><div><i>⚙</i>Setup</div></div>
+<div class="ct"><div class="sh"><span class="t">Find</span><span class="mono sig" style="font-size:12px">w</span><span class="caret"></span><span class="m">2 of 12</span></div>
+<div style="display:flex;justify-content:center;gap:4px;padding:5px;border-bottom:1px solid var(--line2)" class="mono">
+<span class="dim">t</span><span class="dim">u</span><span class="dim">v</span><span style="background:var(--sig);color:var(--sigInk);padding:0 5px;border-radius:3px">w</span><span class="dim">x</span><span class="dim">y</span><span class="dim">z</span><span class="dim">⌫</span><span class="dim">✓</span></div>
+<div class="row focus"><span class="tile">👤</span><span class="k">Wren</span><span class="v mono">2 hops</span></div>
+<div class="row"><span class="tile">📡</span><span class="k">West Ridge RPT</span><span class="v mono">1 hop</span></div>
+</div></div></div></div>
+<ul><li>USR steps the wheel, USR hold adds the letter, AUX hold leaves, as in portrait.</li></ul></div>
+
+<div class="card"><h2><span class="n">7</span>Node detail</h2><p>The design puts the detail's actions in a row in landscape. Name and route on top, readings in two columns.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="bodyr"><div class="rail"><div><i>⌂</i>Home</div><div><i>✉</i>Chat</div><div class="on"><i>◎</i>Nodes</div><div><i>⌖</i>Map</div><div><i>⚙</i>Setup</div></div>
+<div class="ct" style="padding-bottom:6px"><div class="sh"><span class="bk">‹</span><span class="tile">👤</span><span class="t">Wren</span><span class="m">heard 2 m</span></div>
+<div class="mono dim" style="font-size:9px;padding:4px 8px">path: You › Hilltop-2 › Wren</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;padding:2px 8px;font-size:11px">
+<span class="dim">SNR</span><span class="mono">6.25 dB</span><span class="dim">RSSI</span><span class="mono">−98 dBm</span><span class="dim">Distance</span><span class="mono">3.4 km NE</span><span class="dim">Key</span><span class="mono">a1b2…9f</span></div>
+<div style="margin-top:auto;display:flex;gap:4px;padding:0 6px"><div class="btn pri" style="flex:2">Message</div><div class="btn">Ping</div><div class="btn">Trace</div></div>
+</div></div></div></div>
+<ul><li>Room and sensor details: the same frame, their own buttons (Log in, Read). Admin login uses mockup 5's keyboard under a password line.</li><li>Ping and Trace results replace the readings block while they run.</li></ul></div>
+
+</div>
+
+<h3>Map, boot and lock (Epics F, G, D)</h3><div class="grid">
+
+<div class="card"><h2><span class="n">8</span>Radar, a node selected</h2><p>The radar takes the height (212 px circle); the selected node's lines sit in the strip beside it.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ ◎ 87%</span></div>
+<div class="bodyr"><div class="rail"><div><i>⌂</i>Home</div><div><i>✉</i>Chat</div><div><i>◎</i>Nodes</div><div class="on"><i>⌖</i>Map</div><div><i>⚙</i>Setup</div></div>
+<div class="ct" style="flex-direction:row">
+<div style="width:212px;height:212px;margin:4px;border-radius:50%;border:1px solid var(--line);position:relative;background:radial-gradient(circle,transparent 32%,var(--line2) 33%,transparent 34%,transparent 65%,var(--line2) 66%,transparent 67%)">
+<span style="position:absolute;left:103px;top:103px;width:6px;height:6px;border-radius:50%;background:var(--sig)"></span>
+<span style="position:absolute;left:150px;top:55px;width:8px;height:8px;border-radius:50%;border:2px solid var(--ink)"></span>
+<span style="position:absolute;left:60px;top:140px;width:5px;height:5px;border-radius:50%;background:var(--ink2)"></span>
+<span class="mono dim" style="position:absolute;left:6px;top:4px;font-size:8px">N ↑ · 10 km</span></div>
+<div style="flex:1;display:flex;flex-direction:column;gap:3px;padding:8px 6px 6px 0;font-size:10px">
+<b style="font-size:12px">Wren</b><span class="mono">3.4 km</span><span class="mono">NE 42°</span><span class="dim">2 m ago</span>
+<div style="margin-top:auto;display:flex;flex-direction:column;gap:4px"><div class="btn" style="height:22px">+</div><div class="btn" style="height:22px">−</div></div></div>
+</div></div></div></div>
+<ul><li>With nothing selected the strip shows the range and the node count; no position yet and no nodes in range read there too.</li><li>Zoom buttons in the strip, as drawn (owner, 2026-10-19).</li></ul></div>
+
+<div class="card"><h2><span class="n">9</span>Boot screen</h2><p>Full screen. The 40 px logo (design value), name and version on the left; the startup checks on the right; "offband" in Morse as the bar across the foot.</p>
+<div class="dev"><div class="scr" style="justify-content:center">
+<div style="display:flex;gap:14px;align-items:center;padding:0 18px">
+<div style="display:flex;flex-direction:column;align-items:center;gap:6px;width:120px">
+<div style="width:40px;height:40px;border-radius:10px;background:radial-gradient(circle at 50% 55%,var(--sig) 0 18%,transparent 19%),conic-gradient(from 200deg,var(--bg3),var(--line));border:1px solid var(--line)"></div>
+<div style="font-size:20px;font-weight:600">Offband</div><div class="mono dim" style="font-size:8px;text-align:center">Offband 1.5.0 - MC 1.17.0</div></div>
+<div class="mono" style="flex:1;display:flex;flex-direction:column;gap:2px;font-size:9px">
+<span><span class="sig">✓</span> <span class="dim">Storage</span></span><span><span class="sig">✓</span> <span class="dim">Settings</span></span><span><span class="sig">✓</span> <span class="dim">Radio 910.525 · SF7</span></span>
+<span><span class="sig">✓</span> <span class="dim">Contacts 42</span></span><span><span class="warn">…</span> <span class="dim">Bluetooth</span></span></div></div>
+<div style="display:flex;gap:3px;justify-content:center;margin-top:18px">
+<i style="display:block;width:4px;height:3px;background:var(--sig)"></i><i style="display:block;width:9px;height:3px;background:var(--sig)"></i><i style="display:block;width:9px;height:3px;background:var(--sig)"></i><i style="display:block;width:9px;height:3px;background:var(--sig)"></i><i style="display:block;width:4px;height:3px;background:var(--line);margin-left:6px"></i><i style="display:block;width:4px;height:3px;background:var(--line)"></i><i style="display:block;width:9px;height:3px;background:var(--line)"></i><i style="display:block;width:4px;height:3px;background:var(--line)"></i></div>
+<div class="mono dim" style="font-size:8px;text-align:center;margin-top:8px">Hold USER: SafeBoot menu</div>
+</div></div>
+<ul><li>The reset line (after an unclean reset) goes under the checks.</li></ul></div>
+
+<div class="card"><h2><span class="n">10</span>Lock</h2><p>Full screen. The clock and its lines on the left; the unread items on the right.</p>
+<div class="dev"><div class="scr" style="flex-direction:row;align-items:center;padding:0 14px;gap:14px">
+<div style="width:130px;display:flex;flex-direction:column;align-items:center;gap:2px">
+<div class="mono" style="font-size:40px;font-weight:600;line-height:1">21:07</div><div style="font-size:11px;color:var(--ink2)">Sun 18 Oct · 87%</div><div class="mono dim" style="font-size:8px">Eastern</div></div>
+<div style="flex:1;display:flex;flex-direction:column;gap:6px;font-size:10px">
+<div style="border-left:2px solid var(--sig);padding-left:6px"><b>Wren</b> <span class="mono dim">20:41</span><br>See you at the trailhead.</div>
+<div style="border-left:2px solid var(--sig);padding-left:6px"><b>#valley-ops</b> <span class="mono dim">20:38</span><br>Juno: Net check at 20:00</div>
+<span class="dim" style="font-size:9px">+3 more</span></div>
+<div class="dim" style="position:absolute;bottom:8px;left:0;right:0;text-align:center;font-size:9px">Press USR or swipe up to unlock</div>
+</div></div>
+<ul><li>No unread: the clock column centers on the screen. With no zone set, the zone line reads "UTC · set a time zone in Display" in amber (Epic L).</li></ul></div>
+
+</div>
+</body></html>

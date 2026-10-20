@@ -1,6 +1,7 @@
 #include "EnvironmentSensorManager.h"
 #include <MeshLog.h>  // #411: route GPS status through the serial-capture sink
 #include <helpers/ClockSanity.h>  // #607: plausibility bounds on GPS clock sets
+#include <helpers/sensors/SensorProbe.h>  // #1671: which table entries begin() starts
 
 #include <Wire.h>
 
@@ -617,6 +618,31 @@ static const SensorDef SENSOR_TABLE[] = {
 
 static const size_t SENSOR_TABLE_SIZE = (sizeof(SENSOR_TABLE) / sizeof(SENSOR_TABLE[0])) - 1;
 
+// #1661, #1671: the Bosch parts also answer at 0x77 (an address pin; many
+// breakouts ship there). These are fallbacks: runProbe tries them only after
+// every entry above, so an existing node's channels don't move and a part
+// already started at 0x77 (BMP085) is never probed by a Bosch driver.
+static const SensorDef SENSOR_FALLBACK_TABLE[] = {
+#ifdef ENV_INCLUDE_BME680
+  { 0x77,                  "BME680",       init_bme680,   query_bme680   },
+#endif
+#if ENV_INCLUDE_BME280
+  { 0x77,                  "BME280",       init_bme280,   query_bme280   },
+#endif
+#if ENV_INCLUDE_BMP280
+  { 0x77,                  "BMP280",       init_bmp280,   query_bmp280   },
+#endif
+  { 0, nullptr, nullptr, nullptr }  // sentinel — keeps the array non-empty
+};
+
+static const size_t SENSOR_FALLBACK_SIZE = (sizeof(SENSOR_FALLBACK_TABLE) / sizeof(SENSOR_FALLBACK_TABLE[0])) - 1;
+static const size_t SENSOR_PROBE_SIZE = SENSOR_TABLE_SIZE + SENSOR_FALLBACK_SIZE;
+
+// The probe's index space: the table, then the fallbacks.
+static const SensorDef& probeDef(size_t i) {
+  return i < SENSOR_TABLE_SIZE ? SENSOR_TABLE[i] : SENSOR_FALLBACK_TABLE[i - SENSOR_TABLE_SIZE];
+}
+
 // ============================================================
 // begin() — scan the I2C bus, then initialize only what was
 // found. A sensor whose address does not ACK during the scan
@@ -658,23 +684,29 @@ bool EnvironmentSensorManager::begin() {
   bool detected[128] = {};
   scanI2CBus(TELEM_WIRE, detected);
 
-  // Walk the sensor table and initialize only detected devices.
+  // Start only what answered, by the rules in SensorProbe.h (#1661, #1671):
+  // a claimed address isn't probed by another driver, one sensor per
+  // driver, table order kept.
+  offband::sensors::ProbeEntry entries[SENSOR_PROBE_SIZE ? SENSOR_PROBE_SIZE : 1];
+  for (size_t i = 0; i < SENSOR_PROBE_SIZE; i++) {
+    const SensorDef& def = probeDef(i);
+    entries[i] = {def.address, reinterpret_cast<uintptr_t>(def.query), i >= SENSOR_TABLE_SIZE};
+  }
+  offband::sensors::ProbeHit hits[MAX_ACTIVE_SENSORS];
+  const size_t n = offband::sensors::runProbe(
+      entries, SENSOR_PROBE_SIZE, detected,
+      [](size_t i) -> uint8_t {
+        const SensorDef& def = probeDef(i);
+        const uint8_t subs = def.init(TELEM_WIRE, def.address);
+        if (subs) MESH_DEBUG_PRINTLN("Found %s at address: %02X", def.name, def.address);
+        else MESH_DEBUG_PRINTLN("%s at %02X is not that part, or failed to start", def.name, def.address);
+        return subs;
+      },
+      hits, MAX_ACTIVE_SENSORS);
   _active_sensor_count = 0;
-  for (size_t i = 0; i < SENSOR_TABLE_SIZE && _active_sensor_count < MAX_ACTIVE_SENSORS; i++) {
-    const SensorDef& def = SENSOR_TABLE[i];
-    if (!detected[def.address]) {
-      MESH_DEBUG_PRINTLN("%s not detected at I2C address %02X", def.name, def.address);
-      continue;
-    }
-    uint8_t n = def.init(TELEM_WIRE, def.address);
-    if (n == 0) {
-      MESH_DEBUG_PRINTLN("%s found at %02X but failed to initialize", def.name, def.address);
-      continue;
-    }
-    MESH_DEBUG_PRINTLN("Found %s at address: %02X", def.name, def.address);
-    for (uint8_t sub = 0; sub < n && _active_sensor_count < MAX_ACTIVE_SENSORS; sub++) {
-      _active_sensors[_active_sensor_count++] = { def.query, sub };
-    }
+  for (size_t h = 0; h < n; h++) {
+    const SensorDef& def = probeDef(hits[h].entry);
+    _active_sensors[_active_sensor_count++] = {def.query, hits[h].sub, def.name};
   }
 
   return true;

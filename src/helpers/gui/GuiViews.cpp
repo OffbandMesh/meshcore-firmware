@@ -234,10 +234,14 @@ void keySummary(const uint8_t* k, char* out, size_t n) {
 
 // ------------------------------------------------------------------- Lock
 
-void formatClock(int zone, uint32_t utc, char* out, size_t n) {
+void formatClock(int zone, uint32_t utc, char* out, size_t n, bool h12) {
   if (!n) return;
   if (!tz::clockSet(utc)) return put(out, n, "--:--");
-  tz::clock(zone, utc, out, n);
+  if (!h12) return tz::clock(zone, utc, out, n);
+  const int64_t local = tz::localSeconds(zone, utc);
+  const int64_t secs = ((local % 86400) + 86400) % 86400;
+  const unsigned h = unsigned(secs / 3600), m = unsigned(secs / 60 % 60);
+  put(out, n, "%u:%02u %s", h % 12 == 0 ? 12u : h % 12, m, h >= 12 ? "PM" : "AM");
 }
 
 // Days since 1970-01-01 to a civil date (H. Hinnant's days_from_civil, inverted).
@@ -491,6 +495,16 @@ bool typesLabel(const char* label) {
 }
 
 size_t pageLayout(KeyPage page, int16_t width, int16_t y0, KeyRect* out, size_t max) {
+  return pageLayout(page, width, y0, out, max, kKeyW, kKeyH);
+}
+
+size_t pageLayout(KeyPage page, int16_t width, int16_t y0, KeyRect* out, size_t max, int16_t key_w,
+                  int16_t key_h) {
+  // The key size is the layout class's (Epic H): the names below stand for
+  // it through the rest of the layout.
+  const int16_t kKeyW = key_w;
+  const int16_t kKeyH = key_h;
+  const int16_t kRowW = int16_t(10 * kKeyW + 9 * kGap);
   static const RowSpec kLetters[3] = {{nullptr, "qwertyuiop", nullptr},
                                       {nullptr, "asdfghjkl", nullptr},
                                       {"⇧", "zxcvbnm", "⌫"}};

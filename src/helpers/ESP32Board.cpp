@@ -196,6 +196,7 @@ bool ESP32Board::getOTAStatus(char* buf, size_t buflen) {
 static const char* k_nvs_safety_ns = "ota_safety";
 static const char* k_nvs_boot_count = "boot_count";
 static bool s_validation_pending = false;
+static uint8_t s_boot_attempt = 0;   // #1570: this boot's count, before markBootValid()
 
 // ======================================================================// Epic E (#64) / E1 #65: Persistent safety/diagnostic event ring buffer.
 //
@@ -349,6 +350,7 @@ void ESP32Board::beginBootSafety() {
   // ESP_ERR_NVS_NOT_FOUND is expected on first boot ever - boot_count stays 0.
   nvs_get_u8(h, k_nvs_boot_count, &boot_count);
   boot_count++;
+  s_boot_attempt = boot_count;
   nvs_set_u8(h, k_nvs_boot_count, boot_count);
   nvs_commit(h);
   Serial.printf("[SAFETY] boot count: %u (threshold %u) partition state: %s\n",
@@ -416,6 +418,9 @@ void ESP32Board::beginBootSafety() {
     safety_log_append(EVT_BOOT_PENDING, running->label ? running->label : "?");
   }
 }
+
+uint8_t ESP32Board::safeBootAttempt() const { return s_boot_attempt; }
+uint8_t ESP32Board::safeBootLimit() const { return ROLLBACK_THRESHOLD; }
 
 void ESP32Board::markBootValid() {
   // Reset the app-level counter — this boot is healthy.

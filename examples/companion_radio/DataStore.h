@@ -16,6 +16,7 @@ public:
 class DataStore {
   FILESYSTEM* _fs;
   FILESYSTEM* _fsExtra;
+  uint8_t _prefs_load_raw = 2;   // PrefsDefaults until loadPrefs() finds a file
   mesh::RTCClock* _clock;
   IdentityStore identity_store;
 
@@ -35,6 +36,9 @@ public:
   bool saveMainIdentity(const mesh::LocalIdentity &identity);
   void loadPrefs(NodePrefs& prefs);
   bool savePrefs(NodePrefs& prefs);
+  // #1571: where loadPrefs() found them, for the GUI's boot screen.
+  enum PrefsLoad : uint8_t { PrefsFromFile, PrefsMigrated, PrefsDefaults };
+  PrefsLoad prefsLoad() const { return PrefsLoad(_prefs_load_raw); }
   void loadContacts(DataStoreHost* host);
   void saveContacts(DataStoreHost* host, bool (*filter)(const ContactInfo& c) = NULL);
   void loadChannels(DataStoreHost* host);

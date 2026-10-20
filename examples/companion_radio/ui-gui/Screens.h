@@ -11,12 +11,15 @@
 #include <lvgl.h>
 #include <stdint.h>
 
+#include <helpers/gui/GuiLayout.h>
 #include <helpers/gui/GuiPrefs.h>
 #include <helpers/gui/GuiTheme.h>
 #include <helpers/gui/GuiViews.h>
 #include <helpers/gui/InputMap.h>
 #include <helpers/gui/NodeViews.h>
 #include <helpers/gui/RadarViews.h>
+#include <helpers/gui/SensorViews.h>
+#include <helpers/gui/SettingsViews.h>
 
 #include "StatusBar.h"
 
@@ -31,17 +34,22 @@ struct HomeData {
   char name[32];
   char key[24];
   HomeCell cells[6];   // Radio, Heard, Unread, GPS, Battery, Airtime
+  // Epic M (owner pick 5a): a sensor was found, so the last cell is the
+  // consolidated reading ("SENSORS") and a tap opens Setup › Sensors.
+  bool sensors;
 };
 
 struct LockItem {
   char label[48];
-  char time[8];
+  char time[12];   // "12:05 PM"
   char text[96];
 };
 
 struct LockData {
-  char clock[8];
+  char clock[12];   // "21:07", or "9:07 PM" (12-hour)
   char sub[64];
+  char zone[40];    // "UTC · set a time zone in Display", or the zone's name (#1610)
+  bool zone_unset;  // drawn in amber
   uint8_t count;   // items, 0..2
   LockItem items[2];
   uint32_t more;   // unread in threads not shown
@@ -67,6 +75,30 @@ struct ActView {
   uint32_t done_ms;          // when it finished (Share's "Shared ✓" lasts 2 s)
 };
 
+// Setup's pages, in the drawn list's order (Blocked is Contacts, owner pick
+// a, 2026-10-17).
+enum class SetPage : uint8_t {
+  Node, Radio, Stats, Sensors, Privacy, Contacts, Msg, Display, Conn, Power, Actions, Debug, About, Count,
+  Theme = 0x40,   // Display › Theme (not in the list)
+  List = 0xFF
+};
+
+// Connectivity, Power, Debug and About (G5): what the device reads now.
+struct DeviceInfo {
+  bool ble_on, phone;                    // Bluetooth on; a phone connected
+  uint32_t pin_stored, pin_active;       // pinText()
+  uint16_t batt_mv;
+  int batt_pct;
+  uint16_t full_mv;                      // in effect: learned, pinned, or the board's
+  bool full_pinned;
+  uint16_t shutdown_mv;                  // 0: none in this build
+  uint8_t log_index;                     // logName()
+  uint8_t boot_attempt, boot_limit;      // SafeBoot; limit 0: none here
+  uint32_t reset_code;                   // resetName()
+  char offband[24], meshcore[16], build[32], model[40];
+  uint16_t msgs, msgs_cap, contacts, contacts_max;
+};
+
 // What the screens need from the rest of the firmware. UITask implements it,
 // so the screens stay free of the mesh.
 class ShellModel {
@@ -76,6 +108,10 @@ public:
   virtual void threadOpened(int thread) = 0;                     // mark it read
   virtual void routeMeta(int thread, char* out, size_t n) = 0;   // the header's route line
   virtual int zone() = 0;                                        // TimeZones.h index
+  virtual void setZone(int index) = 0;                           // saved with the prefs
+  virtual int gpsZone() = 0;                                     // the kept position's zone; 0 without
+  virtual bool gpsLiveFix() = 0;                                 // GPS on, with a fix now
+  virtual uint32_t utcNow() = 0;                                 // the device clock, Unix seconds
   virtual void sendAdvert() = 0;
   virtual void loraPopover() = 0;
   // Compose (D5)
@@ -101,6 +137,47 @@ public:
   virtual int openDm(const uint8_t* key) = 0;                         // its thread, -1 if none
   // Map (Epic F): this device's position, false if it has none.
   virtual bool ownPos(offband::gui::GeoPos* out) = 0;
+  // Setup (Epic G): the radio as set, this board's TX ceiling, and a save
+  // (false if refused); the list's value column for a page.
+  virtual offband::gui::RadioValues radioValues() = 0;
+  virtual int8_t txMax() = 0;
+  virtual bool saveRadio(const offband::gui::RadioValues& v) = 0;
+  virtual void setupSummary(SetPage page, char* out, size_t n) = 0;
+  // The GUI's own settings, read and written in place; prefsChanged() saves
+  // them when the device is idle and applies the Display ones at once.
+  virtual offband::gui::GuiPrefs& guiPrefs() = 0;
+  virtual void prefsChanged() = 0;
+  // Leaving a Settings page: write pending changes now (owner pick a,
+  // 2026-10-17), not only when the device is next idle.
+  virtual void savePrefsNow() = 0;
+  virtual uint16_t screenOffSecs() = 0;   // as it takes effect
+  virtual void setScreenOffSecs(uint16_t secs) = 0;
+  virtual bool buzzerOn() = 0;            // Alert with: Buzzer, or Silent
+  virtual void setBuzzerOn(bool on) = 0;
+  // Node, Privacy, Contacts (G4): applied at once, saved on leaving the page.
+  virtual offband::gui::NodeSettings nodeSettings() = 0;
+  virtual void setNodeSettings(const offband::gui::NodeSettings& s) = 0;
+  virtual void radioStats(offband::gui::RadioStats* out) = 0;
+  // Epic M (#1661): the radio's own sensors. Readings as querySensors()
+  // gives the phone, at most 5 s old; the sensor names by LPP channel; and
+  // the GPS section's two lines (false when there's no GPS in the build).
+  virtual size_t sensorReadings(offband::gui::SensorReading* out, size_t max) = 0;
+  virtual int sensorCount() = 0;
+  virtual const char* sensorName(uint8_t channel) = 0;
+  virtual bool gpsLines(char* fix, size_t fn, char* alt, size_t an) = 0;
+  virtual const uint8_t* selfKey() = 0;   // 32 bytes
+  // Connectivity, Power, Debug, About (G5).
+  virtual void deviceInfo(DeviceInfo* out) = 0;
+  virtual void setBleOn(bool on) = 0;            // until the next boot
+  virtual bool setBlePin(uint32_t pin) = 0;      // 0: a new one each boot; from the next boot
+  virtual bool setFullMv(uint16_t mv) = 0;       // pins it; false outside the learner's band
+  virtual void learnFullAgain() = 0;             // drops it; the next full charge teaches it
+  virtual bool setLogLevel(int index) = 0;       // logName(); false if not saved
+  // Actions (G5): each false if it didn't happen.
+  virtual bool advertNow() = 0;                  // zero-hop
+  virtual bool syncTimeFromGps() = 0;            // false: no GPS time to take
+  virtual void reboot() = 0;                     // saves first; doesn't return
+  virtual uint16_t deleteAllPaths() = 0;         // contacts sent back to flood
   virtual ~ShellModel() {}
 };
 
@@ -108,6 +185,10 @@ class GuiShell {
 public:
   void begin(const offband::gui::ThemeTokens& t, offband::gui::Look look, ShellModel* model);
   void setTheme(const offband::gui::ThemeTokens& t, offband::gui::Look look);
+  // The layout class (Epic H): set before the first build, and again when
+  // Rotation changes; rebuilds.
+  void setLayout(const offband::gui::Layout& l);
+  const offband::gui::Layout& layout() const { return _lay; }
 
   void showLock();
   void showTab(Tab tab);
@@ -121,6 +202,7 @@ public:
     if (_composing || _login) return true;
     if (_searching && _tab == Tab::Nodes) return _search_wheel || _search_kb;
     if (_tab == Tab::Map && !_detail) return true;   // USR selects the next node
+    if (_tab == Tab::Setup && _ss != SetSheet::None) return true;   // a sheet's cursor or stepper
     return _tab == Tab::Chat && _thread >= 0;
   }
   // Compose for a thread (from a conversation); leaving returns to it.
@@ -131,6 +213,9 @@ public:
 
   void updateHome(const HomeData& d);
   void updateLock(const LockData& d);
+  // The one-time "Use <zone> time?" prompt (Epic L). False while Lock,
+  // Compose, a login or another sheet is up: it waits for a free screen.
+  bool offerZone(int zone);
   void setAdvertState(offband::gui::AdvertButton::State s);
   // Redraws Chats or the open conversation if the store changed.
   void updateChats();
@@ -180,8 +265,102 @@ public:
   void updateDetail(uint32_t now_ms);
   // Map: redrawn when a position, the selection or the scale changes.
   void updateRadar(uint32_t now_ms);
+  // Setup: timed notes ("Not saved") clear themselves.
+  void updateSetup(uint32_t now_ms);
+  bool setupSheetOpen() const { return _ss != SetSheet::None; }
 
 private:
+  // Setup (Epic G, SetupScreens.cpp): the list, the pages, and the edit
+  // sheets of mockups 3-6.
+  enum class SetSheet : uint8_t { None, Pick, Step, Pad, Confirm };
+  void resetSetup();
+  void buildSetup(lv_obj_t* content);
+  void buildSetupList(lv_obj_t* content);
+  void buildRadioPage(lv_obj_t* content);
+  void buildMsgPage(lv_obj_t* content);
+  void buildNodePage(lv_obj_t* content);
+  void buildStatsPage(lv_obj_t* content);
+  void buildSensorsPage(lv_obj_t* content);
+  void buildPrivacyPage(lv_obj_t* content);
+  void buildContactsPage(lv_obj_t* content);
+  // Node › Name: the keyboard under a one-line field (as Admin login).
+  void openSetText();
+  void buildSetText(lv_obj_t* scr);
+  void refreshSetText();
+  void closeSetText(bool keep);
+  void buildDisplayPage(lv_obj_t* content);
+  void buildThemePage(lv_obj_t* content);
+  void buildConnPage(lv_obj_t* content);
+  void buildPowerPage(lv_obj_t* content);
+  void buildActionsPage(lv_obj_t* content);
+  void buildDebugPage(lv_obj_t* content);
+  void buildAboutPage(lv_obj_t* content);
+  void actionDone(uint8_t row, const char* note);   // an action's one-line result
+  // The open picker or stepper, for whichever page and row opened it.
+  int pickCount();
+  int pickCurrent();
+  void pickText(int i, char* out, size_t n);
+  void pickSide(int i, char* out, size_t n);   // right of the option; empty but for Time zone
+  const char* pickTitle(const char** sub);
+  void pickApply(int i);
+  void stepApply(int v);
+  void stepText(int v, char* out, size_t n);
+  lv_obj_t* setHeader(lv_obj_t* content, const char* title);
+  lv_obj_t* setSection(lv_obj_t* parent, const char* h);
+  lv_obj_t* setRow(lv_obj_t* parent, uint8_t id, const char* k, const char* hint, const char* v, uint8_t kind,
+                   bool on, bool changed, bool off);
+  void setOpen(SetPage p);
+  void setBack();
+  void setRowPressed(uint8_t id);
+  bool setAction(offband::gui::Action a);
+  bool fullScreenSetup() const { return _tab == Tab::Setup && _set_page == SetPage::Radio; }
+  void setFlag(uint8_t& flag);   // a toggle row: flip, save, redraw
+  void openSetSheet(SetSheet kind, uint8_t row);
+  void closeSetSheet();
+  void setSheetCursor(int i);
+  void setSheetStep(int dir);
+  void setSheetPress(int i);   // a row, a key, or a button
+  void setSheetCommit();
+  void setNote(const char* text);
+
+  bool _set_text = false;                   // Node › Name is being typed
+  offband::gui::ComposeBuffer _set_buf;
+  lv_obj_t* _set_text_label = nullptr;
+  uint8_t _pad_stage = 0;                   // Position: 0 latitude, 1 longitude
+  int32_t _pad_lat = 0;
+  uint32_t _stats_at = 0;                   // Radio stats: next refresh
+  lv_coord_t _stats_scroll = 0;             // Radio stats, Sensors: where the reader is, across refreshes
+  lv_obj_t* _set_body = nullptr;            // the page's scrolling body (Radio stats)
+  SetPage _set_page = SetPage::List;
+  SetPage _set_focus = SetPage::Node;    // the list row to refocus
+  uint8_t _set_focus_row = 0xFF;         // a page's row to refocus
+  offband::gui::RadioValues _radio_was{};
+  offband::gui::RadioValues _radio_now{};
+  int _preset_hint = -1;                 // the preset last picked, among twins
+  char _set_note[24] = {};               // shown on Save, or an action's row, for 2 s
+  uint32_t _set_note_at = 0;
+  uint8_t _note_row = 0xFF;              // Actions: the row the note is for
+  lv_obj_t* _set_save = nullptr;
+  SetSheet _ss = SetSheet::None;
+  uint8_t _ss_row = 0;                   // the row the sheet edits
+  int _ss_cur = 0;                       // the cursor: an option, a key, a button
+  int _ss_count = 0;
+  int _ss_val = 0;                       // the stepper's value
+  offband::gui::StepSpec _ss_spec{0, 0, 1};
+  offband::gui::NumberEntry _ss_pad;
+  lv_obj_t* _ss_obj = nullptr;           // on the top layer
+  lv_obj_t* _ss_list = nullptr;          // the picker's scrolling list
+  lv_obj_t* _ss_value = nullptr;         // the stepper's or pad's value
+  lv_obj_t* _ss_limit = nullptr;         // the range line under it
+  static constexpr size_t kSheetItems = 16;   // a picker builds only its window
+  lv_obj_t* _ss_item[kSheetItems] = {};
+  int _ss_top = 0;                       // the picker's first option on screen
+  int _ss_gz = 0;                        // the GPS zone when the sheet opened (Time zone)
+  int _ss_picked = -1;                   // the option the value has now
+  int16_t _ss_drag = 0;                  // a drag's travel since the last row step
+  bool _ss_dragged = false;
+  void setPickTop(int top);
+
   void buildCompose(lv_obj_t* scr);
   void buildKeys();
   void refreshDraft();
@@ -190,8 +369,9 @@ private:
   void insertText(const char* text);
   void leaveCompose();
   // Bottom sheets (D6): the channel notification sheet, and the menu USR
-  // hold opens in a channel (owner pick a, 2026-10-16).
-  enum class Sheet : uint8_t { None, Notify, Menu };
+  // hold opens in a channel (owner pick a, 2026-10-16). Zone: the one-time
+  // "Use <zone> time?" prompt (Epic L, owner pick 5a).
+  enum class Sheet : uint8_t { None, Notify, Menu, Zone };
   void openSheet(Sheet kind);
   void closeSheet();
   void sheetHot(int i);
@@ -206,6 +386,17 @@ private:
 
   offband::gui::ThemeTokens _t{};
   offband::gui::LookTokens _look{};
+  offband::gui::Layout _lay = offband::gui::layoutFor(0);
+  // Class B: the area right of the rail that the screens build in, full
+  // height (the status strip is drawn over its top). Class A: the screen.
+  lv_obj_t* host(lv_obj_t* scr);
+  bool landscape() const { return _lay.cls == offband::gui::LayoutClass::B; }
+  int16_t kbTop() const;
+  static constexpr int16_t kWheelH = 70;   // the letter wheel's strip
+  // A sheet's backdrop on the top layer (below the status strip) and the
+  // sheet itself, which starts right of the rail in class B.
+  lv_obj_t* sheetBackdrop();
+  lv_obj_t* sheetPanel(lv_obj_t* backdrop);
   ShellModel* _model = nullptr;
   StatusBar _status;
   lv_group_t* _group = nullptr;
@@ -222,6 +413,7 @@ private:
   lv_obj_t* _msg_list = nullptr;  // the conversation's scrolling column
   lv_obj_t* _focus_row = nullptr; // the list row for _focus_thread, if shown
   lv_coord_t _keep_scroll = -1;   // a conversation's scroll to restore on redraw; -1 = bottom
+  size_t _jump_unread = 0;        // on opening: unread messages to start above (Jump to oldest unread)
 
   // Compose (D5)
   bool _composing = false;
@@ -246,6 +438,7 @@ private:
   lv_obj_t* _sheet_rows[3] = {};
   uint8_t _sheet_count = 0;
   int _sheet_hot = 0;
+  int _sheet_zone = 0;   // the zone the Zone prompt offers
 
   // Nodes (Epic E)
   static constexpr size_t kNodeRowsShown = 50;   // the newest; search reaches the rest
@@ -326,6 +519,8 @@ private:
   lv_obj_t* _name = nullptr;
   lv_obj_t* _key = nullptr;
   lv_obj_t* _value[6] = {};
+  lv_obj_t* _cell_name[6] = {};   // the cells' labels; the last turns to SENSORS (Epic M)
+  bool _home_sensors = false;     // the last cell is the sensors' reading
   lv_obj_t* _sub[6] = {};
   lv_obj_t* _advert = nullptr;
   lv_obj_t* _advert_label = nullptr;
@@ -333,7 +528,9 @@ private:
 
   // Lock
   lv_obj_t* _lock_clock = nullptr;
+  lv_obj_t* _lock_ampm = nullptr;   // 12-hour: the clock font has digits and a colon only
   lv_obj_t* _lock_sub = nullptr;
+  lv_obj_t* _lock_zone = nullptr;
   lv_obj_t* _lock_list = nullptr;
   uint8_t _lock_count = 0xFF;
   uint32_t _lock_more = 0xFFFFFFFF;

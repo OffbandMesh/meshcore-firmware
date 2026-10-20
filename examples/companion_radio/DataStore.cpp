@@ -228,6 +228,7 @@ void DataStore::loadPrefs(NodePrefs& prefs) {
     if (file) {
       prefs.loadSerial(file);   // new Serial prefs
       file.close();
+      _prefs_load_raw = PrefsFromFile;
     }
   } else {
     // #627: same discipline as CommonCLI -- decide which writer produced the
@@ -268,6 +269,7 @@ void DataStore::loadPrefs(NodePrefs& prefs) {
         // appends, so one reader serves both: on an upstream-written record it
         // short-reads to EOF and the appended fields keep their defaults.
         loadPrefsInt(legacy, prefs);
+        _prefs_load_raw = PrefsMigrated;
         if (!savePrefs(prefs)) {
           MESH_DEBUG_PRINTLN("[prefs] ERROR: migrated %s but FAILED to write "
                              "/prefs.json -- will be retried next boot.", legacy);

@@ -51,6 +51,41 @@ jobs:
       - name: Env capability-claim self-test
         run: python scripts/test_env_capability_claims.py
 
+      # #1619 (epic #1618, Feature #1599). MAX_FRAME_SIZE is 176: a protocol constant and
+      # the frame BUFFER size. It is NOT what a link delivers -- a BLE notification
+      # carries the negotiated ATT MTU minus 3, and the stack SILENTLY CLIPS a larger
+      # frame. No error, no short return from writeFrame(), no failing test. So a builder
+      # that sizes its payload against 176 is correct on serial and TCP and wrong on BLE,
+      # which is exactly why it survives review: that is #450, and #711 was its
+      # regression, found in the field two weeks later.
+      #
+      # This cannot be a symbol rule in check_symbol_presence.py (#1602) and that script's
+      # docstring says so: maxFramePayload is a non-virtual inline member, present in some
+      # envs and inlined away in others, both correct. So the invariant is asserted in the
+      # SOURCE -- frame sizing goes through maxFramePayload(header_bytes).
+      #
+      # The rule turns on who OWNS the buffer, not on a text pattern. A transport
+      # legitimately bounds its own buffer with the constant (asking maxFramePayload() to
+      # validate its own buffer would be circular) and deliverableFrame() takes the
+      # constant AS that bound by design; application frame builders must not. Both
+      # categories are exempted by name, never by a loose pattern.
+      #
+      # The self-test runs FIRST and is not a formality: it carries the negative cases
+      # proving what the checker catches -- including the false-positive traps that would
+      # get it switched off, since some thirty comments in this tree name the constant and
+      # KISS_MAX_FRAME_SIZE is a different protocol's 512-byte buffer -- plus a coverage
+      # floor, because an "OK" from a checker that classified nothing looks identical to
+      # one that classified everything.
+      #
+      # Both steps BLOCK. The checker's output names its known-unconverted baseline
+      # (#1621) rather than hiding it, and fails if a baseline entry is converted without
+      # shrinking the table, so the exemption list cannot rot into a silent coverage gap.
+      - name: Frame-cap guard self-test
+        run: python scripts/test_check_frame_cap.py
+
+      - name: Frame sizing goes through maxFramePayload(), not MAX_FRAME_SIZE arithmetic
+        run: python scripts/check_frame_cap.py
+
       # #749/#758: the asset generators. The native-tests job discovers and runs the
       # C++ suites on its own, but nothing discovers scripts/test_*.py -- they only
       # run if named here. A generator bug is silent (the splash renders in the wrong

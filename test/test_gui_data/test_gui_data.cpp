@@ -399,6 +399,94 @@ TEST(Prefs, RoundTrip) {
   EXPECT_EQ(b.rotation, 180);
 }
 
+// Messages & alerts and Display (Epic G, G3): defaults as drawn, and kept.
+TEST(Prefs, AlertsAndClockDefaultsAsDrawn) {
+  GuiPrefs p;
+  EXPECT_EQ(p.clock_12h, 0);
+  EXPECT_EQ(p.notify_on, 1);
+  EXPECT_EQ(p.notify_dm, 1);
+  EXPECT_EQ(p.notify_channels, 1);
+  EXPECT_EQ(p.notify_new_node, 0);
+  EXPECT_EQ(p.clear_path_on_fail, 0);
+  EXPECT_EQ(p.jump_to_unread, 0);
+  EXPECT_EQ(p.wake_touch, 1);   // Power › Wake on touch (G5), on as drawn
+}
+
+TEST(Prefs, AlertsAndClockRoundTrip) {
+  GuiPrefs a;
+  a.clock_12h = 1;
+  a.notify_on = 0;
+  a.notify_dm = 0;
+  a.notify_channels = 0;
+  a.notify_new_node = 1;
+  a.clear_path_on_fail = 1;
+  a.jump_to_unread = 1;
+  a.wake_touch = 0;
+  RoundTripStream s;
+  ASSERT_TRUE(a.saveSerial(s));
+  s.rewind();
+  GuiPrefs b;
+  ASSERT_TRUE(b.loadSerial(s));
+  EXPECT_EQ(b.clock_12h, 1);
+  EXPECT_EQ(b.notify_on, 0);
+  EXPECT_EQ(b.notify_dm, 0);
+  EXPECT_EQ(b.notify_channels, 0);
+  EXPECT_EQ(b.notify_new_node, 1);
+  EXPECT_EQ(b.clear_path_on_fail, 1);
+  EXPECT_EQ(b.jump_to_unread, 1);
+  EXPECT_EQ(b.wake_touch, 0);
+}
+
+TEST(Prefs, AlertFlagsSanitizeToZeroOrOne) {
+  GuiPrefs p;
+  p.clock_12h = 7;
+  p.notify_on = 2;
+  p.jump_to_unread = 9;
+  p.wake_touch = 5;
+  p.sanitize();
+  EXPECT_EQ(p.clock_12h, 1);
+  EXPECT_EQ(p.notify_on, 1);
+  EXPECT_EQ(p.jump_to_unread, 1);
+  EXPECT_EQ(p.wake_touch, 1);
+}
+
+// Epic L (#1610): the one-time zone prompt's flag. Off on a new or older
+// file, so the prompt can show; kept once set, so it never shows again.
+TEST(Prefs, ZoneAskedDefaultsOffAndIsKept) {
+  GuiPrefs p;
+  EXPECT_EQ(p.zone_asked, 0);
+  p.zone_asked = 1;
+  RoundTripStream s;
+  ASSERT_TRUE(p.saveSerial(s));
+  s.rewind();
+  GuiPrefs b;
+  ASSERT_TRUE(b.loadSerial(s));
+  EXPECT_EQ(b.zone_asked, 1);
+}
+
+TEST(Prefs, ZoneAskedSanitizesToZeroOrOne) {
+  GuiPrefs p;
+  p.zone_asked = 9;
+  p.sanitize();
+  EXPECT_EQ(p.zone_asked, 1);
+}
+
+// Epic M (#1661): Sensors › Units. °F unless set otherwise; kept; 0 or 1.
+TEST(Prefs, TemperatureUnitDefaultsToFahrenheitAndIsKept) {
+  GuiPrefs p;
+  EXPECT_EQ(p.temp_f, 1);
+  p.temp_f = 0;
+  RoundTripStream s;
+  ASSERT_TRUE(p.saveSerial(s));
+  s.rewind();
+  GuiPrefs b;
+  ASSERT_TRUE(b.loadSerial(s));
+  EXPECT_EQ(b.temp_f, 0);
+  b.temp_f = 7;
+  b.sanitize();
+  EXPECT_EQ(b.temp_f, 1);
+}
+
 TEST(Prefs, MissingKeysKeepDefaults) {
   RoundTripStream s;
   s.setText("{theme:2}");  // ConfigSerializer keys are unquoted
