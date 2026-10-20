@@ -53,7 +53,7 @@ constexpr uint8_t kPreflashTuneInherit = kChannelTuneUnset;
 
 // Silent: this channel arrives without a sound at all.
 //
-// Abend asked for #test and #echo to be quiet by default, and this is the mechanism that
+// A tester asked for #test and #echo to be quiet by default, and this is the mechanism that
 // already exists to do it. There is no per-channel All/Mentions/Off on the badge -- that
 // lives in GuiPrefs and only GUI builds carry it -- and the device-wide notify scope is
 // the only place mentions-only can be set. What a channel CAN carry is its own tune, and

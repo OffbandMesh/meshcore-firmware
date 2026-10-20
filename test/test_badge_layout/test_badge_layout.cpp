@@ -480,16 +480,16 @@ TEST(BadgeLayoutTextSize, StepsAreNamed) {
 
 TEST(BadgeLayoutFace, FitPxCutsToWhatFits) {
   const Face& body = bodyFace();
-  EXPECT_EQ(0, fitPx(body, "Abend", 2));
-  EXPECT_EQ(5, fitPx(body, "Abend", 128));
-  const int n = fitPx(body, "Abend", textPx(body, "Abe"));
+  EXPECT_EQ(0, fitPx(body, "Offband-peer", 2));
+  EXPECT_EQ(12, fitPx(body, "Offband-peer", 128));
+  const int n = fitPx(body, "Offband-peer", textPx(body, "Off"));
   EXPECT_EQ(3, n);
 }
 
 // A channel message: the sender's tag in the left kTagPx, text after it, and the rows
 // after it indented to match (design 1a, "Thread settled").
 TEST(BadgeLayoutThread, ChannelMessageTagsItsFirstRow) {
-  const MsgView msgs[] = {{false, "Abend", "anyone at the CTF table?"}};
+  const MsgView msgs[] = {{false, "Offband-peer", "anyone at the CTF table?"}};
   Row rows[8];
   const int n = layoutThread(kFixed, msgs, 1, true, -1, rows, 8);
   // #1669: three rows, not two. kTagPx went 30 -> 60 for the owner's 10-character tag,
@@ -539,7 +539,7 @@ TEST(BadgeLayoutThread, OwnMessagesAreRightAlignedInTheBodyFace) {
 }
 
 TEST(BadgeLayoutThread, MessagesStayInOrder) {
-  const MsgView msgs[] = {{false, "Abend", "one"}, {true, "", "two"}, {false, "Stryc", "three"}};
+  const MsgView msgs[] = {{false, "Offband-peer", "one"}, {true, "", "two"}, {false, "Stryc", "three"}};
   Row rows[8];
   ASSERT_EQ(3, layoutThread(kFixed, msgs, 3, true, -1, rows, 8));
   EXPECT_EQ(0, rows[0].msg);
@@ -550,7 +550,7 @@ TEST(BadgeLayoutThread, MessagesStayInOrder) {
 // The selected message: a caret at the left on each of its rows, everything else clear
 // of it, and one meta row after it (design 1a, "Message selected").
 TEST(BadgeLayoutThread, SelectedMessageGetsACaretAndAMetaRow) {
-  const MsgView msgs[] = {{false, "Abend", "anyone?"}, {false, "Stryc", "flag drop at the CTF table"}};
+  const MsgView msgs[] = {{false, "Offband-peer", "anyone?"}, {false, "Stryc", "flag drop at the CTF table"}};
   Row rows[8];
   const int n = layoutThread(kFixed, msgs, 2, true, 1, rows, 8);
   // #1669: five rows now, not four -- "anyone?", THREE rows of the selected message, and
@@ -572,7 +572,7 @@ TEST(BadgeLayoutThread, SelectedMessageGetsACaretAndAMetaRow) {
 // The caret takes the body face's own '>' width, not a cell.
 TEST(BadgeLayoutThread, TheBodyFaceShiftsForItsOwnCaret) {
   const Face& body = bodyFace();
-  const MsgView msgs[] = {{false, "Abend", "anyone at the CTF table?"}};
+  const MsgView msgs[] = {{false, "Offband-peer", "anyone at the CTF table?"}};
   Row rows[8];
   ASSERT_LE(1, layoutThread(body, msgs, 1, true, 0, rows, 8));
   EXPECT_TRUE(rows[0].caret);
