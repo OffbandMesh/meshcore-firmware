@@ -33,7 +33,7 @@ TEST(BadgeStore, AConversationIsItsKindAndKey) {
   const int a = s.convo(Store::Channel, Key(1).b, "Public");
   ASSERT_GE(a, 0);
   EXPECT_EQ(a, s.convo(Store::Channel, Key(1).b, "Public"));
-  const int b = s.convo(Store::Contact, Key(1).b, "Abend");   // same bytes, other kind
+  const int b = s.convo(Store::Contact, Key(1).b, "Offband-peer");   // same bytes, other kind
   EXPECT_NE(a, b);
   EXPECT_EQ(a, s.find(Store::Channel, Key(1).b));
   EXPECT_EQ(-1, s.find(Store::Channel, Key(2).b));
@@ -41,9 +41,9 @@ TEST(BadgeStore, AConversationIsItsKindAndKey) {
 
 TEST(BadgeStore, LookingAConversationUpRefreshesItsName) {
   Store s;
-  const int a = s.convo(Store::Contact, Key(1).b, "abend");
-  s.convo(Store::Contact, Key(1).b, "Abend");
-  EXPECT_STREQ("Abend", s.convoAt(a)->name);
+  const int a = s.convo(Store::Contact, Key(1).b, "offband-peer");
+  s.convo(Store::Contact, Key(1).b, "Offband-peer");
+  EXPECT_STREQ("Offband-peer", s.convoAt(a)->name);
 }
 
 TEST(BadgeStore, IncomingCountsAsUnreadUntilRead) {
@@ -128,7 +128,7 @@ TEST(BadgeStore, AShortThreadBufferGetsTheNewestMessages) {
 TEST(BadgeStore, AFullPoolEvictsFromTheBusiestConversation) {
   Store s;
   const int busy = s.convo(Store::Channel, Key(1).b, "Public");
-  const int dm = s.convo(Store::Contact, Key(2).b, "Abend");
+  const int dm = s.convo(Store::Contact, Key(2).b, "Offband-peer");
   const uint32_t dm_msg = incoming(s, dm, "hi");
   const uint32_t oldest_busy = incoming(s, busy, "b1");
   for (int i = 0; i < 5; i++) incoming(s, busy, "more");   // pool of 6 now full, then over
@@ -146,7 +146,7 @@ TEST(BadgeStore, UnreadSurvivesEviction) {
 
 TEST(BadgeStore, AnOutgoingDmFollowsItsTrackerHandle) {
   Store s;
-  const int a = s.convo(Store::Contact, Key(1).b, "Abend");
+  const int a = s.convo(Store::Contact, Key(1).b, "Offband-peer");
   const uint32_t m = s.addOutgoing(a, 100, "omw", 7, BadgeSend::Sending);
   EXPECT_EQ(BadgeSend::Sending, s.msg(m)->status);
   EXPECT_TRUE(s.setStatusForHandle(7, BadgeSend::Delivered));
@@ -159,7 +159,7 @@ TEST(BadgeStore, AnOutgoingDmFollowsItsTrackerHandle) {
 // counts as failed, which offers a resend.
 TEST(BadgeStore, RefreshSendingTakesTheTrackersWord) {
   Store s;
-  const int a = s.convo(Store::Contact, Key(1).b, "Abend");
+  const int a = s.convo(Store::Contact, Key(1).b, "Offband-peer");
   const uint32_t m1 = s.addOutgoing(a, 100, "one", 1, BadgeSend::Sending);
   const uint32_t m2 = s.addOutgoing(a, 100, "two", 2, BadgeSend::Sending);
   const uint32_t ch = s.addOutgoing(a, 100, "chan", 0, BadgeSend::None);
@@ -181,7 +181,7 @@ TEST(BadgeStore, ChannelSendsStopWaitingForARepeat) {
   const int a = s.convo(Store::Channel, Key(1).b, "Public");
   const uint32_t old_send = s.addOutgoing(a, 100, "old", 0, BadgeSend::Sending);
   const uint32_t new_send = s.addOutgoing(a, 125, "new", 0, BadgeSend::Sending);
-  const int d = s.convo(Store::Contact, Key(2).b, "Abend");
+  const int d = s.convo(Store::Contact, Key(2).b, "Offband-peer");
   const uint32_t dm = s.addOutgoing(d, 100, "dm", 7, BadgeSend::Sending);
   s.expireChannelSends(130, 30);
   EXPECT_EQ(BadgeSend::None, s.msg(old_send)->status);
@@ -227,7 +227,7 @@ TEST(BadgeStore, AClockCorrectionLeavesEmptyConversationsAlone) {
 
 TEST(BadgeStore, RemoveDropsOneMessage) {
   Store s;
-  const int a = s.convo(Store::Contact, Key(1).b, "Abend");
+  const int a = s.convo(Store::Contact, Key(1).b, "Offband-peer");
   const uint32_t keep = incoming(s, a, "keep");
   const uint32_t gone = s.addOutgoing(a, 100, "gone", 3, BadgeSend::Failed);
   EXPECT_TRUE(s.remove(gone));
@@ -308,8 +308,8 @@ TEST(BadgeStore, TextAndSenderAreCutToFit) {
 // MeshCore sends a channel message as "<name>: <text>".
 TEST(BadgeStoreSplitSender, NameAndText) {
   char sender[16];
-  const char* body = offband::splitSender("Abend: anyone at", sender, sizeof(sender));
-  EXPECT_STREQ("Abend", sender);
+  const char* body = offband::splitSender("Offband-peer: anyone at", sender, sizeof(sender));
+  EXPECT_STREQ("Offband-peer", sender);
   EXPECT_STREQ("anyone at", body);
 }
 

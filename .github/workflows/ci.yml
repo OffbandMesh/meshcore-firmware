@@ -117,7 +117,7 @@ jobs:
 
       # #1625: which preflashed channels ship quiet. A silent channel and a channel that
       # made no choice are one byte apart, and swapping them is invisible until a badge is
-      # quiet in the wrong room -- or noisy in the one Abend asked to be quiet.
+      # quiet in the wrong room -- or noisy in the one a tester asked to be quiet.
       - name: QCC preflash channel tunes
         run: python scripts/test_qcc_preflash_tunes.py
 

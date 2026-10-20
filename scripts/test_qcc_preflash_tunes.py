@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pin the QCC badge's preflashed channel table: which channels ship quiet (#1625).
 
-Abend asked for #test and #echo to be quiet by default. The badge has no per-channel
+A tester asked for #test and #echo to be quiet by default. The badge has no per-channel
 All/Mentions/Off -- that lives in GuiPrefs and only GUI builds carry it -- so the mechanism
 is the per-channel TUNE, where tune id 0 is silence by construction.
 
