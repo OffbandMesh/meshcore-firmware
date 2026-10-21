@@ -31,6 +31,10 @@ enum class InputEvent : uint8_t {
   AuxPress, AuxHold, AuxLongHold,
   TouchTap, TouchSwipeRight,
   KeyTab, KeyEnter, KeyEsc, KeyAltDigit, KeyOther,
+  // The T-Deck (J4 #1727): its keyboard has no Esc, so Backspace goes back
+  // outside a text field. The trackball's press is USR (GPIO0).
+  KeyBackspace,
+  TrackUp, TrackDown, TrackLeft, TrackRight,
 };
 
 enum class Action : uint8_t {

@@ -1424,32 +1424,8 @@ void GuiShell::pressKey(int i) {
   ComposeBuffer& buf = _set_text ? _set_buf : _login ? _login_pw : _searching ? _query : _draft;
   const bool plain = _login || _searching || _set_text;   // no capitals of their own
 
-  if (_set_text && strcmp(l, "Send") == 0) {   // "Done": the name is kept
-    later([](GuiShell* g) { g->closeSetText(true); });
-    return;
-  }
-
-  if (_login && strcmp(l, "Send") == 0) {   // "Log in"
-    _login_ok_at = 0;
-    _login_sent = _model->startNodeAct(_detail_key, NodeAct::Login, _login_pw.text());
-    _login_at = lv_tick_get();
-    if (!_login_sent && _login_status) lv_label_set_text(_login_status, "Not sent");
-    return;
-  }
-  if (_searching && strcmp(l, "Send") == 0) {
-    _search_kb = false;
-    later([](GuiShell* g) { g->rebuild(); });
-    return;
-  }
   if (strcmp(l, "Send") == 0) {
-    if (_draft.length() == 0) return;
-    if (_model->sendText(_thread, _draft.text(), _draft.length())) {
-      // Leave after this event: the rebuild deletes the keyboard taking it.
-      later([](GuiShell* g) { g->leaveCompose(); });
-      return;
-    }
-    _not_sent_at = lv_tick_get();   // the counter reads "Not sent" for 2 s
-    refreshDraft();
+    submitText();
     return;
   }
   if (strcmp(l, "⇧") == 0) {
@@ -1476,10 +1452,65 @@ void GuiShell::pressKey(int i) {
     }
   }
   if (_page.page() != page_before || _shift.state() != shift_before) buildKeys();
+  refreshText();
+}
+
+void GuiShell::submitText() {
+  if (_set_text) {   // "Done": the name is kept
+    later([](GuiShell* g) { g->closeSetText(true); });
+    return;
+  }
+  if (_login) {   // "Log in"
+    _login_ok_at = 0;
+    _login_sent = _model->startNodeAct(_detail_key, NodeAct::Login, _login_pw.text());
+    _login_at = lv_tick_get();
+    if (!_login_sent && _login_status) lv_label_set_text(_login_status, "Not sent");
+    return;
+  }
+  if (_searching) {
+    _search_kb = false;
+    later([](GuiShell* g) { g->rebuild(); });
+    return;
+  }
+  if (_draft.length() == 0) return;
+  if (_model->sendText(_thread, _draft.text(), _draft.length())) {
+    // Leave after this event: the rebuild deletes the keyboard taking it.
+    later([](GuiShell* g) { g->leaveCompose(); });
+    return;
+  }
+  _not_sent_at = lv_tick_get();   // the counter reads "Not sent" for 2 s
+  refreshDraft();
+}
+
+void GuiShell::refreshText() {
   if (_set_text) refreshSetText();
   else if (_login) refreshLoginField();
   else if (_searching) querySoon();
   else refreshDraft();
+}
+
+// The keyboard applies its own Shift, so a typed key goes in as it came:
+// no auto-capital and no change to the on-screen keys' shift.
+bool GuiShell::typeKey(KeyKind k, char ch) {
+  if (_locked || _sheet != Sheet::None) return false;
+  const bool search_typing = _searching && _tab == Tab::Nodes && (_search_kb || _search_wheel);
+  if (!(_set_text || _login || search_typing || _composing)) return false;
+  ComposeBuffer& buf = _set_text ? _set_buf : _login ? _login_pw : _searching ? _query : _draft;
+  switch (k) {
+    case KeyKind::Enter:
+      submitText();
+      return true;
+    case KeyKind::Backspace:
+      if (!buf.backspace()) return false;   // empty: Back, as the caller maps it
+      break;
+    case KeyKind::Char:
+      if (!buf.insert(&ch, 1)) return true;   // full: the key is spent, nothing changes
+      break;
+    default:
+      return false;
+  }
+  refreshText();
+  return true;
 }
 
 // A canned chip: its text goes in after what's typed, a space between.

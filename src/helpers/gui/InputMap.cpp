@@ -31,10 +31,16 @@ Action mapInput(InputEvent ev, bool screen_on, bool pocket_locked) {
   switch (ev) {
     case InputEvent::UsrClick:
     case InputEvent::KeyTab:
+    case InputEvent::TrackDown:
+    case InputEvent::TrackRight:
       return Action::Next;
     case InputEvent::UsrDoubleClick:
     case InputEvent::AuxPress:
+    case InputEvent::TrackUp:
       return Action::Prev;
+    case InputEvent::TrackLeft:
+    case InputEvent::KeyBackspace:
+      return Action::Back;
     case InputEvent::UsrHold:
     case InputEvent::TouchTap:
     case InputEvent::KeyEnter:

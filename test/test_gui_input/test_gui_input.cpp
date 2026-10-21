@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include "helpers/gui/InputTiming.h"
+#include "helpers/gui/KeyInput.h"
 
 using namespace offband::gui;
 
@@ -144,6 +145,64 @@ TEST(ScreenTimer, ZeroDisablesThatStep) {
 
 TEST(ScreenTimer, AlwaysOnWins) {
   EXPECT_EQ(screenStateFor(10000000, 30000, 120000, true), ScreenState::On);
+}
+
+// ------------------------------------------- T-Deck keyboard (J4 #1727)
+
+TEST(TDeckKeyboard, PrintableAsciiIsACharacter) {
+  for (uint8_t b : {uint8_t(' '), uint8_t('a'), uint8_t('Z'), uint8_t('1'), uint8_t('~'), uint8_t('$')}) {
+    EXPECT_EQ(KeyKind::Char, classifyKey(b)) << int(b);
+  }
+}
+
+TEST(TDeckKeyboard, EnterAndBackspace) {
+  EXPECT_EQ(KeyKind::Enter, classifyKey(0x0D));
+  EXPECT_EQ(KeyKind::Enter, classifyKey(0x0A));
+  EXPECT_EQ(KeyKind::Backspace, classifyKey(0x08));
+  EXPECT_EQ(KeyKind::Backspace, classifyKey(0x7F));
+}
+
+// 0 is "no key"; Alt+C sends 0x0C and Shift on a symbol a control code; a
+// byte above ASCII is a glitch. None of them may reach a draft.
+TEST(TDeckKeyboard, NoKeyControlCodesAndHighBytesAreIgnored) {
+  for (uint8_t b : {uint8_t(0x00), uint8_t(0x0C), uint8_t(0x03), uint8_t(0x1B), uint8_t(0x1F),
+                    uint8_t(0x80), uint8_t(0xFF)}) {
+    EXPECT_EQ(KeyKind::None, classifyKey(b)) << int(b);
+  }
+}
+
+// ------------------------------------------- T-Deck trackball (J4 #1727)
+
+TEST(Trackball, OnePulseAStepByDefault) {
+  uint8_t carry = 0;
+  EXPECT_EQ(0, trackballSteps(0, 1, &carry));
+  EXPECT_EQ(1, trackballSteps(1, 1, &carry));
+  EXPECT_EQ(2, trackballSteps(2, 1, &carry));
+  EXPECT_EQ(0, carry);
+}
+
+TEST(Trackball, APartialStepCarriesOver) {
+  uint8_t carry = 0;
+  EXPECT_EQ(0, trackballSteps(1, 2, &carry));
+  EXPECT_EQ(1, carry);
+  EXPECT_EQ(1, trackballSteps(1, 2, &carry));
+  EXPECT_EQ(0, carry);
+  EXPECT_EQ(1, trackballSteps(3, 2, &carry));
+  EXPECT_EQ(1, carry);
+}
+
+TEST(Trackball, AHardSpinIsCappedAndLeavesNothingBehind) {
+  uint8_t carry = 0;
+  EXPECT_EQ(kTrackballMaxSteps, trackballSteps(40, 1, &carry));
+  EXPECT_EQ(0, carry);
+  EXPECT_EQ(0, trackballSteps(0, 1, &carry));
+  EXPECT_EQ(kTrackballMaxSteps, trackballSteps(1000000, 2, &carry));
+}
+
+TEST(Trackball, BadArgumentsMoveNothingOrActAsOne) {
+  EXPECT_EQ(0, trackballSteps(5, 1, nullptr));
+  uint8_t carry = 0;
+  EXPECT_EQ(2, trackballSteps(2, 0, &carry));   // 0 pulses a step reads as 1
 }
 
 int main(int argc, char** argv) {

@@ -47,7 +47,17 @@ GUI_FLAGS = {"PIN_TFT_MISO": "38", "PIN_SD_CS": "39", "DISPLAY_CLASS": "GuiPanel
              # GT911 touch on the board bus with the keyboard; reset is RC-only (#1724, #1726).
              "TOUCH_GT911": "1", "PIN_BOARD_SDA": "18", "PIN_BOARD_SCL": "8",
              "PIN_TOUCH_SDA": "18", "PIN_TOUCH_SCL": "8", "PIN_TOUCH_RST": "-1",
-             "GUI_TOUCH_SWAP_XY": "1"}
+             "GUI_TOUCH_SWAP_XY": "1",
+             # Keyboard and trackball (J4 #1727); the trackball's press is USR (GPIO0).
+             "TDECK_KEYBOARD": "1", "PIN_TRACKBALL_UP": "3", "PIN_TRACKBALL_DOWN": "15",
+             "PIN_TRACKBALL_LEFT": "1", "PIN_TRACKBALL_RIGHT": "2"}
+TRACKBALL = ("PIN_TRACKBALL_UP", "PIN_TRACKBALL_DOWN", "PIN_TRACKBALL_LEFT", "PIN_TRACKBALL_RIGHT")
+
+
+def pin_flags(text):
+    """Every -D PIN_*/P_LORA_* flag with a GPIO number (-1 is "none"), as {name: value}."""
+    return {m.group(1): m.group(2)
+            for m in re.finditer(r"-D\s+((?:PIN|P_LORA)_\w+)=(\d+)\b", strip_comments(text, ";"))}
 
 
 def gui_branch(target):
@@ -95,6 +105,15 @@ def failures(ini, target, ci, hal=None):
     for name, want in GUI_FLAGS.items():
         if flag(gui, name) != want:
             out.append("the GUI env's %s must be %s; got %r" % (name, want, flag(gui, name)))
+    # A trackball line on a pin something else uses gets that device's traffic
+    # counted as rolls (or its interrupt steals the pin).
+    pins = pin_flags(hw)
+    pins.update(pin_flags(gui))
+    for t in TRACKBALL:
+        gpio = pins.get(t)
+        clash = sorted(n for n, v in pins.items() if v == gpio and n != t)
+        if gpio is not None and clash:
+            out.append("%s=%s is also %s: a trackball line must have its pin to itself" % (t, gpio, ", ".join(clash)))
     if flag(hw, "PIN_TFT_SCL") != flag(hw, "P_LORA_SCLK") or flag(hw, "PIN_TFT_SDA") != flag(hw, "P_LORA_MOSI"):
         out.append("the display and the radio must share SCK and MOSI: they are one bus")
 
@@ -177,6 +196,20 @@ def test_negative_touch_off_the_board_bus_is_caught():
 
 def test_negative_the_chsc6x_driver_on_the_tdeck_is_caught():
     _fails_with("TOUCH_GT911 must be 1", ini=_swap_in(GUI, "-D TOUCH_GT911=1", ""))
+
+
+def test_negative_the_keyboard_left_out_is_caught():
+    _fails_with("TDECK_KEYBOARD must be 1", ini=_swap_in(GUI, "-D TDECK_KEYBOARD=1", ""))
+
+
+def test_negative_a_wrong_trackball_pin_is_caught():
+    _fails_with("PIN_TRACKBALL_DOWN must be 15", ini=_swap_in(GUI, "-D PIN_TRACKBALL_DOWN=15", "-D PIN_TRACKBALL_DOWN=16"))
+
+
+def test_negative_a_trackball_line_on_a_used_pin_is_caught():
+    # 0 is USR (the trackball's press): a roll line there would count presses as rolls.
+    _fails_with("a trackball line must have its pin to itself",
+                ini=_swap_in(GUI, "-D PIN_TRACKBALL_LEFT=1", "-D PIN_TRACKBALL_LEFT=0"))
 
 
 def test_negative_a_portrait_start_is_caught():
