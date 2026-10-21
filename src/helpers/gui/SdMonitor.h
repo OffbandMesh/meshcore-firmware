@@ -63,6 +63,12 @@ private:
 // Settings text (I9). Bytes as the page shows them: "28.9 GB", "512 MB".
 const char* sdStatusText(SdState s);
 void sdSizeText(uint64_t bytes, char* out, unsigned out_len);
+// The Settings list's SD card value (mockup 2): the free space while the
+// card works ("28.9 GB free"), "Unavailable" once a card has gone, "Can't
+// read card" for one that won't mount, "No card" if none was ever seen.
+// *alarm: the list shows it in red.
+void sdListValue(SdState s, bool usage_ok, uint64_t free_bytes, char* out, unsigned out_len,
+                 bool* alarm);
 
 }  // namespace gui
 }  // namespace offband

@@ -34,6 +34,8 @@ public:
 
   // Bytes on the volume. False if not mounted.
   bool usage(uint64_t* total, uint64_t* free_bytes);
+  // The card's own size and its volume's type ("FAT32"). False if not mounted.
+  bool describe(uint64_t* capacity, const char** fs_type);
 
   // Erases the card with a fresh FAT volume and mounts it. Works on a card
   // that won't mount, which is the point of offering it there.
@@ -41,6 +43,7 @@ public:
 
 private:
   sdmmc_card_t* _card = nullptr;
+  const char* _fs_type = "FAT";   // read once at mount: f_getfree can scan the whole FAT
 };
 
 // A file on the card, for SdArchive.

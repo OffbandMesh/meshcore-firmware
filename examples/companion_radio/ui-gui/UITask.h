@@ -99,6 +99,14 @@ public:
   bool syncTimeFromGps() override;
   void reboot() override;
   uint16_t deleteAllPaths() override;
+#ifdef PIN_SD_CS
+  bool sdSlot() override { return true; }
+  void sdView(SdView* out) override;
+  bool sdFormat() override;
+  // A copy still running after this long shows the notice (mockup 6). Two
+  // seconds: shorter than anyone waits wondering, longer than a quick catch-up.
+  static constexpr uint32_t kSdNoticeMs = 2000;
+#endif
 
 private:
   void fillNodeRow(const ContactInfo& ci, offband::gui::NodeRow& r, uint8_t* key_copy, uint32_t now, bool clock_ok);

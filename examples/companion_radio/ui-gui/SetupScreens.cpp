@@ -37,11 +37,13 @@ const char* const kTypeName[4] = {"Companions", "Repeaters", "Room servers", "Se
 const char* const kModeName[] = {"All messages", "Mentions only", "Off"};   // as the notification sheet
 const char* const kLookName[] = {"Modern", "Classic"};
 
-const char* const kPageName[] = {"Node",    "Radio",        "Radio stats", "Sensors", "Privacy", "Contacts",
+const char* const kPageName[] = {"Node",    "Radio",        "Radio stats", "Sensors", "SD card", "Privacy", "Contacts",
                                  "Messages & alerts", "Display", "Connectivity", "Power", "Actions", "Debug",
                                  "About device"};
 // The list's icon tiles: the font's emoji nearest the drawn icons.
-const char* const kPageIcon[] = {"👤", "📡", "📈", "🌡", "🛡", "👥", "🔔", "🖥", "📶", "🔋", "⚡", "🔧", "📋"};
+const char* const kPageIcon[] = {"👤", "📡", "📈", "🌡", "💾", "🛡", "👥", "🔔", "🖥", "📶", "🔋", "⚡", "🔧", "📋"};
+// SD card (Epic I, mockup 3): the one action row.
+constexpr uint8_t kSdFormat = 0;
 // Sensors (Epic M): the Units row's id, past any reading's.
 constexpr uint8_t kSensUnits = 200;
 constexpr size_t kPages = sizeof(kPageName) / sizeof(kPageName[0]);
@@ -116,19 +118,27 @@ void GuiShell::setNote(const char* text) {
 void GuiShell::updateSetup(uint32_t now_ms) {
   // Radio stats: live, once a second while open (no sheet on it). Sensors
   // (Epic M): every 5 s, the rate the readings are taken at.
-  const bool live = _set_page == SetPage::Stats || _set_page == SetPage::Sensors;
+  // SD card refreshes too, so a pulled or returned card shows without leaving.
+  const bool live = _set_page == SetPage::Stats || _set_page == SetPage::Sensors || _set_page == SetPage::Sd;
   if (_tab == Tab::Setup && !_locked && live && _ss == SetSheet::None && _sheet == Sheet::None &&
       int32_t(now_ms - _stats_at) >= 0) {
-    _stats_at = now_ms + (_set_page == SetPage::Sensors ? 5000 : 1000);
+    _stats_at = now_ms + (_set_page == SetPage::Sensors ? 5000 : _set_page == SetPage::Sd ? 2000 : 1000);
     _stats_scroll = _set_body ? lv_obj_get_scroll_y(_set_body) : 0;
+    // Keep the row the buttons are on: only a tap records it otherwise, so a
+    // refresh would drop focus back to the top (SD card's Format card is the
+    // last row). Rows carry their id + 1 as user data.
+    if (lv_obj_t* f = lv_group_get_focused(_group)) {
+      const uintptr_t ud = uintptr_t(lv_obj_get_user_data(f));
+      if (ud) _set_focus_row = uint8_t(ud - 1);
+    }
     rebuild();
   }
   if (!_set_note[0] || lv_tick_elaps(_set_note_at) < 2000) return;
   _set_note[0] = '\0';
   if (_note_row != 0xFF) {   // an action's result: its row's hint comes back
     _note_row = 0xFF;
-    if (_tab == Tab::Setup && !_locked && _set_page == SetPage::Actions && _ss == SetSheet::None &&
-        _sheet == Sheet::None) {
+    if (_tab == Tab::Setup && !_locked && (_set_page == SetPage::Actions || _set_page == SetPage::Sd) &&
+        _ss == SetSheet::None && _sheet == Sheet::None) {
       rebuild();
     }
     return;
@@ -141,7 +151,9 @@ void GuiShell::updateSetup(uint32_t now_ms) {
 void GuiShell::buildSetup(lv_obj_t* content) {
   SlowStep slow("setup", int(_set_page));
   _set_body = nullptr;
-  if (_set_page != SetPage::Stats && _set_page != SetPage::Sensors) _stats_scroll = 0;   // a fresh visit starts at the top
+  if (_set_page != SetPage::Stats && _set_page != SetPage::Sensors && _set_page != SetPage::Sd) {
+    _stats_scroll = 0;   // a fresh visit starts at the top
+  }
   lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
   if (_set_page == SetPage::List) buildSetupList(content);
   else if (_set_page == SetPage::Radio) buildRadioPage(content);
@@ -149,6 +161,7 @@ void GuiShell::buildSetup(lv_obj_t* content) {
   else if (_set_page == SetPage::Node) buildNodePage(content);
   else if (_set_page == SetPage::Stats) buildStatsPage(content);
   else if (_set_page == SetPage::Sensors) buildSensorsPage(content);
+  else if (_set_page == SetPage::Sd) buildSdPage(content);
   else if (_set_page == SetPage::Privacy) buildPrivacyPage(content);
   else if (_set_page == SetPage::Contacts) buildContactsPage(content);
   else if (_set_page == SetPage::Display) buildDisplayPage(content);
@@ -285,6 +298,7 @@ void GuiShell::buildSetupList(lv_obj_t* content) {
   char v[48];
   for (size_t i = 0; i < kPages; i++) {
     const SetPage p = SetPage(i);
+    if (p == SetPage::Sd && !_model->sdSlot()) continue;   // only boards with a card slot
     lv_obj_t* row = box(list, LV_PCT(100), _lay.cat_row_h);   // 34, or 30 in class B
     lv_obj_set_style_pad_hor(row, 8, 0);
     lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
@@ -302,7 +316,15 @@ void GuiShell::buildSetupList(lv_obj_t* content) {
     lv_obj_center(label(ic, FontRole::BodySmall, p == SetPage::Actions ? _t.warn : _t.sig, kPageIcon[i]));
     label(row, FontRole::Body, _t.ink, kPageName[i]);
     _model->setupSummary(p, v, sizeof v);
-    lv_obj_t* vl = label(row, FontRole::BodySmall, _t.ink2);
+    uint32_t value_ink = _t.ink2;
+    if (p == SetPage::Sd) {   // a card that's gone or won't mount reads red (mockup 2)
+      SdView sd;
+      _model->sdView(&sd);
+      bool alarm = false;
+      sdListValue(sd.state, sd.usage_ok, sd.free_bytes, v, sizeof v, &alarm);
+      if (alarm) value_ink = _t.bad;
+    }
+    lv_obj_t* vl = label(row, FontRole::BodySmall, value_ink);
     userText(vl, v);
     lv_obj_set_flex_grow(vl, 1);
     lv_obj_set_style_text_align(vl, LV_TEXT_ALIGN_RIGHT, 0);
@@ -643,6 +665,86 @@ void GuiShell::buildSensorsPage(lv_obj_t* content) {
   lv_obj_scroll_to_y(body, _stats_scroll, LV_ANIM_OFF);
 }
 
+// SD card (Epic I #1705; owner-approved mockups 3, 4 and 7, 2026-10-21):
+// what the card is doing, how full it is, and Format card. Refreshed every
+// 2 s, so a card pulled or put back shows without leaving the page.
+void GuiShell::buildSdPage(lv_obj_t* content) {
+  setHeader(content, "SD card");
+  lv_obj_t* body = pageBody(content);
+  _set_body = body;
+  SdView sd;
+  _model->sdView(&sd);
+  const bool working = sd.state == SdState::Working;
+  char v[24];
+  uint8_t id = 1;   // 0 is Format card
+
+  // Class B sets the details and the space side by side (mockup 7).
+  lv_obj_t* left = body;
+  lv_obj_t* right = body;
+  if (landscape() && working) {
+    lv_obj_t* cols = box(body, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(cols, LV_FLEX_FLOW_ROW);
+    left = box(cols, LV_PCT(50), LV_SIZE_CONTENT);
+    right = box(cols, LV_PCT(50), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_flow(right, LV_FLEX_FLOW_COLUMN);
+  }
+
+  lv_obj_t* st = setRow(left, id++, "Status", nullptr, sdStatusText(sd.state), kInfo, false, false, false);
+  const uint32_t st_ink = working ? _t.ok : sd.state == SdState::NeverSeen ? _t.ink2 : _t.bad;
+  lv_obj_set_style_text_color(lv_obj_get_child(st, -1), c(st_ink), 0);
+
+  if (working) {
+    if (sd.card[0]) setRow(left, id++, "Card", nullptr, sd.card, kInfo, false, false, false);
+    textf(v, sizeof v, "%lu", (unsigned long)sd.on_card);
+    setRow(left, id++, landscape() ? "Messages" : "Messages on card", nullptr, v, kInfo, false, false, false);
+    if (sd.usage_ok && sd.total > 0) {
+      if (!landscape()) setSection(right, "Space");
+      lv_obj_t* hold = box(right, LV_PCT(100), LV_SIZE_CONTENT);   // LVGL 8 has no margins
+      lv_obj_set_style_pad_hor(hold, 8, 0);
+      lv_obj_set_style_pad_ver(hold, 4, 0);
+      lv_obj_t* bar = box(hold, LV_PCT(100), 8);
+      lv_obj_set_style_border_width(bar, 1, 0);
+      lv_obj_set_style_border_color(bar, c(_t.line), 0);
+      lv_obj_set_style_radius(bar, 3, 0);
+      const uint64_t used = sd.total > sd.free_bytes ? sd.total - sd.free_bytes : 0;
+      lv_obj_t* fill = box(bar, LV_PCT(int16_t(used * 100 / sd.total)), LV_PCT(100));
+      lv_obj_set_style_bg_opa(fill, LV_OPA_COVER, 0);
+      lv_obj_set_style_bg_color(fill, c(_t.sig), 0);
+      sdSizeText(used, v, sizeof v);
+      setRow(right, id++, "Used", nullptr, v, kInfo, false, false, false);
+      sdSizeText(sd.free_bytes, v, sizeof v);
+      setRow(right, id++, "Free", nullptr, v, kInfo, false, false, false);
+      sdSizeText(sd.total, v, sizeof v);
+      setRow(right, id++, "Total", nullptr, v, kInfo, false, false, false);
+    }
+  } else if (sd.state != SdState::NeverSeen) {   // mockup 4: the card is out, or won't mount
+    setRow(body, id++, "Saving to", nullptr, "Flash", kInfo, false, false, false);
+    if (sd.waiting) {
+      textf(v, sizeof v, "%u message%s", unsigned(sd.waiting), sd.waiting == 1 ? "" : "s");
+      setRow(body, id++, "Waiting to copy", nullptr, v, kInfo, false, false, false);
+    }
+    lv_obj_t* foot = label(body, FontRole::Label, _t.dim,
+                           "Messages are kept in flash until the card is back, then copied to it. "
+                           "Flash holds up to 1,000.");
+    lv_obj_set_width(foot, LV_PCT(100));
+    lv_label_set_long_mode(foot, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_pad_all(foot, 8, 0);
+  }
+
+  // Format card: on a card that works, and on one that won't mount (that's how
+  // it gets fixed from here). With no card in, there's nothing to format.
+  const bool can_format = working || sd.state == SdState::Failed;
+  const bool note = _note_row == kSdFormat && _set_note[0];
+  lv_obj_t* fmt = setRow(body, kSdFormat, "Format card", note ? _set_note : nullptr, nullptr, kVal, false,
+                         false, !can_format);
+  lv_obj_t* kk = lv_obj_get_child(fmt, 0);
+  lv_obj_set_style_text_color(lv_obj_get_child(kk, 0), c(can_format ? _t.bad : _t.dim), 0);
+
+  lv_obj_update_layout(body);
+  lv_obj_scroll_to_y(body, _stats_scroll, LV_ANIM_OFF);
+}
+
 // Privacy (mockup 11): location in adverts, extra ACKs, telemetry.
 void GuiShell::buildPrivacyPage(lv_obj_t* content) {
   setHeader(content, "Privacy");
@@ -971,6 +1073,13 @@ void GuiShell::setRowPressed(uint8_t id) {
       case wTouch: setFlag(g.wake_touch); break;
       default: break;
     }
+    return;
+  }
+  if (_set_page == SetPage::Sd) {
+    if (id != kSdFormat) return;   // the rest are read-only
+    SdView sd;
+    _model->sdView(&sd);
+    if (sd.state == SdState::Working || sd.state == SdState::Failed) openSetSheet(SetSheet::Confirm, id);
     return;
   }
   if (_set_page == SetPage::Actions) {
@@ -1396,6 +1505,28 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
       break;
     }
     case SetSheet::Confirm: {   // Discard changes? (mockup 6); an action (mockup 15)
+      if (_set_page == SetPage::Sd) {   // Epic I mockup 5: Cancel first, and the default
+        SdView sd;
+        _model->sdView(&sd);
+        char what[176];
+        if (sd.state == SdState::Working) {
+          textf(what, sizeof what,
+                "This erases everything on the card: %lu messages and any other files. It can't be undone.\n"
+                "The newest 1,000 messages stay in flash.",
+                (unsigned long)sd.on_card);
+        } else {
+          textf(what, sizeof what,
+                "This erases everything on the card. It can't be undone.\n"
+                "The newest 1,000 messages stay in flash.");
+        }
+        title("Format the SD card?", what);
+        lv_obj_t* br = buttonRow();
+        button(br, 0, "Cancel", _t.ink, _t.line, false);
+        button(br, 1, "Format", _t.bad, _t.bad, false);
+        _ss_count = 2;
+        setSheetCursor(0);
+        break;
+      }
       if (_set_page == SetPage::Actions) {   // Cancel first, and the default
         const bool reboot = row == aReboot;
         if (reboot) {
@@ -1784,6 +1915,9 @@ void GuiShell::setSheetPress(int i) {
     case SetSheet::Confirm:
       if (i == 0) {
         closeSetSheet();   // Keep editing; an action's Cancel
+      } else if (_set_page == SetPage::Sd) {
+        closeSetSheet();
+        actionDone(kSdFormat, _model->sdFormat() ? "Formatted ✓" : "Format failed");
       } else if (_set_page == SetPage::Actions) {
         const uint8_t row = _ss_row;
         closeSetSheet();

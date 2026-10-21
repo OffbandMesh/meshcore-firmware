@@ -47,6 +47,7 @@ const lv_point_t kTickV[] = {{5, 0}, {5, 2}};
 const lv_point_t kTickV2[] = {{5, 9}, {5, 11}};
 const lv_point_t kTickH[] = {{0, 5}, {2, 5}};
 const lv_point_t kTickH2[] = {{9, 5}, {11, 5}};
+const lv_point_t kSdCut[] = {{0, 2}, {2, 0}};   // the SD card's clipped corner
 
 uint32_t toneRgb(const ThemeTokens& t, Tone tone) {
   switch (tone) {
@@ -112,6 +113,17 @@ void StatusBar::build(lv_obj_t* parent, const ThemeTokens& t, LongPressFn on_lor
   // Everything after the spacer sits at the right edge.
   lv_obj_t* spacer = box(strip, 1, 1);
   lv_obj_set_flex_grow(spacer, 1);
+
+  // The SD disk (Epic I, owner 2026-10-21): first of the right-hand icons,
+  // green while the card works, red once it's gone or won't mount. A card
+  // shape: a filled body with its top-left corner clipped by a line in the
+  // strip's own color.
+  _sd = box(strip, 8, 11);
+  lv_obj_set_style_bg_opa(_sd, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(_sd, 1, 0);
+  _sd_cut = line(_sd, kSdCut, 2, t.bg2);
+  lv_obj_set_style_line_width(_sd_cut, 3, 0);
+  lv_obj_add_flag(_sd, LV_OBJ_FLAG_HIDDEN);
 
   // LoRa bars: the long-press target, padded out to a finger-sized area.
   _bars = box(strip, 11, kHeight);
@@ -183,6 +195,15 @@ void StatusBar::update(const StatusReadings& r, uint32_t now_ms) {
       lv_obj_clear_flag(_mail, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(_mail, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+
+  if (first || r.sd != _shown.sd) {
+    if (r.sd == SdIcon::None) {
+      lv_obj_add_flag(_sd, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_set_style_bg_color(_sd, c(r.sd == SdIcon::Green ? _t.ok : _t.bad), 0);
+      lv_obj_clear_flag(_sd, LV_OBJ_FLAG_HIDDEN);
     }
   }
 

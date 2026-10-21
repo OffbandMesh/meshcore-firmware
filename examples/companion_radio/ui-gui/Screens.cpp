@@ -156,11 +156,13 @@ void GuiShell::openThread(int thread) {
 void GuiShell::setTheme(const ThemeTokens& t, Look look) {
   _t = t;
   _look = lookTokens(look);
+  sdNotice(false, 0, 0);   // redrawn in the new colors on the next tick
   rebuild();
 }
 
 void GuiShell::setLayout(const Layout& l) {
   _lay = l;
+  sdNotice(false, 0, 0);   // redrawn at the new size on the next tick
   if (_model) rebuild();   // before begin() only the layout is kept
 }
 
@@ -197,6 +199,49 @@ lv_obj_t* GuiShell::sheetPanel(lv_obj_t* backdrop) {
   lv_obj_set_flex_flow(sheet, LV_FLEX_FLOW_COLUMN);
   lv_obj_add_flag(sheet, LV_OBJ_FLAG_CLICKABLE);   // a tap on the sheet isn't a backdrop tap
   return sheet;
+}
+
+// The SD copy notice (Epic I #1705, owner-approved mockup 6): on the top
+// layer, over whatever screen is up, while the first copy (or a catch-up)
+// runs long enough to notice. The radio keeps receiving underneath.
+void GuiShell::sdNotice(bool show, uint16_t done, uint16_t total) {
+  if (!show) {
+    if (_sdn) lv_obj_del(_sdn);
+    _sdn = _sdn_bar = _sdn_count = nullptr;
+    return;
+  }
+  if (!_sdn) {
+    _sdn = box(lv_layer_top(), _lay.w, _lay.h - kStatusH);
+    lv_obj_set_pos(_sdn, 0, kStatusH);
+    lv_obj_set_style_bg_opa(_sdn, LV_OPA_70, 0);
+    lv_obj_set_style_bg_color(_sdn, lv_color_black(), 0);
+    lv_obj_add_flag(_sdn, LV_OBJ_FLAG_CLICKABLE);   // taps don't reach the screen under it
+    lv_obj_t* p = box(_sdn, _lay.w - 24, LV_SIZE_CONTENT);
+    lv_obj_center(p);
+    lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(p, c(_t.bg3), 0);
+    lv_obj_set_style_border_width(p, 1, 0);
+    lv_obj_set_style_border_color(p, c(_t.line), 0);
+    lv_obj_set_style_radius(p, 8, 0);
+    lv_obj_set_style_pad_all(p, 10, 0);
+    lv_obj_set_style_pad_row(p, 6, 0);
+    lv_obj_set_flex_flow(p, LV_FLEX_FLOW_COLUMN);
+    label(p, FontRole::Body, _t.ink, "Copying messages to the SD card");
+    lv_obj_t* track = box(p, LV_PCT(100), 8);
+    lv_obj_set_style_border_width(track, 1, 0);
+    lv_obj_set_style_border_color(track, c(_t.line), 0);
+    lv_obj_set_style_radius(track, 3, 0);
+    _sdn_bar = box(track, 0, LV_PCT(100));
+    lv_obj_set_style_bg_opa(_sdn_bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(_sdn_bar, c(_t.sig), 0);
+    _sdn_count = label(p, FontRole::Meta, _t.dim, "");
+    lv_obj_t* hint = label(p, FontRole::Label, _t.ink2, "The radio keeps receiving. Leave the card in until this finishes.");
+    lv_obj_set_width(hint, LV_PCT(100));
+    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+  }
+  const uint16_t pct = total ? uint16_t(uint32_t(done) * 100 / total) : 0;
+  lv_obj_set_width(_sdn_bar, LV_PCT(pct > 100 ? 100 : pct));
+  lv_label_set_text_fmt(_sdn_count, "%u of %u", unsigned(done), unsigned(total));
 }
 
 void GuiShell::showLock() {
