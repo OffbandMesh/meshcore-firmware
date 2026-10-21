@@ -40,6 +40,8 @@ sdspi_device_config_t deviceConfig() {
 
 }  // namespace
 
+static const char* readFsType(sdmmc_card_t* card);
+
 MountOutcome SdCard::mount() {
   if (_card) return MountOutcome::Ok;
   sdmmc_host_t host = hostConfig();
@@ -49,7 +51,10 @@ MountOutcome SdCard::mount() {
   cfg.max_files = 4;
   cfg.allocation_unit_size = 16 * 1024;
   const esp_err_t e = esp_vfs_fat_sdspi_mount(kMount, &host, &dev, &cfg, &_card);
-  if (e == ESP_OK) return MountOutcome::Ok;
+  if (e == ESP_OK) {
+    _fs_type = readFsType(_card);
+    return MountOutcome::Ok;
+  }
   _card = nullptr;
   mesh_log_line(MLOG_BOOT, "[sd] mount: %s\n", esp_err_to_name(e));
   switch (e) {
@@ -88,6 +93,32 @@ bool SdCard::usage(uint64_t* total, uint64_t* free_bytes) {
   if (total) *total = uint64_t(fs->n_fatent - 2) * cluster;
   if (free_bytes) *free_bytes = uint64_t(free_clusters) * cluster;
   return true;
+}
+
+bool SdCard::describe(uint64_t* capacity, const char** fs_type) {
+  if (!_card) return false;
+  if (capacity) *capacity = uint64_t(_card->csd.capacity) * uint64_t(_card->csd.sector_size);
+  if (fs_type) *fs_type = _fs_type;
+  return true;
+}
+
+// The volume's type, once per mount. f_getfree is the call that hands back
+// the FATFS; on a card without a valid FSINFO its first call scans the FAT,
+// and FatFs then caches the free count, so usage() stays cheap after this.
+static const char* readFsType(sdmmc_card_t* card) {
+  FATFS* fs = nullptr;
+  DWORD free_clusters = 0;
+  const BYTE pdrv = ff_diskio_get_pdrv_card(card);
+  if (pdrv == 0xFF) return "FAT";
+  char drv[3] = {char('0' + pdrv), ':', 0};
+  if (f_getfree(drv, &free_clusters, &fs) != FR_OK || !fs) return "FAT";
+  switch (fs->fs_type) {
+    case FS_FAT12: return "FAT12";
+    case FS_FAT16: return "FAT16";
+    case FS_FAT32: return "FAT32";
+    case FS_EXFAT: return "exFAT";
+    default: return "FAT";
+  }
 }
 
 // ESP-IDF 4.4 has no esp_vfs_fat_sdcard_format(), so this is its sequence by

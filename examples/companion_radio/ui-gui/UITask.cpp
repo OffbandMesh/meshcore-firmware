@@ -443,8 +443,35 @@ StatusReadings UITask::statusReadings(uint32_t now) {
   r.gps = gpsIcon(gps_on, the_mesh.guiFixType(), without);
 
   r.batt_pct = battPercent();
+#ifdef PIN_SD_CS
+  r.sd = the_mesh.guiSd().icon();   // Epic I: green, red, or none
+#endif
   return r;
 }
+
+#ifdef PIN_SD_CS
+// Settings -> SD card (Epic I #1705).
+void UITask::sdView(SdView* out) {
+  *out = SdView{};
+  GuiSd& sd = the_mesh.guiSd();
+  out->state = sd.state();
+  out->waiting = sd.waiting(the_mesh.guiStore());
+  if (out->state != SdState::Working) return;
+  out->usage_ok = sd.usage(&out->total, &out->free_bytes);
+  out->on_card = sd.messagesOnCard();
+  uint64_t cap = 0;
+  const char* fs = nullptr;
+  if (sd.describe(&cap, &fs)) {
+    char size[16];
+    sdSizeText(cap, size, sizeof size);
+    snprintf(out->card, sizeof out->card, "%s · %s", size, fs ? fs : "FAT");
+  }
+}
+
+bool UITask::sdFormat() {
+  return the_mesh.guiSd().format(millis(), the_mesh.guiStore());
+}
+#endif
 
 void UITask::homeData(HomeData* d) {
   memset(d, 0, sizeof *d);
@@ -1690,6 +1717,15 @@ void UITask::loop() {
       _shell.status().tick(now);
     }
     _shell.setAdvertState(_advert.state(now));
+#ifdef PIN_SD_CS
+    // The SD copy notice (Epic I mockup 6): only for a copy still running
+    // after kSdNoticeMs, so a quick one never flashes a sheet.
+    {
+      const GuiSd& sd = the_mesh.guiSd();
+      const bool show = sd.copying() && now - sd.copyStartedMs() >= kSdNoticeMs && !_shell.locked();
+      _shell.sdNotice(show, sd.copyDone(), sd.copyTotal());
+    }
+#endif
     GUI_SPAN(s_t_status);
   }
   if ((int32_t)(now - _next_screen) >= 0) {

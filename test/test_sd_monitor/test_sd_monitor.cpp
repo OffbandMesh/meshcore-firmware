@@ -234,6 +234,25 @@ TEST(SdMonitor, AStillMissingCardIsNoNewChange) {
   EXPECT_EQ(r, m.revision()) << "Removed -> Removed redraws the screen for nothing";
 }
 
+TEST(SdText, TheSettingsListValue) {
+  char b[24];
+  bool alarm = true;
+  sdListValue(SdState::Working, true, 28900000000ULL, b, sizeof b, &alarm);
+  EXPECT_STREQ("28.9 GB free", b);
+  EXPECT_FALSE(alarm);
+  sdListValue(SdState::Working, false, 0, b, sizeof b, &alarm);
+  EXPECT_STREQ("Working", b) << "no usage yet: say it works, never \"0 MB free\"";
+  sdListValue(SdState::Removed, true, 28900000000ULL, b, sizeof b, &alarm);
+  EXPECT_STREQ("Unavailable", b);
+  EXPECT_TRUE(alarm);
+  sdListValue(SdState::Failed, false, 0, b, sizeof b, &alarm);
+  EXPECT_STREQ("Can't read card", b);
+  EXPECT_TRUE(alarm);
+  sdListValue(SdState::NeverSeen, false, 0, b, sizeof b, &alarm);
+  EXPECT_STREQ("No card", b);
+  EXPECT_FALSE(alarm) << "a board that never had a card isn't an alarm";
+}
+
 TEST(SdText, ATooSmallBufferIsCutNotOverrun) {
   char b[5];
   memset(b, 'x', sizeof(b));

@@ -47,7 +47,11 @@ public:
   uint32_t copyStartedMs() const { return _copy_started; }
 
   bool usage(uint64_t* total, uint64_t* free_bytes) { return _card.usage(total, free_bytes); }
+  bool describe(uint64_t* capacity, const char** fs_type) { return _card.describe(capacity, fs_type); }
   uint32_t messagesOnCard() const;
+  // Card out: live messages that will be copied when it's back ("Waiting to
+  // copy"). 0 if no card has been in since boot.
+  uint16_t waiting(const offband::gui::MsgStore& live) const;
 
   // Settings -> SD card -> Format card. Erases the card and starts the
   // archive again from the live store; flash is untouched.
@@ -65,6 +69,8 @@ private:
   uint32_t _owner = 0;
   bool _begun = false;
   uint32_t _rev = 0;
+  uint32_t _last_through = 0;   // the card's cursor when it was last open
+  bool _had_card = false;
   uint16_t _copy_total = 0;
   uint16_t _copy_done = 0;
   uint32_t _copy_started = 0;

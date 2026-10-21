@@ -61,6 +61,10 @@ bool GuiSd::openArchive(MsgStore& live) {
 }
 
 void GuiSd::closeArchive() {
+  if (_arch.ready()) {
+    _last_through = _arch.archivedThrough();
+    _had_card = true;
+  }
   _arch.close();
   _rec.close();
   _thr.close();
@@ -144,6 +148,11 @@ void GuiSd::loop(uint32_t now_ms, MsgStore& live) {
 }
 
 uint32_t GuiSd::messagesOnCard() const { return _arch.ready() ? _arch.stored() : 0; }
+
+uint16_t GuiSd::waiting(const MsgStore& live) const {
+  if (_arch.ready() || !_had_card) return 0;
+  return live.countAfter(_last_through);
+}
 
 bool GuiSd::format(uint32_t now_ms, MsgStore& live) {
   closeArchive();

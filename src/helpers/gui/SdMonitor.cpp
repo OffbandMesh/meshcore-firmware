@@ -88,6 +88,27 @@ const char* sdStatusText(SdState s) {
   return "No card";
 }
 
+void sdListValue(SdState s, bool usage_ok, uint64_t free_bytes, char* out, unsigned out_len,
+                 bool* alarm) {
+  if (alarm) *alarm = s == SdState::Removed || s == SdState::Failed;
+  if (!out || out_len == 0) return;
+  switch (s) {
+    case SdState::Working:
+      if (usage_ok) {
+        char size[16];
+        sdSizeText(free_bytes, size, sizeof size);
+        snprintf(out, out_len, "%s free", size);
+      } else {
+        snprintf(out, out_len, "%s", sdStatusText(s));
+      }
+      return;
+    case SdState::Removed: snprintf(out, out_len, "Unavailable"); return;
+    case SdState::Failed:
+    case SdState::NeverSeen: break;
+  }
+  snprintf(out, out_len, "%s", sdStatusText(s));
+}
+
 // Decimal units, as cards are labeled: a 32 GB card reads about 31.8 GB.
 void sdSizeText(uint64_t bytes, char* out, unsigned out_len) {
   if (!out || out_len == 0) return;
