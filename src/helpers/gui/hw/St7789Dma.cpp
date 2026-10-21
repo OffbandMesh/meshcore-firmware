@@ -44,7 +44,7 @@ bool St7789Dma::begin(spi_host_device_t host, const Pins& pins, uint32_t hz, uin
 
   spi_bus_config_t bus = {};
   bus.mosi_io_num = pins.mosi;
-  bus.miso_io_num = -1;
+  bus.miso_io_num = pins.miso;
   bus.sclk_io_num = pins.sck;
   bus.quadwp_io_num = -1;
   bus.quadhd_io_num = -1;

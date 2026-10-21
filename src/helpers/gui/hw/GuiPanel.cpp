@@ -38,6 +38,9 @@ bool GuiPanel::begin(size_t max_transfer) {
   pins.cs = PIN_TFT_CS;
   pins.dc = PIN_TFT_DC;
   pins.rst = PIN_TFT_RST;
+#ifdef PIN_TFT_MISO
+  pins.miso = PIN_TFT_MISO;   // the SD card on the same bus reads through it (#1677)
+#endif
   // SPI2: the radio owns SPI3. target.cpp's SPIClass defaults to HSPI, which
   // is SPI3 on the S3, and Arduino's SPI driver writes that peripheral's
   // registers directly, wiping the interrupt setup the IDF driver relies on.
