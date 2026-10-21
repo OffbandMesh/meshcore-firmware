@@ -2,6 +2,12 @@
 
 #include <string.h>
 
+// The board's natural orientation (Epic J #1434): 0 on the Heltecs' portrait
+// panels; a landscape board's env sets 90 so a fresh radio starts in class B.
+#ifndef GUI_DEFAULT_ROTATION
+  #define GUI_DEFAULT_ROTATION 0
+#endif
+
 namespace offband {
 namespace gui {
 
@@ -14,7 +20,7 @@ GuiPrefs::GuiPrefs() {
   look = 0;
   brightness = 100;
   dim_secs = 30;
-  rotation = 0;
+  rotation = GUI_DEFAULT_ROTATION;   // a landscape board (the T-Deck) starts in class B
   clock_12h = 0;
   notify_on = 1;
   notify_dm = 1;

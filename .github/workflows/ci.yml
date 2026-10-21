@@ -169,6 +169,13 @@ jobs:
       - name: R8 TFT GUI env pins
         run: python scripts/test_r8_tft_gui_env.py
 
+      # #1434: the T-Deck GUI env. Display, SD and radio share one SPI bus, so the
+      # radio must reach it through ESP-IDF (EspSharedSpiHal on SPI2), never an Arduino
+      # SPIClass that would take the pins from the display and card. Pins from LilyGo's
+      # schematic (#1724).
+      - name: T-Deck GUI env pins and shared bus
+        run: python scripts/test_tdeck_gui_env.py
+
       # #1704: the SD archive's call sites. The archive's rules are host-tested; this
       # checks the firmware uses them: every stored message whose delivery or echo
       # count changes also reaches the card, and the loop drives the card at all.
@@ -491,6 +498,9 @@ jobs:
           # #1676: the same GUI on the V4 R8 with the Expansion Kit V2 (Epic I).
           - heltec_v4_r8_tft_companion_radio_ble_gui
           - heltec_v4_r8_tft_companion_radio_ble_gui_diag
+          # #1434: the same GUI on the LilyGo T-Deck (Epic J), radio on the shared SPI2.
+          - LilyGo_TDeck_companion_radio_ble_gui
+          - LilyGo_TDeck_companion_radio_ble_gui_diag
           # #733: Heltec Vision Master E290 (ESP32-S3 + SX1262, 2.9" e-ink) --
           # first e-ink board; community-tester enablement off the upstream-1.17
           # variant. Owner scope (2026-08-13): companion ble+usb only, repeater
