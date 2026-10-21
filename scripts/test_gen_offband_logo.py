@@ -154,6 +154,65 @@ def test_st7735_row_matches_the_driver():
         assert panel / logical == float(s.group(1)), f"SCALE_{axis} disagrees with the table"
 
 
+def test_st7789lcd_row_matches_the_driver():
+    # No geometry macros here either: the panel size is implied by the scale
+    # factors the driver applies to the 128x64 canvas.
+    t = _target("OffbandLogoST7789LCD.h")
+    src = _read("src/helpers/ui/ST7789LCDDisplay.cpp")
+    for axis, panel, logical in (("X", t.panel_w, t.logical_w),
+                                 ("Y", t.panel_h, t.logical_h)):
+        m = re.search(rf"#define DISPLAY_SCALE_{axis} ([\d.]+)f?", src)
+        assert m, f"DISPLAY_SCALE_{axis} not found in ST7789LCDDisplay.cpp"
+        assert panel / logical == float(m.group(1)), f"DISPLAY_SCALE_{axis} disagrees"
+
+
+def test_st7789_rows_match_the_constructors():
+    # One driver, three panels, chosen by #if. The sizes live in the constructor
+    # arguments, so that is what this reads.
+    src = _read("src/helpers/ui/ST7789Display.h")
+    ctors = re.findall(r"GEOMETRY_RAWMODE,\s*(\d+)\s*,\s*(\d+)", src)
+    assert len(ctors) == 3, f"expected three ST7789Spi constructors, found {len(ctors)}"
+    from_driver = {(int(w), int(h)) for w, h in ctors}
+    from_table = {(t.panel_w, t.panel_h) for t in gen.SPLASH_TARGETS
+                  if t.driver.startswith("ST7789 (")}
+    assert from_table == from_driver, f"table {from_table} vs driver {from_driver}"
+
+
+def test_scindicator_row_matches_the_sprite_not_the_panel():
+    # The asset is sized for the sprite LGFXDisplay draws into -- the panel
+    # divided by UI_ZOOM -- not for the 480x480 panel itself.
+    t = _target("OffbandLogoSCIndicator.h")
+    hdr = _read("variants/sensecap_indicator-espnow/SCIndicatorDisplay.h")
+    m = re.search(r"LGFXDisplay\((\d+),\s*(\d+),", hdr)
+    assert m, "LGFXDisplay(w, h, ...) not found in SCIndicatorDisplay.h"
+    ini = _read("variants/sensecap_indicator-espnow/platformio.ini")
+    z = re.search(r"-D UI_ZOOM=([\d.]+)", ini)
+    assert z, "UI_ZOOM not found in the sensecap platformio.ini"
+    assert t.panel_w == int(int(m.group(1)) / float(z.group(1)))
+    assert t.panel_h == int(int(m.group(2)) / float(z.group(1)))
+
+
+def test_every_color_driver_has_a_target():
+    # The failure this catches: a new color driver ships with the mono lockup
+    # because nobody added its row. Every driver that overrides colorSplashArt
+    # must have an asset in the table.
+    import subprocess
+    # Shipped drivers only -- test/ carries fakes that override it on purpose.
+    out = subprocess.run(["git", "grep", "-l", "colorSplashArt() const override",
+                          "--", "src", "variants"],
+                         cwd=str(Path(_HERE).parent), capture_output=True, text=True).stdout
+    declared = {Path(p).stem for p in out.split() if p}
+    covered = {c for t in gen.SPLASH_TARGETS for c in t.classes}
+
+    # Exact class names both ways. Substring matching was the first version of this
+    # test and it was vacuous: a new ST7735SpecialDisplay would have passed on the
+    # strength of containing "ST7735" (found in review).
+    missing = declared - covered
+    assert not missing, f"{sorted(missing)} declare color art with no row in SPLASH_TARGETS"
+    stale = covered - declared
+    assert not stale, f"SPLASH_TARGETS names {sorted(stale)}, which no longer declares color art"
+
+
 def test_the_rc32_asset_is_still_shared_with_rc52():
     # Why the RC32 row is handled with care: RC52Display consumes the same header,
     # so a change to that row lands on two boards. If RC52 ever gets its own asset,

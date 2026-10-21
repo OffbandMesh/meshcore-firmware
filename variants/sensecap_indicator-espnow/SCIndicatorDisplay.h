@@ -1,6 +1,7 @@
 #pragma once
 
 #include <helpers/ui/LGFXDisplay.h>
+#include <helpers/ui/OffbandLogoSCIndicator.h>   // #868: this board's color splash art
 
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
@@ -125,4 +126,19 @@ class SCIndicatorDisplay : public LGFXDisplay {
   LGFX disp;
 public:
   SCIndicatorDisplay() : LGFXDisplay(480, 480, disp) {}
+
+  // #868: this board's color splash art. Sized for the sprite (480/UI_ZOOM), which
+  // is the space LGFXDisplay draws in; endFrame scales it onto the 480x480 panel.
+  const ColorArt* colorSplashArt() const override {
+#ifdef OFFBAND_SPLASH_SCINDICATOR_W
+    static const ColorArt art = {
+      offband_splash_scindicator,
+      OFFBAND_SPLASH_SCINDICATOR_W, OFFBAND_SPLASH_SCINDICATOR_H,
+      OFFBAND_SPLASH_SCINDICATOR_X, OFFBAND_SPLASH_SCINDICATOR_Y
+    };
+    return &art;
+#else
+    return nullptr;
+#endif
+  }
 };

@@ -1,4 +1,5 @@
 #include "ST7789LCDDisplay.h"
+#include "OffbandLogoST7789LCD.h"   // #868: this panel's color splash art
 
 #ifndef PIN_TFT_MISO
   #define PIN_TFT_MISO -1
@@ -145,6 +146,36 @@ uint16_t ST7789LCDDisplay::getTextWidth(const char* str) {
   display.getTextBounds(str, 0, 0, &x1, &y1, &w, &h);
 
   return w / DISPLAY_SCALE_X;
+}
+
+// 320x240 is what this driver draws in: init() is handed 240x320 and
+// DISPLAY_ROTATION 3 turns it, which is also why DISPLAY_SCALE_X/Y are 2.5/3.75
+// against the 128x64 canvas. The generator's table mirrors these two numbers.
+int ST7789LCDDisplay::physicalWidth() const { return 320; }
+int ST7789LCDDisplay::physicalHeight() const { return 240; }
+
+const DisplayDriver::ColorArt* ST7789LCDDisplay::colorSplashArt() const {
+#ifdef OFFBAND_SPLASH_ST7789LCD_W
+  static const ColorArt art = {
+    offband_splash_st7789lcd,
+    OFFBAND_SPLASH_ST7789LCD_W, OFFBAND_SPLASH_ST7789LCD_H,
+    OFFBAND_SPLASH_ST7789LCD_X, OFFBAND_SPLASH_ST7789LCD_Y
+  };
+  return &art;
+#else
+  return nullptr;
+#endif
+}
+
+void ST7789LCDDisplay::drawRGB565(int x, int y, const uint16_t* px, int w, int h) {
+  if (!px) return;
+
+  // This panel has no back buffer -- every primitive writes straight through --
+  // so the art is simply drawn where it belongs, in PHYSICAL pixels. Unlike every
+  // other primitive here, nothing is multiplied by DISPLAY_SCALE_X/Y: the asset is
+  // already sized for the panel, and scaling it would both stretch it and push it
+  // off the right-hand edge.
+  display.drawRGBBitmap(x, y, px, w, h);
 }
 
 void ST7789LCDDisplay::endFrame() {

@@ -94,6 +94,20 @@ class SplashTarget(NamedTuple):
     out: str         # header path, relative to the repo root
     prefix: str      # macro prefix: <prefix>_W, _H, _X, _Y
     array: str
+    # What this panel's alpha is flattened against. It MUST equal the driver's
+    # window_bkg: the blit is opaque, so a mismatch renders the artwork on a
+    # rectangle of the wrong color. Drivers do not share a background -- the RC32
+    # and ST7735 run the Offband dark theme, the ST7789LCD is still light.
+    bg: str = SPLASH_BG_HEX
+    # Which brand lockup to draw from. The two are not interchangeable: the dark
+    # lockup's ink is pale, for dark panels, and baking it onto a light panel
+    # leaves the wordmark all but invisible. It must follow `bg`.
+    light: bool = False
+    # The driver CLASSES this row serves, spelled exactly. The test that checks
+    # every color driver has an asset compares these names against the classes
+    # that override colorSplashArt(); spelled out rather than matched on substrings,
+    # which would let an ST7735SpecialDisplay pass on the strength of "ST7735".
+    classes: tuple = ()
 
 
 SPLASH_TARGETS = (
@@ -102,11 +116,48 @@ SPLASH_TARGETS = (
     # RC52Display (variants/heltec_rc52/), so a change here lands on two boards.
     SplashTarget("NV3001B (RC32, RCC6) and RC52Display", 220, 128, 128, 64,
                  "src/helpers/ui/OffbandLogoRGB565.h",
-                 "OFFBAND_SPLASH_RGB565", "offband_splash_rgb565"),
+                 "OFFBAND_SPLASH_RGB565", "offband_splash_rgb565",
+                 classes=("NV3001BDisplay", "RC52Display")),
     # createSprite(160, 80) and SCALE_X/SCALE_Y in ST7735Display.cpp.
     SplashTarget("ST7735", 160, 80, 128, 64,
                  "src/helpers/ui/OffbandLogoST7735.h",
-                 "OFFBAND_SPLASH_ST7735", "offband_splash_st7735"),
+                 "OFFBAND_SPLASH_ST7735", "offband_splash_st7735",
+                 classes=("ST7735Display",)),
+    # DISPLAY_SCALE_X/Y in ST7789LCDDisplay.cpp: 320x240 after DISPLAY_ROTATION 3,
+    # which is what the driver draws in -- not the 240x320 passed to init().
+    # heltec_v4, heltec_v4_r8 and lilygo_tdeck. Light theme, so the art is baked
+    # against white rather than INK (ST7789LCDDisplay.cpp window_bkg).
+    SplashTarget("ST7789LCD", 320, 240, 128, 64,
+                 "src/helpers/ui/OffbandLogoST7789LCD.h",
+                 "OFFBAND_SPLASH_ST7789LCD", "offband_splash_st7789lcd",
+                 bg="ffffff", light=True, classes=("ST7789LCDDisplay",)),
+    # The three ST7789Spi panels, from the constructors in ST7789Display.h. That
+    # driver keeps a 1-BIT buffer and renders each pixel as `bit ? _RGB : 0`, so
+    # an off pixel is black and the art bakes against black -- and the art cannot
+    # live in the buffer at all, which is why ST7789Spi composites it during the
+    # blit instead (#868).
+    SplashTarget("ST7789 (T114)", 240, 135, 128, 64,
+                 "src/helpers/ui/OffbandLogoST7789T114.h",
+                 "OFFBAND_SPLASH_ST7789_T114", "offband_splash_st7789_t114",
+                 bg="000000", classes=("ST7789Display",)),
+    SplashTarget("ST7789 (T190)", 320, 170, 128, 64,
+                 "src/helpers/ui/OffbandLogoST7789T190.h",
+                 "OFFBAND_SPLASH_ST7789_T190", "offband_splash_st7789_t190",
+                 bg="000000"),
+    SplashTarget("ST7789 (ThinkNode M9)", 320, 240, 128, 64,
+                 "src/helpers/ui/OffbandLogoST7789M9.h",
+                 "OFFBAND_SPLASH_ST7789_M9", "offband_splash_st7789_m9",
+                 bg="000000"),
+    # SenseCAP Indicator. LGFXDisplay draws into a sprite sized width()/height(),
+    # which is the 480x480 panel divided by UI_ZOOM (3.5), and endFrame zooms that
+    # sprite onto the panel. The art goes into the sprite with everything else, so
+    # it is sized in sprite pixels and scales with the rest of the UI rather than
+    # being the one element at native panel resolution. Light theme (LGFXDisplay.cpp
+    # window_bkg = 0xFFFF).
+    SplashTarget("SCIndicator", 137, 137, 137, 137,
+                 "src/helpers/ui/OffbandLogoSCIndicator.h",
+                 "OFFBAND_SPLASH_SCINDICATOR", "offband_splash_scindicator",
+                 bg="ffffff", light=True, classes=("SCIndicatorDisplay",)),
 )
 
 
@@ -313,8 +364,9 @@ def main():
     # never disturb the color assets or vice versa. The defaults are what ships.
     ap.add_argument("--rgb565-src", default=str(site_img / "logo-lockup-dark.png"),
                     help="source for the color assets (the dark lockup)")
-    ap.add_argument("--rgb565-bg", default=SPLASH_BG_HEX,
-                    help="splash background as RRGGBB; baked in, since the blit is opaque")
+    ap.add_argument("--rgb565-bg", default=None,
+                    help="override every target's baked background (RRGGBB); "
+                         "by default each target uses its own driver's window_bkg")
     ap.add_argument("--out-root", default=str(REPO_ROOT),
                     help="write the color headers under this root instead of the repo")
     ap.add_argument("--skip-rgb565", action="store_true")
@@ -348,16 +400,24 @@ def main():
     if a.skip_rgb565:
         return
 
-    bg = tuple(int(a.rgb565_bg[i:i + 2], 16) for i in (0, 2, 4))
-    art = trimmed_lockup(a.rgb565_src)
+    # One lockup per theme, loaded once. A light panel takes the light lockup: the
+    # dark one's ink is pale by design and renders as a ghost on white.
+    sources = {False: a.rgb565_src, True: a.src}
+    lockups = {k: trimmed_lockup(v) for k, v in sources.items()}
     for t in SPLASH_TARGETS:
+        # Each panel bakes against ITS OWN background, since the drivers do not
+        # agree on one; --rgb565-bg overrides every target, for trying a theme out.
+        bg_hex = a.rgb565_bg or t.bg
+        bg = tuple(int(bg_hex[i:i + 2], 16) for i in (0, 2, 4))
+        art = lockups[t.light]
         w, h = fit_size(*art.size, t)
         px, _, _ = image_to_rgb565(art.resize((w, h), Image.LANCZOS), bg)
         out = Path(a.out_root) / t.out
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(rgb565_header(t, Path(a.rgb565_src).name, a.rgb565_bg, px, w, h),
+        out.write_text(rgb565_header(t, Path(sources[t.light]).name, bg_hex, px, w, h),
                        newline="\n")
-        print(f"wrote {out}\n  {t.driver}: {w}x{h} ({len(px) * 2:,}B flash)")
+        print(f"wrote {out}\n  {t.driver}: {w}x{h} ({len(px) * 2:,}B flash, "
+              f"bg #{bg_hex}, {Path(sources[t.light]).name})")
 
 
 if __name__ == "__main__":
