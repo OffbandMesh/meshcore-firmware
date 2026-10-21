@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>T-Deck compose mockups</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* Offband theme tokens and screen parts, as in the Epic H and I mockups. Static markup. */
+:root{
+  --bg:#0F1412; --bg2:#161C19; --bg3:#1D2521; --line:#34403A; --line2:#232C28;
+  --ink:#EFF3E8; --ink2:#BAC4B5; --dim:#7C8B82; --sig:#7BEFA8; --sigInk:#0F1412;
+  --wash:rgba(123,239,168,.09); --warn:#FFA552; --bad:#FF7A6E; --r:6px;
+  --sans:'Barlow Condensed',sans-serif; --mono:'JetBrains Mono',monospace;
+  --page:#0a0d0c; --pageInk:#cfd6cc;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--page);color:var(--pageInk);font-family:var(--sans);padding:24px 16px 48px}
+h1{font-size:26px;font-weight:600;color:var(--ink)}
+h3{font-size:18px;font-weight:600;color:var(--sig);margin:28px 0 10px}
+.lede{font-size:16px;color:var(--dim);margin:6px 0 8px;max-width:1000px}
+.lede b{color:var(--ink2)}
+.q{font-size:15px;color:var(--ink2);max-width:1000px;margin:8px 0;line-height:1.35}
+.q b{color:var(--warn)}
+.grid{display:flex;flex-wrap:wrap;gap:28px}
+.card{width:400px;max-width:100%}
+.card h2{font-size:18px;font-weight:600;color:var(--ink)}
+.card .n{font-family:var(--mono);font-size:12px;color:var(--sig);margin-right:6px}
+.card p{font-size:14px;color:var(--ink2);margin:4px 0 10px;line-height:1.3;min-height:54px}
+.card ul{font-size:13px;color:var(--dim);margin:10px 0 0 16px;line-height:1.35}
+.card ul b{color:var(--ink2)}
+.dev{width:400px;height:300px;border:1px solid #2a332f;border-radius:10px;overflow:hidden;background:#000}
+.scr{width:320px;height:240px;transform:scale(1.25);transform-origin:0 0;background:var(--bg);color:var(--ink);
+  font-family:var(--sans);position:relative;overflow:hidden;display:flex;flex-direction:column}
+.sb{height:20px;flex:none;background:var(--bg2);border-bottom:1px solid var(--line2);display:flex;align-items:center;
+  padding:0 6px;font-family:var(--mono);font-size:10px;color:var(--ink2);gap:5px}
+.sb .clk{color:var(--ink);font-weight:600} .sb .right{margin-left:auto;display:flex;align-items:center;gap:5px}
+.sd{width:9px;height:11px;display:inline-block;background:var(--sig);clip-path:polygon(35% 0,100% 0,100% 100%,0 100%,0 30%)}
+.bodyr{flex:1;min-height:0;display:flex}
+.rail{width:48px;flex:none;display:flex;flex-direction:column;border-right:1px solid var(--line);background:var(--bg2)}
+.rail div{flex:1;display:flex;align-items:center;justify-content:center;font-size:8px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);border-left:2px solid transparent}
+.rail div.on{color:var(--sig);background:var(--wash);border-left-color:var(--sig);font-weight:600}
+.ct{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;position:relative}
+.ch{display:flex;align-items:center;gap:4px;height:28px;flex:none;padding:0 8px;border-bottom:1px solid var(--line2);font-size:13px}
+.ch .bk{color:var(--sig);font-size:15px;margin-right:2px} .ch .to{color:var(--dim)} .ch .cnt{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--dim)}
+.draft{margin:4px 8px 0;border:1px solid var(--sig);background:var(--wash);border-radius:var(--r);padding:5px 7px;font-size:13px;line-height:1.25;flex:none}
+.draft.grow{flex:1;min-height:0}
+.caret{display:inline-block;width:1px;height:12px;background:var(--sig);vertical-align:-2px;margin-left:1px}
+.chips{display:flex;gap:4px;margin:4px 8px 0;flex:none}
+.chips div{height:22px;border:1px solid var(--line);border-radius:12px;padding:0 6px;font-size:11px;color:var(--ink2);display:flex;align-items:center;white-space:nowrap}
+.kb{margin-top:auto;padding:2px 3px 3px;display:flex;flex-direction:column;gap:2px;flex:none}
+.kb .r{display:flex;gap:2px}
+.kb .r div{flex:1;height:25px;background:var(--bg3);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--ink)}
+.kb .r div.w{flex:1.6;font-size:9px;color:var(--ink2)} .kb .r div.sp{flex:4.5;font-size:9px;color:var(--dim)}
+.kb .r div.go{flex:1.8;background:var(--sig);color:var(--sigInk);font-weight:600;font-size:10px}
+.hint{margin-top:auto;height:20px;flex:none;border-top:1px solid var(--line2);display:flex;align-items:center;gap:10px;padding:0 8px;
+  font-family:var(--mono);font-size:9px;color:var(--dim)}
+.hint b{color:var(--ink2);font-weight:600}
+.msgs{flex:1;min-height:0;display:flex;flex-direction:column;gap:5px;padding:6px 8px;justify-content:flex-end}
+.m{max-width:78%;padding:4px 7px;border-radius:var(--r);font-size:12px;line-height:1.2}
+.m.in{background:var(--bg3);align-self:flex-start} .m.out{background:var(--wash);border:1px solid var(--line);align-self:flex-end}
+.m .meta{display:block;font-family:var(--mono);font-size:8px;color:var(--dim);margin-top:2px}
+.th{display:flex;align-items:center;gap:4px;height:28px;flex:none;padding:0 8px;border-bottom:1px solid var(--line2);font-size:14px;font-weight:600}
+.th .bk{color:var(--sig);font-weight:400}
+.th .sub{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--dim);font-weight:400}
+.copy{font-family:var(--mono);font-size:12px;color:var(--ink);background:#141a17;border:1px solid var(--line2);padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<h1>Epic J: compose with the T-Deck's keyboard (#1434, #1727)</h1>
+<p class="lede">The T-Deck's landscape screen (class B, Epic H), shown at 1.25×, in the Offband theme and Modern look. Figures are examples. <b>Owner, 2026-10-21:</b> when a physical keyboard is present, compose hides the on-screen keys, and this screen needs a mockup and his yes before it is built. Already approved and built: in an open conversation, the digits 1–4 open compose with that canned reply in the draft, and Enter sends it.</p>
+
+<div class="grid">
+
+<div class="card"><h2><span class="n">1</span>Today: the on-screen keys take half the screen</h2><p>What the T-Deck test build shows now. The physical keyboard already types into the draft, but the on-screen keys still take the bottom 127 px.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right"><span class="sd"></span>▂▄▆ ✱ 87%</span></div>
+<div class="bodyr"><div class="rail"><div>Home</div><div class="on">Chat</div><div>Nodes</div><div>Map</div><div>Setup</div></div>
+<div class="ct">
+<div class="ch"><span class="bk">‹</span><span class="to">To</span><span>OB-Ridge</span><span class="cnt">9/160</span></div>
+<div class="draft" style="height:34px">On my way<span class="caret"></span></div>
+<div class="chips"><div>On my way</div><div>Copy that</div><div>Check-in OK</div><div>Need help</div></div>
+<div class="kb">
+<div class="r"><div>q</div><div>w</div><div>e</div><div>r</div><div>t</div><div>y</div><div>u</div><div>i</div><div>o</div><div>p</div></div>
+<div class="r"><div>a</div><div>s</div><div>d</div><div>f</div><div>g</div><div>h</div><div>j</div><div>k</div><div>l</div></div>
+<div class="r"><div class="w">⇧</div><div>z</div><div>x</div><div>c</div><div>v</div><div>b</div><div>n</div><div>m</div><div class="w">⌫</div></div>
+<div class="r"><div class="w">?123</div><div class="sp">space</div><div class="go">Send</div></div>
+</div></div></div></div></div>
+<ul><li>Two lines of draft are visible; a longer message scrolls inside the box.</li></ul></div>
+
+<div class="card"><h2><span class="n">2</span>Proposed: keyboard present, the draft gets the room</h2><p>The on-screen keys are gone. The draft fills the space, the canned chips stay (touch still works), and one line at the foot names the two keys that aren't obvious.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right"><span class="sd"></span>▂▄▆ ✱ 87%</span></div>
+<div class="bodyr"><div class="rail"><div>Home</div><div class="on">Chat</div><div>Nodes</div><div>Map</div><div>Setup</div></div>
+<div class="ct">
+<div class="ch"><span class="bk">‹</span><span class="to">To</span><span>OB-Ridge</span><span class="cnt">88/160</span></div>
+<div class="draft grow">On my way. Coming up the east trail, about twenty minutes out. Will check in at the gate<span class="caret"></span></div>
+<div class="chips" style="margin-bottom:4px"><div>On my way</div><div>Copy that</div><div>Check-in OK</div><div>Need help</div></div>
+<div class="hint"><span><b>Enter</b> send</span><span><b>⌫</b> on empty: back</span></div>
+</div></div></div></div>
+<ul><li><b>"Keyboard present"</b> means the keyboard answered on the bus, at boot or later. Until it does, the on-screen keys show as in 1.</li><li>The draft box grows from 34 px to about 120 px: seven lines instead of two.</li><li>Shift and symbols come from the keyboard itself (Sym key), so no page or shift keys are needed.</li><li>The same applies to the other text fields (login password, a node's name, Nodes search): the field stays, the keys go.</li></ul></div>
+
+<div class="card"><h2><span class="n">3</span>Optional: tell people the digits are a shortcut</h2><p>An open conversation with a one-line hint at the foot. Without it, the 1–4 shortcut is invisible unless someone is told.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right"><span class="sd"></span>▂▄▆ ✱ 87%</span></div>
+<div class="bodyr"><div class="rail"><div>Home</div><div class="on">Chat</div><div>Nodes</div><div>Map</div><div>Setup</div></div>
+<div class="ct">
+<div class="th"><span class="bk">‹</span>OB-Ridge<span class="sub">2 hops · -9 dB</span></div>
+<div class="msgs">
+<div class="m in">Where are you?<span class="meta">20:58</span></div>
+<div class="m out">Leaving the lot now<span class="meta">21:01 · heard 2</span></div>
+<div class="m in">Ok, gate in 30?<span class="meta">21:06</span></div>
+</div>
+<div class="hint"><span><b>Enter</b> reply</span><span><b>1–4</b> quick reply</span></div>
+</div></div></div></div>
+<ul><li>Shown only when a keyboard is present.</li><li>Costs one 20 px line of the message list.</li><li>On a channel, Enter first asks write or notifications, as a press does today.</li></ul></div>
+
+</div>
+
+<h3>For the owner</h3>
+<p class="q"><b>A · Build 2 as drawn</b>, with the foot line. <b>B · Build 2 without the foot line</b> (the draft gets those 20 px too). And separately, <b>3: yes or no</b>.</p>
+<p class="q">New on-screen text, exactly as it would ship: <span class="copy">Enter send</span> and <span class="copy">⌫ on empty: back</span> (compose, mockup 2); <span class="copy">Enter reply</span> and <span class="copy">1–4 quick reply</span> (conversation, mockup 3). Nothing else changes wording.</p>
+</body></html>
