@@ -657,6 +657,110 @@ TEST(BadgeLayoutMarquee, HoldsSlidesHolds) {
   EXPECT_EQ(0, marqueeOffset(228, 128, slide_end + kMarqueeHoldMs));   // round again
 }
 
+// ---- the GPS mode row (#1557) ----------------------------------------------------------
+
+namespace {
+std::string gpsValue(offband::GpsActivity a, uint32_t wait_s) {
+  char buf[24];
+  badgeui::formatGpsModeValue(a, wait_s, buf, sizeof(buf));
+  return std::string(buf);
+}
+std::string gpsLabel(offband::GpsMode m) {
+  char buf[24];
+  badgeui::formatGpsModeLabel(m, buf, sizeof(buf));
+  return std::string(buf);
+}
+std::string dur(uint32_t s) {
+  char buf[8];
+  badgeui::formatShortDuration(s, buf, sizeof(buf));
+  return std::string(buf);
+}
+}  // namespace
+
+// Rounding UP, so the number only ever decreases. Rounding down would show "1m" with 70 s
+// left and still "1m" ten seconds later, which reads as a stuck screen.
+TEST(GpsModeRow, ShortDurationRoundsUpSoItOnlyCountsDown) {
+  EXPECT_EQ("now", dur(0));
+  EXPECT_EQ("45s", dur(45));
+  EXPECT_EQ("59s", dur(59));
+  EXPECT_EQ("1m", dur(60));
+  EXPECT_EQ("2m", dur(61));     // rounds up, not down to 1m
+  EXPECT_EQ("30m", dur(1800));
+  EXPECT_EQ("1h", dur(3600));
+  EXPECT_EQ("2h", dur(3601));
+  EXPECT_EQ("8h", dur(8 * 3600));
+}
+
+TEST(GpsModeRow, TheValueSaysWhichOfTheFourThingsIsHappening) {
+  EXPECT_EQ("off", gpsValue(offband::GpsActivity::Off, 0));
+  EXPECT_EQ("on", gpsValue(offband::GpsActivity::On, 0));
+  EXPECT_EQ("seek", gpsValue(offband::GpsActivity::Searching, 0));
+  EXPECT_EQ("30m", gpsValue(offband::GpsActivity::Sleeping, 1800));
+  EXPECT_EQ("4h", gpsValue(offband::GpsActivity::BackedOff, 4 * 3600));
+}
+
+// Sleeping and backed off share the row's value -- both are just a wait -- so the BODY
+// line is the only thing that distinguishes them, and it has to. One is normal; the other
+// is "cannot get a fix here", which is what a conference attendee indoors will be looking
+// at for hours, and it must read as a condition rather than as a fault.
+TEST(GpsModeRow, TheBodyLineTellsSleepingFromGivenUp) {
+  char buf[32];
+  badgeui::formatGpsPowerSaveLine(offband::GpsActivity::Sleeping, 1800, buf, sizeof(buf));
+  const std::string sleeping(buf);
+  badgeui::formatGpsPowerSaveLine(offband::GpsActivity::BackedOff, 4 * 3600, buf, sizeof(buf));
+  const std::string backed(buf);
+
+  EXPECT_EQ(" next try in 30m", sleeping);
+  EXPECT_EQ(" no sky; next try 4h", backed);
+  EXPECT_NE(sleeping, backed) << "the two waits are indistinguishable on screen";
+
+  // Nothing to explain while searching, or outside Power save -- the body's other lines
+  // (position, altitude, time) want the space.
+  for (auto a : {offband::GpsActivity::Off, offband::GpsActivity::On,
+                 offband::GpsActivity::Searching}) {
+    badgeui::formatGpsPowerSaveLine(a, 0, buf, sizeof(buf));
+    EXPECT_STREQ("", buf);
+  }
+}
+
+TEST(GpsModeRow, TheLabelNamesTheMode) {
+  EXPECT_EQ("GPS: Off", gpsLabel(offband::GpsMode::Off));
+  EXPECT_EQ("GPS: On", gpsLabel(offband::GpsMode::On));
+  EXPECT_EQ("GPS: Power save", gpsLabel(offband::GpsMode::PowerSave));
+}
+
+// 21 columns is the whole row at the fixed face, shared between label and value, and the
+// body line gets the same 21. Both have to fit for every state, or text clips on the badge
+// and nobody finds out until the screen is in front of them.
+//
+// This test is why the copy looks the way it does: the first draft put the explanation in
+// the row's value and came to 27 columns.
+TEST(GpsModeRow, EveryRowAndBodyLineFitsTwentyOneColumns) {
+  const std::vector<offband::GpsActivity> acts = {
+      offband::GpsActivity::Off, offband::GpsActivity::On, offband::GpsActivity::Searching,
+      offband::GpsActivity::Sleeping, offband::GpsActivity::BackedOff};
+  // 8h is the longest wait the backoff cap can produce; 59s the longest short form.
+  const std::vector<uint32_t> waits = {0, 59, 1800, 8 * 3600};
+
+  for (auto m : {offband::GpsMode::Off, offband::GpsMode::On, offband::GpsMode::PowerSave}) {
+    const std::string label = gpsLabel(m);
+    for (auto a : acts) {
+      for (uint32_t w : waits) {
+        const std::string value = gpsValue(a, w);
+        // One leading space, label, one separating space, value.
+        EXPECT_LE(1 + label.size() + 1 + value.size(), (size_t)21)
+            << "row '" << label << " " << value << "' is "
+            << (1 + label.size() + 1 + value.size()) << " columns";
+
+        char buf[32];
+        badgeui::formatGpsPowerSaveLine(a, w, buf, sizeof(buf));
+        EXPECT_LE(std::strlen(buf), (size_t)21)
+            << "body line '" << buf << "' is " << std::strlen(buf) << " columns";
+      }
+    }
+  }
+}
+
 // ---- the sender tag's two limits (#1669) ------------------------------------------------
 //
 // A tester asked for more than 5 characters of the node name; the owner's call was 10.
