@@ -501,7 +501,8 @@ TEST(BadgeLayoutThread, ChannelMessageTagsItsFirstRow) {
   EXPECT_EQ(kTagPx + kGapPx, rows[0].x_px);
   EXPECT_EQ("anyone at", rowText(msgs, rows[0]));
   EXPECT_FALSE(rows[1].first);
-  EXPECT_EQ(0, rows[1].x_px) << "the tag is on row 0 only; row 1 must not be indented";
+  EXPECT_EQ(contIndentPx(kFixed), rows[1].x_px)
+      << "row 1 clears the hanging indent, not the whole tag column";
   EXPECT_EQ("the CTF table?", rowText(msgs, rows[1]));
   EXPECT_TRUE(rows[1].last);
 }
@@ -519,15 +520,19 @@ TEST(BadgeLayoutThread, ContinuationRowsReclaimTheTagColumn) {
 
   EXPECT_EQ(kTagPx + kGapPx, rows[0].x_px) << "row 0 still clears the tag";
   for (int i = 1; i < n; i++) {
-    EXPECT_EQ(0, rows[i].x_px)
-        << "row " << i << " is still indented past a tag that is not drawn on it";
+    EXPECT_EQ(contIndentPx(kFixed), rows[i].x_px)
+        << "row " << i << " must sit at the hanging indent -- not the full tag column it "
+           "used to clear, and not flush left either";
   }
 
-  // And the reclaimed column has to buy real width, not just move the origin: a
-  // continuation row must be able to hold more than the first row can.
+  // The indent has to leave the continuation rows genuinely WIDER than the first, not
+  // just shifted. Asserted on the width available rather than the width a particular
+  // string happened to use: with this body the used widths differ by a single pixel, so
+  // a span-based assertion would pass or fail on the wrap point rather than on the rule.
   const int first_px = kScreenPx - kEdgePx - (kTagPx + kGapPx);
-  EXPECT_GT(spanPx(kFixed, body, rows[1].span), first_px)
-      << "row 1 fits no more than the narrow first row did -- the width did not widen";
+  const int rest_px  = kScreenPx - kEdgePx - contIndentPx(kFixed);
+  EXPECT_GT(rest_px, first_px)
+      << "the hanging indent ate the width it was supposed to hand back";
 }
 
 // The caret owns the left edge when a message is selected, so a continuation row returns
@@ -539,7 +544,9 @@ TEST(BadgeLayoutThread, ASelectedMessageKeepsItsCaretColumnOnEveryRow) {
   const int caret_px = charPx(kFixed, '>') + 1;
   ASSERT_GE(n, 2);
   EXPECT_EQ(kTagPx + kGapPx + caret_px, rows[0].x_px);
-  EXPECT_EQ(caret_px, rows[1].x_px) << "a continuation row must clear the caret, not hide it";
+  EXPECT_EQ(caret_px + contIndentPx(kFixed), rows[1].x_px)
+      << "a continuation row sits at caret + hanging indent; dropping the caret term "
+         "would paint message text over the caret column";
 }
 
 // One sender in a DM, so no tag: the text gets the whole width.
@@ -597,7 +604,8 @@ TEST(BadgeLayoutThread, SelectedMessageGetsACaretAndAMetaRow) {
   EXPECT_EQ(kTagPx + kGapPx + caret_px, rows[1].x_px);   // clear of both tag and caret
   EXPECT_EQ("flag drop", rowText(msgs, rows[1]));
   EXPECT_TRUE(rows[2].caret);
-  EXPECT_EQ(caret_px, rows[2].x_px) << "clear of the caret, but no longer of the tag";
+  EXPECT_EQ(caret_px + contIndentPx(kFixed), rows[2].x_px)
+      << "clear of the caret and the hanging indent, but no longer of the whole tag";
   EXPECT_EQ("at the CTF table", rowText(msgs, rows[2]));
   EXPECT_EQ(RowKind::Meta, rows[3].kind);
   EXPECT_EQ(1, rows[3].msg);
@@ -832,10 +840,11 @@ TEST(BadgeLayoutTag, WideningTheTagCostsROWS_NeverTEXT) {
   // every-row indent took 6 rows where this takes 4.
   EXPECT_EQ(kTagPx + kGapPx, rows[0].x_px) << "row 0 carries the tag and clears it";
   for (int i = 1; i < n; i++) {
-    EXPECT_EQ(0, rows[i].x_px) << "row " << i << ": no tag on this row, so no indent";
+    EXPECT_EQ(contIndentPx(kFixed), rows[i].x_px)
+        << "row " << i << ": no tag on this row, so only the hanging indent";
   }
-  EXPECT_EQ(4, n) << "the hanging indent should take this body in 4 rows, not the 6 the "
-                     "every-row indent needed";
+  EXPECT_EQ(4, n) << "this body should take 4 rows: the every-row indent needed 6, and "
+                     "the 4-character hanging indent costs nothing back on this one";
 }
 
 // #1685: the two widths are what makes the hanging indent possible, so test the wrap
@@ -863,6 +872,38 @@ TEST(BadgeLayoutWrap, TheUniformWrapIsTheHangingWrapWithEqualWidths) {
   for (int i = 0; i < na; i++) {
     EXPECT_EQ(a[i].start, b[i].start) << "line " << i;
     EXPECT_EQ(a[i].len, b[i].len) << "line " << i;
+  }
+}
+
+// #1669: the hanging indent is FOUR CHARACTERS, not twenty-four pixels. Those are the
+// same number at two of the three text sizes and different at the third, which is
+// exactly how a hardcoded constant would survive review and then be wrong on the small
+// face. Owner: "if it's variable by font size, you adjust by font size."
+TEST(BadgeLayoutTag, TheHangingIndentScalesWithTheTextSize) {
+  const Face& large  = bodyFaceFor(kTextLarge);
+  const Face& medium = bodyFaceFor(kTextMedium);
+  const Face& small  = bodyFaceFor(kTextSmall);
+
+  // Four of the face's own character cells, whatever that face is.
+  EXPECT_EQ(4 * large.missing,  contIndentPx(large));
+  EXPECT_EQ(4 * medium.missing, contIndentPx(medium));
+  EXPECT_EQ(4 * small.missing,  contIndentPx(small));
+
+  // And it really does differ, so the test above is not comparing a constant to itself.
+  EXPECT_NE(contIndentPx(small), contIndentPx(large))
+      << "the small face has a narrower cell; if these match, the indent stopped "
+         "following the face and a hardcoded pixel count crept back in";
+  EXPECT_LT(contIndentPx(small), contIndentPx(large));
+}
+
+// The indent must never eat so much of the row that a continuation line is narrower than
+// the first -- that would invert the whole point of #1685.
+TEST(BadgeLayoutTag, TheIndentNeverCostsMoreThanTheTagItReplaces) {
+  for (int size = 0; size < kTextSteps; size++) {
+    const Face& f = bodyFaceFor(size);
+    EXPECT_LT(contIndentPx(f), kTagPx + kGapPx)
+        << "text size " << size << ": the hanging indent is at least as wide as the tag "
+           "column, so continuation rows gained nothing";
   }
 }
 
