@@ -445,8 +445,26 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   ui_started_at = millis();
   _alert_expiry = 0;
 
+  // #973: see the long note in ui-new/UITask.cpp. Same defect, same silence: an
+  // unchecked `new` here produced a null screen, the render guard stopped firing, and
+  // the panel froze on its last frame with every other subsystem healthy. MLOG_BOOT
+  // reaches the UART0 mirror on boards where the OFFBAND_OBSERVER-gated tracing does
+  // not exist at all (#972).
   splash = new SplashScreen(this);
+  if (!splash) {
+    _screen_alloc_failed = true;
+    mesh_log_line(MLOG_BOOT, "[ui] SCREEN ALLOC FAILED: splash\r\n");
+  }
   home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
+  if (!home) {
+    _screen_alloc_failed = true;
+    mesh_log_line(MLOG_BOOT, "[ui] SCREEN ALLOC FAILED: home\r\n");
+  }
+  if (_screen_alloc_failed) {
+    mesh_log_line(MLOG_BOOT,
+                  "[ui] DEGRADED: one or more screens failed to allocate; "
+                  "navigation to them will be refused (#973, memory: #856)\r\n");
+  }
   setCurrScreen(splash);
 }
 
@@ -532,6 +550,15 @@ void UITask::userLedHandler() {
 }
 
 void UITask::setCurrScreen(UIScreen* c) {
+  // #973: no call site passes null on purpose, so a null here is always a screen whose
+  // `new` failed. Storing it stopped the render guard firing and froze the panel in
+  // silence. Hold what is on screen instead, and say why.
+  if (!c) {
+    mesh_log_line(MLOG_BOOT,
+                  "[ui] setCurrScreen(NULL) REFUSED -- screen alloc failed; "
+                  "holding current (#973)\r\n");
+    return;
+  }
   curr = c;
   _next_refresh = 100;
 }

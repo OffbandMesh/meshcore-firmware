@@ -11,6 +11,7 @@
 #include "helpers/diagnostics/CrashLog.h"   // #1075: the [shutdown] line
 #include "helpers/ui/OffbandSplash.h"
 #include <helpers/ui/KeyNav.h>
+#include <helpers/ui/ScreenName.h>   // #973: null-first screen labels for the trace
 #include <helpers/TxtDataHelpers.h>
 #include "../MyMesh.h"
 #include "target.h"
@@ -781,39 +782,76 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   ui_started_at = millis();
   _alert_expiry = 0;
 
-  splash = new SplashScreen(this);
+  // #973: every screen below used to be an unchecked `new`. A null screen is
+  // COMPLETELY silent: setCurrScreen() stored it, the render guard further down
+  // (`millis() >= _next_refresh && curr`) stopped firing, and the panel held its last
+  // blitted frame forever -- on a board whose radio, mesh, BLE and heartbeat were all
+  // healthy. No error, no log line, no degraded mode. On RC52 that cost a flash cycle,
+  // a purpose-built driver instrument and a UART sniffer to find, for a failure a null
+  // check names instantly.
+  //
+  // MLOG_BOOT via mesh_log_line(), NOT crashLogf(): every crashLogf site in this file
+  // is gated on OFFBAND_OBSERVER, which implies WiFi and so compiles out on every
+  // nRF52 board (#972) -- precisely the boards tight enough on RAM to hit this. BOOT
+  // level survives whatever caplog level is configured and reaches the UART0 mirror.
+  //
+  // Allocation is NOT retried and the board is NOT halted: #973 is strictly that the
+  // failure was silent. The memory constraint itself is #856.
+#define UI_NEW_SCREEN(member, expr)                                                   \
+  do {                                                                                \
+    (member) = (expr);                                                                \
+    if (!(member)) {                                                                  \
+      _screen_alloc_failed = true;                                                    \
+      mesh_log_line(MLOG_BOOT, "[ui] SCREEN ALLOC FAILED: %s\r\n", #member);          \
+    }                                                                                 \
+  } while (0)
+
+  UI_NEW_SCREEN(splash, new SplashScreen(this));
 #if UI_HAS_CARDKB
   // #1230: the Messages inbox is Home (owner: "I want the Unread/messages screen to
   // become the Home screen instead of the PIN screen"). The pages Home held stay
   // reachable as tools. A message arriving flashes its row in the inbox instead of
   // opening the preview popup, so the popup's queue isn't allocated.
-  home = new InboxScreen(this);
-  thread = new ThreadScreen(this);
-  tools = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
-  contacts = new ContactsScreen(this);   // #1231
-  nearby = new NearbyScreen(this);       // #1234
-  status = new StatusScreen(this);       // #1231
-  settings = new SettingsScreen(this);   // #1233
-  zones = new ZonePickerScreen(this);    // #1233
-  gps = new GpsScreen(this);             // #1235
-  battery = new BatteryScreen(this);     // #1254
+  UI_NEW_SCREEN(home, new InboxScreen(this));
+  UI_NEW_SCREEN(thread, new ThreadScreen(this));
+  UI_NEW_SCREEN(tools, new HomeScreen(this, &rtc_clock, sensors, node_prefs));
+  UI_NEW_SCREEN(contacts, new ContactsScreen(this));   // #1231
+  UI_NEW_SCREEN(nearby, new NearbyScreen(this));       // #1234
+  UI_NEW_SCREEN(status, new StatusScreen(this));       // #1231
+  UI_NEW_SCREEN(settings, new SettingsScreen(this));   // #1233
+  UI_NEW_SCREEN(zones, new ZonePickerScreen(this));    // #1233
+  UI_NEW_SCREEN(gps, new GpsScreen(this));             // #1235
+  UI_NEW_SCREEN(battery, new BatteryScreen(this));     // #1254
 #ifdef PIN_BUZZER
-  tones = new TonesScreen(this);              // #1421
-  tone_picker = new TonePickerScreen(this);   // #1421
-  custom_tunes = new CustomTunesScreen(this);  // #1476
-  rtttl_edit = new RtttlEditScreen(this);      // #1477
+  UI_NEW_SCREEN(tones, new TonesScreen(this));               // #1421
+  UI_NEW_SCREEN(tone_picker, new TonePickerScreen(this));    // #1421
+  UI_NEW_SCREEN(custom_tunes, new CustomTunesScreen(this));  // #1476
+  UI_NEW_SCREEN(rtttl_edit, new RtttlEditScreen(this));      // #1477
 #endif
+  // DELIBERATELY null on this build, not a failure: a message arriving flashes its
+  // inbox row instead of opening the preview popup, so the popup is never allocated.
+  // Left as a plain assignment so UI_NEW_SCREEN never reports it.
   msg_preview = NULL;
 #else
-  home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
-  msg_preview = new MsgPreviewScreen(this, &rtc_clock);
+  UI_NEW_SCREEN(home, new HomeScreen(this, &rtc_clock, sensors, node_prefs));
+  UI_NEW_SCREEN(msg_preview, new MsgPreviewScreen(this, &rtc_clock));
 #endif
 #ifdef QCC_BADGE_SELFTEST
-  self_test = new SelfTestScreen(this);
+  UI_NEW_SCREEN(self_test, new SelfTestScreen(this));
 #endif
 #if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
-  key_test = new KeyTestScreen(this);
+  UI_NEW_SCREEN(key_test, new KeyTestScreen(this));
 #endif
+#undef UI_NEW_SCREEN
+
+  // #973: one summary line, so a capture that caught only the tail of boot still says
+  // the UI came up degraded. The per-screen lines above name which ones.
+  if (_screen_alloc_failed) {
+    mesh_log_line(MLOG_BOOT,
+                  "[ui] DEGRADED: one or more screens failed to allocate; "
+                  "navigation to them will be refused (#973, memory: #856)\r\n");
+  }
+
   setCurrScreen(splash);
 }
 
@@ -1361,21 +1399,63 @@ void UITask::userLedHandler() {
 }
 
 void UITask::setCurrScreen(UIScreen* c) {
+  // #973: a null screen used to be stored here without comment, after which the render
+  // guard (`millis() >= _next_refresh && curr`) simply stopped firing and the panel
+  // froze on its last frame. No call site passes null on purpose -- verified by grep
+  // across examples/companion_radio -- so a null arriving here is always a screen whose
+  // `new` failed. Say so, and keep what is on screen: a stale frame the user can see and
+  // report beats a dark panel that reads as dead hardware.
+  if (!c) {
+    mesh_log_line(MLOG_BOOT,
+                  "[ui] setCurrScreen(NULL) REFUSED -- screen alloc failed; "
+                  "holding current (#973)\r\n");
+    return;
+  }
+
 #ifdef OFFBAND_OBSERVER
   // Screen transition tracing: log every change so we can see if the
-  // SplashScreen ↔ HomeScreen oscillation observed on hv3-bench is
+  // SplashScreen <-> HomeScreen oscillation observed on hv3-bench is
   // a real state-machine bug.
-  const char* from = "?";
-  const char* to   = "?";
-  if      (curr == splash)      from = "SPLASH";
-  else if (curr == home)        from = "HOME";
-  else if (curr == msg_preview) from = "MSG_PREVIEW";
-  else if (curr == nullptr)     from = "NULL";
-  if      (c == splash)         to   = "SPLASH";
-  else if (c == home)           to   = "HOME";
-  else if (c == msg_preview)    to   = "MSG_PREVIEW";
-  else if (c == nullptr)        to   = "NULL";
-  offband::crashLogf("[ui] setCurrScreen %s -> %s", from, to);
+  //
+  // #973: resolved through offband::screenName(), which tests null FIRST. The inline
+  // chain this replaces tested `c == home` before `c == nullptr`, so when `home` was
+  // null -- or `msg_preview` deliberately null on the CardKB build -- a transition to
+  // NOTHING printed that member's name. The trace read as a clean, healthy handoff
+  // while the UI went dark, and that is what sent the first round of diagnosis at the
+  // display driver. The ordering is covered by test/test_screen_name, positively and
+  // negatively. Do not inline this back.
+  const offband::ScreenLabel kScreens[] = {
+    { splash,       "SPLASH"       },
+    { home,         "HOME"         },
+    { msg_preview,  "MSG_PREVIEW"  },
+#if UI_HAS_CARDKB
+    { thread,       "THREAD"       },
+    { tools,        "TOOLS"        },
+    { contacts,     "CONTACTS"     },
+    { nearby,       "NEARBY"       },
+    { status,       "STATUS"       },
+    { settings,     "SETTINGS"     },
+    { zones,        "ZONES"        },
+    { gps,          "GPS"          },
+    { battery,      "BATTERY"      },
+#endif
+#if UI_HAS_CARDKB && defined(PIN_BUZZER)
+    { tones,        "TONES"        },
+    { tone_picker,  "TONE_PICKER"  },
+    { custom_tunes, "CUSTOM_TUNES" },
+    { rtttl_edit,   "RTTTL_EDIT"   },
+#endif
+#ifdef QCC_BADGE_SELFTEST
+    { self_test,    "SELF_TEST"    },
+#endif
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+    { key_test,     "KEY_TEST"     },
+#endif
+  };
+  const size_t kScreenCount = sizeof(kScreens) / sizeof(kScreens[0]);
+  offband::crashLogf("[ui] setCurrScreen %s -> %s",
+                     offband::screenName(curr, kScreens, kScreenCount),
+                     offband::screenName(c, kScreens, kScreenCount));
 #endif
 #if UI_HAS_CARDKB
   // #1230: a thread off screen isn't being read. It marks itself open when it draws.
