@@ -165,35 +165,45 @@ class UITask : public AbstractUITask {
   bool _input_from_kbd = false;   // #1207: whether the key being dispatched is a keyboard key
 #endif
 
-  UIScreen* splash;
-  UIScreen* home;
-  UIScreen* msg_preview;
+  // #973: these are initialized so that "not allocated yet" and "allocation failed"
+  // are the same, checkable value rather than an indeterminate one. They were raw
+  // uninitialized members assigned from an unchecked `new` in begin(), and
+  // setCurrScreen() compares a candidate against every one of them.
+  //
+  // `curr` itself was NOT part of that hazard -- the constructor body already sets
+  // `curr = NULL`, and begin() assigns every screen before the first setCurrScreen().
+  // The in-class initializer below is belt and braces, not a bug fix. Said plainly
+  // because an earlier version of this comment claimed the render guard was reading
+  // an indeterminate `curr`, and that was wrong.
+  UIScreen* splash = nullptr;
+  UIScreen* home = nullptr;
+  UIScreen* msg_preview = nullptr;
 #ifdef QCC_BADGE_SELFTEST
-  UIScreen* self_test;
+  UIScreen* self_test = nullptr;
 #endif
 #if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
-  UIScreen* key_test;
+  UIScreen* key_test = nullptr;
 #endif
 #if OFFBAND_SCREEN_UI
-  UIScreen* thread;     // #1230: one conversation, with compose
-  UIScreen* tools;      // #1230: the device pages Home used to hold
-  UIScreen* contacts;   // #1231
-  UIScreen* nearby;     // #1234
-  UIScreen* status;     // #1231
-  UIScreen* settings;   // #1233
-  UIScreen* zones;      // #1233: the time zone picker
-  UIScreen* gps;        // #1235
-  UIScreen* battery;    // #1254
+  UIScreen* thread = nullptr;     // #1230: one conversation, with compose
+  UIScreen* tools = nullptr;      // #1230: the device pages Home used to hold
+  UIScreen* contacts = nullptr;   // #1231
+  UIScreen* nearby = nullptr;     // #1234
+  UIScreen* status = nullptr;     // #1231
+  UIScreen* settings = nullptr;   // #1233
+  UIScreen* zones = nullptr;      // #1233: the time zone picker
+  UIScreen* gps = nullptr;        // #1235
+  UIScreen* battery = nullptr;    // #1254
   uint32_t _cycle_at = 0;   // #1231: when SW1 last moved along the cycle
 #endif
 #if OFFBAND_SCREEN_UI && defined(PIN_BUZZER)
   // #1421: Settings -> Tones -> a tune. The screens and a buzzer, and nothing on a
   // keyboard: they navigate by button (#1788 -- this used to require UI_HAS_CARDKB).
-  UIScreen* tones;        // the six events
-  UIScreen* tone_picker;  // the tunes, for one event
-  UIScreen* custom_tunes; // #1476: the eight custom slots
+  UIScreen* tones = nullptr;        // the six events
+  UIScreen* tone_picker = nullptr;  // the tunes, for one event
+  UIScreen* custom_tunes = nullptr; // #1476: the eight custom slots
 #if UI_HAS_CARDKB
-  UIScreen* rtttl_edit;   // #1477: typing one slot's tune -- typed entry, the keyboard's
+  UIScreen* rtttl_edit = nullptr;   // #1477: typing one slot's tune -- typed entry, the keyboard's
 #endif
   // Which event the picker is editing. Held here rather than passed into the screen so
   // the picker can be a plain UIScreen like the others.
@@ -203,7 +213,13 @@ class UITask : public AbstractUITask {
   int _tone_picking_channel = -1;
   int _tone_picking_convo = -1;   // the conversation to return to, in conversation mode
 #endif
-  UIScreen* curr;
+  UIScreen* curr = nullptr;
+
+  // #973: set when any screen's `new` returned null during begin(). Kept so the
+  // condition is inspectable after the fact, not only in whatever log was being
+  // captured at boot -- the whole point of this issue is that a UI that cannot
+  // render must never look identical to a healthy one.
+  bool _screen_alloc_failed = false;
 
   void userLedHandler();
 
