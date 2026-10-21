@@ -10,6 +10,7 @@
 #include "BrokerHealth.h"   // #739: connection-health / penalty tracker
 #include "FailEscalateWindow.h"   // #838/#906: per-attempt escalation dedupe
 #include "BudgetHoldClock.h"      // #720: reconnect-proof TLS-budget hold clock
+#include "BrokerEventLog.h"
 #include "MqttPayload.h"
 
 #ifdef ARDUINO
@@ -169,7 +170,7 @@ public:
     // the pool when this broker is rotated out after holding a FULL dwell Up
     // with no error -- the only event that earns rehabilitation.
     const BrokerHealth&        health() const { return health_; }
-    void                       noteCleanDwell() { health_.onCleanDwell(); }
+    void                       noteCleanDwell();
 
     // #823: clear a TERMINAL Failed state. Failed is otherwise terminal -- the
     // pool's reconcileSlot() refuses to revive it via begin(), so the ONLY escape
@@ -178,12 +179,7 @@ public:
     // broker gets a fresh start instead of re-failing on its first hiccup. No-op
     // for a broker that is not terminally Failed, so tweaking a healthy/backoff
     // broker's config preserves its accumulated penalty.
-    void clearTerminalFailure() {
-        if (rt_.state == BrokerState::Failed) {
-            rt_.state = BrokerState::Down;
-            health_.reset();
-        }
-    }
+    void clearTerminalFailure();
 
     // #175: true if the esp_mqtt client handle currently exists. shutdown()
     // destroys it (client_ = nullptr) to free the ~60KB TLS context without
@@ -214,6 +210,14 @@ private:
     BrokerHealth         health_;   // #739: sticky failure penalty + rehab
     MqttAuth*            auth_  = nullptr;  // owned
 
+    // What has already been recorded to the capture ring, so conditions the
+    // worker re-drives every pass are recorded once when they start and once when
+    // they end. Outside rt_, which begin() and releaseClient() reset mid-condition.
+    HoldTracker          hold_;
+    RepeatedFailure      setup_fail_;          // begin() could not set the slot up
+    RepeatedFailure      refresh_fail_;        // mid-session credential refresh
+    bool                 no_client_reported_ = false;
+
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     esp_mqtt_client_handle_t client_ = nullptr;
     // Serializes ALL client_ ops (publish/start/stop/destroy) so the lifecycle
@@ -231,6 +235,25 @@ private:
     // Host-tested in test/test_fail_escalate_window. reset() on a clean connect.
     FailEscalateWindow fail_window_;
 
+    // What the next disconnect record reports, since esp-mqtt's disconnect event
+    // carries no reason: whether this attempt's session came up, and the class of
+    // the error event raised for the same failure. rt_.state cannot answer the
+    // first -- an error escalates Up to Backoff before its disconnect arrives.
+    // Reset in onBeforeConnect(), which starts every attempt; both are read and
+    // written only by the handlers, which run in order on the esp-mqtt task.
+    bool             session_up_              = false;
+    BrokerErrorClass error_before_disconnect_ = BrokerErrorClass::None;
+
+    // tryConnect() already recorded the attempt its start() begins, so the
+    // BEFORE_CONNECT that follows must not record it again. Any other
+    // BEFORE_CONNECT is esp-mqtt's own auto-reconnect. Set on mqtt_worker before
+    // start() creates the esp-mqtt task; cleared by that task.
+    //
+    // volatile because those are two tasks: the write happens before the task
+    // that reads it exists, so the ordering holds, but nothing in the types
+    // says so and a compiler is free to keep the read in a register.
+    volatile bool    pool_start_recorded_     = false;
+
     // #720: reconnect-proof clock for TLS-budget hold duration. Stamped on the
     // first Up of an occupancy, cleared on releaseClient(); a reconnect does NOT
     // reset it. Separate from rt_ (which a reconnect/rt_ reset would disturb).
@@ -243,6 +266,7 @@ private:
                              esp_event_base_t base,
                              int32_t event_id,
                              void* event_data);
+    void onBeforeConnect(uint32_t now_ms);
     void onConnected(uint32_t now_ms);
     void onDisconnected(uint32_t now_ms, BrokerErrorClass err);
     void onError(uint32_t now_ms, BrokerErrorClass err);
