@@ -1,5 +1,6 @@
 #include "ST7735Display.h"
-#include "St7735Palette.h"   // #785: Offband dark theme colour roles
+#include "St7735Palette.h"   // #785: Offband dark theme color roles
+#include "OffbandLogoST7735.h"   // #867: this panel's color splash art
 
 //#include <Fonts/GFXFF/FreeSans9pt7b.h>
 
@@ -580,6 +581,41 @@ void ST7735Display::drawRect(int x, int y, int w, int h) {
 
 void ST7735Display::drawXbm(int x, int y, const uint8_t* bits, int w, int h) {
   sprite->drawBitmap(x*SCALE_X, y*SCALE_Y, bits, w, h, curr_color);
+}
+
+int ST7735Display::physicalWidth() const { return 160; }
+int ST7735Display::physicalHeight() const { return 80; }
+
+const DisplayDriver::ColorArt* ST7735Display::colorSplashArt() const {
+#ifdef OFFBAND_SPLASH_ST7735_W
+  static const ColorArt art = {
+    offband_splash_st7735,
+    OFFBAND_SPLASH_ST7735_W, OFFBAND_SPLASH_ST7735_H,
+    OFFBAND_SPLASH_ST7735_X, OFFBAND_SPLASH_ST7735_Y
+  };
+  return &art;
+#else
+  return nullptr;
+#endif
+}
+
+void ST7735Display::drawRGB565(int x, int y, const uint16_t* px, int w, int h) {
+  if (!sprite || !px) return;
+
+  // INTO the sprite, never straight to the panel. The splash re-renders about once
+  // a second inside startFrame/endFrame, and endFrame blits the whole sprite over
+  // the panel -- art pushed directly would be erased on the next frame, which is
+  // exactly the flashing the RC52 showed on its first attempt (#948).
+  //
+  // Coordinates are PHYSICAL. The sprite IS the panel at 160x80, so unlike every
+  // other primitive here nothing is multiplied by SCALE_X/SCALE_Y.
+  //
+  // The asset is host-order RGB565; a sprite stores panel-order, which endFrame
+  // hands to SPI untouched. setSwapBytes makes pushImage do that conversion.
+  const bool prev_swap = sprite->getSwapBytes();
+  sprite->setSwapBytes(true);
+  sprite->pushImage(x, y, w, h, px);
+  sprite->setSwapBytes(prev_swap);
 }
 
 uint16_t ST7735Display::getTextWidth(const char* str) {
