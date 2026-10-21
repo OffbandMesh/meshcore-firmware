@@ -122,6 +122,155 @@ TEST(TouchMapping, OutOfRangeIsClamped) {
   EXPECT_EQ(y, 319);
 }
 
+// ------------------------------------------------- GT911 (Epic J, J3 #1726)
+
+namespace {
+// Point 1 at 0x8150: track id, X lo/hi, Y lo/hi, size lo/hi, reserved.
+void gtPoint(uint8_t* b, uint16_t x, uint16_t y) {
+  b[0] = 0;
+  b[1] = uint8_t(x & 0xFF);
+  b[2] = uint8_t(x >> 8);
+  b[3] = uint8_t(y & 0xFF);
+  b[4] = uint8_t(y >> 8);
+  b[5] = 20;
+  b[6] = 0;
+  b[7] = 0;
+}
+}  // namespace
+
+TEST(Gt911, APointIsReadAcrossBothBytes) {
+  uint8_t b[kGt911PointLen];
+  gtPoint(b, 300, 200);   // past 255 in X: the high byte matters
+  TouchPoint p{};
+  EXPECT_EQ(Gt911Frame::Pressed, parseGt911(0x81, b, sizeof b, &p));
+  EXPECT_TRUE(p.pressed);
+  EXPECT_EQ(300, p.x);
+  EXPECT_EQ(200, p.y);
+}
+
+TEST(Gt911, NoNewReportKeepsTheLastState) {
+  TouchPoint p{true, 10, 20};
+  EXPECT_EQ(Gt911Frame::NotReady, parseGt911(0x01, nullptr, 0, &p)) << "bit 7 clear: nothing new";
+  EXPECT_TRUE(p.pressed);
+  EXPECT_EQ(10, p.x);
+}
+
+TEST(Gt911, AReportWithNoPointsIsARelease) {
+  TouchPoint p{true, 10, 20};
+  EXPECT_EQ(Gt911Frame::Released, parseGt911(0x80, nullptr, 0, &p));
+  EXPECT_FALSE(p.pressed);
+}
+
+TEST(Gt911, TooManyPointsIsAGlitch) {
+  uint8_t b[kGt911PointLen];
+  gtPoint(b, 1, 1);
+  TouchPoint p{};
+  EXPECT_EQ(Gt911Frame::Invalid, parseGt911(0x8F, b, sizeof b, &p)) << "15 points: the GT911 reports 5 at most";
+  EXPECT_EQ(Gt911Frame::Invalid, parseGt911(0xFF, b, sizeof b, &p)) << "an all-ones bus read";
+}
+
+TEST(Gt911, AShortPointReadIsAGlitch) {
+  uint8_t b[kGt911PointLen];
+  gtPoint(b, 1, 1);
+  TouchPoint p{};
+  EXPECT_EQ(Gt911Frame::Invalid, parseGt911(0x81, b, 4, &p));
+  EXPECT_EQ(Gt911Frame::Invalid, parseGt911(0x81, nullptr, 0, &p));
+}
+
+TEST(Gt911, ACoordinateBeyondTheChipsRangeIsAGlitch) {
+  uint8_t b[kGt911PointLen];
+  gtPoint(b, 0xFFFF, 100);
+  TouchPoint p{};
+  EXPECT_EQ(Gt911Frame::Invalid, parseGt911(0x81, b, sizeof b, &p));
+}
+
+TEST(Gt911, TheFirstPointIsUsedWhenSeveralAreDown) {
+  uint8_t b[kGt911PointLen];
+  gtPoint(b, 50, 60);
+  TouchPoint p{};
+  EXPECT_EQ(Gt911Frame::Pressed, parseGt911(0x83, b, sizeof b, &p));
+  EXPECT_EQ(50, p.x);
+}
+
+TEST(Gt911Id, TheProductIdIsRecognized) {
+  const uint8_t id[] = {'9', '1', '1', 0};
+  EXPECT_TRUE(isGt911ProductId(id, sizeof id));
+}
+
+TEST(Gt911Id, AnotherChipIsNotTakenForTheTouchPanel) {
+  const uint8_t other[] = {0x00, 0x00, 0x00, 0x00};
+  const uint8_t ff[] = {0xFF, 0xFF, 0xFF, 0xFF};
+  const uint8_t close[] = {'9', '1', '7', 0};
+  EXPECT_FALSE(isGt911ProductId(other, sizeof other));
+  EXPECT_FALSE(isGt911ProductId(ff, sizeof ff));
+  EXPECT_FALSE(isGt911ProductId(close, sizeof close));
+  EXPECT_FALSE(isGt911ProductId(nullptr, 4));
+  EXPECT_FALSE(isGt911ProductId(other, 2));
+}
+
+TEST(Gt911Tracker, AHeldFingerStaysHeldBetweenReports) {
+  Gt911Tracker t;
+  uint8_t b[kGt911PointLen];
+  gtPoint(b, 70, 80);
+  TouchPoint p{};
+  ASSERT_TRUE(t.update(0x81, b, sizeof b, &p));
+  for (uint8_t i = 0; i + 1 < kGt911StaleReads; i++) {
+    ASSERT_TRUE(t.update(0x00, nullptr, 0, &p));
+    EXPECT_TRUE(p.pressed);
+    EXPECT_EQ(70, p.x);
+  }
+  ASSERT_TRUE(t.update(0x81, b, sizeof b, &p));   // a new report restarts the count
+  for (uint8_t i = 0; i + 1 < kGt911StaleReads; i++) ASSERT_TRUE(t.update(0x00, nullptr, 0, &p));
+  EXPECT_TRUE(p.pressed);
+}
+
+TEST(Gt911Tracker, ALostReleaseReportDoesNotLeaveThePressStuck) {
+  Gt911Tracker t;
+  uint8_t b[kGt911PointLen];
+  gtPoint(b, 70, 80);
+  TouchPoint p{};
+  ASSERT_TRUE(t.update(0x81, b, sizeof b, &p));
+  for (uint8_t i = 0; i < kGt911StaleReads; i++) ASSERT_TRUE(t.update(0x00, nullptr, 0, &p));
+  EXPECT_FALSE(p.pressed);
+  EXPECT_EQ(70, p.x);   // released where the finger was
+  ASSERT_TRUE(t.update(0x00, nullptr, 0, &p));
+  EXPECT_FALSE(p.pressed);
+}
+
+TEST(Gt911Tracker, AReleaseReportReleasesAtOnce) {
+  Gt911Tracker t;
+  uint8_t b[kGt911PointLen];
+  gtPoint(b, 70, 80);
+  TouchPoint p{};
+  ASSERT_TRUE(t.update(0x81, b, sizeof b, &p));
+  ASSERT_TRUE(t.update(0x80, nullptr, 0, &p));
+  EXPECT_FALSE(p.pressed);
+  EXPECT_EQ(80, p.y);
+}
+
+TEST(Gt911Tracker, AnInvalidReportIsAFailedReadAndKeepsTheState) {
+  Gt911Tracker t;
+  uint8_t b[kGt911PointLen];
+  gtPoint(b, 70, 80);
+  TouchPoint p{};
+  ASSERT_TRUE(t.update(0x81, b, sizeof b, &p));
+  TouchPoint q{};
+  EXPECT_FALSE(t.update(0x87, b, sizeof b, &q));   // 7 points: a glitch
+  ASSERT_TRUE(t.update(0x00, nullptr, 0, &p));
+  EXPECT_TRUE(p.pressed);
+  EXPECT_FALSE(t.update(0x81, b, sizeof b, nullptr));
+}
+
+// The T-Deck's GT911 reports 320x240 against a 240x320 portrait panel:
+// swapping the axes puts a landscape touch on the portrait panel.
+TEST(TouchMapping, ALandscapeControllerOnAPortraitPanelSwaps) {
+  TouchMapping m{true, false, false, 240, 320};
+  uint16_t x = 300, y = 10;   // near the long edge's far end
+  mapTouch(m, &x, &y);
+  EXPECT_EQ(10, x);
+  EXPECT_EQ(300, y);
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

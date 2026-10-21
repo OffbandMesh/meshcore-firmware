@@ -13,6 +13,7 @@
 #include <helpers/gui/GuiViews.h>
 #include <helpers/gui/SignalLevel.h>
 #include <helpers/gui/hw/Chsc6xTouch.h>
+#include <helpers/gui/hw/Gt911Touch.h>
 #include <helpers/gui/hw/GuiPanel.h>
 #include <helpers/gui/hw/LvglPort.h>
 #include <helpers/ui/OffbandSplash.h>   // offbandShortVersion
@@ -80,7 +81,10 @@ const char* screenName(ScreenState s) {
 // On the R8's Expansion Board V2 the touch chip sits on the board's own I2C
 // bus with the sensors (schematic V2.03, TP_SDA/TP_SCL = I2C_SDA/I2C_SCL), so
 // it must share that controller: a second one driving the same pins breaks both.
-#if defined(PIN_BOARD_SDA) && defined(PIN_TOUCH_SDA) && PIN_TOUCH_SDA == PIN_BOARD_SDA
+// The T-Deck's GT911 (Epic J #1434) is on the board bus too, with the keyboard.
+#if defined(TOUCH_GT911)
+Gt911Touch s_touch(Wire);
+#elif defined(PIN_BOARD_SDA) && defined(PIN_TOUCH_SDA) && PIN_TOUCH_SDA == PIN_BOARD_SDA
 Chsc6xTouch s_touch(Wire);
 #else
 Chsc6xTouch s_touch;
@@ -129,7 +133,11 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
     lvglAttachTouch(s_touch, m);
   }
   // No answer from the controller: the GUI runs on buttons only (PLAN.md §6).
+#ifdef TOUCH_GT911
+  mesh_log_line(MLOG_BOOT, "[gui] touch %s\n", _touch_ok ? "gt911 ok" : "none (buttons only)");
+#else
   mesh_log_line(MLOG_BOOT, "[gui] touch %s\n", _touch_ok ? "chsc6x ok" : "none (buttons only)");
+#endif
 #endif
 
   // USR pulls to ground when pressed; AUX does too, except where its env says

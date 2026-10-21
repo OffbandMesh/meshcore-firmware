@@ -11,7 +11,7 @@
 
 #include "../TouchFrame.h"
 
-class Chsc6xTouch {
+class Chsc6xTouch : public offband::gui::TouchSource {
 public:
   explicit Chsc6xTouch(TwoWire& wire = Wire1) : _wire(wire) {}
 
@@ -22,7 +22,7 @@ public:
   bool present() const { return _present; }
 
   // Reads one frame. Returns false on a bus error or a glitch frame.
-  bool read(offband::gui::TouchPoint* p);
+  bool read(offband::gui::TouchPoint* p) override;
 
 private:
   TwoWire& _wire;

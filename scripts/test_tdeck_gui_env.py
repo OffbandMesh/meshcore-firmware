@@ -43,7 +43,11 @@ HW_PINS = {
     "PIN_TFT_LEDA_CTL": "42", "PIN_TFT_RST": "-1", "PIN_PERF_POWERON": "10", "PIN_USER_BTN": "0",
 }
 GUI_FLAGS = {"PIN_TFT_MISO": "38", "PIN_SD_CS": "39", "DISPLAY_CLASS": "GuiPanel",
-             "GUI_DEFAULT_ROTATION": "90", "OFFBAND_GUI": "1"}
+             "GUI_DEFAULT_ROTATION": "90", "OFFBAND_GUI": "1",
+             # GT911 touch on the board bus with the keyboard; reset is RC-only (#1724, #1726).
+             "TOUCH_GT911": "1", "PIN_BOARD_SDA": "18", "PIN_BOARD_SCL": "8",
+             "PIN_TOUCH_SDA": "18", "PIN_TOUCH_SCL": "8", "PIN_TOUCH_RST": "-1",
+             "GUI_TOUCH_SWAP_XY": "1"}
 
 
 def gui_branch(target):
@@ -165,6 +169,14 @@ def test_negative_a_wrong_schematic_pin_is_caught():
 
 def test_negative_the_wrong_sd_cs_is_caught():
     _fails_with("PIN_SD_CS must be 39", ini=_swap_in(GUI, "-D PIN_SD_CS=39", "-D PIN_SD_CS=3"))
+
+
+def test_negative_touch_off_the_board_bus_is_caught():
+    _fails_with("PIN_TOUCH_SDA must be 18", ini=_swap_in(GUI, "-D PIN_TOUCH_SDA=18", "-D PIN_TOUCH_SDA=47"))
+
+
+def test_negative_the_chsc6x_driver_on_the_tdeck_is_caught():
+    _fails_with("TOUCH_GT911 must be 1", ini=_swap_in(GUI, "-D TOUCH_GT911=1", ""))
 
 
 def test_negative_a_portrait_start_is_caught():
