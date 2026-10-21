@@ -248,7 +248,11 @@ private:
     // BEFORE_CONNECT that follows must not record it again. Any other
     // BEFORE_CONNECT is esp-mqtt's own auto-reconnect. Set on mqtt_worker before
     // start() creates the esp-mqtt task; cleared by that task.
-    bool             pool_start_recorded_     = false;
+    //
+    // volatile because those are two tasks: the write happens before the task
+    // that reads it exists, so the ordering holds, but nothing in the types
+    // says so and a compiler is free to keep the read in a register.
+    volatile bool    pool_start_recorded_     = false;
 
     // #720: reconnect-proof clock for TLS-budget hold duration. Stamped on the
     // first Up of an occupancy, cleared on releaseClient(); a reconnect does NOT
