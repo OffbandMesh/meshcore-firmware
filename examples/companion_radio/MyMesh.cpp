@@ -515,7 +515,10 @@ void MyMesh::logRx(mesh::Packet* pkt, int len, float score) {
       uint8_t hash[MAX_HASH_SIZE];
       pkt->calculatePacketHash(hash);
       const uint32_t seq = _gui_repeats.heard(hash, now_ms);
-      if (seq && _gui_store.addEcho(seq)) _gui_store_flash.ringChanged(now_ms);
+      if (seq && _gui_store.addEcho(seq)) {
+        _gui_store_flash.ringChanged(now_ms);
+        guiStoreChanged(seq);
+      }
     }
   }
 #endif
@@ -711,6 +714,7 @@ ContactInfo*  MyMesh::processAck(const uint8_t *data) {
       if (_gui_ack_seq[i]) {   // #1464: the stored DM is delivered
         _gui_store.setDelivery(_gui_ack_seq[i], offband::gui::Delivery::Delivered);
         _gui_store_flash.ringChanged(_ms->getMillis());
+        guiStoreChanged(_gui_ack_seq[i]);
         _gui_ack_seq[i] = 0;
       }
 #endif
@@ -1914,6 +1918,11 @@ void MyMesh::begin(bool has_display) {
   if (_gui_store.begin(GUI_MSG_CAPACITY, GUI_MSG_THREADS)) {
     FILESYSTEM* fs = _store->getSecondaryFS() ? _store->getSecondaryFS() : _store->getPrimaryFS();
     if (_gui_store_flash.begin(fs, &_gui_store)) _gui_store_flash.load();
+  #ifdef PIN_SD_CS
+    // The card's archive is this radio's (#1433): tagged by its public key.
+    _gui_sd.begin(uint32_t(self_id.pub_key[0]) | uint32_t(self_id.pub_key[1]) << 8 |
+                  uint32_t(self_id.pub_key[2]) << 16 | uint32_t(self_id.pub_key[3]) << 24);
+  #endif
   #ifdef OFFBAND_GUI_STORE_FILL
     // #1470, bench only: fill the store to capacity so the C6 bench (#1466)
     // measures a full-size ring write and reload. Real traffic evicts these
@@ -4314,6 +4323,9 @@ void MyMesh::loop() {
   // #1463: the message store writes a slice per tick too, never in the same
   // tick as a contacts slice.
   _gui_store_flash.loop(_ms->getMillis(), _contacts_save.active(), _gui_screen_idle);
+  #ifdef PIN_SD_CS
+  _gui_sd.loop(_ms->getMillis(), _gui_store);   // #1433: the card catches up, a slice per tick
+  #endif
 #else
   // is there are pending dirty contacts write needed?
   if (dirty_contacts_expiry && millisHasNowPassed(dirty_contacts_expiry)) {
@@ -4373,6 +4385,7 @@ CmdResult MyMesh::cmdSendDirect(ContactInfo& to, uint32_t timestamp, uint8_t att
       if (attempt > 0) stored = _gui_store.findOwn(t, text, len);
       if (stored) {
         _gui_store.setDelivery(stored, offband::gui::Delivery::Sending);
+        guiStoreChanged(stored);
       } else {
         stored = _gui_store.addOwn(t, getRTCClock()->getCurrentTime(), text, len,
                                    ack ? offband::gui::Delivery::Sending : offband::gui::Delivery::None);
