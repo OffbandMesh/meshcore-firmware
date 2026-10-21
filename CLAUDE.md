@@ -109,7 +109,24 @@ Decision record: **OffbandMesh/meshcore-firmware#5** (closed, preserved-by-desig
 
 ## Hardware facts — read before any hardware work
 
-Device inventory, RF chain (FEM / TX power), per-device MACs/roles, slot/pin maps, and flash paths live in **`HARDWARE.local.md`** (gitignored, per-host; symlink to the canonical `C:\Dev\LoRa\HARDWARE.md`). **Read it before asking about or acting on hardware**, and record newly-stated hardware facts there so the user never has to restate them. It holds LAN IPs / MACs / SSID / BLE PINs / GPS coordinates — **never commit it or paste its contents** into issues/PRs/chat.
+This project has **two hardware files, and both live IN THIS REPOSITORY**:
+
+| File | Committed? | Contents |
+|---|---|---|
+| **`HARDWARE.md`** | **yes, public** | Supported board families, variant names, public specs, strapping-pin hazards, flash-discipline overview |
+| **`HARDWARE.local.md`** | **no — gitignored** | Per-host bench inventory: device identities, MACs, LAN IPs, SSIDs, BLE PINs, admin passwords, GPS coordinates, flash paths, per-unit config |
+
+**Read `HARDWARE.local.md` before asking about or acting on hardware**, and record newly-stated hardware facts there so the owner never has to restate them. **Never commit it or paste its contents** into issues/PRs/chat. Public hardware facts go in `HARDWARE.md`; anything identifying a specific unit goes in `HARDWARE.local.md`.
+
+> ## 🚫 NEVER SYMLINK EITHER FILE. NEVER POINT THEM OUTSIDE THIS REPO.
+>
+> `HARDWARE.local.md` was a symlink to `C:\Dev\LoRa\HARDWARE.md` from 2026-06-14 until 2026-08-16. `C:\Dev\LoRa` is the **retired pre-Offband repository** (`Strycher/LoRa`) and is **not this project**. Because this very line documented the symlink as correct, every agent followed it, and **two months of Offband hardware documentation — 977 lines, 49 device entries — was written into an unrelated repository** instead of this one. It was never diffed, reviewed or committed here. (#735)
+>
+> **Rules, no exceptions:**
+> - `HARDWARE.md` and `HARDWARE.local.md` are **real files in `C:\Dev\meshcore-firmware`**. Never symlinks, never mirrors, never external paths.
+> - **Nothing belonging to this repo may be STORED IN, WRITTEN TO, or RUN FROM `C:\Dev\LoRa`.** Every path in this repo's tooling derives from `__file__`, the repo root, or the per-host state dir (`scripts/offband_state.py`). A path that reads or writes `C:\Dev\LoRa` at runtime is a **defect** — fix it.
+> - **Reading is fine. Storing is not.** `Strycher/LoRa` remains a legitimate **historical reference**: reading prior work from it, and citing `Strycher/LoRa#NNN` for provenance, are **correct and expected**. Do not strip those citations. Likewise `scripts/offband_state.py` correctly notes that `C:\Dev\LoRa` and `C:\Dev\wadamesh` keep their *own* registries — that is the right distinction, not a defect.
+> - The defect is **dependency and data flow, not mention**. A comment citing `Strycher/LoRa#88` is history. A path that reads or writes `C:\Dev\LoRa\...` at runtime is a bug.
 
 ## Security
 
