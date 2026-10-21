@@ -103,6 +103,36 @@ jobs:
       - name: Frame sizing goes through maxFramePayload(), not MAX_FRAME_SIZE arithmetic
         run: python scripts/check_frame_cap.py
 
+      # #1601 (Feature #1599). The board matrix is larger than anyone can bench-test,
+      # and base updates arrive carrying pin changes for boards nobody here owns. A pin
+      # that collides with another on the same bus builds cleanly and does not work --
+      # no compile error, no test failure. This asserts a property over all 92 variants
+      # instead, reading BOTH declaration styles (nRF52 #define headers and ESP32 -D
+      # build flags), so adopting such a change is checkable without the board.
+      #
+      # The self-test runs FIRST and is not a formality: it carries the negative cases
+      # proving what the checker catches, plus a coverage floor, because an "OK" from a
+      # checker that compared nothing looks identical to one that compared everything.
+      - name: Variant pin-collision guard self-test
+        run: python scripts/test_check_variant_pin_collisions.py
+
+      - name: No two pins of one peripheral share a GPIO, on any variant
+        run: python scripts/check_variant_pin_collisions.py
+
+      # #1602: the other half of the "builds clean, doesn't work" class. Deleting the
+      # call that arms the watchdog, or landing a #define that selects a no-op crash-log
+      # path, compiles fine and leaves the capability out of the image. The assertion
+      # itself has to run where the artifacts are, so it lives in the build job below,
+      # per matrix leg. What runs HERE is its self-test, which needs no build: the
+      # negative cases (a base-class no-op must not satisfy a derived-class rule; the
+      # mangled-name length prefix must keep substring matching exact) plus the coverage
+      # floor that every env in the build matrix still classifies to a platform family.
+      # That floor is why this is in config-lint and not only in build -- adding an env
+      # the guard cannot classify fails here, immediately, instead of producing a leg
+      # that checks nothing.
+      - name: Built-artifact symbol-presence guard self-test
+        run: python scripts/test_check_symbol_presence.py
+
       # #749/#758: the asset generators. The native-tests job discovers and runs the
       # C++ suites on its own, but nothing discovers scripts/test_*.py -- they only
       # run if named here. A generator bug is silent (the splash renders in the wrong
@@ -601,6 +631,21 @@ jobs:
             .pio/build/${{ matrix.env }}/firmware.uf2
           if-no-files-found: warn
           retention-days: 90
+
+      # #1602: a green build does not mean the Offband capabilities are IN the image.
+      # This reads .symtab out of the ELF just built and asserts that the crash log,
+      # the watchdog, the ESP32 boot-rollback safety and the packet-hash capability are
+      # linked -- per env, so a change that unlinks one fails on the leg where it
+      # happened rather than being found in the field. Rules name the owning class
+      # (ESP32Board, not the mesh::MainBoard no-op default) and, where a capability has
+      # a no-op twin behind an #ifdef that emits the same mangled name, a symbol only
+      # the live path compiles. Not advisory: this is the regression class #1599 exists
+      # to close, and the matrix is larger than anyone can bench-test.
+      #
+      # Runs AFTER the upload on purpose: when this fails, the artifact it failed on is
+      # already attached to the run, so the ELF can be read instead of reproduced.
+      - name: Offband capabilities are linked into ${{ matrix.env }}
+        run: python scripts/check_symbol_presence.py --env ${{ matrix.env }} --verbose
 
   # #477: single required-status aggregation point. Branch protection on
   # firmware-base requires ONLY this check -- so matrix edits can never
