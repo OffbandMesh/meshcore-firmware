@@ -742,6 +742,7 @@ void UITask::pollDmRetries(uint32_t now) {
       case DmRetry::Step::Fail: {
         store.setDelivery(seq, Delivery::Failed);
         the_mesh.guiStoreFlash().ringChanged(millis());
+        the_mesh.guiStoreChanged(seq);
         // Messages & alerts › Clear path on max retry: the next send floods
         // and finds a route again.
         const Thread* th = m ? store.threadAt(m->thread) : nullptr;

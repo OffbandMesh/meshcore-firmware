@@ -122,6 +122,12 @@ jobs:
       - name: R8 TFT GUI env pins
         run: python scripts/test_r8_tft_gui_env.py
 
+      # #1704: the SD archive's call sites. The archive's rules are host-tested; this
+      # checks the firmware uses them: every stored message whose delivery or echo
+      # count changes also reaches the card, and the loop drives the card at all.
+      - name: GUI SD archive wiring
+        run: python scripts/test_gui_sd_wiring.py
+
       # #1625: which preflashed channels ship quiet. A silent channel and a channel that
       # made no choice are one byte apart, and swapping them is invisible until a badge is
       # quiet in the wrong room -- or noisy in the one a tester asked to be quiet.
