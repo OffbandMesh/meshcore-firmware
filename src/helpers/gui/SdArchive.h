@@ -29,7 +29,7 @@ namespace gui {
 constexpr uint16_t kArchiveSlots = 5000;     // PLAN.md §9
 constexpr uint16_t kArchiveThreads = 256;
 constexpr uint16_t kArchiveVersion = 1;
-constexpr size_t kArchiveHeaderLen = 16;
+constexpr size_t kArchiveHeaderLen = 24;
 
 // A file the archive can seek in. A file on the card in practice, memory in
 // the tests.
@@ -78,6 +78,9 @@ public:
 
   // The highest seq the card holds; 0 for an empty archive.
   uint32_t archivedThrough() const { return _through; }
+  // Records the card holds: each one written once, capped at the slots once
+  // the oldest start being overwritten. For Settings' "Messages on card".
+  uint32_t stored() const { return _stored; }
 
   // Live messages the card doesn't have yet (seq > archivedThrough).
   size_t pending(const MsgStore& live) const;
@@ -121,6 +124,7 @@ private:
   uint16_t _slots = 0;
   uint16_t _max_threads = 0;
   uint32_t _through = 0;
+  uint32_t _stored = 0;
 };
 
 }  // namespace gui

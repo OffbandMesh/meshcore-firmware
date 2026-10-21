@@ -102,7 +102,7 @@ TEST(SdArchive, ReopensWhatItWrote) {
 TEST(SdArchive, GarbageIsABadHeaderNotAnArchive) {
   Fixture f;
   f.rec.bytes.assign(kArchiveHeaderLen + 50 * sizeof(MsgRecord), 0x5A);
-  f.thr.bytes.assign(16, 0x5A);
+  f.thr.bytes.assign(kArchiveHeaderLen + 8 * sizeof(ArchiveThread), 0x5A);
   SdArchive a;
   EXPECT_EQ(ArchiveOpen::BadHeader, a.open(f.rec, f.thr, kOwner, 50, 8));
   EXPECT_FALSE(a.ready());
@@ -329,7 +329,7 @@ TEST(SdArchive, ThreadsAreKeptOncePerKey) {
   int used = 0;
   for (uint32_t i = 0; i < 8; i++) {
     ArchiveThread t;
-    const uint32_t off = 16 + i * sizeof(ArchiveThread);
+    const uint32_t off = kArchiveHeaderLen + i * sizeof(ArchiveThread);
     ASSERT_TRUE(f.thr.readAt(off, &t, sizeof(t)));
     if (t.kind) used++;
   }
@@ -468,6 +468,40 @@ TEST(SdArchive, ACardErrorOnTheThreadTableStopsTheSlice) {
   EXPECT_EQ(1u, a.catchUp(f.live, 100, &ok));
   EXPECT_FALSE(ok);
   EXPECT_EQ(0u, a.archivedThrough()) << "a card error was taken for a full table and skipped";
+}
+
+// Settings' "Messages on card": what was written, kept across a reopen, never
+// counting a skip, capped at the slots once the oldest are overwritten.
+TEST(SdArchive, StoredCountsWhatTheCardHolds) {
+  Fixture f(5);
+  for (int i = 1; i <= 8; i++) add(f.live, f.chan_a, "m");   // 3 evicted: a gap
+  {
+    SdArchive a;
+    ASSERT_EQ(ArchiveOpen::Fresh, a.open(f.rec, f.thr, kOwner, 10, 8));
+    EXPECT_EQ(0u, a.stored());
+    a.catchUp(f.live, 100);
+    EXPECT_EQ(5u, a.stored()) << "the evicted 3 never reached the card";
+  }
+  SdArchive b;
+  ASSERT_EQ(ArchiveOpen::Ok, b.open(f.rec, f.thr, kOwner, 10, 8));
+  EXPECT_EQ(5u, b.stored());
+  for (int i = 0; i < 12; i++) {
+    add(f.live, f.chan_a, "more");
+    b.catchUp(f.live, 100);
+  }
+  EXPECT_EQ(10u, b.stored()) << "capped at the archive's 10 slots";
+}
+
+TEST(SdArchive, AFailedSliceDoesntCount) {
+  Fixture f;
+  for (int i = 1; i <= 4; i++) add(f.live, f.chan_a, "m");
+  SdArchive a;
+  ASSERT_EQ(ArchiveOpen::Fresh, a.open(f.rec, f.thr, kOwner, 50, 8));
+  f.rec.fail_only = f.rec.attempts + 2;
+  bool ok = true;
+  a.catchUp(f.live, 100, &ok);
+  EXPECT_FALSE(ok);
+  EXPECT_EQ(0u, a.stored());
 }
 
 TEST(SdArchive, NothingWorksBeforeOpen) {
