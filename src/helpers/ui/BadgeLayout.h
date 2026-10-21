@@ -21,7 +21,23 @@ namespace badgeui {
 constexpr int kScreenPx = 128;      // the panel
 constexpr int kScreenRowsPx = 64;
 constexpr int kEdgePx = 1;          // the margin anything flush right keeps
-constexpr int kTagPx = 30;          // a channel message's sender tag
+// #1669: a channel message's sender tag. Widened from 30 px / 5 characters on the owner's
+// call, 2026-10-19, after a tester asked for more of the node name: "name @ 10 characters."
+//
+// 60 px is 10 characters at the 6 px nominal advance the old 30/5 pairing implies, and it
+// costs ~10 characters off the FIRST line of each message only -- continuation rows start
+// at x=0 and are unaffected.
+//
+// ⚠ THE BODY FACE IS PROPORTIONAL on the badge. bodyFaceFor(kTextMedium) returns Org_01,
+// so a character count alone does NOT bound the pixel width -- a name of wide glyphs can
+// exceed its reservation and paint over the message text. That hazard existed at 5
+// characters too; nothing had hit it because 5 wide glyphs only just fit 30 px.
+//
+// So kTagChars and kTagPx are BOTH limits and the render honours whichever binds first:
+// at most kTagChars characters, and never wider than kTagPx. A wide 10-character name
+// therefore shows 8 or 9 rather than overlapping.
+constexpr int kTagPx = 60;
+constexpr int kTagChars = 10;       // the owner's figure; the pixel cap above still wins
 constexpr int kGapPx = 2;           // between that tag and its text
 constexpr int kMarkPx = 8;          // my message's status mark, at the right edge
 constexpr int kCycleStops = 4;      // SW1's cycle: Messages, Contacts, Nearby, Status
@@ -194,16 +210,24 @@ inline int spanPx(const Face& f, const char* text, const Span& s) {
   return px;
 }
 
-// Splits text into lines at most `width_px` wide. A line breaks at its last space if it
-// has one, else mid-word; spaces at a break are dropped. Returns the line count, at most
-// max_lines. A box too narrow for even one character still takes one per line, so the
-// wrap always advances; the screen clips what won't fit.
-inline int wrap(const Face& f, const char* text, int width_px, Span* out, int max_lines) {
+// Splits text into lines, the first at most `first_px` wide and the rest at most
+// `rest_px`. A line breaks at its last space if it has one, else mid-word; spaces at a
+// break are dropped. Returns the line count, at most max_lines. A box too narrow for even
+// one character still takes one per line, so the wrap always advances; the screen clips
+// what won't fit.
+//
+// #1685: the two widths exist because an incoming channel message's sender tag occupies
+// the left kTagPx of its FIRST row only. Reserving that column on every row -- which is
+// what a single-width wrap forces -- left the bottom-left of the screen permanently blank
+// and cost ~5 characters on every continuation line. A tester photographed it.
+inline int wrapHanging(const Face& f, const char* text, int first_px, int rest_px,
+                       Span* out, int max_lines) {
   const int total = (int)strlen(text);
   int pos = 0, n = 0;
   while (n < max_lines) {
     while (pos < total && text[pos] == ' ') pos++;
     if (pos >= total) break;
+    const int width_px = (n == 0) ? first_px : rest_px;
     int fit = 0, used = 0;   // characters that fit on this line
     while (pos + fit < total) {
       const int w = charPx(f, text[pos + fit]);
@@ -243,6 +267,11 @@ inline int wrap(const Face& f, const char* text, int width_px, Span* out, int ma
   return n;
 }
 
+// The uniform-width wrap, which is every caller but the channel thread.
+inline int wrap(const Face& f, const char* text, int width_px, Span* out, int max_lines) {
+  return wrapHanging(f, text, width_px, width_px, out, max_lines);
+}
+
 // One message, for the thread layout. `sender` is empty in a DM.
 struct MsgView {
   bool outgoing;
@@ -265,7 +294,9 @@ struct Row {
 
 // Lays a thread's messages (oldest first) out as rows, oldest first.
 // - An incoming channel message has its sender's tag in the left kTagPx of its first
-//   row, and its text after that on every row.
+//   row, and its text after that ON THAT ROW ONLY. Continuation rows reclaim the tag
+//   column and run the full width (#1685) -- the tag is drawn once, so reserving its
+//   column on every row blanked the bottom-left of the screen for nothing.
 // - An incoming DM has one sender, so no tag: its text starts at the left edge.
 // - My messages are flush right, clear of the status mark at the edge.
 // - The selected message (or -1) has a caret at the left on each row, with everything
@@ -278,19 +309,28 @@ inline int layoutThread(const Face& f, const MsgView* msgs, int count, bool chan
   for (int m = 0; m < count && n < max_rows; m++) {
     const bool sel = (m == selected);
     const int shift = sel ? caret_px : 0;
-    int x, width;
+    // Two origins and two widths: the first row may start clear of the sender tag, every
+    // row after it starts where the message itself does. They differ only for an incoming
+    // channel message, which is the only case that draws a tag.
+    int x, width, rest_x, rest_width;
     if (msgs[m].outgoing) {
       x = 0;   // each line is placed flush right below
       width = kScreenPx - kMarkPx - kEdgePx - shift;
+      rest_x = x;
+      rest_width = width;
     } else if (channel) {
       x = kTagPx + kGapPx + shift;
       width = kScreenPx - kEdgePx - x;
+      rest_x = shift;                                // #1685: the tag column comes back
+      rest_width = kScreenPx - kEdgePx - rest_x;
     } else {
       x = shift;
       width = kScreenPx - kEdgePx - x;
+      rest_x = x;
+      rest_width = width;
     }
     Span spans[16];
-    const int lines = wrap(f, msgs[m].text, width, spans, 16);
+    const int lines = wrapHanging(f, msgs[m].text, width, rest_width, spans, 16);
     for (int i = 0; i < lines && n < max_rows; i++) {
       Row& r = out[n++];
       r.msg = (uint8_t)m;
@@ -300,7 +340,7 @@ inline int layoutThread(const Face& f, const MsgView* msgs, int count, bool chan
       r.caret = sel;
       r.x_px = msgs[m].outgoing
                    ? (int16_t)(kScreenPx - kMarkPx - kEdgePx - spanPx(f, msgs[m].text, spans[i]))
-                   : (int16_t)x;
+                   : (int16_t)(i == 0 ? x : rest_x);
       r.span = spans[i];
     }
     if (sel && n < max_rows) {

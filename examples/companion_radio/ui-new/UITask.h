@@ -2,6 +2,7 @@
 
 #include <MeshCore.h>
 #include <helpers/ui/BatteryGauge.h>   // #1246
+#include <helpers/ui/LowBattCutoff.h>  // #1667: the cutoff debounces
 #include <helpers/ui/DisplayDriver.h>
 #include <helpers/ui/UIScreen.h>
 #include <helpers/SensorManager.h>
@@ -55,6 +56,9 @@ class UITask : public AbstractUITask {
   // #1246: the battery the screens show, averaged over readings taken on a cadence --
   // not once per redraw, which is what made the number move on its own.
   offband::BatteryAverage _batt;
+  // #1667: how long the cell has been under AUTO_SHUTDOWN_MILLIVOLTS. The cutoff needs
+  // the condition SUSTAINED, so the run has to outlive a single loop iteration.
+  offband::LowBattCutoffState _low_batt;
   unsigned long _next_batt_read = 0;
   offband::FullPointLearner _full_learner;   // #1254: learns this cell's 100%
   int next_backlight_btn_check = 0;

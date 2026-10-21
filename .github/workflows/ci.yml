@@ -147,7 +147,7 @@ jobs:
 
       # #1625: which preflashed channels ship quiet. A silent channel and a channel that
       # made no choice are one byte apart, and swapping them is invisible until a badge is
-      # quiet in the wrong room -- or noisy in the one Abend asked to be quiet.
+      # quiet in the wrong room -- or noisy in the one a tester asked to be quiet.
       - name: QCC preflash channel tunes
         run: python scripts/test_qcc_preflash_tunes.py
 
@@ -185,6 +185,20 @@ jobs:
       # Includes a hang at every one of the declared boot stages, not one example.
       - name: Rig boot smoke-test assertions
         run: python scripts/test_rig_boot_smoke.py
+
+      # #1667: every low-battery cutoff goes through the one debounced rule.
+      #
+      # This defect was written THREE times independently, once per UI family, because
+      # nothing checked. ui-gui copied ui-new's raw-sample form deliberately and
+      # documented the copy. #1667 fixed two families and said "both"; there were three,
+      # and the third arrived in a base merge after the grep that found the other two.
+      #
+      # A build does not catch it: the GUI variant built clean in a 4/4 gate run while
+      # still carrying it. The decision powers hardware off and fails silently, so it
+      # gets a guard that also asserts the FAMILY COUNT -- a fourth family makes this
+      # fail and someone has to look.
+      - name: Low-battery cutoff call sites
+        run: python scripts/test_low_batt_cutoff_call_sites.py
 
       - name: QCC splash-art generator self-test
         run: python scripts/test_gen_qcc_splash.py
@@ -501,6 +515,15 @@ jobs:
           - heltec_rc32_companion_radio_ble_diag
           - heltec_rc32_companion_radio_usb_diag
           - heltec_rc32_repeater_diag
+          # Heltec V4-R8 SAW -- shipped envs (.github/release-envs.txt, #1344)
+          - heltec_v4_r8_companion_observer_wifi
+          - heltec_v4_r8_companion_radio_ble
+          - heltec_v4_r8_companion_radio_usb
+          - heltec_v4_r8_repeater
+          - heltec_v4_r8_companion_observer_wifi_diag
+          - heltec_v4_r8_companion_radio_ble_diag
+          - heltec_v4_r8_companion_radio_usb_diag
+          - heltec_v4_r8_repeater_diag
           # RCC6 -- shipped envs (.github/release-envs.txt)
           - heltec_rcc6_companion_radio_ble
           - heltec_rcc6_companion_radio_usb

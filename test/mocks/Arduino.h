@@ -42,6 +42,14 @@ inline void pinMode(uint8_t pin, uint8_t mode) { if (pin < 64) g_mock_pin_mode[p
 inline int digitalRead(uint8_t pin) { return pin < 64 ? g_mock_pin_level[pin] : LOW; }
 inline int analogRead(uint8_t pin) { return pin < 64 ? g_mock_analog[pin] : 0; }
 
+// Board-control tests (#1338) assert the level code drove onto a pin. Writes go
+// to their own array so they never change what digitalRead() reports for an
+// input a test is simulating.
+inline int g_mock_pin_out[64] = {};
+inline void digitalWrite(uint8_t pin, uint8_t val) { if (pin < 64) g_mock_pin_out[pin] = val; }
+inline void analogReadResolution(uint8_t) {}
+inline uint32_t analogReadMilliVolts(uint8_t pin) { return pin < 64 ? g_mock_analog[pin] : 0; }
+
 // Sink for MeshLog's console mirror. Discards output unless a test sets `record`,
 // in which case everything written lands in `captured` (#1211: the console must
 // see a mesh_log_print line exactly once). Off by default, so every other test

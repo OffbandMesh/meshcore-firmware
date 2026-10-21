@@ -126,7 +126,7 @@ public:
   // with the hash, since a hashtag channel's key is derived from the name INCLUDING it.
   // This store has always documented its names as being WITHOUT one (see Convo::name),
   // and the badge UI prepends the sigil itself when it draws a row. Feed a prefixed name
-  // in and the badge renders "##queencitycon", which is what Abend reported.
+  // in and the badge renders "##queencitycon", which is what a tester reported.
   //
   // Stripped HERE rather than at each call site, because the contract is this store's and
   // a contract enforced by its owner cannot be forgotten by a new caller. The UI keeps
