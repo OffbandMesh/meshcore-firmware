@@ -2,6 +2,37 @@
 
 #include "ST7789Display.h"
 
+// #868: this board's color splash art. Three panels, three geometries, selected
+// the same way the constructor in ST7789Display.h selects them.
+#if defined(HELTEC_VISION_MASTER_T190)
+  #include "OffbandLogoST7789T190.h"
+  #define OB_ART_PX  offband_splash_st7789_t190
+  #define OB_ART_W   OFFBAND_SPLASH_ST7789_T190_W
+  #define OB_ART_H   OFFBAND_SPLASH_ST7789_T190_H
+  #define OB_ART_X   OFFBAND_SPLASH_ST7789_T190_X
+  #define OB_ART_Y   OFFBAND_SPLASH_ST7789_T190_Y
+  #define OB_PANEL_W 320
+  #define OB_PANEL_H 170
+#elif defined(THINKNODE_M9)
+  #include "OffbandLogoST7789M9.h"
+  #define OB_ART_PX  offband_splash_st7789_m9
+  #define OB_ART_W   OFFBAND_SPLASH_ST7789_M9_W
+  #define OB_ART_H   OFFBAND_SPLASH_ST7789_M9_H
+  #define OB_ART_X   OFFBAND_SPLASH_ST7789_M9_X
+  #define OB_ART_Y   OFFBAND_SPLASH_ST7789_M9_Y
+  #define OB_PANEL_W 320
+  #define OB_PANEL_H 240
+#else
+  #include "OffbandLogoST7789T114.h"
+  #define OB_ART_PX  offband_splash_st7789_t114
+  #define OB_ART_W   OFFBAND_SPLASH_ST7789_T114_W
+  #define OB_ART_H   OFFBAND_SPLASH_ST7789_T114_H
+  #define OB_ART_X   OFFBAND_SPLASH_ST7789_T114_X
+  #define OB_ART_Y   OFFBAND_SPLASH_ST7789_T114_Y
+  #define OB_PANEL_W 240
+  #define OB_PANEL_H 135
+#endif
+
 #ifndef X_OFFSET
 #define X_OFFSET 0  // No offset needed for landscape
 #endif
@@ -111,8 +142,31 @@ void ST7789Display::clear() {
 
 void ST7789Display::startFrame(ColorVal bkg) {
   display.clear();  // TODO: use bkg
+  // Art lives for one frame: whatever drew it must draw it again next frame, the
+  // same contract the 1-bit buffer has.
+  display.clearColorArt();
   setColor(UIColor::primary_txt);
   display.setFont(ArialMT_Plain_16);
+}
+
+int ST7789Display::physicalWidth() const { return OB_PANEL_W; }
+int ST7789Display::physicalHeight() const { return OB_PANEL_H; }
+
+const DisplayDriver::ColorArt* ST7789Display::colorSplashArt() const {
+#ifdef OB_ART_W
+  static const ColorArt art = { OB_ART_PX, OB_ART_W, OB_ART_H, OB_ART_X, OB_ART_Y };
+  return &art;
+#else
+  return nullptr;
+#endif
+}
+
+void ST7789Display::drawRGB565(int x, int y, const uint16_t* px, int w, int h) {
+  if (!px) return;
+  // Handed to the blit rather than drawn: see the note on ST7789Spi::artPixel.
+  // Coordinates are PHYSICAL -- the buffer is the panel here, so SCALE_X/Y and
+  // the X/Y_OFFSET nudges that every other primitive applies do not belong.
+  display.setColorArt(px, x, y, w, h);
 }
 
 void ST7789Display::setTextSize(int sz) {

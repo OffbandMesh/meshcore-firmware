@@ -106,7 +106,36 @@ class ST7789Spi : public OLEDDisplay {
       SPISettings 		    _spiSettings;
       uint16_t            _RGB=0xFFFF;
       uint8_t             _buffheight;
+
+      // #868: full-color splash art, composited as the buffer is pushed.
+      //
+      // It cannot be drawn into `buffer` -- that is ONE BIT per pixel, so anything
+      // written there comes back out as _RGB or black. The art therefore lives
+      // beside the buffer and replaces those pixels on their way to the panel,
+      // the same approach RC52Display takes (#948).
+      const uint16_t*     _art = nullptr;
+      int                 _artX = 0, _artY = 0, _artW = 0, _artH = 0;
+
+      // Buffer coordinates in, panel pixel out. `mono` is what the 1-bit buffer
+      // would have produced; inside the art rectangle the art wins.
+      //
+      // The byte swap is the panel's: pixbuf is handed to SPI as raw bytes, and
+      // ST7789 reads RGB565 MSB-first, while a uint16 sits in memory low byte
+      // first. It never showed up before because the only values pushed here are
+      // white and black, which read the same either way.
+      inline uint16_t artPixel(int bx, int by, uint16_t mono) const {
+        if (!_art || bx < _artX || by < _artY || bx >= _artX + _artW || by >= _artY + _artH)
+          return mono;
+        const uint16_t v = _art[(by - _artY) * _artW + (bx - _artX)];
+        return (uint16_t)((v >> 8) | (v << 8));
+      }
   public:
+    // Set for one frame by DisplayDriver::drawRGB565, cleared by startFrame, so
+    // art never outlives the frame that drew it.
+    void setColorArt(const uint16_t* px, int x, int y, int w, int h) {
+      _art = px; _artX = x; _artY = y; _artW = w; _artH = h;
+    }
+    void clearColorArt() { _art = nullptr; }
     /* pass _cs as -1 to indicate "do not use CS pin", for cases where it is hard wired low */
     ST7789Spi(SPIClass *spiClass,uint8_t _rst, uint8_t _dc, uint8_t _cs, OLEDDISPLAY_GEOMETRY g = GEOMETRY_RAWMODE,uint16_t width=240,uint16_t height=135,int mosi=-1,int miso=-1,int clk=-1) {
       this->_spi = spiClass;
@@ -197,7 +226,8 @@ class ST7789Spi : public OLEDDisplay {
               uint16_t *pixbuf = (uint16_t *)rtos_malloc(2 * pixbufcount);
               for (x = minBoundX; x <= maxBoundX; x++)
               {
-                pixbuf[x-minBoundX] = ((buffer[x + y * displayWidth]>>temp)&0x01)==1?_RGB:0;
+                uint16_t mono = ((buffer[x + y * displayWidth]>>temp)&0x01)==1?_RGB:0;
+                pixbuf[x-minBoundX] = artPixel(x, y*8+temp, mono);
               }
 #ifdef ESP_PLATFORM
               _spi->transferBytes((uint8_t *)pixbuf, NULL, 2 * pixbufcount);
@@ -225,7 +255,8 @@ class ST7789Spi : public OLEDDisplay {
               uint16_t *pixbuf = (uint16_t *)rtos_malloc(2 * pixbufcount);
               for (x = 0; x < displayWidth; x++)
               {
-                pixbuf[x] = ((buffer[x + y * displayWidth]>>temp)&0x01)==1?_RGB:0;
+                uint16_t mono = ((buffer[x + y * displayWidth]>>temp)&0x01)==1?_RGB:0;
+                pixbuf[x] = artPixel(x, y*8+temp, mono);
               }
 #ifdef ESP_PLATFORM
               _spi->transferBytes((uint8_t *)pixbuf, NULL, 2 * pixbufcount);

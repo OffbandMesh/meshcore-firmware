@@ -33,7 +33,15 @@ public:
   void fillRect(int x, int y, int w, int h) override;
   void drawRect(int x, int y, int w, int h) override;
   void drawXbm(int x, int y, const uint8_t* bits, int w, int h) override;
+  // #868: full-color art, pushed into the same sprite as everything else.
+  void drawRGB565(int x, int y, const uint16_t* px, int w, int h) override;
   uint16_t getTextWidth(const char* str) override;
   void endFrame() override;
+
+  // The sprite IS the coordinate space here -- the panel is UI_ZOOM times larger
+  // and endFrame scales onto it -- so physical and logical are the same numbers.
+  // They are still both reported, so the splash needs no special case.
+  int physicalWidth() const override { return width(); }
+  int physicalHeight() const override { return height(); }
   virtual bool getTouch(int *x, int *y);
 };

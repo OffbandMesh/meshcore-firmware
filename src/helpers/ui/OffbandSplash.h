@@ -71,7 +71,7 @@ int drawBrandLockup(DisplayDriver& display, int y = 1);
 // #1172: a board's own event splash (the QCC 0x4 badge). drawSplash() draws it INSTEAD
 // of the Offband lockup on full-size mono panels when the env defines
 // OFFBAND_EVENT_SPLASH; the board supplies the definition. Board-level rather than
-// driver-level like colourSplashArt(), because event art belongs to one board, not
+// driver-level like colorSplashArt(), because event art belongs to one board, not
 // to a display driver many boards share.
 void drawEventSplash(DisplayDriver& display, const SplashInfo& info);
 

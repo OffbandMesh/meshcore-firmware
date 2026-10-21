@@ -37,6 +37,18 @@ public:
   void fillRect(int x, int y, int w, int h) override;
   void drawRect(int x, int y, int w, int h) override;
   void drawXbm(int x, int y, const uint8_t* bits, int w, int h) override;
+  // #868: full-color art. The 1-bit buffer cannot hold it, so this hands it to
+  // ST7789Spi, which composites it during the blit.
+  void drawRGB565(int x, int y, const uint16_t* px, int w, int h) override;
   uint16_t getTextWidth(const char* str) override;
   void endFrame() override;
+
+  // The panel's own pixels -- 240x135, 320x170 or 320x240 depending on the board
+  // -- against the 128x64 canvas the UI draws on.
+  int physicalWidth() const override;
+  int physicalHeight() const override;
+
+  // #868: this panel's color splash art. Capability and asset in one place, so no
+  // per-variant build flag can be forgotten.
+  const ColorArt* colorSplashArt() const override;
 };

@@ -55,6 +55,17 @@ public:
   void fillRect(int x, int y, int w, int h) override;
   void drawRect(int x, int y, int w, int h) override;
   void drawXbm(int x, int y, const uint8_t* bits, int w, int h) override;
+  // #868: full-color art at native panel resolution.
+  void drawRGB565(int x, int y, const uint16_t* px, int w, int h) override;
   uint16_t getTextWidth(const char* str) override;
   void endFrame() override;
+
+  // 320x240 as the driver draws it (post-rotation), against a 128x64 canvas.
+  // The splash places its art in physical pixels, so it needs both.
+  int physicalWidth() const override;
+  int physicalHeight() const override;
+
+  // #868: this panel's color splash art. Capability and asset in one place, so no
+  // per-variant build flag can be forgotten.
+  const ColorArt* colorSplashArt() const override;
 };
