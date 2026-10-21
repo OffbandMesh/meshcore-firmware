@@ -11,6 +11,8 @@
 #ifdef DISPLAY_CLASS
   #ifdef HELTEC_V4_R8_OLED
     #include <helpers/ui/SSD1306Display.h>
+  #elif defined(HELTEC_V4_R8_TFT) && defined(OFFBAND_GUI)
+    #include <helpers/gui/hw/GuiPanel.h>   // #1676: LVGL GUI panel
   #elif defined(HELTEC_V4_R8_TFT)
     #include <helpers/ui/ST7789LCDDisplay.h>
   #endif

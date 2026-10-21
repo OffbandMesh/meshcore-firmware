@@ -181,12 +181,18 @@ C6 also checks the reverse risk: a 350-contact save running while the store writ
 
 | Task | Pts |
 |---|---|
-| **I0 · Failing tests:** SD bus arbitration (a flush and an SD write never overlap), SD backend round trip, and fallback when the card is missing. | 3 |
+| **I0 · Failing tests:** SD bus arbitration (a flush and an SD write never overlap), SD backend round trip, fallback when the card is missing, hot-swap, the first-boot copy and the resync. | 4 |
 | **I1 · Reset pins:** reconciled against the Expansion Board V2 schematic and checked on the bench, using a backup and restore of `Strycher-WR8`. | 3 |
 | **I2 · GUI env:** `heltec_v4_r8_tft_companion_radio_ble_gui` plus `_diag`, added to CI. AUX is GPIO46. Coordinated with Epic #1322 (V4-R8 variant). | 3 |
 | **I3 · SD driver on the shared display SPI bus:** SD access is arbitrated against panel flushes. | 4 |
 | **I4 · SD store backend:** the store persists to SD when a card is present, 5,000 messages (§9). | 3 |
-| **I5 · Epic verification:** bench image on the R8. | 1 |
+| **I6 · Design:** mockups for the owner's answer: the header disk icon (green healthy, red unavailable), the first-boot copy notice, and Settings → SD card. | 2 |
+| **I7 · Hot-swap:** removal and reinsertion detected while running; the card remounts without a reboot. | 3 |
+| **I8 · Copy and resync:** history is copied from flash to the card on first boot, with a notice if it's slow; flash keeps the newest 1,000 throughout (option B); while the card is out the store runs on flash, and what arrived meanwhile syncs to the card when it returns. | 4 |
+| **I9 · SD in the GUI:** the header disk icon (green healthy, red unavailable), Settings → SD card (status, used/free/total, Format card), and the copy notice. | 3 |
+| **I5 · Epic verification:** bench image on the R8, including a pull and reinsert, the first-boot copy and a format. | 1 |
+
+SD card decisions (owner, 2026-10-21, #1433): the card can be swapped while running; history is copied to the card on first boot, and flash keeps the newest 1,000 as today while the card holds up to 5,000 (option B); a missing card falls back to flash and shows a red disk icon in the header (green while the card is present and healthy), and flash syncs back when it returns; Settings gets an SD card page.
 
 ### Epic J: LilyGo T-Deck
 

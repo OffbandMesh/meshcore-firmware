@@ -78,7 +78,7 @@ struct ActView {
 // Setup's pages, in the drawn list's order (Blocked is Contacts, owner pick
 // a, 2026-10-17).
 enum class SetPage : uint8_t {
-  Node, Radio, Stats, Sensors, Privacy, Contacts, Msg, Display, Conn, Power, Actions, Debug, About, Count,
+  Node, Radio, Stats, Sensors, Sd, Privacy, Contacts, Msg, Display, Conn, Power, Actions, Debug, About, Count,
   Theme = 0x40,   // Display › Theme (not in the list)
   List = 0xFF
 };
@@ -97,6 +97,16 @@ struct DeviceInfo {
   uint32_t reset_code;                   // resetName()
   char offband[24], meshcore[16], build[32], model[40];
   uint16_t msgs, msgs_cap, contacts, contacts_max;
+};
+
+// Settings -> SD card (Epic I, I9 #1705; owner-approved mockups 3 and 4).
+struct SdView {
+  offband::gui::SdState state;
+  bool usage_ok;            // the volume answered
+  uint64_t total, free_bytes;
+  uint32_t on_card;         // messages the archive holds
+  uint16_t waiting;         // card out: messages that copy when it's back
+  char card[28];            // "31.9 GB · FAT32", "" if not working
 };
 
 // What the screens need from the rest of the firmware. UITask implements it,
@@ -178,6 +188,10 @@ public:
   virtual bool syncTimeFromGps() = 0;            // false: no GPS time to take
   virtual void reboot() = 0;                     // saves first; doesn't return
   virtual uint16_t deleteAllPaths() = 0;         // contacts sent back to flood
+  // SD card (Epic I): only boards with a slot list the page.
+  virtual bool sdSlot() { return false; }
+  virtual void sdView(SdView* out) { *out = SdView{}; }
+  virtual bool sdFormat() { return false; }   // erases the card; flash is untouched
   virtual ~ShellModel() {}
 };
 
@@ -193,6 +207,9 @@ public:
   void showLock();
   void showTab(Tab tab);
   bool locked() const { return _locked; }
+  // The SD copy notice (Epic I, mockup 6): shown while `show`, with its
+  // progress; UITask decides when a copy is long enough to need it.
+  void sdNotice(bool show, uint16_t done, uint16_t total);
   Tab tab() const { return _tab; }
   bool composing() const { return _composing; }
   // USR steps through something here (the letter wheel, a keyboard's key
@@ -281,6 +298,7 @@ private:
   void buildNodePage(lv_obj_t* content);
   void buildStatsPage(lv_obj_t* content);
   void buildSensorsPage(lv_obj_t* content);
+  void buildSdPage(lv_obj_t* content);
   void buildPrivacyPage(lv_obj_t* content);
   void buildContactsPage(lv_obj_t* content);
   // Node › Name: the keyboard under a one-line field (as Admin login).
@@ -435,6 +453,10 @@ private:
   // Bottom sheet
   Sheet _sheet = Sheet::None;
   lv_obj_t* _sheet_obj = nullptr;   // the backdrop on the top layer; the sheet is its child
+  // The SD copy notice (Epic I, mockup 6), over everything while it runs.
+  lv_obj_t* _sdn = nullptr;
+  lv_obj_t* _sdn_bar = nullptr;
+  lv_obj_t* _sdn_count = nullptr;
   lv_obj_t* _sheet_rows[3] = {};
   uint8_t _sheet_count = 0;
   int _sheet_hot = 0;

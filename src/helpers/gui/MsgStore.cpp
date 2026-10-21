@@ -58,6 +58,8 @@ static uint16_t threadCrc(Thread t) {
   return crc16(&t, sizeof(t));
 }
 
+uint16_t storeCrc16(const void* data, size_t len) { return crc16(data, len); }
+
 static bool bit(const uint8_t* b, size_t i) { return (b[i >> 3] >> (i & 7)) & 1; }
 static void setBit(uint8_t* b, size_t i) { b[i >> 3] |= uint8_t(1u << (i & 7)); }
 static void clearBit(uint8_t* b, size_t i) { b[i >> 3] &= uint8_t(~(1u << (i & 7))); }
@@ -273,6 +275,33 @@ MsgRecord* MsgStore::ref(uint32_t seq) const {
 }
 
 const MsgRecord* MsgStore::msg(uint32_t seq) const { return ref(seq); }
+
+uint32_t MsgStore::nextSeqAfter(uint32_t seq) const {
+  uint32_t best = 0;
+  if (!_msgs) return 0;
+  for (uint16_t i = 0; i < _cap; i++) {
+    const uint32_t s = _msgs[i].seq;
+    if (s > seq && (best == 0 || s < best)) best = s;
+  }
+  return best;
+}
+
+void MsgStore::raiseSeqFloor(uint32_t floor) {
+  if (_seq >= floor) return;
+  _seq = floor;
+  _ring_header_dirty = true;    // both headers carry next_seq
+  _index_header_dirty = true;
+  _revision++;
+}
+
+uint16_t MsgStore::countAfter(uint32_t seq) const {
+  uint16_t n = 0;
+  if (!_msgs) return 0;
+  for (uint16_t i = 0; i < _cap; i++) {
+    if (_msgs[i].seq > seq) n++;
+  }
+  return n;
+}
 
 uint32_t MsgStore::findOwn(int t, const char* text, size_t len) const {
   if (!live(t) || !text) return 0;

@@ -5,6 +5,7 @@
 #include <helpers/gui/GuiCommands.h>
 #ifdef OFFBAND_GUI
   #include <helpers/gui/hw/StoreFlash.h>
+  #include <helpers/gui/hw/GuiSd.h>
   #include <helpers/gui/MsgStore.h>
   #include <helpers/gui/ChunkedSave.h>
   #include <helpers/gui/GuiGps.h>
@@ -197,6 +198,18 @@ public:
   // The on-device message store (#1427) and its flash backend (#1463).
   offband::gui::MsgStore& guiStore() { return _gui_store; }
   StoreFlash& guiStoreFlash() { return _gui_store_flash; }
+#ifdef PIN_SD_CS
+  // The SD card and its archive of the store (Epic I #1433).
+  GuiSd& guiSd() { return _gui_sd; }
+#endif
+  // A stored message's delivery or echo count changed: the card's copy too.
+  void guiStoreChanged(uint32_t seq) {
+#ifdef PIN_SD_CS
+    _gui_sd.noteChanged(seq);
+#else
+    (void)seq;
+#endif
+  }
   // The UI says whether anyone is looking: internal-flash writes (the store,
   // the contacts save) wait for a dim or dark screen (#1472).
   void setGuiScreenIdle(bool idle) { _gui_screen_idle = idle; }
@@ -414,6 +427,9 @@ private:
 
   offband::gui::MsgStore _gui_store;
   StoreFlash _gui_store_flash;
+#ifdef PIN_SD_CS
+  GuiSd _gui_sd;
+#endif
   bool _gui_screen_idle = false;
   uint32_t _contacts_wait_since = 0;   // a due contacts save held for the screen; 0: none
 

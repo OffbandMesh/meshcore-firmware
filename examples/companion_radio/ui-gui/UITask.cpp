@@ -77,7 +77,20 @@ const char* screenName(ScreenState s) {
   return "?";
 }
 
+// On the R8's Expansion Board V2 the touch chip sits on the board's own I2C
+// bus with the sensors (schematic V2.03, TP_SDA/TP_SCL = I2C_SDA/I2C_SCL), so
+// it must share that controller: a second one driving the same pins breaks both.
+#if defined(PIN_BOARD_SDA) && defined(PIN_TOUCH_SDA) && PIN_TOUCH_SDA == PIN_BOARD_SDA
+Chsc6xTouch s_touch(Wire);
+#else
 Chsc6xTouch s_touch;
+#endif
+
+// AUX pulls to ground on the V4 TFT. On the R8's Expansion Board V2 it closes
+// to 3.3 V through 10K (schematic V2.03, "LED KEY"), so its env says HIGH.
+#ifndef PIN_USER_BTN_2_ACTIVE
+  #define PIN_USER_BTN_2_ACTIVE LOW
+#endif
 
 // With an AUX button USR clicks aren't grouped into double and triple:
 // AUX does "previous", and AUX held 3 s the buzzer (#1534).
@@ -93,6 +106,11 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   _display = display;
   _sensors = sensors;
   _prefs = node_prefs;
+#ifdef PIN_SD_CS
+  // A card has worked here before: an empty slot shows red from boot (owner
+  // pick A, 2026-10-21). Before the mesh loop's first SD poll.
+  the_mesh.guiSd().remember(_prefs && _prefs->gui.sd_used);
+#endif
 
   GuiPanel* panel = static_cast<GuiPanel*>(display);
   _gui_ok = panel && lvglBegin(*panel);
@@ -114,10 +132,11 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   mesh_log_line(MLOG_BOOT, "[gui] touch %s\n", _touch_ok ? "chsc6x ok" : "none (buttons only)");
 #endif
 
-  // USR and AUX both pull to ground when pressed.
+  // USR pulls to ground when pressed; AUX does too, except where its env says
+  // it's active-high.
   pinMode(PIN_USER_BTN, INPUT_PULLUP);
 #ifdef PIN_USER_BTN_2
-  pinMode(PIN_USER_BTN_2, INPUT_PULLUP);
+  pinMode(PIN_USER_BTN_2, PIN_USER_BTN_2_ACTIVE == HIGH ? INPUT_PULLDOWN : INPUT_PULLUP);
 #endif
 
 #ifdef PIN_BUZZER
@@ -205,7 +224,7 @@ void UITask::pollButtons(uint32_t now) {
   }
   if (uint8_t n = _usr_clicks.poll(now, _usr.isDown())) handle(clicksEvent(n), now);
 #ifdef PIN_USER_BTN_2
-  if (_aux.update(digitalRead(PIN_USER_BTN_2) == LOW, now, &kind)) {
+  if (_aux.update(digitalRead(PIN_USER_BTN_2) == PIN_USER_BTN_2_ACTIVE, now, &kind)) {
     handle(kind == PressKind::Press  ? InputEvent::AuxPress
            : kind == PressKind::Hold ? InputEvent::AuxHold
                                      : InputEvent::AuxLongHold,
@@ -429,8 +448,35 @@ StatusReadings UITask::statusReadings(uint32_t now) {
   r.gps = gpsIcon(gps_on, the_mesh.guiFixType(), without);
 
   r.batt_pct = battPercent();
+#ifdef PIN_SD_CS
+  r.sd = the_mesh.guiSd().icon();   // Epic I: green, red, or none
+#endif
   return r;
 }
+
+#ifdef PIN_SD_CS
+// Settings -> SD card (Epic I #1705).
+void UITask::sdView(SdView* out) {
+  *out = SdView{};
+  GuiSd& sd = the_mesh.guiSd();
+  out->state = sd.state();
+  out->waiting = sd.waiting(the_mesh.guiStore());
+  if (out->state != SdState::Working) return;
+  out->usage_ok = sd.usage(&out->total, &out->free_bytes);
+  out->on_card = sd.messagesOnCard();
+  uint64_t cap = 0;
+  const char* fs = nullptr;
+  if (sd.describe(&cap, &fs)) {
+    char size[16];
+    sdSizeText(cap, size, sizeof size);
+    snprintf(out->card, sizeof out->card, "%s · %s", size, fs ? fs : "FAT");
+  }
+}
+
+bool UITask::sdFormat() {
+  return the_mesh.guiSd().format(millis(), the_mesh.guiStore());
+}
+#endif
 
 void UITask::homeData(HomeData* d) {
   memset(d, 0, sizeof *d);
@@ -728,6 +774,7 @@ void UITask::pollDmRetries(uint32_t now) {
       case DmRetry::Step::Fail: {
         store.setDelivery(seq, Delivery::Failed);
         the_mesh.guiStoreFlash().ringChanged(millis());
+        the_mesh.guiStoreChanged(seq);
         // Messages & alerts › Clear path on max retry: the next send floods
         // and finds a route again.
         const Thread* th = m ? store.threadAt(m->thread) : nullptr;
@@ -1675,6 +1722,22 @@ void UITask::loop() {
       _shell.status().tick(now);
     }
     _shell.setAdvertState(_advert.state(now));
+#ifdef PIN_SD_CS
+    // The SD copy notice (Epic I mockup 6): only for a copy still running
+    // after kSdNoticeMs, so a quick one never flashes a sheet.
+    {
+      const GuiSd& sd = the_mesh.guiSd();
+      const bool show = sd.copying() && now - sd.copyStartedMs() >= kSdNoticeMs && !_shell.locked();
+      _shell.sdNotice(show, sd.copyDone(), sd.copyTotal());
+      // The first card that works here is remembered, saved when the screen
+      // is next idle like any other pref: an internal-flash write stalls both
+      // cores (#1472), and nobody should see it happen.
+      if (_prefs && !_prefs->gui.sd_used && sd.state() == SdState::Working) {
+        _prefs->gui.sd_used = 1;
+        prefsChanged();
+      }
+    }
+#endif
     GUI_SPAN(s_t_status);
   }
   if ((int32_t)(now - _next_screen) >= 0) {

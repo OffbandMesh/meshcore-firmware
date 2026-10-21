@@ -471,6 +471,23 @@ TEST(Prefs, ZoneAskedSanitizesToZeroOrOne) {
   EXPECT_EQ(p.zone_asked, 1);
 }
 
+// Epic I (#1703): a card has worked in this radio. Off on a new or older
+// file (a radio never given a card shows no disk); kept once set; 0 or 1.
+TEST(Prefs, SdUsedDefaultsOffIsKeptAndSanitizes) {
+  GuiPrefs p;
+  EXPECT_EQ(p.sd_used, 0);
+  p.sd_used = 1;
+  RoundTripStream s;
+  ASSERT_TRUE(p.saveSerial(s));
+  s.rewind();
+  GuiPrefs b;
+  ASSERT_TRUE(b.loadSerial(s));
+  EXPECT_EQ(b.sd_used, 1);
+  b.sd_used = 7;
+  b.sanitize();
+  EXPECT_EQ(b.sd_used, 1);
+}
+
 // Epic M (#1661): Sensors › Units. °F unless set otherwise; kept; 0 or 1.
 TEST(Prefs, TemperatureUnitDefaultsToFahrenheitAndIsKept) {
   GuiPrefs p;

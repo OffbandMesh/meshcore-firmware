@@ -13,6 +13,7 @@
 
 #include <helpers/gui/GuiTheme.h>
 #include <helpers/gui/GuiViews.h>
+#include <helpers/gui/SdMonitor.h>
 
 struct StatusReadings {
   char clock[12];   // "21:07", or "9:07 PM" (12-hour)
@@ -23,6 +24,7 @@ struct StatusReadings {
   offband::gui::BleIcon ble;
   offband::gui::GpsIcon gps;
   uint8_t batt_pct;
+  offband::gui::SdIcon sd;   // Epic I: green working, red gone or unreadable, none without a card
 };
 
 struct LoraReadings {
@@ -53,6 +55,8 @@ private:
   lv_obj_t* _utc = nullptr;       // the amber UTC tag, hidden once a zone is set
   lv_obj_t* _mail = nullptr;      // icon + count, hidden at 0
   lv_obj_t* _mail_count = nullptr;
+  lv_obj_t* _sd = nullptr;        // the SD disk (Epic I), hidden without a card
+  lv_obj_t* _sd_cut = nullptr;    // its clipped corner, drawn in the strip's color
   lv_obj_t* _bars = nullptr;
   lv_obj_t* _bar[4] = {};
   lv_obj_t* _ble = nullptr;
