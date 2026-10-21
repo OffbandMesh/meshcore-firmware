@@ -9,11 +9,12 @@ namespace gui {
 
 namespace {
 
-// Both files start with a 16-byte header:
-//   magic[4], version u16, count u16, value u32, crc u32 (over the first 12)
-// `count` is the slots (records) or the thread entries (threads). `value` is
-// archived_through in the records file and the owning radio's tag in the
-// threads file.
+// Both files start with a 24-byte header:
+//   magic[4], version u16, count u16, value u32, value2 u32, reserved u32,
+//   crc u32 (over the first 20)
+// `count` is the slots (records) or the thread entries (threads). In the
+// records file `value` is archived_through and `value2` the records stored;
+// in the threads file `value` is the owning radio's tag.
 constexpr char kRecMagic[4] = {'O', 'B', 'S', 'A'};
 constexpr char kThrMagic[4] = {'O', 'B', 'S', 'T'};
 
@@ -22,18 +23,21 @@ struct Header {
   uint16_t version;
   uint16_t count;
   uint32_t value;
+  uint32_t value2;
+  uint32_t reserved;
   uint32_t crc;
 };
-static_assert(sizeof(Header) == kArchiveHeaderLen, "the archive header is 16 bytes");
+static_assert(sizeof(Header) == kArchiveHeaderLen, "the archive header is 24 bytes");
 
-uint32_t headerCrc(const Header& h) { return storeCrc16(&h, 12); }
+uint32_t headerCrc(const Header& h) { return storeCrc16(&h, 20); }
 
-Header makeHeader(const char* magic, uint16_t count, uint32_t value) {
+Header makeHeader(const char* magic, uint16_t count, uint32_t value, uint32_t value2 = 0) {
   Header h = {};
   memcpy(h.magic, magic, 4);
   h.version = kArchiveVersion;
   h.count = count;
   h.value = value;
+  h.value2 = value2;
   h.crc = headerCrc(h);
   return h;
 }
@@ -95,6 +99,7 @@ ArchiveOpen SdArchive::open(RandomFile& records, RandomFile& threads, uint32_t o
 
   ArchiveOpen result;
   uint32_t through = 0;
+  uint32_t stored = 0;
   if (records.size() == 0 && threads.size() == 0) {
     const Header rh = makeHeader(kRecMagic, slots, 0);
     const Header th = makeHeader(kThrMagic, max_threads, owner);
@@ -132,12 +137,14 @@ ArchiveOpen SdArchive::open(RandomFile& records, RandomFile& threads, uint32_t o
       if (!threadValid(table[i])) memset(&table[i], 0, sizeof(ArchiveThread));
     }
     through = rh.value;
+    stored = rh.value2 > slots ? slots : rh.value2;
     result = ArchiveOpen::Ok;
   }
   _rec = &records;
   _thr = &threads;
   _threads = table;
   _through = through;
+  _stored = stored;
   return result;
 }
 
@@ -147,6 +154,7 @@ void SdArchive::close() {
   _rec = nullptr;
   _thr = nullptr;
   _through = 0;
+  _stored = 0;
 }
 
 bool SdArchive::alignLive(MsgStore& live) const {
@@ -160,7 +168,7 @@ size_t SdArchive::pending(const MsgStore& live) const {
 }
 
 bool SdArchive::writeHeader() {
-  const Header h = makeHeader(kRecMagic, _slots, _through);
+  const Header h = makeHeader(kRecMagic, _slots, _through, _stored);
   return _rec->writeAt(0, &h, sizeof(h)) && _rec->flush();
 }
 
@@ -211,6 +219,7 @@ size_t SdArchive::catchUp(MsgStore& live, size_t budget, bool* ok) {
   if (!ready()) return 0;
   alignLive(live);
   uint32_t through = _through;
+  uint32_t stored = _stored;
   size_t done = 0;
   while (done < budget) {
     const uint32_t seq = live.nextSeqAfter(through);
@@ -227,15 +236,19 @@ size_t SdArchive::catchUp(MsgStore& live, size_t budget, bool* ok) {
         if (ok) *ok = false;
         return live.countAfter(_through);   // the header still says what's really there
       }
+      if (at >= 0 && stored < _slots) stored++;
     }
     through = seq;
     done++;
   }
   if (through != _through) {
     const uint32_t before = _through;
+    const uint32_t stored_before = _stored;
     _through = through;
+    _stored = stored;
     if (!writeHeader()) {
       _through = before;
+      _stored = stored_before;
       if (ok) *ok = false;
     }
   }
