@@ -33,6 +33,9 @@ INI = ROOT / "variants" / "heltec_v4_r8" / "platformio.ini"
 BOARD = ROOT / "variants" / "heltec_v4_r8" / "HeltecV4R8Board.cpp"
 UITASK = ROOT / "examples" / "companion_radio" / "ui-gui" / "UITask.cpp"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
+SDCARD = ROOT / "src" / "helpers" / "gui" / "hw" / "SdCard.cpp"
+PANEL = ROOT / "src" / "helpers" / "gui" / "hw" / "GuiPanel.cpp"
+GUI_TREES = (ROOT / "src" / "helpers" / "gui", ROOT / "examples" / "companion_radio" / "ui-gui")
 ROOT_INI = ROOT / "platformio.ini"
 NATIVE = "env:native_heltec_v4_r8_gui"
 
@@ -91,7 +94,48 @@ def unguarded_tx_led_uses(cpp):
     return bad
 
 
-def failures(ini, board, uitask, ci, root_ini):
+def sd_bus_failures(gui, sdcard, panel, gui_sources):
+    """The SD card shares the panel's SPI bus (#1677): CS GPIO3, MISO GPIO45.
+
+    ESP-IDF's bus lock keeps the card and the panel's DMA flushes apart, but only
+    if both are devices on the SAME host, the bus came up with MISO, and nothing
+    starts a second driver on those pins. Arduino's SPI.begin() would do exactly
+    that: it writes SPI2's registers directly.
+    """
+    out = []
+    if flag(gui, "PIN_SD_CS") != "3":
+        out.append("PIN_SD_CS must be 3, the kit's SD_SPI_CS (got %r)" % flag(gui, "PIN_SD_CS"))
+    if flag(gui, "PIN_TFT_MISO") != "45":
+        out.append("PIN_TFT_MISO must be 45: the card reads through it (got %r)" % flag(gui, "PIN_TFT_MISO"))
+    code = strip_comments(sdcard, "//")
+    if not re.search(r"host\.slot\s*=\s*SPI2_HOST", code) or not re.search(r"dev\.host_id\s*=\s*SPI2_HOST", code):
+        out.append("SdCard must put the card on SPI2_HOST, the panel's bus; another host means "
+                   "two drivers on the same pins with no lock between them")
+    panel_code = strip_comments(panel, "//")
+    if "_panel.begin(SPI2_HOST" not in panel_code:
+        out.append("GuiPanel must bring the panel up on SPI2_HOST, the bus SdCard joins")
+    if not re.search(r"pins\.miso\s*=\s*PIN_TFT_MISO", panel_code):
+        out.append("GuiPanel must bring the bus up with MISO (pins.miso = PIN_TFT_MISO), "
+                   "or the card can't answer")
+    for name, text in gui_sources.items():
+        if re.search(r"\bSPI\.begin\s*\(", strip_comments(text, "//")):
+            out.append("%s calls SPI.begin(): Arduino's driver writes SPI2's registers directly "
+                       "and breaks the panel and card's shared bus" % name)
+    return out
+
+
+def read_gui_sources():
+    found = {}
+    for tree in GUI_TREES:
+        for p in tree.rglob("*"):
+            if p.suffix in (".cpp", ".h", ".c"):
+                found[str(p.relative_to(ROOT))] = p.read_text(encoding="utf-8", errors="replace")
+    return found
+
+
+def failures(ini, board, uitask, ci, root_ini, sdcard="", panel="", gui_sources=None):
+    if gui_sources is None:
+        gui_sources = {}
     out = []
     secs = ini_sections(ini)
     if GUI not in secs or BASE not in secs:
@@ -153,6 +197,8 @@ def failures(ini, board, uitask, ci, root_ini):
                 NATIVE, flag(native, "PIN_TOUCH_RST"), flag(gui, "PIN_TOUCH_RST"),
                 flag(native, "P_LORA_TX_LED")))
 
+    out.extend(sd_bus_failures(gui, sdcard, panel, gui_sources))
+
     if DIAG not in secs or "extends = %s" % GUI not in secs[DIAG]:
         out.append("the _diag twin must extend the GUI env")
     for env in (GUI, DIAG):
@@ -165,11 +211,13 @@ def failures(ini, board, uitask, ci, root_ini):
 def _real():
     return (INI.read_text(encoding="utf-8"), BOARD.read_text(encoding="utf-8"),
             UITASK.read_text(encoding="utf-8"), CI.read_text(encoding="utf-8"),
-            ROOT_INI.read_text(encoding="utf-8"))
+            ROOT_INI.read_text(encoding="utf-8"), SDCARD.read_text(encoding="utf-8"),
+            PANEL.read_text(encoding="utf-8"), read_gui_sources())
 
 
 def _fails_with(fragment, **swap):
-    parts = dict(zip(("ini", "board", "uitask", "ci", "root_ini"), _real()))
+    parts = dict(zip(("ini", "board", "uitask", "ci", "root_ini", "sdcard", "panel", "gui_sources"),
+                     _real()))
     parts.update(swap)
     got = failures(**parts)
     assert any(fragment in f for f in got), "expected a failure naming %r, got %s" % (fragment, got)
@@ -259,6 +307,31 @@ def test_negative_a_native_env_out_of_step_is_caught():
     _fails_with("out of step", root_ini=_real()[4].replace(
         "  -D OFFBAND_TEST_R8_GUI_CONFIG\n  -D PIN_TOUCH_RST=-1",
         "  -D OFFBAND_TEST_R8_GUI_CONFIG\n  -D PIN_TOUCH_RST=21"))
+
+
+def test_negative_the_card_on_the_wrong_cs_is_caught():
+    _fails_with("PIN_SD_CS must be 3", ini=_gui_section_replace("-D PIN_SD_CS=3", "-D PIN_SD_CS=39"))
+
+
+def test_negative_the_card_on_another_host_is_caught():
+    _fails_with("SPI2_HOST, the panel's bus",
+                sdcard=_real()[5].replace("host.slot = SPI2_HOST", "host.slot = SPI3_HOST"))
+
+
+def test_negative_a_bus_without_miso_is_caught():
+    _fails_with("with MISO", panel=_real()[6].replace("pins.miso = PIN_TFT_MISO", "pins.miso = -1"))
+
+
+def test_negative_an_arduino_spi_begin_in_the_gui_is_caught():
+    srcs = dict(_real()[7])
+    srcs["src/helpers/gui/hw/Extra.cpp"] = "void f() { SPI.begin(16, 45, 15); }\n"
+    _fails_with("calls SPI.begin()", gui_sources=srcs)
+
+
+def test_negative_spi_begin_named_in_a_comment_is_not_a_call():
+    srcs = {"x.cpp": "// nothing here may call SPI.begin()\n"}
+    assert not [f for f in sd_bus_failures("  -D PIN_SD_CS=3\n  -D PIN_TFT_MISO=45\n",
+                                           _real()[5], _real()[6], srcs) if "SPI.begin" in f]
 
 
 def test_negative_a_flag_named_in_a_comment_does_not_read_as_set():

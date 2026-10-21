@@ -19,6 +19,10 @@ class St7789Dma {
 public:
   struct Pins {
     int sck, mosi, cs, dc, rst;
+    // The bus's data-in. The panel never reads, but an SD card sharing the
+    // bus does (the R8's Expansion Kit V2, #1677), so the bus comes up with
+    // it when the board has one.
+    int miso = -1;
   };
 
   // `max_transfer` is the largest pixel write in bytes (one draw buffer).
