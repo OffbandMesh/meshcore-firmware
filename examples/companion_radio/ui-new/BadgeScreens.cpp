@@ -615,7 +615,14 @@ int ThreadScreen::render(DisplayDriver& d) {
     d.translateUTF8ToBlocks(_txt[i], m->text, sizeof(_txt[i]));
     char tag[Store::kSenderLen];
     d.translateUTF8ToBlocks(tag, m->sender, sizeof(tag));
-    snprintf(_tag[i], sizeof(_tag[i]), "%.5s", tag);
+    // #1669: up to badgeui::kTagChars characters, and never wider than the kTagPx the
+    // layout reserves. The body face is proportional, so the character cap alone would
+    // not stop a name of wide glyphs painting over the message text -- fitPx() answers
+    // how many actually fit, and the smaller of the two limits applies.
+    int tag_chars = fitPx(kBody, tag, badgeui::kTagPx);
+    if (tag_chars > badgeui::kTagChars) tag_chars = badgeui::kTagChars;
+    if (tag_chars > (int)sizeof(_tag[i]) - 1) tag_chars = (int)sizeof(_tag[i]) - 1;
+    snprintf(_tag[i], sizeof(_tag[i]), "%.*s", tag_chars, tag);
     _views[i] = {m->outgoing, _tag[i], _txt[i]};
     if (_seqs[i] == _sel_seq) sel = i;
   }

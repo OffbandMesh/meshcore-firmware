@@ -1699,20 +1699,38 @@ void UITask::loop() {
 
 #ifdef AUTO_SHUTDOWN_MILLIVOLTS
   if (millis() > next_batt_chck) {
-    uint16_t milliVolts = getBattMilliVolts();
-    if (milliVolts > 0 && milliVolts < AUTO_SHUTDOWN_MILLIVOLTS) {
-      if(!board.isExternalPowered()) {
-        if (_display != NULL) {
-          _display->startFrame();
-          _display->setTextSize(2);
-          _display->setColor(UIColor::warning_txt);
-          _display->drawTextCentered(_display->width() / 2, 20, "Low Battery.");
-          _display->drawTextCentered(_display->width() / 2, 40, "Shutting Down!");
-          _display->endFrame();
-          if (_display->isEink() == false) { delay(3000); }
-        }
-        shutdown(false, "low-battery");
+    // #1667: the cutoff acts on a DEBOUNCED reading, not a single raw sample. It used to
+    // be `if (getBattMilliVolts() < AUTO_SHUTDOWN_MILLIVOLTS) shutdown()`, which took the
+    // owner's badge down with its gauge reading ~80% -- see helpers/ui/LowBattCutoff.h for
+    // why one raw sample was never enough evidence to power a board off.
+    const uint32_t now_ms = millis();
+    const uint16_t raw_mv = getBattMilliVolts();
+    const uint16_t smoothed_mv = smoothedBattMilliVolts();
+    const bool external = board.isExternalPowered();
+    const bool fire = offband::lowBattShouldShutdown(
+        _low_batt, now_ms, raw_mv, smoothed_mv, (uint16_t)AUTO_SHUTDOWN_MILLIVOLTS,
+        OFFBAND_LOW_BATT_SUSTAIN_MS, external);
+
+    // #1668: the badge's own view, on the wire a bench rig reads, so a discharge run is
+    // measured rather than argued about -- and so an outlier read is caught in the act as
+    // `raw` diverging from `sm` at one instant. The rig logs its MAX17048 and INA228
+    // independently, so a capture carries both views timestamped against each other.
+    mesh_log_line(MLOG_DEBUG, "[batt] raw=%u sm=%u thr=%u ext=%d low_ms=%lu fire=%d\r\n",
+                  (unsigned)raw_mv, (unsigned)smoothed_mv,
+                  (unsigned)AUTO_SHUTDOWN_MILLIVOLTS, external ? 1 : 0,
+                  (unsigned long)offband::lowBattHeldMs(_low_batt, now_ms), fire ? 1 : 0);
+
+    if (fire) {
+      if (_display != NULL) {
+        _display->startFrame();
+        _display->setTextSize(2);
+        _display->setColor(UIColor::warning_txt);
+        _display->drawTextCentered(_display->width() / 2, 20, "Low Battery.");
+        _display->drawTextCentered(_display->width() / 2, 40, "Shutting Down!");
+        _display->endFrame();
+        if (_display->isEink() == false) { delay(3000); }
       }
+      shutdown(false, "low-battery");
     }
     next_batt_chck = millis() + 8000;
   }

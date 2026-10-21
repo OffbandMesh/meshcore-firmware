@@ -14,6 +14,7 @@
 #include <helpers/gui/InputMap.h>
 #include <helpers/gui/InputTiming.h>
 #include <helpers/ui/BatteryGauge.h>
+#include <helpers/ui/LowBattCutoff.h>   // #1667: the cutoff debounces
 #include <helpers/ui/DisplayDriver.h>
 
 #include "../AbstractUITask.h"
@@ -164,6 +165,9 @@ private:
   bool _passwords_dirty = false;                     // saved when idle (#1472)
   offband::gui::AdvertButton _advert;
   offband::BatteryAverage _batt;
+  // #1667: the low-battery cutoff needs the low condition SUSTAINED, so the run has
+  // to outlive a single loop iteration.
+  offband::LowBattCutoffState _low_batt;
   offband::FullPointLearner _full_learner;   // #1254: where this cell's 100% is (Power, G5)
   uint32_t _next_batt_read = 0;
   uint32_t _next_batt_check = 0;   // low-voltage shutdown, every 8 s

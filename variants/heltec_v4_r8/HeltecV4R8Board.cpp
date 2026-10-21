@@ -30,13 +30,15 @@ void HeltecV4R8Board::begin() {
 }
 
 void HeltecV4R8Board::onBeforeTransmit(void) {
-  digitalWrite(P_LORA_TX_LED, HIGH);
+  _tx_active = true;
+  if (_led_enabled) digitalWrite(P_LORA_TX_LED, HIGH);
   loRaFEMControl.setTxModeEnable();
 }
 
 void HeltecV4R8Board::onAfterTransmit(void) {
-  digitalWrite(P_LORA_TX_LED, LOW);
+  if (_led_enabled) digitalWrite(P_LORA_TX_LED, LOW);
   loRaFEMControl.setRxModeEnable();
+  _tx_active = false;
 }
 
 void HeltecV4R8Board::enterDeepSleep(uint32_t secs, int pin_wake_btn) {
@@ -61,8 +63,23 @@ void HeltecV4R8Board::enterDeepSleep(uint32_t secs, int pin_wake_btn) {
   esp_deep_sleep_start();
 }
 
+// #1341: a power-off is off. Cut the FEM LDO and hold it low through deep
+// sleep, then take the base path, which records the shutdown, turns the display
+// and radio off and sleeps with no wake source -- as HeltecV4Board does. This
+// used to call this class's enterDeepSleep(0), which skipped all of that, kept
+// the FEM powered in RX and armed LoRa-packet wake: an auto-shutdown woke on
+// the next packet and kept draining the battery.
+//
+// The board's own Vext claim from begin() is released here too; the display
+// releases its claim when the base path turns it off, so Vext (GPIO40) ends
+// inactive before sleep instead of keeping the OLED and the antenna boost rail
+// powered.
 void HeltecV4R8Board::powerOff() {
-  enterDeepSleep(0);
+  digitalWrite(P_LORA_PA_POWER, LOW);
+  rtc_gpio_hold_en((gpio_num_t)P_LORA_PA_POWER);
+  periph_power.release();
+
+  ESP32Board::powerOff();
 }
 
 uint16_t HeltecV4R8Board::getBattMilliVolts() {
@@ -76,6 +93,39 @@ uint16_t HeltecV4R8Board::getBattMilliVolts() {
 
   return (adc_mult * raw);
 }
+
+// #1339: the R8's FEM is always a KCT8103L, whose CTX line (GPIO5) selects
+// LNA-in or LNA-bypass in RX while the chip stays enabled, so the LNA is always
+// controllable. setRxModeEnable() applies the new setting at once instead of
+// waiting for the next TX->RX turnaround -- except during a transmission, which
+// is asynchronous (the loop keeps running while the packet is on air), so a
+// command can arrive mid-TX. Writing the RX-mode CTX level then would take the
+// FEM out of its TX state; the stored setting is applied by onAfterTransmit().
+bool HeltecV4R8Board::setLoRaFemLnaEnabled(bool enable) {
+  loRaFEMControl.setLNAEnable(enable);
+  if (!_tx_active) loRaFEMControl.setRxModeEnable();
+  return true;
+}
+
+bool HeltecV4R8Board::canControlLoRaFemLna() const {
+  return loRaFEMControl.isLnaCanControl();
+}
+
+bool HeltecV4R8Board::isLoRaFemLnaEnabled() const {
+  return loRaFEMControl.isLNAEnabled();
+}
+
+// #1340 (#542): the TX LED is a plain GPIO (46), always controllable. Disabled
+// forces it LOW and the transmit hooks stop driving it.
+bool HeltecV4R8Board::setLedEnabled(bool on) {
+  _led_enabled = on;
+  if (!on) digitalWrite(P_LORA_TX_LED, LOW);
+  return true;
+}
+
+bool HeltecV4R8Board::canControlLed() const { return true; }
+
+bool HeltecV4R8Board::isLedEnabled() const { return _led_enabled; }
 
 const char* HeltecV4R8Board::getManufacturerName() const {
 #ifdef HELTEC_V4_R8_TFT

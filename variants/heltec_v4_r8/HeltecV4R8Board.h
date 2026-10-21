@@ -13,6 +13,8 @@
 class HeltecV4R8Board : public ESP32Board {
 protected:
   float adc_mult = ADC_MULTIPLIER;
+  bool _tx_active = false;   // #1339: between onBeforeTransmit and onAfterTransmit
+  bool _led_enabled = true;  // #1340 (#542): default on = today's behavior
 
 public:
   RefCountedDigitalPin periph_power;
@@ -36,4 +38,14 @@ public:
   }
   float getAdcMultiplier() const override { return adc_mult; }
   const char* getManufacturerName() const override;
+
+  // External FEM LNA runtime control (`fem on/off` CLI, client toggle). #1339.
+  bool setLoRaFemLnaEnabled(bool enable) override;
+  bool canControlLoRaFemLna() const override;
+  bool isLoRaFemLnaEnabled() const override;
+
+  // Status/traffic (TX) LED runtime control (`led on/off` CLI). #542, #1340.
+  bool setLedEnabled(bool on) override;
+  bool canControlLed() const override;
+  bool isLedEnabled() const override;
 };
