@@ -162,6 +162,63 @@ TEST(SdMonitor, KeepsAskingAcrossTheClockWrap) {
   EXPECT_EQ(SdAction::Probe, m.poll(t + SdMonitor::kProbeMs));
 }
 
+// Owner pick A, 2026-10-21: a radio that has used a card remembers it, so a
+// reboot with the slot empty shows red, not nothing.
+TEST(SdMonitor, ARememberedCardStartsRedAndStaysRedWhileTheSlotIsEmpty) {
+  SdMonitor m;
+  m.remember(true);
+  EXPECT_EQ(SdState::Removed, m.state());
+  EXPECT_EQ(SdIcon::Red, m.icon());
+  ASSERT_EQ(SdAction::Mount, m.poll(0)) << "still asks at boot";
+  m.mountResult(MountOutcome::NoCard, 0);
+  EXPECT_EQ(SdIcon::Red, m.icon());
+  ASSERT_EQ(SdAction::Mount, m.poll(SdMonitor::kRetryMs)) << "keeps asking, so a card put in is found";
+  m.mountResult(MountOutcome::Ok, SdMonitor::kRetryMs);
+  EXPECT_EQ(SdIcon::Green, m.icon());
+}
+
+TEST(SdMonitor, ARadioNeverGivenACardStaysQuiet) {
+  SdMonitor m;
+  m.remember(false);
+  m.poll(0);
+  m.mountResult(MountOutcome::NoCard, 0);
+  EXPECT_EQ(SdIcon::None, m.icon());
+}
+
+TEST(SdMonitor, RememberingAfterACardAnsweredChangesNothing) {
+  SdMonitor m;
+  mountAt(m, 0);
+  m.remember(true);
+  EXPECT_EQ(SdState::Working, m.state());
+}
+
+// Owner, 2026-10-21: the poll mustn't degrade performance. Asking an empty
+// slot takes at most ~1% of the time: cheap asks keep 3 s, slow ones wait.
+TEST(SdMonitor, ACheapEmptySlotAskKeepsThreeSeconds) {
+  SdMonitor m;
+  m.poll(0);
+  m.mountResult(MountOutcome::NoCard, 0, 8);
+  EXPECT_EQ(SdMonitor::kRetryMs, m.retryDelayMs());
+  EXPECT_EQ(SdAction::Mount, m.poll(SdMonitor::kRetryMs));
+}
+
+TEST(SdMonitor, ASlowEmptySlotAskIsAskedLessOften) {
+  SdMonitor m;
+  m.poll(0);
+  m.mountResult(MountOutcome::NoCard, 0, 100);   // 100 ms on the bus
+  EXPECT_EQ(10000u, m.retryDelayMs());
+  EXPECT_EQ(SdAction::None, m.poll(SdMonitor::kRetryMs));
+  EXPECT_EQ(SdAction::Mount, m.poll(10000));
+}
+
+TEST(SdMonitor, AVerySlowAskIsCappedNotAbandoned) {
+  SdMonitor m;
+  m.poll(0);
+  m.mountResult(MountOutcome::NoCard, 0, 5000);
+  EXPECT_EQ(SdMonitor::kBackoffMaxMs, m.retryDelayMs());
+  EXPECT_EQ(SdAction::Mount, m.poll(SdMonitor::kBackoffMaxMs)) << "still looks for a card, once a minute";
+}
+
 // ------------------------------------------------------------ Settings text
 
 TEST(SdText, StatusWords) {

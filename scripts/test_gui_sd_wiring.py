@@ -63,6 +63,14 @@ def failures(mymesh, uitask):
         if before.rfind("#ifdef PIN_SD_CS") <= before.rfind("#endif"):
             out.append("%s) must sit inside #ifdef PIN_SD_CS, so cardless boards compile none of it"
                        % call)
+    # Owner pick A (2026-10-21): a radio that has used a card remembers it, so an
+    # empty slot after a reboot shows red. Both halves must be wired.
+    ui = "\n".join(code_lines(uitask))
+    if "guiSd().remember(" not in ui:
+        out.append("UITask never passes the remembered card to GuiSd: after a reboot with the slot "
+                   "empty, the disk would show nothing instead of red")
+    if not re.search(r"gui\.sd_used\s*=\s*1", ui):
+        out.append("UITask never records that a card has worked: the remembered flag would never be set")
     return out
 
 
@@ -111,6 +119,17 @@ def test_negative_the_loop_call_outside_its_guard_is_caught():
     moved = m.replace("  #ifdef PIN_SD_CS\n  _gui_sd.loop(", "  _gui_sd.loop(", 1)
     assert moved != m, "sanity: the guarded loop call must be found"
     _fails_with("inside #ifdef PIN_SD_CS", mymesh=moved)
+
+
+def test_negative_forgetting_to_remember_is_caught():
+    _, u = _real()
+    _fails_with("never passes the remembered card",
+                uitask=u.replace("the_mesh.guiSd().remember(", "(void)("))
+
+
+def test_negative_never_setting_the_flag_is_caught():
+    _, u = _real()
+    _fails_with("never records that a card has worked", uitask=u.replace("gui.sd_used = 1", "gui.sd_used = 0"))
 
 
 def test_negative_a_hook_named_in_a_comment_does_not_count():

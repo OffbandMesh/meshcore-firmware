@@ -36,9 +36,18 @@ public:
   static constexpr uint32_t kRetryMs = 3000;       // while no card answers
   static constexpr uint32_t kBackoffMaxMs = 60000; // a card that keeps failing
 
+  // At boot, before the first poll: a card has worked in this radio before
+  // (a saved flag; owner pick A, 2026-10-21). Until one answers, the slot
+  // then reads as a card that's gone (red), not one never fitted (nothing).
+  void remember(bool card_used);
+
   // What to do now, if anything. Asking is due at boot.
   SdAction poll(uint32_t now_ms);
-  void mountResult(MountOutcome r, uint32_t now_ms);
+  // `took_ms`: how long the attempt held the bus. An empty slot is asked
+  // again no sooner than 100x that, so asking costs at most ~1% of the time
+  // the display shares the bus with (owner, 2026-10-21: the poll mustn't
+  // degrade performance). Cheap attempts keep the 3 s interval.
+  void mountResult(MountOutcome r, uint32_t now_ms, uint32_t took_ms = 0);
   void probeResult(bool ok, uint32_t now_ms);
   // After Unmount: the caller has let go of the card.
   void unmounted(uint32_t now_ms);

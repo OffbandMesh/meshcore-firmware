@@ -106,6 +106,11 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   _display = display;
   _sensors = sensors;
   _prefs = node_prefs;
+#ifdef PIN_SD_CS
+  // A card has worked here before: an empty slot shows red from boot (owner
+  // pick A, 2026-10-21). Before the mesh loop's first SD poll.
+  the_mesh.guiSd().remember(_prefs && _prefs->gui.sd_used);
+#endif
 
   GuiPanel* panel = static_cast<GuiPanel*>(display);
   _gui_ok = panel && lvglBegin(*panel);
@@ -1724,6 +1729,13 @@ void UITask::loop() {
       const GuiSd& sd = the_mesh.guiSd();
       const bool show = sd.copying() && now - sd.copyStartedMs() >= kSdNoticeMs && !_shell.locked();
       _shell.sdNotice(show, sd.copyDone(), sd.copyTotal());
+      // The first card that works here is remembered, saved when the screen
+      // is next idle like any other pref: an internal-flash write stalls both
+      // cores (#1472), and nobody should see it happen.
+      if (_prefs && !_prefs->gui.sd_used && sd.state() == SdState::Working) {
+        _prefs->gui.sd_used = 1;
+        prefsChanged();
+      }
     }
 #endif
     GUI_SPAN(s_t_status);

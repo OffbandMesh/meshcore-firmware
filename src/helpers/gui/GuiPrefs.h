@@ -46,6 +46,10 @@ public:
   // Epic M (#1661): Sensors › Units, temperature in °F (1) or °C (0). °F by
   // default (owner, 2026-10-19).
   uint8_t temp_f;
+  // Epic I (#1703): a card has worked in this radio. Set the first time one
+  // mounts; after a reboot with the slot empty, the header disk is red
+  // rather than hidden (owner pick A, 2026-10-21).
+  uint8_t sd_used;
 
   NotifyMode channelMode(uint8_t slot) const;
   void setChannelMode(uint8_t slot, NotifyMode m);
