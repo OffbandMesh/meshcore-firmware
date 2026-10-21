@@ -27,6 +27,8 @@ ROOT = Path(__file__).resolve().parent.parent
 INI = ROOT / "variants" / "lilygo_tdeck" / "platformio.ini"
 TARGET = ROOT / "variants" / "lilygo_tdeck" / "target.cpp"
 HAL = ROOT / "src" / "helpers" / "radiolib" / "EspSharedSpiHal.h"
+BOARD = ROOT / "variants" / "lilygo_tdeck" / "TDeckBoard.cpp"
+SD = ROOT / "src" / "helpers" / "gui" / "hw" / "SdCard.cpp"
 SPI_CALLS = ("spiBegin", "spiBeginTransaction", "spiTransfer", "spiEndTransaction", "spiEnd")
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 
@@ -89,10 +91,54 @@ def hal_failures(hal):
     return out
 
 
-def failures(ini, target, ci, hal=None):
+def board_failures(board):
+    """TDeckBoard::begin() drives every SPI chip-select high (#1728).
+
+    The radio, display and micro-SD share one bus; a card whose CS floats can answer
+    on MISO while the radio is read, which looks like a radio fault, not an SD one.
+    """
+    code = strip_comments(board, "//")
+    m = re.search(r"for\s*\(\s*int\s+cs\s*:\s*\{([^}]*)\}\s*\)\s*\{\s*pinMode\(\s*cs\s*,\s*OUTPUT\s*\)\s*;"
+                  r"\s*digitalWrite\(\s*cs\s*,\s*HIGH\s*\)", code)
+    pins = {p.strip() for p in m.group(1).split(",")} if m else set()
+    out = []
+    for need in ("P_LORA_NSS", "PIN_TFT_CS", "kSdCardCs"):
+        if need not in pins:
+            out.append("TDeckBoard::begin() must drive %s high: the three chips share one SPI bus" % need)
+    if not re.search(r"kSdCardCs\s*=\s*39\s*;", code):
+        out.append("TDeckBoard's kSdCardCs must default to 39 (LilyGo's schematic, #1724)")
+    return out
+
+
+def sd_failures(sd):
+    """SdCard holds the card's CS high whenever the driver lets go of it (#1728).
+
+    A failed mount, an unmount and format()'s raw bring-up all release the pin; each
+    must be followed by parkCs(), or the card's CS floats on a bus the radio uses.
+    """
+    code = strip_comments(sd, "//")
+    out = []
+    if not re.search(r"void\s+parkCs\(\)\s*\{[^}]*gpio_set_direction\(\s*cs\s*,\s*GPIO_MODE_OUTPUT\s*\)\s*;"
+                     r"[^}]*gpio_set_level\(\s*cs\s*,\s*1\s*\)", code):
+        out.append("SdCard's parkCs() must drive the card's CS as an output, high")
+    for m in re.finditer(r"(sdspi_host_deinit\(\)|esp_vfs_fat_sdcard_unmount\([^)]*\))\s*;", code):
+        after = code[m.end():].split(";")[:3]
+        if not any("parkCs()" in s for s in after):
+            out.append("SdCard: %s must be followed by parkCs(): the card's CS floats after it" % m.group(1))
+    failed = re.search(r"esp_vfs_fat_sdspi_mount\((.*?)switch\s*\(\s*e\s*\)", code, re.S)
+    if not failed or "parkCs()" not in failed.group(1).split("return MountOutcome::Ok;", 1)[-1]:
+        out.append("SdCard::mount() must parkCs() when the mount fails")
+    return out
+
+
+def failures(ini, target, ci, hal=None, board=None, sd=None):
     out = []
     if hal is not None:
         out.extend(hal_failures(hal))
+    if board is not None:
+        out.extend(board_failures(board))
+    if sd is not None:
+        out.extend(sd_failures(sd))
     secs = ini_sections(ini)
     for s in (HW, OLD, GUI):
         if s not in secs:
@@ -155,11 +201,11 @@ def failures(ini, target, ci, hal=None):
 
 def _real():
     return (INI.read_text(encoding="utf-8"), TARGET.read_text(encoding="utf-8"), CI.read_text(encoding="utf-8"),
-            HAL.read_text(encoding="utf-8"))
+            HAL.read_text(encoding="utf-8"), BOARD.read_text(encoding="utf-8"), SD.read_text(encoding="utf-8"))
 
 
 def _fails_with(fragment, **swap):
-    parts = dict(zip(("ini", "target", "ci", "hal"), _real()))
+    parts = dict(zip(("ini", "target", "ci", "hal", "board", "sd"), _real()))
     parts.update(swap)
     got = failures(**parts)
     assert any(fragment in f for f in got), "expected a failure naming %r, got %s" % (fragment, got)
@@ -273,6 +319,45 @@ def test_negative_a_second_display_class_is_caught():
 
 def test_negative_a_renamed_section_is_not_a_silent_pass():
     _fails_with("cannot see what it is protecting", ini=_real()[0].replace("[LilyGo_TDeck_hw]", "[LilyGo_TDeck_base]"))
+
+
+def test_negative_the_sd_card_cs_left_floating_is_caught():
+    _fails_with("must drive kSdCardCs high",
+                board=_real()[4].replace("{P_LORA_NSS, PIN_TFT_CS, kSdCardCs}", "{P_LORA_NSS, PIN_TFT_CS}"))
+
+
+def test_negative_the_chip_selects_driven_low_is_caught():
+    _fails_with("must drive P_LORA_NSS high", board=_real()[4].replace("digitalWrite(cs, HIGH)", "digitalWrite(cs, LOW)"))
+
+
+def test_negative_the_wrong_sd_cs_default_is_caught():
+    _fails_with("kSdCardCs must default to 39", board=_real()[4].replace("kSdCardCs = 39;", "kSdCardCs = 38;"))
+
+
+def test_negative_an_unmount_leaving_the_cs_floating_is_caught():
+    sd = _real()[5]
+    i = sd.index("esp_vfs_fat_sdcard_unmount(")
+    j = sd.index("parkCs();", i)
+    _fails_with("esp_vfs_fat_sdcard_unmount", sd=sd[:j] + sd[j + len("parkCs();"):])
+
+
+def test_negative_format_leaving_the_cs_floating_is_caught():
+    sd = _real()[5]
+    i = sd.rindex("sdspi_host_deinit();")
+    j = sd.index("parkCs();", i)
+    _fails_with("sdspi_host_deinit() must be followed by parkCs()", sd=sd[:j] + sd[j + len("parkCs();"):])
+
+
+def test_negative_a_failed_mount_leaving_the_cs_floating_is_caught():
+    sd = _real()[5]
+    i = sd.index("esp_vfs_fat_sdspi_mount(")
+    j = sd.index("parkCs();", i)
+    _fails_with("must parkCs() when the mount fails", sd=sd[:j] + sd[j + len("parkCs();"):])
+
+
+def test_negative_parking_the_cs_low_is_caught():
+    _fails_with("parkCs() must drive the card's CS as an output, high",
+                sd=_real()[5].replace("gpio_set_level(cs, 1)", "gpio_set_level(cs, 0)"))
 
 
 if __name__ == "__main__":

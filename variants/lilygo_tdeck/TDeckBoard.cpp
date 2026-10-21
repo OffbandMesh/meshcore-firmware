@@ -3,6 +3,14 @@
 
 uint32_t deviceOnline = 0x00;
 
+// The micro-SD's chip-select (LilyGo's schematic, #1724). Every T-Deck has
+// the slot, whether or not its env uses the card.
+#ifdef PIN_SD_CS
+static constexpr int kSdCardCs = PIN_SD_CS;
+#else
+static constexpr int kSdCardCs = 39;
+#endif
+
 void TDeckBoard::begin() {
   
   ESP32Board::begin();
@@ -31,5 +39,15 @@ void TDeckBoard::begin() {
 
     rtc_gpio_hold_dis((gpio_num_t)P_LORA_NSS);
     rtc_gpio_deinit((gpio_num_t)P_LORA_DIO_1);
+  }
+
+  // The radio, the display and the micro-SD share one SPI bus. Every
+  // chip-select is driven high before anything talks on it: a card whose CS
+  // floats can answer on MISO while the radio is being read (#1728). After
+  // the radio's sleep hold is released, so its line is free to drive. The SD
+  // driver takes its CS over when a card mounts.
+  for (int cs : {P_LORA_NSS, PIN_TFT_CS, kSdCardCs}) {
+    pinMode(cs, OUTPUT);
+    digitalWrite(cs, HIGH);
   }
 }
