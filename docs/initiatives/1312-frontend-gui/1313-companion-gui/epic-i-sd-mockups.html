@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SD card mockups</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* Offband theme tokens and screen parts, as in the Epic G, H, L and M mockups. Static markup. */
+:root{
+  --bg:#0F1412; --bg2:#161C19; --bg3:#1D2521; --line:#34403A; --line2:#232C28;
+  --ink:#EFF3E8; --ink2:#BAC4B5; --dim:#7C8B82; --sig:#7BEFA8; --sigInk:#0F1412;
+  --wash:rgba(123,239,168,.09); --warn:#FFA552; --bad:#FF7A6E; --r:6px;
+  --sans:'Barlow Condensed',sans-serif; --mono:'JetBrains Mono',monospace;
+  --page:#0a0d0c; --pageInk:#cfd6cc;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--page);color:var(--pageInk);font-family:var(--sans);padding:24px 16px 48px}
+h1{font-size:26px;font-weight:600;color:var(--ink)}
+h3{font-size:18px;font-weight:600;color:var(--sig);margin:28px 0 10px}
+.lede{font-size:16px;color:var(--dim);margin:6px 0 8px;max-width:1000px}
+.q{font-size:15px;color:var(--ink2);max-width:1000px;margin:8px 0;line-height:1.35}
+.q b{color:var(--warn)}
+.grid{display:flex;flex-wrap:wrap;gap:28px}
+.card{width:300px}
+.card.w{width:400px;max-width:100%}
+.card h2{font-size:18px;font-weight:600;color:var(--ink)}
+.card .n{font-family:var(--mono);font-size:12px;color:var(--sig);margin-right:6px}
+.card p{font-size:14px;color:var(--ink2);margin:4px 0 10px;line-height:1.3;min-height:54px}
+.card ul{font-size:13px;color:var(--dim);margin:10px 0 0 16px;line-height:1.35}
+.dev{width:300px;height:400px;border:1px solid #2a332f;border-radius:10px;overflow:hidden;background:#000}
+.dev.l{width:400px;height:300px}
+.scr{width:240px;height:320px;transform:scale(1.25);transform-origin:0 0;background:var(--bg);color:var(--ink);
+  font-family:var(--sans);position:relative;overflow:hidden;display:flex;flex-direction:column}
+.scr.l{width:320px;height:240px}
+.sb{height:20px;flex:none;background:var(--bg2);border-bottom:1px solid var(--line2);display:flex;align-items:center;
+  padding:0 6px;font-family:var(--mono);font-size:10px;color:var(--ink2);gap:5px}
+.sb .clk{color:var(--ink);font-weight:600} .sb .right{margin-left:auto;display:flex;align-items:center;gap:5px}
+/* The SD card glyph: a card outline with the clipped corner. Red when unavailable. */
+.sd{width:9px;height:11px;display:inline-block;background:var(--bad);clip-path:polygon(35% 0,100% 0,100% 100%,0 100%,0 30%)}
+.sd.ok{background:var(--sig)}
+.sd.big{width:14px;height:17px}
+.tabs{height:40px;flex:none;border-top:1px solid var(--line2);background:var(--bg2);display:flex;margin-top:auto}
+.tabs div{flex:1;display:flex;align-items:center;justify-content:center;font-size:9px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--dim);border-top:2px solid transparent}
+.tabs div.on{color:var(--sig);background:var(--wash);border-top-color:var(--sig)}
+.bodyr{flex:1;min-height:0;display:flex}
+.rail{width:48px;flex:none;display:flex;flex-direction:column;border-right:1px solid var(--line);background:var(--bg2)}
+.rail div{flex:1;display:flex;align-items:center;justify-content:center;font-size:8px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);border-left:2px solid transparent}
+.rail div.on{color:var(--sig);background:var(--wash);border-left-color:var(--sig);font-weight:600}
+.ct{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;position:relative}
+.lh{display:flex;align-items:center;height:32px;flex:none;padding:0 8px;border-bottom:1px solid var(--line)}
+.lh .t{font-size:16px;font-weight:600} .lh .id{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--dim)}
+.cat{display:flex;align-items:center;gap:7px;height:34px;flex:none;padding:0 8px;border-bottom:1px solid var(--line2)}
+.cat.focus{background:var(--wash);box-shadow:inset 3px 0 var(--sig)}
+.cat .ic{width:20px;height:20px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:var(--r);background:var(--wash);color:var(--sig);font-size:11px}
+.cat .k{font-size:13px;flex:none} .cat .v{flex:1;text-align:right;font-size:10px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cat .v.bad{color:var(--bad)}
+.chev{color:var(--dim)}
+.sh{display:flex;align-items:center;gap:6px;height:32px;flex:none;padding:0 8px;border-bottom:1px solid var(--line)}
+.sh .bk{font-size:16px;color:var(--sig)} .sh .t{font-size:15px;font-weight:600} .sh .m{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--dim)}
+.sec{padding:6px 8px 2px;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);flex:none;display:flex}
+.row{display:flex;align-items:center;gap:6px;min-height:26px;flex:none;padding:0 8px;border-bottom:1px solid var(--line2)}
+.row.l{min-height:24px}
+.row .k{flex:1;font-size:12px}
+.row .v{font-family:var(--mono);font-size:11px;color:var(--ink)}
+.row .v.ok{color:var(--sig)} .row .v.bad{color:var(--bad)}
+.bar{margin:4px 8px 2px;height:8px;border:1px solid var(--line);border-radius:3px;overflow:hidden;flex:none}
+.bar i{display:block;height:100%;background:var(--sig)}
+.btn{margin:8px 8px 0;height:28px;flex:none;border:1px solid var(--bad);color:var(--bad);border-radius:var(--r);display:flex;align-items:center;justify-content:center;font-size:13px}
+.btn.dis{border-color:var(--line);color:var(--dim)}
+.foot{padding:6px 8px;font-size:9px;color:var(--dim);line-height:1.3}
+.home{flex:1;display:flex;flex-direction:column;padding:8px;gap:7px}
+.hd{display:flex;align-items:flex-end} .hd b{font-size:17px} .hd .k{font-family:var(--mono);font-size:9px;color:var(--dim)} .hd .tag{margin-left:auto;border:1px solid var(--sig);color:var(--sig);font-size:8px;padding:1px 4px}
+.cells{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--line);border-left:1px solid var(--line)}
+.cells div{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:4px 6px;display:flex;flex-direction:column}
+.cells .l{font-size:8px;letter-spacing:.1em;color:var(--dim)} .cells .v{font-family:var(--mono);font-size:14px} .cells .s{font-size:9px;color:var(--ink2)}
+.adv{margin-top:auto;height:30px;border:1px solid var(--line);border-radius:var(--r);display:flex;align-items:center;justify-content:center;color:var(--sig);font-size:13px}
+/* Sheets over a dimmed screen, as in Epic G and L. */
+.dim{position:absolute;inset:20px 0 0 0;background:rgba(5,8,7,.72);display:flex;align-items:center;justify-content:center;padding:0 12px}
+.sheet{width:100%;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px}
+.sheet b{font-size:15px} .sheet span{font-size:11px;color:var(--ink2);line-height:1.3}
+.sheet .pb{height:8px;border:1px solid var(--line);border-radius:3px;overflow:hidden} .sheet .pb i{display:block;height:100%;width:41%;background:var(--sig)}
+.sheet .pn{font-family:var(--mono);font-size:10px;color:var(--dim)}
+.acts{display:flex;gap:6px;margin-top:4px}
+.acts div{flex:1;height:28px;border:1px solid var(--line);border-radius:var(--r);display:flex;align-items:center;justify-content:center;font-size:13px}
+.acts .go{border-color:var(--bad);color:var(--bad)}
+.ghost{flex:1;display:flex;flex-direction:column;padding:8px;gap:6px;opacity:.6}
+.ghost div{height:26px;border-bottom:1px solid var(--line2)}
+</style>
+</head>
+<body>
+<h1>Epic I: the SD card (#1433)</h1>
+<p class="lede">Offband theme, Modern look, shown at 1.25×. These are the I6 mockups (#1702) for the owner's answer before any screen code. Figures are examples. <b>Owner decisions, 2026-10-21:</b> the card can be swapped while the radio runs. On the first boot with a card, history is copied from flash to the card, with a notice if it's slow; flash keeps the newest 1,000 (option B). A missing card falls back to flash, and the header shows a red disk icon; a card that's present and healthy shows it green. When the card returns, what was written to flash syncs to the card. Settings gets an SD card page with status, usage and Format card.</p>
+
+<h3>What flash holds once the card is in use: B (owner, 2026-10-21)</h3>
+<p class="q"><b>A · Flash is only the fallback.</b> After the move, every message lives on the card. Flash holds only what arrives while the card is out. If the card is pulled, the chats show only messages from after the pull until it returns.</p>
+<p class="q"><b>B · Flash keeps the newest messages as it does today (chosen).</b> Flash goes on holding the newest 1,000 messages. The card holds the full history, up to 5,000. If the card is pulled, the chats still show recent history and nothing goes blank. When it returns, the card catches up. The first-boot "move" becomes a copy, and Format card leaves the flash copy alone. It costs no more flash writes than today, because today's store already writes every message to flash.</p>
+
+<h3>The header icon, and where SD lives in Settings</h3><div class="grid">
+
+<div class="card"><h2><span class="n">1</span>Card unavailable: the disk turns red</h2><p>Home with the card pulled. The red disk sits at the left of the status icons, the first thing the eye reaches.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right"><span class="sd"></span>▂▄▆ ✱ ◎ 87%</span></div>
+<div class="home"><div class="hd"><div><b>OB-Valley</b><br><span class="k">a1b2…9f</span></div><span class="tag">COMPANION</span></div>
+<div class="cells">
+<div><span class="l">RADIO</span><span class="v">910.525</span><span class="s">SF7 · 62.5</span></div>
+<div><span class="l">HEARD</span><span class="v">12</span><span class="s">4 rpt · 8 chat</span></div>
+<div><span class="l">UNREAD</span><span class="v">3</span><span class="s">2 chats</span></div>
+<div><span class="l">GPS</span><span class="v">3D</span><span class="s">9 sats</span></div>
+<div><span class="l">BATTERY</span><span class="v">87%</span><span class="s">4.02 V</span></div>
+<div><span class="l">AIRTIME</span><span class="v">1.2%</span><span class="s">last hour</span></div></div>
+<div class="adv">Send advert</div></div>
+<div class="tabs"><div class="on">Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div>Setup</div></div></div></div>
+<ul><li>Shown only when a card was in use and is now gone, or a card is in but won't mount. A board with no card never shows it.</li><li>A card that's in and working shows the same icon in green (owner, 2026-10-21), as on every other screen here.</li><li>Turns green again as soon as the card is back and mounted; the sync runs in the background.</li></ul></div>
+
+<div class="card"><h2><span class="n">2</span>Settings list: an SD card row</h2><p>After Sensors. The value is the free space, or "Unavailable" in red.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right"><span class="sd ok"></span>▂▄▆ ✱ ◎ 87%</span></div>
+<div class="lh"><span class="t">Settings</span><span class="id">OB-Valley</span></div><div class="ct">
+<div class="cat"><span class="ic">◉</span><span class="k">Node</span><span class="v">OB-Valley</span><span class="chev">›</span></div>
+<div class="cat"><span class="ic">⌁</span><span class="k">Radio</span><span class="v">910.525 · SF7</span><span class="chev">›</span></div>
+<div class="cat"><span class="ic">∿</span><span class="k">Radio stats</span><span class="v">1.2% air</span><span class="chev">›</span></div>
+<div class="cat"><span class="ic">🌡</span><span class="k">Sensors</span><span class="v">2 found · 71.5 °F</span><span class="chev">›</span></div>
+<div class="cat focus"><span class="ic"><span class="sd ok"></span></span><span class="k">SD card</span><span class="v">28.9 GB free</span><span class="chev">›</span></div>
+<div class="cat"><span class="ic">⛉</span><span class="k">Privacy</span><span class="v">Location off</span><span class="chev">›</span></div></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div></div></div>
+<ul><li>Card out: "Unavailable" in red. No card ever fitted: "No card".</li><li>Only on boards with a card slot.</li></ul></div>
+
+</div>
+
+<h3>Settings → SD card</h3><div class="grid">
+
+<div class="card"><h2><span class="n">3</span>Card working</h2><p>Status, what the card is, how full it is, and how many messages are on it. Format card at the bottom.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right"><span class="sd ok"></span>▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">SD card</span></div><div class="ct">
+<div class="row"><span class="k">Status</span><span class="v ok">Working</span></div>
+<div class="row"><span class="k">Card</span><span class="v">32 GB · FAT32</span></div>
+<div class="sec">Space</div>
+<div class="bar"><i style="width:9%"></i></div>
+<div class="row"><span class="k">Used</span><span class="v">2.9 GB</span></div>
+<div class="row"><span class="k">Free</span><span class="v">28.9 GB</span></div>
+<div class="row"><span class="k">Total</span><span class="v">31.8 GB</span></div>
+<div class="row"><span class="k">Messages on card</span><span class="v">4,212</span></div>
+<div class="btn">Format card</div></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div></div></div>
+<ul><li>Used counts every file on the card, not only messages: maps will live there too (Epic O).</li><li>"Total" is what the file system reports, so a 32 GB card reads 31.8 GB.</li></ul></div>
+
+<div class="card"><h2><span class="n">4</span>Card out</h2><p>What happened, where messages are going meanwhile, and what happens when it's back.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right"><span class="sd"></span>▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">SD card</span></div><div class="ct">
+<div class="row"><span class="k">Status</span><span class="v bad">Not detected</span></div>
+<div class="row"><span class="k">Saving to</span><span class="v">Flash</span></div>
+<div class="row"><span class="k">Waiting to copy</span><span class="v">37 messages</span></div>
+<div class="foot">Messages are kept in flash until the card is back, then copied to it. Flash holds up to 1,000.</div>
+<div class="btn dis">Format card</div></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div></div></div>
+<ul><li>A card that's in but won't mount reads "Can't read card" instead, and Format card stays enabled so it can be fixed from here.</li></ul></div>
+
+<div class="card"><h2><span class="n">5</span>Format card: the confirmation</h2><p>Says exactly what's erased, and that it can't be undone. The confirm button is red and on the right.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right"><span class="sd ok"></span>▂▄▆ ✱ ◎ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">SD card</span></div><div class="ghost"><div></div><div></div><div></div><div></div><div></div><div></div></div>
+<div class="dim"><div class="sheet"><b>Format the SD card?</b><span>This erases everything on the card: 4,212 messages and any other files. It can't be undone.</span><span>The newest 1,000 messages stay in flash.</span>
+<div class="acts"><div>Cancel</div><div class="go">Format</div></div></div></div>
+<div class="tabs"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div></div></div>
+<ul><li>The flash copy is untouched by a format (option B).</li><li>Afterwards the page shows "Working", and the store starts its card files again.</li></ul></div>
+
+</div>
+
+<h3>First boot with a card, and landscape</h3><div class="grid">
+
+<div class="card"><h2><span class="n">6</span>Copying history to the card</h2><p>Shown only if the copy takes long enough to notice. The radio keeps receiving while it runs.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right"><span class="sd ok"></span>▂▄▆ ✱ ◎ 87%</span></div>
+<div class="ghost"><div></div><div></div><div></div><div></div><div></div><div></div><div></div></div>
+<div class="dim"><div class="sheet"><b><span class="sd ok big" style="vertical-align:-3px;margin-right:6px"></span>Copying messages to the SD card</b><div class="pb"><i></i></div><span class="pn">412 of 1,000</span><span>The radio keeps receiving. Leave the card in until this finishes.</span></div></div>
+<div class="tabs"><div class="on">Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div>Setup</div></div></div></div>
+<ul><li>Whether it's needed at all is measured on the R8 first. If a full copy is quick, it never appears.</li><li>Flash keeps the newest 1,000 throughout (option B).</li><li>Pulled mid-copy: nothing is lost, and it resumes when the card is back.</li></ul></div>
+
+<div class="card w"><h2><span class="n">7</span>SD card page, landscape</h2><p>Class B (Epic H): details on the left, space on the right.</p>
+<div class="dev l"><div class="scr l"><div class="sb"><span class="clk">21:07</span><span class="right"><span class="sd ok"></span>▂▄▆ ✱ ◎ 87%</span></div>
+<div class="bodyr"><div class="rail"><div>Home</div><div>Chat</div><div>Nodes</div><div>Map</div><div class="on">Setup</div></div>
+<div class="ct"><div class="sh" style="height:28px"><span class="bk">‹</span><span class="t">SD card</span></div>
+<div style="display:flex;gap:6px">
+<div style="flex:1"><div class="row l"><span class="k">Status</span><span class="v ok">Working</span></div>
+<div class="row l"><span class="k">Card</span><span class="v">32 GB · FAT32</span></div>
+<div class="row l"><span class="k">Messages</span><span class="v">4,212</span></div></div>
+<div style="flex:1"><div class="bar"><i style="width:9%"></i></div>
+<div class="row l"><span class="k">Used</span><span class="v">2.9 GB</span></div>
+<div class="row l"><span class="k">Free</span><span class="v">28.9 GB</span></div>
+<div class="row l"><span class="k">Total</span><span class="v">31.8 GB</span></div></div></div>
+<div class="btn">Format card</div>
+</div></div></div></div>
+<ul><li>The header icon sits in the same place in landscape.</li></ul></div>
+
+</div>
+</body></html>
