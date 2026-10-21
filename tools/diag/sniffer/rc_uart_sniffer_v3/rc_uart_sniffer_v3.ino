@@ -18,7 +18,11 @@
 // summarised once a second as min bus / max current, because a 30 s sample cannot
 // see a 50-200 ms transmit burst and the sag during one is the measurement (#1672).
 // v10 tracks BOTH current extremes: v9 kept only the maximum, so a window that was
-// entirely charging printed 0.0 mA while the INA read -406 mA (#1672).
+// entirely charging printed 0.0 mA while the INA read -406 mA (#1672). v11 makes the
+// sampler fast enough to be believed: it configures the INA228 for 150 us conversions
+// with no averaging, lifts the bus to 400 kHz and polls at 1 kHz, because at 50 Hz the
+// sag stayed pinned at ~90 mV across a 120-168 mA swing -- the dip was real and the
+// current peak was being missed entirely (#1672).
 //
 // FLASH WITH ARDUINO IDE, NOT PLATFORMIO. Two prior PlatformIO attempts put
 // `Serial` on the TinyUSB CDC peripheral while the enumerated port was
@@ -26,7 +30,7 @@
 // Arduino IDE handles the Feather's USB config correctly out of the box.
 // (#704 handoff.)
 
-#define SNIFF_BUILD_ID "SNIFFER-v10"   // the banner, every heartbeat and PING print it
+#define SNIFF_BUILD_ID "SNIFFER-v11"   // the banner, every heartbeat and PING print it
 
 // ==== VARIANT BEGIN: wiring ====
 // ---------------------------------------------------------------------------
@@ -329,9 +333,28 @@
 #define INA228_SHUNT_MILLIOHM  15
 
 #define INA228_REG_CONFIG   0x00
+#define INA228_REG_ADCCFG   0x01
 #define INA228_REG_VSHUNT   0x04
 #define INA228_REG_VBUS     0x05
 #define INA228_CONFIG_ADCRANGE  0x0010
+
+// v11 (#1672): ADC_CONFIG for the fast sampler.
+//
+//   bits 15:12 MODE    0xB = continuous shunt + bus, temperature OFF
+//   bits 11:9  VBUSCT  2   = 150 us
+//   bits  8:6  VSHCT   2   = 150 us
+//   bits  5:3  VTCT    0   = unused, temperature is not converted
+//   bits  2:0  AVG     0   = 1 sample, NO averaging
+//
+// = 0xB480. A fresh bus+shunt pair therefore lands every ~300 us instead of the
+// ~3.2 ms the reset default (0xFB68: 1052 us x3 with temperature) produces.
+//
+// AVERAGING IS THE ENEMY HERE. AVG>1 would hand back a smoother number that is
+// exactly wrong for this measurement: the peak we are chasing lasts less than one
+// default conversion, so any averaging buries it. 150 us rather than the minimum
+// 50 us because the shorter conversions are noisier and 300 us already resolves a
+// pulse an order of magnitude shorter than the ~3 ms we know we are missing.
+#define INA228_ADCCFG_FAST  0xB480
 
 // Scales in nV per LSB, x1000 so the integer maths keeps a fractional digit.
 #define INA228_VSHUNT_NV_X1000_R0   312500UL   // 312.5   nV
@@ -363,20 +386,33 @@
 // the whole point and an average destroys it -- and because raw rows at 50 Hz
 // would be 50 lines/s into a capture that also carries the badge's own log.
 //
-// WHY 20 ms IS FAST ENOUGH, AND WHY IT IS NOT FASTER. The INA228 reset default
-// (ADC_CONFIG 0xFB68) is continuous conversion, 1052 us each for bus, shunt and
-// temperature with AVG=1, so a fresh non-averaged sample lands about every 3.2 ms.
-// Polling faster than that re-reads the same conversion and buys nothing. 20 ms
-// leaves headroom for the UART capture this rig exists to do, which must not be
-// starved to chase a power measurement.
+// WHY 1 ms (v11, and why 20 ms was NOT fast enough).
+//
+// v9/v10 polled at 20 ms against the part's reset default, where a fresh sample
+// lands every ~3.2 ms. That was fast enough to see a 50-200 ms transmit burst and
+// NOT fast enough to see the current peak inside one. The giveaway was in the data:
+// across windows whose measured current swing ranged 120-168 mA, the sag stayed
+// pinned at 90-93 mV. A resistive drop scales with current; a constant one does not.
+// The dip was real and the swing was an undersample, so dividing them produced a
+// "resistance" that moved only with sampling luck -- 0.25 ohm one hour and 0.6 ohm
+// the next, on the same cell, in the wrong direction against state of charge.
+//
+// v11 reconfigures the part (INA228_ADCCFG_FAST, ~300 us per pair), lifts the bus to
+// 400 kHz so a read pair costs ~360 us instead of ~1.4 ms, and polls at 1 ms. That
+// resolves a pulse an order of magnitude shorter than anything v10 could see.
+//
+// THE UART CAPTURE IS STILL THE TENANT. ~360 us of I2C per 1 ms is real CPU, but the
+// ESP32's UART FIFO is 128 bytes and 115200 baud fills it in ~11 ms, so blocking for
+// 360 us cannot drop a byte. The call stays AFTER the relay regardless.
 //
 // NOTE the sampler reads VSHUNT and VBUS only. ina228Tick() re-reads CONFIG every
 // time to pick up ADCRANGE; here it is cached once at first use, because the part
 // is never reconfigured by this sketch and a third I2C transaction per sample is
 // a third of the budget for a bit that does not change.
 // ---------------------------------------------------------------------------
-#define INA_FAST_MS          20     // 50 Hz; see the conversion-time note above
+#define INA_FAST_MS           1     // 1 kHz; see the conversion-time note above
 #define INA_FAST_REPORT_MS 1000     // one [inafast] line per second
+#define INA_FAST_I2C_HZ  400000     // raised from 100 kHz so a read pair fits in 1 ms
 
 // RST: R31 10K + C32 1uF gives a ~10 ms RC on CHIP_PU. 100 ms is comfortably
 // past it. (Holding RST for 1 s was tested by the owner and changes nothing --
@@ -420,6 +456,21 @@ static bool gaugeRead16At(uint8_t addr, uint8_t reg, uint16_t* out) {
 
 static bool gaugeRead16(uint8_t reg, uint16_t* out) {
   return gaugeRead16At(MAX1704X_ADDR, reg, out);
+}
+
+// v11 (#1672): the first WRITE this sketch performs. Everything until now was
+// read-only by design -- an instrument that configures its subject can be blamed
+// for what it measures. The exception is earned: at the INA228's reset default a
+// fresh sample lands only every ~3.2 ms, which is slower than the current pulse we
+// are trying to catch, so the part has to be reconfigured for the measurement to
+// exist at all. Only ADC_CONFIG (0x01) is written; CONFIG (0x00), which holds
+// ADCRANGE and therefore the decode scale, is left exactly as found.
+static bool gaugeWrite16At(uint8_t addr, uint8_t reg, uint16_t val) {
+  Wire1.beginTransmission(addr);
+  Wire1.write(reg);
+  Wire1.write((uint8_t)(val >> 8));
+  Wire1.write((uint8_t)(val & 0xFF));
+  return Wire1.endTransmission(true) == 0;
 }
 
 // INA228's measurement registers are 24 bits, not 16. Same transaction shape as
@@ -805,6 +856,27 @@ static void inaFastTick(uint32_t now) {
       // over-reporting a current that is not there.
       ina_fast_range = (gaugeRead16At(ina_addr, INA228_REG_CONFIG, &cfg) &&
                         (cfg & INA228_CONFIG_ADCRANGE)) ? 1 : 0;
+
+      // v11: configure the part for short conversions and lift the bus, then SAY SO
+      // and read it back. An instrument that silently reconfigures its subject is
+      // how a measurement becomes unreproducible -- the capture has to record that
+      // this run was taken on a non-default ADC_CONFIG, and whether the write took.
+      Wire1.setClock(INA_FAST_I2C_HZ);
+      const bool wrote = gaugeWrite16At(ina_addr, INA228_REG_ADCCFG, INA228_ADCCFG_FAST);
+      uint16_t back = 0;
+      const bool readback = gaugeRead16At(ina_addr, INA228_REG_ADCCFG, &back);
+      Serial.printf("[inafast] ADC_CONFIG write=%d readback=%d value=0x%04X "
+                    "(want 0x%04X) i2c=%luHz poll=%ums\n",
+                    (int)wrote, (int)readback, (unsigned)back,
+                    (unsigned)INA228_ADCCFG_FAST, (unsigned long)INA_FAST_I2C_HZ,
+                    (unsigned)INA_FAST_MS);
+      if (!wrote || !readback || back != INA228_ADCCFG_FAST) {
+        // Not fatal: the sampler still works at whatever cadence the part is in.
+        // Loud, because every number below it would otherwise be read as 1 kHz data.
+        Serial.println("[inafast] WARNING: ADC_CONFIG not as requested -- the sampler "
+                       "is running at the part's existing conversion rate, so a peak "
+                       "shorter than that is still being missed.");
+      }
     }
 
     uint32_t rs = 0, rb = 0;
