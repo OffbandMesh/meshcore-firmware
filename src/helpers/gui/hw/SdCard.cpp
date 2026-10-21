@@ -38,6 +38,18 @@ sdspi_device_config_t deviceConfig() {
   return dev;
 }
 
+// Whenever the driver lets go of the card (a failed mount, an unmount, the
+// raw bring-up in format()), its chip-select goes back to a plain output
+// held high. The bus is shared with the panel and, on the T-Deck, the radio:
+// a card whose CS is left floating can answer on MISO during their transfers
+// (#1728). The next mount routes the pin to the SPI driver again.
+void parkCs() {
+  const gpio_num_t cs = gpio_num_t(PIN_SD_CS);
+  gpio_reset_pin(cs);
+  gpio_set_direction(cs, GPIO_MODE_OUTPUT);
+  gpio_set_level(cs, 1);
+}
+
 }  // namespace
 
 static const char* readFsType(sdmmc_card_t* card);
@@ -56,6 +68,7 @@ MountOutcome SdCard::mount() {
     return MountOutcome::Ok;
   }
   _card = nullptr;
+  parkCs();
   mesh_log_line(MLOG_BOOT, "[sd] mount: %s\n", esp_err_to_name(e));
   switch (e) {
     // Nothing answered the init sequence: an empty slot, cheap to ask again.
@@ -79,6 +92,7 @@ void SdCard::unmount() {
   if (!_card) return;
   esp_vfs_fat_sdcard_unmount(kMount, _card);
   _card = nullptr;
+  parkCs();
 }
 
 bool SdCard::usage(uint64_t* total, uint64_t* free_bytes) {
@@ -132,6 +146,7 @@ bool SdCard::format() {
   sdspi_dev_handle_t handle;
   if (sdspi_host_init_device(&dev, &handle) != ESP_OK) {
     sdspi_host_deinit();
+    parkCs();
     return false;
   }
   host.slot = handle;
@@ -151,6 +166,7 @@ bool SdCard::format() {
   free(card);
   sdspi_host_remove_device(handle);
   sdspi_host_deinit();
+  parkCs();
   mesh_log_line(MLOG_BOOT, "[sd] format %s\n", ok ? "ok" : "FAILED");
   return ok && mount() == MountOutcome::Ok;
 }
