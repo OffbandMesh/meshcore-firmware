@@ -1183,8 +1183,14 @@ void GuiShell::buildConversation(lv_obj_t* content) {
 // ---------------------------------------------------------------- Compose
 
 namespace {
-const char* const kDefaultCanned[4] = {"On my way", "Copy that", "Check-in OK", "Need help"};
+const char* const kDefaultCanned[kCannedReplies] = {"On my way", "Copy that", "Check-in OK", "Need help"};
 }  // namespace
+
+// Canned reply i: what Setup saved, or the design's default.
+const char* GuiShell::cannedFor(int i) {
+  const char* text = _model->cannedText(i);
+  return text && text[0] ? text : kDefaultCanned[i];
+}
 
 // The keyboard area's top: four rows of the layout class's keys and their
 // gaps above the screen's foot (179 in class A, 127 in class B).
@@ -1268,9 +1274,8 @@ void GuiShell::buildCompose(lv_obj_t* scr) {
   lv_obj_set_pos(chips, 8, kStatusH + 28 + gap + draft_h + gap);
   lv_obj_set_flex_flow(chips, LV_FLEX_FLOW_ROW);
   lv_obj_set_style_pad_column(chips, 4, 0);
-  for (int i = 0; i < 4; i++) {
-    const char* text = _model->cannedText(i);
-    if (!text || !text[0]) text = kDefaultCanned[i];
+  for (int i = 0; i < kCannedReplies; i++) {
+    const char* text = cannedFor(i);
     lv_obj_t* chip = box(chips, LV_SIZE_CONTENT, chip_h);
     lv_obj_set_style_border_width(chip, 1, 0);
     lv_obj_set_style_border_color(chip, c(_t.line), 0);
@@ -1493,6 +1498,15 @@ void GuiShell::refreshText() {
 // no auto-capital and no change to the on-screen keys' shift.
 bool GuiShell::typeKey(KeyKind k, char ch) {
   if (_locked || _sheet != Sheet::None) return false;
+  // In an open conversation, 1-4 start a reply with that canned text in the
+  // draft; Enter sends it, or it can be edited first (owner, 2026-10-21).
+  const int canned = k == KeyKind::Char ? cannedSlotForKey(uint8_t(ch)) : -1;
+  if (canned >= 0 && _tab == Tab::Chat && _thread >= 0 && !_composing && !_set_text && !_login && !_searching) {
+    openCompose(_thread);
+    if (!_composing) return false;   // the thread is gone: not taken
+    insertText(cannedFor(canned));
+    return true;
+  }
   const bool search_typing = _searching && _tab == Tab::Nodes && (_search_kb || _search_wheel);
   if (!(_set_text || _login || search_typing || _composing)) return false;
   ComposeBuffer& buf = _set_text ? _set_buf : _login ? _login_pw : _searching ? _query : _draft;

@@ -393,6 +393,7 @@ private:
   void submitText();    // Send, or the field's Done / Log in
   void refreshText();   // whichever text field is open, after an edit
   void insertText(const char* text);
+  const char* cannedFor(int i);   // reply i: Setup's text, or the default
   void leaveCompose();
   // Bottom sheets (D6): the channel notification sheet, and the menu USR
   // hold opens in a channel (owner pick a, 2026-10-16). Zone: the one-time

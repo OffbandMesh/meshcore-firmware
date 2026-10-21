@@ -171,6 +171,18 @@ TEST(TDeckKeyboard, NoKeyControlCodesAndHighBytesAreIgnored) {
   }
 }
 
+TEST(TDeckKeyboard, DigitsOneToFourPickTheCannedReplies) {
+  EXPECT_EQ(0, cannedSlotForKey('1'));
+  EXPECT_EQ(3, cannedSlotForKey('4'));
+}
+
+TEST(TDeckKeyboard, OtherKeysPickNoCannedReply) {
+  for (uint8_t b : {uint8_t('0'), uint8_t('5'), uint8_t('9'), uint8_t('a'), uint8_t(' '), uint8_t(0x0D),
+                    uint8_t(0)}) {
+    EXPECT_EQ(-1, cannedSlotForKey(b)) << int(b);
+  }
+}
+
 // ------------------------------------------- T-Deck trackball (J4 #1727)
 
 TEST(Trackball, OnePulseAStepByDefault) {
