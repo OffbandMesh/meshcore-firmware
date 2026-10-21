@@ -84,7 +84,22 @@ TEST_F(R8Board, LnaChangeDuringTransmitWaitsForReceive) {
 }
 
 // --- TX LED control, #542 parity (#1340) ---
+// [env:native_heltec_v4_r8] builds these with the LED; [env:native_heltec_v4_r8_gui]
+// builds the R8 TFT GUI's configuration, where GPIO46 is the Expansion Kit V2's KEY
+// button and P_LORA_TX_LED is undefined (#1676).
 
+// The GUI env names itself, so a drifted copy of its flags fails to build here
+// rather than quietly running the LED tests instead.
+#ifdef OFFBAND_TEST_R8_GUI_CONFIG
+  #if defined(P_LORA_TX_LED)
+    #error "R8 GUI config: GPIO46 is the KEY button, P_LORA_TX_LED must be undefined"
+  #endif
+  #if !defined(PIN_TOUCH_RST) || PIN_TOUCH_RST >= 0
+    #error "R8 GUI config: the panel owns the GPIO21 reset, PIN_TOUCH_RST must be -1"
+  #endif
+#endif
+
+#ifdef P_LORA_TX_LED
 TEST_F(R8Board, ReportsLedControl) {
   EXPECT_TRUE(board.canControlLed());
 }
@@ -104,6 +119,33 @@ TEST_F(R8Board, LedOnFlashesOnTransmit) {
   board.onAfterTransmit();
   EXPECT_EQ(LOW, g_mock_pin_out[P_LORA_TX_LED]);
 }
+#else
+// GPIO46 belongs to the KEY button here, read by the GUI as an input.
+constexpr int kKeyPin = 46;
+
+TEST_F(R8Board, ReportsNoLedControlWithoutTheLed) {
+  EXPECT_FALSE(board.canControlLed());
+  EXPECT_FALSE(board.setLedEnabled(true));
+}
+
+TEST_F(R8Board, TransmitNeverDrivesTheKeyPin) {
+  board.onBeforeTransmit();
+  board.onAfterTransmit();
+  board.setLedEnabled(false);
+  EXPECT_NE(OUTPUT, g_mock_pin_mode[kKeyPin]);
+  EXPECT_EQ(0, g_mock_pin_out[kKeyPin]);
+}
+#endif
+
+// --- the shared panel/touch reset, GPIO21 (Expansion Board V2.03, #1675) ---
+
+#if defined(PIN_TOUCH_RST) && PIN_TOUCH_RST < 0
+// The GUI env gives the pulse to the panel driver; the board must not drive 21,
+// or a later touch start would reset the panel after it's up.
+TEST_F(R8Board, BoardLeavesTheSharedResetToThePanel) {
+  EXPECT_NE(OUTPUT, g_mock_pin_mode[21]);
+}
+#endif
 
 // --- powerOff cuts FEM power, matching the R2 (#1341) ---
 

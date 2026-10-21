@@ -8,7 +8,10 @@ void HeltecV4R8Board::begin() {
 
   loRaFEMControl.init();
 
-#ifdef PIN_TOUCH_RST
+  // On the Expansion Board V2, GPIO21 resets the panel and the touch chip
+  // together (schematic V2.03, LCD_RST TP_RST). An env whose display driver
+  // owns that pulse sets PIN_TOUCH_RST to -1 instead.
+#if defined(PIN_TOUCH_RST) && PIN_TOUCH_RST >= 0
   pinMode(PIN_TOUCH_RST, OUTPUT);
   digitalWrite(PIN_TOUCH_RST, HIGH);
   delay(10);
@@ -31,12 +34,16 @@ void HeltecV4R8Board::begin() {
 
 void HeltecV4R8Board::onBeforeTransmit(void) {
   _tx_active = true;
+#ifdef P_LORA_TX_LED
   if (_led_enabled) digitalWrite(P_LORA_TX_LED, HIGH);
+#endif
   loRaFEMControl.setTxModeEnable();
 }
 
 void HeltecV4R8Board::onAfterTransmit(void) {
+#ifdef P_LORA_TX_LED
   if (_led_enabled) digitalWrite(P_LORA_TX_LED, LOW);
+#endif
   loRaFEMControl.setRxModeEnable();
   _tx_active = false;
 }
@@ -116,14 +123,27 @@ bool HeltecV4R8Board::isLoRaFemLnaEnabled() const {
 }
 
 // #1340 (#542): the TX LED is a plain GPIO (46), always controllable. Disabled
-// forces it LOW and the transmit hooks stop driving it.
+// forces it LOW and the transmit hooks stop driving it. The R8 TFT GUI env
+// gives GPIO46 to the Expansion Board V2's KEY button instead and undefines
+// P_LORA_TX_LED, so there is no LED to control there.
 bool HeltecV4R8Board::setLedEnabled(bool on) {
+#ifdef P_LORA_TX_LED
   _led_enabled = on;
   if (!on) digitalWrite(P_LORA_TX_LED, LOW);
   return true;
+#else
+  (void)on;
+  return false;
+#endif
 }
 
-bool HeltecV4R8Board::canControlLed() const { return true; }
+bool HeltecV4R8Board::canControlLed() const {
+#ifdef P_LORA_TX_LED
+  return true;
+#else
+  return false;
+#endif
+}
 
 bool HeltecV4R8Board::isLedEnabled() const { return _led_enabled; }
 
