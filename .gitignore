@@ -130,3 +130,26 @@ tools/diag/rc32-boot-740/bootloader-verbose/sdkconfig.*
 # each rebuild would add another full copy to every clone.
 dist/
 tools/diag/rc32-tester/firmware/
+
+# #1629: local-reference doc artifacts. None of these are source, and all three were
+# sitting untracked and re-presenting themselves as a decision on every `git status`.
+
+# A design-handoff archive of exported mockups, ~1 MB. Same reasoning as the binaries
+# above: git cannot delta-compress a zip, so every revision would be another full copy in
+# every clone, forever.
+docs/frontend-gui/*.zip
+
+# Vendor material kept for reference, not for redistribution -- the same rule as the
+# docs/radiocore/vendor block above, applied to the one file that sits outside it.
+docs/vendor/rak13302-tx-power-extract.md
+
+# Generated measurement output: the discharge-comparison plots and the script that draws
+# them. The conclusions belong in the notes; the PNGs are reproducible from the data.
+#
+# Scoped to the generated artifacts rather than the whole directory ON PURPOSE. This
+# directory already holds TRACKED measurement records -- rc32-battery-runtime-2026-08-18
+# as .csv, .log and .md -- which are exactly what it is for. Ignoring the directory would
+# not untrack those, but it WOULD silently swallow the next write-up somebody adds here:
+# they would write it, `git status` would say nothing, and it would never be committed.
+docs/radiocore/measurements/*.png
+docs/radiocore/measurements/plot_discharge_comparison.py
