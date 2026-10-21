@@ -107,6 +107,10 @@ struct DirtyWrite {
   uint16_t len;
 };
 
+// The store's CRC-16/CCITT-FALSE, shared with the SD archive (I4 #1678) so
+// both check records the same way.
+uint16_t storeCrc16(const void* data, size_t len);
+
 enum class LoadResult : uint8_t {
   Ok,
   Empty,           // nothing to read (no file yet)
@@ -139,6 +143,18 @@ public:
   uint32_t addOwn(int t, uint32_t time, const char* text, size_t len, Delivery d);
 
   const MsgRecord* msg(uint32_t seq) const;
+  // The oldest message newer than `seq`, or 0 when there is none: walks the
+  // store in arrival order for the SD archive (I8 #1704).
+  uint32_t nextSeqAfter(uint32_t seq) const;
+  // How many held messages are newer than `seq`.
+  uint16_t countAfter(uint32_t seq) const;
+  // The seq the newest message got; 0 before any.
+  uint32_t lastSeq() const { return _seq; }
+  // The next message's seq will be above `floor`. For a store that lost its
+  // files and restarted its numbering behind the SD archive's cursor (I8):
+  // without it, nothing new would reach the card. Held messages keep their
+  // seqs, so a delivery still in flight still finds its message.
+  void raiseSeqFloor(uint32_t floor);
   // The newest own message in thread t with exactly this text (after the
   // 160-byte cut) that isn't yet delivered, or 0: a resend is the same
   // message (#1464).
