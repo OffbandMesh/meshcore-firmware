@@ -154,8 +154,7 @@ def main() -> int:
                 f"  - DeviceID instance hash match against the named device\n"
                 f"  - Two-stage preview+confirm with a 5-min token (for flash)\n"
                 f"\n"
-                f"See: C:\\Dev\\LoRa\\CLAUDE.md Flashing Discipline section,\n"
-                f"     C:\\Dev\\LoRa\\proposal-flash-discipline.md\n"
+                f"See: CLAUDE.md 'Flash discipline' section + HARDWARE.md\n"
                 f"\n"
                 f"Original command was:\n"
                 f"  " + cmd,
