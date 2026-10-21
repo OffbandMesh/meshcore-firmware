@@ -16,6 +16,7 @@
 #include <helpers/gui/GuiTheme.h>
 #include <helpers/gui/GuiViews.h>
 #include <helpers/gui/InputMap.h>
+#include <helpers/gui/KeyInput.h>
 #include <helpers/gui/NodeViews.h>
 #include <helpers/gui/RadarViews.h>
 #include <helpers/gui/SensorViews.h>
@@ -225,6 +226,11 @@ public:
   // Compose for a thread (from a conversation); leaving returns to it.
   void openCompose(int thread);
 
+  // A physical keyboard's key (the T-Deck, J4 #1727). True when an open text
+  // field took it; false leaves it to the caller as an action. Backspace in
+  // an empty field is not taken, so it goes back.
+  bool typeKey(offband::gui::KeyKind k, char ch);
+
   // Handles an action; false if the screen had no use for it.
   bool action(offband::gui::Action a);
 
@@ -384,6 +390,8 @@ private:
   void refreshDraft();
   void setHotKey(int i, bool preview);
   void pressKey(int i);
+  void submitText();    // Send, or the field's Done / Log in
+  void refreshText();   // whichever text field is open, after an edit
   void insertText(const char* text);
   void leaveCompose();
   // Bottom sheets (D6): the channel notification sheet, and the menu USR

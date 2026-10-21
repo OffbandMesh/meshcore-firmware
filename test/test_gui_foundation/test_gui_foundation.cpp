@@ -231,6 +231,8 @@ const InputEvent kAllEvents[] = {
     InputEvent::AuxHold,   InputEvent::AuxLongHold,    InputEvent::TouchTap,
     InputEvent::TouchSwipeRight, InputEvent::KeyTab,   InputEvent::KeyEnter,
     InputEvent::KeyEsc,    InputEvent::KeyAltDigit,    InputEvent::KeyOther,
+    InputEvent::KeyBackspace, InputEvent::TrackUp,     InputEvent::TrackDown,
+    InputEvent::TrackLeft, InputEvent::TrackRight,
 };
 bool isUsr(InputEvent ev) {
   return ev == InputEvent::UsrClick || ev == InputEvent::UsrDoubleClick ||
@@ -266,6 +268,23 @@ TEST(InputMap, TouchAndKeyboard) {
   EXPECT_EQ(mapInput(InputEvent::KeyEsc, true, false), Action::Back);
   EXPECT_EQ(mapInput(InputEvent::KeyAltDigit, true, false), Action::Canned);
   EXPECT_EQ(mapInput(InputEvent::KeyOther, true, false), Action::None);
+}
+
+// The T-Deck (J4 #1727): the trackball moves, and Backspace is its Back
+// because the keyboard has no Esc.
+TEST(InputMap, TrackballMovesAndBackspaceGoesBack) {
+  EXPECT_EQ(mapInput(InputEvent::TrackUp, true, false), Action::Prev);
+  EXPECT_EQ(mapInput(InputEvent::TrackDown, true, false), Action::Next);
+  EXPECT_EQ(mapInput(InputEvent::TrackRight, true, false), Action::Next);
+  EXPECT_EQ(mapInput(InputEvent::TrackLeft, true, false), Action::Back);
+  EXPECT_EQ(mapInput(InputEvent::KeyBackspace, true, false), Action::Back);
+}
+
+TEST(InputMap, PocketLockIgnoresTheTrackballAndKeyboard) {
+  for (InputEvent ev : {InputEvent::TrackUp, InputEvent::TrackDown, InputEvent::TrackLeft,
+                        InputEvent::TrackRight, InputEvent::KeyBackspace, InputEvent::KeyEnter}) {
+    EXPECT_EQ(mapInput(ev, false, true), Action::None) << "event " << int(ev);
+  }
 }
 
 TEST(InputMap, ScreenOffAnyInputOnlyWakes) {

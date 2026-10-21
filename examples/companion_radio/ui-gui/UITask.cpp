@@ -16,6 +16,7 @@
 #include <helpers/gui/hw/Gt911Touch.h>
 #include <helpers/gui/hw/GuiPanel.h>
 #include <helpers/gui/hw/LvglPort.h>
+#include <helpers/gui/hw/TDeckInput.h>
 #include <helpers/ui/OffbandSplash.h>   // offbandShortVersion
 #include <helpers/ui/ScreenOff.h>
 
@@ -90,6 +91,18 @@ Chsc6xTouch s_touch(Wire);
 Chsc6xTouch s_touch;
 #endif
 
+// The T-Deck's keyboard is on the same board bus; its trackball is four
+// direction lines, and its press is USR (GPIO0).
+#ifdef TDECK_KEYBOARD
+TDeckKeyboard s_keyboard(Wire);
+#endif
+#ifdef PIN_TRACKBALL_UP
+TDeckTrackball s_trackball;
+  #ifndef TRACKBALL_PULSES_PER_STEP
+    #define TRACKBALL_PULSES_PER_STEP 1
+  #endif
+#endif
+
 // AUX pulls to ground on the V4 TFT. On the R8's Expansion Board V2 it closes
 // to 3.3 V through 10K (schematic V2.03, "LED KEY"), so its env says HIGH.
 #ifndef PIN_USER_BTN_2_ACTIVE
@@ -138,6 +151,14 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #else
   mesh_log_line(MLOG_BOOT, "[gui] touch %s\n", _touch_ok ? "chsc6x ok" : "none (buttons only)");
 #endif
+#endif
+
+#ifdef TDECK_KEYBOARD
+  _kb_ok = s_keyboard.begin();
+  mesh_log_line(MLOG_BOOT, "[gui] keyboard %s\n", _kb_ok ? "ok" : "none");
+#endif
+#ifdef PIN_TRACKBALL_UP
+  s_trackball.begin(PIN_TRACKBALL_UP, PIN_TRACKBALL_DOWN, PIN_TRACKBALL_LEFT, PIN_TRACKBALL_RIGHT);
 #endif
 
   // USR pulls to ground when pressed; AUX does too, except where its env says
@@ -237,6 +258,58 @@ void UITask::pollButtons(uint32_t now) {
            : kind == PressKind::Hold ? InputEvent::AuxHold
                                      : InputEvent::AuxLongHold,
            now);
+  }
+#endif
+}
+
+void UITask::pollKeys(uint32_t now) {
+  (void)now;
+#ifdef TDECK_KEYBOARD
+  // The keyboard holds one key until it's read, so a key typed before the
+  // last one is read can be lost: poll every 10 ms (a one-byte read is about
+  // 0.3 ms of the bus). A few per pass, so a stuck bus can't hold the loop.
+  if (!_kb_ok) {
+    // The keyboard's own chip may still be booting when the GUI starts: look
+    // again every 2 s until it answers.
+    if (now - _kb_polled >= 2000) {
+      _kb_polled = now;
+      if ((_kb_ok = s_keyboard.begin())) mesh_log_line(MLOG_BOOT, "[gui] keyboard ok (late)\n");
+    }
+  } else if (now - _kb_polled >= 10) {
+    _kb_polled = now;
+    for (uint8_t i = 0; i < 4; i++) {
+      const uint8_t b = s_keyboard.read();
+      if (!b) break;
+      const KeyKind k = classifyKey(b);
+      if (k == KeyKind::None) continue;
+      // An open text field takes the key; on a dark screen, Lock or the boot
+      // screen it is ordinary input (it wakes, or Enter opens).
+      if (_screen != ScreenState::Off && !_boot.open() && _shell.typeKey(k, char(b))) {
+        _last_input = now;
+        _next_screen = 0;
+        continue;
+      }
+      handle(k == KeyKind::Enter       ? InputEvent::KeyEnter
+             : k == KeyKind::Backspace ? InputEvent::KeyBackspace
+                                       : InputEvent::KeyOther,
+             now);
+    }
+  }
+#endif
+#ifdef PIN_TRACKBALL_UP
+  static const InputEvent kTrack[TDeckTrackball::kDirs] = {InputEvent::TrackUp, InputEvent::TrackDown,
+                                                           InputEvent::TrackLeft, InputEvent::TrackRight};
+  for (uint8_t d = 0; d < TDeckTrackball::kDirs; d++) {
+    const uint32_t pulses = s_trackball.take(TDeckTrackball::Dir(d));
+    // A ball rolled in a pocket must not light the screen: a dark screen
+    // drops the pulses, and USR or a key wakes it.
+    if (_screen == ScreenState::Off) {
+      _track_carry[d] = 0;
+      continue;
+    }
+    for (uint8_t n = trackballSteps(pulses, TRACKBALL_PULSES_PER_STEP, &_track_carry[d]); n; n--) {
+      handle(kTrack[d], now);
+    }
   }
 #endif
 }
@@ -1616,6 +1689,7 @@ void UITask::loop() {
   const uint32_t t_in = millis();
 #endif
   pollButtons(now);
+  pollKeys(now);
 #ifdef OFFBAND_GUI_PERF
   if (millis() - t_in > s_t_input) s_t_input = millis() - t_in;
 #endif
