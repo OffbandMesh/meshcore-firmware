@@ -25,8 +25,8 @@ constexpr int kEdgePx = 1;          // the margin anything flush right keeps
 // call, 2026-10-19, after a tester asked for more of the node name: "name @ 10 characters."
 //
 // 60 px is 10 characters at the 6 px nominal advance the old 30/5 pairing implies, and it
-// costs ~10 characters off the FIRST line of each message only -- continuation rows start
-// at x=0 and are unaffected.
+// costs ~10 characters off the FIRST line of each message only -- continuation rows clear
+// kContIndentChars below, not the whole tag column.
 //
 // ⚠ THE BODY FACE IS PROPORTIONAL on the badge. bodyFaceFor(kTextMedium) returns Org_01,
 // so a character count alone does NOT bound the pixel width -- a name of wide glyphs can
@@ -40,6 +40,25 @@ constexpr int kTagPx = 60;
 constexpr int kTagChars = 10;       // the owner's figure; the pixel cap above still wins
 constexpr int kGapPx = 2;           // between that tag and its text
 constexpr int kMarkPx = 8;          // my message's status mark, at the right edge
+
+// #1669: how far a channel message's CONTINUATION rows are indented, in characters.
+//
+// #1685 took them from the full tag column (62 px) to the left edge, which a tester
+// confirmed works and then asked to soften: "maybe there is a setting in between that
+// would be better. Can you try indenting maybe 4 character widths on messages that span
+// more than one line?" This is that setting.
+//
+// Characters rather than pixels because that is how it was asked for, and it survives a
+// face change. It is unambiguous here despite the body face being proportional: a space
+// and the face's nominal advance are both 6 px in bodyFace() AND in fixedFace(), so four
+// characters is 24 px either way. The indent is measured with the face in hand rather
+// than baked in, so a future face gets its own 4 characters and not a stale 24.
+constexpr int kContIndentChars = 4;
+
+// The hanging indent in pixels for a given face. f.missing is the face's advance for a
+// glyph it has no entry for, which is also its nominal cell width -- the same number a
+// space measures. Kept as a function so the two call sites cannot disagree.
+inline int contIndentPx(const Face& f) { return kContIndentChars * f.missing; }
 constexpr int kCycleStops = 4;      // SW1's cycle: Messages, Contacts, Nearby, Status
 
 // How many rows of a face fit in `px` of screen.
@@ -321,7 +340,9 @@ inline int layoutThread(const Face& f, const MsgView* msgs, int count, bool chan
     } else if (channel) {
       x = kTagPx + kGapPx + shift;
       width = kScreenPx - kEdgePx - x;
-      rest_x = shift;                                // #1685: the tag column comes back
+      // #1685 reclaimed the tag column; #1669 leaves a 4-character hanging indent on it
+      // so a wrapped message still reads as one block instead of running flush left.
+      rest_x = shift + contIndentPx(f);
       rest_width = kScreenPx - kEdgePx - rest_x;
     } else {
       x = shift;
