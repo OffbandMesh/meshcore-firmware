@@ -1,0 +1,65 @@
+name: Classify changed paths
+description: >
+  Emit docs_only=true when every path changed by this event is documentation
+  (#1707). Requires a checkout with enough depth to see both diff endpoints.
+
+# WHY THIS IS AN ACTION AND NOT INLINE SHELL
+#
+# Two jobs need this answer, and they must agree about the RULE while staying
+# independent about the VALUE. `classify` computes it so `build` can skip;
+# `ci-green` computes it AGAIN so that a wrong or forced `classify` output
+# cannot persuade the gate to accept a skipped build.
+#
+# OffbandMesh/meshcore-client#904 is the reason the second computation exists: a
+# forced classifier output reached their default branch, every job trusted it,
+# and seven heavy checks reported green having built nothing for ~19 hours --
+# real code merged with no CI behind it. A disarmed gate is visually identical
+# to a working one.
+#
+# Two inline copies would defend against that and introduce a worse failure:
+# copies that drift. One definition, two invocations.
+
+outputs:
+  docs_only:
+    description: "true only if the change set is non-empty and entirely docs"
+    value: ${{ steps.run.outputs.docs_only }}
+
+runs:
+  using: composite
+  steps:
+    - name: Diff and classify
+      id: run
+      shell: bash
+      # Context values reach the script as environment variables rather than by
+      # template interpolation into the script body. `${{ }}` is substituted by
+      # the runner BEFORE a shell exists, so interpolating directly would work --
+      # but passing through `env:` is GitHub's recommended form, keeps every
+      # value out of the script text entirely, and settles the question instead
+      # of requiring a reader to know which expansion happens when.
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PUSH_BEFORE: ${{ github.event.before }}
+        PUSH_AFTER: ${{ github.sha }}
+      run: |
+        # An empty list classifies as NOT docs-only (classify_changes.py), so
+        # every case that cannot produce a diff -- workflow_dispatch, a new
+        # branch whose `before` is all zeros, a rev-parse failure -- builds.
+        if [ "$EVENT_NAME" = "pull_request" ]; then
+          # three dots: what this PR changed since the merge base, not whatever
+          # else landed on the base branch meanwhile
+          git diff --name-only "$PR_BASE_SHA...$PR_HEAD_SHA" > changed.txt
+        elif [ "$EVENT_NAME" = "push" ] \
+          && [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ]; then
+          git diff --name-only "$PUSH_BEFORE" "$PUSH_AFTER" > changed.txt
+        else
+          : > changed.txt
+        fi
+        echo "changed paths ($EVENT_NAME):"
+        sed 's/^/  /' changed.txt
+        # python3, not python: the runner image guarantees python3, and this
+        # action deliberately does not depend on a setup-python step so it can
+        # run in jobs that have none (classify, ci-green). config-lint keeps
+        # setup-python for its own pinned version.
+        python3 scripts/classify_changes.py < changed.txt >> "$GITHUB_OUTPUT"
