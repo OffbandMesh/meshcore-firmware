@@ -10,6 +10,10 @@ KeyKind classifyKey(uint8_t b) {
   return KeyKind::None;
 }
 
+int cannedSlotForKey(uint8_t b) {
+  return b >= '1' && b < '1' + kCannedReplies ? int(b - '1') : -1;
+}
+
 uint8_t trackballSteps(uint32_t pulses, uint8_t per_step, uint8_t* carry) {
   if (!carry) return 0;
   if (per_step == 0) per_step = 1;

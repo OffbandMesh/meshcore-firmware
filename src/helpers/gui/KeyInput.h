@@ -24,6 +24,12 @@ enum class KeyKind : uint8_t { None, Char, Enter, Backspace };
 // Alt+C gives 0x0C) is ignored.
 KeyKind classifyKey(uint8_t b);
 
+// The canned replies a digit picks in an open conversation (owner,
+// 2026-10-21: the keyboard never sends Alt, so Alt+digit can't be the
+// shortcut). 1-4 are the four replies; anything else is -1.
+constexpr int kCannedReplies = 4;
+int cannedSlotForKey(uint8_t b);
+
 // The most steps one direction moves per poll, so a hard spin moves focus a
 // few rows rather than racing to the end of a list.
 constexpr uint8_t kTrackballMaxSteps = 3;
