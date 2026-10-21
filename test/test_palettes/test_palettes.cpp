@@ -33,9 +33,9 @@ struct Palette {
   uint16_t popup_bkg, popup_txt;
   uint16_t warning_txt, corp_accent;
   // Only the RC32 blits an asset whose background was flattened in at generation
-  // time (#749). ST7735 has no such asset -- OFFBAND_COLOUR_SPLASH appears zero
-  // times across its four boards -- so that invariant must not be asserted there,
-  // where it could only ever pass vacuously.
+  // time (#749). ST7735 has no such asset -- ST7735Display does not override
+  // colorSplashArt() -- so that invariant must not be asserted there, where it
+  // could only ever pass vacuously.
   bool has_baked_splash;
   uint16_t splash_baked_bkg;
 };
