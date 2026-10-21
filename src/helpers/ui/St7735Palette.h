@@ -18,9 +18,9 @@
 // tightest pairs on this driver, and inverting widens them (see #789's baseline:
 // warning 102.7 -> 157.4, secondary 108.3 -> 129.4).
 //
-// NO BAKED SPLASH ASSET on this driver. OFFBAND_COLOUR_SPLASH occurs zero times
-// across its four boards (#789), so unlike the RC32 there is no asset background
-// to keep in step -- hence no SPLASH_BAKED_BKG here, and test/test_palettes skips
+// NO BAKED SPLASH ASSET on this driver. ST7735Display does not override
+// colorSplashArt() (#789), so unlike the RC32 there is no asset background to
+// keep in step -- hence no SPLASH_BAKED_BKG here, and test/test_palettes skips
 // that invariant for this palette rather than asserting it vacuously.
 //
 // Tests: test/test_palettes. ST7735Display.cpp cannot be compiled natively, which

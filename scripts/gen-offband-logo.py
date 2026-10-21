@@ -54,10 +54,10 @@ SPLASH_PANEL_H = 128
 SPLASH_LOGICAL_W = 128
 SPLASH_LOGICAL_H = 64
 
-# Logical y at which the COLOUR splash draws its first version line -- i.e.
-# SPLASH_LINE_1 inside the OFFBAND_COLOUR_SPLASH branch of
-# examples/companion_radio/ui-new/UITask.cpp. It is 29 rather than the mono
-# arrangement's 35 because #758's 18px line box needs the room (see that branch).
+# Logical y at which the color splash draws its first version line -- i.e.
+# COLOR_L1 in src/helpers/ui/OffbandSplash.cpp. It is 29 rather than the mono
+# arrangement's 35 because #758's 18px line box needs the room (see the layout
+# comment there).
 # The artwork is centred in the band ABOVE this line.
 SPLASH_TEXT_TOP_LOGICAL = 29
 
