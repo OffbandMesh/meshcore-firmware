@@ -54,8 +54,19 @@ public:
   void fillRect(int x, int y, int w, int h) override;
   void drawRect(int x, int y, int w, int h) override;
   void drawXbm(int x, int y, const uint8_t* bits, int w, int h) override;
+  // #867: full-color art, written INTO the sprite -- see the note on the definition.
+  void drawRGB565(int x, int y, const uint16_t* px, int w, int h) override;
   uint16_t getTextWidth(const char* str) override;
   void endFrame() override;
+
+  // The sprite IS the panel -- 160x80 -- while the UI draws on a 128x64 canvas.
+  // The splash positions its art in physical pixels, so it needs both sizes.
+  int physicalWidth() const override;
+  int physicalHeight() const override;
+
+  // #867: this driver's own color splash art. Capability and asset in one place,
+  // so no per-variant build flag can be forgotten.
+  const ColorArt* colorSplashArt() const override;
 
 protected:
   void _resetAndInit();
