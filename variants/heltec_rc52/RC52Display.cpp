@@ -978,9 +978,9 @@ static inline uint16_t blend565(uint16_t fg, uint16_t bg, uint8_t cov) {
 int RC52Display::physicalWidth() const { return RC52_SCREEN_WIDTH; }
 int RC52Display::physicalHeight() const { return RC52_SCREEN_HEIGHT; }
 
-const DisplayDriver::ColourArt* RC52Display::colourSplashArt() const {
+const DisplayDriver::ColorArt* RC52Display::colorSplashArt() const {
 #ifdef OFFBAND_SPLASH_RGB565_W
-  static const ColourArt art{ offband_splash_rgb565,
+  static const ColorArt art{ offband_splash_rgb565,
                               OFFBAND_SPLASH_RGB565_W, OFFBAND_SPLASH_RGB565_H,
                               OFFBAND_SPLASH_RGB565_X, OFFBAND_SPLASH_RGB565_Y };
   return &art;

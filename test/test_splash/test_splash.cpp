@@ -37,23 +37,23 @@ public:
   int rgb_calls = 0;
   std::vector<DrawnText> texts;
   std::vector<DrawnArt> xbms;
-  bool colour_capable;
+  bool color_capable;
   int phys_w, phys_h;
   int cur_x = 0, cur_y = 0;
 
-  RecordingDisplay(bool colour, int pw = 128, int ph = 64)
-      : DisplayDriver(128, 64), colour_capable(colour), phys_w(pw), phys_h(ph) {}
+  RecordingDisplay(bool color, int pw = 128, int ph = 64)
+      : DisplayDriver(128, 64), color_capable(color), phys_w(pw), phys_h(ph) {}
 
   // Logical-geometry ctor, for panels that are not 128x64 (the 72x40 techo card).
   RecordingDisplay(int lw, int lh)
-      : DisplayDriver(lw, lh), colour_capable(false), phys_w(lw), phys_h(lh) {}
+      : DisplayDriver(lw, lh), color_capable(false), phys_w(lw), phys_h(lh) {}
 
   // Capability IS the asset: a driver declares colour art by returning it, so it
   // cannot claim the capability and then have nothing to draw.
   static const uint16_t kPixels[4];
-  const ColourArt* colourSplashArt() const override {
-    static const ColourArt art{kPixels, 2, 2, 0, 0};
-    return colour_capable ? &art : nullptr;
+  const ColorArt* colorSplashArt() const override {
+    static const ColorArt art{kPixels, 2, 2, 0, 0};
+    return color_capable ? &art : nullptr;
   }
   int physicalWidth() const override { return phys_w; }
   int physicalHeight() const override { return phys_h; }
@@ -92,15 +92,15 @@ const offband::SplashInfo kInfo{"1.5.0", "1.16.0", "Aug 18 2026"};
 }  // namespace
 
 TEST(Splash, MonoPanelGetsTheOneBitOffbandArt) {
-  RecordingDisplay d(/*colour=*/false);
+  RecordingDisplay d(/*color=*/false);
   offband::drawSplash(d, kInfo);
   EXPECT_GT(d.xbm_calls, 0) << "a mono panel must still get Offband artwork";
   EXPECT_EQ(d.rgb_calls, 0) << "a mono panel must never be handed colour art";
 }
 
-TEST(Splash, ColourPanelGetsColourArtWithoutAnyPerBoardFlag) {
+TEST(Splash, ColorPanelGetsColorArtWithoutAnyPerBoardFlag) {
   // The whole point: capability comes from the driver. No variant opts in.
-  RecordingDisplay d(/*colour=*/true, 220, 128);
+  RecordingDisplay d(/*color=*/true, 220, 128);
   offband::drawSplash(d, kInfo);
   EXPECT_GT(d.rgb_calls, 0) << "a colour-capable panel must get colour art";
 }
@@ -108,11 +108,11 @@ TEST(Splash, ColourPanelGetsColourArtWithoutAnyPerBoardFlag) {
 TEST(Splash, EveryPanelGetsOffbandBrandingOfSomeKind) {
   // The five-implementations bug in one assertion: no display may end up with no
   // Offband artwork at all.
-  for (bool colour : {false, true}) {
-    RecordingDisplay d(colour);
+  for (bool color : {false, true}) {
+    RecordingDisplay d(color);
     offband::drawSplash(d, kInfo);
     EXPECT_GT(d.xbm_calls + d.rgb_calls, 0)
-        << (colour ? "colour" : "mono") << " panel drew no branding";
+        << (color ? "color" : "mono") << " panel drew no branding";
   }
 }
 

@@ -149,11 +149,11 @@ def test_splash_still_draws_its_first_version_line_where_we_think():
     # #822: the colour/mono choice is no longer a #ifdef -- the component asks the
     # DRIVER whether it has colour art, so a board cannot be missed by forgetting a
     # build flag. The layout constants are therefore plain named constants, and this
-    # guard matches COLOUR_L1 directly. The invariant it protects is unchanged: the
+    # guard matches COLOR_L1 directly. The invariant it protects is unchanged: the
     # generator centres the artwork in the band ABOVE the first version line, so if
     # that line moves and the asset is not regenerated, the two overlap.
-    m = re.search(r"COLOUR_L1\s*=\s*(\d+)", ui)
-    assert m, "COLOUR_L1 was not found in OffbandSplash.cpp"
+    m = re.search(r"COLOR_L1\s*=\s*(\d+)", ui)
+    assert m, "COLOR_L1 was not found in OffbandSplash.cpp"
     assert int(m.group(1)) == gen.SPLASH_TEXT_TOP_LOGICAL, (
         f"colour splash line 1 is {m.group(1)} but the generator assumes "
         f"{gen.SPLASH_TEXT_TOP_LOGICAL}; regenerate the asset")
