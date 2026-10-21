@@ -17,6 +17,23 @@ on:
   workflow_dispatch:
 
 jobs:
+  # #1707: classify the change so a pure-docs edit does not pay for 80 build
+  # legs. This job ONLY reports; it decides nothing on its own. `build` reads
+  # this output to skip, and `ci-green` RECOMPUTES the same answer from the diff
+  # rather than trusting it -- see the comment on ci-green for why.
+  classify:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # the diff needs both endpoints, not just the tip
+
+      - name: Classify the changed paths
+        id: classify
+        uses: ./.github/actions/classify-changes
+
   # #199: build-config invariant check. Seconds, and it covers EVERY env rather
   # than the curated build matrix below -- which is the point. The NimBLE defect
   # recurred four times board-by-board because the affected envs were neither in
@@ -249,6 +266,13 @@ jobs:
       - name: Release notes come from the tagged version's section
         run: python scripts/test_release_notes_section.py
 
+      # #1707: the docs-only allowlist, and the property it rests on -- that no
+      # build input CONSUMES an allowlisted path. This runs in config-lint
+      # because config-lint never skips, so the rule that decides what may skip
+      # is itself always checked.
+      - name: Docs-only classifier and its allowlist safety property
+        run: python scripts/test_classify_changes.py
+
       # #775 (epic #774). Guards the defect class behind #764/#765: an `else if`
       # that matches a CLI key and writes nothing, or a key claimed twice in one
       # chain so the later arm is unreachable. `get radio` returned an empty reply
@@ -364,6 +388,17 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    # #1707: the only job worth skipping. `config-lint` and `native-tests` stay
+    # unconditional -- they are cheap, and config-lint is where the guards for
+    # the docs paths themselves live (the release-notes section test).
+    #
+    # A job-level `if:` is safe here specifically because `ci-green` is the ONLY
+    # required context on firmware-base [verified: branch object,
+    # required_status_checks.contexts == ["ci-green"], enforcement_level
+    # "everyone"]. These 80 legs are not individually required, so they can
+    # simply never start rather than start and short-circuit.
+    needs: classify
+    if: needs.classify.outputs.docs_only != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -577,14 +612,50 @@ jobs:
   # required check blocks the PR with no explanation instead of a red X.
   ci-green:
     runs-on: ubuntu-latest
-    needs: [config-lint, native-tests, build]
+    needs: [classify, config-lint, native-tests, build]
     if: always()
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # this job recomputes the diff; it needs both endpoints
+
+      # #1707: the gate does NOT trust `classify`. It derives docs_only itself
+      # and accepts a skipped `build` only on its own evidence.
+      #
+      # OffbandMesh/meshcore-client#904: a forced classifier output reached their
+      # default branch and every job trusted it. Seven heavy checks reported
+      # green having built nothing, for ~19 hours, and real code merged with no
+      # CI behind it. The lesson is not "do not forget a flag" -- it is that a
+      # gate which reads one upstream value is only as honest as that value, and
+      # a disarmed gate looks exactly like a working one.
+      - name: Recompute the change classification, independently of classify
+        id: recheck
+        uses: ./.github/actions/classify-changes
+
       - name: All required CI jobs green
         run: |
-          echo "config-lint: ${{ needs.config-lint.result }}"
-          echo "native-tests: ${{ needs.native-tests.result }}"
-          echo "build (all matrix legs): ${{ needs.build.result }}"
+          echo "classify said      : ${{ needs.classify.outputs.docs_only }}"
+          echo "this gate recomputed: ${{ steps.recheck.outputs.docs_only }}"
+          echo "config-lint        : ${{ needs.config-lint.result }}"
+          echo "native-tests       : ${{ needs.native-tests.result }}"
+          echo "build              : ${{ needs.build.result }}"
+
+          # These two never skip, so their rule is unchanged.
           test "${{ needs.config-lint.result }}" = "success"
           test "${{ needs.native-tests.result }}" = "success"
-          test "${{ needs.build.result }}" = "success"
+
+          # `build` may be success, or skipped -- but skipped is acceptable ONLY
+          # when THIS job's own recompute says the change was docs-only. Any
+          # other skip (a cancelled run, a failed dependency, a forced upstream
+          # output) still fails the gate, exactly as before this change.
+          if [ "${{ needs.build.result }}" = "success" ]; then
+            echo "build ran and passed"
+          elif [ "${{ needs.build.result }}" = "skipped" ] \
+            && [ "${{ steps.recheck.outputs.docs_only }}" = "true" ]; then
+            echo "build skipped, and this gate independently confirms the change is docs-only"
+          else
+            echo "::error::build is '${{ needs.build.result }}' and this gate's own" \
+                 "classification is docs_only=${{ steps.recheck.outputs.docs_only }}." \
+                 "A skipped build is only accepted on a docs-only change." >&2
+            exit 1
+          fi
