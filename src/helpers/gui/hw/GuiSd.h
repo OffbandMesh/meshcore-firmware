@@ -29,6 +29,9 @@ public:
     _owner = owner;
     _begun = true;
   }
+  // A card has worked in this radio before (GuiPrefs::sd_used): an empty
+  // slot then shows red from boot. Call before the first loop.
+  void remember(bool card_used) { _mon.remember(card_used); }
 
   void loop(uint32_t now_ms, offband::gui::MsgStore& live);
 
@@ -74,6 +77,10 @@ private:
   uint16_t _copy_total = 0;
   uint16_t _copy_done = 0;
   uint32_t _copy_started = 0;
+  // Bench timing (owner, 2026-10-21): the first ask, slow ones, the slowest slice.
+  static constexpr uint32_t kSlowMs = 20;
+  bool _logged_ask = false;
+  uint32_t _slice_max = 0;
   // Changed seqs waiting to be rewritten on the card; a full ring drops the
   // oldest, which only costs a stale delivery mark in the archive.
   static constexpr uint8_t kChangedMax = 16;

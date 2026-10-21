@@ -16,6 +16,10 @@ void SdMonitor::set(SdState s) {
   _revision++;
 }
 
+void SdMonitor::remember(bool card_used) {
+  if (card_used && _state == SdState::NeverSeen) set(SdState::Removed);
+}
+
 SdAction SdMonitor::poll(uint32_t now_ms) {
   if (_unmount_due) return SdAction::Unmount;
   if (!_asked) return SdAction::Mount;   // boot: ask straight away
@@ -23,7 +27,7 @@ SdAction SdMonitor::poll(uint32_t now_ms) {
   return _state == SdState::Working ? SdAction::Probe : SdAction::Mount;
 }
 
-void SdMonitor::mountResult(MountOutcome r, uint32_t now_ms) {
+void SdMonitor::mountResult(MountOutcome r, uint32_t now_ms, uint32_t took_ms) {
   _asked = true;
   switch (r) {
     case MountOutcome::Ok:
@@ -32,9 +36,14 @@ void SdMonitor::mountResult(MountOutcome r, uint32_t now_ms) {
       _next = now_ms + kProbeMs;
       return;
     case MountOutcome::NoCard:
-      // Nothing answers: an empty slot costs little to ask, so no backoff.
-      // A card that was failing and is now gone resets its backoff.
+      // Nothing answers: an empty slot costs little to ask, so no backoff,
+      // unless asking turned out slow, when the interval stretches to keep it
+      // near 1% of the time. A card that was failing and is now gone resets
+      // its backoff.
       _delay = kRetryMs;
+      if (took_ms > kRetryMs / 100) {
+        _delay = took_ms >= kBackoffMaxMs / 100 ? kBackoffMaxMs : took_ms * 100;
+      }
       if (_state == SdState::Failed) set(SdState::Removed);
       _next = now_ms + _delay;
       return;

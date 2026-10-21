@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 
+#include <Arduino.h>
 #include <MeshLog.h>
 
 using namespace offband::gui;
@@ -95,19 +96,32 @@ void GuiSd::loop(uint32_t now_ms, MsgStore& live) {
   if (!_begun) return;   // no owner tag yet: an archive opened now would be nobody's
   switch (_mon.poll(now_ms)) {
     case SdAction::Mount: {
+      const uint32_t t0 = millis();
       const MountOutcome r = _card.mount();
+      const uint32_t took = millis() - t0;
+      // Bench (owner, 2026-10-21: the poll mustn't degrade performance): the
+      // first ask and any slow one go to the log.
+      if (!_logged_ask || took > kSlowMs) {
+        mesh_log_line(MLOG_BOOT, "[sd] ask: %d in %u ms\n", int(r), unsigned(took));
+        _logged_ask = true;
+      }
       if (r == MountOutcome::Ok && !openArchive(live)) {
         _card.unmount();
-        _mon.mountResult(MountOutcome::Unreadable, now_ms);
+        _mon.mountResult(MountOutcome::Unreadable, now_ms, took);
         return;
       }
-      _mon.mountResult(r, now_ms);
+      _mon.mountResult(r, now_ms, took);
       if (r == MountOutcome::Ok) _copy_started = now_ms;
       return;
     }
-    case SdAction::Probe:
-      _mon.probeResult(_card.probe(), now_ms);
+    case SdAction::Probe: {
+      const uint32_t t0 = millis();
+      const bool ok = _card.probe();
+      const uint32_t took = millis() - t0;
+      if (took > kSlowMs) mesh_log_line(MLOG_BOOT, "[sd] slow probe: %u ms\n", unsigned(took));
+      _mon.probeResult(ok, now_ms);
       return;
+    }
     case SdAction::Unmount:
       closeArchive();
       _card.unmount();
@@ -119,7 +133,10 @@ void GuiSd::loop(uint32_t now_ms, MsgStore& live) {
   if (!_mon.working() || !_arch.ready()) return;
 
   bool ok = true;
+  const uint32_t t0 = millis();
   const size_t left = _arch.catchUp(live, kSlice, &ok);
+  const uint32_t took = millis() - t0;
+  if (_copy_total && took > _slice_max) _slice_max = took;   // reported when the copy ends
   if (!ok) {
     cardFailed(now_ms);
     return;
@@ -131,8 +148,9 @@ void GuiSd::loop(uint32_t now_ms, MsgStore& live) {
       _rev++;
     }
     if (left == 0) {
-      mesh_log_line(MLOG_BOOT, "[sd] caught up: %u in %u ms\n", unsigned(_copy_total),
-                    unsigned(now_ms - _copy_started));
+      mesh_log_line(MLOG_BOOT, "[sd] caught up: %u in %u ms, slowest slice %u ms\n", unsigned(_copy_total),
+                    unsigned(now_ms - _copy_started), unsigned(_slice_max));
+      _slice_max = 0;
       _copy_total = 0;
       _copy_done = 0;
       _rev++;
