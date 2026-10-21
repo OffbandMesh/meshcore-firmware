@@ -377,6 +377,23 @@ jobs:
           name: capability-claims
           path: ${{ runner.temp }}/capability-claims.json
           if-no-files-found: warn
+
+      # #812 / #1123. A file-static in a display driver that shares a name with a
+      # DisplayDriver virtual: a member function calling it binds to the empty base
+      # method instead. It compiles clean and no compiler flag catches it -- that is
+      # how ST7735 boot rotation was discarded on 27 envs for two months. Scans the
+      # shared drivers AND variant-local ones under variants/*/, where RC52Display
+      # lives.
+      #
+      # ADVISORY, following the #775/#776 precedent: making a new guard a blocking
+      # part of ci-green is an owner decision.
+      - name: Display-virtual shadowing guard self-test (advisory)
+        continue-on-error: true
+        run: python scripts/test_check_display_virtuals.py
+
+      - name: No file-static shadows a DisplayDriver virtual (advisory)
+        continue-on-error: true
+        run: python scripts/check_display_virtuals.py
   # #712: the googletest suites existed but NOTHING ran them in CI, so every invariant they
   # encode was unenforced on PRs. That is how #711 (a regression of #450) reached the field:
   # the frame-size ceiling had no mechanical guard, only a comment.
