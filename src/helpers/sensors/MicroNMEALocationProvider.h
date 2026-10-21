@@ -129,6 +129,21 @@ public :
         if (_pin_reset != -1) {
             digitalWrite(_pin_reset, GPS_RESET_ACTIVE);
         }
+        // #1556: forget the fix along with the power.
+        //
+        // Without this the parser keeps its last fix indefinitely, so isValid() -- and
+        // therefore gpsHasFix() -- reports a fix for a receiver that has been dark for
+        // hours. Harmless while turning GPS off was a one-off user action; a DUTY CYCLE
+        // makes it constant, and #1553's harness caught it live: 8 ms after power-up it
+        // logged "fix ... sats=0", the pre-power-down fix handed straight back. Anything
+        // that treats the flag as evidence of a CURRENT fix is wrong for the whole sleep,
+        // including a wake that tries to decide whether it has acquired yet.
+        //
+        // nmea.clear() is the same primitive syncTime() already uses. The last known
+        // POSITION is not lost: EnvironmentSensorManager keeps node_lat/node_lon as its
+        // own members, persisted in prefs, and adverts read those rather than the parser.
+        nmea.clear();
+        time_valid = 0;
         release();
     }
 

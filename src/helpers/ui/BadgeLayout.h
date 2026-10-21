@@ -9,6 +9,7 @@
 // leaves it.
 
 #include <stddef.h>
+#include <helpers/GpsPowerMode.h>   // #1557: GpsMode / GpsActivity for the GPS row
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -192,6 +193,75 @@ inline void formatGpsState(bool on, bool module, bool fix, long sats, char* out,
   else if (fix) snprintf(out, n, "fix");
   else if (!module) snprintf(out, n, "No GPS Module");
   else snprintf(out, n, "no fix");
+}
+
+// #1557: a duration in the fewest characters that still reads as a duration, for the GPS
+// row's "next try in ..." value. 21 columns is the whole budget for label and value
+// together, so "4h" earns its place over "4 hours".
+//
+// Rounds UP, deliberately: a row that says "1m" when 70 s remain, then still says "1m"
+// ten seconds later, reads as stuck. Rounding up means the number only ever decreases.
+inline void formatShortDuration(uint32_t secs, char* out, size_t n) {
+  if (secs == 0) snprintf(out, n, "now");
+  else if (secs < 60) snprintf(out, n, "%us", (unsigned)secs);
+  else if (secs < 3600) snprintf(out, n, "%um", (unsigned)((secs + 59) / 60));
+  else snprintf(out, n, "%uh", (unsigned)((secs + 3599) / 3600));
+}
+
+// #1557: the GPS row. The mode is the LABEL, so a person reads what it is set to; what it
+// is doing right now is the VALUE on the right.
+//
+// Power save needs its own words for "between fixes" and "has given up for now" -- #1553
+// measured that the badge cannot fix indoors, and a conference attendee will sit in the
+// backed-off state for hours. A row that said only "Power save" there would read as a
+// fault.
+inline void formatGpsModeLabel(offband::GpsMode m, char* out, size_t n) {
+  snprintf(out, n, "GPS: %s", offband::gpsModeName(m));
+}
+
+// The row's VALUE is kept short on purpose: "GPS: Power save" is already 15 of the 21
+// columns, so the value gets 4. A test pins that -- the first draft read
+// "GPS: Power save  no sky, 8h" at 27 columns and would have clipped on the badge.
+//
+// So the value says only which of the four things is happening, and the sentence that
+// explains a long wait goes on its own body line, where there is room for words.
+inline void formatGpsModeValue(offband::GpsActivity a, uint32_t wait_remaining_s,
+                               char* out, size_t n) {
+  switch (a) {
+    case offband::GpsActivity::Off:       snprintf(out, n, "off"); return;
+    case offband::GpsActivity::On:        snprintf(out, n, "on"); return;
+    case offband::GpsActivity::Searching: snprintf(out, n, "seek"); return;
+    case offband::GpsActivity::Sleeping:
+    case offband::GpsActivity::BackedOff:
+      formatShortDuration(wait_remaining_s, out, n);
+      return;
+  }
+  snprintf(out, n, "");
+}
+
+// The body line for Power save, which is where "it has given up for now" gets said in
+// words. Empty while searching or outside Power save -- there is nothing to explain then,
+// and the body's other lines (position, altitude, time) want the space.
+//
+// Backed off is the state a conference attendee indoors will sit in for hours (#1553
+// measured that the badge cannot fix inside), so it has to read as a condition rather than
+// as a fault.
+inline void formatGpsPowerSaveLine(offband::GpsActivity a, uint32_t wait_remaining_s,
+                                   char* out, size_t n) {
+  char when[8];
+  switch (a) {
+    case offband::GpsActivity::Sleeping:
+      formatShortDuration(wait_remaining_s, when, sizeof(when));
+      snprintf(out, n, " next try in %s", when);
+      return;
+    case offband::GpsActivity::BackedOff:
+      formatShortDuration(wait_remaining_s, when, sizeof(when));
+      snprintf(out, n, " no sky; next try %s", when);
+      return;
+    default:
+      if (n > 0) out[0] = '\0';
+      return;
+  }
 }
 
 // "17:07:42": the time of day, UTC, from UTC seconds.

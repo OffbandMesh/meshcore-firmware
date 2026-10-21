@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint> // For uint8_t, uint32_t
 #include <helpers/ConfigSerializer.h>
+#include <helpers/GpsPowerMode.h>  // #1555: GpsMode + kGpsModeUnset
 #ifdef OFFBAND_GUI
   #include <helpers/gui/GuiPrefs.h>
 #endif
@@ -57,6 +58,24 @@ public:
   uint8_t  vibe_quiet = 0;
   uint8_t  gps_enabled = 0;      // GPS enabled flag (0=disabled, 1=enabled)
   uint32_t gps_interval = 0;     // GPS read interval in seconds
+  // #1555: HOW GPS runs while it is enabled -- On or Power save. **Not whether it is on;
+  // `gps_enabled` above still decides that, with its meaning unchanged, so every existing
+  // reader and writer of it stays correct with no translation.**
+  //
+  // Resolve the two together with offband::gpsModeFromPrefs(gps_mode, gps_enabled); never
+  // read this byte on its own. `kGpsModeUnset` (0xFF) is what a prefs file written before
+  // this existed reads as, and it means On -- what the firmware did before Power save.
+  //
+  // Keeping the bool in charge of on/off is deliberate: a writer that only knows the bool
+  // (the app's toggle, the CLI, ui-tiny) leaves this byte alone, so toggling GPS off and
+  // back on returns the badge to Power save instead of silently costing it the saving.
+  uint8_t  gps_mode = offband::kGpsModeUnset;
+  // The duty cycle, kept separate from gps_interval ON PURPOSE. gps_interval is a
+  // reporting cadence (gps_update_interval_sec in the sensor manager); this is how long
+  // Power save sleeps between acquisition attempts. Conflating them would make a
+  // reporting-rate change silently alter power behaviour. 0 means "use the compiled
+  // default", so an older file lands on it rather than on a zero-length sleep.
+  uint32_t gps_ps_interval_s = 0;
   uint8_t autoadd_config = 0;    // bitmask for auto-add contacts config
   uint8_t rx_boosted_gain = 0; // SX126x RX boosted gain mode (0=power saving, 1=boosted)
   uint8_t _client_repeat = 0;  // DEPRECATED -> use repeat.disable_fwd
@@ -102,6 +121,10 @@ private:
       def("en", _parent->gps_enabled); // boolean
       def("int", _parent->gps_interval);   // interval in seconds
       def("adv_loc", _parent->advert_loc_policy);
+      // #1555: additive keys. A file without them leaves the members at their defaults,
+      // which both mean "nothing chosen" -- so an upgrade changes nothing.
+      def("mode", _parent->gps_mode);           // offband::GpsMode, 0xFF = unset
+      def("ps_int", _parent->gps_ps_interval_s); // Power-save sleep, seconds; 0 = default
     }
   public:
     GPSPrefs(NodePrefs* parent) : _parent(parent) { }

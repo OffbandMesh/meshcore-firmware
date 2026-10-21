@@ -4489,6 +4489,80 @@ CmdResult MyMesh::cmdSetChannel(uint8_t idx, const char* name, const uint8_t sec
   return CmdResult::Ok;
 }
 
+#if defined(OFFBAND_GPS_POWER_SAVE)
+// #1556: Power save's duty cycle.
+//
+// The rules are in helpers/GpsPowerMode.h and host-tested; this is only the part that
+// touches the sensor manager. GPS is driven through setSettingValue("gps", ...), the lever
+// the app and the CLI already use, so there is one way GPS gets switched.
+//
+// A board with no mode stored resolves to On or Off, never Power save, so this returns
+// early on it and its behaviour is exactly what it is today.
+void MyMesh::gpsPowerLoop() {
+  const offband::GpsMode mode = gpsMode();
+  const uint32_t gen = _gps_mode_gen;
+
+  // Re-arm on a mode change OR on a bump of the generation. The generation is what makes
+  // re-selecting the mode already in effect a real "try now" (#1557): a check for a
+  // changed mode alone would make that gesture a silent no-op, and someone looking at a
+  // four-hour wait would have no way out but a reboot.
+  if (offband::gpsShouldRearm(_gps_primed, _gps_seen_mode, _gps_seen_gen, mode, gen)) {
+    _gps_primed = true;
+    _gps_seen_mode = mode;
+    _gps_seen_gen = gen;
+    _gps_applied = -1;   // unknown: the first tick applies unconditionally
+    _gps_wait_ms = 0;
+    _gps_machine.reset(offband::gpsConfigFromPrefs(_prefs.gps_ps_interval_s), mode, millis());
+  }
+
+  if (mode != offband::GpsMode::PowerSave) {
+    _gps_activity = mode == offband::GpsMode::Off ? offband::GpsActivity::Off
+                                                  : offband::GpsActivity::On;
+    _gps_wait_ms = 0;
+    return;
+  }
+
+  // ONE snapshot, for both the decision and the log. Reading the fix inside tick() and the
+  // satellite count afterwards would let them disagree, and the log is the only view of
+  // this a bench ever gets.
+  const offband::GpsSnapshot snap = sensors.gpsSnapshot();
+  const offband::GpsPowerAction a = _gps_machine.tick(millis(), snap.fix);
+
+  _gps_activity = a.activity;
+  if (a.next_wait_ms > 0) {
+    _gps_wait_ms = a.next_wait_ms;
+    _gps_wait_until = millis() + a.next_wait_ms;
+  } else if (a.activity == offband::GpsActivity::Searching) {
+    _gps_wait_ms = 0;
+  }
+
+  const int8_t want = a.gps_on ? 1 : 0;
+  if (want != _gps_applied) {
+    _gps_applied = want;
+    sensors.setSettingValue("gps", a.gps_on ? "1" : "0");
+  } else if (snap.active != (want != 0)) {
+    // The screen reads this machine's view, so if the hardware has drifted from it the
+    // screen is lying -- showing "next try 4h" while the receiver burns 70 mA, or the
+    // reverse. setSettingValue("gps", ...) returns true unconditionally and writes the
+    // enable pin synchronously, so this is not reachable today; review was right that
+    // nothing CONFIRMS it, and an unreachable fault that is silent stays unreachable
+    // only until it isn't. `snap.active` is the hardware's own answer, so say so, rate
+    // limited to once a minute because this runs every loop.
+    const uint32_t now = millis();
+    if (_gps_mismatch_ms == 0 || now - _gps_mismatch_ms > 60000) {
+      _gps_mismatch_ms = now;
+      mesh_log_line(MLOG_ERROR, "[gps] state drift: want=%d hardware=%d\n", (int)want,
+                    snap.active ? 1 : 0);
+    }
+  }
+  if (a.attempt_started || a.fix_acquired || a.attempt_failed) {
+    mesh_log_line(MLOG_DEBUG, "[gps] %s fails=%u wait_s=%u sats=%d\n",
+                  a.fix_acquired ? "fix" : (a.attempt_failed ? "nofix" : "searching"),
+                  (unsigned)a.failures, (unsigned)(a.next_wait_ms / 1000U), (int)snap.sats);
+  }
+}
+#endif
+
 // #1525: the one writer of a channel's tune.
 bool MyMesh::setChannelTune(uint8_t idx, uint8_t stored) {
   ChannelDetails ch;

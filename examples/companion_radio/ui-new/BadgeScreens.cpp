@@ -2228,6 +2228,17 @@ bool RtttlEditScreen::handleInput(char c) {
 // ---- GPS (#1235) -----------------------------------------------------------------------
 
 void GpsScreen::summary(UITask* task, char* out, size_t n) {
+  // #1557: a sleeping badge is not an off badge, and formatGpsState() cannot tell them
+  // apart -- it would call both "off". Under Power save the receiver is dark most of the
+  // time, so "off" there would be wrong far more often than right. Say "save <when>"
+  // instead, which also feeds the Settings GPS row.
+  const offband::GpsActivity act = the_mesh.gpsActivity();
+  if (act == offband::GpsActivity::Sleeping || act == offband::GpsActivity::BackedOff) {
+    char when[8];
+    badgeui::formatShortDuration(the_mesh.gpsWaitRemainingS(), when, sizeof(when));
+    snprintf(out, n, "save %s", when);
+    return;
+  }
   LocationProvider* gps = liveGps(task);
   const bool fix = gps != nullptr && gps->isValid();
   formatGpsState(gps != nullptr, gpsModuleFound(), fix, fix ? gps->satellitesCount() : 0, out, n);
@@ -2251,7 +2262,17 @@ void GpsScreen::begin() {
 
 void GpsScreen::act() {
   if (_sel == Power) {
-    _task->toggleGPS();
+    // #1557: cycle the mode, and ALWAYS write it -- even when the cycle lands back on the
+    // mode already in effect, and even when nothing about it has changed.
+    //
+    // This is the one place the "only save on a change" pattern from #1525's tone picker
+    // must NOT be copied. setGpsMode() bumps the generation counter, which re-arms the
+    // power machine: clearing its failure count and attempting at once. That is the only
+    // way out of a four-hour backoff for someone standing outside wondering why their
+    // badge has given up, and it is why the counter exists at all.
+    the_mesh.setGpsMode(offband::nextGpsMode(the_mesh.gpsMode(),
+                                             MyMesh::gpsPowerSaveAvailable()));
+    _task->notify(UIEventType::ack);
     return;
   }
   // Checked again: the fix can go between a render and the key.
@@ -2298,6 +2319,15 @@ int GpsScreen::render(DisplayDriver& d) {
     line(d, kBody, 3, buf);
   }
 
+  // #1557: in Power save, say in words why the receiver is dark. The row's value has four
+  // columns beside "GPS: Power save", which is enough for "4h" and not enough to explain
+  // it -- and a badge indoors sits in the backed-off state for hours (#1553 measured that
+  // it cannot fix inside), where an unexplained dark receiver reads as a fault.
+  char ps_line[24];
+  badgeui::formatGpsPowerSaveLine(the_mesh.gpsActivity(), the_mesh.gpsWaitRemainingS(),
+                                  ps_line, sizeof(ps_line));
+  if (ps_line[0] != 0) line(d, kBody, 2, ps_line);
+
   // The rows sit at the foot.
   const int zone = pending();
   _use_shown = offband::tz::isSet(zone);
@@ -2307,7 +2337,14 @@ int GpsScreen::render(DisplayDriver& d) {
   } else {
     _sel = Power;   // the fix went, or the zone is in use now
   }
-  listRow(d, kListRows, "GPS", _task->getGPSState() ? "on" : "off", _sel == Power);
+  // #1557: the row names the MODE and its value says what that mode is doing. The old row
+  // read "GPS | on/off", which could not distinguish Off from asleep between fixes -- and
+  // under Power save a badge is asleep most of the time.
+  char mode_label[24], mode_value[12];
+  badgeui::formatGpsModeLabel(the_mesh.gpsMode(), mode_label, sizeof(mode_label));
+  badgeui::formatGpsModeValue(the_mesh.gpsActivity(), the_mesh.gpsWaitRemainingS(),
+                              mode_value, sizeof(mode_value));
+  listRow(d, kListRows, mode_label, mode_value, _sel == Power);
   return 1000;
 }
 

@@ -7,6 +7,12 @@
 // constructor(101) instance; see helpers/BootBeacon.h for why it exists.
 #define OFFBAND_BEACON_DEFINE_CTOR
 #include "helpers/BootBeacon.h"
+#if ENV_INCLUDE_GPS == 1
+#include <helpers/GpsPowerMode.h>   // #1554/#1556: Off/On/Power-save with backoff
+#endif
+#if defined(OFFBAND_GPS_DUTY_PROBE)
+#include <helpers/GpsDutyProbe.h>   // #1553 (G0): the GPS power measurement harness
+#endif
 #if defined(OFFBAND_NAME_FROM_BLE_MAC) && defined(OFFBAND_NAME_MAC_VERIFY)
 // #1598: the one-off hardware check that FICR and the advertised address agree. Gated on
 // its own flag as well as the feature's, so it ships only on a diag build.
@@ -1106,6 +1112,77 @@ void loop() {
 #endif
   interface_manager.loop();
   sensors.loop();
+
+#if defined(OFFBAND_GPS_POWER_SAVE) && ENV_INCLUDE_GPS == 1 &&     !defined(OFFBAND_GPS_DUTY_PROBE)
+  // #1556: Power save's duty cycle. It lives on MyMesh rather than as a static here, so
+  // the GPS screen can say what it is doing (#1557). Excluded on the #1553 probe build,
+  // which drives GPS on its own schedule.
+  the_mesh.gpsPowerLoop();
+#endif
+
+#if defined(OFFBAND_GPS_DUTY_PROBE) && ENV_INCLUDE_GPS == 1
+  // #1553 (G0): the GPS power measurement harness. Flag-gated like OFFBAND_PAD_BEACON, so
+  // no shipping env carries it. The sequence lives in helpers/GpsDutyProbe.h and is unit
+  // tested; everything here is the part that touches hardware and the log.
+  //
+  // It drives GPS through setSettingValue("gps", ...), the same lever the app and the CLI
+  // use, rather than reaching into the manager -- so what it measures is what the firmware
+  // actually does.
+  {
+    static offband::GpsDutyProbe s_probe;
+    static bool s_gps_on = true;
+    static bool s_uart_up = true;
+    static long s_epoch_at_power_down = 0;
+
+    // A fix the module is merely still HOLDING from before the power cut is not an
+    // acquisition. The provider never invalidates its cached fix, so this has to be
+    // decided on the GPS epoch rather than on gpsHasFix() -- see gpsProbeFixIsNew(). The
+    // first run of this probe reported an 8 ms time-to-fix with zero satellites because
+    // this check was not here.
+    const offband::GpsSnapshot snap = sensors.gpsSnapshot();
+    const bool fresh_fix = offband::gpsProbeFixIsNew(snap.fix, snap.sats, snap.epoch,
+                                                     s_epoch_at_power_down);
+
+    const offband::GpsProbeAction a = s_probe.tick(millis(), fresh_fix);
+
+    if (a.gps_on != s_gps_on) {
+      s_gps_on = a.gps_on;
+      // Remember where the clock stood as power is cut; that is what the next fix has to
+      // beat to count as new.
+      if (!a.gps_on) s_epoch_at_power_down = snap.epoch;
+      sensors.setSettingValue("gps", a.gps_on ? "1" : "0");
+    }
+    if (a.uart_up != s_uart_up) {
+      s_uart_up = a.uart_up;
+      if (a.uart_up) {
+        #ifdef GPS_BAUD_RATE
+        Serial1.begin(GPS_BAUD_RATE);
+        #else
+        Serial1.begin(9600);
+        #endif
+      } else {
+        // The #1556 candidate, measured before it is proposed. Only ever reached with GPS
+        // already powered down, which the probe's tests pin.
+        Serial1.end();
+      }
+    }
+
+    if (a.result != offband::GpsProbeResult::None) {
+      mesh_log_line(MLOG_BOOT, "[gpsprobe] %s phase=%s off_s=%u ms=%u sats=%d\n",
+                    a.result == offband::GpsProbeResult::Fix ? "fix" : "nofix",
+                    offband::gpsProbePhaseName(a.result_phase),
+                    (unsigned)a.off_s, (unsigned)a.elapsed_ms, (int)snap.sats);
+    }
+    if (a.phase_start) {
+      // One line per phase, and per sweep leg's power-down and power-up. This is what the
+      // rig's current trace is joined against, so it carries the wall clock too.
+      mesh_log_line(MLOG_BOOT,
+                    "[gpsprobe] mark phase=%s gps=%d uart=%d leg_off_s=%u at_ms=%u\n",
+                    offband::gpsProbePhaseName(a.phase), a.gps_on ? 1 : 0,
+                    a.uart_up ? 1 : 0, (unsigned)s_probe.legOffS(), (unsigned)millis());
+    }
+  }
+#endif
 
 #if defined(OFFBAND_OBSERVER) && ENV_INCLUDE_GPS == 1
   // #69 Task A: push GPS time-state to observer ~1 Hz so the SNTP arbiter
