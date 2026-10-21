@@ -8,7 +8,11 @@
 #include <helpers/AutoDiscoverRTCClock.h>
 #include <helpers/SensorManager.h>
 #ifdef DISPLAY_CLASS
-  #include <helpers/ui/ST7789LCDDisplay.h>
+  #ifdef OFFBAND_GUI
+    #include <helpers/gui/hw/GuiPanel.h>   // Epic J #1434: LVGL GUI panel
+  #else
+    #include <helpers/ui/ST7789LCDDisplay.h>
+  #endif
   #include <helpers/ui/MomentaryButton.h>
 #endif
 #include "helpers/sensors/EnvironmentSensorManager.h"
