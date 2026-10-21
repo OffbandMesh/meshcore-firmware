@@ -610,9 +610,9 @@ int NV3001BDisplay::physicalHeight() const { return NV3001B_SCREEN_HEIGHT; }
 // #822: the RC32's colour splash. Placement constants are emitted by
 // scripts/gen-offband-logo.py alongside the pixels, so artwork and position cannot
 // drift apart.
-const DisplayDriver::ColourArt* NV3001BDisplay::colourSplashArt() const {
+const DisplayDriver::ColorArt* NV3001BDisplay::colorSplashArt() const {
 #ifdef OFFBAND_SPLASH_RGB565_W
-  static const ColourArt art{ offband_splash_rgb565,
+  static const ColorArt art{ offband_splash_rgb565,
                               OFFBAND_SPLASH_RGB565_W, OFFBAND_SPLASH_RGB565_H,
                               OFFBAND_SPLASH_RGB565_X, OFFBAND_SPLASH_RGB565_Y };
   return &art;

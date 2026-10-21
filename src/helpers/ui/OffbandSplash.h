@@ -16,7 +16,7 @@
 //   nothing failed. Boards were missed that way twice.
 //
 //   So: one component, and the artwork decision belongs to the DRIVER
-//   (DisplayDriver::colourSplashArt), never to a build flag someone has to remember.
+//   (DisplayDriver::colorSplashArt), never to a build flag someone has to remember.
 //
 // MeshCore attribution is preserved as TEXT (#153, MIT obligation). Dropping their
 // artwork is a branding change; dropping the credit would be a licence problem.
