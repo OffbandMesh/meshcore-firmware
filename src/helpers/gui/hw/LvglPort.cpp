@@ -131,7 +131,7 @@ bool lvglBegin(GuiPanel& panel) {
 }
 
 static lv_indev_drv_t s_indev_drv;
-static Chsc6xTouch* s_touch = nullptr;
+static TouchSource* s_touch = nullptr;
 static TouchMapping s_mapping = {};
 static lv_point_t s_last = {0, 0};
 static bool s_pressed = false;
@@ -164,7 +164,7 @@ static void touchReadCb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
   data->state = s_pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
 }
 
-void lvglAttachTouch(Chsc6xTouch& touch, const TouchMapping& mapping) {
+void lvglAttachTouch(TouchSource& touch, const TouchMapping& mapping) {
   s_touch = &touch;
   s_mapping = mapping;
   lv_indev_drv_init(&s_indev_drv);
