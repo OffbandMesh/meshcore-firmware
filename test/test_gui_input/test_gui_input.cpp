@@ -171,6 +171,25 @@ TEST(TDeckKeyboard, NoKeyControlCodesAndHighBytesAreIgnored) {
   }
 }
 
+TEST(TDeckKeyboard, TheBacklightIsOnOnlyWhileTheScreenIs) {
+  EXPECT_EQ(kKeyboardBacklightOn, keyboardBacklightFor(true));
+  EXPECT_EQ(0, keyboardBacklightFor(false));
+}
+
+// The keyboard firmware's 0x01 falls through into 0x02 and reads a second
+// byte: the brightness goes twice, or Alt+B's default is set from whatever
+// comes next on the bus.
+TEST(TDeckKeyboard, TheBacklightCommandCarriesTheBrightnessTwice) {
+  uint8_t cmd[kKeyboardBacklightCmdLen] = {};
+  keyboardBacklightCommand(127, cmd);
+  EXPECT_EQ(0x01, cmd[0]);
+  EXPECT_EQ(127, cmd[1]);
+  EXPECT_EQ(127, cmd[2]);
+  keyboardBacklightCommand(0, cmd);
+  EXPECT_EQ(0, cmd[1]);
+  EXPECT_EQ(0, cmd[2]);
+}
+
 TEST(TDeckKeyboard, DigitsOneToFourPickTheCannedReplies) {
   EXPECT_EQ(0, cannedSlotForKey('1'));
   EXPECT_EQ(3, cannedSlotForKey('4'));

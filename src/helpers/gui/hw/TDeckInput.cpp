@@ -17,6 +17,15 @@ uint8_t TDeckKeyboard::read() {
   return b < 0 ? 0 : uint8_t(b);
 }
 
+bool TDeckKeyboard::setBacklight(uint8_t duty) {
+  if (!_present) return false;
+  uint8_t cmd[offband::gui::kKeyboardBacklightCmdLen];
+  offband::gui::keyboardBacklightCommand(duty, cmd);
+  _wire.beginTransmission(offband::gui::kTDeckKeyboardAddr);
+  _wire.write(cmd, sizeof cmd);
+  return _wire.endTransmission() == 0;
+}
+
 // One counter per direction, added to and taken atomically, so the loop
 // takes a count without masking interrupts.
 static volatile uint32_t s_pulses[TDeckTrackball::kDirs] = {};

@@ -10,6 +10,14 @@ KeyKind classifyKey(uint8_t b) {
   return KeyKind::None;
 }
 
+uint8_t keyboardBacklightFor(bool screen_on) { return screen_on ? kKeyboardBacklightOn : 0; }
+
+void keyboardBacklightCommand(uint8_t duty, uint8_t out[kKeyboardBacklightCmdLen]) {
+  out[0] = 0x01;
+  out[1] = duty;
+  out[2] = duty;
+}
+
 int cannedSlotForKey(uint8_t b) {
   return b >= '1' && b < '1' + kCannedReplies ? int(b - '1') : -1;
 }
