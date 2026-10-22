@@ -217,6 +217,7 @@ public:
   // A contact's conversation, made on first use (Nodes DM, #1533); -1 if the
   // thread table is full.
   int guiThreadForContact(const ContactInfo& contact) { return guiThreadFor(contact); }
+  int guiThreadForChannelSlot(uint8_t idx) { return guiThreadForChannel(idx); }   // Epic R
   // The store, for the GUI's own small files (its node passwords, #1533).
   DataStore* guiDataStore() { return _store; }
 #endif

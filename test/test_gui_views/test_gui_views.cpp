@@ -6,6 +6,7 @@
 
 #include <string.h>
 
+#include <algorithm>
 #include <string>
 
 #include "helpers/TimeZones.h"
@@ -724,6 +725,39 @@ TEST(Compose, SymbolPagesLayOut) {
   bool back = false;
   for (size_t i = 0; i < n2; i++) back = back || strcmp(k[i].label, "?123") == 0;
   EXPECT_TRUE(back);   // the second page leads back to the first
+}
+
+// Epic R (#1743), mockup 6: a channel key's keypad types hex and nothing
+// else, and nothing on it switches to a page that could.
+TEST(Compose, TheHexKeypadTypesOnlyHex) {
+  KeyRect k[40];
+  for (int16_t w : {int16_t(240), int16_t(272)}) {
+    const size_t n = pageLayout(KeyPage::Hex, w, 100, k, 40);
+    ASSERT_EQ(18u, n);   // 16 digits, Backspace, the confirm key
+    std::string typed;
+    bool back = false, send = false;
+    for (size_t i = 0; i < n; i++) {
+      EXPECT_GE(k[i].x, 0) << k[i].label;
+      EXPECT_LE(k[i].x + k[i].w, w) << k[i].label;
+      if (typesLabel(k[i].label)) typed += k[i].label;
+      back = back || strcmp(k[i].label, "⌫") == 0;
+      send = send || strcmp(k[i].label, "Send") == 0;
+      EXPECT_NE(0, strcmp(k[i].label, "?123"));
+      EXPECT_NE(0, strcmp(k[i].label, "ABC"));
+    }
+    EXPECT_EQ("1234567890abcdef", typed);
+    EXPECT_TRUE(back);
+    EXPECT_TRUE(send);
+  }
+}
+
+// It keeps the keyboard's height, so the field above it doesn't move.
+TEST(Compose, TheHexKeypadSpansTheKeyboardsRows) {
+  KeyRect k[40];
+  const size_t n = pageLayout(KeyPage::Hex, 240, 100, k, 40);
+  int16_t bottom = 0;
+  for (size_t i = 0; i < n; i++) bottom = std::max<int16_t>(bottom, int16_t(k[i].y + k[i].h));
+  EXPECT_EQ(100 + keyboardHeight(kKeyH), bottom);
 }
 
 TEST(Compose, KeysThatTypeTheirLabel) {

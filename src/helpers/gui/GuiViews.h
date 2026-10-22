@@ -201,7 +201,9 @@ private:
 
 // Keyboard pages: ?123 -> Symbols, =\< -> Symbols2, ABC -> Letters. After a
 // symbol and then a space, it returns to Letters.
-enum class KeyPage : uint8_t { Letters, Symbols, Symbols2 };
+// Hex is its own page, never reached by switching: a channel key's keypad
+// (Epic R #1743, mockup 6), 0-9 and a-f, Backspace and the confirm key.
+enum class KeyPage : uint8_t { Letters, Symbols, Symbols2, Hex };
 class PageState {
 public:
   void select(KeyPage p) { _p = p; _typed_symbol = false; }

@@ -310,6 +310,7 @@ void GuiShell::rebuild() {
   _query_label = _match_label = _search_list = _wheel_strip = nullptr;
   _login_field = _login_status = nullptr;
   _set_text_label = nullptr;
+  _chan_field = _chan_note = _chan_count = nullptr;
   for (auto& k : _key_obj) k = nullptr;
   if (_key_preview) {
     lv_obj_del(_key_preview);
@@ -325,13 +326,15 @@ void GuiShell::rebuild() {
   // bar in class A. In class B they take the area right of the rail, and the
   // rail stays, drawn but inert (ObScreen landscape: the rail is on every
   // shell screen).
+  const bool adding_channel = _chan != ChanStep::None && _tab == Tab::Chat;
   const bool own_screen = _composing || (_set_text && _tab == Tab::Setup) || (_login && detailTab()) ||
-                          (_searching && !_detail && _tab == Tab::Nodes);
+                          (_searching && !_detail && _tab == Tab::Nodes) || adding_channel;
   if (own_screen) {
     _status.build(scr, _t, [](void* m) { static_cast<ShellModel*>(m)->loraPopover(); }, _model);
     for (auto& t : _tab_obj) t = nullptr;
     lv_obj_t* h = host(scr);
     if (_composing) buildCompose(h);
+    else if (adding_channel) buildAddChannel(h);                 // Epic R: a channel, step by step
     else if (_set_text && _tab == Tab::Setup) buildSetText(h);   // Node › Name, typed
     else if (_login && detailTab()) buildLogin(h);               // the login sheet, over a node's detail
     else buildSearch(h);                                         // Nodes search (ObScreen: no tab bar)
@@ -576,6 +579,8 @@ bool GuiShell::action(Action a) {
   }
   // Setup: its pages and edit sheets (SetupScreens.cpp).
   if (_tab == Tab::Setup && setAction(a)) return true;
+  // Adding a channel (Epic R, ChannelScreens.cpp).
+  if (_chan != ChanStep::None && _tab == Tab::Chat && chanAction(a)) return true;
   // The login sheet: a key cursor as in Compose; Back closes it.
   if (_login && detailTab()) {
     switch (a) {
@@ -1197,15 +1202,21 @@ const char* GuiShell::cannedFor(int i) {
 int16_t GuiShell::kbTop() const {
   // A hardware keyboard: no keys. Compose keeps a hint line at the foot; the
   // other fields run to the bottom.
-  if (_hw_kb) return int16_t(_composing ? _lay.h - kKeyHintH : _lay.h);
+  if (_hw_kb) return int16_t(keyHinted() ? _lay.h - kKeyHintH : _lay.h);
   return int16_t(_lay.h - keyboardHeight(_lay.key_h) - 4);
+}
+
+// The fields that keep a one-line key hint with a hardware keyboard: Compose
+// (mockup 2, #1727), and joining a hashtag or entering a key (Epic R mockup 10).
+bool GuiShell::keyHinted() const {
+  return _composing || _chan == ChanStep::Hashtag || _chan == ChanStep::KeyEntry;
 }
 
 void GuiShell::setHardwareKeyboard(bool on) {
   if (on == _hw_kb) return;
   _hw_kb = on;
   _hot = -1;   // no on-screen key is held across the switch
-  if (_composing || _login || _set_text || (_searching && _search_kb)) rebuild();
+  if (_composing || _login || _set_text || (_searching && _search_kb) || chanTyping()) rebuild();
 }
 
 void GuiShell::openCompose(int thread) {
@@ -1320,7 +1331,7 @@ void GuiShell::buildCompose(lv_obj_t* scr) {
 void GuiShell::buildKeyboard(lv_obj_t* scr) {
   if (_hw_kb) {
     _nkeys = 0;
-    if (_composing) buildKeyHint(scr);
+    if (keyHinted()) buildKeyHint(scr);
     return;
   }
   const int16_t top = kbTop();
@@ -1367,6 +1378,11 @@ void GuiShell::buildKeyHint(lv_obj_t* scr) {
   lv_obj_set_flex_flow(h, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(h, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_column(h, 4, 0);
+  if (!_composing) {   // joining a channel (Epic R mockup 10)
+    label(h, FontRole::BodySmall, _t.ink2, "Enter");
+    label(h, FontRole::BodySmall, _t.dim, "join");
+    return;
+  }
   label(h, FontRole::BodySmall, _t.ink2, "Enter");
   lv_obj_t* send = label(h, FontRole::BodySmall, _t.dim, "send");
   lv_obj_set_style_pad_right(send, 8, 0);
@@ -1415,7 +1431,11 @@ void GuiShell::buildKeys() {
     char text[8];
     // Search's keyboard ends its entry with Done (ObScreen kbRowsFind).
     snprintf(text, sizeof text, "%s",
-             send && _login ? "Log in" : send && (_searching || _set_text) ? "Done" : k.label);
+             send && _chan == ChanStep::PrivName  ? "Done"
+             : send && chanTyping()               ? "Join"
+             : send && _login                     ? "Log in"
+             : send && (_searching || _set_text)  ? "Done"
+                                                  : k.label);
     if (caps && text[0] >= 'a' && text[0] <= 'z' && !text[1]) text[0] = char(text[0] - 'a' + 'A');
     lv_obj_t* l = label(o, typesLabel(k.label) ? FontRole::Body : FontRole::BodySmall, ink, text);
     lv_obj_center(l);
@@ -1477,8 +1497,10 @@ void GuiShell::pressKey(int i) {
   const Shift shift_before = _shift.state();
   // Search types into the query: no capitals of its own (matching ignores
   // case), and Done puts the keyboard away, keeping the results.
-  ComposeBuffer& buf = _set_text ? _set_buf : _login ? _login_pw : _searching ? _query : _draft;
-  const bool plain = _login || _searching || _set_text;   // no capitals of their own
+  ComposeBuffer& buf = chanTyping() ? _chan_buf : _set_text ? _set_buf : _login ? _login_pw : _searching ? _query : _draft;
+  // No capitals of their own. A hashtag keeps the case it's typed in, so it
+  // gets none either (Epic R #1747).
+  const bool plain = _login || _searching || _set_text || _chan == ChanStep::Hashtag || _chan == ChanStep::KeyEntry;
 
   if (strcmp(l, "Send") == 0) {
     submitText();
@@ -1501,7 +1523,9 @@ void GuiShell::pressKey(int i) {
     if (page_before == KeyPage::Letters && shift_before != Shift::Off && ch[0] >= 'a' && ch[0] <= 'z') {
       ch[0] = char(ch[0] - 'a' + 'A');
     }
-    if (buf.insert(ch, strlen(ch))) {
+    if (chanTyping() && !chanAccepts(ch[0])) {
+      // not taken: a space in a hashtag, a non-hex key
+    } else if (buf.insert(ch, strlen(ch))) {
       _shift.typedLetter();
       if (!plain) _shift.autoCap(buf.text(), buf.length());
       _page.typed(ch[0]);
@@ -1512,6 +1536,10 @@ void GuiShell::pressKey(int i) {
 }
 
 void GuiShell::submitText() {
+  if (chanTyping()) {   // Join / Done (Epic R)
+    chanSubmit();
+    return;
+  }
   if (_set_text) {   // "Done": the name is kept
     later([](GuiShell* g) { g->closeSetText(true); });
     return;
@@ -1539,7 +1567,8 @@ void GuiShell::submitText() {
 }
 
 void GuiShell::refreshText() {
-  if (_set_text) refreshSetText();
+  if (chanTyping()) refreshChanField();
+  else if (_set_text) refreshSetText();
   else if (_login) refreshLoginField();
   else if (_searching) querySoon();
   else refreshDraft();
@@ -1552,15 +1581,16 @@ bool GuiShell::typeKey(KeyKind k, char ch) {
   // In an open conversation, 1-4 start a reply with that canned text in the
   // draft; Enter sends it, or it can be edited first (owner, 2026-10-21).
   const int canned = k == KeyKind::Char ? cannedSlotForKey(uint8_t(ch)) : -1;
-  if (canned >= 0 && _tab == Tab::Chat && _thread >= 0 && !_composing && !_set_text && !_login && !_searching) {
+  if (canned >= 0 && _tab == Tab::Chat && _thread >= 0 && !_composing && !_set_text && !_login && !_searching &&
+      _chan == ChanStep::None) {
     openCompose(_thread);
     if (!_composing) return false;   // the thread is gone: not taken
     insertText(cannedFor(canned));
     return true;
   }
   const bool search_typing = _searching && _tab == Tab::Nodes && (_search_kb || _search_wheel);
-  if (!(_set_text || _login || search_typing || _composing)) return false;
-  ComposeBuffer& buf = _set_text ? _set_buf : _login ? _login_pw : _searching ? _query : _draft;
+  if (!(_set_text || _login || search_typing || _composing || chanTyping())) return false;
+  ComposeBuffer& buf = chanTyping() ? _chan_buf : _set_text ? _set_buf : _login ? _login_pw : _searching ? _query : _draft;
   switch (k) {
     case KeyKind::Enter:
       submitText();
@@ -1569,6 +1599,7 @@ bool GuiShell::typeKey(KeyKind k, char ch) {
       if (!buf.backspace()) return false;   // empty: Back, as the caller maps it
       break;
     case KeyKind::Char:
+      if (chanTyping() && !chanAccepts(ch)) return true;   // spent: not a key this field takes
       if (!buf.insert(&ch, 1)) return true;   // full: the key is spent, nothing changes
       break;
     default:

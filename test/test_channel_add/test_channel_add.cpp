@@ -7,6 +7,8 @@
 
 #include <string.h>
 
+#include <string>
+
 #include "helpers/gui/ChannelAdd.h"
 
 using namespace offband::gui;
@@ -133,6 +135,23 @@ TEST(ChannelKey, AShortBufferIsCutNotOverrun) {
   memset(text, 'X', sizeof text);
   formatChannelKey(key, text, sizeof text);
   EXPECT_LT(strlen(text), sizeof text);
+}
+
+// ------------------------------------------------------ what a field takes
+
+TEST(ChannelFields, AHashtagTakesNoSpaceOrSecondHash) {
+  EXPECT_TRUE(hashtagAccepts('a'));
+  EXPECT_TRUE(hashtagAccepts('Q'));
+  EXPECT_TRUE(hashtagAccepts('-'));
+  EXPECT_TRUE(hashtagAccepts('7'));
+  EXPECT_FALSE(hashtagAccepts(' '));
+  EXPECT_FALSE(hashtagAccepts('#'));
+  EXPECT_FALSE(hashtagAccepts('\0'));
+}
+
+TEST(ChannelFields, AKeyTakesHexOnly) {
+  for (char c : std::string("0123456789abcdefABCDEF")) EXPECT_TRUE(channelKeyAccepts(c)) << c;
+  for (char c : std::string("gGoOzZ -:#")) EXPECT_FALSE(channelKeyAccepts(c)) << c;
 }
 
 // -------------------------------------------------------------- slots

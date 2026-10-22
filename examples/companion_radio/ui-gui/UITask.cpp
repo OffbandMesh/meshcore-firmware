@@ -1323,6 +1323,35 @@ uint16_t UITask::deleteAllPaths() {
   return n;
 }
 
+// ----------------------------------------------------- channels (Epic R #1743)
+
+int UITask::channelSlots(ChannelSlot* out, int max) {
+  const int n = MAX_GROUP_CHANNELS < max ? MAX_GROUP_CHANNELS : max;
+  for (int i = 0; i < n; i++) {
+    ChannelDetails ch;
+    const bool got = the_mesh.getChannel(i, ch);
+    out[i].used = got && ch.name[0] != 0;
+    if (out[i].used) memcpy(out[i].key, ch.channel.secret, kChannelKeyLen);
+    else memset(out[i].key, 0, kChannelKeyLen);
+  }
+  return n;
+}
+
+// Through cmdSetChannel, the app's own path: the new channel gets the default
+// notification mode (#1457), a tune (#1523) and its Chats thread (#1741).
+int UITask::addChannel(int slot, const char* name, const uint8_t key[kChannelKeyLen]) {
+  if (slot < 0 || slot >= MAX_GROUP_CHANNELS || !name || !name[0]) return -1;
+  ChannelDetails held;
+  if (the_mesh.getChannel(slot, held) && held.name[0] != 0 &&
+      memcmp(held.channel.secret, key, kChannelKeyLen) == 0) {
+    return the_mesh.guiThreadForChannelSlot(uint8_t(slot));   // already here: open it, keep its name
+  }
+  if (the_mesh.cmdSetChannel(uint8_t(slot), name, key) != CmdResult::Ok) return -1;
+  return the_mesh.guiThreadForChannelSlot(uint8_t(slot));
+}
+
+void UITask::newChannelKey(uint8_t out[kChannelKeyLen]) { the_mesh.getRNG()->random(out, kChannelKeyLen); }
+
 RadioValues UITask::radioValues() {
   RadioValues v{};
   if (!_prefs) return v;
