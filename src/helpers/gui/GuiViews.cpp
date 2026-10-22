@@ -61,6 +61,39 @@ static bool steersOnly(uint32_t cp) {
          (cp >= 0xE0020 && cp <= 0xE007F);
 }
 
+// The nearest character the fonts carry, for common ones they don't
+// (fonts/README.md: the subsets). Without it these draw as a box: a tester's
+// contact with a bullet in her name showed one (#1761). Returns UTF-8, or
+// null to keep the character as it is.
+static const char* fontStandIn(uint32_t cp) {
+  switch (cp) {
+    case 0x2022:   // • bullet
+    case 0x2023:   // ‣
+    case 0x2027:   // ‧
+    case 0x2219:   // ∙
+    case 0x25CF:   // ●
+    case 0x25E6:   // ◦
+    case 0x2981:   // ⦁
+      return "\xC2\xB7";   // · middle dot
+    case 0x2018:
+    case 0x2019:
+    case 0x201A:
+    case 0x201B:
+      return "'";
+    case 0x201C:
+    case 0x201D:
+    case 0x201E:
+      return "\"";
+    case 0x2010:
+    case 0x2011:
+    case 0x2013:
+    case 0x2043:
+      return "-";
+    default:
+      return nullptr;
+  }
+}
+
 void displayText(const char* in, size_t len, char* out, size_t n) {
   if (!n) return;
   size_t o = 0, i = 0;
@@ -71,9 +104,12 @@ void displayText(const char* in, size_t len, char* out, size_t n) {
     uint32_t cp = k == 1 ? b : b & (0xFF >> (k + 1));
     for (size_t j = 1; j < k; j++) cp = (cp << 6) | (uint8_t(in[i + j]) & 0x3F);
     if (!steersOnly(cp)) {
-      if (o + k >= n) break;   // only whole characters
-      memcpy(out + o, in + i, k);
-      o += k;
+      const char* sub = fontStandIn(cp);
+      const char* src = sub ? sub : in + i;
+      const size_t m = sub ? strlen(sub) : k;
+      if (o + m >= n) break;   // only whole characters
+      memcpy(out + o, src, m);
+      o += m;
     }
     i += k;
   }
