@@ -33,6 +33,57 @@ enum ChanRow : int { RowPublic = 0, RowHashtag = 1, RowPrivate = 2, RowNewKey = 
 
 }  // namespace
 
+// "+" in Chats (R1 #1748, mockup 1): what to start. A sheet like a channel's
+// menu, with no thread behind it.
+void GuiShell::openStartSheet() {
+  closeSheet();
+  _sheet = Sheet::Start;
+  _sheet_obj = sheetBackdrop();
+  lv_obj_add_event_cb(
+      _sheet_obj,
+      [](lv_event_t* e) {
+        if (lv_event_get_target(e) == lv_event_get_current_target(e)) {
+          static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->closeSheet(); });
+        }
+      },
+      LV_EVENT_CLICKED, this);
+  lv_obj_t* sheet = sheetPanel(_sheet_obj);
+  lv_obj_t* tl = label(sheet, FontRole::Body, _t.ink, "Start a chat");
+  lv_obj_set_style_pad_left(tl, 12, 0);
+  lv_obj_set_style_pad_top(tl, 10, 0);
+  lv_obj_set_style_pad_bottom(tl, 6, 0);
+
+  static const char* const kName[2] = {"Message a node", "Add a channel"};
+  static const char* const kSub[2] = {"Pick someone in Nodes", "Public, hashtag or private"};
+  _sheet_count = 2;
+  for (uint8_t i = 0; i < _sheet_count; i++) {
+    lv_obj_t* row = box(sheet, LV_PCT(100), landscape() ? 30 : 38);
+    lv_obj_set_style_pad_hor(row, 12, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_t* nl = label(row, FontRole::Body, _t.ink, kName[i]);
+    lv_obj_set_width(nl, LV_PCT(100));
+    oneLine(nl, FontRole::Body);
+    if (_lay.hints) {
+      lv_obj_t* sl = label(row, FontRole::Label, _t.dim, kSub[i]);
+      lv_obj_set_width(sl, LV_PCT(100));
+      oneLine(sl, FontRole::Label);
+    }
+    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_user_data(row, reinterpret_cast<void*>(intptr_t(i)));
+    lv_obj_add_event_cb(
+        row,
+        [](lv_event_t* e) {
+          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+          self->_sheet_hot = int(intptr_t(lv_obj_get_user_data(lv_event_get_current_target(e))));
+          self->later([](GuiShell* g) { g->sheetPick(g->_sheet_hot); });
+        },
+        LV_EVENT_CLICKED, this);
+    _sheet_rows[i] = row;
+  }
+  sheetHot(0);
+}
+
 void GuiShell::openAddChannel() {
   closeSheet();
   _thread = -1;

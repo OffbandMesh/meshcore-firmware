@@ -864,8 +864,10 @@ lv_obj_t* header(lv_obj_t* parent, const ThemeTokens& t) {
 // radar, Epic F mockup 4).
 enum class EmptyIcon : uint8_t { Bubble, Bubbles, Radar };
 
-void emptyState(lv_obj_t* parent, const ThemeTokens& t, EmptyIcon icon, const char* title, const char* sub,
-                const char* hint) {
+// Returns the hint's box (null without a hint), for a caller whose hint is
+// a button.
+lv_obj_t* emptyState(lv_obj_t* parent, const ThemeTokens& t, EmptyIcon icon, const char* title, const char* sub,
+                     const char* hint) {
   lv_obj_t* col = box(parent, LV_PCT(100), LV_SIZE_CONTENT);
   lv_obj_center(col);
   lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
@@ -892,16 +894,16 @@ void emptyState(lv_obj_t* parent, const ThemeTokens& t, EmptyIcon icon, const ch
   lv_obj_set_width(s, LV_PCT(100));
   lv_label_set_long_mode(s, LV_LABEL_LONG_WRAP);
   lv_obj_set_style_text_align(s, LV_TEXT_ALIGN_CENTER, 0);
-  if (hint) {
-    box(col, 1, 3);   // with the row gap, 8 px above the hint (LVGL 8 has no margins)
-    lv_obj_t* hb = box(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_border_width(hb, 1, 0);
-    lv_obj_set_style_border_color(hb, c(t.line), 0);
-    lv_obj_set_style_radius(hb, 3, 0);
-    lv_obj_set_style_pad_hor(hb, 6, 0);
-    lv_obj_set_style_pad_ver(hb, 2, 0);
-    label(hb, FontRole::Meta, t.sig, hint);
-  }
+  if (!hint) return nullptr;
+  box(col, 1, 3);   // with the row gap, 8 px above the hint (LVGL 8 has no margins)
+  lv_obj_t* hb = box(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_set_style_border_width(hb, 1, 0);
+  lv_obj_set_style_border_color(hb, c(t.line), 0);
+  lv_obj_set_style_radius(hb, 3, 0);
+  lv_obj_set_style_pad_hor(hb, 6, 0);
+  lv_obj_set_style_pad_ver(hb, 2, 0);
+  label(hb, FontRole::Meta, t.sig, hint);
+  return hb;
 }
 
 }  // namespace
@@ -914,26 +916,32 @@ void GuiShell::buildChats(lv_obj_t* content) {
   label(h, FontRole::Title, _t.ink, "Chats");
   lv_obj_t* grow = box(h, 1, 1);
   lv_obj_set_flex_grow(grow, 1);
-  // "+" starts a chat: contacts live in Nodes (Epic E), so it goes there.
+  // "+" asks what to start (Epic R mockup 1): a message to a node, or a
+  // channel. It used to go straight to Nodes, which suits a DM but not a
+  // channel (tester bench, #1730).
+  auto start = [](lv_event_t* e) {
+    static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->openStartSheet(); });
+  };
   lv_obj_t* plus = box(h, 24, 24);
   label(plus, FontRole::Title, _t.sig, "+");
   lv_obj_center(lv_obj_get_child(plus, 0));
   focusable(plus);
-  lv_obj_add_event_cb(
-      plus,
-      [](lv_event_t* e) {
-        GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
-        self->later([](GuiShell* g) { g->showTab(Tab::Nodes); });
-      },
-      LV_EVENT_CLICKED, this);
+  lv_obj_add_event_cb(plus, start, LV_EVENT_CLICKED, this);
 
   uint16_t order[64];
   const size_t n = chatOrder(s, order, 64);
   lv_obj_t* list = box(content, LV_PCT(100), 0);
   lv_obj_set_flex_grow(list, 1);
   if (n == 0) {
-    emptyState(list, _t, EmptyIcon::Bubbles, "No chats yet", "Channels you join and people who message you show up here.",
-               "+ to start one");
+    // The box looked like a button and did nothing (tester bench, #1730); it
+    // is one now, the same as "+" (mockup 2).
+    lv_obj_t* go = emptyState(list, _t, EmptyIcon::Bubbles, "No chats yet",
+                              "Channels you join and people who message you show up here.", "+ Start a chat");
+    if (go) {
+      focusable(go);
+      lv_obj_add_event_cb(go, start, LV_EVENT_CLICKED, this);
+      lv_group_focus_obj(go);
+    }
     return;
   }
   lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
@@ -1864,6 +1872,10 @@ void GuiShell::sheetPick(int i) {
   } else if (kind == Sheet::Menu) {
     if (i == 0) openCompose(_thread);   // rebuild closes the sheet
     else openSheet(Sheet::Notify);
+  } else if (kind == Sheet::Start) {
+    closeSheet();
+    if (i == 0) showTab(Tab::Nodes);   // a message to a node: pick one in Nodes, as "+" did
+    else openAddChannel();
   } else if (kind == Sheet::Zone) {
     if (i == 1) {
       _model->setZone(_sheet_zone);
