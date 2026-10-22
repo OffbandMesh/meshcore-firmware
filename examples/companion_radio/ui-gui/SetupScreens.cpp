@@ -907,11 +907,19 @@ void GuiShell::buildActionsPage(lv_obj_t* content) {
                       {"Delete all paths", "Every contact floods until a route returns", _t.bad}};
   for (uint8_t i = 0; i < 4; i++) {
     const bool note = _note_row == i && _set_note[0];
-    lv_obj_t* row = setRow(body, i, acts[i].k, note ? _set_note : acts[i].hint, nullptr, kVal, false, false, false);
+    // How it went ("Sent ✓") goes under the action where rows have a hint
+    // line. Class B rows have none, so there it takes the value column: the
+    // note had nowhere to go, and colouring a hint line that wasn't built
+    // dereferenced null and rebooted the T-Deck on every Send advert (#1730).
+    const bool note_below = note && _lay.hints;
+    lv_obj_t* row = setRow(body, i, acts[i].k, note_below ? _set_note : acts[i].hint,
+                           note && !note_below ? _set_note : nullptr, kVal, false, false, false);
     lv_obj_set_style_min_height(row, 38, 0);
     lv_obj_t* kk = lv_obj_get_child(row, 0);
-    lv_obj_set_style_text_color(lv_obj_get_child(kk, 0), c(acts[i].ink), 0);
-    if (note) lv_obj_set_style_text_color(lv_obj_get_child(kk, 1), c(_t.sig), 0);
+    if (lv_obj_t* name = lv_obj_get_child(kk, 0)) lv_obj_set_style_text_color(name, c(acts[i].ink), 0);
+    if (!note) continue;
+    lv_obj_t* shown = note_below ? lv_obj_get_child(kk, 1) : lv_obj_get_child(row, -1);   // -1: the last child
+    if (shown) lv_obj_set_style_text_color(shown, c(_t.sig), 0);
   }
 }
 

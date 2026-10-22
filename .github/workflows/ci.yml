@@ -193,6 +193,11 @@ jobs:
       - name: GUI status bar on a rebuild
         run: python scripts/test_gui_status_bar.py
 
+      # #1730: a style set on a row's second child, which the landscape layout doesn't
+      # build, rebooted the T-Deck on every Send advert. Child 1+ is checked first.
+      - name: GUI styles on children a layout may not build
+        run: python scripts/test_gui_child_styles.py
+
       # #1625: which preflashed channels ship quiet. A silent channel and a channel that
       # made no choice are one byte apart, and swapping them is invisible until a badge is
       # quiet in the wrong room -- or noisy in the one a tester asked to be quiet.
