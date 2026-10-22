@@ -1194,7 +1194,19 @@ const char* GuiShell::cannedFor(int i) {
 
 // The keyboard area's top: four rows of the layout class's keys and their
 // gaps above the screen's foot (179 in class A, 127 in class B).
-int16_t GuiShell::kbTop() const { return int16_t(_lay.h - keyboardHeight(_lay.key_h) - 4); }
+int16_t GuiShell::kbTop() const {
+  // A hardware keyboard: no keys. Compose keeps a hint line at the foot; the
+  // other fields run to the bottom.
+  if (_hw_kb) return int16_t(_composing ? _lay.h - kKeyHintH : _lay.h);
+  return int16_t(_lay.h - keyboardHeight(_lay.key_h) - 4);
+}
+
+void GuiShell::setHardwareKeyboard(bool on) {
+  if (on == _hw_kb) return;
+  _hw_kb = on;
+  _hot = -1;   // no on-screen key is held across the switch
+  if (_composing || _login || _set_text || (_searching && _search_kb)) rebuild();
+}
 
 void GuiShell::openCompose(int thread) {
   if (thread < 0 || !_model->store().threadAt(thread)) return;
@@ -1228,7 +1240,11 @@ void GuiShell::buildCompose(lv_obj_t* scr) {
   lv_obj_set_style_pad_column(h, 4, 0);
   // Class B (mockup 5): a shorter draft and chips, so both fit above the
   // landscape keyboard.
-  const int16_t draft_h = landscape() ? 34 : 48, chip_h = landscape() ? 22 : 24, gap = landscape() ? 4 : 6;
+  const int16_t chip_h = landscape() ? 22 : 24, gap = landscape() ? 4 : 6;
+  // With a hardware keyboard the draft takes the keys' room (mockup 2).
+  const int16_t keys_h = landscape() ? 34 : 48;
+  const int16_t room = int16_t(kbTop() - (kStatusH + 28 + gap) - gap - chip_h - gap);
+  const int16_t draft_h = _hw_kb && room > keys_h ? room : keys_h;
   // Back, as the spec gives it ("‹ or swipe right"): the bench found no way
   // out of Compose by touch (#1501).
   lv_obj_t* back = box(h, 10, 20);
@@ -1302,6 +1318,11 @@ void GuiShell::buildCompose(lv_obj_t* scr) {
 // The keyboard, for Compose and for Nodes search: one area takes every touch
 // and snaps it to the nearest key, so a tap in a gap still lands (mockup 7a).
 void GuiShell::buildKeyboard(lv_obj_t* scr) {
+  if (_hw_kb) {
+    _nkeys = 0;
+    if (_composing) buildKeyHint(scr);
+    return;
+  }
   const int16_t top = kbTop();
   _kb = box(scr, _lay.content_w, _lay.h - top + 2);
   lv_obj_set_pos(_kb, 0, top - 2);
@@ -1334,9 +1355,28 @@ void GuiShell::buildKeyboard(lv_obj_t* scr) {
   buildKeys();
 }
 
+// Compose with a hardware keyboard (mockup 2): the two keys that aren't
+// obvious, on one line at the foot.
+void GuiShell::buildKeyHint(lv_obj_t* scr) {
+  lv_obj_t* h = box(scr, _lay.content_w, kKeyHintH);
+  lv_obj_set_pos(h, 0, _lay.h - kKeyHintH);
+  lv_obj_set_style_border_side(h, LV_BORDER_SIDE_TOP, 0);
+  lv_obj_set_style_border_width(h, 1, 0);
+  lv_obj_set_style_border_color(h, c(_t.line2), 0);
+  lv_obj_set_style_pad_hor(h, 8, 0);
+  lv_obj_set_flex_flow(h, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(h, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(h, 4, 0);
+  label(h, FontRole::BodySmall, _t.ink2, "Enter");
+  lv_obj_t* send = label(h, FontRole::BodySmall, _t.dim, "send");
+  lv_obj_set_style_pad_right(send, 8, 0);
+  label(h, FontRole::BodySmall, _t.ink2, "⌫");
+  label(h, FontRole::BodySmall, _t.dim, "on empty: back");
+}
+
 // The keys of the current page, labeled for the shift state.
 void GuiShell::buildKeys() {
-  if (!_kb) return;
+  if (!_kb || _hw_kb) return;
   SlowStep slow("keys page", int(_page.page()));
   if (_key_preview) {   // it belongs to a key that's about to go
     lv_obj_del(_key_preview);
@@ -2151,6 +2191,7 @@ void GuiShell::updateNodes(uint32_t now_ms) {
 // ---------------------------------------------------------- Nodes search
 
 void GuiShell::openSearch(bool wheel) {
+  if (_hw_kb) wheel = false;   // a hardware keyboard types the query: no letter wheel
   _searching = true;
   _search_wheel = wheel;
   _search_kb = !wheel;

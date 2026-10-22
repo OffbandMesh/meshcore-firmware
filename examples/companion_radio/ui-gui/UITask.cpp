@@ -158,6 +158,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #ifdef TDECK_KEYBOARD
   _kb_ok = s_keyboard.begin();
   mesh_log_line(MLOG_BOOT, "[gui] keyboard %s\n", _kb_ok ? "ok" : "none");
+  _shell.setHardwareKeyboard(_kb_ok);   // only a flag before the shell is built
 #endif
 #ifdef PIN_TRACKBALL_UP
   s_trackball.begin(PIN_TRACKBALL_UP, PIN_TRACKBALL_DOWN, PIN_TRACKBALL_LEFT, PIN_TRACKBALL_RIGHT);
@@ -315,7 +316,10 @@ void UITask::pollKeys(uint32_t now) {
     // again every 2 s until it answers.
     if (now - _kb_polled >= 2000) {
       _kb_polled = now;
-      if ((_kb_ok = s_keyboard.begin())) mesh_log_line(MLOG_BOOT, "[gui] keyboard ok (late)\n");
+      if ((_kb_ok = s_keyboard.begin())) {
+        mesh_log_line(MLOG_BOOT, "[gui] keyboard ok (late)\n");
+        _shell.setHardwareKeyboard(true);
+      }
     }
   } else if (now - _kb_polled >= 10) {
     _kb_polled = now;

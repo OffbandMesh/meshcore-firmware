@@ -230,6 +230,10 @@ public:
   // field took it; false leaves it to the caller as an action. Backspace in
   // an empty field is not taken, so it goes back.
   bool typeKey(offband::gui::KeyKind k, char ch);
+  // A physical keyboard is present (the T-Deck): text fields drop the
+  // on-screen keys and take the room, and Compose shows a one-line key hint
+  // instead (owner, 2026-10-21: mockup 2). Rebuilds an open text field.
+  void setHardwareKeyboard(bool on);
 
   // Handles an action; false if the screen had no use for it.
   bool action(offband::gui::Action a);
@@ -257,6 +261,7 @@ private:
   void buildNodes(lv_obj_t* content);
   lv_obj_t* nodeRow(lv_obj_t* list, const offband::gui::NodeRow& r);
   void buildKeyboard(lv_obj_t* scr);
+  void buildKeyHint(lv_obj_t* scr);
   void openSearch(bool wheel);
   void closeSearch();
   void buildSearch(lv_obj_t* scr);
@@ -419,6 +424,8 @@ private:
   lv_obj_t* host(lv_obj_t* scr);
   bool landscape() const { return _lay.cls == offband::gui::LayoutClass::B; }
   int16_t kbTop() const;
+  bool _hw_kb = false;                        // see setHardwareKeyboard()
+  static constexpr int16_t kKeyHintH = 20;    // Compose's key hint, with a hardware keyboard
   static constexpr int16_t kWheelH = 70;   // the letter wheel's strip
   // A sheet's backdrop on the top layer (below the status strip) and the
   // sheet itself, which starts right of the rail in class B.
