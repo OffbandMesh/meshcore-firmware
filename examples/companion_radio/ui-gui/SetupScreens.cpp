@@ -859,7 +859,8 @@ void GuiShell::buildConnPage(lv_obj_t* content) {
   // Off holds until the next boot: the interface comes back on with it.
   setRow(body, bOn, "Bluetooth", d.ble_on ? "For the phone app" : "On again after a reboot", nullptr, kTog, d.ble_on,
          false, false);
-  // A boot's own PIN is shown: it's the one a phone has to type.
+  // The PIN in use is shown in full, set or random: it's the one a phone or
+  // PC has to type (owner, 2026-10-22).
   pinText(d.pin_stored, d.pin_active, v, sizeof v);
   setRow(body, bPin, "PIN", d.pin_stored ? "Asked when pairing" : "New each boot", v, kNav, false, false, false);
   setRow(body, bPhone, "Phone", nullptr, d.phone ? "Connected" : "Not connected", kRo, false, false, false);

@@ -500,8 +500,16 @@ TEST(G5, Pin) {
   EXPECT_FALSE(pinOk(1000000));
   EXPECT_FALSE(pinOk(0));
   char b[24];
-  pinText(654321, 654321, b, sizeof b);   // a set PIN shows masked (the fonts have no •)
-  EXPECT_STREQ(b, "******");
+  // A set PIN is shown in full: it's what has to be typed to pair, and a
+  // masked one left no way to read it (owner, 2026-10-22).
+  pinText(654321, 654321, b, sizeof b);
+  EXPECT_STREQ(b, "654321");
+  EXPECT_EQ(nullptr, strchr(b, '*'));
+  // Changed this boot: the one in use until the next boot is the one that pairs.
+  pinText(111111, 222222, b, sizeof b);
+  EXPECT_STREQ(b, "222222");
+  pinText(1234, 1234, b, sizeof b);       // six digits, as typed on the phone
+  EXPECT_STREQ(b, "001234");
   pinText(0, 482913, b, sizeof b);        // a new one each boot: shown, to pair with
   EXPECT_STREQ(b, "482913");
   pinText(0, 0, b, sizeof b);             // no PIN in this build
