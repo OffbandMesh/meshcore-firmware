@@ -165,8 +165,16 @@ void ArduinoSerialInterface::reportCommittedLoss(const char* where, size_t on_wi
   const bool suppress_mirror = isConsoleSharedWithProtocol() && g_meshLogMirror;
   if (suppress_mirror) g_meshLogMirror = false;
 
-  // MLOG_ERROR, not MLOG_DEBUG: real data left the device malformed. Reaching a STOCK
-  // build (where capture is off by default, #428) is #1316's job, not this one's.
+  // MLOG_ERROR, not MLOG_DEBUG: real data left the device malformed.
+  //
+  // This DOES reach a non-diag build, contrary to what this comment said before hardware
+  // verification corrected it. Capture is off by default (#428), but the 0xC4 caplog
+  // download is compiled unconditionally and the client can enable capture at runtime
+  // (MyMesh.cpp:2394 and :2103), so the tester path is: turn capture on, reproduce,
+  // download. What this line does NOT do is survive a reset -- the capture ring is plain
+  // RAM. A loss that only matters after a reboot is #1316's crashlog sink, which is why
+  // that one writes both rings. Deliberately NOT doing the same here: this is writeFrame's
+  // hot path under the #149 non-blocking contract, and crashLogf takes a critical section.
   mesh_log_line(MLOG_ERROR,
                 "[wf] COMMITTED FRAME LOST at %s: %u of %u bytes on the wire (#1315)\n",
                 where, (unsigned)on_wire, (unsigned)declared);

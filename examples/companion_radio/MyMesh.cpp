@@ -425,10 +425,30 @@ void MyMesh::reportStreamAbandoned(const char* stream, const char* phase, uint32
   offband::abandonFormat(line, sizeof(line), stream, phase, stalled_ms, progress, unit,
                          total, d.suppressed);
 
-  // "%s" rather than passing `line` as the format: the rendered text holds no format
-  // specifiers today, but handing a runtime string to a printf-family format parameter is
-  // how that stops being true later.
+  // BOTH sinks, and neither is redundant. Hardware verification on a non-diag build is
+  // what forced this; the first revision wrote only crashLogf, reasoning that the crashlog
+  // ring is always present and survives a reset. Both of those are true of the WRITE. The
+  // READ is the problem: the only readers are crashLogDump(), which goes to Serial and is
+  // suppressed on exactly this transport since #1087, and a host-only test function. There
+  // is no companion-protocol command and no CLI verb for the crashlog ring -- and a
+  // companion has no CLI at all. So on the one build this task exists to serve, the report
+  // was being written somewhere nobody can read it.
+  //
+  //   crashLogf      -> crashlog ring. Survives a reset, and reaches the raw UART mirror
+  //                     on a bench build. This is the path that works when the device is
+  //                     in front of us and the thing we care about is the boot BEFORE last.
+  //   mesh_log_line  -> capture ring, downloadable over 0xC4 (MyMesh.cpp:2394, compiled
+  //                     UNCONDITIONALLY, not gated on OFFBAND_FORCE_CAPLOG). Capture is off
+  //                     by default per #428, but the client can enable it at runtime
+  //                     (:2103), so the tester path is: turn capture on, reproduce, download.
+  //                     This is the path that works when the device is in someone else's
+  //                     hands on another continent.
+  //
+  // On a build that carries the UART mirror the line appears twice, once per sink. That is
+  // accepted: a duplicated diagnostic on a bench build costs a reader two seconds, and the
+  // alternative -- gating one sink on the other -- is how one of them silently stops firing.
   offband::crashLogf("%s", line);
+  mesh_log_line(MLOG_ERROR, "%s\n", line);
 }
 
 void MyMesh::updateContactFromFrame(ContactInfo &contact, uint32_t& last_mod, const uint8_t *frame, int len) {
