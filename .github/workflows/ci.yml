@@ -182,6 +182,12 @@ jobs:
       - name: GUI SD archive wiring
         run: python scripts/test_gui_sd_wiring.py
 
+      # #1741: every channel the radio holds is in Chats, messages or not. The store
+      # makes a channel's thread on first use, so these two call sites are all that
+      # stand between a fresh radio and an empty Chats with Public configured.
+      - name: GUI channel threads
+        run: python scripts/test_gui_channel_threads.py
+
       # #1625: which preflashed channels ship quiet. A silent channel and a channel that
       # made no choice are one byte apart, and swapping them is invisible until a badge is
       # quiet in the wrong room -- or noisy in the one a tester asked to be quiet.
