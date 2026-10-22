@@ -159,6 +159,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   _kb_ok = s_keyboard.begin();
   mesh_log_line(MLOG_BOOT, "[gui] keyboard %s\n", _kb_ok ? "ok" : "none");
   _shell.setHardwareKeyboard(_kb_ok);   // only a flag before the shell is built
+  if (_kb_ok) s_keyboard.setBacklight(keyboardBacklightFor(_screen == ScreenState::On));
 #endif
 #ifdef PIN_TRACKBALL_UP
   s_trackball.begin(PIN_TRACKBALL_UP, PIN_TRACKBALL_DOWN, PIN_TRACKBALL_LEFT, PIN_TRACKBALL_RIGHT);
@@ -319,6 +320,7 @@ void UITask::pollKeys(uint32_t now) {
       if ((_kb_ok = s_keyboard.begin())) {
         mesh_log_line(MLOG_BOOT, "[gui] keyboard ok (late)\n");
         _shell.setHardwareKeyboard(true);
+        s_keyboard.setBacklight(keyboardBacklightFor(_screen == ScreenState::On));
       }
     }
   } else if (now - _kb_polled >= 10) {
@@ -452,6 +454,10 @@ void UITask::applyScreen(ScreenState s) {
   const bool lit = s != ScreenState::Off;
   if ((_screen == ScreenState::Off) != !lit) setCpuFrequencyMhz(cpuMhzFor(lit));
   _screen = s;
+#ifdef TDECK_KEYBOARD
+  // The keys light with the screen and go dark when it dims (tester bench, #1730).
+  if (_kb_ok) s_keyboard.setBacklight(keyboardBacklightFor(s == ScreenState::On));
+#endif
   mesh_log_line(MLOG_BOOT, "[gui] screen %s cpu=%u\n", screenName(s), (unsigned)getCpuFrequencyMhz());
 }
 

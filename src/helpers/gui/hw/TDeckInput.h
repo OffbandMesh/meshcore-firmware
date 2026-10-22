@@ -17,6 +17,8 @@ public:
   bool present() const { return _present; }
   // The next key byte, or 0 when none is waiting or the read failed.
   uint8_t read();
+  // The keys' backlight, 0 (off) to 255. False if the keyboard didn't take it.
+  bool setBacklight(uint8_t duty);
 
 private:
   TwoWire& _wire;

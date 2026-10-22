@@ -10,6 +10,7 @@
 // Each trackball direction is a line that pulses as the ball rolls. The
 // pulses are counted and turned into steps here.
 
+#include <stddef.h>
 #include <stdint.h>
 
 namespace offband {
@@ -23,6 +24,19 @@ enum class KeyKind : uint8_t { None, Char, Enter, Backspace };
 // that isn't Enter or Backspace (Shift on a symbol gives a control code,
 // Alt+C gives 0x0C) is ignored.
 KeyKind classifyKey(uint8_t b);
+
+// The keyboard's backlight follows the screen: lit while the screen is on,
+// off once it dims or goes dark (tester bench, #1730). 127 is the keyboard
+// firmware's own Alt+B brightness.
+constexpr uint8_t kKeyboardBacklightOn = 127;
+uint8_t keyboardBacklightFor(bool screen_on);
+
+// The bytes that set it. LilyGo's keyboard firmware handles 0x01 (brightness)
+// and then falls through into 0x02 (Alt+B's default brightness), reading a
+// second byte, so the brightness goes twice: one write sets both, and Alt+B
+// afterwards toggles to the same level.
+constexpr size_t kKeyboardBacklightCmdLen = 3;
+void keyboardBacklightCommand(uint8_t duty, uint8_t out[kKeyboardBacklightCmdLen]);
 
 // The canned replies a digit picks in an open conversation (owner,
 // 2026-10-21: the keyboard never sends Alt, so Alt+digit can't be the
