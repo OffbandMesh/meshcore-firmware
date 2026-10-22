@@ -1142,8 +1142,8 @@ void GuiShell::setRowPressed(uint8_t id) {
 bool GuiShell::setAction(Action a) {
   if (_set_text) {   // Node › Name: a key cursor as in Compose; Back drops the edit
     switch (a) {
-      case Action::Next: setHotKey(_hot < 0 ? 0 : int((_hot + 1) % _nkeys), false); return true;
-      case Action::Prev: setHotKey(_hot <= 0 ? int(_nkeys) - 1 : _hot - 1, false); return true;
+      case Action::Next: stepKey(1); return true;
+      case Action::Prev: stepKey(-1); return true;
       case Action::Open: if (_hot >= 0) pressKey(_hot); return true;
       case Action::Back: closeSetText(false); return true;
       default: return false;

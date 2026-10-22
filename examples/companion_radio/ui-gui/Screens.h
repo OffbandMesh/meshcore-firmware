@@ -394,6 +394,7 @@ private:
   void buildKeys();
   void refreshDraft();
   void setHotKey(int i, bool preview);
+  void stepKey(int dir);   // the button cursor over the keys; nothing with no keys
   void pressKey(int i);
   void submitText();    // Send, or the field's Done / Log in
   void refreshText();   // whichever text field is open, after an edit

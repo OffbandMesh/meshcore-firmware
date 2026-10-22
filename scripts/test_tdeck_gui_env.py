@@ -150,6 +150,14 @@ def hw_keyboard_failures(screens, uitask):
     m = re.search(r"void\s+GuiShell::buildKeyboard\(lv_obj_t\*\s*scr\)\s*\{(.*?)\n\}", sc, re.S)
     if not m or not re.search(r"if\s*\(\s*_hw_kb\s*\)\s*\{[^}]*return\s*;", m.group(1)):
         out.append("buildKeyboard() must build no keys with a hardware keyboard (mockup 2)")
+    # With a hardware keyboard there are no on-screen keys (_nkeys == 0): a cursor
+    # step taken modulo the key count is a divide fault, a reboot on the ESP32 (#1730).
+    if re.search(r"%\s*(?:int\s*\(\s*)?_nkeys\b", sc):
+        out.append("the key cursor must step through stepKey(), never '% _nkeys': with a hardware "
+                   "keyboard there are no keys and a modulo by zero reboots the radio")
+    m2 = re.search(r"void\s+GuiShell::stepKey\(int\s+dir\)\s*\{(.*?)\n\}", sc, re.S)
+    if not m2 or not re.search(r"if\s*\(\s*_nkeys\s*==\s*0\s*\)\s*return\s*;", m2.group(1)):
+        out.append("stepKey() must do nothing when there are no keys (_nkeys == 0)")
     h = re.search(r"void\s+GuiShell::buildKeyHint\(lv_obj_t\*\s*scr\)\s*\{(.*?)\n\}", sc, re.S)
     words = re.findall(r'"([^"]*)"', h.group(1)) if h else []
     if words != ["Enter", "send", "⌫", "on empty: back"]:
@@ -414,6 +422,16 @@ def test_negative_the_late_keyboard_never_reaching_the_shell_is_caught():
 def test_negative_keys_built_with_a_hardware_keyboard_is_caught():
     _fails_with("must build no keys", screens=_real()[6].replace(
         "    if (_composing) buildKeyHint(scr);\n    return;\n", "    if (_composing) buildKeyHint(scr);\n"))
+
+
+def test_negative_a_modulo_by_the_key_count_is_caught():
+    _fails_with("never '% _nkeys'", screens=_real()[6].replace(
+        "void GuiShell::stepKey(int dir) {", "void GuiShell::stepKey(int dir) {\n  _hot = (_hot + 1) % _nkeys;"))
+
+
+def test_negative_stepping_with_no_keys_is_caught():
+    _fails_with("must do nothing when there are no keys", screens=_real()[6].replace(
+        "  if (_nkeys == 0) return;\n  const int n = int(_nkeys);", "  const int n = int(_nkeys);"))
 
 
 def test_negative_changed_hint_wording_is_caught():
