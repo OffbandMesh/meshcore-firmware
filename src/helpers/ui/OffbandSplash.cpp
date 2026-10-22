@@ -118,7 +118,7 @@ void drawSplash(DisplayDriver& display, const SplashInfo& info) {
   const bool color = (art != nullptr);
 
 #ifdef OFFBAND_EVENT_SPLASH
-  if (!colour && !isCompact(display)) {
+  if (!color && !isCompact(display)) {
     drawEventSplash(display, info);
     return;
   }
