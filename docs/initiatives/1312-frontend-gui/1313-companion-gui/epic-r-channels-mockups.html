@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Channel mockups</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+/* Offband theme tokens and screen parts, as in the Epic H, I and J mockups. Static markup. */
+:root{
+  --bg:#0F1412; --bg2:#161C19; --bg3:#1D2521; --line:#34403A; --line2:#232C28;
+  --ink:#EFF3E8; --ink2:#BAC4B5; --dim:#7C8B82; --sig:#7BEFA8; --sigInk:#0F1412;
+  --wash:rgba(123,239,168,.09); --warn:#FFA552; --bad:#FF7A6E; --r:6px;
+  --sans:'Barlow Condensed',sans-serif; --mono:'JetBrains Mono',monospace;
+  --page:#0a0d0c; --pageInk:#cfd6cc;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--page);color:var(--pageInk);font-family:var(--sans);padding:24px 16px 48px}
+h1{font-size:26px;font-weight:600;color:var(--ink)}
+h3{font-size:18px;font-weight:600;color:var(--sig);margin:28px 0 10px}
+.lede{font-size:16px;color:var(--dim);margin:6px 0 8px;max-width:1000px}
+.lede b{color:var(--ink2)}
+.q{font-size:15px;color:var(--ink2);max-width:1000px;margin:8px 0;line-height:1.35}
+.q b{color:var(--warn)}
+.grid{display:flex;flex-wrap:wrap;gap:28px}
+.card{width:300px}
+.card.w{width:400px;max-width:100%}
+.card h2{font-size:18px;font-weight:600;color:var(--ink)}
+.card .n{font-family:var(--mono);font-size:12px;color:var(--sig);margin-right:6px}
+.card p{font-size:14px;color:var(--ink2);margin:4px 0 10px;line-height:1.3;min-height:54px}
+.card ul{font-size:13px;color:var(--dim);margin:10px 0 0 16px;line-height:1.35}
+.card ul b{color:var(--ink2)}
+.dev{width:300px;height:400px;border:1px solid #2a332f;border-radius:10px;overflow:hidden;background:#000}
+.dev.l{width:400px;height:300px}
+.scr{width:240px;height:320px;transform:scale(1.25);transform-origin:0 0;background:var(--bg);color:var(--ink);
+  font-family:var(--sans);position:relative;overflow:hidden;display:flex;flex-direction:column}
+.scr.l{width:320px;height:240px}
+.sb{height:20px;flex:none;background:var(--bg2);border-bottom:1px solid var(--line2);display:flex;align-items:center;
+  padding:0 6px;font-family:var(--mono);font-size:10px;color:var(--ink2);gap:5px}
+.sb .clk{color:var(--ink);font-weight:600} .sb .right{margin-left:auto}
+.tabs{height:40px;flex:none;border-top:1px solid var(--line2);background:var(--bg2);display:flex;margin-top:auto}
+.tabs div{flex:1;display:flex;align-items:center;justify-content:center;font-size:9px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--dim);border-top:2px solid transparent}
+.tabs div.on{color:var(--sig);background:var(--wash);border-top-color:var(--sig)}
+.bodyr{flex:1;min-height:0;display:flex}
+.rail{width:48px;flex:none;display:flex;flex-direction:column;border-right:1px solid var(--line);background:var(--bg2)}
+.rail div{flex:1;display:flex;align-items:center;justify-content:center;font-size:8px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);border-left:2px solid transparent}
+.rail div.on{color:var(--sig);background:var(--wash);border-left-color:var(--sig);font-weight:600}
+.ct{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;position:relative}
+.lh{display:flex;align-items:center;height:32px;flex:none;padding:0 8px;border-bottom:1px solid var(--line)}
+.lh .t{font-size:16px;font-weight:600} .lh .plus{margin-left:auto;width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:var(--sig);font-size:18px;border:1px solid var(--line);border-radius:var(--r)}
+.sh{display:flex;align-items:center;gap:6px;height:30px;flex:none;padding:0 8px;border-bottom:1px solid var(--line)}
+.sh .bk{font-size:16px;color:var(--sig)} .sh .t{font-size:15px;font-weight:600}
+.row{display:flex;align-items:center;gap:7px;min-height:38px;flex:none;padding:4px 8px;border-bottom:1px solid var(--line2)}
+.row.focus{background:var(--wash);box-shadow:inset 3px 0 var(--sig)}
+.row .ic{width:22px;height:22px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:var(--r);background:var(--wash);color:var(--sig);font-size:12px;font-family:var(--mono)}
+.row .tx{flex:1;display:flex;flex-direction:column} .row .k{font-size:13px} .row .s{font-size:10px;color:var(--dim);line-height:1.2}
+.row .chev{color:var(--dim)}
+.empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:0 18px;text-align:center}
+.empty .bub{font-size:22px;color:var(--dim)} .empty b{font-size:15px} .empty span{font-size:11px;color:var(--dim);line-height:1.3}
+.btn{height:28px;flex:none;border:1px solid var(--sig);color:var(--sig);border-radius:var(--r);display:flex;align-items:center;justify-content:center;font-size:13px;padding:0 12px}
+.btn.solid{background:var(--sig);color:var(--sigInk);font-weight:600}
+.btn.bad{border-color:var(--bad);color:var(--bad)}
+.btn.dis{border-color:var(--line);color:var(--dim)}
+.field{margin:8px 8px 0;height:30px;flex:none;border:1px solid var(--sig);background:var(--wash);border-radius:var(--r);display:flex;align-items:center;padding:0 8px;font-size:14px}
+.field .pre{color:var(--dim);margin-right:1px} .caret{display:inline-block;width:1px;height:13px;background:var(--sig);margin-left:1px}
+.field.mono{font-family:var(--mono);font-size:12px;letter-spacing:.02em}
+.lbl{margin:8px 8px 0;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);display:flex}
+.lbl .r{margin-left:auto;font-family:var(--mono);letter-spacing:0}
+.note{margin:5px 8px 0;font-size:10px;color:var(--dim);line-height:1.3}
+.note.warn{color:var(--warn)} .note.bad{color:var(--bad)}
+.acts{display:flex;gap:6px;margin:8px 8px 0}
+.acts .btn{flex:1}
+.kb{margin-top:auto;padding:2px 3px 3px;display:flex;flex-direction:column;gap:2px;flex:none;background:var(--bg2);border-top:1px solid var(--line2)}
+.kb .r{display:flex;gap:2px}
+.kb .r div{flex:1;height:26px;background:var(--bg3);border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:11px}
+.kb .r div.w{flex:1.6;font-size:9px;color:var(--ink2)} .kb .r div.sp{flex:4.5;font-size:9px;color:var(--dim)}
+.kb .r div.go{flex:1.8;background:var(--sig);color:var(--sigInk);font-weight:600;font-size:10px}
+.keybox{margin:8px 8px 0;border:1px solid var(--line);border-radius:var(--r);padding:8px;font-family:var(--mono);font-size:15px;line-height:1.5;text-align:center;letter-spacing:.06em;background:var(--bg2)}
+.dim{position:absolute;inset:20px 0 0 0;background:rgba(5,8,7,.72);display:flex;align-items:flex-end}
+.sheet{width:100%;background:var(--bg3);border-top:1px solid var(--line);border-radius:10px 10px 0 0;padding:6px 0 8px;display:flex;flex-direction:column}
+.sheet .ttl{font-size:13px;font-weight:600;padding:2px 10px 6px;color:var(--ink2)}
+.sheet .row{border-bottom:none}
+.ghost{flex:1;display:flex;flex-direction:column;padding:8px;gap:6px;opacity:.5}
+.ghost div{height:30px;border-bottom:1px solid var(--line2)}
+.cdim{position:absolute;inset:20px 0 0 0;background:rgba(5,8,7,.72);display:flex;align-items:center;justify-content:center;padding:0 12px}
+.csheet{width:100%;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px}
+.csheet b{font-size:15px} .csheet span{font-size:11px;color:var(--ink2);line-height:1.3}
+.copy{font-family:var(--mono);font-size:12px;color:var(--ink);background:#141a17;border:1px solid var(--line2);padding:1px 5px;border-radius:4px;white-space:nowrap}
+table.c{border-collapse:collapse;margin:8px 0;font-size:14px;color:var(--ink2)}
+table.c td{border-bottom:1px solid #1c2320;padding:4px 10px 4px 0;vertical-align:top}
+</style>
+</head>
+<body>
+<h1>Epic R: adding a channel on the device (#1743)</h1>
+<p class="lede">Offband theme, Modern look, shown at 1.25×. Portrait (class A: the V4 TFT) unless marked; landscape (class B: R8, T-Deck) gives the same screens beside the rail, with no on-screen keys when a keyboard is present (mockup 2, #1727). Figures and keys are examples. <b>Owner, 2026-10-21:</b> adding channels on the device is critical; the radio is standalone and must not need a phone. A tester also found the empty Chats box reading "+ to start one" looks like a button and does nothing, and "+" goes only to Nodes, which suits a direct message but not a channel.</p>
+
+<h3>Starting from Chats</h3><div class="grid">
+
+<div class="card"><h2><span class="n">1</span>"+" asks what to start</h2><p>"+" in the Chats header opens a sheet: a message to a node (today's behavior, to Nodes), or a channel.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ 87%</span></div>
+<div class="lh"><span class="t">Chats</span><span class="plus">+</span></div>
+<div class="ghost"><div></div><div></div><div></div></div>
+<div class="dim"><div class="sheet"><div class="ttl">Start a chat</div>
+<div class="row focus"><span class="ic">◉</span><div class="tx"><span class="k">Message a node</span><span class="s">Pick someone in Nodes</span></div><span class="chev">›</span></div>
+<div class="row"><span class="ic">#</span><div class="tx"><span class="k">Add a channel</span><span class="s">Public, hashtag or private</span></div><span class="chev">›</span></div>
+</div></div>
+<div class="tabs"><div>Home</div><div class="on">Chat</div><div>Nodes</div><div>Map</div><div>Setup</div></div></div></div>
+<ul><li>Back or a tap outside closes it, as every sheet does.</li><li>Buttons-only boards: USR steps the rows, a hold picks.</li></ul></div>
+
+<div class="card"><h2><span class="n">2</span>Empty Chats: the "+" is a real button</h2><p>The boxed "+ to start one" now does what it looks like: it opens the same sheet as mockup 1.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ 87%</span></div>
+<div class="lh"><span class="t">Chats</span><span class="plus">+</span></div>
+<div class="empty"><span class="bub">◌◌</span><b>No chats yet</b><span>Channels you join and people who message you show up here.</span><div class="btn" style="margin-top:6px">+ Start a chat</div></div>
+<div class="tabs"><div>Home</div><div class="on">Chat</div><div>Nodes</div><div>Map</div><div>Setup</div></div></div></div>
+<ul><li>With #1741, Public shows as a chat on a fresh radio, so this screen is rare: it appears only if every channel was left.</li><li>The button text changes from "+ to start one" to "+ Start a chat".</li></ul></div>
+
+<div class="card"><h2><span class="n">3</span>Add a channel: three kinds</h2><p>What each kind is, in one line, so the choice is made knowingly. Public is listed only when this radio doesn't hold it.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Add a channel</span></div>
+<div class="row"><span class="ic">◎</span><div class="tx"><span class="k">Public</span><span class="s">The channel every MeshCore radio shares</span></div><span class="chev">›</span></div>
+<div class="row focus"><span class="ic">#</span><div class="tx"><span class="k">Hashtag channel</span><span class="s">Anyone who knows the name can read it</span></div><span class="chev">›</span></div>
+<div class="row"><span class="ic">⚿</span><div class="tx"><span class="k">Private channel</span><span class="s">Only people with its key can read it</span></div><span class="chev">›</span></div>
+<div class="note" style="margin-top:8px">3 of 40 channel slots used</div>
+<div class="tabs"><div>Home</div><div class="on">Chat</div><div>Nodes</div><div>Map</div><div>Setup</div></div></div></div>
+<ul><li>Picking Public adds it at once and opens it.</li><li>All 40 slots full: the rows are dimmed and the note reads "All 40 channel slots are in use. Leave one first."</li></ul></div>
+
+</div>
+
+<h3>Hashtag and private</h3><div class="grid">
+
+<div class="card"><h2><span class="n">4</span>Hashtag: type the name</h2><p>The "#" is fixed in front; the key comes from the name, so the same name on any MeshCore radio is the same channel.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Hashtag channel</span></div>
+<div class="lbl">Name</div>
+<div class="field"><span class="pre">#</span>queencitycon<span class="caret"></span></div>
+<div class="note">Anyone who knows or guesses this name can read it.</div>
+<div class="kb">
+<div class="r"><div>q</div><div>w</div><div>e</div><div>r</div><div>t</div><div>y</div><div>u</div><div>i</div><div>o</div><div>p</div></div>
+<div class="r"><div>a</div><div>s</div><div>d</div><div>f</div><div>g</div><div>h</div><div>j</div><div>k</div><div>l</div></div>
+<div class="r"><div class="w">⇧</div><div>z</div><div>x</div><div>c</div><div>v</div><div>b</div><div>n</div><div>m</div><div class="w">⌫</div></div>
+<div class="r"><div class="w">?123</div><div class="sp">space</div><div class="go">Join</div></div></div>
+</div></div>
+<ul><li>"Join" adds it and opens the chat.</li><li>Already joined: "You're already in #queencitycon" and Join opens that chat instead.</li><li>Question below on letter case.</li></ul></div>
+
+<div class="card"><h2><span class="n">5</span>Private: name it, then a key</h2><p>A name for this radio's list, then either a new key (to share) or a key someone gave you.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Private channel</span></div>
+<div class="lbl">Name</div>
+<div class="field">Ridge crew<span class="caret"></span></div>
+<div class="lbl">Key</div>
+<div class="row focus" style="margin-top:2px"><span class="ic">✦</span><div class="tx"><span class="k">Make a new key</span><span class="s">Then share it with the others</span></div><span class="chev">›</span></div>
+<div class="row"><span class="ic">⌨</span><div class="tx"><span class="k">Enter a key</span><span class="s">32 characters, 0–9 and a–f</span></div><span class="chev">›</span></div>
+<div class="tabs"><div>Home</div><div class="on">Chat</div><div>Nodes</div><div>Map</div><div>Setup</div></div></div></div>
+<ul><li>The name is local: other radios may call it something else and still share the channel, because the key is what matters.</li><li>A new key comes from the radio's random source.</li></ul></div>
+
+<div class="card"><h2><span class="n">6</span>Entering a key</h2><p>Grouped in fours as it's typed, counting to 32. Only 0–9 and a–f are taken; anything else is ignored.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Ridge crew</span></div>
+<div class="lbl">Key <span class="r">20/32</span></div>
+<div class="field mono">9cd8 fcf2 2a47 333b 591d<span class="caret"></span></div>
+<div class="note">Copy it from the radio or app that made the channel.</div>
+<div class="kb">
+<div class="r"><div>1</div><div>2</div><div>3</div><div>4</div><div>5</div><div>6</div><div>7</div><div>8</div><div>9</div><div>0</div></div>
+<div class="r"><div>a</div><div>b</div><div>c</div><div>d</div><div>e</div><div>f</div><div class="w" style="flex:3"></div></div>
+<div class="r"><div class="w" style="flex:7"></div><div class="w">⌫</div></div>
+<div class="r"><div class="sp" style="flex:6;color:var(--dim)"> </div><div class="go dis" style="background:var(--bg3);color:var(--dim)">Join</div></div></div>
+</div></div>
+<ul><li>A hex-only keypad on touch and button boards: 16 keys instead of the full keyboard. The T-Deck types it on its keyboard.</li><li>Join lights at 32.</li></ul></div>
+
+</div>
+
+<h3>After joining, and leaving</h3><div class="grid">
+
+<div class="card"><h2><span class="n">7</span>A new private key, to share</h2><p>Shown once right after "Make a new key", and any time from the channel's menu (mockup 8).</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Ridge crew · key</span></div>
+<div class="keybox">4f1c 8a20 d37e 6b95<br>0c4e a1f7 2d68 b39a</div>
+<div class="note warn">Anyone with this key can read the channel. Share it only with the people who should.</div>
+<div class="acts"><div class="btn solid">Done</div></div>
+<div class="tabs"><div>Home</div><div class="on">Chat</div><div>Nodes</div><div>Map</div><div>Setup</div></div></div></div>
+<ul><li>Large and grouped so it can be read aloud or typed into another radio.</li><li>Public and hashtag channels show no key: theirs isn't secret.</li></ul></div>
+
+<div class="card"><h2><span class="n">8</span>The channel's menu: key and leave</h2><p>Today's sheet (Write message, Notifications) gains two rows. "Channel key" appears only for a private channel.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Ridge crew</span></div>
+<div class="ghost"><div></div><div></div></div>
+<div class="dim"><div class="sheet"><div class="ttl">Ridge crew</div>
+<div class="row focus"><span class="ic">✎</span><div class="tx"><span class="k">Write message</span><span class="s">Open the keyboard</span></div></div>
+<div class="row"><span class="ic">♪</span><div class="tx"><span class="k">Notifications</span><span class="s">Alert on every message</span></div></div>
+<div class="row"><span class="ic">⚿</span><div class="tx"><span class="k">Channel key</span><span class="s">Show it to share</span></div></div>
+<div class="row"><span class="ic" style="color:var(--bad);background:rgba(255,122,110,.1)">⨯</span><div class="tx"><span class="k" style="color:var(--bad)">Leave channel</span><span class="s">Remove it from this radio</span></div></div>
+</div></div>
+<div class="tabs"><div>Home</div><div class="on">Chat</div><div>Nodes</div><div>Map</div><div>Setup</div></div></div></div>
+<ul><li>A sheet that grows past the screen scrolls, as the others do.</li></ul></div>
+
+<div class="card"><h2><span class="n">9</span>Leave: the confirmation</h2><p>Says what goes and what stays. Confirm is red and on the right, as Format card.</p>
+<div class="dev"><div class="scr"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ 87%</span></div>
+<div class="sh"><span class="bk">‹</span><span class="t">Ridge crew</span></div><div class="ghost"><div></div><div></div><div></div><div></div></div>
+<div class="cdim"><div class="csheet"><b>Leave Ridge crew?</b><span>This radio stops receiving it and the chat is removed. Its key is forgotten: to come back you'll need it again.</span>
+<div class="acts" style="margin:4px 0 0"><div class="btn">Cancel</div><div class="btn bad">Leave</div></div></div></div>
+<div class="tabs"><div>Home</div><div class="on">Chat</div><div>Nodes</div><div>Map</div><div>Setup</div></div></div></div>
+<ul><li>For Public and hashtag channels the last sentence reads "You can join it again any time."</li></ul></div>
+
+<div class="card w"><h2><span class="n">10</span>Landscape with a keyboard (T-Deck)</h2><p>Hashtag entry beside the rail. No on-screen keys: the field takes the room, and the foot line names Enter.</p>
+<div class="dev l"><div class="scr l"><div class="sb"><span class="clk">21:07</span><span class="right">▂▄▆ ✱ 87%</span></div>
+<div class="bodyr"><div class="rail"><div>Home</div><div class="on">Chat</div><div>Nodes</div><div>Map</div><div>Setup</div></div>
+<div class="ct"><div class="sh" style="height:28px"><span class="bk">‹</span><span class="t">Hashtag channel</span></div>
+<div class="lbl">Name</div>
+<div class="field"><span class="pre">#</span>queencitycon<span class="caret"></span></div>
+<div class="note">Anyone who knows or guesses this name can read it.</div>
+<div style="margin-top:auto;height:20px;border-top:1px solid var(--line2);display:flex;align-items:center;gap:6px;padding:0 8px;font-family:var(--mono);font-size:9px;color:var(--dim)"><b style="color:var(--ink2)">Enter</b> join</div>
+</div></div></div></div>
+<ul><li>The same screens as mockups 3–7, laid out as Epic H's class B.</li></ul></div>
+
+</div>
+
+<h3>For the owner</h3>
+<p class="q"><b>1 · Letter case in hashtag names.</b> The key comes from the name exactly, so <span class="copy">#QueenCityCon</span> and <span class="copy">#queencitycon</span> are different channels. <b>A</b>: lowercase as it's typed, so everyone lands on the same channel (recommended). <b>B</b>: keep exactly what was typed.</p>
+<p class="q"><b>2 · Leave and Channel key (mockups 8–9).</b> Build them with Add, or Add alone first? Without Leave, a full list of 40 can only be cleared from the phone.</p>
+<p class="q"><b>3 · New on-screen text,</b> for your yes, exactly as it would ship:</p>
+<table class="c">
+<tr><td>Sheet (1)</td><td><span class="copy">Start a chat</span> · <span class="copy">Message a node</span> / <span class="copy">Pick someone in Nodes</span> · <span class="copy">Add a channel</span> / <span class="copy">Public, hashtag or private</span></td></tr>
+<tr><td>Empty Chats (2)</td><td><span class="copy">+ Start a chat</span> (was "+ to start one")</td></tr>
+<tr><td>Kinds (3)</td><td><span class="copy">Add a channel</span> · <span class="copy">Public</span> / <span class="copy">The channel every MeshCore radio shares</span> · <span class="copy">Hashtag channel</span> / <span class="copy">Anyone who knows the name can read it</span> · <span class="copy">Private channel</span> / <span class="copy">Only people with its key can read it</span> · <span class="copy">3 of 40 channel slots used</span> · <span class="copy">All 40 channel slots are in use. Leave one first.</span></td></tr>
+<tr><td>Hashtag (4, 10)</td><td><span class="copy">Name</span> · <span class="copy">Anyone who knows or guesses this name can read it.</span> · <span class="copy">Join</span> · <span class="copy">You're already in #name</span> · <span class="copy">Enter join</span></td></tr>
+<tr><td>Private (5, 6)</td><td><span class="copy">Key</span> · <span class="copy">Make a new key</span> / <span class="copy">Then share it with the others</span> · <span class="copy">Enter a key</span> / <span class="copy">32 characters, 0–9 and a–f</span> · <span class="copy">Copy it from the radio or app that made the channel.</span></td></tr>
+<tr><td>Key (7)</td><td><span class="copy">&lt;name&gt; · key</span> · <span class="copy">Anyone with this key can read the channel. Share it only with the people who should.</span> · <span class="copy">Done</span></td></tr>
+<tr><td>Menu (8)</td><td><span class="copy">Channel key</span> / <span class="copy">Show it to share</span> · <span class="copy">Leave channel</span> / <span class="copy">Remove it from this radio</span></td></tr>
+<tr><td>Leave (9)</td><td><span class="copy">Leave &lt;name&gt;?</span> · <span class="copy">This radio stops receiving it and the chat is removed. Its key is forgotten: to come back you'll need it again.</span> · <span class="copy">You can join it again any time.</span> · <span class="copy">Cancel</span> / <span class="copy">Leave</span></td></tr>
+</table>
+</body></html>
