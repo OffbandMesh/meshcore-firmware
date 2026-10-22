@@ -74,10 +74,10 @@ const char* offbandShortVersion() {
 //            the RC32), so the same y=56 would end at physical 130 on a 128px panel
 //            and clip descenders.
 static const int MONO_L1 = 35, MONO_L2 = 46, MONO_L3 = 56;
-static const int COLOUR_L1 = 29, COLOUR_L2 = 41, COLOUR_L3 = 53;
+static const int COLOR_L1 = 29, COLOR_L2 = 41, COLOR_L3 = 53;
 
 int splashLastLineY() {
-  return MONO_L3 > COLOUR_L3 ? MONO_L3 : COLOUR_L3;
+  return MONO_L3 > COLOR_L3 ? MONO_L3 : COLOR_L3;
 }
 
 // A 72x40 OLED (lilygo_techo_card, ui-tiny) cannot take the full lockup: the
@@ -114,11 +114,11 @@ int drawBrandLockup(DisplayDriver& display, int y) {
 }
 
 void drawSplash(DisplayDriver& display, const SplashInfo& info) {
-  const DisplayDriver::ColourArt* art = display.colourSplashArt();
-  const bool colour = (art != nullptr);
+  const DisplayDriver::ColorArt* art = display.colorSplashArt();
+  const bool color = (art != nullptr);
 
 #ifdef OFFBAND_EVENT_SPLASH
-  if (!colour && !isCompact(display)) {
+  if (!color && !isCompact(display)) {
     drawEventSplash(display, info);
     return;
   }
@@ -145,7 +145,7 @@ void drawSplash(DisplayDriver& display, const SplashInfo& info) {
     return;
   }
 
-  if (colour) {
+  if (color) {
     // PHYSICAL pixels -- deliberately not the logical canvas, which is stretched
     // non-uniformly on these panels and would turn the mark's arcs into ellipses.
     display.drawRGB565(art->x, art->y, art->px, art->w, art->h);
@@ -153,9 +153,9 @@ void drawSplash(DisplayDriver& display, const SplashInfo& info) {
     drawBrandLockup(display, 1);
   }
 
-  const int l1 = colour ? COLOUR_L1 : MONO_L1;
-  const int l2 = colour ? COLOUR_L2 : MONO_L2;
-  const int l3 = colour ? COLOUR_L3 : MONO_L3;
+  const int l1 = color ? COLOR_L1 : MONO_L1;
+  const int l2 = color ? COLOR_L2 : MONO_L2;
+  const int l3 = color ? COLOR_L3 : MONO_L3;
   const int mid = display.width() / 2;
 
   display.setTextSize(1);

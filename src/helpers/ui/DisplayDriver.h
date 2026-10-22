@@ -79,9 +79,9 @@ public:
   // splash" rather than like a bug. A driver cannot now claim colour capability
   // without supplying the art, because they are the same override, and the artwork
   // lives with the driver that knows its own panel size.
-  struct ColourArt { const uint16_t* px; int w, h, x, y; };
-  virtual const ColourArt* colourSplashArt() const { return nullptr; }
-  bool supportsColourArt() const { return colourSplashArt() != nullptr; }
+  struct ColorArt { const uint16_t* px; int w, h, x, y; };
+  virtual const ColorArt* colorSplashArt() const { return nullptr; }
+  bool supportsColorArt() const { return colorSplashArt() != nullptr; }
   virtual uint16_t getTextWidth(const char* str) = 0;
   virtual void drawTextCentered(int mid_x, int y, const char* str) {   // helper method (override to optimise)
     int w = getTextWidth(str);

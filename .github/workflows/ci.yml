@@ -377,6 +377,39 @@ jobs:
           name: capability-claims
           path: ${{ runner.temp }}/capability-claims.json
           if-no-files-found: warn
+
+      # #812 / #1123. A file-static in a display driver that shares a name with a
+      # DisplayDriver virtual: a member function calling it binds to the empty base
+      # method instead. It compiles clean and no compiler flag catches it -- that is
+      # how ST7735 boot rotation was discarded on 27 envs for two months. Scans the
+      # shared drivers AND variant-local ones under variants/*/, where RC52Display
+      # lives.
+      #
+      # ADVISORY, following the #775/#776 precedent: making a new guard a blocking
+      # part of ci-green is an owner decision.
+      - name: Display-virtual shadowing guard self-test (advisory)
+        continue-on-error: true
+        run: python scripts/test_check_display_virtuals.py
+
+      - name: No file-static shadows a DisplayDriver virtual (advisory)
+        continue-on-error: true
+        run: python scripts/check_display_virtuals.py
+
+      # #864. A rename that is complete everywhere the author built, and stale
+      # behind a flag they did not: #1122 renamed the color-splash API, and forty
+      # days later a rebase landed it beside an event-splash block still using the
+      # old name inside #ifdef OFFBAND_EVENT_SPLASH. Both sides merged cleanly and
+      # only the QCC badge env compiles that block, so it reached CI as a broken
+      # matrix leg. This costs a second; a matrix leg costs minutes.
+      #
+      # BLOCKING, unlike the two advisory guards above: this one cannot disagree
+      # with the compiler -- an identifier either resolves or it does not -- and
+      # the tree is clean, so it can only fire on something genuinely new.
+      - name: US-English identifier guard self-test
+        run: python scripts/test_check_us_english_identifiers.py
+
+      - name: No UK-spelled identifiers
+        run: python scripts/check_us_english_identifiers.py
   # #712: the googletest suites existed but NOTHING ran them in CI, so every invariant they
   # encode was unenforced on PRs. That is how #711 (a regression of #450) reached the field:
   # the frame-size ceiling had no mechanical guard, only a comment.

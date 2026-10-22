@@ -164,7 +164,7 @@ public:
 
   // This driver's own colour splash art. Capability and asset are one
   // declaration, so no per-variant flag can be forgotten.
-  const ColourArt* colourSplashArt() const override;
+  const ColorArt* colorSplashArt() const override;
 
   bool isOn() override { return is_on; }
   void turnOn() override;

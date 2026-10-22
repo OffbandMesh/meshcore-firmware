@@ -83,6 +83,14 @@ void LGFXDisplay::drawXbm(int x, int y, const uint8_t* bits, int w, int h) {
   buffer.drawBitmap(x, y, bits, w, h, _color);
 }
 
+void LGFXDisplay::drawRGB565(int x, int y, const uint16_t* px, int w, int h) {
+  if (!px) return;
+  // The typed pointer is what makes this safe: the sprite is 8-bit (begin() sets
+  // setColorDepth(8)), and naming the source format lets LovyanGFX convert into
+  // it. Handing it a bare uint16_t* would be read at the sprite's own depth.
+  buffer.pushImage(x, y, w, h, (const lgfx::rgb565_t*)px);
+}
+
 uint16_t LGFXDisplay::getTextWidth(const char* str) {
   return buffer.textWidth(str);
 }
