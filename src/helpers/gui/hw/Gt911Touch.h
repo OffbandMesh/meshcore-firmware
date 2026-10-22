@@ -25,6 +25,22 @@ public:
   bool present() const { return _present; }
   bool read(offband::gui::TouchPoint* p) override;
 
+  // What begin() found, for the diag log: per address, whether it answered
+  // and the product id bytes it gave (#1730 bench).
+  struct Probe {
+    bool acked;
+    bool id_read;
+    uint8_t id[4];
+  };
+  const Probe& probe(uint8_t i) const { return _probe[i < 2 ? i : 1]; }
+
+  // Counts since the last take, for the diag log.
+  struct Stats {
+    uint32_t reads, bus_errors, reports, presses, invalid;
+    uint16_t last_x, last_y;   // the last pressed point, raw
+  };
+  Stats takeStats();
+
 private:
   bool readReg(uint16_t reg, uint8_t* buf, uint8_t len);
   bool writeReg(uint16_t reg, uint8_t value);
@@ -33,4 +49,6 @@ private:
   uint8_t _addr = 0x5D;
   bool _present = false;
   offband::gui::Gt911Tracker _tracker;
+  Probe _probe[2] = {};
+  Stats _stats = {};
 };

@@ -130,6 +130,9 @@ void GuiSd::loop(uint32_t now_ms, MsgStore& live) {
     case SdAction::None:
       break;
   }
+#ifdef OFFBAND_SD_DIAG_LOG
+  if (_mon.working()) _diag.tick(now_ms);   // diag builds: the log to the card
+#endif
   if (!_mon.working() || !_arch.ready()) return;
 
   bool ok = true;

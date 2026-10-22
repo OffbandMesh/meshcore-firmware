@@ -192,6 +192,10 @@ def failures(ini, target, ci, hal=None, board=None, sd=None):
 
     if DIAG not in secs or "extends = %s" % GUI not in secs[DIAG]:
         out.append("the _diag twin must extend the GUI env")
+    elif flag(secs[DIAG], "OFFBAND_SD_DIAG_LOG") is None:
+        out.append("the _diag twin must set OFFBAND_SD_DIAG_LOG: a tester hands the log over on the card (#1730)")
+    if flag(gui, "OFFBAND_SD_DIAG_LOG") is not None:
+        out.append("the GUI env must not set OFFBAND_SD_DIAG_LOG: only the diag build writes its log to the card")
     for env in (GUI, DIAG):
         name = env.split(":", 1)[1]
         if not re.search(r"^\s*-\s*%s\s*$" % re.escape(name), ci, re.M):
@@ -358,6 +362,15 @@ def test_negative_a_failed_mount_leaving_the_cs_floating_is_caught():
 def test_negative_parking_the_cs_low_is_caught():
     _fails_with("parkCs() must drive the card's CS as an output, high",
                 sd=_real()[5].replace("gpio_set_level(cs, 1)", "gpio_set_level(cs, 0)"))
+
+
+def test_negative_the_diag_build_without_the_sd_log_is_caught():
+    _fails_with("must set OFFBAND_SD_DIAG_LOG", ini=_swap_in(DIAG, "-D OFFBAND_SD_DIAG_LOG", ""))
+
+
+def test_negative_the_sd_log_in_the_plain_gui_build_is_caught():
+    _fails_with("must not set OFFBAND_SD_DIAG_LOG",
+                ini=_swap_in(GUI, "-D OFFBAND_GUI=1", "-D OFFBAND_GUI=1\n  -D OFFBAND_SD_DIAG_LOG"))
 
 
 if __name__ == "__main__":

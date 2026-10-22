@@ -115,6 +115,9 @@ private:
   void savePasswords();
   void pollButtons(uint32_t now);
   void pollKeys(uint32_t now);   // the T-Deck's keyboard and trackball (J4 #1727)
+  void pollTouchLate(uint32_t now);
+  void attachTouch();
+  void logTouchProbe();
   void handle(offband::gui::InputEvent ev, uint32_t now);
   void applyScreen(offband::gui::ScreenState s);
   void toggleBuzzer();
@@ -147,6 +150,7 @@ private:
   NodePrefs* _prefs = nullptr;
   bool _gui_ok = false;
   bool _touch_ok = false;
+  uint32_t _touch_probed = 0;       // the last late look for the touch chip
   bool _kb_ok = false;              // a T-Deck keyboard answered at boot
   uint32_t _kb_polled = 0;
   uint8_t _track_carry[4] = {};     // trackball pulses short of a step, per direction
