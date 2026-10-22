@@ -3,6 +3,13 @@
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
 #include <MeshLog.h>  // #396: serial-capture buffer access for the caplog download
+// #1316: crashLogf() for stream-abandonment reports. Chosen over mesh_log_line because
+// capture is OFF by default on a shipping build (#428), so mesh_log_line reaches nothing
+// on the images testers actually run -- while the crashlog ring is always present and
+// survives a reset. Safe on a USB companion: since #1087 crashLogSerialWrite suppresses
+// its Serial echo when the console carries the framed protocol.
+#include "helpers/diagnostics/CrashLog.h"
+#include "helpers/StreamAbandonReport.h"   // #1316: the rate limit + wording, unit-tested
 #include <helpers/ClockSanity.h>  // #607: owner-path clock sets + audit log
 #include "helpers/CdcConsoleFlush.h"   // #1035: right-flush (ZLP) for the USB-Serial-JTAG console
 #include "helpers/OffbandVersion.h"   // #1391: shared OB-first <ob>-<stock> version string (CLI == device-info)
@@ -180,6 +187,13 @@ namespace offband { MqttBrokerPool& wifiObserverPool(); }
 // trips it. Shorter than the client's 30 s downloadCaplog timeout so the device frees
 // its own state first and the client sees a clean stop rather than a wedged radio.
 #define CAPLOG_STALL_ABORT_MS         15000UL
+// #1283 (D1): the same bound for every OTHER streamed response, and for the same
+// reason -- once a refused frame is retried instead of dropped, a host that never
+// drains would hold the stream open forever, and each stream's in-flight flag
+// (_iter_started, _blk_listing, _ob_stream) rejects a fresh request while set.
+// Measured from the last ACCEPTED frame, so a slow-but-advancing stream is never
+// aborted. Trading silent data loss for a wedged stream would be no bargain.
+#define STREAM_STALL_ABORT_MS         15000UL
 
 // Stats sub-types for CMD_GET_STATS
 #define STATS_TYPE_CORE               0
@@ -345,7 +359,13 @@ void MyMesh::writeDisabledFrame() {
   _serial->writeFrame(buf, 1);
 }
 
-void MyMesh::writeContactRespFrame(uint8_t code, const ContactInfo &contact) {
+// Returns whether the transport took the whole frame. All three callers currently
+// ignore it, so this is behavior-neutral -- it exists so #1299's instrumentation does
+// not need a shared flag between this function and its caller (two of the three callers
+// are not the contact stream, so a shared flag could be clobbered between the write and
+// the read). Acting on this value would be the #1283 fix and is deliberately NOT done
+// here: a build that repairs the defect cannot characterize it.
+bool MyMesh::writeContactRespFrame(uint8_t code, const ContactInfo &contact) {
   int i = 0;
   out_frame[i++] = code;
   memcpy(&out_frame[i], contact.id.pub_key, PUB_KEY_SIZE);
@@ -365,7 +385,70 @@ void MyMesh::writeContactRespFrame(uint8_t code, const ContactInfo &contact) {
   i += 4;
   memcpy(&out_frame[i], &contact.lastmod, 4);
   i += 4;
-  _serial->writeFrame(out_frame, i);
+  // Comparing against the exact length, not against 0: on this transport a short write
+  // already returns 0 (`ArduinoSerialInterface.cpp:40-83`, every short path is explicit),
+  // but a transport that ever returned a partial count would otherwise read as success.
+  return _serial->writeFrame(out_frame, i) == (size_t)i;
+}
+
+#if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
+void MyMesh::csReset(uint32_t declared) {
+  _cs_declared = declared;
+  _cs_yielded = _cs_filtered = _cs_attempted = _cs_refused = _cs_end_refused = 0;
+}
+
+// One line per completed stream, into the capture ring. It cannot go to Serial on a
+// USB companion -- that IS the companion protocol stream, and writing text into it is
+// #1087. The ring is read afterwards with the 0xC4 caplog download, and the ring is
+// plain RAM, so it must be downloaded before the next reboot or the run is lost.
+void MyMesh::csReport() {
+  mesh_log_line(MLOG_BOOT,
+                "[contacts] declared=%u yielded=%u filtered=%u attempted=%u "
+                "refused=%u end_refused=%u sent=%u\n",
+                (unsigned)_cs_declared, (unsigned)_cs_yielded, (unsigned)_cs_filtered,
+                (unsigned)_cs_attempted, (unsigned)_cs_refused,
+                (unsigned)_cs_end_refused,
+                (unsigned)(_cs_attempted - _cs_refused));
+}
+#endif
+
+void MyMesh::reportStreamAbandoned(const char* stream, const char* phase, uint32_t stalled_ms,
+                                   uint32_t progress, const char* unit, uint32_t total) {
+  // Per-stream window plus a per-boot cap; abandonTake() owns and clears the suppressed
+  // count. See StreamAbandonReport.h for why both limits exist and why the window is NOT
+  // global across streams.
+  const offband::AbandonDecision d =
+      offband::abandonTake(_abandon_limiter, stream, millis());
+  if (!d.emit) return;
+
+  char line[176];
+  offband::abandonFormat(line, sizeof(line), stream, phase, stalled_ms, progress, unit,
+                         total, d.suppressed);
+
+  // BOTH sinks, and neither is redundant. Hardware verification on a non-diag build is
+  // what forced this; the first revision wrote only crashLogf, reasoning that the crashlog
+  // ring is always present and survives a reset. Both of those are true of the WRITE. The
+  // READ is the problem: the only readers are crashLogDump(), which goes to Serial and is
+  // suppressed on exactly this transport since #1087, and a host-only test function. There
+  // is no companion-protocol command and no CLI verb for the crashlog ring -- and a
+  // companion has no CLI at all. So on the one build this task exists to serve, the report
+  // was being written somewhere nobody can read it.
+  //
+  //   crashLogf      -> crashlog ring. Survives a reset, and reaches the raw UART mirror
+  //                     on a bench build. This is the path that works when the device is
+  //                     in front of us and the thing we care about is the boot BEFORE last.
+  //   mesh_log_line  -> capture ring, downloadable over 0xC4 (MyMesh.cpp:2394, compiled
+  //                     UNCONDITIONALLY, not gated on OFFBAND_FORCE_CAPLOG). Capture is off
+  //                     by default per #428, but the client can enable it at runtime
+  //                     (:2103), so the tester path is: turn capture on, reproduce, download.
+  //                     This is the path that works when the device is in someone else's
+  //                     hands on another continent.
+  //
+  // On a build that carries the UART mirror the line appears twice, once per sink. That is
+  // accepted: a duplicated diagnostic on a bench build costs a reader two seconds, and the
+  // alternative -- gating one sink on the other -- is how one of them silently stops firing.
+  offband::crashLogf("%s", line);
+  mesh_log_line(MLOG_ERROR, "%s\n", line);
 }
 
 void MyMesh::updateContactFromFrame(ContactInfo &contact, uint32_t& last_mod, const uint8_t *frame, int len) {
@@ -2170,6 +2253,7 @@ void MyMesh::handleOffbandConfigCmd(size_t len) {
     _serial->writeFrame(hdr, 2);
     _ob_off = 0;
     _ob_stream = OB_STREAM_VIEW;
+    _ob_last_progress = millis();   // #1283 (D1): the stall abort's clock
     return;
   }
 
@@ -2187,6 +2271,7 @@ void MyMesh::handleOffbandConfigCmd(size_t len) {
     _ob_buf[0] = '\0';        // empty -> drain renders the next slot before emitting
     _ob_off    = 0;
     _ob_stream = OB_STREAM_BROKERS;
+    _ob_last_progress = millis();   // #1283 (D1): the stall abort's clock
     return;
   }
 
@@ -2201,7 +2286,15 @@ void MyMesh::offbandStreamDrain() {
   if (_ob_stream == OB_STREAM_VIEW) {
     if (_ob_buf[_ob_off] == '\0') {                  // text exhausted -> END, done
       uint8_t hdr[2] = { offband::RESP_CODE_OFFBAND_CONFIG, offband::OCFG_R_VIEW_END };
-      _serial->writeFrame(hdr, 2);
+      // #1283 (D1): retry a refused terminator rather than close the stream on it.
+      if (_serial->writeFrame(hdr, 2) == 0) {
+        if (millis() - _ob_last_progress > STREAM_STALL_ABORT_MS) {
+          _ob_stream = OB_STREAM_NONE;
+          reportStreamAbandoned("obconfig", "view-terminator", STREAM_STALL_ABORT_MS,
+                                _ob_off, " bytes", 0);
+        }
+        return;
+      }
       _ob_stream = OB_STREAM_NONE;
       return;
     }
@@ -2212,7 +2305,18 @@ void MyMesh::offbandStreamDrain() {
     out_frame[1] = offband::OCFG_R_VIEW_CHUNK;
     memcpy(&out_frame[2], &_ob_buf[_ob_off], take);
     out_frame[2 + take] = 0;
-    _serial->writeFrame(out_frame, 2 + take + 1);
+    // #1283 (D1): advance the read offset ONLY on a sent frame. Advancing on a
+    // refusal silently truncates the config text the client asked for -- the
+    // contacts defect, in a third stream. Not advancing re-offers the same chunk.
+    if (_serial->writeFrame(out_frame, 2 + take + 1) == 0) {
+      if (millis() - _ob_last_progress > STREAM_STALL_ABORT_MS) {
+        _ob_stream = OB_STREAM_NONE;
+        reportStreamAbandoned("obconfig", "view", STREAM_STALL_ABORT_MS, _ob_off,
+                              " bytes", 0);
+      }
+      return;
+    }
+    _ob_last_progress = millis();
     _ob_off += take;
     return;
   }
@@ -2225,7 +2329,15 @@ void MyMesh::offbandStreamDrain() {
       while (s < maxSlots && !offband::configBrokerSlotPopulated((uint8_t)s)) s++;
       if (s >= maxSlots) {                           // all populated slots streamed -> END
         uint8_t hdr[2] = { offband::RESP_CODE_OFFBAND_CONFIG, offband::OCFG_R_BROKERS_END };
-        _serial->writeFrame(hdr, 2);
+        // #1283 (D1): retry a refused terminator rather than close the stream on it.
+        if (_serial->writeFrame(hdr, 2) == 0) {
+          if (millis() - _ob_last_progress > STREAM_STALL_ABORT_MS) {
+            _ob_stream = OB_STREAM_NONE;
+            reportStreamAbandoned("obconfig", "brokers-terminator", STREAM_STALL_ABORT_MS,
+                                  _ob_off, " bytes", 0);
+          }
+          return;
+        }
         _ob_stream = OB_STREAM_NONE;
         return;
       }
@@ -2257,7 +2369,17 @@ void MyMesh::offbandStreamDrain() {
       out_frame[2] = (uint8_t)_ob_slot;
       memcpy(&out_frame[3], line, linelen);
       out_frame[3 + linelen] = 0;
-      _serial->writeFrame(out_frame, 3 + linelen + 1);
+      // #1283 (D1): hold the line on refusal -- advancing _ob_off past it drops a
+      // broker row out of a dump the client was told the count of.
+      if (_serial->writeFrame(out_frame, 3 + linelen + 1) == 0) {
+        if (millis() - _ob_last_progress > STREAM_STALL_ABORT_MS) {
+          _ob_stream = OB_STREAM_NONE;
+          reportStreamAbandoned("obconfig", "brokers", STREAM_STALL_ABORT_MS, _ob_off,
+                                " bytes", 0);
+        }
+        return;
+      }
+      _ob_last_progress = millis();
     }
     _ob_off += nl ? (size_t)(nl - line) + 1 : strlen(line);
     return;
@@ -2398,6 +2520,7 @@ void MyMesh::handleCmdFrame(size_t len) {
       _serial->writeFrame(out_frame, 4);
       _blk_list_i = 0;
       _blk_listing = true;
+      _blk_last_progress = millis();   // #1283 (D1): the stall abort's clock
     } else {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     }
@@ -3111,6 +3234,16 @@ void MyMesh::handleCmdFrame(size_t len) {
       _iter = startContactsIterator();
       _iter_started = true;
       _most_recent_lastmod = 0;
+      _has_pending_contact = false;          // #1283 (D1): no carry-over between syncs
+      _contacts_last_progress = millis();    // the clock the stall abort measures from
+      // #1316: always compiled, so an abandonment report on a STOCK build can say how
+      // far the sync actually got. `count` is exactly what the START frame promised.
+      _contacts_declared = count;
+      _contacts_sent = 0;
+      _contacts_filtered = 0;
+#if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
+      csReset(count);   // #1299: `count` is exactly what the START frame promised
+#endif
     }
   } else if (cmd_frame[0] == CMD_SET_ADVERT_NAME && len >= 2) {
     int nlen = len - 1;
@@ -3941,7 +4074,16 @@ void MyMesh::blockListDrain() {
     out_frame[0] = offband::RESP_CODE_OFFBAND_BLOCK;
     out_frame[1] = offband::OFFBAND_BLOCK_LIST;
     out_frame[2] = 0xFE;                             // END
-    _serial->writeFrame(out_frame, 3);
+    // #1283 (D1): a refused terminator used to be dropped AND the stream closed,
+    // leaving the client waiting for an END never re-sent. Retry it instead.
+    if (_serial->writeFrame(out_frame, 3) == 0) {
+      if (millis() - _blk_last_progress > STREAM_STALL_ABORT_MS) {
+        _blk_listing = false;
+        reportStreamAbandoned("blocklist", "terminator", STREAM_STALL_ABORT_MS,
+                              _blk_list_i, " slot", 0);
+      }
+      return;
+    }
     _blk_listing = false;
     return;
   }
@@ -3949,7 +4091,19 @@ void MyMesh::blockListDrain() {
   out_frame[1] = offband::OFFBAND_BLOCK_LIST;
   out_frame[2] = _blk_list_i;                        // 0..MAX_BLOCKED_KEYS-1 (never 0xFE/0xFF)
   memcpy(&out_frame[3], _blocks.keyAt(_blk_list_i), PUB_KEY_SIZE);
-  _serial->writeFrame(out_frame, 3 + PUB_KEY_SIZE);
+  // #1283 (D1): advance ONLY on a sent frame. Advancing on a refusal is how a key
+  // vanished from a list the client was told the length of -- the contacts defect,
+  // in a second stream. The index is the read cursor, so simply not advancing
+  // re-offers the same key next pass.
+  if (_serial->writeFrame(out_frame, 3 + PUB_KEY_SIZE) == 0) {
+    if (millis() - _blk_last_progress > STREAM_STALL_ABORT_MS) {
+      _blk_listing = false;
+      reportStreamAbandoned("blocklist", "list", STREAM_STALL_ABORT_MS, _blk_list_i,
+                            " slot", 0);
+    }
+    return;
+  }
+  _blk_last_progress = millis();
   _blk_list_i++;
 }
 
@@ -3991,8 +4145,8 @@ void MyMesh::caplogDrain() {
     if (millis() - _caplog_last_progress > CAPLOG_STALL_ABORT_MS) {
       _caplog_streaming = false;
       meshLogSetEnabled(_caplog_resume);
-      MESH_DEBUG_PRINTLN("caplog: transport stalled %lums, download aborted (#718)",
-                         (unsigned long)CAPLOG_STALL_ABORT_MS);
+      reportStreamAbandoned("caplog", "download", CAPLOG_STALL_ABORT_MS, _caplog_off,
+                            " bytes", 0);
     }
     return;
   }
@@ -4196,19 +4350,84 @@ void MyMesh::checkSerialInterface() {
   } else if (_iter_started              // check if our ContactsIterator is 'running'
              && !_serial->isWriteBusy() // don't spam the Serial Interface too quickly!
   ) {
+    // #1283 (D1): retry a held contact before pulling a new one. hasNext() advances
+    // the iterator, so asking it again would skip the one that was refused.
     ContactInfo contact;
-    if (_iter.hasNext(this, contact)) {
+    bool have_contact;
+    if (_has_pending_contact) {
+      contact = _pending_contact;
+      have_contact = true;
+    } else {
+      have_contact = _iter.hasNext(this, contact);
+#if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
+      if (have_contact) {                                   // #1299: count each contact once
+        _cs_yielded++;
+        if (!(contact.lastmod > _iter_filter_since)) _cs_filtered++;
+      }
+#endif
+    }
+    if (have_contact) {
       if (contact.lastmod > _iter_filter_since) { // apply the 'since' filter
-        writeContactRespFrame(RESP_CODE_CONTACT, contact);
+        const bool sent_ok = writeContactRespFrame(RESP_CODE_CONTACT, contact);
+#if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
+        _cs_attempted++;                                    // #1299
+        if (!sent_ok) _cs_refused++;
+#endif
+        if (!sent_ok) {
+          // The transport had no room. Hold this contact and re-offer it next pass
+          // rather than let the advanced iterator drop it -- the #1283 defect.
+          _pending_contact = contact;
+          _has_pending_contact = true;
+          // ...but a host that never drains would otherwise hold the stream open
+          // forever, and _iter_started rejects a fresh CMD_GET_CONTACTS with
+          // ERR_CODE_BAD_STATE. Abort on a STALL, measured from the last ACCEPTED
+          // frame, so a slow-but-advancing sync is safe. Mirrors caplogDrain (#718).
+          if (millis() - _contacts_last_progress > STREAM_STALL_ABORT_MS) {
+            _has_pending_contact = false;
+            // Best effort: end the stream rather than abandon the client waiting for
+            // a terminator that will never come. If this write is refused too the
+            // transport is genuinely gone, and the client's own timeout is the
+            // backstop -- but a silent abort would guarantee the hang.
+            out_frame[0] = RESP_CODE_END_OF_CONTACTS;
+            memcpy(&out_frame[1], &_most_recent_lastmod, 4);
+            _serial->writeFrame(out_frame, 5);
+            _iter_started = false;
+            reportStreamAbandoned("contacts", "sync", STREAM_STALL_ABORT_MS,
+                                  _contacts_sent, " contacts", contactsEligible());
+          }
+          return;   // nothing else this pass; the same contact is retried next one
+        }
+        _has_pending_contact = false;
+        _contacts_last_progress = millis();
+        _contacts_sent++;   // #1316: ACCEPTED by the transport, not merely attempted
         if (contact.lastmod > _most_recent_lastmod) {
           _most_recent_lastmod = contact.lastmod; // save for the RESP_CODE_END_OF_CONTACTS frame
         }
+      } else {
+        _has_pending_contact = false;   // filtered out: consumed, never sent, not held
+        _contacts_filtered++;           // #1316: so `declared` can be reduced to eligible
       }
     } else { // EOF
       out_frame[0] = RESP_CODE_END_OF_CONTACTS;
       memcpy(&out_frame[1], &_most_recent_lastmod,
              4); // include the most recent lastmod, so app can update their 'since'
-      _serial->writeFrame(out_frame, 5);
+      // #1283 (D1): a refused terminator used to be dropped AND the stream closed,
+      // leaving the client waiting for an END that would never be re-sent. Stay
+      // streaming and retry it, exactly as caplogDrain does (#718).
+      if (_serial->writeFrame(out_frame, 5) == 0) {
+#if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
+        _cs_end_refused++;                                  // #1299
+#endif
+        if (millis() - _contacts_last_progress > STREAM_STALL_ABORT_MS) {
+          _iter_started = false;
+          reportStreamAbandoned("contacts", "terminator", STREAM_STALL_ABORT_MS,
+                                _contacts_sent, " contacts", contactsEligible());
+        }
+        return;   // retry the terminator next pass
+      }
+#if defined(OFFBAND_CONTACT_STREAM_COUNTERS) && OFFBAND_CONTACT_STREAM_COUNTERS
+      csReport();                                           // #1299
+#endif
       _iter_started = false;
     }
   //} else if (!_serial->isWriteBusy()) {
