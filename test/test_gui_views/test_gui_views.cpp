@@ -836,6 +836,37 @@ TEST(DisplayText, DropsCharactersThatOnlySteerEmoji) {
   EXPECT_STREQ(b, "\xF0\x9F\x91\xA8\xF0\x9F\x91\xA9");
 }
 
+// #1761: a bullet in a node name drew as a box; the fonts don't carry it.
+TEST(DisplayText, CharactersTheFontsLackGetTheNearestTheyHave) {
+  char b[64];
+  const char dot[] = "Dot\xE2\x80\xA2";   // "Dot•"
+  displayText(dot, strlen(dot), b, sizeof b);
+  EXPECT_STREQ(b, "Dot\xC2\xB7");   // "Dot·"
+  const char quotes[] = "\xE2\x80\x9Chi\xE2\x80\x9D it\xE2\x80\x99s \xE2\x80\x93 ok";
+  displayText(quotes, strlen(quotes), b, sizeof b);
+  EXPECT_STREQ(b, "\"hi\" it's - ok");
+  const char big[] = "\xE2\x97\x8F";   // ●
+  displayText(big, strlen(big), b, sizeof b);
+  EXPECT_STREQ(b, "\xC2\xB7");
+}
+
+// What the fonts do carry is never swapped: the em dash, the ellipsis, Latin-1
+// accents and emoji stay as they are.
+TEST(DisplayText, CharactersTheFontsCarryAreLeftAlone) {
+  char b[64];
+  const char kept[] = "\xE2\x80\x94 \xE2\x80\xA6 \xC3\xA9 \xC2\xB7 \xF0\x9F\x93\xA1";
+  displayText(kept, strlen(kept), b, sizeof b);
+  EXPECT_STREQ(b, kept);
+}
+
+// A stand-in that doesn't fit is cut whole, as any character is.
+TEST(DisplayText, AStandInThatDoesNotFitIsCutWhole) {
+  char b[5];
+  const char dot[] = "abc\xE2\x80\xA2";
+  displayText(dot, strlen(dot), b, sizeof b);
+  EXPECT_STREQ(b, "abc");   // "·" is 2 bytes; 3 + 2 + NUL won't fit in 5
+}
+
 TEST(DisplayText, PlainTextAndLimits) {
   char b[6];
   displayText("hello world", 11, b, sizeof b);
