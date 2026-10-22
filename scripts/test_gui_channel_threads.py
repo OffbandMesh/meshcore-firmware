@@ -97,10 +97,57 @@ def add_failures(uitask, screens):
     return out
 
 
+SCREENS = ROOT / "examples" / "companion_radio" / "ui-gui" / "Screens.cpp"
+
+
+def start_failures(screens):
+    """"+" and the empty Chats button both open Start a chat (Epic R #1743, R1 #1748).
+
+    A tester found "+" went only to Nodes (a DM, not a channel), and the boxed
+    "+ to start one" looked like a button and did nothing.
+    """
+    out = []
+    code = strip_comments(screens)
+    chats = body_of(code, r"void\s+GuiShell::buildChats\s*\(")
+    if chats is None:
+        return ["GuiShell::buildChats() not found: this check cannot see what it protects"]
+    if "openStartSheet()" not in chats:
+        out.append("Chats' \"+\" must open the Start a chat sheet (openStartSheet)")
+    if '"+ Start a chat"' not in chats or not re.search(r"lv_obj_add_event_cb\(\s*go\s*,", chats):
+        out.append("the empty Chats box must be a button, \"+ Start a chat\", that opens the sheet")
+    pick = body_of(code, r"void\s+GuiShell::sheetPick\s*\(")
+    m = re.search(r"kind\s*==\s*Sheet::Start\s*\)\s*\{(.*?)\}\s*else", pick or "", re.S)
+    if not m or "showTab(Tab::Nodes)" not in m.group(1) or "openAddChannel()" not in m.group(1):
+        out.append("Start a chat must lead to Nodes (a message) and to Add a channel")
+    return out
+
+
 def test_the_real_tree_passes():
     got = failures(MYMESH.read_text(encoding="utf-8"))
     got += add_failures(UITASK.read_text(encoding="utf-8"), CHANSCREENS.read_text(encoding="utf-8"))
+    got += start_failures(SCREENS.read_text(encoding="utf-8"))
     assert not got, "\n".join(got)
+
+
+def test_negative_plus_straight_to_nodes_is_caught():
+    real = SCREENS.read_text(encoding="utf-8")
+    broken = real.replace("g->openStartSheet();", "g->showTab(Tab::Nodes);", 1)
+    assert broken != real
+    assert any("must open the Start a chat sheet" in f for f in start_failures(broken))
+
+
+def test_negative_a_dead_empty_chats_box_is_caught():
+    real = SCREENS.read_text(encoding="utf-8")
+    broken = real.replace("lv_obj_add_event_cb(go, start, LV_EVENT_CLICKED, this);", "")
+    assert broken != real
+    assert any("must be a button" in f for f in start_failures(broken))
+
+
+def test_negative_a_sheet_without_add_a_channel_is_caught():
+    real = SCREENS.read_text(encoding="utf-8")
+    broken = real.replace("else openAddChannel();", "else showTab(Tab::Nodes);")
+    assert broken != real
+    assert any("Add a channel" in f for f in start_failures(broken))
 
 
 def test_negative_adding_around_the_apps_path_is_caught():

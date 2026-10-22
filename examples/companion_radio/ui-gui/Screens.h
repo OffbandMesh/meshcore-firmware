@@ -449,7 +449,8 @@ private:
   // Bottom sheets (D6): the channel notification sheet, and the menu USR
   // hold opens in a channel (owner pick a, 2026-10-16). Zone: the one-time
   // "Use <zone> time?" prompt (Epic L, owner pick 5a).
-  enum class Sheet : uint8_t { None, Notify, Menu, Zone };
+  enum class Sheet : uint8_t { None, Notify, Menu, Zone, Start };
+  void openStartSheet();   // "+" in Chats: message a node, or add a channel (Epic R)
   void openSheet(Sheet kind);
   void closeSheet();
   void sheetHot(int i);
