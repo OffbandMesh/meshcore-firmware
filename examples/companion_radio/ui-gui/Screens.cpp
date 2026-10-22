@@ -580,10 +580,10 @@ bool GuiShell::action(Action a) {
   if (_login && detailTab()) {
     switch (a) {
       case Action::Next:
-        setHotKey(_hot < 0 ? 0 : int((_hot + 1) % _nkeys), false);
+        stepKey(1);
         return true;
       case Action::Prev:
-        setHotKey(_hot <= 0 ? int(_nkeys) - 1 : _hot - 1, false);
+        stepKey(-1);
         return true;
       case Action::Open:
         if (_hot >= 0) pressKey(_hot);
@@ -637,10 +637,10 @@ bool GuiShell::action(Action a) {
     if (_search_kb) {
       switch (a) {
         case Action::Next:
-          setHotKey(_hot < 0 ? 0 : int((_hot + 1) % _nkeys), false);
+          stepKey(1);
           return true;
         case Action::Prev:
-          setHotKey(_hot <= 0 ? int(_nkeys) - 1 : _hot - 1, false);
+          stepKey(-1);
           return true;
         case Action::Open:
           if (_hot >= 0) pressKey(_hot);
@@ -655,10 +655,10 @@ bool GuiShell::action(Action a) {
   if (_composing) {
     switch (a) {
       case Action::Next:
-        setHotKey(_hot < 0 ? 0 : int((_hot + 1) % _nkeys), false);
+        stepKey(1);
         return true;
       case Action::Prev:
-        setHotKey(_hot <= 0 ? int(_nkeys) - 1 : _hot - 1, false);
+        stepKey(-1);
         return true;
       case Action::Open:
         if (_hot >= 0) pressKey(_hot);
@@ -1423,6 +1423,17 @@ void GuiShell::buildKeys() {
   }
   if (_hot >= int(_nkeys)) _hot = -1;
   if (_hot >= 0) setHotKey(_hot, false);
+}
+
+// The button cursor over the on-screen keys: one key on (dir 1) or back
+// (-1), wrapping. With a hardware keyboard there are no keys, and stepping
+// must do nothing: a modulo by zero is a divide fault, a reboot on the ESP32
+// (T-Deck, #1730).
+void GuiShell::stepKey(int dir) {
+  if (_nkeys == 0) return;
+  const int n = int(_nkeys);
+  if (dir > 0) setHotKey(_hot < 0 ? 0 : (_hot + 1) % n, false);
+  else setHotKey(_hot <= 0 ? n - 1 : _hot - 1, false);
 }
 
 // Highlights key i (-1: none). With `preview`, a finger is down: the key's
