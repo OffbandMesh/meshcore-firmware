@@ -11,6 +11,7 @@
 #include <lvgl.h>
 #include <stdint.h>
 
+#include <helpers/gui/ChannelAdd.h>
 #include <helpers/gui/GuiLayout.h>
 #include <helpers/gui/GuiPrefs.h>
 #include <helpers/gui/GuiTheme.h>
@@ -193,6 +194,13 @@ public:
   virtual bool sdSlot() { return false; }
   virtual void sdView(SdView* out) { *out = SdView{}; }
   virtual bool sdFormat() { return false; }   // erases the card; flash is untouched
+  // Channels (Epic R #1743). Slots fills `out` with the radio's channel table
+  // and returns its size. Add goes through the app's own path, so a new
+  // channel gets its notification default, tune and Chats thread; it returns
+  // the chat's thread, or -1 if the slot couldn't be written.
+  virtual int channelSlots(offband::gui::ChannelSlot* out, int max) = 0;
+  virtual int addChannel(int slot, const char* name, const uint8_t key[offband::gui::kChannelKeyLen]) = 0;
+  virtual void newChannelKey(uint8_t out[offband::gui::kChannelKeyLen]) = 0;
   virtual ~ShellModel() {}
 };
 
@@ -217,7 +225,7 @@ public:
   // cursor, a conversation's scroll): each click is one step, at once.
   bool stepping() const {
     if (_locked || _sheet != Sheet::None) return false;
-    if (_composing || _login) return true;
+    if (_composing || _login || chanTyping()) return true;
     if (_searching && _tab == Tab::Nodes) return _search_wheel || _search_kb;
     if (_tab == Tab::Map && !_detail) return true;   // USR selects the next node
     if (_tab == Tab::Setup && _ss != SetSheet::None) return true;   // a sheet's cursor or stepper
@@ -352,6 +360,43 @@ private:
   void setSheetCommit();
   void setNote(const char* text);
 
+  // Adding a channel (Epic R #1743, ChannelScreens.cpp). One step at a time,
+  // under the Chat tab; the typing steps share the keyboard with Compose.
+  enum class ChanStep : uint8_t {
+    None,
+    Kinds,      // mockup 3: Public, hashtag, private
+    Hashtag,    // mockup 4: the name, typed
+    PrivName,   // mockup 5: a private channel's name, typed
+    PrivKey,    // mockup 5: make a new key, or enter one
+    KeyEntry,   // mockup 6: the key, on the hex keypad
+    ShowKey,    // mockup 7: a new key, to share
+  };
+  ChanStep _chan = ChanStep::None;
+  offband::gui::ComposeBuffer _chan_buf;    // the name or key being typed
+  char _chan_name[offband::gui::kChannelNameMax + 1] = {};   // a private channel's name
+  uint8_t _chan_key[offband::gui::kChannelKeyLen] = {};      // the key ShowKey shows
+  int _chan_thread = -1;                    // the chat to open after ShowKey
+  bool _chan_already = false;               // Hashtag: the name is a channel already held
+  int _chan_pick = 0;                       // the row a tap picked, for the deferred handler
+  bool chanAccepts(char ch) const;          // what the typing step will take
+  lv_obj_t* _chan_field = nullptr;
+  lv_obj_t* _chan_note = nullptr;
+  lv_obj_t* _chan_count = nullptr;
+  bool chanTyping() const {
+    return _chan == ChanStep::Hashtag || _chan == ChanStep::PrivName || _chan == ChanStep::KeyEntry;
+  }
+  void openAddChannel();
+  void closeAddChannel();
+  void chanGo(ChanStep step);
+  void chanBack();
+  void chanSubmit();
+  void chanPick(int row);
+  bool chanAction(offband::gui::Action a);
+  void buildAddChannel(lv_obj_t* scr);
+  void refreshChanField();
+  int chanJoin(const char* name, const uint8_t key[offband::gui::kChannelKeyLen]);
+  void chanOpenThread(int thread);
+
   bool _set_text = false;                   // Node › Name is being typed
   offband::gui::ComposeBuffer _set_buf;
   lv_obj_t* _set_text_label = nullptr;
@@ -425,6 +470,7 @@ private:
   lv_obj_t* host(lv_obj_t* scr);
   bool landscape() const { return _lay.cls == offband::gui::LayoutClass::B; }
   int16_t kbTop() const;
+  bool keyHinted() const;   // a hardware keyboard's field that keeps the key hint
   bool _hw_kb = false;                        // see setHardwareKeyboard()
   static constexpr int16_t kKeyHintH = 20;    // Compose's key hint, with a hardware keyboard
   static constexpr int16_t kWheelH = 70;   // the letter wheel's strip

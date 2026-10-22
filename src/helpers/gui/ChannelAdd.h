@@ -39,6 +39,12 @@ bool hashtagName(const char* typed, char* out, size_t n);
 constexpr size_t kChannelKeyBad = kChannelKeyHexLen + 1;
 size_t parseChannelKey(const char* text, uint8_t out[kChannelKeyLen]);
 
+// What a typing field takes, key by key, so a wrong name or key can't be
+// typed at all: a hashtag takes no space and no second '#' (the name is the
+// key); a key takes hex digits only.
+bool hashtagAccepts(char c);
+bool channelKeyAccepts(char c);
+
 // The key as hex, in groups of four ("4f1c 8a20 ..."), for the key screen.
 // `n` must hold kChannelKeyHexLen + 7 spaces + NUL (40 bytes).
 void formatChannelKey(const uint8_t key[kChannelKeyLen], char* out, size_t n);

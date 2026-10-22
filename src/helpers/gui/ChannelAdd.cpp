@@ -51,6 +51,10 @@ size_t parseChannelKey(const char* text, uint8_t out[kChannelKeyLen]) {
   return digits;
 }
 
+bool hashtagAccepts(char c) { return c != ' ' && c != '#' && c != 0; }
+
+bool channelKeyAccepts(char c) { return hexValue(c) >= 0; }
+
 void formatChannelKey(const uint8_t key[kChannelKeyLen], char* out, size_t n) {
   static const char kHex[] = "0123456789abcdef";
   if (!out || n == 0) return;

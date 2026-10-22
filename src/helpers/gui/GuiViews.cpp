@@ -522,6 +522,25 @@ size_t pageLayout(KeyPage page, int16_t width, int16_t y0, KeyRect* out, size_t 
     n++;
   };
 
+  // The hex keypad (mockup 6): 1-0, then a-f with Backspace beside them,
+  // and the confirm key across the bottom. The third row is left empty so
+  // the keypad keeps the keyboard's height and nothing above it moves.
+  if (page == KeyPage::Hex) {
+    static const char* const kHex = "1234567890abcdef";
+    for (int i = 0; i < 16; i++) {
+      const int r = i < 10 ? 0 : 1;
+      const int col = i < 10 ? i : i - 10;
+      const size_t slot = n < kMaxKeys ? n : kMaxKeys - 1;
+      g_labels[slot][0] = kHex[i];
+      g_labels[slot][1] = '\0';
+      add(int16_t(x0 + col * (kKeyW + kGap)), int16_t(y0 + r * (kKeyH + kKeyRowGap)), kKeyW, g_labels[slot]);
+    }
+    const int16_t bk_x = int16_t(x0 + 6 * (kKeyW + kGap));
+    add(bk_x, int16_t(y0 + kKeyH + kKeyRowGap), int16_t(x0 + kRowW - bk_x), "⌫");
+    add(x0, int16_t(y0 + 3 * (kKeyH + kKeyRowGap)), kRowW, "Send");
+    return n;
+  }
+
   for (int r = 0; r < 3; r++) {
     const int16_t y = y0 + r * (kKeyH + kKeyRowGap);
     size_t chars = 0;

@@ -67,9 +67,63 @@ def failures(mymesh):
     return out
 
 
+UITASK = ROOT / "examples" / "companion_radio" / "ui-gui" / "UITask.cpp"
+CHANSCREENS = ROOT / "examples" / "companion_radio" / "ui-gui" / "ChannelScreens.cpp"
+
+
+def add_failures(uitask, screens):
+    """Adding a channel on the device (Epic R #1743, R2 #1749).
+
+    UITask::addChannel goes through cmdSetChannel, the app's own path, so a channel
+    added on the radio gets the same notification default, tune and Chats thread as
+    one added from the phone. A key the radio already holds is found and opened,
+    never written again: the write would rename the user's channel.
+    """
+    out = []
+    add = body_of(strip_comments(uitask), r"int\s+UITask::addChannel\s*\(")
+    if add is None:
+        return ["UITask::addChannel() not found: this check cannot see what it protects"]
+    held = add.find("memcmp(")
+    write = add.find("cmdSetChannel(")
+    if write < 0:
+        out.append("UITask::addChannel() must add through cmdSetChannel, the app's own path")
+    elif held < 0 or held > write:
+        out.append("UITask::addChannel() must check for the key already being held before it writes, "
+                   "or rejoining a channel renames it")
+    join = body_of(strip_comments(screens), r"int\s+GuiShell::chanJoin\s*\(")
+    if join is None or join.find("findChannelByKey(") < 0 or \
+            join.find("findChannelByKey(") > join.find("firstFreeChannelSlot("):
+        out.append("chanJoin() must look for the key before taking a free slot, or a channel is doubled")
+    return out
+
+
 def test_the_real_tree_passes():
     got = failures(MYMESH.read_text(encoding="utf-8"))
+    got += add_failures(UITASK.read_text(encoding="utf-8"), CHANSCREENS.read_text(encoding="utf-8"))
     assert not got, "\n".join(got)
+
+
+def test_negative_adding_around_the_apps_path_is_caught():
+    ui = UITASK.read_text(encoding="utf-8").replace("the_mesh.cmdSetChannel(", "the_mesh.setChannelRaw(")
+    got = add_failures(ui, CHANSCREENS.read_text(encoding="utf-8"))
+    assert any("through cmdSetChannel" in f for f in got), got
+
+
+def test_negative_rewriting_a_held_channel_is_caught():
+    real = UITASK.read_text(encoding="utf-8")
+    broken = real.replace("memcmp(held.channel.secret, key, kChannelKeyLen) == 0", "false")
+    assert broken != real, "sanity: the held-key check must be in the tree"
+    got = add_failures(broken, CHANSCREENS.read_text(encoding="utf-8"))
+    assert any("renames it" in f for f in got), got
+
+
+def test_negative_a_doubled_channel_is_caught():
+    real = CHANSCREENS.read_text(encoding="utf-8")
+    broken = real.replace("int slot = findChannelByKey(slots, n, key);\n  if (slot < 0) slot = firstFreeChannelSlot(slots, n);",
+                          "int slot = firstFreeChannelSlot(slots, n);")
+    assert broken != real, "sanity: chanJoin's lookup must be in the tree"
+    got = add_failures(UITASK.read_text(encoding="utf-8"), broken)
+    assert any("doubled" in f for f in got), got
 
 
 def _fails_with(fragment, text):

@@ -160,9 +160,11 @@ def hw_keyboard_failures(screens, uitask):
         out.append("stepKey() must do nothing when there are no keys (_nkeys == 0)")
     h = re.search(r"void\s+GuiShell::buildKeyHint\(lv_obj_t\*\s*scr\)\s*\{(.*?)\n\}", sc, re.S)
     words = re.findall(r'"([^"]*)"', h.group(1)) if h else []
-    if words != ["Enter", "send", "⌫", "on empty: back"]:
-        out.append("Compose's key hint must read exactly 'Enter send' and '⌫ on empty: back' (owner-approved); got %r"
-                   % words)
+    # Joining a channel reads "Enter join" (Epic R mockup 10); Compose reads
+    # "Enter send" and "⌫ on empty: back" (mockup 2). Both owner-approved.
+    if words != ["Enter", "join", "Enter", "send", "⌫", "on empty: back"]:
+        out.append("the key hint must read exactly 'Enter join' (joining a channel) and 'Enter send' / "
+                   "'⌫ on empty: back' (Compose), as owner-approved; got %r" % words)
     return out
 
 
@@ -421,7 +423,7 @@ def test_negative_the_late_keyboard_never_reaching_the_shell_is_caught():
 
 def test_negative_keys_built_with_a_hardware_keyboard_is_caught():
     _fails_with("must build no keys", screens=_real()[6].replace(
-        "    if (_composing) buildKeyHint(scr);\n    return;\n", "    if (_composing) buildKeyHint(scr);\n"))
+        "    if (keyHinted()) buildKeyHint(scr);\n    return;\n", "    if (keyHinted()) buildKeyHint(scr);\n"))
 
 
 def test_negative_a_modulo_by_the_key_count_is_caught():
