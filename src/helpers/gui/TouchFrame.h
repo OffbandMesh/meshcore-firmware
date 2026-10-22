@@ -34,11 +34,13 @@ public:
 };
 
 // GT911 (J3 #1726). 16-bit big-endian registers: 0x814E is the status (bit 7:
-// a new report is ready; low nibble: points touched, at most 5), 0x8150 the
-// first point (track id, X low/high, Y low/high, size low/high, reserved).
-// The host writes 0 to the status after reading, or no new report comes.
+// a new report is ready; low nibble: points touched, at most 5), and the first
+// point follows it at 0x814F: track id, X low/high (0x8150/51), Y low/high,
+// size low/high, reserved. The host writes 0 to the status after reading, or
+// no new report comes. Reading from 0x8150 instead (one byte late) made every
+// press read as an out-of-range glitch on the T-Deck bench (#1730).
 constexpr uint16_t kGt911Status = 0x814E;
-constexpr uint16_t kGt911Point1 = 0x8150;
+constexpr uint16_t kGt911Point1 = 0x814F;
 constexpr size_t kGt911PointLen = 8;
 
 enum class Gt911Frame : uint8_t {
