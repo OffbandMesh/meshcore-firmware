@@ -51,7 +51,8 @@ GUI_FLAGS = {"PIN_TFT_MISO": "38", "PIN_SD_CS": "39", "DISPLAY_CLASS": "GuiPanel
              # GT911 touch on the board bus with the keyboard; reset is RC-only (#1724, #1726).
              "TOUCH_GT911": "1", "PIN_BOARD_SDA": "18", "PIN_BOARD_SCL": "8",
              "PIN_TOUCH_SDA": "18", "PIN_TOUCH_SCL": "8", "PIN_TOUCH_RST": "-1",
-             "GUI_TOUCH_SWAP_XY": "1",
+             # The GT911 reports in the panel's portrait frame: no swap (bench, #1730).
+             "GUI_TOUCH_SWAP_XY": "0",
              # Keyboard and trackball (J4 #1727); the trackball's press is USR (GPIO0).
              "TDECK_KEYBOARD": "1", "PIN_TRACKBALL_UP": "3", "PIN_TRACKBALL_DOWN": "15",
              "PIN_TRACKBALL_LEFT": "1", "PIN_TRACKBALL_RIGHT": "2"}

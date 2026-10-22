@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include "helpers/gui/GuiLayout.h"
 #include "helpers/gui/TouchFrame.h"
 
 using namespace offband::gui;
@@ -289,8 +290,44 @@ TEST(Gt911Tracker, AnInvalidReportIsAFailedReadAndKeepsTheState) {
   EXPECT_FALSE(t.update(0x81, b, sizeof b, nullptr));
 }
 
-// The T-Deck's GT911 reports 320x240 against a 240x320 portrait panel:
-// swapping the axes puts a landscape touch on the portrait panel.
+// The T-Deck's GT911 reports in the panel's own portrait frame (240 x 320),
+// so the GUI applies no swap and the landscape turn alone maps it (T-Deck
+// bench, #1730: with a swap, the right of the screen collapsed onto one
+// edge). Every corner of the touch surface reaches its own corner of the
+// 320 x 240 landscape screen.
+TEST(TDeckTouch, ThePortraitFrameReachesTheWholeLandscapeScreen) {
+  const TouchMapping m{false, false, false, 240, 320};
+  const uint16_t raw[4][2] = {{0, 0}, {239, 0}, {0, 319}, {239, 319}};
+  bool seen[2][2] = {};
+  for (auto& r : raw) {
+    uint16_t x = r[0], y = r[1];
+    mapTouch(m, &x, &y);
+    rotateTouch(90, &x, &y);
+    ASSERT_TRUE((x == 0 || x == 319) && (y == 0 || y == 239)) << r[0] << "," << r[1] << " -> " << x << "," << y;
+    seen[x == 319][y == 239] = true;
+  }
+  EXPECT_TRUE(seen[0][0] && seen[0][1] && seen[1][0] && seen[1][1]);
+}
+
+// The bench's failure: swapping a portrait frame first leaves most of the
+// landscape screen unreachable.
+TEST(TDeckTouch, ASwapOnThePortraitFrameLeavesTheScreenUnreachable) {
+  const TouchMapping m{true, false, false, 240, 320};
+  uint16_t max_x = 0;
+  for (uint16_t rx = 0; rx < 240; rx += 7) {
+    for (uint16_t ry = 0; ry < 320; ry += 7) {
+      uint16_t x = rx, y = ry;
+      mapTouch(m, &x, &y);
+      rotateTouch(90, &x, &y);
+      if (x > max_x) max_x = x;
+    }
+  }
+  EXPECT_LT(max_x, 240);   // the right 80 columns can't be touched
+}
+
+// A controller whose axes run the other way round from the panel (320 x
+// 240 against a 240 x 320 portrait panel): swapping the axes puts its touch
+// on the portrait panel.
 TEST(TouchMapping, ALandscapeControllerOnAPortraitPanelSwaps) {
   TouchMapping m{true, false, false, 240, 320};
   uint16_t x = 300, y = 10;   // near the long edge's far end
