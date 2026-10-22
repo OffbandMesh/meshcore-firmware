@@ -2,6 +2,7 @@
 #include <cstdint> // For uint8_t, uint32_t
 #include <helpers/ConfigSerializer.h>
 #include <helpers/GpsPowerMode.h>  // #1555: GpsMode + kGpsModeUnset
+#include <helpers/PathHashDefault.h>   // #1753: the shared default path-hash mode
 #ifdef OFFBAND_GUI
   #include <helpers/gui/GuiPrefs.h>
 #endif
@@ -79,7 +80,10 @@ public:
   uint8_t autoadd_config = 0;    // bitmask for auto-add contacts config
   uint8_t rx_boosted_gain = 0; // SX126x RX boosted gain mode (0=power saving, 1=boosted)
   uint8_t _client_repeat = 0;  // DEPRECATED -> use repeat.disable_fwd
-  uint8_t path_hash_mode = 0;    // which path mode to use when sending
+  // #1753: 2-byte path hashes by default, from the same shared constant the other
+  // roles use, so a companion and a repeater cannot end up originating at different
+  // sizes. Reasoning and accepted costs are in helpers/PathHashDefault.h.
+  uint8_t path_hash_mode = offband::DEFAULT_PATH_HASH_MODE;    // which path mode to use when sending
   uint8_t autoadd_max_hops = 0;  // 0 = no limit, 1 = direct (0 hops), N = up to N-1 hops (max 64)
   char default_scope_name[31];
   uint8_t default_scope_key[16];
