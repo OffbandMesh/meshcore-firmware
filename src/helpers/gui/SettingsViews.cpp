@@ -211,9 +211,14 @@ void batteryNowText(uint32_t mv, int pct, char* out, size_t n) {
 
 bool pinOk(uint32_t pin) { return pin >= 100000 && pin <= 999999; }
 
+// The PIN this boot is using, in full: it's the one a phone or PC has to
+// type, set or random. It used to show "******" once set, which left no way
+// to read it anywhere, and pairing impossible (owner, 2026-10-22: no other
+// radio hides it). A PIN set this boot takes effect at the next one, so until
+// then the old one is shown, because it's the one that pairs.
 void pinText(uint32_t stored, uint32_t active, char* out, size_t n) {
-  if (stored) textf(out, n, "******");   // the GUI fonts have no •
-  else if (active) textf(out, n, "%06lu", (unsigned long)active);
+  const uint32_t pin = active ? active : stored;
+  if (pin) textf(out, n, "%06lu", (unsigned long)pin);
   else textf(out, n, "None");
 }
 
