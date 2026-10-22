@@ -29,6 +29,8 @@ TARGET = ROOT / "variants" / "lilygo_tdeck" / "target.cpp"
 HAL = ROOT / "src" / "helpers" / "radiolib" / "EspSharedSpiHal.h"
 BOARD = ROOT / "variants" / "lilygo_tdeck" / "TDeckBoard.cpp"
 SD = ROOT / "src" / "helpers" / "gui" / "hw" / "SdCard.cpp"
+SCREENS = ROOT / "examples" / "companion_radio" / "ui-gui" / "Screens.cpp"
+UITASK = ROOT / "examples" / "companion_radio" / "ui-gui" / "UITask.cpp"
 SPI_CALLS = ("spiBegin", "spiBeginTransaction", "spiTransfer", "spiEndTransaction", "spiEnd")
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 
@@ -131,7 +133,31 @@ def sd_failures(sd):
     return out
 
 
-def failures(ini, target, ci, hal=None, board=None, sd=None):
+def hw_keyboard_failures(screens, uitask):
+    """Compose with the T-Deck's keyboard: owner's pick, 2026-10-21 (mockup 2, #1727).
+
+    The keyboard's detection must reach the shell, the on-screen keys must not be built
+    when it is present, and the hint carries the approved wording, exactly.
+    """
+    out = []
+    ui = strip_comments(uitask, "//")
+    if not re.search(r"_kb_ok\s*=\s*s_keyboard\.begin\(\)\s*;.*?_shell\.setHardwareKeyboard\(\s*_kb_ok\s*\)", ui, re.S):
+        out.append("UITask must tell the shell when the keyboard answers at boot (setHardwareKeyboard)")
+    if not re.search(r"keyboard ok \(late\).*?_shell\.setHardwareKeyboard\(\s*true\s*\)", ui, re.S):
+        out.append("UITask must tell the shell when the keyboard answers late (setHardwareKeyboard)")
+    sc = strip_comments(screens, "//")
+    m = re.search(r"void\s+GuiShell::buildKeyboard\(lv_obj_t\*\s*scr\)\s*\{(.*?)\n\}", sc, re.S)
+    if not m or not re.search(r"if\s*\(\s*_hw_kb\s*\)\s*\{[^}]*return\s*;", m.group(1)):
+        out.append("buildKeyboard() must build no keys with a hardware keyboard (mockup 2)")
+    h = re.search(r"void\s+GuiShell::buildKeyHint\(lv_obj_t\*\s*scr\)\s*\{(.*?)\n\}", sc, re.S)
+    words = re.findall(r'"([^"]*)"', h.group(1)) if h else []
+    if words != ["Enter", "send", "⌫", "on empty: back"]:
+        out.append("Compose's key hint must read exactly 'Enter send' and '⌫ on empty: back' (owner-approved); got %r"
+                   % words)
+    return out
+
+
+def failures(ini, target, ci, hal=None, board=None, sd=None, screens=None, uitask=None):
     out = []
     if hal is not None:
         out.extend(hal_failures(hal))
@@ -139,6 +165,8 @@ def failures(ini, target, ci, hal=None, board=None, sd=None):
         out.extend(board_failures(board))
     if sd is not None:
         out.extend(sd_failures(sd))
+    if screens is not None and uitask is not None:
+        out.extend(hw_keyboard_failures(screens, uitask))
     secs = ini_sections(ini)
     for s in (HW, OLD, GUI):
         if s not in secs:
@@ -205,11 +233,12 @@ def failures(ini, target, ci, hal=None, board=None, sd=None):
 
 def _real():
     return (INI.read_text(encoding="utf-8"), TARGET.read_text(encoding="utf-8"), CI.read_text(encoding="utf-8"),
-            HAL.read_text(encoding="utf-8"), BOARD.read_text(encoding="utf-8"), SD.read_text(encoding="utf-8"))
+            HAL.read_text(encoding="utf-8"), BOARD.read_text(encoding="utf-8"), SD.read_text(encoding="utf-8"),
+            SCREENS.read_text(encoding="utf-8"), UITASK.read_text(encoding="utf-8"))
 
 
 def _fails_with(fragment, **swap):
-    parts = dict(zip(("ini", "target", "ci", "hal", "board", "sd"), _real()))
+    parts = dict(zip(("ini", "target", "ci", "hal", "board", "sd", "screens", "uitask"), _real()))
     parts.update(swap)
     got = failures(**parts)
     assert any(fragment in f for f in got), "expected a failure naming %r, got %s" % (fragment, got)
@@ -371,6 +400,23 @@ def test_negative_the_diag_build_without_the_sd_log_is_caught():
 def test_negative_the_sd_log_in_the_plain_gui_build_is_caught():
     _fails_with("must not set OFFBAND_SD_DIAG_LOG",
                 ini=_swap_in(GUI, "-D OFFBAND_GUI=1", "-D OFFBAND_GUI=1\n  -D OFFBAND_SD_DIAG_LOG"))
+
+
+def test_negative_the_keyboard_never_reaching_the_shell_is_caught():
+    _fails_with("answers at boot", uitask=_real()[7].replace("_shell.setHardwareKeyboard(_kb_ok);", ""))
+
+
+def test_negative_the_late_keyboard_never_reaching_the_shell_is_caught():
+    _fails_with("answers late", uitask=_real()[7].replace("_shell.setHardwareKeyboard(true);", ""))
+
+
+def test_negative_keys_built_with_a_hardware_keyboard_is_caught():
+    _fails_with("must build no keys", screens=_real()[6].replace(
+        "    if (_composing) buildKeyHint(scr);\n    return;\n", "    if (_composing) buildKeyHint(scr);\n"))
+
+
+def test_negative_changed_hint_wording_is_caught():
+    _fails_with("must read exactly", screens=_real()[6].replace('"on empty: back"', '"empty: go back"'))
 
 
 if __name__ == "__main__":
