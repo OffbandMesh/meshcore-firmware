@@ -298,6 +298,10 @@ heltec_v4_tft_companion_radio_ble
 heltec_v4_tft_companion_radio_usb
 heltec_v4_tft_repeater
 heltec_v4_tft_room_server
+# The companion GUI (#1313), released in beta while incomplete (owner,
+# 2026-10-22, #1772), with its diag twin as betas ship.
+heltec_v4_tft_companion_radio_ble_gui
+heltec_v4_tft_companion_radio_ble_gui_diag
 # heltec_v4_tft_companion_radio_wifi -- CI-built but NOT releasable: bakes a
 #   placeholder WIFI_SSID at compile time; unblocked by #325. (#484)
 
@@ -308,6 +312,10 @@ heltec_v4_r8_companion_observer_wifi
 heltec_v4_r8_companion_radio_ble
 heltec_v4_r8_companion_radio_usb
 heltec_v4_r8_repeater
+# The R8 TFT kit's companion GUI with its micro-SD (#1433), released in beta
+# while incomplete (owner, 2026-10-22, #1772).
+heltec_v4_r8_tft_companion_radio_ble_gui
+heltec_v4_r8_tft_companion_radio_ble_gui_diag
 
 # V4-R8 TESTER DIAGNOSTIC BUILDS -- published while the R8 SAW is beta hardware
 # (owner exception, see the diagnostic-envs rule above). Each extends the shipped
