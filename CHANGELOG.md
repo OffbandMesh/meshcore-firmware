@@ -16,6 +16,197 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+## [1.6.0-beta1] - 2026-10-22
+
+221 commits since 1.5.0-beta7, on the MeshCore 1.17.0 base.
+
+### Added
+
+**On-device companion GUI** — color touch panels, on the Heltec V4 TFT and the V4-R8 TFT (feature #1313)
+
+- The GUI shell with Home and Lock screens (#1497), a status bar with a LoRa long-press popover
+  (#1496), and Chats and Conversation screens (#1498).
+- LVGL 8.3.11 on a DMA ST7789 driver (#1441), an in-house CHSC6x touch driver wired into LVGL
+  (#1442), and the V4 TFT GUI companion env with a USER button and an honest RAM ceiling (#1440).
+- The R8 TFT GUI env, pins taken from the V2.03 schematic (#1676).
+- GUI themes, Look, and the design's fonts (#1444). Characters the fonts lack fall back to the
+  nearest they carry (#1761).
+- Input map, wake/sleep, and a 240/80 MHz clock policy (#1443). USR works like stock MeshCore;
+  AUX scrolls up and goes back (#1451).
+- Layout selection by rotation, class B landscape layouts for every screen, and the panel, LVGL
+  and touch all following Display > Rotation (#1642, #1643, #1644).
+- **Chats and channels** — Compose with the on-screen keyboard (#1499), per-channel notifications
+  with the bell's sheet and a channel menu (#1500), adding a channel on the device as Public,
+  hashtag or private (#1747, #1749), a "+" in Chats that asks what to start and an empty-box
+  button (#1748), and a private channel's key from its menu plus Leave channel (#1750).
+- **Nodes** — the Nodes list (#1531), search by keyboard or letter wheel matching anywhere in the
+  name (#1532, #1534), and node detail, actions and the login sheet (#1533).
+- **Map** — a radar view on the Map tab (#1430, #1565).
+- **Settings and boot** — Settings and the boot screen (#1431, #1604), settings persisted in
+  `/prefs.json` (#1457), a time-zone setting that can suggest the zone from the kept position and
+  name its source (#1610), the radio's own sensors with touch-scrolling Settings pages (#1661),
+  and GPS 2D/3D fix state with time since the fix was lost (#1456).
+- **Data layer** — login, status, trace and path replies reach the GUI (#1454); radio and contact
+  metrics (#1455); the phone's command actions become MyMesh methods (#1453); and the contacts
+  save runs a slice per tick (#1458).
+- **Message store** — the store core (#1462), persisted to flash without stalling the GUI (#1463),
+  own messages kept with delivery state and a "heard xN" count (#1464), and incoming messages kept
+  on the device (#1465).
+- **SD card** — the card on the panel's SPI bus (#1677), an archive that counts what it holds
+  (#1678), the archive and card monitor (#1674), catching up with the store including hot-swap
+  (#1704), the card in the GUI (#1705), card memory with a cap on what polling an empty slot costs
+  (#1703), and a crash's program counter and backtrace reaching the SD log (#1730).
+- Trace gets its round trip from its own button, as Ping does, and a trace's SNR shows on the
+  detail (#1534).
+- Opt-in memory telemetry and an LVGL bench for GUI budgeting (#1389), plus frame-time telemetry
+  for the bench check (#1441).
+
+**LilyGo T-Deck** (epic #1434)
+
+- GT911 touch (#1726), read from the controller's first point register, without an axis swap
+  (#1730).
+- The hardware keyboard and trackball (#1727), the keyboard backlight following the screen, the
+  on-screen keys hidden when a keyboard is present, and digits 1 through 4 starting a canned reply.
+- The radio on the shared SPI2 bus through RadioLib (#1725), with the SD card's chip-select held
+  high on that shared bus (#1728).
+- The T-Deck GUI env and its `_diag` variant in CI (#1729), with an env lint asserting the
+  schematic pins and one SPI bus (#1723).
+- **The T-Deck GUI image is not published in this release.** The code is in and the env builds in
+  CI.
+
+**Heltec V4-R8, with the SAW filter** (epic #1322)
+
+- FEM/LNA runtime control (#1339), TX LED control to #542 parity (#1340), and a power-off path
+  that cuts FEM power and takes the base teardown (#1341).
+- A WiFi+MQTT observer env (#1343) carrying the full channel list plus `_sys` and 50 contacts
+  (#1487), diagnostic builds (#1342), and the board in the CI matrix and the release list (#1344).
+- Host tests for the R8 board controls (#1338).
+
+**Other boards and images**
+
+- Diagnostic builds for the Heltec V4 (R2) (#1375).
+- V4 TFT and R8 GUI images are published in releases (#1772).
+- **The color Offband lockup on every color display** — the ST7735 panels (#867) and the remaining
+  color panels (#868), with each panel's splash art sized to the space it actually has (#1124).
+
+**Queen City Con badge**
+
+- **Sound** — Settings > Tones with a picker that auditions a tone before you keep it (#1421),
+  tunes as a table with a typed tune checked before it plays (#1418), every sound event given a
+  slot with a send confirmed (#1419), the tune for an event coming from prefs rather than the build
+  (#1420), and the shipped chime list of six tones (#1447).
+- **Custom tunes** — the slot format and slot store, one file per slot (#1474), a slot id resolving
+  to its tune and joining the picker (#1475), Settings > Tones > Custom with the eight slots listed
+  (#1476), an RTTTL editor typed on the badge and validated before it saves (#1477), the app able
+  to push a tune into a slot in chunks (#1478), and a wrapped view over LineEdit so a long string
+  can be proofread (#1473). A refused chunk says where the device is, and an edit cancels a push
+  (#1478).
+- **Per-channel tunes** — a channel can hold its own tune, with an encoding and a fallback (#1522),
+  persisted in `/channels2` (#1523), resolved on an arriving channel message (#1524), a
+  conversation showing and setting its own tune (#1525), and events able to play custom tunes
+  (#1549).
+- GPS power modes — Off, On and Power-save, measured and driven (#1415).
+- The LED shows traffic over unread rather than sitting solid-on (#1367), with the heartbeat moved
+  to the module LED to free the badge's own (#1366).
+- A fresh badge ships holding the conference channels (#1364), takes the conference radio defaults
+  on first boot (#1363), and names itself from the last five of its BLE MAC (#1598).
+- Navigation and messages get their own text size (#1362), and the title bar is one size on every
+  screen (#1370).
+
+**Observer**
+
+- Broker lifecycle events are queued and emitted on `loopTask` (#1133), MQTT protocol events
+  recorded in the capture ring (#1134), the pool's slot decisions and non-MQTT failures recorded
+  (#1135), and rotation plus every slot's standing (#1136).
+
+**Build, CI and tooling**
+
+- A docs-only change no longer pays for the full build matrix (#1708).
+- Build-time guards: per-peripheral pin collision across every variant (#1601), a built-artifact
+  check that the Offband capabilities are linked (#1602), a display-virtual guard that scans
+  variant drivers in CI (#1123), and a source-level guard that frame sizing goes through
+  `maxFramePayload` (#1619).
+- A rig boot smoke test that flashes, captures and asserts the badge actually runs (#1641).
+- An on-demand diagnostic-build how-to (#969).
+- The sniffer rig samples the INA fast enough to see a transmit burst (#1693).
+
+### Fixed
+
+- **A USB companion no longer streams fewer contacts than it declares** (epic #1298) — the known
+  issue carried in beta6 and beta7. `writeFrame` refusals were unchecked when the TX FIFO filled,
+  so whole frames were dropped silently. The stream's cursor now advances only when the frame was
+  sent (#1283), `isWriteBusy()` reports the transport rather than a constant false (#1302), a
+  committed frame is finished instead of retried behind itself (#1315), and an abandoned stream is
+  reported on a stock build rather than only under debug (#1316).
+- **MACThenDecrypt rejects non-block-aligned ciphertext** (#1586) — a malformed packet could
+  overflow a stack buffer.
+- `ver`, `version` and the companion device-info field now report one consistent Offband-first
+  `<offband>-<stock>` string (#1391). Previously these three could disagree, and a build with no
+  reachable tag could present itself as a plausible stock version.
+- Companion frames are sized by what the BLE link actually delivers rather than by the buffer
+  (#1621).
+- The low-battery cutoff debounces over 300 s instead of firing on a single raw ADC sample, in all
+  three UI families (#1667).
+- The BLE PIN is shown in full, whether set or random (#1768).
+- Settings > Actions no longer reboots a GUI in landscape (#1766).
+- The GUI panel moved off the radio's SPI bus (#1450).
+- The status bar stays filled through a screen change (#1730).
+- Every channel the radio holds appears in Chats, instead of a channel being hidden until its
+  first message (#1741).
+- Channel names no longer display two `#` symbols (#1624).
+- A channel message clears its sender tag only on the row that has one (#1685).
+- Chat rows can't overlap, emoji render, one-line labels stay on one line, "Mentions only" says
+  what it does, GPS seeking pulses instead of vanishing, and there is a way out of Compose by
+  touch (#1501).
+- The Nodes list builds 12 rows at a time, search keeps up with a full contact list, and with an
+  AUX button every USR click acts at once (#1534).
+- The GUI contacts save writes every contact (#1551) and walks every contact, newest included
+  (#1550).
+- A torn store entry is dropped at load rather than displayed as garbage (#1482).
+- The message store writes only what changed, in place, and flash writes wait until nobody is
+  using the device (#1472).
+- A badge with no keyboard fitted can leave Settings (#1590).
+- A tone preview can no longer silence a real notification (#1417). The tone picker auditions what
+  it opens on (#1467), its highlight lands on a row that is actually drawn (#1475), the slot list
+  re-reads on entry with its row buffer sized honestly (#1476), and the badge can reach the gate
+  that decides whether it makes a sound (#1468).
+- A committed tune slot stores its text rather than two NUL bytes, and the slot-push surface is
+  guarded where its state lives (#1479, #1480).
+- `#test` and `#echo` ship quiet on a fresh badge (#1625).
+- The badge thread screen shows 10 characters of the sender name, with a 4-character hanging
+  indent on wrapped channel messages (#1669).
+- The released V4 repeater image no longer carries a personal node identity (#1378).
+- A `platformio.ini` section lookup no longer finds its own name in a comment (#1646).
+- The boot smoke test no longer skips its own stale-image check (#1659).
+- The bench capture survives a line it cannot print (#1514).
+- `pool_start_recorded_` is read by another task, so it is marked volatile (#1134).
+
+### Changed
+
+- **The root default radio preset is now the US standard — 910.525 MHz, 62.5 kHz, SF7** (#1488).
+  Previously the root default was the European preset. `heltec_v4` inherits the root preset rather
+  than restating it (#1506).
+- The status-LED heartbeat cadence is overridable per board, and the badge slows it to about 5 s
+  (#1614).
+- Device-identity build envs move to a per-host file outside every checkout (#1410).
+- The hardware reference files live in this repository rather than depending on a sibling path
+  (#735).
+- The RC32 display-session capture is preserved in the repository before its worktree goes (#1732).
+
+### Documentation
+
+- Plan of record for the on-device companion GUI (#1329) and the companion-observer `/neighbors`
+  contract (#1385).
+- Plan of record for the Offband broker on `offband-prod` over wss/443 (#1520).
+- The Queen City Con badge sound plan of record, at Feature level (#1408).
+- MeshCore 1.18.0 base-update assessment and merge plan (#1575). **The base update itself has not
+  landed; this release remains on 1.17.0.** Two hardware-ownership claims in that assessment were
+  corrected (#1616).
+- SF7 stands for the conference channel, with the reasoning kept, and why 500 kHz would need SF10
+  (#1363).
+- Epic I SD card mockups and the SD decisions behind them (#1702).
+- The navigation-face inventory says what it does not cover (#1502).
+
 ## [1.5.0-beta7] - 2026-09-28
 
 ### Added
