@@ -102,6 +102,9 @@ public:
   int channelSlots(offband::gui::ChannelSlot* out, int max) override;
   int addChannel(int slot, const char* name, const uint8_t key[offband::gui::kChannelKeyLen]) override;
   void newChannelKey(uint8_t out[offband::gui::kChannelKeyLen]) override;
+  bool channelOf(int thread, uint8_t key[offband::gui::kChannelKeyLen], bool* is_private) override;
+  bool leaveChannel(int thread) override;
+  bool channelHeld(const uint8_t key[offband::gui::kChannelKeyLen]) override;
 #ifdef PIN_SD_CS
   bool sdSlot() override { return true; }
   void sdView(SdView* out) override;

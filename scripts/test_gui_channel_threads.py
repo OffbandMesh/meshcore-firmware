@@ -122,11 +122,66 @@ def start_failures(screens):
     return out
 
 
+def leave_failures(uitask, screens, chanscreens):
+    """Leaving a channel and showing its key (Epic R #1743, R3 #1750)."""
+    out = []
+    leave = body_of(strip_comments(uitask), r"bool\s+UITask::leaveChannel\s*\(")
+    if leave is None or not re.search(r'cmdSetChannel\([^;]*,\s*""\s*,', leave):
+        out.append("UITask::leaveChannel() must empty the slot through cmdSetChannel (an empty name), the app's path")
+    code = strip_comments(screens)
+    chats = body_of(code, r"void\s+GuiShell::buildChats\s*\(") or ""
+    if "channelHeld(" not in chats:
+        out.append("Chats must hide a channel the radio has left (channelHeld), or Leave leaves the chat on screen")
+    sheet = body_of(code, r"void\s+GuiShell::openSheet\s*\(") or ""
+    if not re.search(r"if\s*\(\s*held\s*&&\s*priv\s*\)\s*_menu_rows\[_sheet_count\+\+\]\s*=\s*MenuKey", sheet):
+        out.append("a channel's menu must offer Channel key only for a private channel")
+    ls = body_of(strip_comments(chanscreens), r"void\s+GuiShell::openLeaveSheet\s*\(") or ""
+    if not re.search(r"sheetHot\(\s*0\s*\)", ls):
+        out.append("Leave's confirmation must start on Cancel, so a held button never leaves by accident")
+    return out
+
+
 def test_the_real_tree_passes():
     got = failures(MYMESH.read_text(encoding="utf-8"))
     got += add_failures(UITASK.read_text(encoding="utf-8"), CHANSCREENS.read_text(encoding="utf-8"))
     got += start_failures(SCREENS.read_text(encoding="utf-8"))
+    got += leave_failures(UITASK.read_text(encoding="utf-8"), SCREENS.read_text(encoding="utf-8"),
+                          CHANSCREENS.read_text(encoding="utf-8"))
     assert not got, "\n".join(got)
+
+
+def _leave(ui=None, sc=None, ch=None):
+    return leave_failures(ui if ui is not None else UITASK.read_text(encoding="utf-8"),
+                          sc if sc is not None else SCREENS.read_text(encoding="utf-8"),
+                          ch if ch is not None else CHANSCREENS.read_text(encoding="utf-8"))
+
+
+def test_negative_leaving_around_the_apps_path_is_caught():
+    ui = UITASK.read_text(encoding="utf-8")
+    broken = ui.replace('the_mesh.cmdSetChannel(uint8_t(slot), "", zero)', "the_mesh.clearRaw(uint8_t(slot))")
+    assert broken != ui
+    assert any("empty the slot" in f for f in _leave(ui=broken))
+
+
+def test_negative_a_left_channel_still_listed_is_caught():
+    sc = SCREENS.read_text(encoding="utf-8")
+    broken = sc.replace("!_model->channelHeld(key)", "false")
+    assert broken != sc
+    assert any("hide a channel" in f for f in _leave(sc=broken))
+
+
+def test_negative_a_public_key_offered_to_share_is_caught():
+    sc = SCREENS.read_text(encoding="utf-8")
+    broken = sc.replace("if (held && priv) _menu_rows", "if (held) _menu_rows")
+    assert broken != sc
+    assert any("only for a private channel" in f for f in _leave(sc=broken))
+
+
+def test_negative_leave_defaulting_to_leave_is_caught():
+    ch = CHANSCREENS.read_text(encoding="utf-8")
+    broken = ch.replace("sheetHot(0);   // Cancel", "sheetHot(1);   // Cancel")
+    assert broken != ch
+    assert any("start on Cancel" in f for f in _leave(ch=broken))
 
 
 def test_negative_plus_straight_to_nodes_is_caught():

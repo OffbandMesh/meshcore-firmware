@@ -929,7 +929,18 @@ void GuiShell::buildChats(lv_obj_t* content) {
   lv_obj_add_event_cb(plus, start, LV_EVENT_CLICKED, this);
 
   uint16_t order[64];
-  const size_t n = chatOrder(s, order, 64);
+  size_t n = chatOrder(s, order, 64);
+  // A channel this radio has left keeps its thread (messages point at it by
+  // index, and rejoining finds the same chat), but isn't listed (Epic R #1750).
+  size_t kept = 0;
+  for (size_t i = 0; i < n; i++) {
+    const Thread* th = s.threadAt(order[i]);
+    uint8_t key[kChannelKeyLen];
+    memcpy(key, th->key, kChannelKeyLen);
+    if (ThreadKind(th->kind) == ThreadKind::Channel && !_model->channelHeld(key)) continue;
+    order[kept++] = order[i];
+  }
+  n = kept;
   lv_obj_t* list = box(content, LV_PCT(100), 0);
   lv_obj_set_flex_grow(list, 1);
   if (n == 0) {
@@ -1720,7 +1731,20 @@ void GuiShell::openSheet(Sheet kind) {
   // The design's "Only @<name> and replies" promised replies, which MeshCore
   // can't tell apart (owner pick a, 2026-10-16).
   const char* mention = "Only when you're @mentioned";
-  _sheet_count = kind == Sheet::Notify ? 3 : 2;
+  if (kind == Sheet::Notify) {
+    _sheet_count = 3;
+  } else {
+    // Epic R mockup 8: Write, Notifications, Channel key (a private channel
+    // only: Public's and a hashtag's aren't secret), Leave channel.
+    uint8_t key[kChannelKeyLen];
+    bool priv = false;
+    const bool held = _model->channelOf(_thread, key, &priv);
+    _sheet_count = 0;
+    _menu_rows[_sheet_count++] = MenuWrite;
+    _menu_rows[_sheet_count++] = MenuNotify;
+    if (held && priv) _menu_rows[_sheet_count++] = MenuKey;
+    if (held) _menu_rows[_sheet_count++] = MenuLeave;
+  }
   for (uint8_t i = 0; i < _sheet_count; i++) {
     const bool chosen = kind == Sheet::Notify && i == uint8_t(mode);
     lv_obj_t* row = box(sheet, LV_PCT(100), landscape() ? 30 : 38);   // ObScreen landscape: 30 px, no sub-line
@@ -1740,13 +1764,18 @@ void GuiShell::openSheet(Sheet kind) {
       name = kModeTitle[i];
       sub = i == 0 ? "Alert on every message" : i == 1 ? mention : "Unread count only, no alert";
     } else {
-      name = i == 0 ? "Write message" : "Notifications";
-      sub = i == 0 ? "Open the keyboard" : kModeTitle[uint8_t(mode)];
+      switch (_menu_rows[i]) {
+        case MenuWrite: name = "Write message"; sub = "Open the keyboard"; break;
+        case MenuNotify: name = "Notifications"; sub = kModeTitle[uint8_t(mode)]; break;
+        case MenuKey: name = "Channel key"; sub = "Show it to share"; break;
+        default: name = "Leave channel"; sub = "Remove it from this radio"; break;
+      }
     }
+    const bool leave_row = kind == Sheet::Menu && _menu_rows[i] == MenuLeave;
     lv_obj_t* col = box(row, 0, LV_SIZE_CONTENT);
     lv_obj_set_flex_grow(col, 1);
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
-    lv_obj_t* nl = label(col, FontRole::Body, ink, name);
+    lv_obj_t* nl = label(col, FontRole::Body, leave_row ? _t.bad : ink, name);   // mockup 8: Leave in red
     lv_obj_set_width(nl, LV_PCT(100));
     oneLine(nl, FontRole::Body);
     if (_lay.hints) {
@@ -1869,6 +1898,18 @@ void GuiShell::sheetPick(int i) {
   if (kind == Sheet::Notify) {
     _model->setThreadMode(_thread, NotifyMode(i));
     rebuild();   // closes the sheet; the header bell shows the new mode
+  } else if (kind == Sheet::Leave) {
+    closeSheet();
+    if (i == 1) {   // Leave; 0 is Cancel
+      _model->leaveChannel(_leave_thread);
+      openThread(-1);   // back to Chats, where the channel no longer is
+    }
+  } else if (kind == Sheet::Menu && i < _sheet_count && _menu_rows[i] == MenuKey) {
+    closeSheet();
+    showChannelKey();
+  } else if (kind == Sheet::Menu && i < _sheet_count && _menu_rows[i] == MenuLeave) {
+    closeSheet();
+    openLeaveSheet();
   } else if (kind == Sheet::Menu) {
     if (i == 0) openCompose(_thread);   // rebuild closes the sheet
     else openSheet(Sheet::Notify);

@@ -201,6 +201,15 @@ public:
   virtual int channelSlots(offband::gui::ChannelSlot* out, int max) = 0;
   virtual int addChannel(int slot, const char* name, const uint8_t key[offband::gui::kChannelKeyLen]) = 0;
   virtual void newChannelKey(uint8_t out[offband::gui::kChannelKeyLen]) = 0;
+  // A channel thread's slot and key, and whether it's private (neither Public
+  // nor a hashtag, so its key is a secret worth showing). False if the radio
+  // no longer holds it.
+  virtual bool channelOf(int thread, uint8_t key[offband::gui::kChannelKeyLen], bool* is_private) = 0;
+  // Clears the radio's slot for this channel and marks its chat read. The
+  // thread stays in the store (messages point at it by index), and Chats hides
+  // a channel the radio no longer holds; rejoining finds the same chat.
+  virtual bool leaveChannel(int thread) = 0;
+  virtual bool channelHeld(const uint8_t key[offband::gui::kChannelKeyLen]) = 0;
   virtual ~ShellModel() {}
 };
 
@@ -449,8 +458,10 @@ private:
   // Bottom sheets (D6): the channel notification sheet, and the menu USR
   // hold opens in a channel (owner pick a, 2026-10-16). Zone: the one-time
   // "Use <zone> time?" prompt (Epic L, owner pick 5a).
-  enum class Sheet : uint8_t { None, Notify, Menu, Zone, Start };
+  enum class Sheet : uint8_t { None, Notify, Menu, Zone, Start, Leave };
   void openStartSheet();   // "+" in Chats: message a node, or add a channel (Epic R)
+  void openLeaveSheet();   // a channel's Leave, confirmed (Epic R mockup 9)
+  void showChannelKey();   // a private channel's key, to share (Epic R mockup 7)
   void openSheet(Sheet kind);
   void closeSheet();
   void sheetHot(int i);
@@ -521,7 +532,12 @@ private:
   lv_obj_t* _sdn = nullptr;
   lv_obj_t* _sdn_bar = nullptr;
   lv_obj_t* _sdn_count = nullptr;
-  lv_obj_t* _sheet_rows[3] = {};
+  lv_obj_t* _sheet_rows[4] = {};
+  // A channel's menu (Epic R mockup 8): which action each row is, since
+  // Channel key appears only for a private channel.
+  enum MenuRow : uint8_t { MenuWrite, MenuNotify, MenuKey, MenuLeave };
+  uint8_t _menu_rows[4] = {};
+  int _leave_thread = -1;   // the channel Leave's confirmation names
   uint8_t _sheet_count = 0;
   int _sheet_hot = 0;
   int _sheet_zone = 0;   // the zone the Zone prompt offers
