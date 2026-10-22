@@ -2064,6 +2064,17 @@ void MyMesh::begin(bool has_display) {
   }
 #endif
 
+#ifdef OFFBAND_GUI
+  // Every channel this radio holds is in Chats, messages or not: a fresh radio
+  // shows Public, and a channel nobody has posted on yet can still be written
+  // to (#1741). After the preflash seeds, so they are included. A thread that
+  // already exists is found, not added again.
+  for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+    ChannelDetails ch;
+    if (getChannel(i, ch) && ch.name[0] != 0) guiThreadForChannel(uint8_t(i));
+  }
+#endif
+
 #ifdef OFFBAND_OBSERVER_BLE_COMPANION
   // Plan 3 Task 10 (Strycher/LoRa#272): provision the locked
   // system CLI channel at slot 40. Idempotent: only persists
@@ -4698,6 +4709,9 @@ CmdResult MyMesh::cmdSetChannel(uint8_t idx, const char* name, const uint8_t sec
   if (!setChannel(idx, channel)) return CmdResult::NotFound;
   saveChannels();
 #ifdef OFFBAND_GUI
+  // A channel the app adds is in Chats straight away, before its first
+  // message (#1741).
+  if (name[0] != 0) guiThreadForChannel(idx);
   // A newly joined channel takes the default notification mode (#1457); an
   // edit of an existing one keeps the mode it has.
   if (was_empty && name[0] != 0) {
