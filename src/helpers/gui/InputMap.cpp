@@ -16,6 +16,7 @@ static bool isUsr(InputEvent ev) {
     case InputEvent::UsrTripleClick:
     case InputEvent::UsrHold:
     case InputEvent::UsrLongHold:
+    case InputEvent::TrackPress:
       return true;
     default:
       return false;
@@ -44,6 +45,7 @@ Action mapInput(InputEvent ev, bool screen_on, bool pocket_locked) {
     case InputEvent::UsrHold:
     case InputEvent::TouchTap:
     case InputEvent::KeyEnter:
+    case InputEvent::TrackPress:
       return Action::Open;
     case InputEvent::AuxHold:
     case InputEvent::TouchSwipeRight:

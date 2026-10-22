@@ -116,6 +116,11 @@ constexpr bool kUsrClicksAtOnce = true;
 #else
 constexpr bool kUsrClicksAtOnce = false;
 #endif
+#ifdef PIN_TRACKBALL_UP
+constexpr bool kTrackballPress = true;
+#else
+constexpr bool kTrackballPress = false;
+#endif
 
 }  // namespace
 
@@ -140,14 +145,11 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 
 #if defined(PIN_TOUCH_SDA) && defined(PIN_TOUCH_SCL)
   _touch_ok = s_touch.begin(PIN_TOUCH_SDA, PIN_TOUCH_SCL, PIN_TOUCH_RST);
-  if (_touch_ok) {
-    TouchMapping m = {GUI_TOUCH_SWAP_XY != 0, GUI_TOUCH_MIRROR_X != 0, GUI_TOUCH_MIRROR_Y != 0,
-                      uint16_t(display->width()), uint16_t(display->height())};
-    lvglAttachTouch(s_touch, m);
-  }
+  if (_touch_ok) attachTouch();
   // No answer from the controller: the GUI runs on buttons only (PLAN.md §6).
 #ifdef TOUCH_GT911
   mesh_log_line(MLOG_BOOT, "[gui] touch %s\n", _touch_ok ? "gt911 ok" : "none (buttons only)");
+  logTouchProbe();
 #else
   mesh_log_line(MLOG_BOOT, "[gui] touch %s\n", _touch_ok ? "chsc6x ok" : "none (buttons only)");
 #endif
@@ -240,6 +242,10 @@ void UITask::pollButtons(uint32_t now) {
       // Clicks just before this hold go first, in the order they happened.
       if (uint8_t n = _usr_clicks.take()) handle(clicksEvent(n), now);
       handle(kind == PressKind::Hold ? InputEvent::UsrHold : InputEvent::UsrLongHold, now);
+    } else if (kTrackballPress) {
+      // The T-Deck: USR is the trackball's press. The ball steps, so a click
+      // selects, at once, with no multi-click wait (tester bench, #1730).
+      handle(InputEvent::TrackPress, now);
     } else if (kUsrClicksAtOnce || _screen == ScreenState::Off || _shell.locked() || _shell.stepping()) {
       // A dark or locked screen acts on the click itself, without waiting
       // out the multi-click window. So does a screen where USR steps, and
@@ -259,6 +265,42 @@ void UITask::pollButtons(uint32_t now) {
                                      : InputEvent::AuxLongHold,
            now);
   }
+#endif
+}
+
+void UITask::attachTouch() {
+#if defined(PIN_TOUCH_SDA) && defined(PIN_TOUCH_SCL)
+  TouchMapping m = {GUI_TOUCH_SWAP_XY != 0, GUI_TOUCH_MIRROR_X != 0, GUI_TOUCH_MIRROR_Y != 0,
+                    uint16_t(_display->width()), uint16_t(_display->height())};
+  lvglAttachTouch(s_touch, m);
+#endif
+}
+
+#ifdef TOUCH_GT911
+// What each GT911 address answered at the last probe (#1730 bench): whether
+// it acked, and the product id bytes ("911" is 39 31 31).
+void UITask::logTouchProbe() {
+  for (uint8_t i = 0; i < 2; i++) {
+    const Gt911Touch::Probe& p = s_touch.probe(i);
+    mesh_log_line(MLOG_BOOT, "[gui] gt911 0x%02X ack=%d id_read=%d id=%02x %02x %02x %02x\n", i ? 0x14 : 0x5D,
+                  int(p.acked), int(p.id_read), p.id[0], p.id[1], p.id[2], p.id[3]);
+  }
+}
+#endif
+
+// A touch chip that didn't answer at boot may still be starting: look again
+// every 2 s for the first minute, as for the keyboard.
+void UITask::pollTouchLate(uint32_t now) {
+#if defined(TOUCH_GT911)
+  if (_touch_ok || now > 60000 || now - _touch_probed < 2000) return;
+  _touch_probed = now;
+  if (!s_touch.begin(PIN_TOUCH_SDA, PIN_TOUCH_SCL, PIN_TOUCH_RST)) return;
+  _touch_ok = true;
+  attachTouch();
+  mesh_log_line(MLOG_BOOT, "[gui] touch gt911 ok (late)\n");
+  logTouchProbe();
+#else
+  (void)now;
 #endif
 }
 
@@ -316,6 +358,15 @@ void UITask::pollKeys(uint32_t now) {
 
 void UITask::handle(InputEvent ev, uint32_t now) {
   const Action a = mapInput(ev, _screen != ScreenState::Off, _pocket_locked);
+#ifdef OFFBAND_GUI_PERF
+  // Diag builds: which inputs arrive and what they do, for a bench run where
+  // nobody is watching the screen (#1730). The first 200 only.
+  static uint8_t s_logged = 0;
+  if (s_logged < 200) {
+    s_logged++;
+    mesh_log_line(MLOG_BOOT, "[gui] input ev=%d action=%d\n", int(ev), int(a));
+  }
+#endif
   if (a == Action::None) return;
   _last_input = now;
   // Any press ends the boot screen. CLI rescue, pocket lock and the buzzer
@@ -1690,6 +1741,7 @@ void UITask::loop() {
 #endif
   pollButtons(now);
   pollKeys(now);
+  pollTouchLate(now);
 #ifdef OFFBAND_GUI_PERF
   if (millis() - t_in > s_t_input) s_t_input = millis() - t_in;
 #endif
@@ -1870,6 +1922,14 @@ void UITask::loop() {
                   (unsigned long)s_t_input, (unsigned long)s_t_status, (unsigned long)s_t_data,
                   (unsigned long)s_t_update, (unsigned long)s_t_lvgl);
     s_gap_max = s_t_input = s_t_status = s_t_data = s_t_update = s_t_lvgl = 0;
+  #ifdef TOUCH_GT911
+    // The T-Deck bench (#1730): is the chip read, does it report, and where.
+    const Gt911Touch::Stats ts = s_touch.takeStats();
+    mesh_log_line(MLOG_BOOT, "[gui] gt911 present=%d reads=%lu bus_err=%lu reports=%lu presses=%lu invalid=%lu last=%u,%u\n",
+                  int(s_touch.present()), (unsigned long)ts.reads, (unsigned long)ts.bus_errors,
+                  (unsigned long)ts.reports, (unsigned long)ts.presses, (unsigned long)ts.invalid,
+                  unsigned(ts.last_x), unsigned(ts.last_y));
+  #endif
   }
 #endif
 }

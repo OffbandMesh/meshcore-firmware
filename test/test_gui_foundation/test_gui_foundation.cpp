@@ -232,12 +232,12 @@ const InputEvent kAllEvents[] = {
     InputEvent::TouchSwipeRight, InputEvent::KeyTab,   InputEvent::KeyEnter,
     InputEvent::KeyEsc,    InputEvent::KeyAltDigit,    InputEvent::KeyOther,
     InputEvent::KeyBackspace, InputEvent::TrackUp,     InputEvent::TrackDown,
-    InputEvent::TrackLeft, InputEvent::TrackRight,
+    InputEvent::TrackLeft, InputEvent::TrackRight, InputEvent::TrackPress,
 };
 bool isUsr(InputEvent ev) {
   return ev == InputEvent::UsrClick || ev == InputEvent::UsrDoubleClick ||
          ev == InputEvent::UsrTripleClick || ev == InputEvent::UsrHold ||
-         ev == InputEvent::UsrLongHold;
+         ev == InputEvent::UsrLongHold || ev == InputEvent::TrackPress;
 }
 }  // namespace
 
@@ -278,6 +278,13 @@ TEST(InputMap, TrackballMovesAndBackspaceGoesBack) {
   EXPECT_EQ(mapInput(InputEvent::TrackRight, true, false), Action::Next);
   EXPECT_EQ(mapInput(InputEvent::TrackLeft, true, false), Action::Back);
   EXPECT_EQ(mapInput(InputEvent::KeyBackspace, true, false), Action::Back);
+}
+
+// The trackball's press is USR: it selects, and it can wake a pocket-locked
+// screen, which the ball's rolling can't (tester bench, #1730).
+TEST(InputMap, TheTrackballPressSelectsAndWakesLikeUsr) {
+  EXPECT_EQ(mapInput(InputEvent::TrackPress, true, false), Action::Open);
+  EXPECT_EQ(mapInput(InputEvent::TrackPress, false, true), Action::Wake);
 }
 
 TEST(InputMap, PocketLockIgnoresTheTrackballAndKeyboard) {

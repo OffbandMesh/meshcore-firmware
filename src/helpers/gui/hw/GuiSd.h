@@ -20,6 +20,7 @@
 #include <helpers/gui/SdMonitor.h>
 
 #include "SdCard.h"
+#include "SdDiagLog.h"
 
 class GuiSd {
 public:
@@ -69,6 +70,7 @@ private:
   SdCard _card;
   offband::gui::SdArchive _arch;
   SdFile _rec, _thr;
+  SdDiagLog _diag;   // diag builds only (OFFBAND_SD_DIAG_LOG)
   uint32_t _owner = 0;
   bool _begun = false;
   uint32_t _rev = 0;

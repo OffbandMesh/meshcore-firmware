@@ -148,11 +148,24 @@ static void touchReadCb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
   TouchPoint p{};
   if (s_touch && s_touch->read(&p)) {
     s_failed_reads = 0;
+#ifdef OFFBAND_GUI_PERF
+    const bool press_edge = p.pressed && !s_pressed;
+#endif
     s_pressed = p.pressed;
     if (p.pressed) {
       uint16_t x = p.x, y = p.y;
       mapTouch(s_mapping, &x, &y);   // to portrait panel coordinates
       rotateTouch(s_rotation, &x, &y);   // to where LVGL draws now (Epic H)
+#ifdef OFFBAND_GUI_PERF
+      // Diag builds: the first presses, raw and as LVGL gets them, so a bench
+      // tap settles any mapping question (#1730).
+      static uint8_t s_logged = 0;
+      if (press_edge && s_logged < 30) {
+        s_logged++;
+        mesh_log_line(MLOG_BOOT, "[gui] touch raw=%u,%u -> %u,%u rot=%u\n", unsigned(p.x), unsigned(p.y), unsigned(x),
+                      unsigned(y), unsigned(s_rotation));
+      }
+#endif
       s_last.x = lv_coord_t(x);
       s_last.y = lv_coord_t(y);
       s_any_touch = true;

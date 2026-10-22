@@ -35,6 +35,10 @@ enum class InputEvent : uint8_t {
   // outside a text field. The trackball's press is USR (GPIO0).
   KeyBackspace,
   TrackUp, TrackDown, TrackLeft, TrackRight,
+  // The trackball's press is the USR button. With the ball doing next and
+  // previous, a click selects, at once (tester bench, #1730). It is still USR
+  // for waking and the pocket lock.
+  TrackPress,
 };
 
 enum class Action : uint8_t {
