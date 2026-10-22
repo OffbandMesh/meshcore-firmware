@@ -17,7 +17,15 @@
 // where it should (#1199). v7 can decode two more pads through the RMT and tag every
 // line with the pin it arrived on, so one board reads four pads continuously (#1199).
 // v8 fixes the [xchk] hint: what the gauge-vs-INA difference should be depends on
-// where the INA reads VBUS (#1199).
+// where the INA reads VBUS (#1199). v9 adds the fast INA sampler: 50 Hz polling
+// summarised once a second as min bus / max current, because a 30 s sample cannot
+// see a 50-200 ms transmit burst and the sag during one is the measurement (#1672).
+// v10 tracks BOTH current extremes: v9 kept only the maximum, so a window that was
+// entirely charging printed 0.0 mA while the INA read -406 mA (#1672). v11 makes the
+// sampler fast enough to be believed: it configures the INA228 for 150 us conversions
+// with no averaging, lifts the bus to 400 kHz and polls at 1 kHz, because at 50 Hz the
+// sag stayed pinned at ~90 mV across a 120-168 mA swing -- the dip was real and the
+// current peak was being missed entirely (#1672).
 //
 // FLASH WITH ARDUINO IDE, NOT PLATFORMIO. Two prior PlatformIO attempts put
 // `Serial` on the TinyUSB CDC peripheral while the enumerated port was
@@ -25,7 +33,7 @@
 // Arduino IDE handles the Feather's USB config correctly out of the box.
 // (#704 handoff.)
 
-#define SNIFF_BUILD_ID "SNIFFER-v8"   // the banner, every heartbeat and PING print it
+#define SNIFF_BUILD_ID "SNIFFER-v11"   // the banner, every heartbeat and PING print it
 
 // ==== VARIANT BEGIN: wiring ====
 // ---------------------------------------------------------------------------
@@ -351,9 +359,28 @@
 #define INA228_SHUNT_MILLIOHM  15
 
 #define INA228_REG_CONFIG   0x00
+#define INA228_REG_ADCCFG   0x01
 #define INA228_REG_VSHUNT   0x04
 #define INA228_REG_VBUS     0x05
 #define INA228_CONFIG_ADCRANGE  0x0010
+
+// v11 (#1672): ADC_CONFIG for the fast sampler.
+//
+//   bits 15:12 MODE    0xB = continuous shunt + bus, temperature OFF
+//   bits 11:9  VBUSCT  2   = 150 us
+//   bits  8:6  VSHCT   2   = 150 us
+//   bits  5:3  VTCT    0   = unused, temperature is not converted
+//   bits  2:0  AVG     0   = 1 sample, NO averaging
+//
+// = 0xB480. A fresh bus+shunt pair therefore lands every ~300 us instead of the
+// ~3.2 ms the reset default (0xFB68: 1052 us x3 with temperature) produces.
+//
+// AVERAGING IS THE ENEMY HERE. AVG>1 would hand back a smoother number that is
+// exactly wrong for this measurement: the peak we are chasing lasts less than one
+// default conversion, so any averaging buries it. 150 us rather than the minimum
+// 50 us because the shorter conversions are noisier and 300 us already resolves a
+// pulse an order of magnitude shorter than the ~3 ms we know we are missing.
+#define INA228_ADCCFG_FAST  0xB480
 
 // Scales in nV per LSB, x1000 so the integer maths keeps a fractional digit.
 #define INA228_VSHUNT_NV_X1000_R0   312500UL   // 312.5   nV
@@ -368,6 +395,50 @@
 // Sampling cadence. Matches the RC32's own [pwr] line so the two series line up
 // in the capture without interpolation.
 #define GAUGE_PERIOD_MS 30000
+
+// ---------------------------------------------------------------------------
+// v9: the FAST INA sampler (#1672).
+//
+// WHY. The 30 s [ina] line above cannot answer the question it was pointed at.
+// A LoRa TX burst lasts 50-200 ms, so a 30 s sample catches one only by luck and
+// reports whatever phase it happened to land in. On the QCC badge that produced a
+// +/-600 mV "ADC scatter" that was read as measurement noise for a day. It is not:
+// low readings coincide with 139 mA mean draw against 92 mA for normal ones. The
+// rail is really sagging, and the 30 s series cannot show how far.
+//
+// WHAT. Poll bus+shunt at INA_FAST_MS and emit ONE summary line per
+// INA_FAST_REPORT_MS: the minimum bus voltage, the maximum current, and the bus
+// voltage AT that maximum. Min/max rather than raw rows because the transient is
+// the whole point and an average destroys it -- and because raw rows at 50 Hz
+// would be 50 lines/s into a capture that also carries the badge's own log.
+//
+// WHY 1 ms (v11, and why 20 ms was NOT fast enough).
+//
+// v9/v10 polled at 20 ms against the part's reset default, where a fresh sample
+// lands every ~3.2 ms. That was fast enough to see a 50-200 ms transmit burst and
+// NOT fast enough to see the current peak inside one. The giveaway was in the data:
+// across windows whose measured current swing ranged 120-168 mA, the sag stayed
+// pinned at 90-93 mV. A resistive drop scales with current; a constant one does not.
+// The dip was real and the swing was an undersample, so dividing them produced a
+// "resistance" that moved only with sampling luck -- 0.25 ohm one hour and 0.6 ohm
+// the next, on the same cell, in the wrong direction against state of charge.
+//
+// v11 reconfigures the part (INA228_ADCCFG_FAST, ~300 us per pair), lifts the bus to
+// 400 kHz so a read pair costs ~360 us instead of ~1.4 ms, and polls at 1 ms. That
+// resolves a pulse an order of magnitude shorter than anything v10 could see.
+//
+// THE UART CAPTURE IS STILL THE TENANT. ~360 us of I2C per 1 ms is real CPU, but the
+// ESP32's UART FIFO is 128 bytes and 115200 baud fills it in ~11 ms, so blocking for
+// 360 us cannot drop a byte. The call stays AFTER the relay regardless.
+//
+// NOTE the sampler reads VSHUNT and VBUS only. ina228Tick() re-reads CONFIG every
+// time to pick up ADCRANGE; here it is cached once at first use, because the part
+// is never reconfigured by this sketch and a third I2C transaction per sample is
+// a third of the budget for a bit that does not change.
+// ---------------------------------------------------------------------------
+#define INA_FAST_MS           1     // 1 kHz; see the conversion-time note above
+#define INA_FAST_REPORT_MS 1000     // one [inafast] line per second
+#define INA_FAST_I2C_HZ  400000     // raised from 100 kHz so a read pair fits in 1 ms
 
 // RST: R31 10K + C32 1uF gives a ~10 ms RC on CHIP_PU. 100 ms is comfortably
 // past it. (Holding RST for 1 s was tested by the owner and changes nothing --
@@ -411,6 +482,21 @@ static bool gaugeRead16At(uint8_t addr, uint8_t reg, uint16_t* out) {
 
 static bool gaugeRead16(uint8_t reg, uint16_t* out) {
   return gaugeRead16At(MAX1704X_ADDR, reg, out);
+}
+
+// v11 (#1672): the first WRITE this sketch performs. Everything until now was
+// read-only by design -- an instrument that configures its subject can be blamed
+// for what it measures. The exception is earned: at the INA228's reset default a
+// fresh sample lands only every ~3.2 ms, which is slower than the current pulse we
+// are trying to catch, so the part has to be reconfigured for the measurement to
+// exist at all. Only ADC_CONFIG (0x01) is written; CONFIG (0x00), which holds
+// ADCRANGE and therefore the decode scale, is left exactly as found.
+static bool gaugeWrite16At(uint8_t addr, uint8_t reg, uint16_t val) {
+  Wire1.beginTransmission(addr);
+  Wire1.write(reg);
+  Wire1.write((uint8_t)(val >> 8));
+  Wire1.write((uint8_t)(val & 0xFF));
+  return Wire1.endTransmission(true) == 0;
 }
 
 // INA228's measurement registers are 24 bits, not 16. Same transaction shape as
@@ -762,6 +848,121 @@ static uint32_t ina228Tick() {
   return bus_mv;
 }
 
+// --- v9 fast sampler (#1672) -----------------------------------------------
+// INA228 only. The INA219-class path is left on the 30 s cadence: its parts are
+// on other rigs, nothing has asked this question of them, and adding an untested
+// fast path to hardware that is not in front of anyone is how a rig stops being
+// trustworthy.
+static uint32_t ina_fast_next   = 0;
+static uint32_t ina_fast_report = 0;
+static int8_t   ina_fast_range  = -1;   // cached ADCRANGE; -1 = not read yet
+static uint32_t ff_bus_min = 0xFFFFFFFFUL, ff_bus_max = 0;
+// v10: BOTH extremes of current, because the sign carries the direction. Positive is
+// discharge, negative is charge. v9 tracked only the maximum, seeded at 0, so a window
+// that was entirely charging reported ma_max=0.0 while the INA was reading -406 mA --
+// the instrument said "nothing happening" through a 406 mA charge. Seeded from the first
+// sample rather than from 0 for the same reason: 0 is a value the current can actually
+// take, so it is not a safe sentinel in either direction.
+static int32_t  ff_ma_x10_max = 0;      // most positive  -> peak discharge
+static int32_t  ff_ma_x10_min = 0;      // most negative  -> peak charge
+static uint32_t ff_bus_at_max = 0;      // bus voltage at peak discharge: the sag number
+static uint32_t ff_bus_at_min = 0;      // bus voltage at peak charge
+static uint32_t ff_n = 0, ff_fail = 0;
+
+static void inaFastTick(uint32_t now) {
+  if (ina_addr == 0 || ina_kind != INA_228) return;
+
+  if ((int32_t)(now - ina_fast_next) >= 0) {
+    ina_fast_next = now + INA_FAST_MS;
+
+    if (ina_fast_range < 0) {
+      uint16_t cfg = 0;
+      // Same fallback as ina228Tick: a failed read assumes the part's own reset
+      // default, the wider and coarser range, so it under-resolves rather than
+      // over-reporting a current that is not there.
+      ina_fast_range = (gaugeRead16At(ina_addr, INA228_REG_CONFIG, &cfg) &&
+                        (cfg & INA228_CONFIG_ADCRANGE)) ? 1 : 0;
+
+      // v11: configure the part for short conversions and lift the bus, then SAY SO
+      // and read it back. An instrument that silently reconfigures its subject is
+      // how a measurement becomes unreproducible -- the capture has to record that
+      // this run was taken on a non-default ADC_CONFIG, and whether the write took.
+      Wire1.setClock(INA_FAST_I2C_HZ);
+      const bool wrote = gaugeWrite16At(ina_addr, INA228_REG_ADCCFG, INA228_ADCCFG_FAST);
+      uint16_t back = 0;
+      const bool readback = gaugeRead16At(ina_addr, INA228_REG_ADCCFG, &back);
+      Serial.printf("[inafast] ADC_CONFIG write=%d readback=%d value=0x%04X "
+                    "(want 0x%04X) i2c=%luHz poll=%ums\n",
+                    (int)wrote, (int)readback, (unsigned)back,
+                    (unsigned)INA228_ADCCFG_FAST, (unsigned long)INA_FAST_I2C_HZ,
+                    (unsigned)INA_FAST_MS);
+      if (!wrote || !readback || back != INA228_ADCCFG_FAST) {
+        // Not fatal: the sampler still works at whatever cadence the part is in.
+        // Loud, because every number below it would otherwise be read as 1 kHz data.
+        Serial.println("[inafast] WARNING: ADC_CONFIG not as requested -- the sampler "
+                       "is running at the part's existing conversion rate, so a peak "
+                       "shorter than that is still being missed.");
+      }
+    }
+
+    uint32_t rs = 0, rb = 0;
+    if (!gaugeRead24At(ina_addr, INA228_REG_VSHUNT, &rs) ||
+        !gaugeRead24At(ina_addr, INA228_REG_VBUS,   &rb)) {
+      ff_fail++;                 // counted, not printed: a flood of read errors at
+      return;                    // 50 Hz would bury the badge's own log
+    }
+
+    int32_t sh = (int32_t)(rs >> 4);
+    if (sh & 0x00080000L) sh -= 0x00100000L;
+    const uint32_t nv_x1000 = ina_fast_range ? INA228_VSHUNT_NV_X1000_R1
+                                             : INA228_VSHUNT_NV_X1000_R0;
+    const int64_t shunt_nv = (int64_t)sh * (int64_t)nv_x1000 / 1000;
+    const int32_t ma_x10   = (int32_t)((shunt_nv / (int64_t)INA228_SHUNT_MILLIOHM) / 100);
+    const uint32_t bus_mv  =
+        (uint32_t)(((uint64_t)(rb >> 4) * INA228_VBUS_NV_X1000) / 1000000000ULL);
+
+    if (bus_mv < ff_bus_min) ff_bus_min = bus_mv;
+    if (bus_mv > ff_bus_max) ff_bus_max = bus_mv;
+    // First sample of the window seeds both extremes; after that they only widen.
+    if (ff_n == 0) {
+      ff_ma_x10_max = ff_ma_x10_min = ma_x10;
+      ff_bus_at_max = ff_bus_at_min = bus_mv;
+    } else {
+      if (ma_x10 > ff_ma_x10_max) { ff_ma_x10_max = ma_x10; ff_bus_at_max = bus_mv; }
+      if (ma_x10 < ff_ma_x10_min) { ff_ma_x10_min = ma_x10; ff_bus_at_min = bus_mv; }
+    }
+    ff_n++;
+  }
+
+  if ((int32_t)(now - ina_fast_report) < 0) return;
+  ina_fast_report = now + INA_FAST_REPORT_MS;
+  if (ff_n == 0) {
+    // Say so rather than printing a window of sentinel values. A silent gap and a
+    // window that genuinely read nothing are different faults.
+    if (ff_fail) Serial.printf("[inafast] n=0 fail=%lu\n", (unsigned long)ff_fail);
+    ff_fail = 0;
+    return;
+  }
+  // Printed signed, with the sign spelled out by the field name rather than left for the
+  // reader to infer: ma_dis is the peak discharge, ma_chg the peak charge. A window can
+  // legitimately have both (a TX burst during a charge), and a window that is entirely
+  // one direction shows the other as a small same-signed number, not as a lie about zero.
+  const int32_t dmag = ff_ma_x10_max < 0 ? -ff_ma_x10_max : ff_ma_x10_max;
+  const int32_t cmag = ff_ma_x10_min < 0 ? -ff_ma_x10_min : ff_ma_x10_min;
+  Serial.printf("[inafast] n=%lu bus_min=%lu bus_max=%lu sag=%ld "
+                "ma_dis=%s%ld.%ld bus_at_dis=%lu ma_chg=%s%ld.%ld bus_at_chg=%lu fail=%lu\n",
+                (unsigned long)ff_n, (unsigned long)ff_bus_min,
+                (unsigned long)ff_bus_max,
+                (long)(ff_bus_max - ff_bus_min),
+                ff_ma_x10_max < 0 ? "-" : "", (long)(dmag / 10), (long)(dmag % 10),
+                (unsigned long)ff_bus_at_max,
+                ff_ma_x10_min < 0 ? "-" : "", (long)(cmag / 10), (long)(cmag % 10),
+                (unsigned long)ff_bus_at_min, (unsigned long)ff_fail);
+  ff_bus_min = 0xFFFFFFFFUL; ff_bus_max = 0;
+  ff_ma_x10_max = ff_ma_x10_min = 0;
+  ff_bus_at_max = ff_bus_at_min = 0; ff_n = 0; ff_fail = 0;
+}
+
 static uint32_t inaTick() {
   if (ina_addr == 0) return 0;
   if (ina_kind == INA_228) return ina228Tick();
@@ -1079,7 +1280,15 @@ void loop() {
   // microseconds and the RC32's UART has no flow control -- servicing the gauge
   // ahead of the relay would risk dropping the bytes this whole instrument
   // exists to capture.
-  gaugeTick(millis());
+  {
+    const uint32_t t_now = millis();
+    gaugeTick(t_now);
+    // v9 (#1672): same rule, and the reason it is safe to run at 50 Hz. Two I2C
+    // reads at 100 kHz are ~1 ms, so INA_FAST_MS=20 spends about 5% of the loop.
+    // It sits AFTER the relay for exactly the reason above -- the fast sampler is
+    // a guest here and the UART capture is the tenant.
+    inaFastTick(t_now);
+  }
 #endif
 
   // Host commands.
