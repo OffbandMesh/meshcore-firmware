@@ -70,5 +70,6 @@ private:
   LongPressFn _on_lora = nullptr;
   void* _ctx = nullptr;
   StatusReadings _shown{};
-  bool _have_shown = false;
+  bool _have_shown = false;   // this strip has had a reading (reset by build)
+  bool _ever_shown = false;   // any strip has: _shown holds the last readings
 };

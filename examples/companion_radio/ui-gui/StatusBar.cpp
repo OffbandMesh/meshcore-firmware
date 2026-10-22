@@ -36,6 +36,7 @@ lv_obj_t* label(lv_obj_t* parent, FontRole role, uint32_t rgb) {
   lv_obj_t* l = lv_label_create(parent);
   lv_obj_set_style_text_font(l, font(role), 0);
   lv_obj_set_style_text_color(l, c(rgb), 0);
+  lv_label_set_text(l, "");   // not LVGL's placeholder "Text" before the first reading
   return l;
 }
 
@@ -178,6 +179,12 @@ void StatusBar::build(lv_obj_t* parent, const ThemeTokens& t, LongPressFn on_lor
   lv_obj_set_style_bg_opa(_batt_fill, LV_OPA_COVER, 0);
   lv_obj_set_style_radius(_batt_fill, 1, 0);
   _batt_pct = label(batt, FontRole::Meta, t.ink2);
+
+  // A screen change rebuilds the strip. Fill it from the last readings now,
+  // not at the next quarter-second update, or every tab tap blanks the
+  // clock and icons for a frame and shows LVGL's placeholder "Text" (T-Deck
+  // bench video, #1730).
+  if (_ever_shown) update(_shown, lv_tick_get());
 }
 
 void StatusBar::update(const StatusReadings& r, uint32_t now_ms) {
@@ -270,6 +277,7 @@ void StatusBar::update(const StatusReadings& r, uint32_t now_ms) {
 
   _shown = r;
   _have_shown = true;
+  _ever_shown = true;
 }
 
 void StatusBar::openPopover(const LoraReadings& r, uint32_t now_ms) {
