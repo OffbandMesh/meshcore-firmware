@@ -2,6 +2,7 @@
 
 #include "Mesh.h"
 #include <helpers/IdentityStore.h>
+#include <helpers/PathHashDefault.h>   // #1753: the shared default path-hash mode
 #include <helpers/SensorManager.h>
 #include <helpers/ClientACL.h>
 #include <helpers/RegionMap.h>
@@ -66,7 +67,10 @@ public:
   char owner_info[120];
   uint8_t rx_boosted_gain = 0; // power settings
   uint8_t radio_fem_rxgain = 0; // LoRa FEM RX gain setting
-  uint8_t path_hash_mode = 0;   // which path mode to use when sending
+  // #1753: 2-byte path hashes by default. The reasoning, the accepted hop-ceiling cost
+  // and the interop argument are all in helpers/PathHashDefault.h -- shared so this and
+  // the companion's NodePrefs cannot drift apart.
+  uint8_t path_hash_mode = offband::DEFAULT_PATH_HASH_MODE;   // which path mode to use when sending
   uint8_t loop_detect = 0;
   uint8_t cad_enabled = 0;      // hardware Channel Activity Detection before TX (boolean)
   uint8_t extra_sf[4];
