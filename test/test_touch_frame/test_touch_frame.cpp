@@ -192,6 +192,34 @@ TEST(Gt911, TheFirstPointIsUsedWhenSeveralAreDown) {
   EXPECT_EQ(50, p.x);
 }
 
+// The first point's block starts with its track id, right after the status
+// register; X low is at 0x8150. Reading the block from 0x8150 shifted every
+// field by a byte and made every press an out-of-range glitch (T-Deck bench,
+// #1730: 43 reports, 0 presses, 25 invalid).
+TEST(Gt911Registers, TheFirstPointStartsRightAfterTheStatus) {
+  EXPECT_EQ(0x814E, kGt911Status);
+  EXPECT_EQ(0x814F, kGt911Point1);
+  EXPECT_EQ(kGt911Status + 1, kGt911Point1);
+}
+
+// The bench's failure, as bytes: a block read one byte late (no track id
+// first) can't come out as the press it was.
+TEST(Gt911Registers, ABlockReadOneByteLateIsNotThePress) {
+  uint8_t chip[1 + kGt911PointLen + 1];   // 0x814F..0x8157: the point, then point 2's id
+  chip[0] = 0;                            // track id
+  chip[1] = 0xC8; chip[2] = 0x00;         // X = 200
+  chip[3] = 0x96; chip[4] = 0x00;         // Y = 150
+  chip[5] = 0x20; chip[6] = 0x00;         // size
+  chip[7] = 0;                            // reserved
+  chip[8] = 1;
+  TouchPoint right{}, late{};
+  EXPECT_EQ(Gt911Frame::Pressed, parseGt911(0x81, chip, kGt911PointLen, &right));
+  EXPECT_EQ(200, right.x);
+  EXPECT_EQ(150, right.y);
+  const Gt911Frame f = parseGt911(0x81, chip + 1, kGt911PointLen, &late);
+  EXPECT_TRUE(f == Gt911Frame::Invalid || late.x != 200 || late.y != 150);
+}
+
 TEST(Gt911Id, TheProductIdIsRecognized) {
   const uint8_t id[] = {'9', '1', '1', 0};
   EXPECT_TRUE(isGt911ProductId(id, sizeof id));
