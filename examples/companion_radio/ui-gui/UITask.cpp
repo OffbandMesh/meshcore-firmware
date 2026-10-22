@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <MeshLog.h>
 #include <esp_heap_caps.h>
+#include <helpers/ChannelKeys.h>
 #include <lvgl.h>
 
 #include <helpers/AdvertDataHelpers.h>
@@ -1355,6 +1356,46 @@ int UITask::addChannel(int slot, const char* name, const uint8_t key[kChannelKey
 }
 
 void UITask::newChannelKey(uint8_t out[kChannelKeyLen]) { the_mesh.getRNG()->random(out, kChannelKeyLen); }
+
+// R3 (#1750). Private means neither Public nor a hashtag: only then is the key
+// a secret worth showing, and only then is it gone for good on Leave.
+bool UITask::channelOf(int thread, uint8_t key[kChannelKeyLen], bool* is_private) {
+  const int slot = channelSlot(thread);
+  if (slot < 0) return false;
+  ChannelDetails ch;
+  if (!the_mesh.getChannel(slot, ch) || ch.name[0] == 0) return false;
+  memcpy(key, ch.channel.secret, kChannelKeyLen);
+  bool shared = memcmp(key, offband::kPublicChannelKey, kChannelKeyLen) == 0;
+  if (!shared && ch.name[0] == '#') {
+    uint8_t derived[kChannelKeyLen];
+    offband::hashtagChannelKey(ch.name, derived);
+    shared = memcmp(key, derived, kChannelKeyLen) == 0;
+  }
+  if (is_private) *is_private = !shared;
+  return true;
+}
+
+// The slot is emptied through cmdSetChannel, the app's own path: an empty
+// name and a zero key, as the app's delete does.
+bool UITask::leaveChannel(int thread) {
+  const int slot = channelSlot(thread);
+  if (slot < 0) return false;
+  const uint8_t zero[kChannelKeyLen] = {};
+  if (the_mesh.cmdSetChannel(uint8_t(slot), "", zero) != CmdResult::Ok) return false;
+  threadOpened(thread);   // its unread count goes with it
+  mesh_log_line(MLOG_BOOT, "[gui] channel left: slot %d thread %d\n", slot, thread);
+  return true;
+}
+
+bool UITask::channelHeld(const uint8_t key[kChannelKeyLen]) {
+  ChannelDetails ch;
+  for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+    if (the_mesh.getChannel(i, ch) && ch.name[0] != 0 && memcmp(ch.channel.secret, key, kChannelKeyLen) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
 
 RadioValues UITask::radioValues() {
   RadioValues v{};

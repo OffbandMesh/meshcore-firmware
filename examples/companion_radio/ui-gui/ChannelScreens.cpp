@@ -84,6 +84,82 @@ void GuiShell::openStartSheet() {
   sheetHot(0);
 }
 
+// A private channel's key, from its menu (R3 #1750, mockup 7): the same
+// screen a new key is shown on; Done or Back returns to the chat.
+void GuiShell::showChannelKey() {
+  const Thread* th = _model->store().threadAt(_thread);
+  bool priv = false;
+  if (!th || !_model->channelOf(_thread, _chan_key, &priv) || !priv) return;
+  textf(_chan_name, sizeof _chan_name, "%s", th->name);
+  _chan_thread = _thread;
+  _tab = Tab::Chat;
+  chanGo(ChanStep::ShowKey);
+}
+
+// Leave, confirmed (R3 #1750, mockup 9): what goes and what stays; Cancel
+// first and the default, Leave red on the right.
+void GuiShell::openLeaveSheet() {
+  const Thread* th = _model->store().threadAt(_thread);
+  uint8_t key[kChannelKeyLen];
+  bool priv = false;
+  if (!th || !_model->channelOf(_thread, key, &priv)) return;
+  closeSheet();
+  _sheet = Sheet::Leave;
+  _leave_thread = _thread;   // what Leave acts on is what the sheet named
+  _sheet_obj = sheetBackdrop();
+  lv_obj_add_event_cb(
+      _sheet_obj,
+      [](lv_event_t* e) {
+        if (lv_event_get_target(e) == lv_event_get_current_target(e)) {
+          static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->closeSheet(); });
+        }
+      },
+      LV_EVENT_CLICKED, this);
+  lv_obj_t* sheet = sheetPanel(_sheet_obj);
+  char title[64], raw[64];
+  textf(raw, sizeof raw, "Leave %s?", th->name);
+  displayText(raw, strlen(raw), title, sizeof title);
+  lv_obj_t* tl = label(sheet, FontRole::Body, _t.ink, title);
+  lv_obj_set_style_pad_left(tl, 12, 0);
+  lv_obj_set_style_pad_top(tl, 10, 0);
+  lv_obj_t* sl = label(sheet, FontRole::Label, _t.dim, "");
+  userText(sl, priv ? "This radio stops receiving it and the chat is removed. Its key is forgotten: to come back "
+                      "you'll need it again."
+                    : "This radio stops receiving it and the chat is removed. You can join it again any time.");
+  lv_obj_set_width(sl, LV_PCT(100));
+  lv_label_set_long_mode(sl, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_pad_hor(sl, 12, 0);
+  lv_obj_set_style_pad_bottom(sl, 6, 0);
+
+  lv_obj_t* br = box(sheet, LV_PCT(100), LV_SIZE_CONTENT);
+  lv_obj_set_style_pad_hor(br, 12, 0);
+  lv_obj_set_style_pad_top(br, 6, 0);
+  lv_obj_set_flex_flow(br, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_column(br, 6, 0);
+  for (uint8_t i = 0; i < 2; i++) {
+    const bool go = i == 1;
+    lv_obj_t* b = box(br, 0, 32);
+    lv_obj_set_flex_grow(b, 1);
+    lv_obj_set_style_radius(b, _look.radius, 0);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_border_color(b, c(go ? _t.bad : _t.line), 0);
+    lv_obj_center(label(b, FontRole::Body, go ? _t.bad : _t.ink, go ? "Leave" : "Cancel"));
+    lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_user_data(b, reinterpret_cast<void*>(intptr_t(i)));
+    lv_obj_add_event_cb(
+        b,
+        [](lv_event_t* e) {
+          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+          self->_sheet_hot = int(intptr_t(lv_obj_get_user_data(lv_event_get_current_target(e))));
+          self->later([](GuiShell* g) { g->sheetPick(g->_sheet_hot); });
+        },
+        LV_EVENT_CLICKED, this);
+    _sheet_rows[i] = b;
+  }
+  _sheet_count = 2;
+  sheetHot(0);   // Cancel: a held button never leaves by accident
+}
+
 void GuiShell::openAddChannel() {
   closeSheet();
   _thread = -1;
