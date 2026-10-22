@@ -15,7 +15,54 @@
 #ifdef WIFI_SSID
   #include <WiFi.h>
 #endif
-#ifdef OFFBAND_OBSERVER
+// ---------------------------------------------------------------------------
+// #972: UI state-machine tracing.
+//
+// These crashLogf() call sites were gated on OFFBAND_OBSERVER. That flag implies
+// WiFi, and nRF52 has none -- so on RC52, RAK4631, T1000-E, Wio, T096 and XIAO the
+// tracing compiled out entirely. The instrument exists BECAUSE of a UI bug (see the
+// note above setCurrScreen: a SplashScreen <-> HomeScreen oscillation observed on
+// hv3-bench), so gating it on an unrelated radio capability made it unavailable on a
+// whole class of boards -- including the one whose silent UI failure became #973.
+//
+// Derived from both flags rather than moved onto OFFBAND_BOOT_BEACON directly:
+//   * observer boards keep it exactly as before -- no regression where it works today;
+//   * OFFBAND_BOOT_BEACON brings in the RadioCore _diag envs (RC32, RCC6, RC52 all
+//     set it), matching the standing rule that every env built during bring-up is a
+//     full diagnostic build;
+//   * the name says what it controls. OFFBAND_BOOT_BEACON is about BOOT; this is UI
+//     runtime tracing, and reusing that flag's name would mislead.
+//
+// crashLogf() itself is unconditional in CrashLog.h -- only the call sites were gated.
+// ---------------------------------------------------------------------------
+//
+// Guarded with #ifndef so an explicit -D on the build line wins instead of colliding:
+// without it, a board that sets OFFBAND_OBSERVER and also passes -D OFFBAND_UI_TRACE
+// gets a redefinition. The flag is private to this translation unit today -- nothing
+// else tests it -- so this is robustness, not a live fix.
+#if defined(OFFBAND_OBSERVER) || defined(OFFBAND_BOOT_BEACON)
+  #ifndef OFFBAND_UI_TRACE
+    #define OFFBAND_UI_TRACE 1
+  #endif
+#endif
+
+// The heap probe is gated SEPARATELY and is OFF by default, even on builds that have
+// the tracing above.
+//
+// The transition and allocation traces are a handful of crashLogf() calls. The probe
+// is a different class of thing: it calls malloc in a loop on the boot path. Folding
+// it into OFFBAND_UI_TRACE would drag that cost onto every RadioCore _diag build to
+// answer a question almost none of them are asking.
+//
+// Turn it on deliberately, for a board you are actively investigating:
+//   -D OFFBAND_UI_TRACE_HEAP
+#if defined(OFFBAND_UI_TRACE) && defined(OFFBAND_UI_TRACE_HEAP)
+  #ifndef OFFBAND_UI_HEAP_PROBE
+    #define OFFBAND_UI_HEAP_PROBE 1
+  #endif
+#endif
+
+#ifdef OFFBAND_UI_TRACE
   #include <helpers/diagnostics/CrashLog.h>
 #endif
 #ifdef QCC_BADGE_SELFTEST
@@ -74,7 +121,7 @@ public:
   }
 
   int render(DisplayDriver& display) override {
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_UI_TRACE
     offband::crashLogf("[ui] SplashScreen.render() at %lu", (unsigned long)millis());
 #endif
     offband::SplashInfo si( nullptr, FIRMWARE_VERSION, FIRMWARE_BUILD_DATE );
@@ -852,6 +899,128 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
                   "navigation to them will be refused (#973, memory: #856)\r\n");
   }
 
+#ifdef OFFBAND_UI_TRACE
+  // #856: how much did the screens actually need? sizeof() is exact and costs
+  // nothing at runtime, so it is logged whenever tracing is on. The heap probe below
+  // is opt-in -- see OFFBAND_UI_TRACE_HEAP at the top of this file.
+  //
+  // The original #976 also logged a positive "screens alloc: splash=1 home=0 ..."
+  // map. That is redundant now: #973's per-member SCREEN ALLOC FAILED lines name
+  // every screen that did NOT get memory, so the absence of one means it did.
+  //
+  // ONE list, used for both the per-screen lines and the totals, so the two cannot
+  // drift apart. A hand-maintained total did drift -- the first version of this block
+  // reported four of the badge's fifteen screens and then omitted the two selftest
+  // screens from its sum while claiming to cover "every screen this build allocates".
+  // That is the same misleading-partial-picture defect the expansion existed to cure,
+  // so the sum is now computed from the list rather than written out beside it. Keep
+  // this list in step with the UI_NEW_SCREEN calls above.
+  {
+    const struct { const char* name; unsigned size; } kSizes[] = {
+      // Every guard here MIRRORS the UI_NEW_SCREEN calls above, one for one. If they
+      // drift, this block reports a screen set the build does not allocate -- which is
+      // precisely the partial, confident, wrong picture it was written to stop.
+      { "splash",   (unsigned)sizeof(SplashScreen) },
+#if OFFBAND_SCREEN_UI
+      { "inbox",    (unsigned)sizeof(InboxScreen) },
+      { "thread",   (unsigned)sizeof(ThreadScreen) },
+      { "tools",    (unsigned)sizeof(HomeScreen) },
+      { "contacts", (unsigned)sizeof(ContactsScreen) },
+      { "nearby",   (unsigned)sizeof(NearbyScreen) },
+      { "status",   (unsigned)sizeof(StatusScreen) },
+      { "settings", (unsigned)sizeof(SettingsScreen) },
+      { "zones",    (unsigned)sizeof(ZonePickerScreen) },
+      { "gps",      (unsigned)sizeof(GpsScreen) },
+      { "battery",  (unsigned)sizeof(BatteryScreen) },
+#ifdef PIN_BUZZER
+      { "tones",    (unsigned)sizeof(TonesScreen) },
+      { "picker",   (unsigned)sizeof(TonePickerScreen) },
+      { "custom",   (unsigned)sizeof(CustomTunesScreen) },
+#if UI_HAS_CARDKB
+      { "rtttl",    (unsigned)sizeof(RtttlEditScreen) },
+#endif
+#endif
+#else
+      { "home",     (unsigned)sizeof(HomeScreen) },
+      { "msg",      (unsigned)sizeof(MsgPreviewScreen) },
+#endif
+#ifdef QCC_BADGE_SELFTEST
+      { "selftest", (unsigned)sizeof(SelfTestScreen) },
+#endif
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+      { "keytest",  (unsigned)sizeof(KeyTestScreen) },
+#endif
+    };
+    const unsigned n = (unsigned)(sizeof(kSizes) / sizeof(kSizes[0]));
+    unsigned total = 0, biggest = 0;
+    for (unsigned i = 0; i < n; i++) {
+      total += kSizes[i].size;
+      if (kSizes[i].size > biggest) biggest = kSizes[i].size;
+      offband::crashLogf("[ui] sizeof %s=%u", kSizes[i].name, kSizes[i].size);
+    }
+    // BIGGEST is the number to compare against largest_free_block, not TOTAL: the
+    // probe measures one contiguous block, and these are n separate allocations. A
+    // heap with room for the sum but not for the largest single screen still fails,
+    // which is exactly how #973 presented on RC52 -- msg_preview allocated fine AFTER
+    // home had already failed.
+    //
+    // Neither figure includes per-allocation allocator overhead, so both understate
+    // what the heap actually gives up. Treat them as a floor.
+    offband::crashLogf("[ui] sizeof total=%u biggest=%u screens=%u (excl. alloc overhead)",
+                       total, biggest, n);
+  }
+
+#ifdef OFFBAND_UI_HEAP_PROBE
+  // LARGEST CONTIGUOUS BLOCK still allocatable -- that, not total free bytes, is what
+  // `new HomeScreen` has to find.
+  //
+  // BINARY SEARCH, not a linear walk. The first version stepped down from 64 KB in
+  // 512 B decrements: up to 128 malloc calls on the boot path, and on a board with
+  // room to spare the 64 KB request SUCCEEDS -- newlib returns the block to its free
+  // list but does not hand the sbrk extension back, so a diagnostic could permanently
+  // raise the heap ceiling by 64 KB on boards that never needed it.
+  //
+  // FLOOR MATTERS MORE THAN THE CEILING. That first version stepped by 512 B, so its
+  // resolution floor was 512 -- and sizeof(HomeScreen) is 480. It could not resolve
+  // the allocation it existed to measure, and reported "0" for anything under 512 B,
+  // which reads as "no memory at all" when it means "less than half a kilobyte".
+  // PROBE_FLOOR is deliberately below the smallest screen.
+  {
+    const size_t PROBE_CEIL  = 24u * 1024u;   // above any single screen, well under a big heap
+    const size_t PROBE_FLOOR = 64u;           // below sizeof(SplashScreen), so 0 really means 0
+
+    size_t lo = 0, hi = PROBE_CEIL, largest = 0;
+    // Terminates on the INTERVAL, not on a hard-coded iteration count. With a 24 KB
+    // ceiling and a 64 B floor this still converges in nine halvings, but changing
+    // either constant no longer requires recomputing a magic number that nothing
+    // checks. `guard` is a safety net against a pathological allocator, not the
+    // termination condition.
+    for (int guard = 0; hi - lo >= PROBE_FLOOR && guard < 32; guard++) {
+      // NO `if (mid < PROBE_FLOOR) break;` here -- it was tried and it is wrong.
+      // Breaking on the midpoint abandons the interval while the true largest block
+      // may still be inside it: with 80 B actually available the search narrows to
+      // lo=0/hi=96, computes mid=48, breaks, and reports largest=0 -- claiming no
+      // memory at all when 80 B were free. That is the exact misleading zero this
+      // rewrite existed to remove.
+      //
+      // Termination is already safe: a fixed 9 iterations, plus the hi-lo convergence
+      // check below. PROBE_FLOOR is the RESOLUTION, not a minimum probe size, so
+      // probing beneath it is intended.
+      const size_t mid = lo + (hi - lo) / 2;
+      void* p = malloc(mid);
+      if (p) { free(p); largest = mid; lo = mid; }
+      else   { hi = mid; }
+      if (hi - lo < PROBE_FLOOR) break;
+    }
+    // `largest` stays 0 unless an allocation actually succeeded, so a report of 0
+    // means nothing above PROBE_FLOOR was obtainable -- it is never a value that was
+    // merely stepped past.
+    offband::crashLogf("[ui] largest_free_block=%u (ceil=%u floor=%u)",
+                       (unsigned)largest, (unsigned)PROBE_CEIL, (unsigned)PROBE_FLOOR);
+  }
+#endif
+#endif
+
   setCurrScreen(splash);
 }
 
@@ -1141,7 +1310,7 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
 
   if (_display != NULL) {
     if (!_display->isOn() && !hasConnection() && _disp_mode != 2) {  // #542 B1: not in always-off
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_UI_TRACE
       offband::crashLogf("[ui] newMsg: display off + no conn -> turnOn");
 #endif
       _display->turnOn();
@@ -1304,7 +1473,7 @@ void UITask::setCurrScreen(UIScreen* c) {
     return;
   }
 
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_UI_TRACE
   // Screen transition tracing: log every change so we can see if the
   // SplashScreen <-> HomeScreen oscillation observed on hv3-bench is
   // a real state-machine bug.
@@ -1509,7 +1678,7 @@ void UITask::loop() {
 #endif
 
   if (c != 0 && curr) {
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_UI_TRACE
     offband::crashLogf("[ui] button event c=0x%x dispatched to curr screen", (int)c);
 #endif
     // #1205: Esc backs out to Home from any screen that does not take it. On the badge
