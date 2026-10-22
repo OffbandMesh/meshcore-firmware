@@ -839,9 +839,9 @@ TEST(DisplayText, DropsCharactersThatOnlySteerEmoji) {
 // #1761: a bullet in a node name drew as a box; the fonts don't carry it.
 TEST(DisplayText, CharactersTheFontsLackGetTheNearestTheyHave) {
   char b[64];
-  const char dot[] = "Dot\xE2\x80\xA2";   // "Dot•"
+  const char dot[] = "Node\xE2\x80\xA2";   // "Node•"
   displayText(dot, strlen(dot), b, sizeof b);
-  EXPECT_STREQ(b, "Dot\xC2\xB7");   // "Dot·"
+  EXPECT_STREQ(b, "Node\xC2\xB7");   // "Node·"
   const char quotes[] = "\xE2\x80\x9Chi\xE2\x80\x9D it\xE2\x80\x99s \xE2\x80\x93 ok";
   displayText(quotes, strlen(quotes), b, sizeof b);
   EXPECT_STREQ(b, "\"hi\" it's - ok");
