@@ -8,6 +8,7 @@
 #include <helpers/AdvertDataHelpers.h>
 #include <helpers/ClockSanity.h>
 #include <helpers/diagnostics/CrashLog.h>
+#include <helpers/diagnostics/PanicRecord.h>
 #include <helpers/TimeZones.h>
 #include <helpers/gui/ClockPolicy.h>
 #include <helpers/gui/GuiViews.h>
@@ -128,6 +129,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   _display = display;
   _sensors = sensors;
   _prefs = node_prefs;
+  // Diag builds: where the last crash happened, into the log the card keeps
+  // (#1730). Nothing when there was no crash, or in a build without it.
+  offband::panicRecordReport();
 #ifdef PIN_SD_CS
   // A card has worked here before: an empty slot shows red from boot (owner
   // pick A, 2026-10-21). Before the mesh loop's first SD poll.
