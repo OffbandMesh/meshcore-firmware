@@ -154,6 +154,43 @@ constexpr uint8_t OFFBAND_UI_LED_SET     = 0x08;  // [0xC5][0x08][on]   -> echo
 constexpr uint8_t OFFBAND_UI_SLOT_GET    = 0x09;
 constexpr uint8_t OFFBAND_UI_SLOT_SET    = 0x0A;
 
+// #1788: settings a keyboardless badge has a screen for but a client could not reach.
+// Allocated 2026-10-23 after checking every live branch: 0x01-0x0A taken, 0x0B+ free.
+//
+// CHTUNE_GET  [0xC5][0x0B][ch]          -> [0xC5][0x0B][ch][stored]
+// CHTUNE_SET  [0xC5][0x0C][ch][stored]  -> [0xC5][0x0C][ch][stored]
+//
+//   One channel's own tune (#1789), in the byte as /channels2 stores it: 0 = Default
+//   (inherit the global channel tune), otherwise tune id + 1. The SET accepts exactly the
+//   ids the badge's own conversation picker offers -- Default, the named builtins and the
+//   custom slots -- and refuses anything else with ERR_MALFORMED; the device never stores
+//   some other tune in place of the one asked for. An empty or out-of-range channel is
+//   ERR_MALFORMED too. Gated on the buzzer, like the slots: no buzzer, no tunes.
+//   Gated on OFFBAND_CAP2_CHANNEL_TUNE.
+//
+// GPS_GET  [0xC5][0x0D]
+// GPS_SET  [0xC5][0x0E][mode][interval_s:4 LE]
+//   both -> [0xC5][sub][mode][stored][ps_ok][activity][interval_s:4 LE][wait_s:4 LE]
+//
+//   GPS mode (#1791). mode: 0 Off, 1 On, 2 Power save -- the mode in effect, resolved.
+//   stored: the raw mode byte, 0xFF when never set. Picking Off leaves it unchanged, so
+//   Off-then-On returns to it; it is how a client shows what On will come back as.
+//   ps_ok = 1 when this build can run Power save, so the client offers the option only
+//   where it does something. activity: 0 Off, 1 On, 2 searching, 3 sleeping between
+//   fixes, 4 backed off after repeated failures (offband::GpsActivity). wait_s: seconds
+//   until the next attempt while sleeping or backed off, else 0. The SET reply carries
+//   the STORED values after the write, never an echo of the request.
+//   interval_s is Power save's wait between attempts; 0 = the
+//   compiled default. The SET clamps a non-zero interval into the range the device
+//   accepts (offband::gpsPsIntervalForWrite) and replies with what it stored, so the
+//   client shows the truth. A mode above 2 is ERR_MALFORMED; Power save on a build that
+//   cannot run it is ERR_UNSUPPORTED_ACTION; no GPS at all is ERR_NO_GPS.
+//   Gated on OFFBAND_CAP2_GPS_MODE.
+constexpr uint8_t OFFBAND_UI_CHTUNE_GET  = 0x0B;
+constexpr uint8_t OFFBAND_UI_CHTUNE_SET  = 0x0C;
+constexpr uint8_t OFFBAND_UI_GPS_GET     = 0x0D;
+constexpr uint8_t OFFBAND_UI_GPS_SET     = 0x0E;
+
 // === 0xC6 PACKET-HASH QUERY -- CANONICAL WIRE CONTRACT (#611) =================
 // FIRMWARE OWNS THIS CONTRACT (same discipline as 0xC5). Agreed with the client
 // (QuietSnow) 2026-08-10; owner-approved. The client codes to what is written here.
@@ -328,7 +365,9 @@ enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUT
 //    1   0x02   OFFBAND_CAP2_BUTTON_MATRIX    this change  #509
 //    2   0x04   OFFBAND_CAP2_INDICATORS      this change  #542
 //    3   0x08   OFFBAND_CAP2_PKT_HASH         this change  #611
-//    4-7 0x10.. -- free --
+//    4   0x10   OFFBAND_CAP2_CHANNEL_TUNE     this change  #1789
+//    5   0x20   OFFBAND_CAP2_GPS_MODE         this change  #1791
+//    6-7 0x40.. -- free --
 // ===============================================================================
 // bit 0 (0x01): device notification scope ALL/SELF/NONE is supported and settable.
 // Set only where the device can actually make a sound -- gated on PIN_BUZZER, exactly
@@ -349,6 +388,13 @@ constexpr uint8_t OFFBAND_CAP2_INDICATORS = 0x04;
 // needs no hardware, only the send path. A client that does not see this bit (or sees
 // FIRMWARE_VER_CODE < 22) must never emit 0xC6.
 constexpr uint8_t OFFBAND_CAP2_PKT_HASH = 0x08;
+// bit 4 (0x10): a channel's own tune is readable and settable over 0xC5 CHTUNE (#1789).
+// Gated on PIN_BUZZER -- a tune needs something to play it.
+constexpr uint8_t OFFBAND_CAP2_CHANNEL_TUNE = 0x10;
+// bit 5 (0x20): GPS mode and the Power-save interval are readable and settable over 0xC5
+// GPS (#1791). Gated on GPS being built in (ENV_INCLUDE_GPS == 1). Whether Power save
+// itself is available is the GET's ps_ok byte, not a second bit.
+constexpr uint8_t OFFBAND_CAP2_GPS_MODE = 0x20;
 constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: config backend (wifi_observer) compiled in
 constexpr uint8_t OFFBAND_CAP_BLOCK         = 0x02;  // bit 1: user-block list (BlockStore) compiled in (#241)
 constexpr uint8_t OFFBAND_CAP_FEM_LNA       = 0x04;  // bit 2: FEM LNA runtime control available (#298)
