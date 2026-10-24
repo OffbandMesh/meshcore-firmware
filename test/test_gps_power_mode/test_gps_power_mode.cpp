@@ -587,6 +587,63 @@ TEST(GpsConfigFromPrefs, AnAbsurdIntervalClampsRatherThanWrapping) {
   }
 }
 
+// ---- a client writing the interval (#1791) ---------------------------------------------
+
+// 0 is how a client hands the choice back to the compiled default. It must survive the
+// write as 0, not be clamped up to the floor.
+TEST(GpsPsIntervalForWrite, ZeroStaysTheCompiledDefault) {
+  EXPECT_EQ(0u, gpsPsIntervalForWrite(0));
+  EXPECT_EQ(kGpsIntervalMs, gpsConfigFromPrefs(gpsPsIntervalForWrite(0)).interval_ms);
+}
+
+TEST(GpsPsIntervalForWrite, ASensibleIntervalIsStoredUnchanged) {
+  for (uint32_t s : {kGpsMinPsIntervalS, 1800u, 3600u, 4u * 3600u, kGpsMaxPsIntervalS}) {
+    EXPECT_EQ(s, gpsPsIntervalForWrite(s));
+  }
+}
+
+// An interval shorter than an attempt is GPS held on with extra steps. It must land on the
+// floor, never be stored as asked.
+TEST(GpsPsIntervalForWrite, ATooShortIntervalClampsUpToTheFloor) {
+  for (uint32_t s : {1u, 30u, 179u, 180u, kGpsMinPsIntervalS - 1}) {
+    const uint32_t stored = gpsPsIntervalForWrite(s);
+    EXPECT_EQ(kGpsMinPsIntervalS, stored) << "asked " << s << " s";
+    EXPECT_GT(gpsConfigFromPrefs(stored).interval_ms, kGpsFirstAttemptTimeoutMs)
+        << "a stored interval shorter than one attempt is continuous searching";
+  }
+}
+
+TEST(GpsPsIntervalForWrite, AHugeIntervalClampsDownWithoutWrapping) {
+  for (uint32_t s : {kGpsMaxPsIntervalS + 1, 0x80000000u, 0xFFFFFFFFu}) {
+    EXPECT_EQ(kGpsMaxPsIntervalS, gpsPsIntervalForWrite(s)) << "asked " << s << " s";
+  }
+}
+
+// The mode byte from the wire: exactly the three modes, nothing else -- including the
+// stored "unset" marker, which is a file state, not a choice a client can make.
+TEST(GpsModeFromWire, OnlyTheThreeModesAreAccepted) {
+  EXPECT_TRUE(isValidGpsMode((uint8_t)GpsMode::Off));
+  EXPECT_TRUE(isValidGpsMode((uint8_t)GpsMode::On));
+  EXPECT_TRUE(isValidGpsMode((uint8_t)GpsMode::PowerSave));
+  EXPECT_FALSE(isValidGpsMode(3));
+  EXPECT_FALSE(isValidGpsMode(0x7F));
+  EXPECT_FALSE(isValidGpsMode(kGpsModeUnset));
+}
+
+// The 0xC5 GPS reply sends these enums as raw bytes and the client hard-codes the values
+// (OffbandConfigProtocol.h). Reordering either enum would silently change the wire.
+TEST(GpsWireValues, ModeAndActivityBytesAreFixed) {
+  EXPECT_EQ(0, (int)GpsMode::Off);
+  EXPECT_EQ(1, (int)GpsMode::On);
+  EXPECT_EQ(2, (int)GpsMode::PowerSave);
+  EXPECT_EQ(0, (int)GpsActivity::Off);
+  EXPECT_EQ(1, (int)GpsActivity::On);
+  EXPECT_EQ(2, (int)GpsActivity::Searching);
+  EXPECT_EQ(3, (int)GpsActivity::Sleeping);
+  EXPECT_EQ(4, (int)GpsActivity::BackedOff);
+  EXPECT_EQ(0xFF, kGpsModeUnset);
+}
+
 // ---- millis() rollover -----------------------------------------------------------------
 
 // The badge runs for days; millis() wraps at ~49.7. A wait computed across the wrap must

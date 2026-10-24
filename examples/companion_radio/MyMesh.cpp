@@ -2610,7 +2610,12 @@ void MyMesh::handleCmdFrame(size_t len) {
     const bool is_scope_sub  = (sub == offband::OFFBAND_UI_SCOPE_GET ||
                                 sub == offband::OFFBAND_UI_SCOPE_SET ||
                                 sub == offband::OFFBAND_UI_SLOT_GET ||
-                                sub == offband::OFFBAND_UI_SLOT_SET);
+                                sub == offband::OFFBAND_UI_SLOT_SET ||
+                                sub == offband::OFFBAND_UI_CHTUNE_GET ||
+                                sub == offband::OFFBAND_UI_CHTUNE_SET);
+    // #1791: GPS mode needs GPS, nothing else -- its own gate, matching OFFBAND_CAP2_GPS_MODE.
+    const bool is_gps_sub    = (sub == offband::OFFBAND_UI_GPS_GET ||
+                                sub == offband::OFFBAND_UI_GPS_SET);
     const bool is_matrix_sub = (sub == offband::OFFBAND_UI_MATRIX_GET ||
                                 sub == offband::OFFBAND_UI_MATRIX_SET);
     // #542 B1: indicator sub-codes, gated on their own capability (not the buzzer).
@@ -2655,7 +2660,17 @@ void MyMesh::handleCmdFrame(size_t len) {
       _serial->writeFrame(out_frame, 3);
       return;
     }
+#if ENV_INCLUDE_GPS != 1
+    if (is_gps_sub) {
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = offband::OFFBAND_UI_ERR;
+      out_frame[2] = offband::OFFBAND_UI_ERR_NO_GPS;
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
+#endif
     (void)is_scope_sub; (void)is_matrix_sub; (void)is_display_sub; (void)is_led_sub;
+    (void)is_gps_sub;
 {
     // #1478: the custom tune slots. Asked of the UI rather than handled here: the slot
     // store and its assembly buffer live in the badge's UI, and this file is compiled by
@@ -2745,6 +2760,82 @@ void MyMesh::handleCmdFrame(size_t len) {
       _serial->writeFrame(out_frame, 4);
       return;
     }
+    // #1789: one channel's own tune. A keyboardless badge sets this from its conversation
+    // picker; this is the same choice for a client. setChannelTune is the one writer, and
+    // channelTuneSettable is the picker's rule, so the wire can reach no tune the picker
+    // cannot. Refused rather than corrected: the client asked for one tune, and storing a
+    // different one in its place would be a silent lie.
+    if (sub == offband::OFFBAND_UI_CHTUNE_GET || sub == offband::OFFBAND_UI_CHTUNE_SET) {
+      const bool is_set = (sub == offband::OFFBAND_UI_CHTUNE_SET);
+      ChannelDetails ch;
+      const bool ok = len >= (is_set ? 4 : 3) && getChannel(cmd_frame[2], ch) && ch.name[0] != 0 &&
+                      (!is_set || (offband::channelTuneSettable(cmd_frame[3]) &&
+                                   setChannelTune(cmd_frame[2], cmd_frame[3]) &&
+                                   getChannel(cmd_frame[2], ch)));
+      if (!ok) {
+        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+        out_frame[1] = offband::OFFBAND_UI_ERR;
+        out_frame[2] = offband::OFFBAND_UI_ERR_MALFORMED;
+        _serial->writeFrame(out_frame, 3);
+        return;
+      }
+      if (is_set) {
+        MESH_DEBUG_PRINTLN("[0xC5] channel %d tune -> stored %d via client",
+                           (int)cmd_frame[2], (int)ch.tune);
+      }
+      // Reply what is stored, re-read after the write, never an echo of the request.
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = cmd_frame[2];
+      out_frame[3] = ch.tune;
+      _serial->writeFrame(out_frame, 4);
+      return;
+    }
+#if ENV_INCLUDE_GPS == 1
+    // #1791: GPS mode and the Power-save interval. setGpsMode is the badge's GPS screen's
+    // own writer, so a client choice and an on-device choice take the same path: both
+    // fields written together, saved once, the power machine re-armed.
+    if (sub == offband::OFFBAND_UI_GPS_GET || sub == offband::OFFBAND_UI_GPS_SET) {
+      if (sub == offband::OFFBAND_UI_GPS_SET) {
+        uint8_t reason = 0;
+        if (len < 7 || !offband::isValidGpsMode(cmd_frame[2])) {
+          reason = offband::OFFBAND_UI_ERR_MALFORMED;
+        } else if (cmd_frame[2] == (uint8_t)offband::GpsMode::PowerSave &&
+                   !gpsPowerSaveAvailable()) {
+          // The screen does not offer a mode nothing drives; neither does the wire.
+          reason = offband::OFFBAND_UI_ERR_UNSUPPORTED_ACTION;
+        }
+        if (reason != 0) {
+          out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+          out_frame[1] = offband::OFFBAND_UI_ERR;
+          out_frame[2] = reason;
+          _serial->writeFrame(out_frame, 3);
+          return;
+        }
+        uint32_t want_s;
+        memcpy(&want_s, &cmd_frame[3], 4);
+        _prefs.gps_ps_interval_s = offband::gpsPsIntervalForWrite(want_s);
+        setGpsMode((offband::GpsMode)cmd_frame[2]);   // saves both fields once
+        MESH_DEBUG_PRINTLN("[0xC5] gps mode -> %d, ps interval %lu s via client",
+                           (int)gpsMode(), (unsigned long)_prefs.gps_ps_interval_s);
+      }
+      // The resolved mode for display, and the stored byte beside it: picking Off leaves
+      // the stored byte alone, so it is the only way a client can show what turning GPS
+      // back on will return to. Activity and the wait left are what tell "backed off,
+      // next try in 48 min" apart from a fault. 14 bytes: under the 20-byte BLE floor.
+      const uint32_t wait_s = gpsWaitRemainingS();
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = (uint8_t)gpsMode();
+      out_frame[3] = _prefs.gps_mode;
+      out_frame[4] = gpsPowerSaveAvailable() ? 1 : 0;
+      out_frame[5] = (uint8_t)gpsActivity();
+      memcpy(&out_frame[6], &_prefs.gps_ps_interval_s, 4);
+      memcpy(&out_frame[10], &wait_s, 4);
+      _serial->writeFrame(out_frame, 14);
+      return;
+    }
+#endif
     if (sub == offband::OFFBAND_UI_SCOPE_GET) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = sub;
@@ -3010,6 +3101,12 @@ void MyMesh::handleCmdFrame(size_t len) {
     // Gated on the hardware, same principle as OFFBAND_CAP_FEM_LNA above -- a client
     // must never render a control that cannot do anything on this board.
     offband_caps2 |= offband::OFFBAND_CAP2_NOTIFY_SCOPE;
+    // #1789: a channel's own tune, on the same hardware gate as the scope.
+    offband_caps2 |= offband::OFFBAND_CAP2_CHANNEL_TUNE;
+#endif
+#if ENV_INCLUDE_GPS == 1
+    // #1791: GPS mode and the Power-save interval. Needs GPS and nothing else.
+    offband_caps2 |= offband::OFFBAND_CAP2_GPS_MODE;
 #endif
 #ifdef PIN_USER_BTN
     // #509: button-action matrix. Gated on the BUTTON, not the buzzer -- reassigning

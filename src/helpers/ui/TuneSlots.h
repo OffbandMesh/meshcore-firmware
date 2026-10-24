@@ -218,6 +218,23 @@ inline uint8_t resolveChannelTune(uint8_t stored, uint8_t inherited) {
   return id;
 }
 
+// May a client store `stored` as a channel's tune (#1789)?
+//
+// The companion protocol is a second writer of this byte, beside the badge's picker, and a
+// second writer must accept exactly what the picker offers -- no more. A range check is
+// not that: the builtin table has an entry the picker deliberately does not list, and a
+// range check would hand the wire a way to set it. So the rule is the picker's own:
+// Default (unset), every builtin the picker names, and every custom slot.
+//
+// Anything else is refused rather than clamped, so a client that sent a bad id learns it
+// instead of finding some other tune stored in its place.
+inline bool channelTuneSettable(uint8_t stored) {
+  if (stored == kChannelTuneUnset) return true;
+  const uint8_t id = decodeChannelTune(stored);
+  if (isSlotId(id)) return true;
+  return tuneName(id) != nullptr;
+}
+
 // ---- where it sits in the file (#1523) ------------------------------------------------
 //
 // Each /channels2 record is 4 spare bytes, then 32 of name, then 32 of secret. The spare

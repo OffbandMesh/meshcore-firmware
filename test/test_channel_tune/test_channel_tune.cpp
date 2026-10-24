@@ -297,6 +297,46 @@ TEST(TonePickerRows, ChoosingDefaultClearsTheChannel) {
   EXPECT_EQ(kTuneChime, resolveChannelTune(encodeChannelTune(chosen), kTuneChime));
 }
 
+// ---- a client setting a channel's tune (#1789) ----------------------------------------
+
+// Everything the conversation picker can choose, a client can set -- walked from the
+// picker's own rows so the two cannot drift. A row whose builtin has no name is one the
+// screen skips, so it is skipped here too.
+TEST(ChannelTuneSettable, EveryIdThePickerOffersIsSettable) {
+  for (int row = 0; row < tonePickerRowCount(true); row++) {
+    const uint8_t id = tonePickerIdAt(true, row);
+    if (isBuiltinTune(id) && tuneName(id) == nullptr) continue;
+    EXPECT_TRUE(channelTuneSettable(encodeChannelTune(id))) << "row " << row << " id " << (int)id;
+  }
+}
+
+TEST(ChannelTuneSettable, DefaultSilentAndEverySlotAreSettable) {
+  EXPECT_TRUE(channelTuneSettable(kChannelTuneUnset));
+  EXPECT_TRUE(channelTuneSettable(encodeChannelTune(kTuneSilent)));
+  for (uint8_t i = 0; i < kSlotCount; i++) {
+    EXPECT_TRUE(channelTuneSettable(encodeChannelTune(slotIdAt(i)))) << "slot " << (int)i;
+  }
+}
+
+// The second writer must not reach what the picker hides. Asserted for every unnamed
+// builtin, not one hard-coded id, so a future hidden entry is covered without editing this.
+TEST(ChannelTuneSettable, AnUnlistedBuiltinIsRefused) {
+  int unnamed = 0;
+  for (uint8_t id = 0; id < kBuiltinCount; id++) {
+    if (tuneName(id) != nullptr) continue;
+    unnamed++;
+    EXPECT_FALSE(channelTuneSettable(encodeChannelTune(id))) << "id " << (int)id;
+  }
+  EXPECT_GT(unnamed, 0) << "the table has an unlisted entry; this test must see it";
+}
+
+TEST(ChannelTuneSettable, AnIdPastTheSlotsIsRefused) {
+  for (int id = kPickerIdEnd; id <= (int)kMaxStorableTuneId; id++) {
+    EXPECT_FALSE(channelTuneSettable(encodeChannelTune((uint8_t)id))) << "id " << id;
+  }
+  EXPECT_FALSE(channelTuneSettable(0xFF));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

@@ -42,6 +42,8 @@ enum class GpsMode : uint8_t {
 // between fixes" are not the same thing to someone looking at a screen, and neither is
 // "given up for now", which is the state a conference attendee will actually be in and the
 // one most likely to read as a fault if it is left unlabelled.
+//
+// Both enums go on the companion wire as raw bytes (0xC5 GPS, #1791): append only.
 enum class GpsActivity : uint8_t {
   Off,         // mode Off
   On,          // mode On
@@ -121,6 +123,27 @@ inline GpsPowerConfig gpsConfigFromPrefs(uint32_t ps_interval_s) {
   if (ps_interval_s > kGpsMaxPsIntervalS) ps_interval_s = kGpsMaxPsIntervalS;
   cfg.interval_ms = ps_interval_s * 1000u;
   return cfg;
+}
+
+// The shortest Power-save interval a client may store (#1791).
+//
+// An interval shorter than an attempt is not a power saver: the badge would finish one
+// search and start the next almost at once, which is GPS held on with extra steps. The
+// first attempt may run kGpsFirstAttemptTimeoutMs (180 s), so the floor sits above it.
+constexpr uint32_t kGpsMinPsIntervalS = 300;
+static_assert(kGpsMinPsIntervalS * 1000u > kGpsFirstAttemptTimeoutMs,
+              "the shortest interval must outlast the longest attempt");
+
+// What to store for a Power-save interval a client asked for (#1791).
+//
+// 0 stays 0 -- "use the compiled default" -- so a client can hand the choice back. Anything
+// else is clamped into [kGpsMinPsIntervalS, kGpsMaxPsIntervalS] rather than refused, and
+// the reply carries the stored value, so the client sees what actually landed.
+inline uint32_t gpsPsIntervalForWrite(uint32_t requested_s) {
+  if (requested_s == 0) return 0;
+  if (requested_s < kGpsMinPsIntervalS) return kGpsMinPsIntervalS;
+  if (requested_s > kGpsMaxPsIntervalS) return kGpsMaxPsIntervalS;
+  return requested_s;
 }
 
 // How long the next attempt gets, given how many have failed in a row.
