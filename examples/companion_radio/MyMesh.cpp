@@ -19,6 +19,9 @@
 // #1523: the per-channel tune's encoding. Header-only constexpr, and the builtin table is
 // internal-linkage, so a variant that only names the unset value emits nothing of it.
 #include <helpers/ui/TuneSlots.h>
+#ifdef PIN_BUZZER
+  #include "ToneEngine.h"   // #1788: the tune sub-codes reach the UI's engine
+#endif
 
 // The arriving-message rule that can ask every badge in earshot to sound the un-listed
 // tune. Opt-in per variant: only the env that defines this compiles any of it, so the
@@ -583,7 +586,7 @@ void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
 #endif
 }
 
-#if defined(OFFBAND_OBSERVER) || UI_HAS_CARDKB || defined(OFFBAND_GUI)
+#if defined(OFFBAND_OBSERVER) || OFFBAND_SCREEN_UI || defined(OFFBAND_GUI)
 // Dispatcher::checkRecv calls logRx (Dispatcher.cpp:237) for every successfully-parsed
 // packet BEFORE routing and before the duplicate filter, so it sees all heard traffic,
 // repeats of our own packets included.
@@ -605,7 +608,7 @@ void MyMesh::logRx(mesh::Packet* pkt, int len, float score) {
     }
   }
 #endif
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
   // #1232: a repeater passing one of the badge's channel sends on. The repeat carries
   // the send's payload unchanged, so it has the send's packet hash.
   const uint32_t now_ms = _ms->getMillis();
@@ -770,7 +773,7 @@ void MyMesh::onContactPathUpdated(const ContactInfo &contact) {
 }
 
 ContactInfo*  MyMesh::processAck(const uint8_t *data) {
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
   // #1227: an ACK for a DM typed on the badge. Checked first and kept from the phone,
   // which never sent it. Returning the recipient lets BaseChatMesh treat it as ours.
   uint32_t ack_crc;
@@ -873,7 +876,7 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
     _serial->writeFrame(frame, 1);
   }
 
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
   // #1229: the badge's inbox keeps its own copy of each DM, before the UI hears of it.
   if (txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN) {
     const int c = _badge_store.convo(BadgeMsgStore::Contact, from.id.pub_key, from.name);
@@ -1233,7 +1236,7 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
     }
   }
 #endif
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
   // #1229: and the badge's inbox keeps its own copy, filed by the channel's secret.
   ChannelDetails badge_channel;
   if (getChannel(channel_idx, badge_channel)) {
@@ -1642,7 +1645,7 @@ uint32_t MyMesh::calcDirectTimeoutMillisFor(uint32_t pkt_airtime_millis, uint8_t
 
 void MyMesh::onSendTimeout() {}
 
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
 // #1227: a channel message typed on the badge. The same call and bookkeeping as the
 // phone path (CMD_SEND_CHANNEL_TXT_MSG); channels have no delivery receipt.
 bool MyMesh::uiSendChannel(int channel_idx, const char* text) {
@@ -2603,16 +2606,29 @@ void MyMesh::handleCmdFrame(size_t len) {
     // The two capabilities are independent and are advertised independently
     // (OFFBAND_CAP2_NOTIFY_SCOPE on PIN_BUZZER, OFFBAND_CAP2_BUTTON_MATRIX on
     // PIN_USER_BTN), so the command surface must match that split exactly.
-    // #1478: the slot sub-codes belong to the BUZZER capability, like the scope ones --
-    // a board with no buzzer has no tunes to store -- so they join is_scope_sub rather
-    // than getting a gate of their own. Keeping the #509 rule: gate per sub-command, and
-    // match the capability split exactly.
     const bool is_scope_sub  = (sub == offband::OFFBAND_UI_SCOPE_GET ||
-                                sub == offband::OFFBAND_UI_SCOPE_SET ||
-                                sub == offband::OFFBAND_UI_SLOT_GET ||
+                                sub == offband::OFFBAND_UI_SCOPE_SET);
+    // #1788: the tune sub-codes -- the slots (#1478), a channel's tune, an event's tune, an
+    // audition, reading a slot back -- belong to the UI's tune engine, which a UI holds
+    // only when every sound it makes goes through it. Gated on the engine rather than on
+    // PIN_BUZZER alone: a board with a buzzer whose UI still plays fixed melodies would
+    // store a choice and ignore it. Keeping the #509 rule: gate per sub-command, and match
+    // the advertised capability exactly (OFFBAND_CAP2_TUNES).
+    const bool is_tune_sub   = (sub == offband::OFFBAND_UI_SLOT_GET ||
                                 sub == offband::OFFBAND_UI_SLOT_SET ||
                                 sub == offband::OFFBAND_UI_CHTUNE_GET ||
-                                sub == offband::OFFBAND_UI_CHTUNE_SET);
+                                sub == offband::OFFBAND_UI_CHTUNE_SET ||
+                                sub == offband::OFFBAND_UI_EVTONE_GET ||
+                                sub == offband::OFFBAND_UI_EVTONE_SET ||
+                                sub == offband::OFFBAND_UI_TUNE_PLAY ||
+                                sub == offband::OFFBAND_UI_SLOT_READ);
+    // #1788: the screen settings, gated on a UI whose screens honor them
+    // (OFFBAND_CAP2_SCREEN_SETTINGS).
+    const bool is_screen_sub = (sub == offband::OFFBAND_UI_SCREEN_GET ||
+                                sub == offband::OFFBAND_UI_TEXT_SET ||
+                                sub == offband::OFFBAND_UI_SCROFF_SET ||
+                                sub == offband::OFFBAND_UI_TZ_SET ||
+                                sub == offband::OFFBAND_UI_BATT_SET);
     // #1791: GPS mode needs GPS, nothing else -- its own gate, matching OFFBAND_CAP2_GPS_MODE.
     const bool is_gps_sub    = (sub == offband::OFFBAND_UI_GPS_GET ||
                                 sub == offband::OFFBAND_UI_GPS_SET);
@@ -2669,29 +2685,46 @@ void MyMesh::handleCmdFrame(size_t len) {
       return;
     }
 #endif
+    // One refusal shape for everything #1788 adds below: [0xC5][0x7F][reason].
+    auto ui_err = [&](uint8_t reason) {
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = offband::OFFBAND_UI_ERR;
+      out_frame[2] = reason;
+      _serial->writeFrame(out_frame, 3);
+    };
+    offband::ToneEngine* tones = nullptr;
+#ifdef PIN_BUZZER
+    if (_ui != NULL) tones = _ui->toneEngine();
+#endif
+    if (is_tune_sub && tones == nullptr) {
+#ifdef PIN_BUZZER
+      ui_err(offband::OFFBAND_UI_ERR_UNSUPPORTED_ACTION);   // a buzzer, fixed melodies
+#else
+      ui_err(offband::OFFBAND_UI_ERR_NO_BUZZER);
+#endif
+      return;
+    }
+    AbstractUITask::ScreenSettings screen = {};
+    if (is_screen_sub && (_ui == NULL || !_ui->clientScreenSettings(screen))) {
+      ui_err(offband::OFFBAND_UI_ERR_UNSUPPORTED_ACTION);
+      return;
+    }
     (void)is_scope_sub; (void)is_matrix_sub; (void)is_display_sub; (void)is_led_sub;
-    (void)is_gps_sub;
+    (void)is_gps_sub; (void)is_tune_sub; (void)is_screen_sub; (void)tones;
 {
-    // #1478: the custom tune slots. Asked of the UI rather than handled here: the slot
-    // store and its assembly buffer live in the badge's UI, and this file is compiled by
-    // every companion variant, so a badge-only feature must not cost them the RAM. Same
-    // route applyBuzzerMute takes.
+#ifdef PIN_BUZZER
+    // #1478: the custom tune slots, through the UI's tune engine (#1788). The engine and
+    // its assembly buffer live in the UI, so a board without a buzzer pays nothing.
     if (sub == offband::OFFBAND_UI_SLOT_GET) {
-      if (len < 3 || _ui == NULL) {
-        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
-        out_frame[1] = offband::OFFBAND_UI_ERR;
-        out_frame[2] = offband::OFFBAND_UI_ERR_MALFORMED;
-        _serial->writeFrame(out_frame, 3);
+      if (len < 3) {
+        ui_err(offband::OFFBAND_UI_ERR_MALFORMED);
         return;
       }
       const uint8_t slot = cmd_frame[2];
       uint8_t tune_len = 0;
       char name[16];
-      if (!_ui->readTuneSlot(slot, tune_len, name, sizeof(name))) {
-        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
-        out_frame[1] = offband::OFFBAND_UI_ERR;
-        out_frame[2] = offband::OFFBAND_UI_ERR_UNSUPPORTED_ACTION;
-        _serial->writeFrame(out_frame, 3);
+      if (!tones->slotInfo(slot, tune_len, name, sizeof(name))) {
+        ui_err(offband::OFFBAND_UI_ERR_MALFORMED);   // a slot index past the eight
         return;
       }
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
@@ -2711,26 +2744,16 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
     if (sub == offband::OFFBAND_UI_SLOT_SET) {
       // [0xC5][0x0A][slot][offset][more][bytes...] -- five header bytes, the rest payload.
-      if (len < 5 || _ui == NULL) {
-        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
-        out_frame[1] = offband::OFFBAND_UI_ERR;
-        out_frame[2] = offband::OFFBAND_UI_ERR_MALFORMED;
-        _serial->writeFrame(out_frame, 3);
+      if (len < 5) {
+        ui_err(offband::OFFBAND_UI_ERR_MALFORMED);
         return;
       }
       const uint8_t slot = cmd_frame[2];
       const uint8_t offset = cmd_frame[3];
       const bool more = cmd_frame[4] != 0;
       uint8_t accepted = 0;
-      const uint8_t r = _ui->feedTuneSlot(slot, offset, more, &cmd_frame[5],
-                                          (size_t)(len - 5), accepted);
-      if (r == 0xFF) {
-        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
-        out_frame[1] = offband::OFFBAND_UI_ERR;
-        out_frame[2] = offband::OFFBAND_UI_ERR_UNSUPPORTED_ACTION;
-        _serial->writeFrame(out_frame, 3);
-        return;
-      }
+      const uint8_t r = tones->feedSlot(slot, offset, more, &cmd_frame[5],
+                                        (size_t)(len - 5), accepted);
       // Accepted (0) and Complete (1) are progress. A step error -- BadOffset (2) or
       // BadSlot (3) -- answers with the offset the device expects NEXT, so a client that
       // lost a frame can resume or restart knowing where it stands rather than guessing.
@@ -2760,23 +2783,97 @@ void MyMesh::handleCmdFrame(size_t len) {
       _serial->writeFrame(out_frame, 4);
       return;
     }
+    // #1788: a slot's whole tune, read back in chunks so a client can edit what is there
+    // rather than only replace it. Sized against the TRANSPORT, like SLOT_GET's name.
+    if (sub == offband::OFFBAND_UI_SLOT_READ) {
+      if (len < 4 || cmd_frame[2] >= offband::kSlotCount) {
+        ui_err(offband::OFFBAND_UI_ERR_MALFORMED);
+        return;
+      }
+      char tune[offband::kMaxRtttl + 1];
+      const size_t tune_len = tones->slotText(cmd_frame[2], tune, sizeof(tune));
+      size_t n = 0;
+      bool more = false;
+      if (!offband::slotReadChunk(tune_len, cmd_frame[3], _serial->maxFramePayload(5), n,
+                                  more)) {
+        ui_err(offband::OFFBAND_UI_ERR_MALFORMED);   // an offset past the end
+        return;
+      }
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = cmd_frame[2];
+      out_frame[3] = cmd_frame[3];
+      out_frame[4] = more ? 1 : 0;
+      memcpy(&out_frame[5], &tune[cmd_frame[3]], n);
+      _serial->writeFrame(out_frame, 5 + n);
+      return;
+    }
+    // #1788: one event's tune -- DM, channel, room, new contact, ack, sent -- as the Tones
+    // screen sets it. The reply carries the stored byte (0xFF = nothing chosen) and the
+    // tune that actually plays, so a client can say "Default (Kerplop)".
+    if (sub == offband::OFFBAND_UI_EVTONE_GET || sub == offband::OFFBAND_UI_EVTONE_SET) {
+      const bool is_set = (sub == offband::OFFBAND_UI_EVTONE_SET);
+      if (len < (is_set ? 4 : 3)) {
+        ui_err(offband::OFFBAND_UI_ERR_MALFORMED);
+        return;
+      }
+      if (is_set) {
+        // The event picker's rule, and nothing else: a named builtin or a filled slot.
+        // It has no Default row, so neither does the wire.
+        if (!tones->setEventTone(cmd_frame[2], cmd_frame[3])) {
+          ui_err(offband::OFFBAND_UI_ERR_MALFORMED);
+          return;
+        }
+        savePrefs();
+      }
+      uint8_t stored = 0, effective = 0;
+      if (!tones->eventTone(cmd_frame[2], stored, effective)) {
+        ui_err(offband::OFFBAND_UI_ERR_MALFORMED);
+        return;
+      }
+      if (is_set) {
+        MESH_DEBUG_PRINTLN("[0xC5] event %d tune -> %d via client", (int)cmd_frame[2],
+                           (int)stored);
+      }
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = cmd_frame[2];
+      out_frame[3] = stored;
+      out_frame[4] = effective;
+      _serial->writeFrame(out_frame, 5);
+      return;
+    }
+    // #1788: an audition, as the picker plays one when the selection moves. Preview
+    // priority, so it can never cut off a notification; the result says why nothing
+    // played, so a client can say "sound is off" instead of appearing to do nothing.
+    if (sub == offband::OFFBAND_UI_TUNE_PLAY) {
+      if (len < 3 || !offband::tuneIdOffered(cmd_frame[2]) || !tones->listed(cmd_frame[2])) {
+        ui_err(offband::OFFBAND_UI_ERR_MALFORMED);
+        return;
+      }
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = cmd_frame[2];
+      out_frame[3] = (uint8_t)tones->preview(cmd_frame[2]);
+      _serial->writeFrame(out_frame, 4);
+      return;
+    }
     // #1789: one channel's own tune. A keyboardless badge sets this from its conversation
     // picker; this is the same choice for a client. setChannelTune is the one writer, and
-    // channelTuneSettable is the picker's rule, so the wire can reach no tune the picker
-    // cannot. Refused rather than corrected: the client asked for one tune, and storing a
-    // different one in its place would be a silent lie.
+    // the picker's rule decides what is accepted: Default, a named builtin, or a FILLED
+    // slot -- the picker skips empty ones, so the wire does too. Refused rather than
+    // corrected: storing a different tune in place of the one asked for is a silent lie.
     if (sub == offband::OFFBAND_UI_CHTUNE_GET || sub == offband::OFFBAND_UI_CHTUNE_SET) {
       const bool is_set = (sub == offband::OFFBAND_UI_CHTUNE_SET);
       ChannelDetails ch;
       const bool ok = len >= (is_set ? 4 : 3) && getChannel(cmd_frame[2], ch) && ch.name[0] != 0 &&
                       (!is_set || (offband::channelTuneSettable(cmd_frame[3]) &&
+                                   (cmd_frame[3] == offband::kChannelTuneUnset ||
+                                    tones->listed(offband::decodeChannelTune(cmd_frame[3]))) &&
                                    setChannelTune(cmd_frame[2], cmd_frame[3]) &&
                                    getChannel(cmd_frame[2], ch)));
       if (!ok) {
-        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
-        out_frame[1] = offband::OFFBAND_UI_ERR;
-        out_frame[2] = offband::OFFBAND_UI_ERR_MALFORMED;
-        _serial->writeFrame(out_frame, 3);
+        ui_err(offband::OFFBAND_UI_ERR_MALFORMED);
         return;
       }
       if (is_set) {
@@ -2789,6 +2886,53 @@ void MyMesh::handleCmdFrame(size_t len) {
       out_frame[2] = cmd_frame[2];
       out_frame[3] = ch.tune;
       _serial->writeFrame(out_frame, 4);
+      return;
+    }
+#endif  // PIN_BUZZER
+    // #1788: the screen settings -- both text sizes, Screen off, time zone, and the
+    // battery's full point -- through the UI, whose setters carry the screens' own rules.
+    // Every reply is the whole set, re-read after any write, so a client always renders
+    // what the device holds.
+    if (is_screen_sub) {
+      bool ok = true;
+      if (sub == offband::OFFBAND_UI_TEXT_SET) {
+        ok = len >= 4 && cmd_frame[2] <= 1 &&
+             _ui->clientSetTextSize(cmd_frame[2] == 1, cmd_frame[3]);
+      } else if (sub == offband::OFFBAND_UI_SCROFF_SET) {
+        uint16_t secs = 0;
+        if (len >= 4) memcpy(&secs, &cmd_frame[2], 2);
+        ok = len >= 4 && _ui->clientSetScreenOff(secs);
+      } else if (sub == offband::OFFBAND_UI_TZ_SET) {
+        ok = len >= 3 && _ui->clientSetTimeZone(cmd_frame[2]);
+      } else if (sub == offband::OFFBAND_UI_BATT_SET) {
+        if (len < 3 || cmd_frame[2] > 1) {
+          ok = false;
+        } else if (cmd_frame[2] == 0) {
+          ok = _ui->clientClearBattFull();
+        } else {
+          // The Battery screen's two refusals, as their own reasons, so a client can say
+          // which way the reading was wrong rather than just "no".
+          const uint8_t r = _ui->clientPinBattFull();
+          if (r == 1) { ui_err(offband::OFFBAND_UI_ERR_BATT_TOO_HIGH); return; }
+          if (r == 2) { ui_err(offband::OFFBAND_UI_ERR_BATT_NOT_CHARGED); return; }
+          ok = (r == 0);
+        }
+      }
+      if (!ok || !_ui->clientScreenSettings(screen)) {
+        ui_err(offband::OFFBAND_UI_ERR_MALFORMED);
+        return;
+      }
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = screen.nav_text;
+      out_frame[3] = screen.msg_text;
+      memcpy(&out_frame[4], &screen.screen_stored, 2);
+      memcpy(&out_frame[6], &screen.screen_secs, 2);
+      out_frame[8] = screen.tz;
+      memcpy(&out_frame[9], &screen.batt_stored, 2);
+      memcpy(&out_frame[11], &screen.batt_full, 2);
+      out_frame[13] = screen.batt_pinned;
+      _serial->writeFrame(out_frame, 14);   // under the 20-byte BLE floor
       return;
     }
 #if ENV_INCLUDE_GPS == 1
@@ -3101,9 +3245,18 @@ void MyMesh::handleCmdFrame(size_t len) {
     // Gated on the hardware, same principle as OFFBAND_CAP_FEM_LNA above -- a client
     // must never render a control that cannot do anything on this board.
     offband_caps2 |= offband::OFFBAND_CAP2_NOTIFY_SCOPE;
-    // #1789: a channel's own tune, on the same hardware gate as the scope.
-    offband_caps2 |= offband::OFFBAND_CAP2_CHANNEL_TUNE;
+    // #1788: tunes -- slots, event and channel tunes, auditions -- wherever the UI plays
+    // through the tune engine. Asked of the UI rather than inferred from the pin: a buzzer
+    // behind a UI that still plays fixed melodies must not be offered controls it ignores.
+    if (_ui != NULL && _ui->toneEngine() != nullptr) offband_caps2 |= offband::OFFBAND_CAP2_TUNES;
 #endif
+    {
+      // #1788: the screen settings, wherever the UI's screens honor them.
+      AbstractUITask::ScreenSettings probe;
+      if (_ui != NULL && _ui->clientScreenSettings(probe)) {
+        offband_caps2 |= offband::OFFBAND_CAP2_SCREEN_SETTINGS;
+      }
+    }
 #if ENV_INCLUDE_GPS == 1
     // #1791: GPS mode and the Power-save interval. Needs GPS and nothing else.
     offband_caps2 |= offband::OFFBAND_CAP2_GPS_MODE;
@@ -4617,7 +4770,7 @@ void MyMesh::checkObserverSerialCli() {
 
 void MyMesh::loop() {
   BaseChatMesh::loop();
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
   badgeSendTick();   // #1227
 #endif
 #if defined(OFFBAND_GUI) && ENV_INCLUDE_GPS == 1
@@ -4952,7 +5105,7 @@ void MyMesh::cmdSetTime(uint32_t secs) {
   uint32_t curr = getRTCClock()->getCurrentTime();
   getRTCClock()->setCurrentTime(secs);
   offband::logClockSet("client-set-time", curr, secs);
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
   _badge_clock_set_by_phone = true;   // #1233: the badge can show clock times now
 #endif
 }

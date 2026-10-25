@@ -142,6 +142,19 @@ inline uint16_t nextScreenOffSecs(uint16_t secs) {
   return kScreenOffSteps[0];
 }
 
+// #1788: may a client store this Screen off value? Exactly the steps the row cycles
+// through. The row never offers 0 (the compiled default) or anything between steps, so
+// neither does the wire: a client reaches what the badge's own screen reaches, no more.
+inline bool isScreenOffStep(uint16_t secs) {
+  for (int i = 0; i < kScreenOffStepCount; i++) {
+    if (kScreenOffSteps[i] == secs) return true;
+  }
+  return false;
+}
+
+// #1788: a text size the two text rows can land on.
+inline bool isTextSize(uint8_t size) { return size < kTextSteps; }
+
 // The arithmetic behind the row -- how long the display actually waits -- is every
 // ui-new board's, not the badge's, and lives in ScreenOff.h beside it.
 

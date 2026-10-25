@@ -20,7 +20,7 @@
 // implied. At that price per-slot files are simpler and safer: no read-modify-write, no
 // temporary file, no rename (DataStore.cpp:462 already records that rename will not
 // replace an existing file), and a power loss mid-write costs one slot instead of eight.
-// The paths live in ui-new/TuneSlotStore.h with the file I/O.
+// The paths live in examples/companion_radio/TuneSlotStore.h with the file I/O.
 //
 // A packed binary record was never the alternative: the length-serialized records
 // (ContactInfo, ChannelDetails) misparse the remainder of a list when a record's size
@@ -233,6 +233,31 @@ inline bool channelTuneSettable(uint8_t stored) {
   const uint8_t id = decodeChannelTune(stored);
   if (isSlotId(id)) return true;
   return tuneName(id) != nullptr;
+}
+
+// The id-space half of "does the picker list this tune" (#1788): a named builtin or a
+// slot id. The other half -- whether that slot holds a tune -- needs the slot store, so
+// tuneIsListed() in examples/companion_radio/TuneSlotStore.h adds it; a writer checks both.
+// Unset is not an id here: the EVENT picker has no Default row, so a client cannot
+// return an event to "nothing chosen" any more than the screen can.
+inline bool tuneIdOffered(uint8_t id) {
+  return isSlotId(id) || tuneName(id) != nullptr;
+}
+
+// One chunk of a slot's tune for a client read (#1788). `len` is the tune's length,
+// `offset` where the client asks to start, `room` how many bytes the frame can carry.
+// Returns the bytes to send and sets `more` when anything is left after them. An offset
+// past the end is refused (false) rather than answered empty, so a client that lost
+// track learns it instead of reading a tune as shorter than it is.
+inline bool slotReadChunk(size_t len, size_t offset, size_t room, size_t& n, bool& more) {
+  n = 0;
+  more = false;
+  if (offset > len) return false;
+  const size_t left = len - offset;
+  if (left > 0 && room == 0) return false;   // a frame with no room would never finish
+  n = left < room ? left : room;
+  more = offset + n < len;
+  return true;
 }
 
 // ---- where it sits in the file (#1523) ------------------------------------------------

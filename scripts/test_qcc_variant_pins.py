@@ -443,6 +443,14 @@ def test_badge_env_enables_the_keyboard():
     assert "+<helpers/ui/CardKbInput.cpp>" in ini
 
 
+def test_badge_env_enables_the_screen_set_separately():
+    # #1788: the Offband screen set (inbox, Settings, Tones, Battery) is its own switch, so
+    # an image without the keyboard keeps everything that is not on the keyboard. The
+    # badge must set it -- without it the badge would boot to the stock pages.
+    ini = (QCC / "platformio.ini").read_text()
+    assert re.search(r"^\s*-D\s+OFFBAND_SCREEN_UI=1\b", ini, re.MULTILINE)
+
+
 def ini_value(name):
     """A -D flag's value as a float. ini_flag() only matches integers; the radio
     parameters are decimal, so a float-aware reader is needed."""

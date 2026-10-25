@@ -165,6 +165,83 @@ TEST(TuneSlotIds, TheBuiltinTableResolvesNoSlotId) {
   }
 }
 
+// ---- what a client may choose (#1788) ------------------------------------------------
+
+// Every named builtin and every slot id is in the id space a picker can offer.
+TEST(TuneIdOffered, NamedBuiltinsAndSlotIdsAreOffered) {
+  int named = 0;
+  for (uint8_t id = 0; id < kBuiltinCount; id++) {
+    if (tuneName(id) == nullptr) continue;
+    named++;
+    EXPECT_TRUE(tuneIdOffered(id)) << "builtin " << (int)id;
+  }
+  EXPECT_GT(named, 1);
+  for (uint8_t i = 0; i < kSlotCount; i++) EXPECT_TRUE(tuneIdOffered(slotIdAt(i)));
+}
+
+// A builtin the picker deliberately leaves out, an id past the slots, and "unset" are
+// not -- the event picker has no Default row, so a client cannot clear an event either.
+TEST(TuneIdOffered, UnlistedBuiltinsPastTheSlotsAndUnsetAreNot) {
+  int unnamed = 0;
+  for (uint8_t id = 0; id < kBuiltinCount; id++) {
+    if (tuneName(id) != nullptr) continue;
+    unnamed++;
+    EXPECT_FALSE(tuneIdOffered(id)) << "builtin " << (int)id;
+  }
+  EXPECT_GT(unnamed, 0) << "the table has an unlisted entry; this test must see it";
+  for (int id = kPickerIdEnd; id < 256; id++) {
+    EXPECT_FALSE(tuneIdOffered((uint8_t)id)) << "id " << id;
+  }
+  EXPECT_FALSE(tuneIdOffered(kTuneUnset));
+}
+
+// ---- reading a slot back in chunks (#1788) -------------------------------------------
+
+// Walking a tune at a given frame room reassembles it exactly, and stops.
+TEST(SlotReadChunk, WalkingTheChunksCoversTheTuneExactlyOnce) {
+  for (size_t len : {(size_t)0, (size_t)1, (size_t)15, (size_t)16, (size_t)200, kMaxRtttl}) {
+    for (size_t room : {(size_t)1, (size_t)15, (size_t)171}) {
+      size_t offset = 0, chunks = 0;
+      bool more = true;
+      while (more) {
+        size_t n = 0;
+        ASSERT_TRUE(slotReadChunk(len, offset, room, n, more)) << len << "/" << room;
+        EXPECT_LE(n, room);
+        offset += n;
+        ASSERT_LT(++chunks, 1000u) << "never finished";
+      }
+      EXPECT_EQ(len, offset) << "len " << len << " room " << room;
+    }
+  }
+}
+
+TEST(SlotReadChunk, AnEmptySlotIsOneEmptyFinalChunk) {
+  size_t n = 99;
+  bool more = true;
+  EXPECT_TRUE(slotReadChunk(0, 0, 15, n, more));
+  EXPECT_EQ(0u, n);
+  EXPECT_FALSE(more);
+}
+
+// An offset past the end is refused, not answered empty -- a client that lost its place
+// must not read a tune as shorter than it is.
+TEST(SlotReadChunk, AnOffsetPastTheEndIsRefused) {
+  size_t n = 0;
+  bool more = false;
+  EXPECT_FALSE(slotReadChunk(10, 11, 15, n, more));
+  EXPECT_FALSE(slotReadChunk(0, 1, 15, n, more));
+  EXPECT_TRUE(slotReadChunk(10, 10, 15, n, more));   // exactly at the end: done
+  EXPECT_EQ(0u, n);
+  EXPECT_FALSE(more);
+}
+
+// A frame with no room would loop forever; it is refused instead.
+TEST(SlotReadChunk, NoRoomWithBytesLeftIsRefused) {
+  size_t n = 0;
+  bool more = false;
+  EXPECT_FALSE(slotReadChunk(10, 0, 0, n, more));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

@@ -2,7 +2,8 @@
 
 // #1230: the badge's screens from the owner's design (the QCC mockups, sections 1a,
 // 1c, 1e and 2a). The Messages inbox is Home on badge builds; a thread is one
-// conversation, with compose inline under it. Badge builds only (UI_HAS_CARDKB).
+// conversation, with compose inline under it. Built where OFFBAND_SCREEN_UI is set
+// (#1788); the RTTTL editor, which is typed entry, additionally needs UI_HAS_CARDKB.
 
 #include <helpers/ui/UIScreen.h>
 #include <helpers/ui/MsgCompose.h>
@@ -369,6 +370,10 @@ private:
 //
 // No cursor movement, per the owner: a typo early in a long string is restarted with
 // Clear rather than un-typed, and the app push (#1478) is the route for anything long.
+//
+// #1788: typed entry, so it is the keyboard's -- built only with UI_HAS_CARDKB. Without
+// it a slot is filled from the client, which is the route a keyboardless board has.
+#if UI_HAS_CARDKB
 class RtttlEditScreen : public UIScreen {
 public:
   explicit RtttlEditScreen(UITask* task) : _task(task) {}
@@ -388,6 +393,7 @@ private:
   const char* _note = "";
   uint32_t _note_until = 0;
 };
+#endif  // UI_HAS_CARDKB
 #endif
 
 class ThreadScreen : public UIScreen {

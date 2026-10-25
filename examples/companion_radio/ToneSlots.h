@@ -11,7 +11,7 @@
 // and lives in flash, with no dependence on any particular NodePrefs instance.
 
 #include <helpers/ui/Tunes.h>
-#include "../NodePrefs.h"
+#include "NodePrefs.h"
 
 namespace offband {
 

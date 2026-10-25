@@ -1,6 +1,6 @@
 // #1230: the badge's inbox and thread screens. See BadgeScreens.h.
 
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
 
 #include "BadgeScreens.h"
 
@@ -11,10 +11,7 @@
 #include "UITask.h"
 #include "target.h"
 #ifdef PIN_BUZZER
-  // #1474: the custom tune slots. Included here from the start so the badge build
-  // compiles the store now -- a header nobody includes is a header the compiler never
-  // checks, and the screens that consume it land in #1476 and #1477.
-  #include "TuneSlotStore.h"
+  #include "../TuneSlotStore.h"   // #1474: the custom tune slots
 #endif
 
 using namespace badgeui;
@@ -2041,10 +2038,12 @@ bool CustomTunesScreen::handleInput(char c) {
     audition();
     return true;
   }
+#if UI_HAS_CARDKB
   if (key == KEY_ENTER) {
     _task->gotoRtttlEdit((uint8_t)_sel);   // #1477: filled or empty, Enter edits it
     return true;
   }
+#endif
   // Review read the bare `return false` as abdicating keys to a parent that might do
   // something surprising with them. It cannot: the only fallback in UITask::loop() is
   // guarded by `keynav::backsOut((uint8_t)c)`, so an unhandled key does nothing at all,
@@ -2052,6 +2051,7 @@ bool CustomTunesScreen::handleInput(char c) {
   return false;   // Esc: back to Tones
 }
 
+#if UI_HAS_CARDKB   // #1788: the editor is typed entry, so it is the keyboard's
 // The editor pins the FIXED face, and that is a correctness requirement rather than a
 // preference. Wrapping at a column count is only right when every character is the same
 // width; bodyFaceFor() returns a PROPORTIONAL face at the medium and small text sizes
@@ -2222,6 +2222,7 @@ bool RtttlEditScreen::handleInput(char c) {
   }
   return false;
 }
+#endif  // UI_HAS_CARDKB
 
 #endif  // PIN_BUZZER
 
@@ -2367,4 +2368,4 @@ bool GpsScreen::handleInput(char c) {
   return from_button;
 }
 
-#endif  // UI_HAS_CARDKB
+#endif  // OFFBAND_SCREEN_UI

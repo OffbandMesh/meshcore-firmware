@@ -21,10 +21,7 @@
 
 #ifdef PIN_BUZZER
   #include <helpers/ui/buzzer.h>
-  #include <helpers/ui/Tunes.h>   // #1418/#1419: the tone for an event is looked up
-  #include "ToneSlots.h"          // #1421: the one event-to-pref slot table
-  #include <helpers/ui/TuneSlots.h>      // #1474: kMaxRtttl, kSlotCount
-  #include <helpers/ui/SlotAssembly.h>   // #1478: a pushed tune arrives in chunks
+  #include "../ToneEngine.h"   // #1788: tables, event choices, slots -- the buzzer's, not ours
 #endif
 #ifdef PIN_VIBRATION
   #include <helpers/ui/GenericVibration.h>
@@ -33,9 +30,16 @@
 #include "../AbstractUITask.h"
 #include "../NodePrefs.h"
 
+// #1788: switches named for what they serve, never for a product. OFFBAND_SCREEN_UI is the
+// Offband screen set for a small display -- inbox, threads, Settings, Tones, Battery --
+// which needs a display and nothing on a keyboard. UI_HAS_CARDKB is the keyboard itself:
+// its driver and typed entry. The badge sets both today; keeping them apart is what lets
+// an image without a keyboard keep everything that is not on the keyboard.
+#if OFFBAND_SCREEN_UI
+  #include <helpers/ui/MsgCompose.h>   // #1228
+#endif
 #if UI_HAS_CARDKB
   #include <helpers/ui/CardKbInput.h>
-  #include <helpers/ui/MsgCompose.h>   // #1228
 #endif
 
 class UITask : public AbstractUITask {
@@ -43,6 +47,7 @@ class UITask : public AbstractUITask {
   SensorManager* _sensors;
 #ifdef PIN_BUZZER
   genericBuzzer buzzer;
+  offband::ToneEngine _tones;   // #1788: every event plays through it
 #endif
 #ifdef PIN_VIBRATION
   GenericVibration vibration;
@@ -169,7 +174,7 @@ class UITask : public AbstractUITask {
 #if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
   UIScreen* key_test;
 #endif
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
   UIScreen* thread;     // #1230: one conversation, with compose
   UIScreen* tools;      // #1230: the device pages Home used to hold
   UIScreen* contacts;   // #1231
@@ -181,17 +186,14 @@ class UITask : public AbstractUITask {
   UIScreen* battery;    // #1254
   uint32_t _cycle_at = 0;   // #1231: when SW1 last moved along the cycle
 #endif
-#if UI_HAS_CARDKB && defined(PIN_BUZZER)
-  // #1421: Settings -> Tones -> a tune. Both guards, because the screens need the
-  // keyboard to navigate AND a buzzer to be about anything. Today only the badge sets
-  // UI_HAS_CARDKB and it has a buzzer, so this is belt and braces rather than a live
-  // case -- but a keyboard board without a piezo should not fail to compile.
+#if OFFBAND_SCREEN_UI && defined(PIN_BUZZER)
+  // #1421: Settings -> Tones -> a tune. The screens and a buzzer, and nothing on a
+  // keyboard: they navigate by button (#1788 -- this used to require UI_HAS_CARDKB).
   UIScreen* tones;        // the six events
   UIScreen* tone_picker;  // the tunes, for one event
   UIScreen* custom_tunes; // #1476: the eight custom slots
-  UIScreen* rtttl_edit;   // #1477: typing one slot's tune
-#ifdef PIN_BUZZER
-  offband::SlotAssembly<offband::kMaxRtttl> _slot_push;   // #1478
+#if UI_HAS_CARDKB
+  UIScreen* rtttl_edit;   // #1477: typing one slot's tune -- typed entry, the keyboard's
 #endif
   // Which event the picker is editing. Held here rather than passed into the screen so
   // the picker can be a plain UIScreen like the others.
@@ -270,7 +272,7 @@ public:
 #if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
   void gotoKeyTest();
 #endif
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
   // #1230: a conversation's thread; `first_key` is typed into its compose line.
   void gotoThread(int convo, char first_key = 0);
   void gotoTools();   // #1230
@@ -285,7 +287,7 @@ public:
   void gotoZones();      // #1233
   void gotoGps();        // #1235: from Settings' GPS row
   void gotoBattery();    // #1254: from Settings' Battery row
-#if UI_HAS_CARDKB && defined(PIN_BUZZER)
+#if defined(PIN_BUZZER)
   void gotoTones();                                   // #1421: from Settings' Tones row
   void gotoTonePicker(offband::ToneEvent e);          // #1421: from a Tones row
   // #1525: the same picker, editing one conversation's tune. From Right in a thread.
@@ -296,55 +298,60 @@ public:
   // Tones screen. One place decides, so Enter and Esc cannot disagree.
   void leaveTonePicker();
   void gotoCustomTunes();                             // #1476: from Tones' Custom row
+#if UI_HAS_CARDKB
   void gotoRtttlEdit(uint8_t slot_index);             // #1477: from a Custom row
-
-  // #1477: play a string the caller has already staged in the playback buffer. Preview
-  // priority, so auditioning what is being typed can never cut off a notification.
-  offband::TonePlay playStagedTune(const char* staged) {
-    return buzzer.play(staged, offband::TonePriority::Preview);
-  }
+#endif
   offband::ToneEvent tonePickerEvent() const { return _tone_picking; }
   // #1525: the channel the picker is editing, or -1 for an event. The picker shows its
   // Default row, names the conversation in its title, and writes the channel record
   // instead of a pref, when this is not -1.
   int tonePickerChannel() const { return _tone_picking_channel; }
-  // #1422: plays any tune by id, including the un-listed one the remote trigger names.
-  // This is the ENTIRE surface a caller needs: it honors the quiet pref and the hardware
-  // MUTE, and does nothing for an id this build cannot resolve. Anything that wants to
-  // sound a tune by id should not require touching sound code at all.
-  offband::TonePlay playTuneById(uint8_t id, offband::TonePriority priority);
-  // The badge's override of the trigger seam. Names the un-listed id and asks for it at
-  // Trigger priority, which is what stops the next arriving message cutting it off: the
-  // payload is far longer than any notification, so under Event priority a busy channel
-  // truncates it on every badge in the room (#1608).
-  //
-  // Reports whether the buzzer took the request, which is not the same as audible: this
-  // board's MUTE slide switch is in series with BZ1 and no software can see it. Silence
-  // chosen by id counts as played, because choosing silence is a choice; a refusal for the
-  // quiet pref or an unresolvable id does not.
-  bool playTriggerTune() override;
-  // #1422: stops whatever is sounding. The other half of the trigger seam -- a tune
-  // sent to a room full of badges has to be stoppable, and the payload is the owner's
-  // to replace, so it will not always be under two seconds.
-  void stopTune();
-  // Auditions a tune. Low priority, so it can never cut off a real notification, and
-  // the result says WHY nothing played so the screen can show it rather than appearing
-  // to do nothing.
-  //
-  // NotFound is folded into Played on purpose: a stored id this build cannot resolve is
-  // not something to show the person choosing a tune, it is just a row that makes no
-  // sound. The trigger is the caller that needs the distinction.
-  offband::TonePlay previewTune(uint8_t id) {
-    const offband::TonePlay r = playTuneById(id, offband::TonePriority::Preview);
-    return r == offband::TonePlay::NotFound ? offband::TonePlay::Played : r;
-  }
 #endif
   // The Status screen under another title, as cycle position `pos`: the inbox's empty state.
   int renderStatusAs(DisplayDriver& d, const char* title, int pos);
+  // #1788: what the screens ask about the keyboard. Without UI_HAS_CARDKB in the image the
+  // answers are the ones a badge with no keyboard plugged in already gives, so the screens
+  // need no second code path.
+#if UI_HAS_CARDKB
   bool hasKeyboard() const { return _kbd.isPresent(); }
   uint8_t lastKeyboardRaw() const { return _last_kbd_raw; }
   int lastButtonEvent() const { return _last_btn_event; }
   bool inputFromKeyboard() const { return _input_from_kbd; }
+#else
+  bool hasKeyboard() const { return false; }
+  uint8_t lastKeyboardRaw() const { return 0; }
+  int lastButtonEvent() const { return 0; }
+  bool inputFromKeyboard() const { return false; }
+#endif
+#endif
+
+#if defined(PIN_BUZZER)
+  // #1788: the tune surface, on any board with a buzzer -- delegated to the engine, which
+  // is also what a client reaches through toneEngine().
+  offband::ToneEngine* toneEngine() override { return &_tones; }
+  // #1477: play a string the caller has already staged in the playback buffer. Preview
+  // priority, so auditioning what is being typed can never cut off a notification.
+  offband::TonePlay playStagedTune(const char* staged) { return _tones.playStaged(staged); }
+  // #1422: plays any tune by id, including the un-listed one the remote trigger names.
+  // It honors the quiet pref and the hardware MUTE, and does nothing for an id this build
+  // cannot resolve.
+  offband::TonePlay playTuneById(uint8_t id, offband::TonePriority priority) {
+    return _tones.playId(id, priority);
+  }
+  // The override of the trigger seam. Names the un-listed id and asks for it at Trigger
+  // priority, which is what stops the next arriving message cutting it off: the payload is
+  // far longer than any notification, so under Event priority a busy channel truncates it
+  // on every badge in the room (#1608). Whether a board ever calls it is MyMesh's
+  // OFFBAND_TUNE_TRIGGER, not this.
+  //
+  // Reports whether the buzzer took the request, which is not the same as audible: the
+  // QCC badge's MUTE slide switch is in series with BZ1 and no software can see it.
+  bool playTriggerTune() override;
+  // #1422: stops whatever is sounding. The other half of the trigger seam.
+  void stopTune() { _tones.stop(); }
+  // Auditions a tune: low priority, and the result says WHY nothing played. NotFound is
+  // folded into Played -- see ToneEngine::preview.
+  offband::TonePlay previewTune(uint8_t id) { return _tones.preview(id); }
 #endif
   void showAlert(const char* text, int duration_millis);
   int  getMsgCount() const { return _msgcount; }
@@ -378,42 +385,35 @@ public:
   // from AbstractUITask
   void msgRead(int msgcount) override;
   void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) override;
-#if defined(PIN_BUZZER)
-  // #1549: the one way an EVENT turns a tune id into sound. Guarded on the buzzer alone,
-  // not on the keyboard: both buzzer configurations need it, and each resolves the id the
-  // only way it can -- see the definition.
-  void playEventTune(uint8_t id);
-#endif
   void notify(UIEventType t = UIEventType::none) override;
   // #1524: a channel message, with the channel. Declared for all three ui-new
   // configurations and branched inside, rather than guarded here: the #1478 lesson was
   // that a header guard which does not match where the members live fails on the envs
-  // you did not build. The non-badge branch calls the base behaviour and is identical to
-  // inheriting it.
+  // you did not build.
   void notifyChannel(uint8_t channel_idx) override;
   void applyBuzzerMute(bool quiet) override;
-// #1478: BOTH guards, matching where _slot_push lives. A board with a buzzer and no
-// keyboard -- heltec_rc32 and WioTrackerL1 are the live cases -- compiles this header but
-// not the CardKB-only members, so declaring these under PIN_BUZZER alone referenced a
-// member that was not there. CI caught it on four envs I had not built locally.
-//
-// Scoping, not an accident: the slots are a badge feature and this epic scoped them to
-// the badge. A buzzer-without-keyboard board answers the client through the base class's
-// default -- "unsupported" -- which is exactly what that default is for. Extending the
-// push to such a board would also mean compiling the slot store's file I/O onto it, and
-// that is a deliberate decision rather than a side effect of a guard.
-#if UI_HAS_CARDKB && defined(PIN_BUZZER)
-  // The assembly buffer lives here rather than in MyMesh because MyMesh.h is compiled by
-  // every companion variant and a badge-only feature must not cost them 241 bytes of RAM.
-  uint8_t feedTuneSlot(uint8_t slot, uint8_t offset, bool more, const uint8_t* bytes,
-                       size_t len, uint8_t& accepted) override;
-  bool readTuneSlot(uint8_t slot, uint8_t& len, char* name, size_t name_cap) override;
-
+#if defined(PIN_BUZZER)
   // #1478: abandon a push in flight. The badge's own editor calls this when it saves,
   // so a chunked push that was already under way cannot later commit over what the
-  // person just typed -- review was right that the two writers could otherwise race on
-  // intent, with the stale one winning because it finished last.
-  void cancelTuneSlotPush() { _slot_push.reset(); }
+  // person just typed.
+  //
+  // #1788: the slots, the push and their file I/O are a BUZZER feature now, on every
+  // ui-new board with one -- heltec_rc32 and WioTrackerL1 among them, which #1478 had
+  // deliberately left out. The owner's ruling (2026-10-25): a capability is switched by
+  // the hardware that serves it, not by being a badge. Cost on those boards: the push
+  // buffer and the playback stage, ~480 bytes of RAM.
+  void cancelTuneSlotPush() { _tones.cancelPush(); }
+#endif
+#if OFFBAND_SCREEN_UI
+  // #1788: the screen settings a client can reach. The rules are the screens' own --
+  // text sizes and Screen off steps from BadgeLayout.h, every zone the picker lists, the
+  // Battery screen's two actions -- so the client and the screen cannot disagree.
+  bool clientScreenSettings(ScreenSettings& out) override;
+  bool clientSetTextSize(bool message, uint8_t size) override;
+  bool clientSetScreenOff(uint16_t secs) override;
+  bool clientSetTimeZone(uint8_t tz) override;
+  uint8_t clientPinBattFull() override;
+  bool clientClearBattFull() override;
 #endif
   void loop() override;
 

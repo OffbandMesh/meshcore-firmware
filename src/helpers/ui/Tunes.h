@@ -233,7 +233,7 @@ inline bool isBuiltinTune(uint8_t id) { return id < kBuiltinCount; }
 // Which picker row to open on, given a BUILTIN tune an event resolves to (#1467).
 //
 // Renamed from pickerRowFor in #1475, when a store-aware overload arrived in
-// ui-new/TuneSlotStore.h: two functions of the same name, one of which silently sends
+// examples/companion_radio/TuneSlotStore.h: two functions of the same name, one of which silently sends
 // every custom slot to Silent, is a trap for whoever reaches for the shorter one. This
 // one is correct only where slots cannot occur.
 //

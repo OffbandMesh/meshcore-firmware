@@ -104,13 +104,13 @@
 // (OFFBAND_PKTHASH_RING_SLOTS) rather than a duplicated literal. Safe to include
 // here -- this header pulls only <stdint.h> and defines no types of its own.
 #include "OffbandConfigProtocol.h"
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
 #include <helpers/BadgeSendTracker.h>   // #1227: DMs typed on the badge
 #include <helpers/BadgeStore.h>         // #1229: the badge's inbox and threads
 #include <helpers/HeardRepeats.h>       // #1232: a tick when a repeater passes ours on
 #include <helpers/ClockJump.h>          // #1233: the clock set under stored messages
 #endif
-#if defined(OFFBAND_GUI) && !UI_HAS_CARDKB
+#if defined(OFFBAND_GUI) && !OFFBAND_SCREEN_UI
 #include <helpers/HeardRepeats.h>       // #1464: "heard xN" on the GUI's own channel sends
 #include <helpers/BadgeStore.h>         // #1465: splitSender, for the store's channel messages
 #endif
@@ -222,7 +222,11 @@ public:
   DataStore* guiDataStore() { return _store; }
 #endif
 
-#if UI_HAS_CARDKB
+  // #1474: the store, for UI code that owns its own small files -- the custom tune slots.
+  // #1788: on every board now, because the slots belong to the buzzer, not to the badge.
+  DataStore* dataStore() { return _store; }
+
+#if OFFBAND_SCREEN_UI
   // #1227: messages typed on the badge, sent with the same mesh calls as the phone path.
   // A DM gets up to kBadgeDmAttempts attempts; uiSendStatus() reports how it ended.
   static constexpr int kBadgeDmSlots = 4;
@@ -239,11 +243,6 @@ public:
   using BadgeMsgStore = offband::BadgeStore<kBadgeConvos, kBadgeMsgs, MAX_TEXT_LEN, PUB_KEY_SIZE>;
   BadgeMsgStore& badgeStore() { return _badge_store; }
 
-  // #1474: the store, for UI code that owns its own small files -- the badge's custom
-  // tune slots. Exposed rather than adding another member here, so the slot store stays
-  // in ui-new and this header, which every companion variant compiles, learns nothing
-  // about it.
-  DataStore* dataStore() { return _store; }
   // #1233: whether the phone or the GPS has set the clock since boot. Until then it runs
   // from the newest contact's last-heard time (bootstrapRTCfromContacts), which can be
   // hours or days behind, so the badge shows ages rather than clock times.
@@ -333,7 +332,7 @@ protected:
 #ifdef OFFBAND_GUI
   void logTx(mesh::Packet* packet, int len) override;  // TX airtime for the GUI (#1455)
 #endif
-#if defined(OFFBAND_OBSERVER) || UI_HAS_CARDKB || defined(OFFBAND_GUI)
+#if defined(OFFBAND_OBSERVER) || OFFBAND_SCREEN_UI || defined(OFFBAND_GUI)
   // Strycher/LoRa#335: the observer's /packets path. #1232: the badge's heard repeats.
   // #1455: the GUI's heard counts by type.
   void logRx(mesh::Packet* pkt, int len, float score) override;
@@ -762,7 +761,7 @@ private:
   int guiThreadForChannel(uint8_t idx);
 #endif
 
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
   // #1227: DMs typed on the badge. Their ACKs are kept apart from expected_ack_table so
   // the phone is never told about a message it didn't send.
   offband::BadgeSendTracker<kBadgeDmSlots, kBadgeDmAttempts, MAX_TEXT_LEN, PUB_KEY_SIZE> _badge_dms;
