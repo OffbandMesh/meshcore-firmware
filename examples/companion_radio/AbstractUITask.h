@@ -13,6 +13,8 @@
 
 #include "NodePrefs.h"
 
+namespace offband { class ToneEngine; }   // ToneEngine.h, PIN_BUZZER builds only
+
 enum class UIEventType {
     none,
     contactMessage,
@@ -22,8 +24,8 @@ enum class UIEventType {
     ack,
     // #1419: the badge sent a message from its own keyboard. Appended, so the three
     // UI implementations' switches ignore it through their existing `default` until
-    // one handles it. Only the badge can fire it -- the screen that sends is inside
-    // `#if UI_HAS_CARDKB`, which no other variant sets.
+    // one handles it. Only the Offband screen set can fire it -- the screen that sends is
+    // inside `#if OFFBAND_SCREEN_UI` (#1788).
     sent
 };
 
@@ -65,7 +67,7 @@ public:
   // stays in the mesh layer and the UI stays dumb. A tune set on one channel needs the
   // channel, and UIEventType is consumed by four UI families -- so this is its own
   // virtual rather than a wider notify(). Third time this shape answers exactly this
-  // problem, after applyBuzzerMute (#510) and feedTuneSlot (#1478).
+  // problem, after applyBuzzerMute (#510) and the slot hooks (#1478, now toneEngine()).
   //
   // The default IS the current behaviour, so ui-orig, ui-tiny and ui-gui inherit it and
   // sound exactly as they do now. Only the badge overrides it.
@@ -74,25 +76,44 @@ public:
     notify(UIEventType::channelMessage);
   }
 
-  // #1478: a custom tune slot, pushed from the app. Routed through this interface for
-  // the same reason applyBuzzerMute is: the slot store lives in the badge's UI and
-  // MyMesh.cpp is compiled by every companion variant, so the mesh layer asks rather
-  // than knowing. A UI without slots keeps the defaults and the handler reports
-  // unsupported.
-  //
-  // feedTuneSlot returns one of the SlotAssembly results as a uint8_t, plus the bytes
-  // accepted so far in `accepted`, so the handler can answer without knowing the store.
-  virtual uint8_t feedTuneSlot(uint8_t slot, uint8_t offset, bool more,
-                               const uint8_t* bytes, size_t len, uint8_t& accepted) {
-    (void)slot; (void)offset; (void)more; (void)bytes; (void)len;
-    accepted = 0;
-    return 0xFF;   // unsupported on this UI
-  }
+  // #1788: the tune engine this UI plays through, or nullptr when it plays fixed melodies
+  // (or has no buzzer). The mesh layer reaches event tones, channel tones, the custom
+  // slots and auditions through it, and advertises tunes to a client only when it is
+  // non-null -- so a board is offered exactly what it will act on. Replaces the per-call
+  // slot virtuals #1478 added: one hook, and the engine carries the rest. (Not `tones()`:
+  // ui-new already has a screen member by that name.)
+  virtual offband::ToneEngine* toneEngine() { return nullptr; }
+
+  // #1788: the screen settings a client can reach -- text sizes, Screen off, time zone,
+  // and the battery's full point -- for a UI whose screens honor them. The default says
+  // "not here"; a UI that overrides clientScreenSettings() to true overrides the rest.
+  // Prefixed `client` because the UIs already have their own setters by the plain names
+  // (ui-gui's setScreenOffSecs), and these are the client's door, not a second setter.
+  struct ScreenSettings {
+    uint8_t nav_text;        // badgeui::TextSize
+    uint8_t msg_text;
+    uint16_t screen_stored;  // seconds; 0 = the board's compiled timeout
+    uint16_t screen_secs;    // what the display actually waits
+    uint8_t tz;              // a TimeZones.h index; 0 = not set
+    uint16_t batt_stored;    // mV; 0 = nothing learned or pinned
+    uint16_t batt_full;      // mV the bar treats as 100%
+    uint8_t batt_pinned;     // 1 = set by hand, which auto-learn leaves alone
+  };
+  virtual bool clientScreenSettings(ScreenSettings& out) { (void)out; return false; }
+  // Each returns false for a value the matching screen would not offer. They apply and
+  // persist, as the screen's own write does.
+  virtual bool clientSetTextSize(bool message, uint8_t size) { (void)message; (void)size; return false; }
+  virtual bool clientSetScreenOff(uint16_t secs) { (void)secs; return false; }
+  virtual bool clientSetTimeZone(uint8_t tz) { (void)tz; return false; }
+  // The Battery screen's two actions. Pin answers 0 pinned, 1 the reading is too high to
+  // be a full cell, 2 not charged yet -- the same two refusals the screen shows.
+  virtual uint8_t clientPinBattFull() { return 0xFF; }
+  virtual bool clientClearBattFull() { return false; }
 
   // Sound the un-listed tune, for a message the mesh layer has decided asks for it.
   //
-  // Fourth use of this shape, after applyBuzzerMute (#510), feedTuneSlot (#1478) and
-  // notifyChannel (#1524), and for the same reason: the tune table and the buzzer are
+  // Another use of this shape, after applyBuzzerMute (#510), the slot hooks (#1478, now
+  // toneEngine()) and notifyChannel (#1524), and for the same reason: the tune table and the buzzer are
   // members of a UITask implementation, MyMesh.cpp is compiled by every companion
   // variant, and the decision of WHETHER to sound belongs in the mesh layer. So the mesh
   // layer asks and does not reach.
@@ -112,13 +133,6 @@ public:
   // all. Only the badge overrides it.
   virtual bool playTriggerTune() { return false; }
 
-  // The stored tune's length and derived name, for SLOT_GET. False when this UI has no
-  // slots. `name` is written as a NUL-terminated string of at most 12 characters.
-  virtual bool readTuneSlot(uint8_t slot, uint8_t& len, char* name, size_t name_cap) {
-    (void)slot; (void)name; (void)name_cap;
-    len = 0;
-    return false;
-  }
   // #542 B1: OLED mode (0 auto, 1 always-on, 2 always-off). No-op default: UIs
   // without a controllable display inherit it and are unaffected. Applied live from
   // the 0xC5 display SET sub-code and at boot.

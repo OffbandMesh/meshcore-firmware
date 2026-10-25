@@ -914,6 +914,46 @@ TEST(BadgeLayoutTag, TheStoreIsTheHardCeiling) {
   EXPECT_LE(kTagChars, 15) << "kTagChars exceeds what BadgeStore::kSenderLen can hold";
 }
 
+// ---- what a client may set (#1788) ---------------------------------------------------
+
+// Exactly the steps the Screen off row cycles through -- including the default -- and
+// nothing between them, nothing past them, and not 0.
+TEST(ClientScreenOff, OnlyTheRowsStepsAreAccepted) {
+  for (int i = 0; i < kScreenOffStepCount; i++) EXPECT_TRUE(isScreenOffStep(kScreenOffSteps[i]));
+  EXPECT_TRUE(isScreenOffStep(kDefaultScreenOffSecs));
+  for (uint16_t s : {0, 1, 14, 16, 29, 31, 45, 90, 299, 301, 600, 65535}) {
+    EXPECT_FALSE(isScreenOffStep(s)) << s << " s";
+  }
+}
+
+// Every step the row can land on is one nextScreenOffSecs() reaches, so the two cannot
+// disagree about what the row offers.
+TEST(ClientScreenOff, TheStepsAreWhatTheRowCycles) {
+  uint16_t s = kScreenOffSteps[0];
+  for (int i = 0; i < kScreenOffStepCount; i++) {
+    EXPECT_TRUE(isScreenOffStep(s));
+    s = nextScreenOffSecs(s);
+  }
+  EXPECT_EQ(kScreenOffSteps[0], s) << "the cycle must come back round";
+}
+
+TEST(ClientTextSize, TheThreeSizesAndNothingElse) {
+  EXPECT_TRUE(isTextSize(kTextLarge));
+  EXPECT_TRUE(isTextSize(kTextMedium));
+  EXPECT_TRUE(isTextSize(kTextSmall));
+  EXPECT_FALSE(isTextSize(kTextSteps));
+  EXPECT_FALSE(isTextSize(0xFF));
+}
+
+// Every row the zone picker lists, "not set" included, and nothing past the table.
+TEST(ClientTimeZone, EveryListedZoneAndNothingPastIt) {
+  for (int z = 0; z < offband::tz::kZoneCount; z++) EXPECT_TRUE(offband::tz::isStorable(z));
+  EXPECT_TRUE(offband::tz::isStorable(offband::tz::kNotSet));
+  EXPECT_FALSE(offband::tz::isStorable(offband::tz::kZoneCount));
+  EXPECT_FALSE(offband::tz::isStorable(-1));
+  EXPECT_FALSE(offband::tz::isStorable(255));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

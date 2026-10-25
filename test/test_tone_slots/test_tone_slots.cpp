@@ -16,7 +16,7 @@
 #include <set>
 #include <string>
 
-#include "../../examples/companion_radio/ui-new/ToneSlots.h"
+#include "../../examples/companion_radio/ToneSlots.h"
 
 using namespace offband;
 

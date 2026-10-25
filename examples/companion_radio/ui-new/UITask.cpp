@@ -1,7 +1,4 @@
 #include "UITask.h"
-#ifdef PIN_BUZZER
-  #include "TuneSlotStore.h"   // #1475: custom slots resolve through the store
-#endif
 #ifdef PIN_QCC_ACTIVITY_LED
   // #1367: the dispatcher -> UI traffic seam. Up here, not beside the scheduler further
   // down: the sink is registered in begin(), which comes first in this file, so an
@@ -27,7 +24,7 @@
 #if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
   #include <helpers/ui/LineEdit.h>
 #endif
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
   #include "BadgeScreens.h"   // #1230: the inbox and thread screens
 #endif
 #include <helpers/ui/ScreenOff.h>   // #1245: the auto-off arithmetic, for every board
@@ -317,7 +314,7 @@ public:
     }
 
     if (_page == HomePage::FIRST) {
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
       // #1231: on the badge these pages are tools, opened from Status, which now holds
       // the message count and the pairing PIN.
       display.setColor(UIColor::primary_txt);
@@ -590,7 +587,7 @@ public:
       return true;
     }
 #endif
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
     if (c == KEY_ENTER && _page == HomePage::FIRST) {   // #1233: back to Settings, which opened them
       _task->gotoSettings();
       return true;
@@ -771,6 +768,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #ifdef PIN_BUZZER
   buzzer.begin();
   buzzer.quiet(_node_prefs->buzzer_quiet);
+  _tones.begin(&buzzer, the_mesh.dataStore(), _node_prefs);   // #1788
   buzzer.startup();
 #endif
 
@@ -782,7 +780,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   _alert_expiry = 0;
 
   splash = new SplashScreen(this);
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
   // #1230: the Messages inbox is Home (owner: "I want the Unread/messages screen to
   // become the Home screen instead of the PIN screen"). The pages Home held stay
   // reachable as tools. A message arriving flashes its row in the inbox instead of
@@ -801,7 +799,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   tones = new TonesScreen(this);              // #1421
   tone_picker = new TonePickerScreen(this);   // #1421
   custom_tunes = new CustomTunesScreen(this);  // #1476
-  rtttl_edit = new RtttlEditScreen(this);      // #1477
+#if UI_HAS_CARDKB
+  rtttl_edit = new RtttlEditScreen(this);      // #1477: typed entry, the keyboard's
+#endif
 #endif
   msg_preview = NULL;
 #else
@@ -842,7 +842,7 @@ void UITask::gotoKeyTest() {
 }
 #endif
 
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
 void UITask::gotoThread(int convo, char first_key) {
   ((ThreadScreen*)thread)->begin(convo);
   setCurrScreen(thread);
@@ -875,7 +875,7 @@ void UITask::gotoGps() {
 
 void UITask::gotoBattery() { setCurrScreen(battery); }   // #1254
 
-#if UI_HAS_CARDKB && defined(PIN_BUZZER)
+#if defined(PIN_BUZZER)
 // #1421. #1476: re-read the slot names on entry, because the Custom row shows a count
 // that comes from the cache -- same reason the slot list itself re-reads. Eight reads
 // per visit to this screen, not per render, which bounds staleness to one visit rather
@@ -885,49 +885,12 @@ void UITask::gotoTones() {
   setCurrScreen(tones);
 }
 
-// #1478: both guards, matching the declaration -- see UITask.h.
-#if UI_HAS_CARDKB && defined(PIN_BUZZER)
-uint8_t UITask::feedTuneSlot(uint8_t slot, uint8_t offset, bool more, const uint8_t* bytes,
-                            size_t len, uint8_t& accepted) {
-  using Res = offband::SlotAssembly<offband::kMaxRtttl>::Result;
-  accepted = 0;
-  if (slot >= offband::kSlotCount) return (uint8_t)Res::BadSlot;
-
-  const Res r = _slot_push.feed(slot, offset, more, bytes, len);
-  accepted = (uint8_t)_slot_push.length();
-  if (r != Res::Complete) return (uint8_t)r;
-
-  // Committed. The SAME store call a typed tune goes through, so the same validator and
-  // the same refusals apply -- an empty string clears the slot, which is how a client
-  // deletes one without a third sub-code.
-  const bool ok = offband::saveSlotRtttl(the_mesh.dataStore(), slot, _slot_push.text());
-  _slot_push.reset();
-  accepted = 0;
-  // A store refusal is reported as a bad byte rather than invented as a new code: the
-  // only ways saveSlotRtttl says no are a string the validator rejects, one over the
-  // length, or a write that failed -- and the client's remedy for all three is the same,
-  // which is to look at what it sent.
-  return ok ? (uint8_t)Res::Complete : (uint8_t)Res::BadByte;
-}
-
-bool UITask::readTuneSlot(uint8_t slot, uint8_t& len, char* name, size_t name_cap) {
-  len = 0;
-  if (name != nullptr && name_cap > 0) name[0] = 0;
-  if (slot >= offband::kSlotCount) return false;
-  // Through the CALLER's buffer, never the playback stage: answering a client query must
-  // not disturb a tune that is sounding.
-  char tune[offband::kMaxRtttl + 1];
-  const size_t n = offband::readSlotRtttl(the_mesh.dataStore(), slot, tune, sizeof(tune));
-  len = (uint8_t)(n > 255 ? 255 : n);
-  if (n > 0 && name != nullptr) offband::deriveSlotName(tune, name, name_cap);
-  return true;
-}
-#endif
-
+#if UI_HAS_CARDKB
 void UITask::gotoRtttlEdit(uint8_t slot_index) {
   ((RtttlEditScreen*)rtttl_edit)->begin(slot_index);
   setCurrScreen(rtttl_edit);
 }
+#endif
 
 void UITask::gotoCustomTunes() {
   ((CustomTunesScreen*)custom_tunes)->begin();
@@ -970,50 +933,6 @@ void UITask::leaveTonePicker() {
   gotoTones();
 }
 
-bool UITask::playTriggerTune() {
-  // One call into the resolver that already knows how to find the id, honour quiet and
-  // MUTE, and refuse politely. Nothing here duplicates any of that.
-  const offband::TonePlay r =
-      playTuneById(offband::kTuneTrigger, offband::TonePriority::Trigger);
-  return r == offband::TonePlay::Played;
-}
-
-offband::TonePlay UITask::playTuneById(uint8_t id, offband::TonePriority priority) {
-  // Silent is a CHOICE: it sounds like nothing and that is success.
-  if (id == offband::kTuneSilent) return offband::TonePlay::Played;
-  // #1475: a custom slot. Asked BEFORE reading the file, because staging overwrites the
-  // one buffer the player may still be walking -- if play() refused after the read, the
-  // tune still sounding would be left pointing at the new tune's bytes. The pre-check is
-  // not a second copy of the priority rule; it is the same rule, queried.
-  if (offband::isSlotId(id)) {
-    if (!buzzer.wouldTake(priority)) return offband::TonePlay::RefusedBusy;
-    // Stop BEFORE staging. wouldTake() has already said this request takes the buzzer,
-    // so stopping costs nothing -- and it closes the one window review found that is
-    // actually reachable: stageSlotForPlayback writes into the shared buffer as it reads
-    // the file and only validates afterwards, so a corrupt slot overwrites the buffer and
-    // then returns nullptr with no play() call. Without this, a tune already sounding
-    // would be left walking those bytes.
-    buzzer.stop();
-    const char* staged =
-        offband::stageSlotForPlayback(the_mesh.dataStore(), offband::slotIndex(id));
-    // An empty slot, a slot whose file will not read, or one holding a string the
-    // validator refuses. All three are "this id resolves to nothing", which is what
-    // NotFound means; the picker folds it back to Played and a trigger does not.
-    if (staged == nullptr) return offband::TonePlay::NotFound;
-    // No loop() runs between the stage above and the play below, so the player never
-    // reads a half-written buffer. That is the invariant, not the stop.
-    return buzzer.play(staged, priority);
-  }
-  const char* melody = offband::tuneRtttl(id);
-  // Anything else with no melody is an id this build cannot resolve -- past the table
-  // after a downgrade, or a slot id from a build with more slots. A remote trigger needs
-  // to tell that apart from "played", because for it the badge making no noise is a
-  // failure it may want to report. The picker does not care, so previewTune() folds it.
-  if (melody == nullptr) return offband::TonePlay::NotFound;
-  return buzzer.play(melody, priority);
-}
-
-void UITask::stopTune() { buzzer.stop(); }
 #endif
 
 int UITask::renderStatusAs(DisplayDriver& d, const char* title, int pos) {
@@ -1099,20 +1018,6 @@ static bool toneEventFor(UIEventType t, offband::ToneEvent& out) {
 // same safe behavior rather than on silence.
 #endif
 
-#if UI_HAS_CARDKB && defined(PIN_BUZZER)
-// #1524: which tune a message on `channel_idx` plays -- the channel's own choice, else
-// the global Channel tune that every channel message has always used. A channel that has
-// chosen nothing, and a channel_idx that does not resolve, both land on exactly what this
-// board played before the feature existed.
-static uint8_t channelTuneIdFor(NodePrefs* prefs, uint8_t channel_idx) {
-  const uint8_t inherited =
-      offband::effectiveTone(prefs, offband::ToneEvent::ChannelMessage);
-  ChannelDetails ch;
-  if (!the_mesh.getChannel(channel_idx, ch)) return inherited;
-  return offband::resolveChannelTune(ch.tune, inherited);
-}
-#endif
-
 // Trigger vibration for all UI events except none.
 //
 // #1419: `sent` is excluded. Vibration is feedback for something that ARRIVED; a send
@@ -1136,28 +1041,12 @@ static void vibrateFor(UIEventType t) {
 }
 
 #if defined(PIN_BUZZER)
-// #1549: one way to turn a tune id into sound, for every event.
-//
-// This replaces a direct offband::tuneRtttl() lookup that could only play the builtin
-// table. Once a custom slot became selectable (#1413), picking one for an event stored an
-// id past that table, the lookup returned nullptr, and the event went SILENT -- while the
-// picker's own audition played it, because the audition had always gone through
-// playTuneById. One resolver for both paths is the fix and the point: a third kind of
-// tune cannot now reach one path and not the other.
-void UITask::playEventTune(uint8_t id) {
-#if UI_HAS_CARDKB
-  // Slots exist on this board, so the id may name a file rather than a table entry.
-  // playTuneById is the only resolver that knows how, and it carries the
-  // stop-before-staging ordering that makes slot playback safe (#1437).
-  playTuneById(id, offband::TonePriority::Event);
-#else
-  // No keyboard means no slot store and no picker, so nothing can have stored an id past
-  // the table. The table lookup is the whole answer, and playTuneById is not compiled
-  // here (#1478's guard).
-  if (const char* melody = offband::tuneRtttl(id)) {
-    buzzer.play(melody, offband::TonePriority::Event);
-  }
-#endif
+bool UITask::playTriggerTune() {
+  // One call into the resolver that already knows how to find the id, honour quiet and
+  // MUTE, and refuse politely. Nothing here duplicates any of that.
+  const offband::TonePlay r =
+      playTuneById(offband::kTuneTrigger, offband::TonePriority::Trigger);
+  return r == offband::TonePlay::Played;
 }
 #endif
 
@@ -1165,22 +1054,25 @@ void UITask::notify(UIEventType t) {
 #if defined(PIN_BUZZER)
   // #1418/#1419/#1420: the tone is looked up, not written here. The id comes from the
   // stored pref, falling back to this board's compiled default when nothing has been
-  // chosen -- so an un-configured badge plays what it always did, and a deliberately
-  // silenced event stays silent.
+  // chosen -- so an un-configured board plays what it always did, and a deliberately
+  // silenced event stays silent. #1549: through the one resolver that also plays slots,
+  // so a third kind of tune cannot reach the audition and not the event.
   offband::ToneEvent ev;
-  if (toneEventFor(t, ev)) playEventTune(offband::effectiveTone(_node_prefs, ev));
+  if (toneEventFor(t, ev)) _tones.playEvent(ev);
 #endif
   vibrateFor(t);
 }
 
-// #1524: a channel message, resolved against the channel it arrived on.
+// #1524: a channel message, resolved against the channel it arrived on -- the channel's
+// own tune, else the global Channel tune. #1788: on every board with a buzzer, since a
+// client can set a channel's tune whether or not the board has a screen that does.
 void UITask::notifyChannel(uint8_t channel_idx) {
-#if UI_HAS_CARDKB && defined(PIN_BUZZER)
-  playEventTune(channelTuneIdFor(_node_prefs, channel_idx));
+#if defined(PIN_BUZZER)
+  ChannelDetails ch;
+  _tones.playChannel(the_mesh.getChannel(channel_idx, ch) ? ch.tune
+                                                          : offband::kChannelTuneUnset);
   vibrateFor(UIEventType::channelMessage);
 #else
-  // Nothing on this board can set a per-channel tune -- the screen that does is the
-  // badge's -- so it keeps the base class's behaviour exactly, by calling it.
   (void)channel_idx;
   notify(UIEventType::channelMessage);
 #endif
@@ -1189,7 +1081,7 @@ void UITask::notifyChannel(uint8_t channel_idx) {
 
 void UITask::msgRead(int msgcount) {
   _msgcount = msgcount;
-#if !UI_HAS_CARDKB
+#if !OFFBAND_SCREEN_UI
   // #1230: on the badge the phone catching up is no reason to leave what's on screen.
   if (msgcount == 0) {
     gotoHomeScreen();
@@ -1200,7 +1092,7 @@ void UITask::msgRead(int msgcount) {
 void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) {
   _msgcount = msgcount;
 
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
   // #1230: the message is already in the badge store. Its row jumps to the top of the
   // inbox and flashes; nothing takes the screen away (design 1a, "no lost keystrokes").
   ((InboxScreen*)home)->flash();
@@ -1377,7 +1269,7 @@ void UITask::setCurrScreen(UIScreen* c) {
   else if (c == nullptr)        to   = "NULL";
   offband::crashLogf("[ui] setCurrScreen %s -> %s", from, to);
 #endif
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
   // #1230: a thread off screen isn't being read. It marks itself open when it draws.
   the_mesh.badgeStore().setOpen(-1);
 #endif
@@ -1537,16 +1429,19 @@ void UITask::loop() {
     // it goes up one level instead: the device pages, the zone picker (#1233) and the
     // GPS (#1235) to Settings, and Settings to Status, where it was opened.
     if (!curr->handleInput(c) && keynav::backsOut((uint8_t)c) && curr != home) {
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
 #ifdef PIN_BUZZER
       // #1421: the picker is one level deeper than the rest, so Esc from it goes to
       // Tones rather than all the way out. Without this it would land on Home, because
       // the fallback below is the default for any screen not named here.
+#if UI_HAS_CARDKB
       if (curr == rtttl_edit) gotoCustomTunes();
+      else
+#endif
       // #1525: the picker now serves conversations too, and one opened from a
       // conversation has to go back to it -- landing in Settings would strand someone
       // three levels from what they were reading.
-      else if (curr == tone_picker) leaveTonePicker();
+      if (curr == tone_picker) leaveTonePicker();
       else if (curr == custom_tunes) gotoTones();
       else
 #endif
@@ -1620,7 +1515,7 @@ void UITask::loop() {
     // millis() wraps, which would have left the display lit for another seven weeks.
     if (_disp_mode == 2 || (!_always_on && (long)(millis() - _auto_off) > 0)) {
       _display->turnOff();
-#if UI_HAS_CARDKB
+#if OFFBAND_SCREEN_UI
       the_mesh.badgeStore().setOpen(-1);   // #1230: a dark thread isn't being read
 #endif
     }
@@ -1794,6 +1689,68 @@ void UITask::setAutoOffSecs(uint16_t secs) {
   _node_prefs->ui_screen_secs = secs;
   _auto_off = millis() + autoOffMillis();   // the running timer follows the new value
 }
+
+#if OFFBAND_SCREEN_UI
+// #1788: the client's view of the screen settings, and its writes. Each write goes
+// through the same setter and the same rule as the screen that owns the setting, and
+// saves at once -- the screens save after a settle because a press walks a value round;
+// a client sends the one value it wants.
+bool UITask::clientScreenSettings(ScreenSettings& out) {
+  if (_node_prefs == NULL) return false;
+  out.nav_text = _node_prefs->ui_text_size;
+  out.msg_text = _node_prefs->ui_msg_text_size;
+  out.screen_stored = _node_prefs->ui_screen_secs;
+  out.screen_secs = autoOffSecs();
+  out.tz = _node_prefs->ui_tz;
+  out.batt_stored = _node_prefs->batt_full_mv;
+  out.batt_full = battFullMilliVolts();
+  out.batt_pinned = battFullIsUserSet() ? 1 : 0;
+  return true;
+}
+
+bool UITask::clientSetTextSize(bool message, uint8_t size) {
+  if (_node_prefs == NULL || !badgeui::isTextSize(size)) return false;
+  uint8_t& field = message ? _node_prefs->ui_msg_text_size : _node_prefs->ui_text_size;
+  if (field != size) {
+    field = size;
+    the_mesh.savePrefs();
+  }
+  _next_refresh = 100;   // redraw in the new size now, not at the next tick
+  return true;
+}
+
+bool UITask::clientSetScreenOff(uint16_t secs) {
+  if (_node_prefs == NULL || !badgeui::isScreenOffStep(secs)) return false;
+  const bool changed = _node_prefs->ui_screen_secs != secs;
+  setAutoOffSecs(secs);
+  if (changed) the_mesh.savePrefs();
+  return true;
+}
+
+bool UITask::clientSetTimeZone(uint8_t tz) {
+  if (_node_prefs == NULL || !offband::tz::isStorable(tz)) return false;
+  if (_node_prefs->ui_tz != tz) {
+    _node_prefs->ui_tz = tz;
+    the_mesh.savePrefs();
+  }
+  _next_refresh = 100;
+  return true;
+}
+
+// The Battery screen's "Set 100% here": the smoothed reading, through the same plausibility
+// band, with the same two refusals the screen shows.
+uint8_t UITask::clientPinBattFull() {
+  const uint16_t mv = smoothedBattMilliVolts();
+  if (setBattFullMilliVolts(mv)) return 0;
+  return mv > offband::FullPointLearner::kCeilMv ? 1 : 2;
+}
+
+bool UITask::clientClearBattFull() {
+  if (_node_prefs == NULL) return false;
+  clearBattFullMilliVolts();
+  return true;
+}
+#endif
 
 char UITask::checkDisplayOn(char c) {
   if (_display != NULL) {

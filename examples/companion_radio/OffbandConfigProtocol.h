@@ -109,8 +109,8 @@ constexpr uint8_t OFFBAND_UI_DISPLAY_SET = 0x06;  // [0xC5][0x06][mode] -> echo
 constexpr uint8_t OFFBAND_UI_LED_GET     = 0x07;  // -> [0xC5][0x07][on]
 constexpr uint8_t OFFBAND_UI_LED_SET     = 0x08;  // [0xC5][0x08][on]   -> echo
 
-// #1478: the eight custom tune slots. Gated on the buzzer capability, like the scope
-// sub-codes -- a board with no buzzer has no slots. Allocated 2026-10-16 after checking
+// #1478: the eight custom tune slots. Gated on OFFBAND_CAP2_TUNES (#1788) -- a board
+// whose UI does not play through the tune engine has no slots to fill. Allocated 2026-10-16 after checking
 // every live branch: 0x01-0x08 were taken on all of them and 0x7F is the error code.
 //
 // SLOT_GET  [0xC5][0x09][slot]
@@ -154,19 +154,66 @@ constexpr uint8_t OFFBAND_UI_LED_SET     = 0x08;  // [0xC5][0x08][on]   -> echo
 constexpr uint8_t OFFBAND_UI_SLOT_GET    = 0x09;
 constexpr uint8_t OFFBAND_UI_SLOT_SET    = 0x0A;
 
-// #1788: settings a keyboardless badge has a screen for but a client could not reach.
-// Allocated 2026-10-23 after checking every live branch: 0x01-0x0A taken, 0x0B+ free.
+// #1788: every setting a board's own screens can make, reachable from a client -- so a
+// board with no keyboard, or no screen at all, can still be configured. Allocated
+// 2026-10-23..25 after checking every live branch: 0x01-0x0A taken, 0x0B+ free.
+//
+// "The picker's rule", below, means: a builtin the picker names, or a custom slot that
+// holds a tune. The picker skips the rest, so the wire refuses them.
+//
+// TUNES -- all gated on OFFBAND_CAP2_TUNES. SLOT_GET/SLOT_SET above are part of it too.
 //
 // CHTUNE_GET  [0xC5][0x0B][ch]          -> [0xC5][0x0B][ch][stored]
 // CHTUNE_SET  [0xC5][0x0C][ch][stored]  -> [0xC5][0x0C][ch][stored]
 //
 //   One channel's own tune (#1789), in the byte as /channels2 stores it: 0 = Default
-//   (inherit the global channel tune), otherwise tune id + 1. The SET accepts exactly the
-//   ids the badge's own conversation picker offers -- Default, the named builtins and the
-//   custom slots -- and refuses anything else with ERR_MALFORMED; the device never stores
-//   some other tune in place of the one asked for. An empty or out-of-range channel is
-//   ERR_MALFORMED too. Gated on the buzzer, like the slots: no buzzer, no tunes.
-//   Gated on OFFBAND_CAP2_CHANNEL_TUNE.
+//   (inherit the global channel tune), otherwise tune id + 1. The SET accepts Default or
+//   an id meeting the picker's rule, and refuses anything else with ERR_MALFORMED; the
+//   device never stores some other tune in place of the one asked for. An empty or
+//   out-of-range channel is ERR_MALFORMED too. The reply is re-read after the write.
+//
+// EVTONE_GET  [0xC5][0x0F][ev]          -> [0xC5][0x0F][ev][stored][effective]
+// EVTONE_SET  [0xC5][0x10][ev][id]      -> [0xC5][0x10][ev][stored][effective]
+//
+//   One event's tune, as the Tones screen sets it. ev: 0 DM, 1 channel, 2 room, 3 new
+//   contact, 4 ack, 5 sent (offband::ToneEvent). stored: the raw id, 0xFF = nothing chosen
+//   (the board's compiled default plays). effective: the id that actually plays. The SET
+//   takes a raw tune id -- NOT id + 1 -- meeting the picker's rule; the event picker has no
+//   Default row, so 0xFF is refused like any other id it does not list.
+//
+// TUNE_PLAY   [0xC5][0x11][id]          -> [0xC5][0x11][id][result]
+//
+//   An audition, at preview priority so it never cuts off a notification. id must meet
+//   the picker's rule. result: 0 played, 1 refused because something more important is
+//   sounding, 2 refused because sound is off (offband::TonePlay).
+//
+// SLOT_READ   [0xC5][0x12][slot][offset]
+//          -> [0xC5][0x12][slot][offset][more][bytes...]
+//
+//   A slot's whole tune, in chunks, so a client can edit it rather than only replace it.
+//   Start at offset 0 and ask again at offset + bytes while more = 1. Chunk size follows
+//   the transport (maxFramePayload). An empty slot answers more = 0 and no bytes; an
+//   offset past the end is ERR_MALFORMED.
+//
+// SCREEN SETTINGS -- all gated on OFFBAND_CAP2_SCREEN_SETTINGS.
+//
+// SCREEN_GET  [0xC5][0x13]
+// TEXT_SET    [0xC5][0x14][which][size]       which: 0 navigation, 1 messages
+// SCROFF_SET  [0xC5][0x15][secs:2 LE]
+// TZ_SET      [0xC5][0x16][tz]
+// BATT_SET    [0xC5][0x17][action]            action: 0 back to auto, 1 set 100% here
+//   all -> [0xC5][sub][nav][msg][scr_stored:2][scr_secs:2][tz]
+//          [batt_stored:2][batt_full:2][batt_pinned]                      (14 bytes)
+//
+//   nav, msg: 0 large, 1 medium, 2 small. scr_stored: the Screen off pref in seconds, 0 =
+//   the board's compiled timeout; scr_secs: what the display actually waits. A SET takes
+//   only the steps the Screen off row offers (15, 30, 60, 120, 300). tz: an index into
+//   src/helpers/TimeZones.h (append-only, 0 = not set, shows ages). batt_stored: the full
+//   point in mV, 0 = nothing learned or pinned; batt_full: the mV the bar treats as 100%;
+//   batt_pinned: 1 when set by hand, which auto-learn leaves alone. BATT_SET 1 pins the
+//   CURRENT reading, as the Battery screen does, and is refused with ERR_BATT_TOO_HIGH or
+//   ERR_BATT_NOT_CHARGED when that reading is not a plausible full cell. Every reply is
+//   the whole set, re-read after the write; a refused value is ERR_MALFORMED.
 //
 // GPS_GET  [0xC5][0x0D]
 // GPS_SET  [0xC5][0x0E][mode][interval_s:4 LE]
@@ -190,6 +237,15 @@ constexpr uint8_t OFFBAND_UI_CHTUNE_GET  = 0x0B;
 constexpr uint8_t OFFBAND_UI_CHTUNE_SET  = 0x0C;
 constexpr uint8_t OFFBAND_UI_GPS_GET     = 0x0D;
 constexpr uint8_t OFFBAND_UI_GPS_SET     = 0x0E;
+constexpr uint8_t OFFBAND_UI_EVTONE_GET  = 0x0F;
+constexpr uint8_t OFFBAND_UI_EVTONE_SET  = 0x10;
+constexpr uint8_t OFFBAND_UI_TUNE_PLAY   = 0x11;
+constexpr uint8_t OFFBAND_UI_SLOT_READ   = 0x12;
+constexpr uint8_t OFFBAND_UI_SCREEN_GET  = 0x13;
+constexpr uint8_t OFFBAND_UI_TEXT_SET    = 0x14;
+constexpr uint8_t OFFBAND_UI_SCROFF_SET  = 0x15;
+constexpr uint8_t OFFBAND_UI_TZ_SET      = 0x16;
+constexpr uint8_t OFFBAND_UI_BATT_SET    = 0x17;
 
 // === 0xC6 PACKET-HASH QUERY -- CANONICAL WIRE CONTRACT (#611) =================
 // FIRMWARE OWNS THIS CONTRACT (same discipline as 0xC5). Agreed with the client
@@ -259,6 +315,9 @@ constexpr uint8_t OFFBAND_UI_ERR_UNSUPPORTED_INDICATOR = 6;  // #542 B1: no cont
 // device got to -- which review was right to call out as leaving it stuck with no remedy
 // but a blind restart.
 constexpr uint8_t OFFBAND_UI_ERR_SLOT_OFFSET           = 7;
+// #1788: BATT_SET's "set 100% here" refused, the two ways the Battery screen refuses it.
+constexpr uint8_t OFFBAND_UI_ERR_BATT_TOO_HIGH         = 8;   // reading above a full cell
+constexpr uint8_t OFFBAND_UI_ERR_BATT_NOT_CHARGED      = 9;   // reading below a full cell
 constexpr uint8_t CMD_OFFBAND_CONFIG       = 0xC0;  // request:  cmd_frame[0]
 constexpr uint8_t RESP_CODE_OFFBAND_CONFIG = 0xC0;  // response: out_frame[0]
 
@@ -365,9 +424,10 @@ enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUT
 //    1   0x02   OFFBAND_CAP2_BUTTON_MATRIX    this change  #509
 //    2   0x04   OFFBAND_CAP2_INDICATORS      this change  #542
 //    3   0x08   OFFBAND_CAP2_PKT_HASH         this change  #611
-//    4   0x10   OFFBAND_CAP2_CHANNEL_TUNE     this change  #1789
+//    4   0x10   OFFBAND_CAP2_TUNES            this change  #1788 / #1789
 //    5   0x20   OFFBAND_CAP2_GPS_MODE         this change  #1791
-//    6-7 0x40.. -- free --
+//    6   0x40   OFFBAND_CAP2_SCREEN_SETTINGS  this change  #1788
+//    7   0x80   -- free --  (last byte-2 bit: HEADROOM, do not spend casually)
 // ===============================================================================
 // bit 0 (0x01): device notification scope ALL/SELF/NONE is supported and settable.
 // Set only where the device can actually make a sound -- gated on PIN_BUZZER, exactly
@@ -388,13 +448,17 @@ constexpr uint8_t OFFBAND_CAP2_INDICATORS = 0x04;
 // needs no hardware, only the send path. A client that does not see this bit (or sees
 // FIRMWARE_VER_CODE < 22) must never emit 0xC6.
 constexpr uint8_t OFFBAND_CAP2_PKT_HASH = 0x08;
-// bit 4 (0x10): a channel's own tune is readable and settable over 0xC5 CHTUNE (#1789).
-// Gated on PIN_BUZZER -- a tune needs something to play it.
-constexpr uint8_t OFFBAND_CAP2_CHANNEL_TUNE = 0x10;
+// bit 4 (0x10): tunes -- SLOT_GET/SET/READ, CHTUNE, EVTONE, TUNE_PLAY (#1788). Set where
+// the UI plays every sound through the tune engine (AbstractUITask::toneEngine()), which needs
+// a buzzer but is not implied by one: a UI still playing fixed melodies does not set it.
+constexpr uint8_t OFFBAND_CAP2_TUNES = 0x10;
 // bit 5 (0x20): GPS mode and the Power-save interval are readable and settable over 0xC5
 // GPS (#1791). Gated on GPS being built in (ENV_INCLUDE_GPS == 1). Whether Power save
 // itself is available is the GET's ps_ok byte, not a second bit.
 constexpr uint8_t OFFBAND_CAP2_GPS_MODE = 0x20;
+// bit 6 (0x40): screen settings -- SCREEN_GET, TEXT_SET, SCROFF_SET, TZ_SET, BATT_SET
+// (#1788). Set where the UI's screens honor them (AbstractUITask::clientScreenSettings()).
+constexpr uint8_t OFFBAND_CAP2_SCREEN_SETTINGS = 0x40;
 constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: config backend (wifi_observer) compiled in
 constexpr uint8_t OFFBAND_CAP_BLOCK         = 0x02;  // bit 1: user-block list (BlockStore) compiled in (#241)
 constexpr uint8_t OFFBAND_CAP_FEM_LNA       = 0x04;  // bit 2: FEM LNA runtime control available (#298)

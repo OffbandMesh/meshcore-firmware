@@ -1,8 +1,8 @@
 #pragma once
 
-// #1474: reading and writing the eight custom tune slots. Badge-scoped: this header is
-// included only by the badge's screens, so the other ~60 variants neither compile it nor
-// pay for it.
+// #1474: reading and writing the eight custom tune slots. #1788: a buzzer feature, not a
+// badge one -- included by ToneEngine.h under PIN_BUZZER, so a board without a buzzer
+// neither compiles it nor pays for it.
 //
 // THE STAGING BUFFER, AND WHY IT EXISTS.
 //
@@ -53,7 +53,7 @@
 
 #include <helpers/ui/TuneSlots.h>
 
-#include "../DataStore.h"
+#include "DataStore.h"
 
 namespace offband {
 

@@ -63,6 +63,8 @@ constexpr int kNotSet = 0, kUtc = 1, kEastern = 2, kCentral = 3, kMountain = 4, 
               kPacific = 6, kAlaska = 7, kHawaii = 8, kUk = 9, kCentralEu = 10, kEasternEu = 11;
 
 inline bool isSet(int index) { return index > 0 && index < kZoneCount; }
+// #1788: an index the zone picker can store -- every row it lists, "not set" included.
+inline bool isStorable(int index) { return index >= 0 && index < kZoneCount; }
 inline const Zone& zone(int index) { return kZones[isSet(index) ? index : 0]; }
 
 // The fixed-offset zone for an offset in minutes, or kNotSet when there's none.
