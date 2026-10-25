@@ -267,6 +267,13 @@ jobs:
       - name: QCC badge call-site guards
         run: python scripts/test_qcc_call_sites.py
 
+      # #1753 (Epic #1752). Every role's path-hash default must come from the one shared
+      # constant. test/test_path_hash_mode pins the constant at 2-byte but cannot read the
+      # two prefs structs without Arduino, so a struct reverted to `= 0` would pass every
+      # native test. This source check is what catches that. BLOCKS.
+      - name: Every role's path-hash default comes from the shared constant
+        run: python scripts/test_path_hash_default.py
+
       # #1641: the assessment logic of the rig boot smoke test.
       #
       # The smoke test's hardware RUN cannot be in CI -- it needs the sniffer rig and a
