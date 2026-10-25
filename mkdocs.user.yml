@@ -24,6 +24,8 @@ theme:
     - search.suggest
 plugins:
   - search
+markdown_extensions:
+  - pymdownx.superfences
 validation:
   nav:
     omitted_files: warn

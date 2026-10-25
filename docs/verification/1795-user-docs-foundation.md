@@ -8,7 +8,7 @@ CI uses Python 3.12; its result is reported separately on the Epic PR.
 |---|---|
 | Validator regression suite | 31 tests passed, including negative metadata, role/board/release, evidence, paths, symlinks, HTML navigation, private examples and impact decisions. |
 | Strict standalone build | Passed with mkdocs.user.yml and pinned direct dependencies. |
-| Rendered publication suite | 5 tests passed: manual/guide HTML, firmware source edit URL, WiFi search result, no external font request, and exclusion of catalog metadata plus synthetic internal canaries. |
+| Rendered publication suite | 6 tests passed: manual/guide HTML, exact command blocks in numbered steps without language-label prefixes, firmware source edit URL, WiFi search result, no external font request, and exclusion of catalog metadata plus synthetic internal canaries. |
 | Existing firmware classifier | 64 checks passed; no classifier or matrix changes. |
 | Whitespace check | Passed. |
 | Fresh whole-tree code review | Found an HTML-navigation bypass. Four negative cases failed before the parser restriction and pass after it; fenced HTML examples remain non-navigation. |
