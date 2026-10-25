@@ -339,13 +339,18 @@ def test_a_fresh_badge_must_be_named_from_its_ble_mac():
     ini = (ROOT / "variants" / "qcc_badge" / "platformio.ini").read_text()
     exp = expected_from_env(ini, "QCC_Badge_companion_radio_ble_diag", fresh_badge=True)
     exp["sha"] = "7a312de"
-    assert exp["name_prefix"] == "QCC", exp
-    assert exp["name_hex_chars"] == 5, exp
+    assert exp["name_prefix"] == "QCC-", exp
+    assert exp["name_hex_chars"] == 4, exp
 
-    # The shape a fresh badge should produce: prefix + 5 hex.
-    ok = RADIO_LINE.replace("name=Bench-Badge-A", "name=QCC1A2B3")
+    # The shape a fresh badge should produce: prefix + 4 hex (#1807).
+    ok = RADIO_LINE.replace("name=Bench-Badge-A", "name=QCC-A2B3")
     bad, _ = assess(parse_boot(capture(NRF_STAGES, radio_line=ok)), DECLARED, exp)
     assert not bad, bad
+
+    # The old five-character shape no longer passes as fresh.
+    old = RADIO_LINE.replace("name=Bench-Badge-A", "name=QCC1A2B3")
+    bad, _ = assess(parse_boot(capture(NRF_STAGES, radio_line=old)), DECLARED, exp)
+    assert bad, "QCC + 5 hex must not pass for the QCC- + 4 format"
 
     # The failure that matters: the FICR read failed and it fell through to pubkey hex.
     fell_through = RADIO_LINE.replace("name=Bench-Badge-A", "name=51205463")
@@ -359,7 +364,7 @@ def test_a_fresh_badge_must_be_named_from_its_ble_mac():
 
 def test_a_missing_node_name_is_caught_when_it_was_asserted():
     for exp in (dict(EXPECTED, name="Bench-Badge-A"),
-                dict(EXPECTED, name_prefix="QCC", name_hex_chars=5)):
+                dict(EXPECTED, name_prefix="QCC-", name_hex_chars=4)):
         bad, _ = assess(parse_boot(capture(NRF_STAGES, radio_line=None)), DECLARED, exp)
         assert any("no node name" in b for b in bad), bad
 

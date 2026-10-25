@@ -171,9 +171,20 @@ TEST(NodeName, TheQccWrapperAppliesBothConstants) {
   // So the two numbers live in one place rather than at each call site.
   char out[32];
   ASSERT_TRUE(formatQccNodeName(out, sizeof(out), kMac, sizeof(kMac)));
-  EXPECT_STREQ("QCC89ABC", out);
-  EXPECT_STREQ("QCC", kQccNamePrefix);
-  EXPECT_EQ(5u, kQccNameMacChars);
+  EXPECT_STREQ("QCC-9ABC", out);
+  EXPECT_STREQ("QCC-", kQccNamePrefix);
+  EXPECT_EQ(4u, kQccNameMacChars);
+}
+
+// #1807: the badge label carries the last 4 of the MAC, so the name has to end in exactly
+// those 4, uppercase, after a hyphen -- and keep the 8-character width.
+TEST(NodeName, TheBadgeNameIsTheLabelsLastFourAfterAHyphen) {
+  char out[32];
+  ASSERT_TRUE(formatQccNodeName(out, sizeof(out), kMac, sizeof(kMac)));
+  EXPECT_EQ(8u, std::strlen(out));
+  EXPECT_EQ('-', out[3]);
+  EXPECT_STREQ("9ABC", out + 4) << "must be the LAST four hex characters of the MAC";
+  EXPECT_STRNE("QCC89ABC", out) << "the five-character form is the one the labels don't match";
 }
 
 TEST(NodeName, ItFitsThePrefsField) {

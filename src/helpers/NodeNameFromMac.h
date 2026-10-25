@@ -18,9 +18,12 @@
 
 namespace offband {
 
-// The owner's format: "QCC" + the last 5 hex characters of the BLE MAC, 8 characters total.
-constexpr const char* kQccNamePrefix = "QCC";
-constexpr size_t kQccNameMacChars = 5;
+// The badge's format: "QCC-" + the last 4 hex characters of the BLE MAC, 8 characters
+// total. #1807: 4 rather than 5 because the badge labels carry the last 4 of the MAC, and
+// the hyphen keeps the width the pubkey-hex default had. The badge env sets the same two
+// values as OFFBAND_NAME_FROM_BLE_MAC / _CHARS; test_qcc_badge_env.py holds them equal.
+constexpr const char* kQccNamePrefix = "QCC-";
+constexpr size_t kQccNameMacChars = 4;
 
 // BLE addresses are six bytes, twelve hex characters as displayed.
 constexpr size_t kBleMacBytes = 6;
