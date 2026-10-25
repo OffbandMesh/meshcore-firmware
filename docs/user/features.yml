@@ -1,0 +1,65 @@
+schema_version: 1
+features:
+  - id: observer-wifi
+    title: Connect an observer to WiFi
+    coverage: documented
+    guide: guides/observer-wifi.md
+    roles: [companion-observer]
+    boards: [heltec_v3, heltec_v4, xiao_s3_wio]
+    availability:
+      channel: stable
+      verified_releases: [offband-v1.4.0]
+    verification: Source-checked against current implementation and v1.4.0; no new hardware trial.
+    evidence:
+      - path: src/helpers/config/WifiConfigProvider.cpp
+        contains: ['wifi.pwd is write-only', 'wifi.status = %s ip=%s', 'p.putString(field, value)', 'wifi.enabled = %d (reboot to apply)']
+      - path: src/helpers/wifi_observer/WifiBootstrap.cpp
+        contains: ['prefs.getBool("enabled", true)', 'WiFi.begin(ssid.c_str(), pwd.c_str())']
+      - path: src/helpers/wifi_observer/SystemChannelCli.h
+        contains: ['_sys @ <8hex>', 'no shell escapes']
+      - path: variants/heltec_v4/platformio.ini
+        contains: ['[env:heltec_v4_companion_observer_wifi]', '[env:heltec_v4_tft_companion_observer_wifi]']
+      - path: variants/heltec_v3/platformio.ini
+        contains: ['[env:Heltec_v3_companion_observer_wifi]']
+      - path: variants/xiao_s3_wio/platformio.ini
+        contains: ['[env:Xiao_S3_WIO_companion_observer_wifi]']
+  - id: observer-mqtt
+    title: Publish observer data to a broker
+    coverage: planned
+    roles: [companion-observer]
+    boards: [heltec_v3, heltec_v4, xiao_s3_wio]
+    availability: {channel: development, verified_releases: []}
+    verification: Existing reference requires task-oriented guide and release review in Epic D.
+    evidence:
+      - path: docs/observer-cli-commands.md
+        contains: ['MQTT broker pool']
+  - id: observer-location
+    title: Choose time, GPS and location sharing
+    coverage: needs-review
+    roles: [companion-observer]
+    boards: [heltec_v3, heltec_v4, xiao_s3_wio]
+    availability: {channel: development, verified_releases: []}
+    verification: Per-board GPS differences and release applicability need review before publication.
+    evidence:
+      - path: docs/observer-gps-location-config.md
+        contains: ['Recommended setups']
+  - id: safeboot
+    title: Understand the low-power boot guard
+    coverage: needs-review
+    roles: [companion-observer, repeater]
+    boards: [heltec_v3, heltec_v4]
+    availability: {channel: development, verified_releases: []}
+    verification: This bounded inventory is not a complete board-support declaration; guide review belongs to Epic D.
+    evidence:
+      - path: docs/safeboot.md
+        contains: ['When SafeBoot is for you']
+  - id: diagnostic-logs
+    title: Collect logs for support
+    coverage: needs-review
+    roles: [companion-observer, repeater]
+    boards: [heltec_v3, heltec_v4]
+    availability: {channel: development, verified_releases: []}
+    verification: Separate role-specific logging surfaces and public-safe examples before writing the guide.
+    evidence:
+      - path: docs/remote-diagnostics.md
+        contains: ['Troubleshooting']
