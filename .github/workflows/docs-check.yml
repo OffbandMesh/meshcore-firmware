@@ -1,0 +1,37 @@
+name: User documentation
+
+on:
+  pull_request:
+  push:
+    branches: [firmware-base]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docs-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install pinned documentation dependencies
+        run: python -m pip install -r requirements-docs.txt
+      - name: Validator positive and negative tests
+        run: python scripts/test_check_user_docs.py
+      - name: Check public manual and source evidence
+        run: python scripts/check_user_docs.py --catalog docs/user/features.yml --content-root docs/user
+      - name: Build standalone user manual
+        run: python -m mkdocs build --strict --config-file mkdocs.user.yml
+      - name: Verify rendered publication boundary
+        run: python scripts/test_build_user_docs.py
+      - uses: actions/upload-artifact@v6
+        with:
+          name: firmware-user-manual
+          path: site-user/
+          if-no-files-found: error
+
+# Deliberately independent of ci.yml and its docs-only classifier. No publishing,
+# secrets, dispatch, or required-check/matrix changes are part of Epic A.

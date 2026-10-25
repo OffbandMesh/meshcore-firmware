@@ -1,0 +1,4 @@
+# Direct dependencies pinned for the independent user-manual build (Python 3.12 CI).
+mkdocs==1.6.1
+mkdocs-material==9.8.0
+PyYAML==6.0.3
