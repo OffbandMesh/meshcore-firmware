@@ -103,6 +103,18 @@ jobs:
       - name: Frame sizing goes through maxFramePayload(), not MAX_FRAME_SIZE arithmetic
         run: python scripts/check_frame_cap.py
 
+      # #1792 (Epic #1788). Every setting the Offband screens can write must be writable
+      # from a client too -- a board with no keyboard, or no screen, is configured from
+      # the app, and three such gaps were found by hand, late. The guard checks the
+      # client's actual write path, not a CLI binding: a binding is not a client path,
+      # which is how GPS mode went missing while looking covered. Both steps BLOCK; the
+      # self-test plants each failure and proves it trips.
+      - name: Client-reachable settings guard self-test
+        run: python scripts/test_check_client_reachable_settings.py
+
+      - name: Every setting the screens write is reachable from a client
+        run: python scripts/check_client_reachable_settings.py
+
       # #1601 (Feature #1599). The board matrix is larger than anyone can bench-test,
       # and base updates arrive carrying pin changes for boards nobody here owns. A pin
       # that collides with another on the same bus builds cleanly and does not work --
