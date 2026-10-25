@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build the real manual in isolation and verify output, links, search and canaries."""
 import json
+from html.parser import HTMLParser
 from pathlib import Path
 import shutil
 import subprocess
@@ -12,6 +13,26 @@ from check_user_docs import check_build_config, check_catalog, check_content
 
 ROOT = Path(__file__).resolve().parent.parent
 CANARY = 'PRIVATE-INTERNAL-CANARY-NOT-FOR-PUBLICATION-1795'
+
+
+class CodeBlocks(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.blocks = []
+        self.current = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'pre':
+            self.current = []
+
+    def handle_data(self, data):
+        if self.current is not None:
+            self.current.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == 'pre' and self.current is not None:
+            self.blocks.append(''.join(self.current).strip())
+            self.current = None
 
 
 class RenderedManualTests(unittest.TestCase):
@@ -44,6 +65,13 @@ class RenderedManualTests(unittest.TestCase):
         self.assertIn('Connect an observer to WiFi', guide)
         self.assertIn('StaConnected', guide)
         self.assertIn('hardware validation', guide)
+
+    def test_commands_in_numbered_steps_render_without_language_labels(self):
+        parser = CodeBlocks()
+        parser.feed((self.output / 'guides/observer-wifi/index.html').read_text(encoding='utf-8'))
+        expected = ['wifi status', 'set wifi.ssid <your-network-name>',
+                    'set wifi.pwd <your-password>', 'wifi enable', 'wifi status']
+        self.assertEqual(parser.blocks[:5], expected)
 
     def test_edit_links_target_firmware_user_sources(self):
         guide = (self.output / 'guides/observer-wifi/index.html').read_text(encoding='utf-8')

@@ -2,3 +2,4 @@
 mkdocs==1.6.1
 mkdocs-material==9.8.0
 PyYAML==6.0.3
+pymdown-extensions==12.3
