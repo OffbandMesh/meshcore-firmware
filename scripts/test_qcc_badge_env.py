@@ -10,7 +10,8 @@ Deleting any of them leaves CI green, the matrix green and the badge wrong.
                                          called "obnoxious"
     ON/OFF defaults stay 90/890          every OTHER nRF52 board's heartbeat moves,
                                          including the solar car companion it was sized for
-    OFFBAND_NAME_FROM_BLE_MAC == "QCC"   fresh badges fall back to pubkey-hex names
+    OFFBAND_NAME_FROM_BLE_MAC == "QCC-"  fresh badges fall back to pubkey-hex names
+    ..._CHARS == 4 (= the header)        the name stops matching the badge labels (#1807)
     OFFBAND_TUNE_TRIGGER badge-only      sixty other variants compile the trigger
     OFFBAND_NAME_MAC_VERIFY diag-only    the SHIPPING image prints the BLE address (#1635)
 
@@ -45,6 +46,19 @@ INI = QCC / "platformio.ini"
 VARIANT_H = QCC / "variant.h"
 NRF52 = ROOT / "src" / "helpers" / "NRF52Board.cpp"
 HB_TEST = ROOT / "test" / "test_heartbeat_cadence" / "test_heartbeat_cadence.cpp"
+NAME_HEADER = ROOT / "src" / "helpers" / "NodeNameFromMac.h"
+
+
+def _header_constant(pattern):
+    m = re.search(pattern, NAME_HEADER.read_text())
+    assert m, "cannot read %s from %s" % (pattern, NAME_HEADER)
+    return m.group(1)
+
+
+# The fresh-badge name format, read from the header the host tests exercise, so the env
+# and the tested constants cannot drift apart (#1807).
+NAME_PREFIX = _header_constant(r'kQccNamePrefix\s*=\s*"([^"]*)"')
+NAME_MAC_CHARS = int(_header_constant(r"kQccNameMacChars\s*=\s*(\d+)"))
 
 SHIPPING_ENV = "env:QCC_Badge_companion_radio_ble"
 DIAG_SECTION = "qcc_badge_diag"
@@ -215,13 +229,22 @@ def env_failures(ini_text, variant_text, nrf52_text, hb_test_text):
                 "against a number the firmware does not use -- which is exactly the state "
                 "this check exists to make impossible." % (const, in_test, what, actual))
 
-    # 4. The naming prefix.
+    # 4. The naming format: the env's two flags, and the header's two constants, agree.
+    #    #1807: "QCC-" + the last 4 of the MAC, matching the badge labels.
     prefix = flag(ship, "OFFBAND_NAME_FROM_BLE_MAC")
-    if prefix != "'\"QCC\"'":
+    want_prefix = "'\"%s\"'" % NAME_PREFIX
+    if prefix != want_prefix:
         bad.append(
-            "OFFBAND_NAME_FROM_BLE_MAC is %s, expected '\"QCC\"'. Without it a fresh badge "
-            "falls back to a pubkey-hex name, which is not the name in the owner's phone "
-            "pairing list (#1598)." % prefix)
+            "OFFBAND_NAME_FROM_BLE_MAC is %s, expected %s (NodeNameFromMac.h). Without it a "
+            "fresh badge falls back to a pubkey-hex name, which is not the name in the "
+            "owner's phone pairing list (#1598)." % (prefix, want_prefix))
+    chars = flag(ship, "OFFBAND_NAME_FROM_BLE_MAC_CHARS")
+    if chars != str(NAME_MAC_CHARS):
+        bad.append(
+            "OFFBAND_NAME_FROM_BLE_MAC_CHARS is %s, expected %d (NodeNameFromMac.h). The "
+            "badge labels carry the last %d hex characters of the MAC, so a different count "
+            "makes a badge harder to find against its label (#1807)."
+            % (chars, NAME_MAC_CHARS, NAME_MAC_CHARS))
 
     # 5. The trigger is badge-scoped. Sixty other variants build this companion role.
     if flag(ship, "OFFBAND_TUNE_TRIGGER") != "1":
@@ -332,7 +355,29 @@ def test_negative_a_vanished_test_constant_is_caught():
 def test_negative_a_dropped_naming_prefix_is_caught():
     _sanity()
     _fails_with("pubkey-hex name",
-                ini=_real()[0].replace("  -D OFFBAND_NAME_FROM_BLE_MAC='\"QCC\"'\n", ""))
+                ini=_real()[0].replace("  -D OFFBAND_NAME_FROM_BLE_MAC='\"QCC-\"'\n", ""))
+
+
+def test_negative_the_old_five_character_name_is_caught():
+    # #1807: the labels carry the last 4 of the MAC. Reverting to 5 must not pass quietly.
+    _sanity()
+    _fails_with("harder to find against its label",
+                ini=_real()[0].replace("  -D OFFBAND_NAME_FROM_BLE_MAC_CHARS=4\n",
+                                       "  -D OFFBAND_NAME_FROM_BLE_MAC_CHARS=5\n"))
+
+
+def test_negative_a_dropped_name_length_is_caught():
+    # Without the flag the firmware falls back to its own default of 5 (MyMesh.cpp).
+    _sanity()
+    _fails_with("harder to find against its label",
+                ini=_real()[0].replace("  -D OFFBAND_NAME_FROM_BLE_MAC_CHARS=4\n", ""))
+
+
+def test_negative_the_old_prefix_without_the_hyphen_is_caught():
+    _sanity()
+    _fails_with("pubkey-hex name",
+                ini=_real()[0].replace("OFFBAND_NAME_FROM_BLE_MAC='\"QCC-\"'",
+                                       "OFFBAND_NAME_FROM_BLE_MAC='\"QCC\"'"))
 
 
 def test_negative_a_badge_that_cannot_be_triggered_at_all_is_caught():
@@ -361,8 +406,8 @@ def test_negative_the_ble_address_print_returning_to_the_shipping_env_is_caught(
     # #1635, made self-enforcing. This is the mutation that proves it.
     _sanity()
     _fails_with("the SHIPPING env",
-                ini=_real()[0].replace("  -D OFFBAND_NAME_FROM_BLE_MAC='\"QCC\"'",
-                                       "  -D OFFBAND_NAME_FROM_BLE_MAC='\"QCC\"'\n"
+                ini=_real()[0].replace("  -D OFFBAND_NAME_FROM_BLE_MAC='\"QCC-\"'",
+                                       "  -D OFFBAND_NAME_FROM_BLE_MAC='\"QCC-\"'\n"
                                        "  -D OFFBAND_NAME_MAC_VERIFY=1"))
 
 
