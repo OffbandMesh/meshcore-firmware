@@ -153,3 +153,6 @@ docs/vendor/rak13302-tx-power-extract.md
 # they would write it, `git status` would say nothing, and it would never be committed.
 docs/radiocore/measurements/*.png
 docs/radiocore/measurements/plot_discharge_comparison.py
+
+# Reproducible standalone end-user documentation output.
+/site-user/
