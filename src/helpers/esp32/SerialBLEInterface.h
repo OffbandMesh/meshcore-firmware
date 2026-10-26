@@ -3,6 +3,9 @@
 #include "../BaseSerialInterface.h"
 #include "../BleFrameSizing.h"   // #711: testable ATT frame-sizing arithmetic
 #include <NimBLEDevice.h>
+#ifdef OFFBAND_BLE_TRACE
+  #include "../BleTrace.h"         // #1830: diag GUI builds only
+#endif
 
 // NimBLE merges security callbacks INTO NimBLEServerCallbacks (Bluedroid had
 // a separate BLESecurityCallbacks class). Inheritance reflects that merge.
@@ -27,6 +30,12 @@ class SerialBLEInterface : public BaseSerialInterface, NimBLEServerCallbacks, Ni
   // race costs at most one extra or missed line, never a dropped frame.
   volatile bool _recv_full_logged;
   volatile bool _send_full_logged;
+#ifdef OFFBAND_BLE_TRACE
+  // #1830: the advertising state, sampled once a second; each change is logged.
+  ble_trace::Transition _adv_trace;
+  unsigned long _adv_trace_at = 0;
+  void traceAdvState();
+#endif
 
   struct Frame {
     uint8_t len;
