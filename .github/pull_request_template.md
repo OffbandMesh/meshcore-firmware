@@ -31,6 +31,19 @@ invariant, and whose first draft test passed against the broken code.)
 Note: an LLM review is a second opinion, not a gate that can be trusted alone. The #454 review
 certified as "correct" the exact two things that later broke.
 
+## End-user documentation
+
+- Affected user journey(s), board/role/images and release applicability:
+- Guide owner and changed `docs/user/` paths:
+- Firmware-change impact record (`docs/changes/<issue>-<description>.yml`):
+- If `impact: none`, explain why commands, defaults, outputs and recovery are unchanged:
+- [ ] Instructions and expected replies checked against implementation/evidence
+- [ ] Hardware verification and any remaining unverified claims are stated accurately
+- [ ] Rendered manual reviewed; affected guides accompany this behavior change
+
+See `docs/documentation-workflow.md`. Documentation-only changes need no impact
+record. CI validates structure; reviewers judge correctness. Publishing is manual.
+
 ## Notes
 Anything a reviewer needs: risks, follow-ups filed, what is deliberately out of scope.
 
