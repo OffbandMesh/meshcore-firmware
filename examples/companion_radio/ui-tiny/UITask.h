@@ -57,10 +57,16 @@ class UITask : public AbstractUITask {
   unsigned long _analogue_pin_read_millis = millis();
 #endif
 
-  UIScreen* splash;
-  UIScreen* home;
+  // #973: initialized so "not allocated yet" and "allocation failed" are the same
+  // checkable value. `curr` was already set to NULL by the constructor body, so the
+  // initializer on it is belt and braces rather than a fix -- same as ui-new.
+  UIScreen* splash = nullptr;
+  UIScreen* home = nullptr;
   // UIScreen* msg_preview;
-  UIScreen* curr;
+  UIScreen* curr = nullptr;
+
+  // #973: set when a screen's `new` returned null during begin().
+  bool _screen_alloc_failed = false;
 
 
   void userLedHandler();

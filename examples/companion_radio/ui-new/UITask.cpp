@@ -8,13 +8,61 @@
 #include "helpers/diagnostics/CrashLog.h"   // #1075: the [shutdown] line
 #include "helpers/ui/OffbandSplash.h"
 #include <helpers/ui/KeyNav.h>
+#include <helpers/ui/ScreenName.h>   // #973: null-first screen labels for the trace
 #include <helpers/TxtDataHelpers.h>
 #include "../MyMesh.h"
 #include "target.h"
 #ifdef WIFI_SSID
   #include <WiFi.h>
 #endif
-#ifdef OFFBAND_OBSERVER
+// ---------------------------------------------------------------------------
+// #972: UI state-machine tracing.
+//
+// These crashLogf() call sites were gated on OFFBAND_OBSERVER. That flag implies
+// WiFi, and nRF52 has none -- so on RC52, RAK4631, T1000-E, Wio, T096 and XIAO the
+// tracing compiled out entirely. The instrument exists BECAUSE of a UI bug (see the
+// note above setCurrScreen: a SplashScreen <-> HomeScreen oscillation observed on
+// hv3-bench), so gating it on an unrelated radio capability made it unavailable on a
+// whole class of boards -- including the one whose silent UI failure became #973.
+//
+// Derived from both flags rather than moved onto OFFBAND_BOOT_BEACON directly:
+//   * observer boards keep it exactly as before -- no regression where it works today;
+//   * OFFBAND_BOOT_BEACON brings in the RadioCore _diag envs (RC32, RCC6, RC52 all
+//     set it), matching the standing rule that every env built during bring-up is a
+//     full diagnostic build;
+//   * the name says what it controls. OFFBAND_BOOT_BEACON is about BOOT; this is UI
+//     runtime tracing, and reusing that flag's name would mislead.
+//
+// crashLogf() itself is unconditional in CrashLog.h -- only the call sites were gated.
+// ---------------------------------------------------------------------------
+//
+// Guarded with #ifndef so an explicit -D on the build line wins instead of colliding:
+// without it, a board that sets OFFBAND_OBSERVER and also passes -D OFFBAND_UI_TRACE
+// gets a redefinition. The flag is private to this translation unit today -- nothing
+// else tests it -- so this is robustness, not a live fix.
+#if defined(OFFBAND_OBSERVER) || defined(OFFBAND_BOOT_BEACON)
+  #ifndef OFFBAND_UI_TRACE
+    #define OFFBAND_UI_TRACE 1
+  #endif
+#endif
+
+// The heap probe is gated SEPARATELY and is OFF by default, even on builds that have
+// the tracing above.
+//
+// The transition and allocation traces are a handful of crashLogf() calls. The probe
+// is a different class of thing: it calls malloc in a loop on the boot path. Folding
+// it into OFFBAND_UI_TRACE would drag that cost onto every RadioCore _diag build to
+// answer a question almost none of them are asking.
+//
+// Turn it on deliberately, for a board you are actively investigating:
+//   -D OFFBAND_UI_TRACE_HEAP
+#if defined(OFFBAND_UI_TRACE) && defined(OFFBAND_UI_TRACE_HEAP)
+  #ifndef OFFBAND_UI_HEAP_PROBE
+    #define OFFBAND_UI_HEAP_PROBE 1
+  #endif
+#endif
+
+#ifdef OFFBAND_UI_TRACE
   #include <helpers/diagnostics/CrashLog.h>
 #endif
 #ifdef QCC_BADGE_SELFTEST
@@ -73,7 +121,7 @@ public:
   }
 
   int render(DisplayDriver& display) override {
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_UI_TRACE
     offband::crashLogf("[ui] SplashScreen.render() at %lu", (unsigned long)millis());
 #endif
     offband::SplashInfo si( nullptr, FIRMWARE_VERSION, FIRMWARE_BUILD_DATE );
@@ -779,41 +827,200 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   ui_started_at = millis();
   _alert_expiry = 0;
 
-  splash = new SplashScreen(this);
+  // #973: every screen below used to be an unchecked `new`. A null screen is
+  // COMPLETELY silent: setCurrScreen() stored it, the render guard further down
+  // (`millis() >= _next_refresh && curr`) stopped firing, and the panel held its last
+  // blitted frame forever -- on a board whose radio, mesh, BLE and heartbeat were all
+  // healthy. No error, no log line, no degraded mode. On RC52 that cost a flash cycle,
+  // a purpose-built driver instrument and a UART sniffer to find, for a failure a null
+  // check names instantly.
+  //
+  // MLOG_BOOT via mesh_log_line(), NOT crashLogf(): every crashLogf site in this file
+  // is gated on OFFBAND_OBSERVER, which implies WiFi and so compiles out on every
+  // nRF52 board (#972) -- precisely the boards tight enough on RAM to hit this. BOOT
+  // level survives whatever caplog level is configured and reaches the UART0 mirror.
+  //
+  // Allocation is NOT retried and the board is NOT halted: #973 is strictly that the
+  // failure was silent. The memory constraint itself is #856.
+#define UI_NEW_SCREEN(member, expr)                                                   \
+  do {                                                                                \
+    (member) = (expr);                                                                \
+    if (!(member)) {                                                                  \
+      _screen_alloc_failed = true;                                                    \
+      mesh_log_line(MLOG_BOOT, "[ui] SCREEN ALLOC FAILED: %s\r\n", #member);          \
+    }                                                                                 \
+  } while (0)
+
+  UI_NEW_SCREEN(splash, new SplashScreen(this));
 #if OFFBAND_SCREEN_UI
   // #1230: the Messages inbox is Home (owner: "I want the Unread/messages screen to
   // become the Home screen instead of the PIN screen"). The pages Home held stay
   // reachable as tools. A message arriving flashes its row in the inbox instead of
   // opening the preview popup, so the popup's queue isn't allocated.
-  home = new InboxScreen(this);
-  thread = new ThreadScreen(this);
-  tools = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
-  contacts = new ContactsScreen(this);   // #1231
-  nearby = new NearbyScreen(this);       // #1234
-  status = new StatusScreen(this);       // #1231
-  settings = new SettingsScreen(this);   // #1233
-  zones = new ZonePickerScreen(this);    // #1233
-  gps = new GpsScreen(this);             // #1235
-  battery = new BatteryScreen(this);     // #1254
+  UI_NEW_SCREEN(home, new InboxScreen(this));
+  UI_NEW_SCREEN(thread, new ThreadScreen(this));
+  UI_NEW_SCREEN(tools, new HomeScreen(this, &rtc_clock, sensors, node_prefs));
+  UI_NEW_SCREEN(contacts, new ContactsScreen(this));   // #1231
+  UI_NEW_SCREEN(nearby, new NearbyScreen(this));       // #1234
+  UI_NEW_SCREEN(status, new StatusScreen(this));       // #1231
+  UI_NEW_SCREEN(settings, new SettingsScreen(this));   // #1233
+  UI_NEW_SCREEN(zones, new ZonePickerScreen(this));    // #1233
+  UI_NEW_SCREEN(gps, new GpsScreen(this));             // #1235
+  UI_NEW_SCREEN(battery, new BatteryScreen(this));     // #1254
 #ifdef PIN_BUZZER
-  tones = new TonesScreen(this);              // #1421
-  tone_picker = new TonePickerScreen(this);   // #1421
-  custom_tunes = new CustomTunesScreen(this);  // #1476
+  UI_NEW_SCREEN(tones, new TonesScreen(this));               // #1421
+  UI_NEW_SCREEN(tone_picker, new TonePickerScreen(this));    // #1421
+  UI_NEW_SCREEN(custom_tunes, new CustomTunesScreen(this));  // #1476
 #if UI_HAS_CARDKB
-  rtttl_edit = new RtttlEditScreen(this);      // #1477: typed entry, the keyboard's
+  UI_NEW_SCREEN(rtttl_edit, new RtttlEditScreen(this));      // #1477: typed entry, the keyboard's
 #endif
 #endif
+  // DELIBERATELY null on this build, not a failure: a message arriving flashes its
+  // inbox row instead of opening the preview popup, so the popup is never allocated.
+  // Left as a plain assignment so UI_NEW_SCREEN never reports it.
   msg_preview = NULL;
 #else
-  home = new HomeScreen(this, &rtc_clock, sensors, node_prefs);
-  msg_preview = new MsgPreviewScreen(this, &rtc_clock);
+  UI_NEW_SCREEN(home, new HomeScreen(this, &rtc_clock, sensors, node_prefs));
+  UI_NEW_SCREEN(msg_preview, new MsgPreviewScreen(this, &rtc_clock));
 #endif
 #ifdef QCC_BADGE_SELFTEST
-  self_test = new SelfTestScreen(this);
+  UI_NEW_SCREEN(self_test, new SelfTestScreen(this));
 #endif
 #if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
-  key_test = new KeyTestScreen(this);
+  UI_NEW_SCREEN(key_test, new KeyTestScreen(this));
 #endif
+#undef UI_NEW_SCREEN
+
+  // #973: one summary line, so a capture that caught only the tail of boot still says
+  // the UI came up degraded. The per-screen lines above name which ones.
+  if (_screen_alloc_failed) {
+    mesh_log_line(MLOG_BOOT,
+                  "[ui] DEGRADED: one or more screens failed to allocate; "
+                  "navigation to them will be refused (#973, memory: #856)\r\n");
+  }
+
+#ifdef OFFBAND_UI_TRACE
+  // #856: how much did the screens actually need? sizeof() is exact and costs
+  // nothing at runtime, so it is logged whenever tracing is on. The heap probe below
+  // is opt-in -- see OFFBAND_UI_TRACE_HEAP at the top of this file.
+  //
+  // The original #976 also logged a positive "screens alloc: splash=1 home=0 ..."
+  // map. That is redundant now: #973's per-member SCREEN ALLOC FAILED lines name
+  // every screen that did NOT get memory, so the absence of one means it did.
+  //
+  // ONE list, used for both the per-screen lines and the totals, so the two cannot
+  // drift apart. A hand-maintained total did drift -- the first version of this block
+  // reported four of the badge's fifteen screens and then omitted the two selftest
+  // screens from its sum while claiming to cover "every screen this build allocates".
+  // That is the same misleading-partial-picture defect the expansion existed to cure,
+  // so the sum is now computed from the list rather than written out beside it. Keep
+  // this list in step with the UI_NEW_SCREEN calls above.
+  {
+    const struct { const char* name; unsigned size; } kSizes[] = {
+      // Every guard here MIRRORS the UI_NEW_SCREEN calls above, one for one. If they
+      // drift, this block reports a screen set the build does not allocate -- which is
+      // precisely the partial, confident, wrong picture it was written to stop.
+      { "splash",   (unsigned)sizeof(SplashScreen) },
+#if OFFBAND_SCREEN_UI
+      { "inbox",    (unsigned)sizeof(InboxScreen) },
+      { "thread",   (unsigned)sizeof(ThreadScreen) },
+      { "tools",    (unsigned)sizeof(HomeScreen) },
+      { "contacts", (unsigned)sizeof(ContactsScreen) },
+      { "nearby",   (unsigned)sizeof(NearbyScreen) },
+      { "status",   (unsigned)sizeof(StatusScreen) },
+      { "settings", (unsigned)sizeof(SettingsScreen) },
+      { "zones",    (unsigned)sizeof(ZonePickerScreen) },
+      { "gps",      (unsigned)sizeof(GpsScreen) },
+      { "battery",  (unsigned)sizeof(BatteryScreen) },
+#ifdef PIN_BUZZER
+      { "tones",    (unsigned)sizeof(TonesScreen) },
+      { "picker",   (unsigned)sizeof(TonePickerScreen) },
+      { "custom",   (unsigned)sizeof(CustomTunesScreen) },
+#if UI_HAS_CARDKB
+      { "rtttl",    (unsigned)sizeof(RtttlEditScreen) },
+#endif
+#endif
+#else
+      { "home",     (unsigned)sizeof(HomeScreen) },
+      { "msg",      (unsigned)sizeof(MsgPreviewScreen) },
+#endif
+#ifdef QCC_BADGE_SELFTEST
+      { "selftest", (unsigned)sizeof(SelfTestScreen) },
+#endif
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+      { "keytest",  (unsigned)sizeof(KeyTestScreen) },
+#endif
+    };
+    const unsigned n = (unsigned)(sizeof(kSizes) / sizeof(kSizes[0]));
+    unsigned total = 0, biggest = 0;
+    for (unsigned i = 0; i < n; i++) {
+      total += kSizes[i].size;
+      if (kSizes[i].size > biggest) biggest = kSizes[i].size;
+      offband::crashLogf("[ui] sizeof %s=%u", kSizes[i].name, kSizes[i].size);
+    }
+    // BIGGEST is the number to compare against largest_free_block, not TOTAL: the
+    // probe measures one contiguous block, and these are n separate allocations. A
+    // heap with room for the sum but not for the largest single screen still fails,
+    // which is exactly how #973 presented on RC52 -- msg_preview allocated fine AFTER
+    // home had already failed.
+    //
+    // Neither figure includes per-allocation allocator overhead, so both understate
+    // what the heap actually gives up. Treat them as a floor.
+    offband::crashLogf("[ui] sizeof total=%u biggest=%u screens=%u (excl. alloc overhead)",
+                       total, biggest, n);
+  }
+
+#ifdef OFFBAND_UI_HEAP_PROBE
+  // LARGEST CONTIGUOUS BLOCK still allocatable -- that, not total free bytes, is what
+  // `new HomeScreen` has to find.
+  //
+  // BINARY SEARCH, not a linear walk. The first version stepped down from 64 KB in
+  // 512 B decrements: up to 128 malloc calls on the boot path, and on a board with
+  // room to spare the 64 KB request SUCCEEDS -- newlib returns the block to its free
+  // list but does not hand the sbrk extension back, so a diagnostic could permanently
+  // raise the heap ceiling by 64 KB on boards that never needed it.
+  //
+  // FLOOR MATTERS MORE THAN THE CEILING. That first version stepped by 512 B, so its
+  // resolution floor was 512 -- and sizeof(HomeScreen) is 480. It could not resolve
+  // the allocation it existed to measure, and reported "0" for anything under 512 B,
+  // which reads as "no memory at all" when it means "less than half a kilobyte".
+  // PROBE_FLOOR is deliberately below the smallest screen.
+  {
+    const size_t PROBE_CEIL  = 24u * 1024u;   // above any single screen, well under a big heap
+    const size_t PROBE_FLOOR = 64u;           // below sizeof(SplashScreen), so 0 really means 0
+
+    size_t lo = 0, hi = PROBE_CEIL, largest = 0;
+    // Terminates on the INTERVAL, not on a hard-coded iteration count. With a 24 KB
+    // ceiling and a 64 B floor this still converges in nine halvings, but changing
+    // either constant no longer requires recomputing a magic number that nothing
+    // checks. `guard` is a safety net against a pathological allocator, not the
+    // termination condition.
+    for (int guard = 0; hi - lo >= PROBE_FLOOR && guard < 32; guard++) {
+      // NO `if (mid < PROBE_FLOOR) break;` here -- it was tried and it is wrong.
+      // Breaking on the midpoint abandons the interval while the true largest block
+      // may still be inside it: with 80 B actually available the search narrows to
+      // lo=0/hi=96, computes mid=48, breaks, and reports largest=0 -- claiming no
+      // memory at all when 80 B were free. That is the exact misleading zero this
+      // rewrite existed to remove.
+      //
+      // Termination is already safe: a fixed 9 iterations, plus the hi-lo convergence
+      // check below. PROBE_FLOOR is the RESOLUTION, not a minimum probe size, so
+      // probing beneath it is intended.
+      const size_t mid = lo + (hi - lo) / 2;
+      void* p = malloc(mid);
+      if (p) { free(p); largest = mid; lo = mid; }
+      else   { hi = mid; }
+      if (hi - lo < PROBE_FLOOR) break;
+    }
+    // `largest` stays 0 unless an allocation actually succeeded, so a report of 0
+    // means nothing above PROBE_FLOOR was obtainable -- it is never a value that was
+    // merely stepped past.
+    offband::crashLogf("[ui] largest_free_block=%u (ceil=%u floor=%u)",
+                       (unsigned)largest, (unsigned)PROBE_CEIL, (unsigned)PROBE_FLOOR);
+  }
+#endif
+#endif
+
   setCurrScreen(splash);
 }
 
@@ -1103,7 +1310,7 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
 
   if (_display != NULL) {
     if (!_display->isOn() && !hasConnection() && _disp_mode != 2) {  // #542 B1: not in always-off
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_UI_TRACE
       offband::crashLogf("[ui] newMsg: display off + no conn -> turnOn");
 #endif
       _display->turnOn();
@@ -1253,21 +1460,70 @@ void UITask::userLedHandler() {
 }
 
 void UITask::setCurrScreen(UIScreen* c) {
-#ifdef OFFBAND_OBSERVER
+  // #973: a null screen used to be stored here without comment, after which the render
+  // guard (`millis() >= _next_refresh && curr`) simply stopped firing and the panel
+  // froze on its last frame. No call site passes null on purpose -- verified by grep
+  // across examples/companion_radio -- so a null arriving here is always a screen whose
+  // `new` failed. Say so, and keep what is on screen: a stale frame the user can see and
+  // report beats a dark panel that reads as dead hardware.
+  if (!c) {
+    mesh_log_line(MLOG_BOOT,
+                  "[ui] setCurrScreen(NULL) REFUSED -- screen alloc failed; "
+                  "holding current (#973)\r\n");
+    return;
+  }
+
+#ifdef OFFBAND_UI_TRACE
   // Screen transition tracing: log every change so we can see if the
-  // SplashScreen ↔ HomeScreen oscillation observed on hv3-bench is
+  // SplashScreen <-> HomeScreen oscillation observed on hv3-bench is
   // a real state-machine bug.
-  const char* from = "?";
-  const char* to   = "?";
-  if      (curr == splash)      from = "SPLASH";
-  else if (curr == home)        from = "HOME";
-  else if (curr == msg_preview) from = "MSG_PREVIEW";
-  else if (curr == nullptr)     from = "NULL";
-  if      (c == splash)         to   = "SPLASH";
-  else if (c == home)           to   = "HOME";
-  else if (c == msg_preview)    to   = "MSG_PREVIEW";
-  else if (c == nullptr)        to   = "NULL";
-  offband::crashLogf("[ui] setCurrScreen %s -> %s", from, to);
+  //
+  // #973: resolved through offband::screenName(), which tests null FIRST. The inline
+  // chain this replaces tested `c == home` before `c == nullptr`, so when `home` was
+  // null -- or `msg_preview` deliberately null on the CardKB build -- a transition to
+  // NOTHING printed that member's name. The trace read as a clean, healthy handoff
+  // while the UI went dark, and that is what sent the first round of diagnosis at the
+  // display driver. The ordering is covered by test/test_screen_name, positively and
+  // negatively. Do not inline this back.
+  const offband::ScreenLabel kScreens[] = {
+    { splash,       "SPLASH"       },
+    { home,         "HOME"         },
+    { msg_preview,  "MSG_PREVIEW"  },
+    // These guards MUST track the member declarations in UITask.h exactly. #1788 moved
+    // this group from UI_HAS_CARDKB to OFFBAND_SCREEN_UI -- they navigate by button now
+    // and no longer need a keyboard -- and left rtttl_edit behind the keyboard guard,
+    // since typed entry does need one. A guard that drifts from the header here costs a
+    // screen its name in the trace, silently.
+#if OFFBAND_SCREEN_UI
+    { thread,       "THREAD"       },
+    { tools,        "TOOLS"        },
+    { contacts,     "CONTACTS"     },
+    { nearby,       "NEARBY"       },
+    { status,       "STATUS"       },
+    { settings,     "SETTINGS"     },
+    { zones,        "ZONES"        },
+    { gps,          "GPS"          },
+    { battery,      "BATTERY"      },
+#endif
+#if OFFBAND_SCREEN_UI && defined(PIN_BUZZER)
+    { tones,        "TONES"        },
+    { tone_picker,  "TONE_PICKER"  },
+    { custom_tunes, "CUSTOM_TUNES" },
+#if UI_HAS_CARDKB
+    { rtttl_edit,   "RTTTL_EDIT"   },
+#endif
+#endif
+#ifdef QCC_BADGE_SELFTEST
+    { self_test,    "SELF_TEST"    },
+#endif
+#if defined(QCC_BADGE_SELFTEST) && UI_HAS_CARDKB
+    { key_test,     "KEY_TEST"     },
+#endif
+  };
+  const size_t kScreenCount = sizeof(kScreens) / sizeof(kScreens[0]);
+  offband::crashLogf("[ui] setCurrScreen %s -> %s",
+                     offband::screenName(curr, kScreens, kScreenCount),
+                     offband::screenName(c, kScreens, kScreenCount));
 #endif
 #if OFFBAND_SCREEN_UI
   // #1230: a thread off screen isn't being read. It marks itself open when it draws.
@@ -1422,7 +1678,7 @@ void UITask::loop() {
 #endif
 
   if (c != 0 && curr) {
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_UI_TRACE
     offband::crashLogf("[ui] button event c=0x%x dispatched to curr screen", (int)c);
 #endif
     // #1205: Esc backs out to Home from any screen that does not take it. On the badge
