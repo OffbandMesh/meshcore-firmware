@@ -16,6 +16,24 @@ on:
   pull_request:
   workflow_dispatch:
 
+# #1824: a push to a PR branch used to leave the previous run's 84 legs computing
+# an answer about a commit that no longer exists, while the new run queued behind
+# them for the same 20 job slots. Measured on 2026-10-25: feat/1795 had two
+# overlapping runs on one branch, 168 legs, half of them already void.
+#
+# Superseded runs are cancelled so their slots return to the pool immediately.
+# This loses no coverage -- a cancelled run was already evaluating a replaced
+# commit. Scoped to pull_request ONLY: a push to firmware-base is never
+# cancelled, so the canonical branch always keeps its own proof even when
+# merges land back to back.
+#
+# Expect a cancelled run to report as `cancelled`, not `failed`. A required
+# check that is cancelled can make a PR look blocked until the replacement run
+# posts its own ci-green; that resolves itself and is not a failure.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # #1707: classify the change so a pure-docs edit does not pay for 80 build
   # legs. This job ONLY reports; it decides nothing on its own. `build` reads
@@ -132,6 +150,17 @@ jobs:
       # that checks nothing.
       - name: Built-artifact symbol-presence guard self-test
         run: python scripts/test_check_symbol_presence.py
+
+      # #1824: PR CI caches `.pio/build/<env>` so a leg rebuilds only what
+      # changed. That must never reach a release workflow -- a stale object
+      # linking into a tagged image would build, flash and boot while not being
+      # the source the tag claims. The self-test runs first so a guard that
+      # cannot classify fails here rather than passing vacuously.
+      - name: Release-build-clean guard self-test
+        run: python scripts/test_check_release_no_build_cache.py
+
+      - name: Release workflows build clean, never from a cached object tree
+        run: python scripts/check_release_no_build_cache.py
 
       # #749/#758: the asset generators. The native-tests job discovers and runs the
       # C++ suites on its own, but nothing discovers scripts/test_*.py -- they only
@@ -663,6 +692,35 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'variants/**/*.ini') }}
           restore-keys: |
             pio-${{ runner.os }}-
+
+      # #1824: the step above caches toolchains, NOT compiled objects, so every
+      # leg recompiled the whole firmware from zero on every run. Measured on
+      # run 40237956793: 136 s of the leg's 183 s was compilation, x84 legs =
+      # ~190 min of genuine compile per PR. That compute is what saturates the
+      # 20 job slots and turns a stack of PRs into hours of queueing.
+      #
+      # Restoring this env's previous object tree lets PlatformIO build
+      # incrementally: a shared-code PR recompiles the touched translation units
+      # and relinks instead of rebuilding everything. All 84 legs are retained
+      # -- this cuts the cost of the coverage, not the coverage (#477 stands).
+      #
+      # Why a stale object cannot silently link in: PlatformIO invalidates
+      # project.checksum and clears every env dir when platformio.ini or a
+      # variant ini changes. The edits that could make a cached object wrong are
+      # exactly the ones that force a full rebuild, so the cache is only
+      # consulted when the build configuration is byte-identical.
+      #
+      # RELEASE BUILDS MUST NEVER READ THIS CACHE. release.yml always builds
+      # clean; a stale object linking into a tagged image is the image-identity
+      # failure class this project has already been bitten by, and saving a few
+      # minutes is worthless at a release. config-lint guards that.
+      - name: Cache build objects for ${{ matrix.env }}
+        uses: actions/cache@v5
+        with:
+          path: .pio/build/${{ matrix.env }}
+          key: pioobj-${{ runner.os }}-${{ matrix.env }}-${{ github.sha }}
+          restore-keys: |
+            pioobj-${{ runner.os }}-${{ matrix.env }}-
 
       - name: Install PlatformIO
         run: pip install --upgrade platformio
