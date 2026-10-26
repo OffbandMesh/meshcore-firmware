@@ -525,7 +525,32 @@ jobs:
     # "everyone"]. These 80 legs are not individually required, so they can
     # simply never start rather than start and short-circuit.
     needs: classify
-    if: needs.classify.outputs.docs_only != 'true'
+    # #1824: the matrix runs on PULL REQUESTS ONLY. It used to run on the PR and
+    # again on the merge push, compiling the same 84 boards twice per change --
+    # ~432 leg-minutes where 216 buys the same information. The PR run already
+    # proved these boards against the code about to land; rebuilding them after
+    # it lands re-proves it.
+    #
+    # What this does NOT trade away, and why it is not a return to #477: that
+    # failure was a break that "merged green and surfaced only when a tag was
+    # cut", i.e. nothing built the boards before the release. Here every board
+    # still builds, before every merge, as a required gate. Only the duplicate
+    # second build is gone.
+    #
+    # The residual risk is a SEMANTIC CONFLICT: two PRs that each pass alone and
+    # break together. That is real but self-limiting -- every subsequent PR
+    # builds against the new base, so a conflict surfaces on the next PR within
+    # hours with a one-or-two-commit blame surface, instead of at a tag with a
+    # 221-commit window (the beta7 -> 1.6.0-beta1 span). If that ever proves too
+    # loose, the tighter fix is branch protection's "require branches up to
+    # date", which makes a PR test the exact commit that lands and renders the
+    # second build redundant by construction rather than in practice.
+    #
+    # config-lint and native-tests still run on the merge push, unconditionally.
+    # They are cheap and catch the fast regressions.
+    #
+    # Owner-approved 2026-10-26 (matrix changes are owner-only, CLAUDE.md).
+    if: github.event_name != 'push' && needs.classify.outputs.docs_only != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -726,26 +751,6 @@ jobs:
       # clean; a stale object linking into a tagged image is the image-identity
       # failure class this project has already been bitten by, and saving a few
       # minutes is worthless at a release. config-lint guards that.
-      # RESTORE on every run, SAVE only on firmware-base. The repo has a 10 GB
-      # Actions cache budget and the toolchain caches above already occupy
-      # ~9.3 GB across 7 entries at 1.3-1.5 GB each (they are keyed on every
-      # variant ini, and all 92 declare lib_deps, so that key cannot safely be
-      # narrowed). Saving an object tree per commit would mint 84 entries per
-      # push, evict the toolchain caches, and make CI SLOWER than before -- the
-      # 28 s restore above becomes a multi-minute download.
-      #
-      # Saving only on base keeps exactly one object cache per env, so the
-      # steady-state footprint is 84 entries rather than 84 per commit, and a
-      # PR restores from the most recent base build of its env.
-      - name: Restore build objects for ${{ matrix.env }}
-        id: objcache
-        uses: actions/cache/restore@v5
-        with:
-          path: .pio/build/${{ matrix.env }}
-          key: pioobj-${{ runner.os }}-${{ matrix.env }}-${{ github.sha }}
-          restore-keys: |
-            pioobj-${{ runner.os }}-${{ matrix.env }}-
-
       - name: Install PlatformIO
         run: pip install --upgrade platformio
 
@@ -756,18 +761,6 @@ jobs:
 
       - name: Build ${{ matrix.env }}
         run: pio run -e ${{ matrix.env }}
-
-      # Save ONLY on firmware-base, so there is one object cache per env rather
-      # than 84 per commit. A PR restores from the most recent base build of its
-      # env and never writes, which keeps the repo inside its 10 GB Actions cache
-      # ceiling -- a fixed per-repository limit that no plan raises. See the
-      # restore step above for why writing from PRs would make CI slower.
-      - name: Save build objects for ${{ matrix.env }}
-        if: github.event_name == 'push' && github.ref == 'refs/heads/firmware-base'
-        uses: actions/cache/save@v5
-        with:
-          path: .pio/build/${{ matrix.env }}
-          key: pioobj-${{ runner.os }}-${{ matrix.env }}-${{ github.sha }}
 
       # Dev-channel artifact (epic #14 / T2, #16). Built with the placeholder
       # secrets stub above -- these are dev/test builds, NOT releases. Configure
@@ -842,18 +835,37 @@ jobs:
           test "${{ needs.config-lint.result }}" = "success"
           test "${{ needs.native-tests.result }}" = "success"
 
-          # `build` may be success, or skipped -- but skipped is acceptable ONLY
-          # when THIS job's own recompute says the change was docs-only. Any
-          # other skip (a cancelled run, a failed dependency, a forced upstream
-          # output) still fails the gate, exactly as before this change.
+          echo "event              : ${{ github.event_name }}"
+
+          # `build` may be success, or skipped -- and a skip is acceptable for
+          # exactly two reasons, neither of which trusts an upstream job output:
+          #
+          #   1. THIS job's own recompute says the change was docs-only (#1707).
+          #   2. This is a push, so the matrix ran on the pull request instead
+          #      (#1824 -- it no longer builds the same 84 boards twice).
+          #
+          # Both conditions are read from values a disarmed upstream job cannot
+          # forge: the recompute is this job's own work, and `github.event_name`
+          # comes from the runner context, not from a job output. That is the
+          # distinction that matters after meshcore-client#904, where every job
+          # trusted one forced classifier output and seven checks reported green
+          # having built nothing.
+          #
+          # Any other skip -- a cancelled run, a failed dependency -- still
+          # fails the gate.
           if [ "${{ needs.build.result }}" = "success" ]; then
             echo "build ran and passed"
           elif [ "${{ needs.build.result }}" = "skipped" ] \
             && [ "${{ steps.recheck.outputs.docs_only }}" = "true" ]; then
             echo "build skipped, and this gate independently confirms the change is docs-only"
+          elif [ "${{ needs.build.result }}" = "skipped" ] \
+            && [ "${{ github.event_name }}" = "push" ]; then
+            echo "build skipped on a push: the matrix is a pull-request gate (#1824)."
+            echo "Every board was built on the PR before this commit landed."
           else
-            echo "::error::build is '${{ needs.build.result }}' and this gate's own" \
-                 "classification is docs_only=${{ steps.recheck.outputs.docs_only }}." \
-                 "A skipped build is only accepted on a docs-only change." >&2
+            echo "::error::build is '${{ needs.build.result }}', event is" \
+                 "'${{ github.event_name }}', and this gate's own classification is" \
+                 "docs_only=${{ steps.recheck.outputs.docs_only }}. A skipped build is" \
+                 "accepted only on a docs-only change or on a push." >&2
             exit 1
           fi

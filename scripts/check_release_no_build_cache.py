@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """A release build must compile from scratch -- never from a cached object tree (#1824).
 
-PR CI caches `.pio/build/<env>` so a leg rebuilds only what changed. That is a
-throughput measure and it belongs on PRs only. A release is the one place where
-saving a few minutes is worthless and a wrong binary is expensive: a stale object
-linking into a tagged image is the image-identity failure class this project has
-already been bitten by, and it would be invisible -- the image would build, flash
-and boot, just not from the source the tag claims.
+Nothing in this repository caches build objects today. An attempt was made and
+reverted: caching `.pio/build/<env>` per env restored correctly in CI -- a 28 MB
+tree, confirmed by a cache-hit log line -- and then bought nothing, because the
+leg compiled 302 translation units warm and 302 cold, identically. It is kept out
+on measurement, not on principle.
+
+This guard exists because the idea is a reasonable one that will be proposed
+again, and the next attempt must not reach a release workflow. A release is the
+one place where saving a few minutes is worthless and a wrong binary is
+expensive: a stale object linking into a tagged image is the image-identity
+failure class this project has already been bitten by, and it would be invisible
+-- the image would build, flash and boot, just not from the source the tag
+claims.
 
 So this asserts the absence of a build-object cache in every workflow that
 produces release artifacts. Absence is easy to lose by accident: somebody copies
