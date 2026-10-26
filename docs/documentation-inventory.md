@@ -6,12 +6,12 @@ manual uses only `docs/user/`. The feature catalog in that tree is checked by
 
 | User journey | Existing material to assess | Manual coverage | Next owner |
 |---|---|---|---|
-| Choose an image, install, update and check version | README.md, VERSIONING.md, release notes | Planned | Epic D, installation |
+| Choose an image, install, update and check version | README.md, VERSIONING.md, release notes, pio-flash.py | Draft guide source-checked against beta1; new hardware trial pending | Epic D, installation |
 | Connect an observer to WiFi | observer-cli-commands.md, WifiConfigProvider and WifiBootstrap | Documented, source-checked; new hands-on guide validation pending | Epic A |
-| Publish observer data to MQTT | observer-cli-commands.md, broker configuration implementation | Planned | Epic D, observer operation |
-| Set time/GPS and choose location sharing | observer-gps-location-config.md | Needs review before publication | Epic D, observer operation |
-| Understand SafeBoot and recover safely | safeboot.md, SafeBoot implementation | Needs review before publication | Epic D, safety |
-| Collect diagnostics for support | serial-log-capture.md, remote-diagnostics.md | Needs review before publication | Epic D, diagnostics |
+| Publish observer data to MQTT | ObserverCli, broker pool and clock implementation | Draft guide source-checked against beta1; no new live broker trial | Epic D, observer operation |
+| Set time/GPS and choose location sharing | Companion preference/API, observer snapshot and clock paths | Draft guide corrects old command/hardware assumptions; app/hardware trial pending | Epic D, observer operation |
+| Understand SafeBoot and recover safely | SafeBoot and ESP32Board boot-safety implementation | Draft ESP32 guide; no low-voltage/rollback trial or universal recovery claim | Epic D, safety |
+| Collect diagnostics for support | Capture/redaction scripts and role-specific command handlers | Draft guide checked against beta1; no new device capture | Epic D, diagnostics |
 
 The existing technical documents remain where they are; their existence is not
 approval to publish them wholesale. Some contain maintainer procedures and
