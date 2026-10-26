@@ -21,10 +21,13 @@ Thanks for considering contributing to this project!
 #### Small fixes (typos, comments, examples, small bug fixes)
 → Just open a pull request — no prior issue needed
 
+Firmware code changes still need a linked issue for the documentation-impact
+record described below; documentation-only fixes do not need that record.
+
 #### Larger changes / new features
 1. Open an issue first to discuss the idea
 2. Get a rough 👍 from maintainer(s)
-3. Fork the repo from 'dev' branch and create your branch (`fix/xxx`, `feature/yyy`, `docs/whatever`)
+3. Fork from `firmware-base` and create a branch for the approved change.
 4. Make your changes
 5. Update or add examples when appropriate
 6. Add/update comments in code
@@ -39,6 +42,20 @@ Thanks for considering contributing to this project!
 - Reference any related issue (`Fixes #123`, `Closes #89`, etc.)
 - If you change public API, update README.md and library.properties
 - New features should include an example sketch in `examples/`
+
+### End-user documentation
+
+Feature/Epic planning names the user journeys, guide owner, supported images and
+release applicability, and verification evidence. Update affected `docs/user/`
+guides in the same PR as the behavior, including success checks and recovery.
+Changes to firmware code require a changed `docs/changes/<issue>-<description>.yml`
+record: either `updated` with changed guide paths, or `none` with a concrete
+reviewable reason. Documentation-only PRs still run the manual checks.
+
+Follow [the documentation workflow](docs/documentation-workflow.md) for the record
+schema, AI drafting/review procedure and local checks. Passing CI does not prove
+hardware behavior or release availability. Website builds assemble committed
+guides; public publishing remains manual and owner-initiated.
 
 ## Coding Style
 

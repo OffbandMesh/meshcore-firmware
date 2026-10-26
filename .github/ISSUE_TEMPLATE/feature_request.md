@@ -17,3 +17,11 @@ Board(s) / chip(s) this is for, if it's not universal.
 
 ## Notes / prior art
 Any references, related MeshCore behavior, or existing implementations to learn from.
+
+## Documentation and acceptance
+
+For implementation planning, identify the user journey and existing/new guide
+paths, guide owner, board/role/image and release applicability, and evidence
+needed to verify the instructions. Include the guide work in each behavior-changing
+Epic and its child tasks; record justified no-user-impact decisions during delivery.
+List hardware trials or other claims still awaiting verification.
