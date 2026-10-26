@@ -1,5 +1,18 @@
 schema_version: 1
 features:
+  - id: firmware-install
+    title: Choose, install and update firmware
+    coverage: documented
+    guide: guides/install-update.md
+    roles: [companion-observer, companion, repeater]
+    boards: [heltec_v3, heltec_v4, xiao_s3_wio]
+    availability: {channel: beta, verified_releases: [offband-v1.6.0-beta1]}
+    verification: Current release-format and flashing implementation checked; no hardware flash performed and no blanket older-release compatibility claim.
+    evidence:
+      - path: scripts/pio-flash.py
+        contains: ['ESP32_APP0_OFFSET = 0x10000', '--erase requires the full -merged.bin']
+      - path: README.md
+        contains: ['first install', 'update', 'device identity + config']
   - id: observer-wifi
     title: Connect an observer to WiFi
     coverage: documented
@@ -25,41 +38,57 @@ features:
         contains: ['[env:Xiao_S3_WIO_companion_observer_wifi]']
   - id: observer-mqtt
     title: Publish observer data to a broker
-    coverage: planned
+    coverage: documented
+    guide: guides/observer-mqtt.md
     roles: [companion-observer]
     boards: [heltec_v3, heltec_v4, xiao_s3_wio]
-    availability: {channel: development, verified_releases: []}
-    verification: Existing reference requires task-oriented guide and release review in Epic D.
+    availability: {channel: beta, verified_releases: [offband-v1.6.0-beta1]}
+    verification: Current command handlers and state labels checked; no live broker or hardware trial. Older release behavior must be checked separately.
     evidence:
-      - path: docs/observer-cli-commands.md
-        contains: ['MQTT broker pool']
+      - path: src/helpers/wifi_observer/ObserverCli.cpp
+        contains: ['waiting-turn', 'held(no-clock)', 'mqtt slot %d: %s', 'password is write-only']
+      - path: src/helpers/wifi_observer/WifiObserverConfig.h
+        contains: ['#define OFFBAND_MAX_BROKERS 10']
+      - path: src/helpers/wifi_observer/MqttBroker.cpp
+        contains: ['mqcfg.broker.address.uri = cfg_.url;']
   - id: observer-location
     title: Choose time, GPS and location sharing
-    coverage: needs-review
+    coverage: documented
+    guide: guides/observer-location.md
     roles: [companion-observer]
     boards: [heltec_v3, heltec_v4, xiao_s3_wio]
-    availability: {channel: development, verified_releases: []}
-    verification: Per-board GPS differences and release applicability need review before publication.
+    availability: {channel: beta, verified_releases: [offband-v1.6.0-beta1]}
+    verification: Current companion location/time paths and compile-time GPS choices checked; app UI and physical GPS receiver availability are not inferred from board name.
     evidence:
-      - path: docs/observer-gps-location-config.md
-        contains: ['Recommended setups']
+      - path: examples/companion_radio/main.cpp
+        contains: ['snap.loc_valid = false', 'sensors.node_lat != 0.0 || sensors.node_lon != 0.0']
+      - path: src/helpers/wifi_observer/WifiObserver.cpp
+        contains: ['SNTP started immediately', 'SNTP stopped (GPS>NTP)']
+      - path: examples/companion_radio/MyMesh.cpp
+        contains: ['CMD_SET_ADVERT_LATLON && len >= 9', 'CMD_SET_CUSTOM_VAR && len >= 4']
   - id: safeboot
     title: Understand the low-power boot guard
-    coverage: needs-review
+    coverage: documented
+    guide: guides/power-and-recovery.md
     roles: [companion-observer, repeater]
     boards: [heltec_v3, heltec_v4]
-    availability: {channel: development, verified_releases: []}
-    verification: This bounded inventory is not a complete board-support declaration; guide review belongs to Epic D.
+    availability: {channel: beta, verified_releases: [offband-v1.6.0-beta1]}
+    verification: ESP32 source and conditional SafeBoot/OTA recovery paths checked; no low-voltage or rollback trial, no universal hardware recovery guarantee.
     evidence:
-      - path: docs/safeboot.md
-        contains: ['When SafeBoot is for you']
+      - path: src/SafeBoot.cpp
+        contains: ['#define DEFAULT_SAFE_BOOT_WAKE_MV 3700', 'SAFE_BOOT_DISABLED', 'below safe threshold']
+      - path: src/helpers/ESP32Board.cpp
+        contains: ['esp_ota_mark_app_valid_cancel_rollback', 'ROLLBACK_THRESHOLD']
   - id: diagnostic-logs
     title: Collect logs for support
-    coverage: needs-review
+    coverage: documented
+    guide: guides/support-logs.md
     roles: [companion-observer, repeater]
     boards: [heltec_v3, heltec_v4]
-    availability: {channel: development, verified_releases: []}
-    verification: Separate role-specific logging surfaces and public-safe examples before writing the guide.
+    availability: {channel: beta, verified_releases: [offband-v1.6.0-beta1]}
+    verification: Capture helper dependencies/redaction and role-specific status surfaces checked; no new device capture and no guarantee that arbitrary logs are secret-free.
     evidence:
-      - path: docs/remote-diagnostics.md
-        contains: ['Troubleshooting']
+      - path: scripts/_cap_serial.py
+        contains: ['from log_redact import redact_line', 'default=115200', '--no-redact']
+      - path: src/helpers/wifi_observer/ObserverCli.cpp
+        contains: ['"caplog status"', 'OFFBAND_CAPLOG_FORWARD']

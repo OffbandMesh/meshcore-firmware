@@ -35,6 +35,21 @@ class CodeBlocks(HTMLParser):
             self.current = None
 
 
+class OrderedSteps(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.in_steps = False
+        self.lists = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'h2':
+            self.in_steps = dict(attrs).get('id') == 'steps'
+        elif self.in_steps and tag == 'ol':
+            self.lists.append(0)
+        elif self.in_steps and tag == 'li' and self.lists:
+            self.lists[-1] += 1
+
+
 class RenderedManualTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -76,6 +91,11 @@ class RenderedManualTests(unittest.TestCase):
     def test_edit_links_target_firmware_user_sources(self):
         guide = (self.output / 'guides/observer-wifi/index.html').read_text(encoding='utf-8')
         self.assertIn('https://github.com/OffbandMesh/meshcore-firmware/edit/firmware-base/docs/user/guides/observer-wifi.md', guide)
+
+    def test_wifi_steps_form_one_six_step_sequence(self):
+        parser = OrderedSteps()
+        parser.feed((self.output / 'guides/observer-wifi/index.html').read_text(encoding='utf-8'))
+        self.assertEqual(parser.lists, [6])
 
     def test_search_finds_the_wifi_journey(self):
         search = json.loads((self.output / 'search/search_index.json').read_text(encoding='utf-8'))
