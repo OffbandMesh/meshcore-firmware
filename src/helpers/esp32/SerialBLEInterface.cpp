@@ -28,6 +28,134 @@ static void blePeer(const NimBLEConnInfo& connInfo, char* out, size_t cap) {
 
 #define ADVERT_RESTART_DELAY  1000   // millis
 
+#ifdef OFFBAND_BLE_TRACE
+// #1830: a trace of the NimBLE stack itself, for the diag GUI builds, to find
+// why a companion stops advertising (#1828). The callbacks above see only a
+// completed connect, a disconnect and pairing; this sees every GAP event the
+// host raises, a host reset, and the advertising state as it changes.
+// NimBLE-Arduino's own logs print through printf, which this console does not
+// carry, so the trace goes through mesh_log_line like every [ble] line.
+#include "nimble/nimble/host/include/host/ble_hs.h"
+#include <esp_heap_caps.h>
+
+// BleTrace.h restates NimBLE's numbers to stay host-testable; hold it to them.
+static_assert(ble_trace::kConnect == BLE_GAP_EVENT_CONNECT, "BleTrace.h event numbers");
+static_assert(ble_trace::kDisconnect == BLE_GAP_EVENT_DISCONNECT, "BleTrace.h event numbers");
+static_assert(ble_trace::kConnUpdate == BLE_GAP_EVENT_CONN_UPDATE, "BleTrace.h event numbers");
+static_assert(ble_trace::kConnUpdateReq == BLE_GAP_EVENT_CONN_UPDATE_REQ, "BleTrace.h event numbers");
+static_assert(ble_trace::kL2capUpdateReq == BLE_GAP_EVENT_L2CAP_UPDATE_REQ, "BleTrace.h event numbers");
+static_assert(ble_trace::kTermFailure == BLE_GAP_EVENT_TERM_FAILURE, "BleTrace.h event numbers");
+static_assert(ble_trace::kAdvComplete == BLE_GAP_EVENT_ADV_COMPLETE, "BleTrace.h event numbers");
+static_assert(ble_trace::kEncChange == BLE_GAP_EVENT_ENC_CHANGE, "BleTrace.h event numbers");
+static_assert(ble_trace::kPasskeyAction == BLE_GAP_EVENT_PASSKEY_ACTION, "BleTrace.h event numbers");
+static_assert(ble_trace::kNotifyRx == BLE_GAP_EVENT_NOTIFY_RX, "BleTrace.h event numbers");
+static_assert(ble_trace::kNotifyTx == BLE_GAP_EVENT_NOTIFY_TX, "BleTrace.h event numbers");
+static_assert(ble_trace::kSubscribe == BLE_GAP_EVENT_SUBSCRIBE, "BleTrace.h event numbers");
+static_assert(ble_trace::kMtu == BLE_GAP_EVENT_MTU, "BleTrace.h event numbers");
+static_assert(ble_trace::kIdentityResolved == BLE_GAP_EVENT_IDENTITY_RESOLVED, "BleTrace.h event numbers");
+static_assert(ble_trace::kRepeatPairing == BLE_GAP_EVENT_REPEAT_PAIRING, "BleTrace.h event numbers");
+static_assert(ble_trace::kPhyUpdateComplete == BLE_GAP_EVENT_PHY_UPDATE_COMPLETE, "BleTrace.h event numbers");
+static_assert(ble_trace::kDataLenChg == BLE_GAP_EVENT_DATA_LEN_CHG, "BleTrace.h event numbers");
+static_assert(ble_trace::kLinkEstab == BLE_GAP_EVENT_LINK_ESTAB, "BleTrace.h event numbers");
+static_assert(ble_trace::kENoMem == BLE_HS_ENOMEM, "BleTrace.h host error numbers");
+static_assert(ble_trace::kEOs == BLE_HS_EOS, "BleTrace.h host error numbers");
+static_assert(ble_trace::kEController == BLE_HS_ECONTROLLER, "BleTrace.h host error numbers");
+static_assert(ble_trace::kETimeout == BLE_HS_ETIMEOUT, "BleTrace.h host error numbers");
+static_assert(ble_trace::kEDone == BLE_HS_EDONE, "BleTrace.h host error numbers");
+static_assert(ble_trace::kETimeoutHci == BLE_HS_ETIMEOUT_HCI, "BleTrace.h host error numbers");
+static_assert(ble_trace::kENoMemEvt == BLE_HS_ENOMEM_EVT, "BleTrace.h host error numbers");
+static_assert(ble_trace::kENotSynced == BLE_HS_ENOTSYNCED, "BleTrace.h host error numbers");
+static_assert(ble_trace::kEPreempted == BLE_HS_EPREEMPTED, "BleTrace.h host error numbers");
+static_assert(ble_trace::kEStalled == BLE_HS_ESTALLED, "BleTrace.h host error numbers");
+
+static ble_gap_event_listener s_trace_listener;
+static ble_hs_reset_fn* s_prev_reset_cb = nullptr;
+static ble_hs_sync_fn* s_prev_sync_cb = nullptr;
+
+// A connect status, disconnect reason or encryption status: an HCI code
+// (0x200 + code) decoded by name, or a host error by name.
+static const char* traceStatus(int rc) {
+  if (rc >= ble_reason::kNimbleHciBase) return ble_reason::fromNimble(rc).name;
+  return ble_trace::hostErrorName(rc);
+}
+
+// Every GAP event the host raises, before NimBLE-Arduino's own handler runs.
+// adv= is the controller's advertising state as the event arrives.
+static int traceGapEvent(struct ble_gap_event* e, void*) {
+  if (!ble_trace::logged(e->type)) return 0;
+  const char* ev = ble_trace::gapEventName(e->type);
+  const int adv = ble_gap_adv_active();
+  switch (e->type) {
+    case BLE_GAP_EVENT_CONNECT:
+      mesh_log_line(MLOG_BOOT, "[ble-trace] %s status=0x%03X (%s) handle=%u adv=%d\n", ev,
+                    (unsigned)e->connect.status, traceStatus(e->connect.status),
+                    (unsigned)e->connect.conn_handle, adv);
+      break;
+    case BLE_GAP_EVENT_DISCONNECT:
+      mesh_log_line(MLOG_BOOT, "[ble-trace] %s reason=0x%03X (%s) handle=%u adv=%d\n", ev,
+                    (unsigned)e->disconnect.reason, traceStatus(e->disconnect.reason),
+                    (unsigned)e->disconnect.conn.conn_handle, adv);
+      break;
+    case BLE_GAP_EVENT_ADV_COMPLETE:
+      mesh_log_line(MLOG_BOOT, "[ble-trace] %s reason=%d (%s) adv=%d\n", ev,
+                    e->adv_complete.reason, traceStatus(e->adv_complete.reason), adv);
+      break;
+    case BLE_GAP_EVENT_CONN_UPDATE:
+      mesh_log_line(MLOG_BOOT, "[ble-trace] %s status=0x%03X (%s) handle=%u adv=%d\n", ev,
+                    (unsigned)e->conn_update.status, traceStatus(e->conn_update.status),
+                    (unsigned)e->conn_update.conn_handle, adv);
+      break;
+    case BLE_GAP_EVENT_ENC_CHANGE:
+      mesh_log_line(MLOG_BOOT, "[ble-trace] %s status=0x%03X (%s) handle=%u adv=%d\n", ev,
+                    (unsigned)e->enc_change.status, traceStatus(e->enc_change.status),
+                    (unsigned)e->enc_change.conn_handle, adv);
+      break;
+    case BLE_GAP_EVENT_TERM_FAILURE:
+      mesh_log_line(MLOG_BOOT, "[ble-trace] %s status=0x%03X (%s) handle=%u adv=%d\n", ev,
+                    (unsigned)e->term_failure.status, traceStatus(e->term_failure.status),
+                    (unsigned)e->term_failure.conn_handle, adv);
+      break;
+    case BLE_GAP_EVENT_MTU:
+      mesh_log_line(MLOG_BOOT, "[ble-trace] %s value=%u handle=%u adv=%d\n", ev,
+                    (unsigned)e->mtu.value, (unsigned)e->mtu.conn_handle, adv);
+      break;
+    default:
+      mesh_log_line(MLOG_BOOT, "[ble-trace] %s type=%u adv=%d\n", ev, (unsigned)e->type, adv);
+      break;
+  }
+  return 0;
+}
+
+// A host reset tears down every connection and advertising until the host and
+// controller sync again. NimBLE-Arduino's own handlers still run, after ours.
+static void traceHostReset(int reason) {
+  mesh_log_line(MLOG_BOOT, "[ble-trace] host-reset reason=%d (%s) adv=%d\n", reason,
+                traceStatus(reason), ble_gap_adv_active());
+  if (s_prev_reset_cb) s_prev_reset_cb(reason);
+}
+
+static void traceHostSync() {
+  if (s_prev_sync_cb) s_prev_sync_cb();
+  mesh_log_line(MLOG_BOOT, "[ble-trace] host-sync adv=%d\n", ble_gap_adv_active());
+}
+
+// Once a second: the controller's advertising state, logged when it changes,
+// with what the firmware believes and the internal heap BLE allocates from.
+void SerialBLEInterface::traceAdvState() {
+  if (millis() - _adv_trace_at < 1000) return;
+  _adv_trace_at = millis();
+  const bool adv = ble_gap_adv_active();
+  if (!_adv_trace.update(adv)) return;
+  mesh_log_line(MLOG_BOOT,
+                "[ble-trace] adv-state active=%d conns=%u enabled=%d connected=%d synced=%d "
+                "restart_pending=%d int_free=%u largest=%u\n",
+                (int)adv, (unsigned)pServer->getConnectedCount(), (int)_isEnabled,
+                (int)deviceConnected, ble_hs_synced(), (int)(adv_restart_time != 0),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+}
+#endif
+
 void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code) {
   _pin_code = pin_code;
 
@@ -43,6 +171,17 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
 
   // Create the BLE Device
   NimBLEDevice::init(dev_name);
+#ifdef OFFBAND_BLE_TRACE
+  {
+    // #1830: chained, so NimBLE-Arduino's reset and sync handlers still run.
+    s_prev_reset_cb = ble_hs_cfg.reset_cb;
+    s_prev_sync_cb = ble_hs_cfg.sync_cb;
+    ble_hs_cfg.reset_cb = traceHostReset;
+    ble_hs_cfg.sync_cb = traceHostSync;
+    const int rc = ble_gap_event_listener_register(&s_trace_listener, traceGapEvent, nullptr);
+    mesh_log_line(MLOG_BOOT, "[ble-trace] on listener_rc=%d synced=%d\n", rc, ble_hs_synced());
+  }
+#endif
   // #711: setMTU() returns false if the stack refused it, and the return was
   // previously discarded -- a silent failure. It matters because
   // getMTU() then reports NimBLE's DEFAULT preferred MTU (256), not ours, and any
@@ -333,6 +472,9 @@ bool SerialBLEInterface::isWriteBusy() const {
 }
 
 size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
+#ifdef OFFBAND_BLE_TRACE
+  traceAdvState();   // first: the returns below skip the rest while frames flow
+#endif
   if (send_queue_len > 0   // first, check send queue
     && millis() >= _last_write + BLE_WRITE_MIN_INTERVAL    // space the writes apart
   ) {
