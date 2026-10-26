@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1833
+impact: none
+reason: Changes contribution and CI policy only; radio commands, settings, defaults and firmware runtime behavior are unchanged.

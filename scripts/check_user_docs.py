@@ -3,8 +3,8 @@
 
 These checks establish structure and catch known disclosure patterns. They do not
 prove semantic accuracy, hardware operation, or that arbitrary prose is secret-free.
-External URLs are not fetched. Epic C will wire impact decisions into PR policy;
-the optional impact interface here provides its tested foundation.
+External URLs are not fetched. check_docs_impact.py applies the impact interface
+to real PR and base-branch push diffs in the independent documentation workflow.
 """
 import argparse
 from html.parser import HTMLParser
@@ -24,7 +24,7 @@ SECTIONS = ('Applies to', 'Before you start', 'Steps', 'Check it worked',
 PRIVATE_COMPONENTS = {'vendor', 'plans', 'handoffs', 'assessments', 'superpowers',
                       'llm-consultations', 'llm-consult-prompts', 'docs-internal'}
 IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.ico'}
-CODE_PREFIXES = ('src/', 'examples/', 'variants/', 'include/', 'lib/', 'boards/')
+CODE_PREFIXES = ('src/', 'examples/', 'variants/', 'include/', 'lib/', 'boards/', 'arch/')
 RELEASE = re.compile(r'offband-v\d+\.\d+\.\d+(?:-(?:beta|rc)\d*)?\Z')
 LINK = re.compile(r'!?\[[^\]]*\]\(([^\s)]+)(?:\s+[^)]*)?\)')
 SECRET = re.compile(r'\b(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|'
@@ -331,11 +331,11 @@ def check_build_config(repo_root: Path, config_path: Path) -> list[str]:
 
 
 def check_impact(repo_root: Path, changed_paths: list[str], record_paths: list[Path]) -> list[str]:
-    """Shape-check impact decisions; Epic C owns their CI activation and review policy."""
+    """Validate impact decisions; semantic accuracy remains a review responsibility."""
     code = [p for p in changed_paths if p.startswith(CODE_PREFIXES) or p == 'platformio.ini']
-    if not code:
+    if not code and not record_paths:
         return []
-    if not record_paths:
+    if code and not record_paths:
         return ['firmware changes require a documentation-impact decision']
     errors = []
     for path in record_paths:

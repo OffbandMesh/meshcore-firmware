@@ -30,7 +30,7 @@ network details into examples.
 ## Record the documentation impact
 
 A PR changing firmware under `src/`, `examples/`, `variants/`, `include/`, `lib/`,
-`boards/`, or root `platformio.ini` must add or change a decision record at
+`boards/`, `arch/`, or root `platformio.ini` must add or change a decision record at
 `docs/changes/<issue>-<short-description>.yml`. The record is checked against the
 PR diff, not the presence of old records elsewhere in the repository.
 
