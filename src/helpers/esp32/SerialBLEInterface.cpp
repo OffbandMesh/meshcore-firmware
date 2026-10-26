@@ -72,55 +72,58 @@ static ble_gap_event_listener s_trace_listener;
 static ble_hs_reset_fn* s_prev_reset_cb = nullptr;
 static ble_hs_sync_fn* s_prev_sync_cb = nullptr;
 
-// A connect status, disconnect reason or encryption status: an HCI code
-// (0x200 + code) decoded by name, or a host error by name.
+// The host task only records; checkRecvFrame() prints on the main loop. The
+// host task has ~1.25 KB of stack to spare, and mesh_log_line both formats a
+// line on the stack and busy-waits on the UART mirror per byte, which would
+// stall the stack's own connection handling: the timing being diagnosed.
+static ble_trace::EventRing<24> s_trace_ring;
+static portMUX_TYPE s_trace_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void traceRecord(uint8_t type, int32_t status, uint16_t handle, uint16_t value, int8_t host_adv) {
+  ble_trace::Event ev = {(uint32_t)millis(), status, handle, value, type, host_adv};
+  portENTER_CRITICAL(&s_trace_mux);
+  s_trace_ring.push(ev);
+  portEXIT_CRITICAL(&s_trace_mux);
+}
+
+// A status or reason: an HCI code (0x200 + code) decoded by name, or a host
+// error by name. ATT, L2CAP and SM codes print raw as host-error.
 static const char* traceStatus(int rc) {
   if (rc >= ble_reason::kNimbleHciBase) return ble_reason::fromNimble(rc).name;
   return ble_trace::hostErrorName(rc);
 }
 
 // Every GAP event the host raises, before NimBLE-Arduino's own handler runs.
-// adv= is the controller's advertising state as the event arrives.
+// host_adv is the host's advertising bookkeeping (ble_gap_adv_active), not the
+// controller's; on adv-complete it is read before the host clears it, so it
+// is recorded as unknown there.
 static int traceGapEvent(struct ble_gap_event* e, void*) {
   if (!ble_trace::logged(e->type)) return 0;
-  const char* ev = ble_trace::gapEventName(e->type);
-  const int adv = ble_gap_adv_active();
+  const int8_t adv = (int8_t)ble_gap_adv_active();
   switch (e->type) {
     case BLE_GAP_EVENT_CONNECT:
-      mesh_log_line(MLOG_BOOT, "[ble-trace] %s status=0x%03X (%s) handle=%u adv=%d\n", ev,
-                    (unsigned)e->connect.status, traceStatus(e->connect.status),
-                    (unsigned)e->connect.conn_handle, adv);
+      traceRecord(e->type, e->connect.status, e->connect.conn_handle, 0, adv);
       break;
     case BLE_GAP_EVENT_DISCONNECT:
-      mesh_log_line(MLOG_BOOT, "[ble-trace] %s reason=0x%03X (%s) handle=%u adv=%d\n", ev,
-                    (unsigned)e->disconnect.reason, traceStatus(e->disconnect.reason),
-                    (unsigned)e->disconnect.conn.conn_handle, adv);
+      traceRecord(e->type, e->disconnect.reason, e->disconnect.conn.conn_handle, 0, adv);
       break;
     case BLE_GAP_EVENT_ADV_COMPLETE:
-      mesh_log_line(MLOG_BOOT, "[ble-trace] %s reason=%d (%s) adv=%d\n", ev,
-                    e->adv_complete.reason, traceStatus(e->adv_complete.reason), adv);
+      traceRecord(e->type, e->adv_complete.reason, 0, 0, -1);
       break;
     case BLE_GAP_EVENT_CONN_UPDATE:
-      mesh_log_line(MLOG_BOOT, "[ble-trace] %s status=0x%03X (%s) handle=%u adv=%d\n", ev,
-                    (unsigned)e->conn_update.status, traceStatus(e->conn_update.status),
-                    (unsigned)e->conn_update.conn_handle, adv);
+      traceRecord(e->type, e->conn_update.status, e->conn_update.conn_handle, 0, adv);
       break;
     case BLE_GAP_EVENT_ENC_CHANGE:
-      mesh_log_line(MLOG_BOOT, "[ble-trace] %s status=0x%03X (%s) handle=%u adv=%d\n", ev,
-                    (unsigned)e->enc_change.status, traceStatus(e->enc_change.status),
-                    (unsigned)e->enc_change.conn_handle, adv);
+      traceRecord(e->type, e->enc_change.status, e->enc_change.conn_handle, 0, adv);
       break;
     case BLE_GAP_EVENT_TERM_FAILURE:
-      mesh_log_line(MLOG_BOOT, "[ble-trace] %s status=0x%03X (%s) handle=%u adv=%d\n", ev,
-                    (unsigned)e->term_failure.status, traceStatus(e->term_failure.status),
-                    (unsigned)e->term_failure.conn_handle, adv);
+      traceRecord(e->type, e->term_failure.status, e->term_failure.conn_handle, 0, adv);
       break;
     case BLE_GAP_EVENT_MTU:
-      mesh_log_line(MLOG_BOOT, "[ble-trace] %s value=%u handle=%u adv=%d\n", ev,
-                    (unsigned)e->mtu.value, (unsigned)e->mtu.conn_handle, adv);
+      traceRecord(e->type, 0, e->mtu.conn_handle, e->mtu.value, adv);
       break;
     default:
-      mesh_log_line(MLOG_BOOT, "[ble-trace] %s type=%u adv=%d\n", ev, (unsigned)e->type, adv);
+      traceRecord(e->type, 0, 0, 0, adv);
       break;
   }
   return 0;
@@ -128,29 +131,79 @@ static int traceGapEvent(struct ble_gap_event* e, void*) {
 
 // A host reset tears down every connection and advertising until the host and
 // controller sync again. NimBLE-Arduino's own handlers still run, after ours.
+// (A reset NimBLE-Arduino detects from an adv-complete reason calls its onReset
+// directly, not through here: it shows as that adv-complete.)
 static void traceHostReset(int reason) {
-  mesh_log_line(MLOG_BOOT, "[ble-trace] host-reset reason=%d (%s) adv=%d\n", reason,
-                traceStatus(reason), ble_gap_adv_active());
+  traceRecord(ble_trace::kHostReset, reason, 0, 0, (int8_t)ble_gap_adv_active());
   if (s_prev_reset_cb) s_prev_reset_cb(reason);
 }
 
+// Recorded after NimBLE-Arduino's onSync, which restarts advertising on a
+// clean sync. host_adv=0 here means it did not: onSync bails out early when
+// it cannot set an address.
 static void traceHostSync() {
   if (s_prev_sync_cb) s_prev_sync_cb();
-  mesh_log_line(MLOG_BOOT, "[ble-trace] host-sync adv=%d\n", ble_gap_adv_active());
+  traceRecord(ble_trace::kHostSync, 0, 0, 0, (int8_t)ble_gap_adv_active());
 }
 
-// Once a second: the controller's advertising state, logged when it changes,
-// with what the firmware believes and the internal heap BLE allocates from.
+static void tracePrint(const ble_trace::Event& ev) {
+  const char* name = ble_trace::gapEventName(ev.type);
+  switch (ev.type) {
+    case BLE_GAP_EVENT_MTU:
+      mesh_log_line(MLOG_BOOT, "[ble-trace] t=%lu %s value=%u handle=%u host_adv=%d\n",
+                    (unsigned long)ev.at_ms, name, (unsigned)ev.value, (unsigned)ev.handle, ev.host_adv);
+      break;
+    case BLE_GAP_EVENT_ADV_COMPLETE:
+    case ble_trace::kHostReset:
+      mesh_log_line(MLOG_BOOT, "[ble-trace] t=%lu %s reason=%ld (%s) host_adv=%d\n",
+                    (unsigned long)ev.at_ms, name, (long)ev.status, traceStatus(ev.status), ev.host_adv);
+      break;
+    case BLE_GAP_EVENT_CONNECT:
+    case BLE_GAP_EVENT_DISCONNECT:
+    case BLE_GAP_EVENT_CONN_UPDATE:
+    case BLE_GAP_EVENT_ENC_CHANGE:
+    case BLE_GAP_EVENT_TERM_FAILURE:
+      mesh_log_line(MLOG_BOOT, "[ble-trace] t=%lu %s status=0x%03lX (%s) handle=%u host_adv=%d\n",
+                    (unsigned long)ev.at_ms, name, (unsigned long)ev.status, traceStatus(ev.status),
+                    (unsigned)ev.handle, ev.host_adv);
+      break;
+    default:
+      mesh_log_line(MLOG_BOOT, "[ble-trace] t=%lu %s type=%u host_adv=%d\n",
+                    (unsigned long)ev.at_ms, name, (unsigned)ev.type, ev.host_adv);
+      break;
+  }
+}
+
+// On the main loop: print what the host task recorded, then once a second
+// sample the host's advertising state, logging each change, and a heartbeat
+// every 60 s so a long silence reads as "still stuck", not "loop dead".
 void SerialBLEInterface::traceAdvState() {
-  if (millis() - _adv_trace_at < 1000) return;
-  _adv_trace_at = millis();
+  ble_trace::Event ev;
+  for (;;) {
+    portENTER_CRITICAL(&s_trace_mux);
+    const bool got = s_trace_ring.pop(&ev);
+    portEXIT_CRITICAL(&s_trace_mux);
+    if (!got) break;
+    tracePrint(ev);
+  }
+  portENTER_CRITICAL(&s_trace_mux);
+  const uint16_t dropped = s_trace_ring.takeDropped();
+  portEXIT_CRITICAL(&s_trace_mux);
+  if (dropped) mesh_log_line(MLOG_BOOT, "[ble-trace] dropped=%u (ring full)\n", (unsigned)dropped);
+
+  const unsigned long now = millis();
+  if (now - _adv_trace_at < 1000) return;
+  _adv_trace_at = now;
   const bool adv = ble_gap_adv_active();
-  if (!_adv_trace.update(adv)) return;
+  const bool changed = _adv_trace.update(adv);
+  const bool heartbeat = now - _adv_trace_beat >= 60000;
+  if (!changed && !heartbeat) return;
+  _adv_trace_beat = now;
   mesh_log_line(MLOG_BOOT,
-                "[ble-trace] adv-state active=%d conns=%u enabled=%d connected=%d synced=%d "
+                "[ble-trace] adv-state%s host_adv=%d conns=%u enabled=%d connected=%d synced=%d "
                 "restart_pending=%d int_free=%u largest=%u\n",
-                (int)adv, (unsigned)pServer->getConnectedCount(), (int)_isEnabled,
-                (int)deviceConnected, ble_hs_synced(), (int)(adv_restart_time != 0),
+                changed ? "" : " (60 s)", (int)adv, (unsigned)pServer->getConnectedCount(),
+                (int)_isEnabled, (int)deviceConnected, ble_hs_synced(), (int)(adv_restart_time != 0),
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 }
@@ -174,10 +227,13 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
 #ifdef OFFBAND_BLE_TRACE
   {
     // #1830: chained, so NimBLE-Arduino's reset and sync handlers still run.
-    s_prev_reset_cb = ble_hs_cfg.reset_cb;
-    s_prev_sync_cb = ble_hs_cfg.sync_cb;
-    ble_hs_cfg.reset_cb = traceHostReset;
-    ble_hs_cfg.sync_cb = traceHostSync;
+    // Once only: a second begin() would chain the wrappers to themselves.
+    if (ble_hs_cfg.reset_cb != traceHostReset) {
+      s_prev_reset_cb = ble_hs_cfg.reset_cb;
+      s_prev_sync_cb = ble_hs_cfg.sync_cb;
+      ble_hs_cfg.reset_cb = traceHostReset;
+      ble_hs_cfg.sync_cb = traceHostSync;
+    }
     const int rc = ble_gap_event_listener_register(&s_trace_listener, traceGapEvent, nullptr);
     mesh_log_line(MLOG_BOOT, "[ble-trace] on listener_rc=%d synced=%d\n", rc, ble_hs_synced());
   }

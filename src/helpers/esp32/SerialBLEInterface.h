@@ -31,9 +31,11 @@ class SerialBLEInterface : public BaseSerialInterface, NimBLEServerCallbacks, Ni
   volatile bool _recv_full_logged;
   volatile bool _send_full_logged;
 #ifdef OFFBAND_BLE_TRACE
-  // #1830: the advertising state, sampled once a second; each change is logged.
+  // #1830: the advertising state, sampled once a second; each change is logged,
+  // and a heartbeat line every 60 s.
   ble_trace::Transition _adv_trace;
   unsigned long _adv_trace_at = 0;
+  unsigned long _adv_trace_beat = 0;
   void traceAdvState();
 #endif
 
