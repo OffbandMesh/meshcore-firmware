@@ -3,9 +3,10 @@
 
 // #1830: the pure half of the BLE trace that diag GUI builds compile in
 // (OFFBAND_BLE_TRACE) to find why a companion stops advertising (#1828).
-// SerialBLEInterface (ESP32) logs every NimBLE GAP event and each change of
+// SerialBLEInterface (ESP32) records every NimBLE GAP event and each change of
 // the advertising state; this header names what it logs, so a capture reads
-// without a spec lookup.
+// without a spec lookup, and holds the ring that carries records from the
+// host task to the main loop.
 //
 // The numbers restate NimBLE's (ble_gap.h BLE_GAP_EVENT_*, ble_hs.h BLE_HS_E*)
 // so this header needs no NimBLE include and is tested natively in
@@ -36,8 +37,16 @@ enum GapEvent : uint8_t {
   kLinkEstab = 38,
 };
 
+// Trace records that are not GAP events (GAP event types stop well below these).
+enum TraceKind : uint8_t {
+  kHostReset = 250,   // ble_hs_cfg.reset_cb; status = the reason
+  kHostSync = 251,    // ble_hs_cfg.sync_cb, after NimBLE-Arduino's own onSync
+};
+
 inline const char* gapEventName(uint8_t type) {
   switch (type) {
+    case kHostReset:         return "host-reset";
+    case kHostSync:          return "host-sync";
     case kConnect:           return "connect";
     case kDisconnect:        return "disconnect";
     case kConnUpdate:        return "conn-update";
@@ -100,6 +109,56 @@ inline const char* hostErrorName(int rc) {
     default:           return "host-error";
   }
 }
+
+// One trace record, captured on the NimBLE host task. Formatting and printing
+// happen later on the main loop (EventRing), because the host task's stack is
+// small and the UART log mirror busy-waits on every byte: logging there would
+// both risk the stack and stall the stack's own timing.
+struct Event {
+  uint32_t at_ms;
+  int32_t status;     // connect/enc/term status, disconnect or adv-complete reason
+  uint16_t handle;
+  uint16_t value;     // the MTU, for an MTU event
+  uint8_t type;       // a GapEvent or a TraceKind
+  int8_t host_adv;    // the host's advertising bookkeeping (ble_gap_adv_active), -1 when stale
+};
+
+// The host task pushes, the main loop pops. Not synchronized itself: the
+// device code holds a critical section around each push and pop. When full, a
+// push is dropped and counted, so the log says how much it lost.
+template <uint8_t N>
+class EventRing {
+public:
+  bool push(const Event& e) {
+    if (_count == N) {
+      if (_dropped != UINT16_MAX) _dropped++;
+      return false;
+    }
+    _buf[(_head + _count) % N] = e;
+    _count++;
+    return true;
+  }
+  bool pop(Event* out) {
+    if (_count == 0) return false;
+    *out = _buf[_head];
+    _head = (_head + 1) % N;
+    _count--;
+    return true;
+  }
+  // The pushes dropped since the last call, then zero.
+  uint16_t takeDropped() {
+    const uint16_t d = _dropped;
+    _dropped = 0;
+    return d;
+  }
+  uint8_t count() const { return _count; }
+
+private:
+  Event _buf[N];
+  uint8_t _head = 0;
+  uint8_t _count = 0;
+  uint16_t _dropped = 0;
+};
 
 // Reports each change of a sampled on/off state once, and the first sample.
 class Transition {
