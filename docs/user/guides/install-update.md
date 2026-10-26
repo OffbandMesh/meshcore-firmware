@@ -76,8 +76,7 @@ the exact board and review the selected file and erase setting before starting.
 For an ordinary update, do not enable full erase. For first installation, follow
 the release's merged-image instructions and understand that erase is destructive.
 
-Keep the device connected until the tool reports completion. This guide does
-not perform a flash, select a USB port or approve erasing an existing device.
+Keep the device connected until the tool reports completion.
 
 ## Check it worked
 
