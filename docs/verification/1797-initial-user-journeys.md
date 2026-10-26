@@ -44,7 +44,10 @@ guides and verified beta applicability were supplied. Final catalog/source/link
 checks pass. A strict MkDocs build produces all five pages and search entries.
 Rendered inspection finds no literal `text ` prefix in command blocks and
 confirms beta applicability is visible on each new page. Search indexes safety,
-broker and support content. The six existing rendered-publication tests pass.
+broker and support content. Seven rendered-publication tests pass, including a
+new regression for the existing WiFi page's six sequential steps. That page had
+rendered as five separate lists (`1, 1, 1, 1, 2` items); correcting continuation
+indentation produces one six-item list without changing the commands.
 
 An initial build into the new worktree's default output directory hit a local
 filesystem permission boundary. Rebuilding into the task's authorized preview

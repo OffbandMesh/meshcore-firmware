@@ -46,58 +46,58 @@ your app never stores what you typed.
 
 1. Read the current state:
 
-   ```text
-   wifi status
-   ```
+    ```text
+    wifi status
+    ```
 
-   You should receive a `wifi.status` reply. `AwaitingSetup` means no active
-   connection is available, which can include missing credentials or disabled
-   WiFi. If there is no reply, resolve the channel/image problem before sending
-   a password.
+    You should receive a `wifi.status` reply. `AwaitingSetup` means no active
+    connection is available, which can include missing credentials or disabled
+    WiFi. If there is no reply, resolve the channel/image problem before sending
+    a password.
 
 2. Save the network name:
 
-   ```text
-   set wifi.ssid <your-network-name>
-   ```
+    ```text
+    set wifi.ssid <your-network-name>
+    ```
 
-   The reply starts with `wifi.ssid =`. Confirm the name is correct. An `ERROR`
-   reply means the value was not successfully saved; stop and correct that
-   problem before continuing.
+    The reply starts with `wifi.ssid =`. Confirm the name is correct. An `ERROR`
+    reply means the value was not successfully saved; stop and correct that
+    problem before continuing.
 
 3. Save the password for a password-protected network:
 
-   ```text
-   set wifi.pwd <your-password>
-   ```
+    ```text
+    set wifi.pwd <your-password>
+    ```
 
-   The normal reply reports `wifi.pwd set` and the number of entered characters,
-   without printing the password. A save error is not a successful update.
-   This guide covers password-protected networks; open-network setup is outside
-   its scope.
+    The normal reply reports `wifi.pwd set` and the number of entered characters,
+    without printing the password. A save error is not a successful update.
+    This guide covers password-protected networks; open-network setup is outside
+    its scope.
 
 4. Enable WiFi if it may have been disabled:
 
-   ```text
-   wifi enable
-   ```
+    ```text
+    wifi enable
+    ```
 
-   The reply is `wifi.enabled = 1 (reboot to apply)`. This stores the policy;
-   it does not establish that the radio has connected.
+    The reply is `wifi.enabled = 1 (reboot to apply)`. This stores the policy;
+    it does not establish that the radio has connected.
 
 5. Restart the radio normally, using its power control or cycling its supply.
-   Reconnect the app over BLE and reopen the reserved channel. Do not erase the
-   radio, reset its identity or reflash it for this step. The reserved channel
-   does not accept a `reboot` command.
+    Reconnect the app over BLE and reopen the reserved channel. Do not erase the
+    radio, reset its identity or reflash it for this step. The reserved channel
+    does not accept a `reboot` command.
 
 6. Ask for the state again:
 
-   ```text
-   wifi status
-   ```
+    ```text
+    wifi status
+    ```
 
-   While joining, the reply can show `StaConnecting`. Wait for the network
-   attempt to settle and check again.
+    While joining, the reply can show `StaConnecting`. Wait for the network
+    attempt to settle and check again.
 
 ## Check it worked
 
