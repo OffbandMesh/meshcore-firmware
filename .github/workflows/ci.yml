@@ -714,8 +714,20 @@ jobs:
       # clean; a stale object linking into a tagged image is the image-identity
       # failure class this project has already been bitten by, and saving a few
       # minutes is worthless at a release. config-lint guards that.
-      - name: Cache build objects for ${{ matrix.env }}
-        uses: actions/cache@v5
+      # RESTORE on every run, SAVE only on firmware-base. The repo has a 10 GB
+      # Actions cache budget and the toolchain caches above already occupy
+      # ~9.3 GB across 7 entries at 1.3-1.5 GB each (they are keyed on every
+      # variant ini, and all 92 declare lib_deps, so that key cannot safely be
+      # narrowed). Saving an object tree per commit would mint 84 entries per
+      # push, evict the toolchain caches, and make CI SLOWER than before -- the
+      # 28 s restore above becomes a multi-minute download.
+      #
+      # Saving only on base keeps exactly one object cache per env, so the
+      # steady-state footprint is 84 entries rather than 84 per commit, and a
+      # PR restores from the most recent base build of its env.
+      - name: Restore build objects for ${{ matrix.env }}
+        id: objcache
+        uses: actions/cache/restore@v5
         with:
           path: .pio/build/${{ matrix.env }}
           key: pioobj-${{ runner.os }}-${{ matrix.env }}-${{ github.sha }}
@@ -732,6 +744,18 @@ jobs:
 
       - name: Build ${{ matrix.env }}
         run: pio run -e ${{ matrix.env }}
+
+      # Save ONLY on firmware-base, so there is one object cache per env rather
+      # than 84 per commit. A PR restores from the most recent base build of its
+      # env and never writes, which keeps the repo inside its 10 GB Actions cache
+      # ceiling -- a fixed per-repository limit that no plan raises. See the
+      # restore step above for why writing from PRs would make CI slower.
+      - name: Save build objects for ${{ matrix.env }}
+        if: github.event_name == 'push' && github.ref == 'refs/heads/firmware-base'
+        uses: actions/cache/save@v5
+        with:
+          path: .pio/build/${{ matrix.env }}
+          key: pioobj-${{ runner.os }}-${{ matrix.env }}-${{ github.sha }}
 
       # Dev-channel artifact (epic #14 / T2, #16). Built with the placeholder
       # secrets stub above -- these are dev/test builds, NOT releases. Configure
