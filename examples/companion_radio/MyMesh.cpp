@@ -19,6 +19,7 @@
 // #1523: the per-channel tune's encoding. Header-only constexpr, and the builtin table is
 // internal-linkage, so a variant that only names the unset value emits nothing of it.
 #include <helpers/ui/TuneSlots.h>
+#include <helpers/ChannelSlotGuard.h>   // #1865: no channel written over another
 #ifdef PIN_BUZZER
   #include "ToneEngine.h"   // #1788: the tune sub-codes reach the UI's engine
 #endif
@@ -3989,8 +3990,12 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
 #endif
     // NOTE: only 128-bit secrets supported
-    if (cmdSetChannel(channel_idx, (const char *)&cmd_frame[2], &cmd_frame[2 + 32]) == offband::gui::CmdResult::Ok) {
+    const offband::gui::CmdResult res =
+        cmdSetChannel(channel_idx, (const char *)&cmd_frame[2], &cmd_frame[2 + 32]);
+    if (res == offband::gui::CmdResult::Ok) {
       writeOKFrame();
+    } else if (res == offband::gui::CmdResult::Occupied) {
+      writeErrFrame(ERR_CODE_BAD_STATE); // #1865: another channel holds this slot; clear it first
     } else {
       writeErrFrame(ERR_CODE_NOT_FOUND); // bad channel_idx
     }
@@ -4942,12 +4947,23 @@ CmdResult MyMesh::cmdSetChannel(uint8_t idx, const char* name, const uint8_t sec
   // else, so anything the badge keeps per channel has to be carried over here or it is
   // lost. setChannel() copies the struct whole (#1523).
   ChannelDetails before;
-  const bool was_empty = !getChannel(idx, before) || before.name[0] == 0;
+  const bool got = getChannel(idx, before);
+  const bool was_empty = !got || before.name[0] == 0;
+
+  // #1865: never put a different channel over one already in the slot. The
+  // caller cannot know what a slot holds; changing a key is clear-then-add.
+  if (got && offband::slotWriteDecision(before.name, before.channel.secret, name, secret) ==
+                 offband::SlotWrite::Refuse) {
+    mesh_log_line(MLOG_BOOT, "[chan] refused overwrite slot=%u\n", (unsigned)idx);
+    return CmdResult::Occupied;
+  }
 
   ChannelDetails channel;
   StrHelper::strncpy(channel.name, name, 32);
   memset(channel.channel.secret, 0, sizeof(channel.channel.secret));
-  memcpy(channel.channel.secret, secret, 16);  // only 128-bit secrets are supported
+  // #1865: a clear keeps no key, whatever the caller sent. Channels are matched on
+  // the secret, so a nameless slot holding one would still take that channel's traffic.
+  if (name[0] != 0) memcpy(channel.channel.secret, secret, 16);  // only 128-bit secrets are supported
   // #1523: keep the tune through a rename from the phone, but not across a REPLACEMENT.
   // The slot is what the app addresses, so "not empty" is also true when a different
   // channel is being dropped into it; the secret is what says whether this is still the

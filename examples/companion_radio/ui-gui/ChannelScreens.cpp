@@ -231,6 +231,11 @@ int GuiShell::chanJoin(const char* name, const uint8_t key[kChannelKeyLen]) {
   if (slot < 0) slot = firstFreeChannelSlot(slots, n);
   if (slot < 0) return -1;
   const int t = _model->addChannel(slot, name, key);
+  if (t < 0) {
+    // #1865: the slot changed under us, or the write was refused; nothing was joined.
+    mesh_log_line(MLOG_BOOT, "[gui] channel join failed: slot %d\n", slot);
+    return -1;
+  }
   mesh_log_line(MLOG_BOOT, "[gui] channel joined: slot %d thread %d\n", slot, t);
   return t;
 }

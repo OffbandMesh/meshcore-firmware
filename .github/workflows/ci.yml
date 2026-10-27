@@ -239,6 +239,11 @@ jobs:
       - name: GUI styles on children a layout may not build
         run: python scripts/test_gui_child_styles.py
 
+      # #1865: adding a channel from the client wrote it over Public. cmdSetChannel
+      # refuses a different channel into an occupied slot; this keeps it wired.
+      - name: Channel slot guard wired into cmdSetChannel
+        run: python scripts/test_channel_slot_guard_wiring.py
+
       # #1625: which preflashed channels ship quiet. A silent channel and a channel that
       # made no choice are one byte apart, and swapping them is invisible until a badge is
       # quiet in the wrong room -- or noisy in the one a tester asked to be quiet.
