@@ -4,19 +4,27 @@
 |---|---|
 | Feature | [Firmware #1794](https://github.com/OffbandMesh/meshcore-firmware/issues/1794), Citadel `Crosswire-uuu`. Standalone Feature. |
 | Serves | Firmware users learning, configuring and troubleshooting Offband features. |
-| Status | Five-Epic structure approved in chat on 2026-10-24. Implementation plan awaits owner review and plan-PR merge. No production changes or spending authorized yet. |
+| Status | Original plan merged in #1802. Foundation, contribution policy and six guides delivered; manual site publication is live. Owner requested additional initial-population backfill on 2026-10-27. Operational acceptance and sender integration remain open. |
 | Owner | Strycher |
-| Last updated | 2026-10-25 |
-| Proposed repository destination | `docs/initiatives/standalone/1794-firmware-user-documentation/PLAN.md` in meshcore-firmware. |
+| Last updated | 2026-10-27 |
+| Plan of record | `docs/initiatives/standalone/1794-firmware-user-documentation/PLAN.md` in meshcore-firmware. |
 
 ## At a glance
 
 - **What:** a searchable firmware manual at docs.offband.org, with documentation maintained as part of Features and Epics.
-- **Why now:** useful guides exist, but users are sent to a GitHub path that returns 404, there is no inspected documentation publishing workflow, and feature completion does not explicitly require a checked user guide.
+- **Why now:** the original discovery/publishing gaps are addressed. Users still need explanations and setup/recovery guides for under-used shipped capabilities, especially repeater telemetry/HA, reliability/diagnostic rigs and complete observer operation.
 - **How:** establish approved documentation sources and checks in firmware; publish them from offband-site; add documentation requirements and update triggers; write the first complete user journeys; integration-test the whole process.
 - **Done when:** someone can find a feature, identify whether their board, role and firmware version support it, follow its instructions, and verify the result. A subsequent feature change cannot silently bypass a documentation-impact decision.
 
-Planning task: [#1799](https://github.com/OffbandMesh/meshcore-firmware/issues/1799), Citadel `Crosswire-gzi`. The owner approved establishing this hierarchy and preparing this plan; implementation follows separate plan approval. See ISSUE-MAP.md for the actual native hierarchy and Citadel IDs.
+Original planning task: [#1799](https://github.com/OffbandMesh/meshcore-firmware/issues/1799), completed by merged #1802. Backfill amendment task: #1858. See ISSUE-MAP.md for the native hierarchy, delivery evidence and Citadel IDs.
+
+### Recorded owner decisions and current delivery
+
+- The manual is live at `https://docs.offband.org/firmware/`. Firmware PR #1816 delivered the foundation; #1836 delivered C1/C2 policy; #1841 delivered the first five additional guides. The six-guide manual was manually published by site run 40405972459 from source `894d2585bb4f2247d6af53644aa741576bbbe094`.
+- On 2026-10-26 the owner chose GitHub Free with **owner-only manual production publishing**, rather than upgrading for private-repository environment protection. Automatic rebuild notifications, once their scoped credential and receiver gate are ready, build artifacts only. They do not publish.
+- On 2026-10-27 the owner explicitly placed the named historical-guide backfill under this Feature. Epics F/G/H below extend the bounded initial population before final Integration Testing E. This is a scope extension, not a claim that the original six guides or all firmware features are complete.
+- Site rollback rehearsal, sender credential verification, C3 #1834, C4 #1835 and gate #1800 remain open. The owner merged the policy portion of C before the sender; its residual work needs a separately reviewed follow-up PR. It is not silently waived.
+- Existing human-reviewed merges and named public-action approval are the delivery authority. The original grant proposal in section 5 is not an active or enlarged grant and does not authorize new backfill/follow-up merges automatically.
 
 ## 1. Diagnosis
 
@@ -49,8 +57,8 @@ Native parent/child relationships and current labels are listed in ISSUE-MAP.md.
 | meshcore-firmware | `docs/user/features.yml` | Feature IDs, user-visible names, role/board applicability, release availability, guide paths and source/test evidence. |
 | meshcore-firmware | `docs/templates/USER-GUIDE.md` | Purpose, prerequisites, applicability, steps, expected result, persistence/reboot behavior, limitations, troubleshooting and recovery. Not published. |
 | meshcore-firmware | `docs/documentation-workflow.md` | Feature/Epic documentation acceptance criteria and the existing-agent drafting/review procedure. Not part of the user manual. |
-| meshcore-firmware | `docs/changes/<issue-number>.yml` | Per-work-item documentation-impact record: updated guides, or a specific no-user-impact reason. Not published. |
-| meshcore-firmware | `scripts/check_user_docs.py` and `scripts/test_check_user_docs.py` | Validate the catalog, impact records, evidence paths, publication boundaries and changed-file coverage. |
+| meshcore-firmware | `docs/changes/<issue>-<description>.yml` | Per-work-item documentation-impact record: updated guides, or a specific no-user-impact reason. Not published. |
+| meshcore-firmware | `scripts/check_user_docs.py`, `scripts/check_docs_impact.py` and tests | Validate catalog, records, source evidence, public boundaries and real Git diff coverage. |
 | meshcore-firmware | `mkdocs.user.yml`, `requirements-docs.txt`, `.github/workflows/docs-check.yml` | Reproducible standalone user-docs build and PR checks, separate from existing firmware build classification. |
 | meshcore-firmware | `.github/pull_request_template.md`, `CONTRIBUTING.md` | Put documentation impact, validation evidence and release applicability into normal delivery. Create CONTRIBUTING.md only if absent. |
 | meshcore-firmware | `.github/workflows/docs-notify.yml` | Notify the website after approved docs changes land. Never send deployment credentials into untrusted PR code. |
@@ -66,6 +74,7 @@ Native parent/child relationships and current labels are listed in ISSUE-MAP.md.
 - The manual follows approved documentation on firmware-base. Every feature page states which released versions/channels support it. Beta and development-only features are visibly labeled. Do not call the current branch the stable firmware.
 - Every build records the exact firmware source commit. Fetch the branch once, resolve its SHA, and build only that checkout. A later branch change cannot alter the in-progress build. Render the short SHA and build time in the manual footer, linking the full SHA to its source commit. Publish a machine-readable `build-info.json` containing `source_repository`, `source_commit`, `source_ref` and `built_at`; acceptance checks compare that record with the fetched revision.
 - Corrections can publish without cutting firmware tags. A feature is not described as shipped merely because its documentation merged. A release event can refresh availability only from verified release metadata; it does not generate user instructions.
+- Production publication is always an explicit owner-initiated workflow on site `main`, with publish opt-in and the enable switch. Automatic push/rebuild events may assemble artifacts but cannot upload production. No paid GitHub environment protection is assumed.
 - Source Markdown remains useful on GitHub. The site staging code owns the `/firmware/` prefix and source/edit URLs; it must not make users maintain duplicate copies or edit offband-site for each new guide.
 - Publish only `docs/user/` Markdown and approved image assets. Do not stage the wider docs tree, local files, consultations, plan artifacts, feature-impact records or private examples.
 - Existing technical pages are retained for provenance and developer use. User guides must be self-contained or link to an approved published reference, not leak into excluded content.
@@ -103,11 +112,11 @@ The receiving workflow in `OffbandMesh/offband-site` supports `repository_dispat
 
 Validate the schema, repository/ref literals and SHA format before checkout; never substitute payload values into shell text or arbitrary checkout locations. The receiver fetches the configured firmware-base branch, resolves its current head exactly once, and verifies the notified SHA belongs to that branch's history. A delayed valid event therefore rebuilds the newest accepted head, not an older public version. A mismatch fails visibly. Manual workflow dispatch resolves the same configured branch without requiring an event payload. Both paths use the same staging/build code. Deployment concurrency serializes production publication, so a slow older build cannot overwrite a newer deployment.
 
-Before C3, B2 must verify a credential with permission to send this cross-repository event. A source repository's default GITHUB_TOKEN is not assumed to have that permission. Inspect the existing credential inventory and verify scopes without displaying values. Reuse an existing appropriately scoped credential; expose it only to the trusted post-merge sender under the secret name `OFFBAND_DOCS_DISPATCH_TOKEN`. Fork PR checks receive no dispatch or deployment credential. If no suitable credential exists, site#61 stays open and blocks this setup until the owner approves a scoped credential solution. A manual trigger is a recovery path, not acceptance of a missing automatic-update requirement. Cloudflare publication uses its own existing credential and is a separate permission check.
+Before C3, B2 must verify a credential with permission to send this cross-repository event. A source repository's default GITHUB_TOKEN is not assumed to have that permission. Inspect the existing credential inventory and verify scopes without displaying values. Reuse an existing appropriately scoped credential; expose it only to the trusted post-merge sender under the secret name `OFFBAND_DOCS_DISPATCH_TOKEN`. Fork PR checks receive no dispatch or deployment credential. If no suitable credential exists, site#61 stays open and blocks this setup until the owner approves a scoped credential solution. A manual build is a recovery path, not acceptance of a missing automatic-rebuild requirement. Production publication is separately and deliberately manual under the owner's revised decision. Cloudflare uses its own existing credential.
 
 ## 3. Epics and tasks
 
-Issue levels: standalone **type:feature #1794**, five **type:epic** children, and direct **type:task** children. Epic IDs are A=#1795, B=offband-site#60, C=#1796, D=#1797 and E=#1798. Use Stories only if one user requirement needs several Tasks and that grouping adds clarity. The Feature, Epics, planning task and explicit gates already have GitHub board items and matching Citadel records. Implementation child Tasks and verification dependencies are instantiated after plan approval; all Epics remain backlog until then.
+Issue levels: standalone **type:feature #1794**, **type:epic** children A-H, and direct **type:task** children. A=#1795, B=offband-site#60, C=#1796, D=#1797, E=#1798, F=#1843, G=#1844 and H=#1845. F/G/H are the owner-requested backfill extension; E remains the final Integration Testing Epic. Use Stories only when one requirement needs several Tasks and the grouping helps. Existing parentage is preserved; backfill issues are not replacement parents for old work.
 
 ### Epic A (#1795): Firmware documentation foundation and checks (firmware)
 
@@ -131,7 +140,7 @@ Test corpus includes missing guide, dangling source path, unknown board/role, mi
 
 The public deployment gate is [offband-site#61](https://github.com/OffbandMesh/offband-site/issues/61), Citadel `offband-site-cs7`, a child of Epic B. It names Pages project creation, DNS/custom-domain binding, credential setup if required, and production publishing separately. It blocks deployment, not local preview work.
 
-### Epic C (#1796): Features/Epics maintain docs and approved changes republish (firmware)
+### Epic C (#1796): Features/Epics maintain docs and request rebuild artifacts (firmware)
 
 | Task | Pts | Deliverable and proof |
 |---|---|---|
@@ -153,21 +162,90 @@ Do not reuse `firmware-release` as if it meant docs-only updates. Coordinate wit
 
 A1 defines the bounded launch inventory. D is not an assertion that every historical feature is documented. Uncovered features become individually tracked backlog with support/release applicability, rather than broadening D indefinitely.
 
+### Epic F (#1843): Repeater telemetry and Home Assistant backfill
+
+| Task | Pts | Deliverable and proof |
+|---|---|---|
+| F1 #1846: What repeater telemetry does and how to configure it | 4 | Explain role/purpose, radio versus WiFi/MQTT responsibilities, supported images, burst behavior, prerequisites, configuration, persistence and success/recovery. No assumption that observer commands also configure a repeater. |
+| F2 #1847: Home Assistant setup and delivered entity reference | 4 | Discovery/setup and a source-backed list of emitted entities, keys, units, availability, meaning and useful actions. Match actual released payloads, including legacy names where applicable. Reuse #440/#441/#445 provenance without implementing or claiming proposed entities. |
+| F3 #1848: Epic verification | 1 | Source/release matrix, public-safe examples, rendered setup/reference walkthrough, search/catalog and owner usability. Actual HA/device trials are stated separately; no service deployment is implied. |
+
+### Epic G (#1844): Reliability, watchdog and diagnostic rig backfill
+
+| Task | Pts | Deliverable and proof |
+|---|---|---|
+| G1 #1849: SafeBoot purpose and value | 3 | Extend the existing power/recovery guide with the problem the guard solves, why it is useful, observable decisions, sensing/wake/build limitations and appropriate operator responses. |
+| G2 #1850: Watchdog behavior | 3 | Distinguish task/internal/external mechanisms by actual image/platform. Explain monitored activity, trigger/restart behavior, evidence to collect and recovery. Do not prescribe disabling production protection or hanging a live device as routine troubleshooting. |
+| G3 #1851: Diag builds and a supported reference rig | 4 | Explain selecting/obtaining a diag image, source identity and flags; then parts, verified interfaces/pins/voltage assumptions, assembly/checks, capture and reproduction for a supported reference rig. Audit existing harness/smoke scripts and board references. Preserve #755 capabilities-matrix and #287 nRF SafeFlash ownership. Unknown wiring claims block that procedure rather than becoming plausible examples. |
+| G4 #1852: Epic verification | 1 | Review source/release and physical-interface evidence, public-safe rig examples and rendered procedures. Hardware construction, flashing, low-voltage trials and fault injection are not performed under this documentation authorization. State missing bench validation explicitly. |
+
+### Epic H (#1845): Complete observer operation backfill
+
+| Task | Pts | Deliverable and proof |
+|---|---|---|
+| H1 #1853: Bounded capability-to-guide map | 2 | Audit shipped observer command/config handlers and applicability. Every supported operator capability in that audited release maps to a guide or a named gap; future features are excluded. This map defines what "everything observer" means for initial population. |
+| H2 #1854: Complete first-time setup | 3 | Extend/link existing WiFi/MQTT/location pages into a coherent operator path: image/role, management surface, network/broker/time/privacy choices, expected results and persistence. No invented client screens. |
+| H3 #1855: Rotation, held/heap states and failed recovery | 3 | Explain normal rotation versus memory deferral, clock holds, backoff and terminal failure, their causes, what to change/re-enable, and useful evidence. Distinguish human CLI labels from machine tokens and verify corrective actions against actual handlers. |
+| H4 #1856: Usable authentication and trust recipes | 4 | Full URI/transport/port/path, supported CA selection, JWT identity/audience, seeded versus retained configuration and credential safety. Broker-specific assertions need implementation and operator evidence; no invented live connection trial. |
+| H5 #1857: Epic verification | 1 | Coverage map/catalog, release/source evidence, coherent setup/recovery walkthroughs, rendered search/navigation, and explicit app/broker/hardware gaps. Extend existing pages rather than create competing copies of the same journey. |
+
+The three backfill Epics are inside Feature #1794 as additional initial population, explicitly requested on 2026-10-27. Completion is the named journeys and audited observer capability map, not every historical feature or every possible board/rig. Further discoveries become individually tracked backlog with a separate scope decision; they do not silently keep this Feature open forever.
+The three-Epic grouping is this amendment's delivery proposal for the owner's named topics.
+
+### Backfill file handoffs and task execution
+
+Keep the existing Markdown/MkDocs/Material stack, public root `docs/user`, source
+evidence catalog and manual site publication. These file targets make the named
+scope actionable; narrow or split a page when source review justifies it, without
+silently adding another user journey.
+
+| Owner task | Public/maintainer files | Consumes / produces |
+|---|---|---|
+| F1 #1846 | Create `docs/user/guides/repeater-telemetry.md` | Consume README role definitions, repeater config/command handlers and `src/helpers/wifi_telemetry/`; produce the prerequisite setup journey used by F2. |
+| F2 #1847 | Create `docs/user/guides/home-assistant.md` | Consume F1 and actual discovery/state emission; produce integration steps and a delivered entity table with units/availability/meaning. Existing provenance tasks remain authoritative for their implementation. |
+| G1 #1849 | Extend `docs/user/guides/power-and-recovery.md` | Consume SafeBoot's actual decision/sensing/wake paths; produce a clear purpose/value explanation without replacing existing recovery cautions. |
+| G2 #1850 | Create `docs/user/guides/watchdog.md` | Consume watchdog helpers, task guard/self-hang tests and build flags; produce image/platform-specific behavior and operator evidence/recovery. |
+| G3 #1851 | Create `docs/user/guides/diagnostic-builds.md` and `docs/user/guides/diagnostic-rig.md` | Consume `diag-build.yml`, `companion_harness.py`, `rig_boot_smoke.py`, relevant tests and verified board interface references; produce image selection plus a reproducible supported reference rig. Exclude private registry entries and unsupported wiring. |
+| H1 #1853 | Create maintainer `docs/observer-user-coverage.md` | Consume the shipped observer command/config manifests and selected release; produce the bounded capability-to-guide map for H2-H4, not a second public navigation list. |
+| H2 #1854 | Create `docs/user/guides/observer-setup.md`; extend/link existing WiFi/MQTT/location/support pages | Consume H1's scope and the existing individual journeys; produce an end-to-end first-time setup sequence with explicit success checks. |
+| H3 #1855 | Create `docs/user/guides/observer-broker-states.md`; update links in `observer-mqtt.md` | Consume broker/pool transitions and human/wire formatters; produce causes and exact corrective actions for rotation, held/heap, backoff and terminal failed states. |
+| H4 #1856 | Create `docs/user/guides/observer-broker-auth.md`; extend `observer-mqtt.md` | Consume URI construction, trust/auth code, seeded settings and operator evidence; produce usable, versioned recipes and a safe readback/enable/verification path. |
+| F3/G4/H5 | Update `docs/user/features.yml`, relevant index links and an Epic evidence record under `docs/verification/` | Consume the authoring tasks; produce validated coverage, rendered search/navigation and explicit owner/hardware acceptance limits. Serialize shared catalog/index updates. |
+
+For every authoring task:
+
+- [ ] Audit the selected released/tagged implementation and existing reference; list unsupported or unverified claims before drafting.
+- [ ] Draft from `docs/templates/USER-GUIDE.md`, covering purpose/value, applicability, prerequisites, steps, expected result, persistence, troubleshooting and recovery.
+- [ ] Record literal source/test evidence and release/build applicability. A rolling `diag-builds` prerelease is not a stable version; document the exact selected source/flags rather than inventing release support.
+- [ ] Build with the catalog/content checker and strict standalone MkDocs config; reject missing evidence or broken links. Add a targeted regression only for a real parser/rendering/validation defect, not tests that merely repeat prose.
+- [ ] Review the rendered journey as a user, fix factual findings and commit under its child task. No hardware actions or production publication are performed by writing the guide.
+
+Each final verification task also builds the assembled site preview from the
+committed source SHA, follows the user path and search, checks exclusions and
+release labels, records remaining live-device/service trials and requests owner
+usability review. After merge, publish only through the existing manual owner lane.
+
+Review focus: observer versus repeater/serial management surfaces; retained broker
+layouts versus fresh defaults; normal rotation versus actual heap/terminal failure;
+actual emitted HA entities versus proposed ones; and physical board/pin/voltage
+facts versus compile-time capability flags. The affected authoring task must
+resolve each uncertainty or explicitly block the unsupported claim/procedure.
+
 ### Epic E (#1798): Feature Integration Testing (firmware)
 
 | Task | Pts | Deliverable and proof |
 |---|---|---|
-| E1: Whole-system acceptance | 4 | From website entry to correct guide and source edit link; known stable/beta distinction; docs-impact failure then fix; accepted docs commit republishes and source SHA matches; search finds it; marketing still works. Use a preview for the test change. |
+| E1: Whole-system acceptance | 4 | From website entry to correct guide and source edit link; known stable/beta distinction; docs-impact failure then fix; accepted docs commit produces the expected rebuild artifact and owner manual publication matches its source SHA; search finds it; marketing still works. Include F/G/H journeys. |
 | E2: Failure and rollback exercise | 3 | Unknown source ref, failed fetch, invalid guide, missing credential, failed dispatch and deployment failure all surface visibly; existing production remains intact. Restore a prior docs deployment and verify its SHA. |
 | E3: Outcomes and Epic verification | 1 | OUTCOMES.md beside the plan: plain-language result, linked evidence, content coverage, unverified hardware claims, deferred client scope and owner sign-off. |
 
 ## 4. Order, ownership and dependencies
 
-Order: A -> B -> C -> D -> E. E depends on every preceding Epic. Each child depends on its Epic; each Epic's verification gates its successor. Planning and external setup tasks are outside the implementation chain where appropriate.
+Original order was A -> B -> C -> D -> E. Actual delivery has A/D and C1/C2 merged and the manual live; B operational acceptance and C3/C4 remain open. Backfill F/G/H can progress on the existing manual lane while those prerequisites are resolved. Final E depends on A/B/C/D/F/G/H and the existing site gate. Each backfill Epic ends with its own verification; F2 builds on F1's setup and H2-H4 use H1's bounded map. Planning and external setup remain separately tracked.
 
-One worktree/branch per Epic in the repository that owns it, child task commits on that branch, one Epic PR after verification. Four implementation Epic PRs in firmware (A/C/D/E), one in offband-site (B). Use the repositories' actual base branches: firmware-base and main respectively.
+Use one worktree/branch per new backfill Epic, child task commits and an Epic review PR. Use `firmware-base` in firmware and `main` in the site. Already merged delivery and separately reviewed site setup/fix PRs are recorded history, not retroactively one PR. C's residual sender and operational follow-ups require their own reviewed PRs; no extra merge grant is inferred from this amendment.
 
-Native GitHub parentage includes site#60 beneath firmware#1794. Citadel execution remains project-scoped. [Firmware#1800](https://github.com/OffbandMesh/meshcore-firmware/issues/1800), `Crosswire-fyx`, records verification of site#60 and mechanically blocks C and E. Complete it only from actual merged receiver and Epic verification evidence. A/C/D/E also depend on planning task #1799; final child-verification gates are added when implementation Tasks are instantiated. The site publication gate remains separate from this receiver-verification gate.
+Native GitHub parentage includes site#60 and F/G/H beneath firmware#1794. Citadel execution remains project-scoped. Gate #1800 records site verification and still gates C3 notification integration and final E. Do not close it from reachable pages alone: scoped credentials, operational evidence and verification are required. The site public-action gate is separate. Final E's dependencies include all three new backfill Epics. Original planning task #1799 is complete; amendment task #1858 records this extension.
 
 | Shared file/surface | Writers | Ordering |
 |---|---|---|
@@ -176,12 +254,16 @@ Native GitHub parentage includes site#60 beneath firmware#1794. Citadel executio
 | Website docs front door | B3 and site#53 when it changes firmware.md | Reserve/coordinate and serialize overlapping edits. |
 | Website publishing workflow | B and site#57 | Prefer dedicated docs.yml; if deploy-cloudflare.yml must change, #57 and B cannot edit it concurrently. |
 | Existing Why Offband content | firmware#445 and D3 | Keep #445 parented to #440. Reuse reviewed completed content; no duplicate competing writer or premature closure. |
+| Feature catalog/index and shared observer/safety pages | F/G/H | Serialize shared catalog/index changes; G1 extends the existing safety page, H extends observer pages, and no second central guide inventory is introduced. |
+| Entity provenance and hardware capabilities | #440/#441/#445, #755/#287, F/G | Reference delivered work without moving existing issues. A missing prerequisite blocks the affected claim or procedure, not permission to invent it. |
 
 AI/API automation, if later wanted, is a separate plan. It must settle provider, budget, secret handling and untrusted-diff handling; this Feature does not quietly introduce it.
 
 ## 5. Grants and authorization
 
-This plan is not approved until its PR merges. Structural approval in chat authorized planning and issue organization, not implementation, release tags or public infrastructure changes. The planning PR is outside the implementation merge budget.
+The original plan merged as #1802. Subsequent owner approvals authorized implementation, named site public actions, manual publication and the 2026-10-27 backfill extension. No hardware actions, release tags, paid service or hook changes are authorized. This amendment is reviewed separately under #1858.
+
+The grant table/terms below preserve the **original proposal**, not an active grant or authorization for the additional F/G/H and follow-up PRs. No grant was minted by this session. Existing owner-reviewed merges are not an automatically replenished budget. Do not extend a repository grant, its chain, expiry or budget by interpreting this scope amendment as a mint/renewal request.
 
 The merge gate checks that a grant's repository matches the target PR. Therefore one firmware grant cannot cover the site Epic. The proposal is a four-merge firmware grant below and one separately owner-approved site merge for Epic B. No unsupported cross-repository grant is implied. If a site plan grant is preferred, prepare a site-owned plan record and a one-merge grant there before site execution.
 
@@ -234,7 +316,7 @@ Proposed deterministic commands, implemented by the named tasks:
 - Firmware: `python -m mkdocs build --strict --config-file mkdocs.user.yml`.
 - Website: `python scripts/test_build_docs.py`.
 - Website: `python scripts/build_docs.py --sources docs-sources.yml --output .build/docs` (resolves source SHA and writes the manifest).
-- Website: `python -m mkdocs build --strict --config-file mkdocs.yml` against that staged tree.
+- Website: `python -m mkdocs build --strict --config-file .build/docs/mkdocs.yml` after staging; the root file is a template.
 - Website marketing regression: `hugo --gc --minify` plus rendered home/firmware/docs smoke checks.
 
 Add docs-check.yml for every pull_request and push to firmware-base without workflow-level path exclusions. Its documentation build/impact jobs run independently of ci.yml and do not consume the classifier's docs_only output. Keep the existing ci.yml classifier and independent ci-green classification intact: they already handle legitimate docs-only matrix skips. Mixed/code changes retain the existing full firmware checks plus the new documentation checks. Configure link/anchor validation explicitly: --strict is not proof that every external URL or user instruction works. Do not change the protected firmware build matrix or required checks without separate owner approval.
@@ -246,7 +328,8 @@ Every test has a positive and a relevant negative case. The final evidence links
 - The manual is searchable and reachable from offband.org without navigating GitHub.
 - The launch inventory is documented, with explicit support and release applicability.
 - Existing source/developer content remains intact and unpublished material stays excluded.
-- A real example demonstrates Feature/Epic documentation maintenance and automatic republishing.
+- A real example demonstrates Feature/Epic documentation maintenance, the expected rebuild artifact and an explicit owner manual publication; no automatic production publication is required or allowed.
+- The named F/G/H backfill is delivered with support/release evidence and the bounded observer coverage map; deferred claims remain visible rather than reported as complete.
 - A new guide needs one source-repo PR, not a second site nav edit.
 - Failure cases do not replace a good public site with a partial or stale build presented as current.
 - Owner accepts the published instructions and OUTCOMES.md.
@@ -260,7 +343,7 @@ Every test has a positive and a relevant negative case. The final evidence links
 | How current is the manual? | Maintain corrected docs from firmware-base with mandatory per-feature release/channel applicability. | Separate stable/beta/development snapshots; more build/navigation/storage complexity and content backfill. |
 | AI assistance at launch? | Existing development agents draft reviewed changes as part of the Feature/Epic. | A new automated AI drafting service, scoped and budgeted separately. |
 
-Only the five-Epic structure and planning work are approved so far. Release-alignment and assistance choices are implementation proposals for this plan review. Existing issues were not moved, reparented or closed. Grants and publication remain explicit owner actions.
+The original five-Epic plan and subsequent delivery were approved in recorded reviews/chat. The owner explicitly requested the named F/G/H backfill on 2026-10-27 and chose manual publication on the existing free plan. Existing unrelated issue parentage is preserved. New merge grants, hardware actions and broader content scope are not implied; publication remains an explicit owner action.
 
 ## 10. Carried-in work
 
