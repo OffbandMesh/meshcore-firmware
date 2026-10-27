@@ -862,7 +862,8 @@ def test_both_text_size_rows_exist_and_cycle():
 
 # ---- #1364: the channels a fresh badge ships holding -------------------------------
 
-EXPECTED_PREFLASH_CHANNELS = ["#queencitycon", "#okimesh", "#test", "#echo", "#offband"]
+EXPECTED_PREFLASH_CHANNELS = ["#queencitycon", "#okimesh", "#test", "#echo", "#offband",
+                              "#qcchhv", "#qcchams"]   # #1861
 
 
 def preflash_table():
@@ -889,7 +890,7 @@ def preflash_table():
     return rows
 
 
-def test_the_preflashed_channels_are_the_five_agreed():
+def test_the_preflashed_channels_are_the_agreed_list():
     names = [n for n, _ in preflash_table()]
     assert names == EXPECTED_PREFLASH_CHANNELS, (
         f"the pre-flashed channel list changed.\n  got:      {names}\n"

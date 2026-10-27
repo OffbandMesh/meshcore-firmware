@@ -77,6 +77,9 @@ static const PreflashChannel kQccPreflashChannels[] = {
   { "#test",         "nNj88ipHMztZHZaiuEi3Pw==", kPreflashTuneSilent  },
   { "#echo",         "XSXPQLH1tKfrDPlwNjSpSA==", kPreflashTuneSilent  },
   { "#offband",      "zai/JZlzNvmZzoQ41CAapw==", kPreflashTuneInherit },
+  // #1861: conversation channels, so they sound like any other channel.
+  { "#qcchhv",       "Uwb5GXpG3sB87g8qD8O6ng==", kPreflashTuneInherit },
+  { "#qcchams",      "WoeDI8VlMr9J8oNcCI4VqQ==", kPreflashTuneInherit },
 };
 
 static const int kQccPreflashChannelCount =
