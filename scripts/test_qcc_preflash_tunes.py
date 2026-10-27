@@ -23,7 +23,8 @@ CHANNELS = os.path.join(ROOT, "variants", "qcc_badge", "QccChannels.h")
 SLOTS = os.path.join(ROOT, "src", "helpers", "ui", "TuneSlots.h")
 
 SHOULD_BE_SILENT = {"#test", "#echo"}
-SHOULD_INHERIT = {"#queencitycon", "#okimesh", "#offband"}
+SHOULD_INHERIT = {"#queencitycon", "#okimesh", "#offband",
+                  "#qcchhv", "#qcchams"}   # #1861: conversation channels
 
 failures = []
 
