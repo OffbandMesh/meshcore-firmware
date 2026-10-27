@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1861
+impact: none
+reason: A freshly provisioned QCC badge now also holds the #qcchhv and #qcchams hashtag channels after #offband; a badge that already has channels keeps them unchanged. The public manual does not document the QCC badge or its preflashed channel set, so no published guide describes this list and none changes; every other variant, command, setting and default is unchanged.
