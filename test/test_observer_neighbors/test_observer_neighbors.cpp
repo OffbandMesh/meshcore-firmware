@@ -712,6 +712,17 @@ TEST(NodeDiscover, ResponsesThatCannotBeUsedAreRejected) {
     len = discoverReply(buf, 0x92, 77, 0x40, 8);                           // prefix-only answer
     EXPECT_FALSE(offband::parseNodeDiscoverResponse(buf, len, 77, key));
     EXPECT_FALSE(offband::parseNodeDiscoverResponse(nullptr, 40, 77, key));
+    len = discoverReply(buf, 0x90, 77, 0x40, 32);                          // type nibble 0
+    EXPECT_FALSE(offband::parseNodeDiscoverResponse(buf, len, 77, key));
+}
+
+TEST(NodeDiscover, LengthBoundaryIsAWholeKey) {
+    uint8_t buf[64];
+    uint8_t key[offband::kNeighborKeyLen];
+    size_t len = discoverReply(buf, 0x92, 77, 0x40, 32);
+    ASSERT_EQ(len, 38u);
+    EXPECT_TRUE(offband::parseNodeDiscoverResponse(buf, 38, 77, key));    // header + whole key
+    EXPECT_FALSE(offband::parseNodeDiscoverResponse(buf, 37, 77, key));   // one byte short
 }
 
 // ---- RxRssiStamps ----------------------------------------------------------

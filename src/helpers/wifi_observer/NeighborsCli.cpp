@@ -17,13 +17,22 @@ static bool hooksReady() {
 }
 
 static bool handleDiscoverNeighbors(char* reply, size_t reply_size) {
-    if (!s_hooks->discover_neighbors()) {
-        snprintf(reply, reply_size,
-                 "ERROR: discover.neighbors: no request sent (no free packet); try again\n");
-        return true;
+    int seconds_left = 0;
+    switch (s_hooks->discover_neighbors(&seconds_left)) {
+        case DiscoverResult::Busy:
+            snprintf(reply, reply_size,
+                     "discover.neighbors: still collecting answers to the last request "
+                     "(%d s left); %d neighbors in table\n", seconds_left, s_hooks->neighbor_count());
+            return true;
+        case DiscoverResult::Failed:
+            snprintf(reply, reply_size,
+                     "ERROR: discover.neighbors: no request queued (no free packet); try again\n");
+            return true;
+        case DiscoverResult::Queued:
+            break;
     }
     snprintf(reply, reply_size,
-             "discover.neighbors: request sent; %d neighbors in table, answers arrive "
+             "discover.neighbors: request queued; %d neighbors in table, answers arrive "
              "over the next minute\n", s_hooks->neighbor_count());
     return true;
 }

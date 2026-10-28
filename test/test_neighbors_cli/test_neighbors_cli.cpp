@@ -4,18 +4,23 @@
 
 #include "helpers/wifi_observer/NeighborsCli.h"
 
+using offband::DiscoverResult;
 using offband::NeighborsCliHooks;
 using offband::ScopeWalkSummary;
 
 // A fake companion behind the hooks.
 static int g_count = 0;
-static bool g_discover_ok = true;
+static DiscoverResult g_discover = DiscoverResult::Queued;
 static int g_discover_calls = 0;
 static int g_start_calls = 0;
 static ScopeWalkSummary g_summary;
 
 static int fakeCount() { return g_count; }
-static bool fakeDiscover() { g_discover_calls++; return g_discover_ok; }
+static DiscoverResult fakeDiscover(int* seconds_left) {
+    g_discover_calls++;
+    if (g_discover == DiscoverResult::Busy) *seconds_left = 42;
+    return g_discover;
+}
 static void fakeSummary(ScopeWalkSummary* out) { *out = g_summary; }
 static bool g_start_ok = true;
 static bool fakeStart() { g_start_calls++; return g_start_ok; }
@@ -26,7 +31,7 @@ class NeighborsCli : public ::testing::Test {
 protected:
     void SetUp() override {
         g_count = 0;
-        g_discover_ok = true;
+        g_discover = DiscoverResult::Queued;
         g_discover_calls = 0;
         g_start_calls = 0;
         g_start_ok = true;
@@ -62,15 +67,25 @@ TEST_F(NeighborsCli, DiscoverNeighborsSendsAndSaysHowMany) {
     std::string r = call("discover.neighbors");
     ASSERT_TRUE(handled_);
     EXPECT_EQ(g_discover_calls, 1);
-    EXPECT_NE(r.find("request sent"), std::string::npos) << r;
+    EXPECT_NE(r.find("request queued"), std::string::npos) << r;   // queued, not claimed on air
     EXPECT_NE(r.find("3 neighbors"), std::string::npos) << r;
 }
 
 TEST_F(NeighborsCli, DiscoverNeighborsReportsAFailedSend) {
-    g_discover_ok = false;
+    g_discover = DiscoverResult::Failed;
     std::string r = call("discover.neighbors\r\n");   // a serial line's tail is tolerated
     ASSERT_TRUE(handled_);
     EXPECT_EQ(r.rfind("ERROR:", 0), 0u) << r;
+}
+
+TEST_F(NeighborsCli, DiscoverNeighborsWhileListeningSaysSoAndQueuesNothing) {
+    g_count = 2;
+    g_discover = DiscoverResult::Busy;
+    std::string r = call("discover.neighbors");
+    ASSERT_TRUE(handled_);
+    EXPECT_NE(r.find("still collecting"), std::string::npos) << r;
+    EXPECT_NE(r.find("42 s left"), std::string::npos) << r;
+    EXPECT_EQ(r.find("queued"), std::string::npos) << r;
 }
 
 TEST_F(NeighborsCli, DiscoverScopesWithNoNeighborsStartsNothing) {
@@ -120,11 +135,20 @@ TEST_F(NeighborsCli, WithoutHooksItIsAnErrorNotACrash) {
     std::string r = call("discover.scopes");
     ASSERT_TRUE(handled_);
     EXPECT_EQ(r.rfind("ERROR:", 0), 0u) << r;
-    NeighborsCliHooks partial = { fakeCount, nullptr, fakeSummary, fakeStart };
-    offband::setNeighborsCliHooks(&partial);
-    r = call("discover.neighbors");
-    EXPECT_EQ(r.rfind("ERROR:", 0), 0u) << r;
-    EXPECT_EQ(g_discover_calls, 0);
+    const NeighborsCliHooks partials[] = {
+        { nullptr, fakeDiscover, fakeSummary, fakeStart },
+        { fakeCount, nullptr, fakeSummary, fakeStart },
+        { fakeCount, fakeDiscover, nullptr, fakeStart },
+        { fakeCount, fakeDiscover, fakeSummary, nullptr },
+    };
+    for (const NeighborsCliHooks& partial : partials) {
+        offband::setNeighborsCliHooks(&partial);
+        r = call("discover.neighbors");
+        EXPECT_EQ(r.rfind("ERROR:", 0), 0u) << r;
+        r = call("discover.scopes");
+        EXPECT_EQ(r.rfind("ERROR:", 0), 0u) << r;
+    }
+    EXPECT_EQ(g_discover_calls + g_start_calls, 0);
 }
 
 TEST_F(NeighborsCli, TinyReplyBufferIsStillTerminated) {

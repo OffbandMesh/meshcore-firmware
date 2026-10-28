@@ -98,6 +98,16 @@ static void normalizeVerbAndFieldToLower(char* buf, size_t buf_size,
     }
 }
 
+// p is exactly word, optionally followed by whitespace. #1398
+static bool isBareWord(const char* p, const char* word) {
+    const size_t n = strlen(word);
+    if (strncmp(p, word, n) != 0) return false;
+    for (const char* q = p + n; *q != '\0'; q++) {
+        if (*q != ' ' && *q != '\t' && *q != '\r' && *q != '\n') return false;
+    }
+    return true;
+}
+
 bool cliPassthroughIsAllowed(const char* line) {
     if (line == nullptr) return false;
     const char* p = trimLeading(line);
@@ -119,8 +129,9 @@ bool cliPassthroughIsAllowed(const char* line) {
     else if (strncmp(p, "display ", 8) == 0) skip = 8;  // #141: "display always on/off" toggle
     else if (strncmp(p, "caplog ", 7) == 0) skip = 7;   // #1194: caplog status / caplog forward
     else if (strcmp(p, "caplog") == 0) return true;      // #1194: bare `caplog` is status
-    else if (strncmp(p, "discover.neighbors", 18) == 0 ||  // #1398: dispatched in ObserverCli
-             strncmp(p, "discover.scopes", 15) == 0) return true;
+    // #1398: the two discover verbs take no argument, so admit the bare words only
+    // (trailing whitespace allowed, as NeighborsCli accepts it).
+    else if (isBareWord(p, "discover.neighbors") || isBareWord(p, "discover.scopes")) return true;
     else return false;
     // Deny scan against the tail (after the verb + its trailing space).
     const char* tail = p + skip;

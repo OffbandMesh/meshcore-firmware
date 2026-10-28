@@ -304,7 +304,7 @@ public:
   const ScopeRun* scopeQuery() const { return _scope_run; }   // nullptr until first used
   void scopeWalkSummary(offband::ScopeWalkSummary* out) const;
   // #1398: discover.neighbors -- ask repeaters in range to identify themselves now.
-  bool sendNodeDiscoverReq();
+  offband::DiscoverResult sendNodeDiscoverReq(int* seconds_left);
 #endif
 
 #if defined(OFFBAND_OBSERVER) || defined(OFFBAND_POWER_TELEMETRY)
