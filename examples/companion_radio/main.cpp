@@ -176,6 +176,15 @@ MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
    #endif
 );
 
+#if defined(OFFBAND_OBSERVER) && MAX_NEIGHBOURS
+// #1398: discover.neighbors / discover.scopes reach the mesh through these.
+static int  nbrCount() { return the_mesh.getNeighbourCount(); }
+static bool nbrDiscover() { return the_mesh.sendNodeDiscoverReq(); }
+static void nbrSummary(offband::ScopeWalkSummary* out) { the_mesh.scopeWalkSummary(out); }
+static bool nbrStartScopes() { return the_mesh.startScopeQuery(); }
+static const offband::NeighborsCliHooks kNeighborsCliHooks = { nbrCount, nbrDiscover, nbrSummary, nbrStartScopes };
+#endif
+
 /* END GLOBAL OBJECTS */
 
 void halt() {
@@ -740,6 +749,9 @@ void setup() {
   if (ui_task.displaySupportsRotation()) ui_task.requestRotation(offband::getDisplayRotation());
   CW_PHASE("post:display.prefs");
 #endif
+#endif
+#if defined(OFFBAND_OBSERVER) && MAX_NEIGHBOURS
+  offband::setNeighborsCliHooks(&kNeighborsCliHooks);   // #1398: discover.* CLI
 #endif
   board.onBootComplete();
 
