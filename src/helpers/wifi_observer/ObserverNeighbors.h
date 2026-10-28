@@ -45,6 +45,22 @@ inline bool isNeighborAdvert(uint8_t path_hash_count, bool is_share, bool advert
     return path_hash_count == 0 && !is_share && advert_valid && is_repeater;
 }
 
+// Anonymous-request sub-type asking a repeater for its flood regions. The same value
+// as ANON_REQ_TYPE_REGIONS in simple_repeater/MyMesh.cpp, which answers it through
+// handleAnonRegionsReq(): reused, not a new allocation.
+constexpr uint8_t kAnonReqTypeRegions = 0x01;
+constexpr int kRegionsRequestLen = 6;
+
+// The plaintext of an anon-regions request: {tag (4, host order, as the repeater
+// memcpy's it back)}{kAnonReqTypeRegions}{reply path length 0}. A zero-length reply
+// path makes the repeater answer zero-hop direct, which is right for a neighbor.
+inline int buildRegionsRequest(uint32_t tag, uint8_t* out) {
+    memcpy(out, &tag, 4);
+    out[4] = kAnonReqTypeRegions;
+    out[5] = 0;
+    return kRegionsRequestLen;
+}
+
 struct NeighbourInfo {
     uint8_t  pub_key[kNeighborKeyLen];
     uint32_t advert_timestamp;   // the advert's own timestamp (sender clock)
