@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1386
+impact: none
+reason: The companion observer now keeps an internal table of the repeaters it hears directly (key, timestamps, SNR, RSSI), the input to a later neighbor report. Nothing reads it yet; no radio command, setting, default, reply or published output changes, and repeater and room-server builds are untouched. The commands and report that expose it come with Epics 1398 and 1399, which carry their own guide changes.
