@@ -179,7 +179,7 @@ MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
 #if defined(OFFBAND_OBSERVER) && MAX_NEIGHBOURS
 // #1398: discover.neighbors / discover.scopes reach the mesh through these.
 static int  nbrCount() { return the_mesh.getNeighbourCount(); }
-static bool nbrDiscover() { return the_mesh.sendNodeDiscoverReq(); }
+static offband::DiscoverResult nbrDiscover(int* seconds_left) { return the_mesh.sendNodeDiscoverReq(seconds_left); }
 static void nbrSummary(offband::ScopeWalkSummary* out) { the_mesh.scopeWalkSummary(out); }
 static bool nbrStartScopes() { return the_mesh.startScopeQuery(); }
 static const offband::NeighborsCliHooks kNeighborsCliHooks = { nbrCount, nbrDiscover, nbrSummary, nbrStartScopes };
