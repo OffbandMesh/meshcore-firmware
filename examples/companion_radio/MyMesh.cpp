@@ -633,11 +633,35 @@ void MyMesh::logRx(mesh::Packet* pkt, int len, float score) {
   int   score_milli = (int)(score * 1000.0f);
   int   duration    = (int)_radio->getEstAirtimeFor(len);
   offband::observerLogRxParsedTrampoline(*pkt, rssi, snr, score_milli, duration);
+#if MAX_NEIGHBOURS
+  if (pkt->getPayloadType() == PAYLOAD_TYPE_ADVERT) _advert_rssi.stamp(pkt, rssi);   // #1386
+#endif
 #else
   (void)len;
   (void)score;
 #endif
 }
+#endif
+
+#if defined(OFFBAND_OBSERVER) && MAX_NEIGHBOURS
+// #1386: the companion's zero-hop neighbor table, filled the way the repeater fills
+// its own (simple_repeater MyMesh::onAdvertRecv): adverts heard directly, not relayed
+// in by a 'Share', from repeaters only. The rule itself is offband::isNeighborAdvert.
+void MyMesh::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, uint32_t timestamp,
+                          const uint8_t* app_data, size_t app_data_len) {
+  BaseChatMesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len);
+
+  AdvertDataParser parser(app_data, app_data_len);
+  const bool is_share = offband::isShareAdvert(packet->hasTransportCodes(),
+                                               packet->transport_codes[0], packet->transport_codes[1]);
+  if (!offband::isNeighborAdvert(packet->getPathHashCount(), is_share, parser.isValid(),
+                                 parser.getType() == ADV_TYPE_REPEATER)) return;
+
+  int8_t rssi = 0;
+  const bool rssi_known = _advert_rssi.lookup(packet, &rssi);
+  _neighbours.put(id.pub_key, timestamp, getRTCClock()->getCurrentTime(), packet->getSNR(), rssi, rssi_known);
+}
+static_assert(offband::kNeighborKeyLen == PUB_KEY_SIZE, "neighbor rows hold a whole public key");
 #endif
 
 bool MyMesh::isAutoAddEnabled() const {
@@ -1787,7 +1811,7 @@ void MyMesh::badgeSendTick() {
 #endif
 
 MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui)
-    : BaseChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(16), tables),
+    : BaseChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(COMPANION_PACKET_POOL_SIZE), tables),
       _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store), _ui(ui), _iter(0) {
   _iter_started = false;
   _cli_rescue = false;
