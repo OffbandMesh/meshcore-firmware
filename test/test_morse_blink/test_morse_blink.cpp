@@ -206,10 +206,15 @@ TEST(Morse, TheMessageIsTheLengthWeQuoted) {
   EXPECT_NEAR(10.3, secs, 0.05);
 }
 
-TEST(Morse, TheMessageDecodesBackToItself) {
-  // Decode the rendered timeline and check it spells the message. If this passes, somebody
-  // at the conference with a Morse chart gets the joke; if it fails, they get noise.
-  const std::string t = render("I AM NOT WORTHY");
+// #1887: the text the badge now blinks, pinned the same way: 251 units is 20.1 s per
+// repetition.
+TEST(Morse, TheBadgeTextIsTheLengthWeQuoted) {
+  EXPECT_EQ(251u, morseTotalUnits("BE SURE TO DRINK YOUR OVALTINE"));
+  EXPECT_NEAR(20.1, 251.0 * kMorseUnitMs / 1000.0, 0.05);
+}
+
+// Read a rendered timeline back the way a person with a Morse chart would.
+static std::string decodeTimeline(const std::string& t) {
   std::string decoded, code;
   size_t i = 0;
   auto flush_letter = [&]() {
@@ -232,7 +237,19 @@ TEST(Morse, TheMessageDecodesBackToItself) {
     }
   }
   flush_letter();
-  EXPECT_EQ("I AM NOT WORTHY", decoded);
+  return decoded;
+}
+
+TEST(Morse, TheMessageDecodesBackToItself) {
+  // Decode the rendered timeline and check it spells the message. If this passes, somebody
+  // at the conference with a Morse chart gets the joke; if it fails, they get noise.
+  EXPECT_EQ("I AM NOT WORTHY", decodeTimeline(render("I AM NOT WORTHY")));
+}
+
+// #1887: the text the badge now blinks.
+TEST(Morse, TheBadgeTextDecodesBackToItself) {
+  EXPECT_EQ("BE SURE TO DRINK YOUR OVALTINE",
+            decodeTimeline(render("BE SURE TO DRINK YOUR OVALTINE")));
 }
 
 // ---- duty, because this is three bright LEDs on a battery ------------------------------

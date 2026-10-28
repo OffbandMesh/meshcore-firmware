@@ -16,7 +16,7 @@
 //
 // A TIMELINE, not a state machine. Given the text and a unit index, this says lit or dark.
 // No stored position, nothing to resynchronise, and the whole message is addressable -- so
-// a test can walk all 129 units of it in a loop rather than simulating ten seconds.
+// a test can walk every unit of it in a loop rather than simulating the seconds.
 
 #include <stdint.h>
 
@@ -31,7 +31,8 @@ constexpr uint32_t kMorseLetterGap = 3;
 constexpr uint32_t kMorseWordGap = 7;
 
 // The owner's choice: slow enough to decode on sight, fast enough that the loop does not
-// drag. At 80 ms, "I AM NOT WORTHY" is 129 units = 10.3 s per repetition.
+// drag. At 80 ms, the badge's "BE SURE TO DRINK YOUR OVALTINE" is 251 units = 20.1 s per
+// repetition.
 constexpr uint32_t kMorseUnitMs = 80;
 
 // A-Z and 0-9. Returns nullptr for anything else, which the walker skips -- so punctuation

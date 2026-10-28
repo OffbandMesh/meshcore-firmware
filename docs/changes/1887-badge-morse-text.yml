@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1887
+impact: none
+reason: Changes the text of a badge LED pattern that no public guide describes; the QCC badge guide (#1868) deliberately does not cover the front LEDs.
