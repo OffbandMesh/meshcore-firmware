@@ -661,6 +661,46 @@ void MyMesh::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, uint32
   _neighbours.put(id.pub_key, timestamp, getRTCClock()->getCurrentTime(), packet->getSNR(), rssi, rssi_known);
 }
 static_assert(offband::kNeighborKeyLen == PUB_KEY_SIZE, "neighbor rows hold a whole public key");
+
+// #1398: the reply comes back as a RESPONSE datagram, which only decrypts for a contact.
+// A neighbor that is not one gets a transient ADV_TYPE_NONE contact, as the client's
+// CMD_SEND_ANON_REQ does. The query overwrites its own previous transient in place
+// rather than allocating another, so walking the table holds one of the
+// MAX_ANON_CONTACTS slots and never cycles out a transient the client is waiting on.
+// The request goes zero-hop direct, whatever path a known contact has: the repeater
+// answers a regions request only on a direct route, and a neighbor is zero hops away.
+bool MyMesh::sendRegionsReq(const uint8_t* pub_key, uint32_t& tag) {
+  ContactInfo* recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  if (recipient == NULL) {
+    ContactInfo anon;
+    memset(&anon, 0, sizeof(anon));
+    memcpy(anon.id.pub_key, pub_key, PUB_KEY_SIZE);
+    anon.out_path_len = 0;
+    anon.type = ADV_TYPE_NONE;
+    anon.lastmod = getRTCClock()->getCurrentTime();
+
+    ContactInfo* prev = _scope_contact_valid ? lookupContactByPubKey(_scope_contact_key, PUB_KEY_SIZE) : NULL;
+    if (prev != NULL && prev->type == ADV_TYPE_NONE) {
+      *prev = anon;
+      prev->shared_secret_valid = false;
+      recipient = prev;
+    } else if (addContact(anon)) {
+      recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+    }
+    if (recipient == NULL) return false;
+    memcpy(_scope_contact_key, pub_key, PUB_KEY_SIZE);
+    _scope_contact_valid = true;
+  }
+
+  uint8_t req[offband::kRegionsRequestLen];
+  tag = getRTCClock()->getCurrentTimeUnique();
+  offband::buildRegionsRequest(tag, req);
+  mesh::Packet* pkt = createAnonDatagram(PAYLOAD_TYPE_ANON_REQ, self_id, recipient->id,
+                                         recipient->getSharedSecret(self_id), req, sizeof(req));
+  if (pkt == NULL) return false;
+  sendZeroHop(pkt);
+  return true;
+}
 #endif
 
 bool MyMesh::isAutoAddEnabled() const {
@@ -1832,6 +1872,9 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _obs_cli_redact = false;
   _obs_cli_buf[0] = 0;
   _ob_stream = OB_STREAM_NONE;   // F8 (#169): no config-response stream in flight
+#if MAX_NEIGHBOURS
+  _scope_contact_valid = false;  // #1398: no transient scope-query contact yet
+#endif
 #endif
   _blk_listing = false;   // #241: no block-LIST stream in flight
   _caplog_streaming = false;  // #396: no caplog download in flight

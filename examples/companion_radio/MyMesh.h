@@ -290,6 +290,9 @@ public:
   // Accessor names are the repeater's (simple_repeater MyMesh), kept for #197.
   int getNeighbourCount() const { return _neighbours.count(); }
   int getNeighbours(offband::NeighbourInfo* out, int max_out) const { return _neighbours.copyTo(out, max_out); }
+  // #1398: ask one neighbor for its flood regions (anon-regions request, zero-hop
+  // direct). False when no packet could be built; tag identifies the reply.
+  bool sendRegionsReq(const uint8_t* pub_key, uint32_t& tag);
 #endif
 
 #if defined(OFFBAND_OBSERVER) || defined(OFFBAND_POWER_TELEMETRY)
@@ -738,6 +741,10 @@ private:
   // from the radio at advert time).
   offband::NeighborTable<MAX_NEIGHBOURS> _neighbours;
   offband::RxRssiStamps<COMPANION_PACKET_POOL_SIZE> _advert_rssi;
+  // #1398: the one transient (ADV_TYPE_NONE) contact the scope query reuses for a
+  // neighbor that is not a contact, so its reply decrypts. Constructor-init.
+  uint8_t _scope_contact_key[PUB_KEY_SIZE];
+  bool    _scope_contact_valid;
 #endif
 #endif
   // #241: in-flight block-LIST streaming (ALWAYS compiled, unlike the observer
