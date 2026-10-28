@@ -351,6 +351,18 @@ jobs:
       - name: SafeBoot log-channel guard
         run: python scripts/test_safeboot_log_channels.py
 
+      # #1692 (epic #1687). nRF52 SYSTEM_OFF has no timer: it ends only on a wake
+      # source. The QCC badge armed its button on the wrong pin at the wrong polarity
+      # and reset every 128 ms instead of sleeping. Every nRF52 SafeBoot variant must
+      # declare a source or be exempted with a reason, and SafeBoot.cpp must arm the
+      # button through the pin map at its own polarity. Self-test first: it carries the
+      # negative cases proving what the checker catches.
+      - name: SafeBoot wake-source guard self-test
+        run: python scripts/test_check_safeboot_wake_source.py
+
+      - name: Every nRF52 SafeBoot variant can wake from its sleep
+        run: python scripts/check_safeboot_wake_source.py
+
       # #1083 / #1159 / #1160 (epic #446). For fifteen months the ESP32 repeater
       # and companion never armed their task watchdog: startWatchdog()/feedWatchdog()
       # sat inside `#if defined(NRF52_PLATFORM)`. It compiled, it linked, and a
