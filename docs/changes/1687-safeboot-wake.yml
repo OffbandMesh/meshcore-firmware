@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1687
+impact: none
+reason: The only public SafeBoot guide (power-and-recovery.md) covers the ESP32 Heltec V3/V4 images and states nRF52 recovery is out of scope. On those boards the refusal line still reports a below-threshold reading and a sleep interval, and neither defines PIN_STATUS_LED, so the SOS blink does not reach them. The nRF52 changes (button wake on the mapped pin and its own polarity, a timed restart where no wake source exists, the SOS blink) are described for the QCC badge in its user guide under #1868.

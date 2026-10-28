@@ -22,14 +22,16 @@ def test_no_safeboot_line_prints_straight_to_serial():
 
 
 def test_both_battery_lines_go_through_mesh_log_print():
+    # Two "below" lines since #1687: one names a sleep time, one does not, because an
+    # nRF52 in SYSTEM_OFF has no timer to name (#1690).
     lines = re.findall(r"mesh_log_print\(\s*MLOG_BOOT\s*,\s*\"\[SafeBoot\] Vbat=%u mV (\w+)", SRC)
-    assert sorted(lines) == ["below", "stable"], lines
+    assert sorted(lines) == ["below", "below", "stable"], lines
 
 
 def test_low_battery_path_drains_the_mirror_before_sleeping():
-    below = SRC.index('"[SafeBoot] Vbat=%u mV below')
+    below = SRC.rindex('"[SafeBoot] Vbat=%u mV below')
     drain = SRC.find("meshLogDrainUart();", below)
-    sleep = SRC.find("enterSafeBootSleep(sleep_secs);", below)
+    sleep = SRC.find("enterSafeBootSleep(sleep_secs, wake);", below)
     assert below < drain < sleep, \
         "the low-battery path must call meshLogDrainUart() after its line and before enterSafeBootSleep()"
 
