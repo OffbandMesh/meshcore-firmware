@@ -129,6 +129,93 @@ TEST(BleTraceRing, TheDropCountSaturatesRatherThanWrapping) {
   EXPECT_EQ(UINT16_MAX, r.takeDropped());
 }
 
+TEST(BleTraceRing, TheDropCountIsExactUpToTheCeiling) {
+  EventRing<1> r;
+  r.push(ev(kConnect, 0));
+  for (int i = 0; i < UINT16_MAX - 1; i++) r.push(ev(kConnect, 0));
+  EXPECT_EQ(UINT16_MAX - 1, r.takeDropped());
+  for (int i = 0; i < UINT16_MAX; i++) r.push(ev(kConnect, 0));
+  EXPECT_EQ(UINT16_MAX, r.takeDropped());
+  for (int i = 0; i < UINT16_MAX + 1; i++) r.push(ev(kConnect, 0));
+  EXPECT_EQ(UINT16_MAX, r.takeDropped());
+}
+
+TEST(BleTraceRing, CountingResumesAfterTheDropsAreTaken) {
+  EventRing<1> r;
+  r.push(ev(kConnect, 0));
+  r.push(ev(kConnect, 0));
+  EXPECT_EQ(1, r.takeDropped());
+  r.push(ev(kConnect, 0));
+  r.push(ev(kConnect, 0));
+  EXPECT_EQ(2, r.takeDropped());
+}
+
+// The head is moved off slot 0 first, so "full" is tested with the records
+// wrapping round the end of the buffer.
+TEST(BleTraceRing, AFullRingAfterTheWrapKeepsTheOldestAndRefusesTheNewest) {
+  EventRing<3> r;
+  Event out;
+  r.push(ev(kMtu, -1));
+  r.push(ev(kMtu, -2));
+  r.pop(&out);
+  r.pop(&out);
+  ASSERT_TRUE(r.push(ev(kMtu, 1)));
+  ASSERT_TRUE(r.push(ev(kMtu, 2)));
+  ASSERT_TRUE(r.push(ev(kMtu, 3)));
+  EXPECT_FALSE(r.push(ev(kMtu, 4)));
+  EXPECT_EQ(1, r.takeDropped());
+  for (int want = 1; want <= 3; want++) {
+    ASSERT_TRUE(r.pop(&out));
+    EXPECT_EQ(want, out.status);
+  }
+  EXPECT_FALSE(r.pop(&out));
+}
+
+TEST(BleTraceRing, AFullRingTakesARecordAgainOnceOneIsRead) {
+  EventRing<2> r;
+  Event out;
+  r.push(ev(kMtu, 1));
+  r.push(ev(kMtu, 2));
+  EXPECT_FALSE(r.push(ev(kMtu, 3)));
+  ASSERT_TRUE(r.pop(&out));
+  EXPECT_EQ(1, out.status);
+  EXPECT_TRUE(r.push(ev(kMtu, 4)));
+  ASSERT_TRUE(r.pop(&out));
+  EXPECT_EQ(2, out.status);
+  ASSERT_TRUE(r.pop(&out));
+  EXPECT_EQ(4, out.status);
+}
+
+TEST(BleTraceRing, PoppingAnEmptyRingAfterAWrapChangesNothing) {
+  EventRing<2> r;
+  Event out;
+  for (int i = 0; i < 3; i++) {
+    r.push(ev(kMtu, i));
+    r.pop(&out);
+  }
+  out = ev(kConnect, 77);
+  EXPECT_FALSE(r.pop(&out));
+  EXPECT_EQ(77, out.status);   // left untouched
+  EXPECT_EQ(0, r.count());
+  ASSERT_TRUE(r.push(ev(kMtu, 9)));
+  ASSERT_TRUE(r.pop(&out));
+  EXPECT_EQ(9, out.status);
+}
+
+TEST(BleTraceHostErrors, TheFourSelfResetReasonsAreFlagged) {
+  EXPECT_TRUE(isHostResetReason(11));
+  EXPECT_TRUE(isHostResetReason(12));
+  EXPECT_TRUE(isHostResetReason(19));
+  EXPECT_TRUE(isHostResetReason(22));
+}
+
+TEST(BleTraceHostErrors, OrdinaryAdvertisingStopsAreNotFlagged) {
+  EXPECT_FALSE(isHostResetReason(0));    // a connection
+  EXPECT_FALSE(isHostResetReason(13));   // duration ran out
+  EXPECT_FALSE(isHostResetReason(29));   // preempted
+  EXPECT_FALSE(isHostResetReason(0x213));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
