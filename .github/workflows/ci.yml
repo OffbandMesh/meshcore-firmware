@@ -290,6 +290,12 @@ jobs:
       - name: QCC badge call-site guards
         run: python scripts/test_qcc_call_sites.py
 
+      # #1884: keynav::listTap() is tested in test_keynav; this checks the Messages,
+      # Contacts and Nearby screens still CALL it with the fitted-keyboard state, so a
+      # keyboardless badge can walk its lists. A tripwire, like the guard above.
+      - name: Keyboardless badge list-navigation call sites
+        run: python scripts/test_badge_list_nav.py
+
       # #1753 (Epic #1752). Every role's path-hash default must come from the one shared
       # constant. test/test_path_hash_mode pins the constant at 2-byte but cannot read the
       # two prefs structs without Arduino, so a struct reverted to `= 0` would pass every

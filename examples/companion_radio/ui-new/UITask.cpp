@@ -1155,15 +1155,21 @@ int UITask::cyclePos() const {
 
 void UITask::cycle(int step) {
   const int pos = (cyclePos() + step + badgeui::kCycleStops) % badgeui::kCycleStops;
+  const keynav::ListEntry entry = keynav::listEntry(step, hasKeyboard());
+  const bool enter = (entry != keynav::ListEntry::Keep);
+  const bool at_bottom = (entry == keynav::ListEntry::Bottom);
   if (pos == 1) {
     ((ContactsScreen*)contacts)->reload();
+    if (enter) ((ContactsScreen*)contacts)->enterList(at_bottom);
     setCurrScreen(contacts);
   } else if (pos == 2) {
     ((NearbyScreen*)nearby)->reload();
+    if (enter) ((NearbyScreen*)nearby)->enterList(at_bottom);
     setCurrScreen(nearby);
   } else if (pos == 3) {
     setCurrScreen(status);
   } else {
+    if (enter) ((InboxScreen*)home)->enterList(at_bottom);
     setCurrScreen(home);
   }
   _cycle_at = millis();

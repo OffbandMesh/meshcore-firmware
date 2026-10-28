@@ -70,6 +70,82 @@ TEST(KeyNav, TripleClickKeepsItsOtherJobAtHome) {
   EXPECT_FALSE(keynav::backsOut(keynav::tripleClickKey(true)));
 }
 
+// ---- #1884: a tap on a main list screen ---------------------------------------------
+
+using keynav::ListTap;
+using keynav::listTap;
+
+TEST(ListTap, WithoutAKeyboardATapWalksDownTheList) {
+  const auto r = listTap(KEY_NEXT, false, 0, 3);
+  EXPECT_EQ(ListTap::Select, r.action);
+  EXPECT_EQ(1, r.sel);
+}
+
+TEST(ListTap, WithoutAKeyboardADoubleTapWalksUpTheList) {
+  const auto r = listTap(KEY_PREV, false, 2, 3);
+  EXPECT_EQ(ListTap::Select, r.action);
+  EXPECT_EQ(1, r.sel);
+}
+
+TEST(ListTap, WalkingOffTheBottomMovesToTheNextScreen) {
+  EXPECT_EQ(ListTap::CycleNext, listTap(KEY_NEXT, false, 2, 3).action);
+}
+
+TEST(ListTap, WalkingOffTheTopMovesToThePreviousScreen) {
+  EXPECT_EQ(ListTap::CyclePrev, listTap(KEY_PREV, false, 0, 3).action);
+}
+
+TEST(ListTap, AnEmptyListMovesStraightOn) {
+  EXPECT_EQ(ListTap::CycleNext, listTap(KEY_NEXT, false, 0, 0).action);
+  EXPECT_EQ(ListTap::CyclePrev, listTap(KEY_PREV, false, 0, 0).action);
+}
+
+TEST(ListTap, AOneRowListMovesStraightOnBothWays) {
+  EXPECT_EQ(ListTap::CycleNext, listTap(KEY_NEXT, false, 0, 1).action);
+  EXPECT_EQ(ListTap::CyclePrev, listTap(KEY_PREV, false, 0, 1).action);
+}
+
+TEST(ListTap, WithAKeyboardFittedATapStillCyclesScreens) {
+  // The supporter badge keeps its design: the arrow keys walk the list, a tap cycles.
+  EXPECT_EQ(ListTap::CycleNext, listTap(KEY_NEXT, true, 0, 3).action);
+  EXPECT_EQ(ListTap::CyclePrev, listTap(KEY_PREV, true, 2, 3).action);
+}
+
+TEST(ListTap, AStaleSelectionPastTheEndStepsBackOntoTheList) {
+  const auto r = listTap(KEY_PREV, false, 5, 3);
+  EXPECT_EQ(ListTap::Select, r.action);
+  EXPECT_EQ(2, r.sel);
+  EXPECT_EQ(ListTap::CycleNext, listTap(KEY_NEXT, false, 5, 3).action);
+}
+
+using keynav::ListEntry;
+using keynav::listEntry;
+
+TEST(ListEntry, WithoutAKeyboardAForwardStepStartsAtTheTop) {
+  EXPECT_EQ(ListEntry::Top, listEntry(1, false));
+}
+
+TEST(ListEntry, WithoutAKeyboardABackwardStepStartsAtTheBottom) {
+  // Otherwise a double tap off the top of Nearby lands on Contacts' top row and the next
+  // double tap leaves at once: a list could never be walked up from its end.
+  EXPECT_EQ(ListEntry::Bottom, listEntry(-1, false));
+}
+
+TEST(ListEntry, WithAKeyboardTheRememberedRowIsKept) {
+  EXPECT_EQ(ListEntry::Keep, listEntry(1, true));
+  EXPECT_EQ(ListEntry::Keep, listEntry(-1, true));
+}
+
+TEST(ListEntry, NoStepKeepsTheRow) {
+  EXPECT_EQ(ListEntry::Keep, listEntry(0, false));
+}
+
+TEST(ListTap, OtherKeysAreNotATap) {
+  EXPECT_EQ(ListTap::None, listTap(KEY_ENTER, false, 0, 3).action);
+  EXPECT_EQ(ListTap::None, listTap(KEY_UP, false, 1, 3).action);
+  EXPECT_EQ(ListTap::None, listTap(KEY_CANCEL, true, 1, 3).action);
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
