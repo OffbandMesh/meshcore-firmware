@@ -338,15 +338,23 @@ int InboxScreen::render(DisplayDriver& d) {
   return 1000;
 }
 
+void InboxScreen::enterList(bool at_bottom) {
+  Item list[kMaxItems];
+  const int count = items(list, kMaxItems);
+  if (count > 0) select(list, count, at_bottom ? count - 1 : 0);
+}
+
 bool InboxScreen::handleInput(char c) {
   const uint8_t key = (uint8_t)c;
   Item list[kMaxItems];
   const int count = items(list, kMaxItems);
   follow(list, count);
 
-  if (!_task->inputFromKeyboard()) {   // SW1: a tap moves along the cycle (design 1f)
-    if (key == KEY_NEXT) _task->cycle(1);
-    else if (key == KEY_PREV) _task->cycle(-1);
+  if (!_task->inputFromKeyboard()) {   // SW1: a tap cycles (design 1f), or walks the list
+    const keynav::ListTapResult t = keynav::listTap(key, _task->hasKeyboard(), _sel, count);
+    if (t.action == keynav::ListTap::Select) select(list, count, t.sel);
+    else if (t.action == keynav::ListTap::CycleNext) _task->cycle(1);
+    else if (t.action == keynav::ListTap::CyclePrev) _task->cycle(-1);
     else if (key == KEY_ENTER && count > 0) open(list[_sel], 0);
     return true;
   }
@@ -875,11 +883,15 @@ int ContactsScreen::render(DisplayDriver& d) {
   return crumb ? 250 : 1000;
 }
 
+void ContactsScreen::enterList(bool at_bottom) { select(at_bottom ? _count - 1 : 0); }
+
 bool ContactsScreen::handleInput(char c) {
   const uint8_t key = (uint8_t)c;
-  if (!_task->inputFromKeyboard()) {   // SW1: a tap moves along the cycle
-    if (key == KEY_NEXT) _task->cycle(1);
-    else if (key == KEY_PREV) _task->cycle(-1);
+  if (!_task->inputFromKeyboard()) {   // SW1: a tap cycles, or walks the list (#1884)
+    const keynav::ListTapResult t = keynav::listTap(key, _task->hasKeyboard(), _sel, _count);
+    if (t.action == keynav::ListTap::Select) select(t.sel);
+    else if (t.action == keynav::ListTap::CycleNext) _task->cycle(1);
+    else if (t.action == keynav::ListTap::CyclePrev) _task->cycle(-1);
     else if (key == KEY_ENTER) open(0);
     return true;
   }
@@ -1054,11 +1066,18 @@ int NearbyScreen::render(DisplayDriver& d) {
   return crumb ? 250 : 1000;
 }
 
+void NearbyScreen::enterList(bool at_bottom) {
+  select(at_bottom ? (int)_list.count() - 1 : 0);
+}
+
 bool NearbyScreen::handleInput(char c) {
   const uint8_t key = (uint8_t)c;
-  if (!_task->inputFromKeyboard()) {   // SW1: a tap moves along the cycle
-    if (key == KEY_NEXT) _task->cycle(1);
-    else if (key == KEY_PREV) _task->cycle(-1);
+  if (!_task->inputFromKeyboard()) {   // SW1: a tap cycles, or walks the list (#1884)
+    const keynav::ListTapResult t =
+        keynav::listTap(key, _task->hasKeyboard(), _sel, (int)_list.count());
+    if (t.action == keynav::ListTap::Select) select(t.sel);
+    else if (t.action == keynav::ListTap::CycleNext) _task->cycle(1);
+    else if (t.action == keynav::ListTap::CyclePrev) _task->cycle(-1);
     else if (key == KEY_ENTER) open(0);
     return true;
   }

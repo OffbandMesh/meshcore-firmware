@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1884
+impact: none
+reason: No published guide covers the QCC badge's controls yet. The badge user guide in progress under #1868 will describe this navigation (on a badge without a keyboard, click and double click walk the list and walking off either end changes screens) when it lands.
