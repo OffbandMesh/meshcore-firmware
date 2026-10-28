@@ -663,9 +663,12 @@ static_assert(offband::kNeighborKeyLen == PUB_KEY_SIZE, "neighbor rows hold a wh
 
 // #1398: the reply comes back as a RESPONSE datagram, which only decrypts for a contact.
 // A neighbor that is not one gets a transient ADV_TYPE_NONE contact, as the client's
-// CMD_SEND_ANON_REQ does. The query overwrites its own previous transient in place
-// rather than allocating another, so walking the table holds one of the
-// MAX_ANON_CONTACTS slots and never cycles out a transient the client is waiting on.
+// CMD_SEND_ANON_REQ does, through addContact(), which only ever recycles a transient
+// slot and never a saved contact. The scope query's transient is stamped lastmod 0, the
+// oldest possible, so the next query recycles that same slot rather than one the client
+// stamped when it sent its own request: a walk over the table holds one of the
+// MAX_ANON_CONTACTS slots. (A client request to the very node in flight reuses our slot
+// and loses its reply when the walk moves on; the window is one query.)
 // The request goes zero-hop direct, whatever path a known contact has: the repeater
 // answers a regions request only on a direct route, and a neighbor is zero hops away.
 bool MyMesh::sendRegionsReq(const uint8_t* pub_key, uint32_t& tag) {
@@ -676,29 +679,36 @@ bool MyMesh::sendRegionsReq(const uint8_t* pub_key, uint32_t& tag) {
     memcpy(anon.id.pub_key, pub_key, PUB_KEY_SIZE);
     anon.out_path_len = 0;
     anon.type = ADV_TYPE_NONE;
-    anon.lastmod = getRTCClock()->getCurrentTime();
-
-    ContactInfo* prev = _scope_contact_valid ? lookupContactByPubKey(_scope_contact_key, PUB_KEY_SIZE) : NULL;
-    if (prev != NULL && prev->type == ADV_TYPE_NONE) {
-      *prev = anon;
-      prev->shared_secret_valid = false;
-      recipient = prev;
-    } else if (addContact(anon)) {
-      recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
-    }
+    anon.lastmod = 0;
+    if (!addContact(anon)) return false;
+    recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
     if (recipient == NULL) return false;
-    memcpy(_scope_contact_key, pub_key, PUB_KEY_SIZE);
-    _scope_contact_valid = true;
   }
 
   uint8_t req[offband::kRegionsRequestLen];
-  tag = getRTCClock()->getCurrentTimeUnique();
-  offband::buildRegionsRequest(tag, req);
+  const uint32_t t = getRTCClock()->getCurrentTimeUnique();
+  offband::buildRegionsRequest(t, req);
   mesh::Packet* pkt = createAnonDatagram(PAYLOAD_TYPE_ANON_REQ, self_id, recipient->id,
                                          recipient->getSharedSecret(self_id), req, sizeof(req));
   if (pkt == NULL) return false;
   sendZeroHop(pkt);
+  tag = t;   // only a request that went out has a tag worth matching
   return true;
+}
+
+// #1398: a reply to the regions request in flight. Matched on the sender's key AND the
+// tag, so a reply the same node sends to one of the client's own requests is left to
+// the client. The parsed list is parked for loop(), which owns the query walk.
+bool MyMesh::onRegionsReply(const ContactInfo& contact, const uint8_t* data, uint8_t len) {
+  if (len < 4) return false;
+  uint32_t tag;
+  memcpy(&tag, data, 4);
+  if (!_scope_inflight.matches(contact.id.pub_key, tag)) return false;
+  if (offband::parseRegionsResponse(data, len, tag, _scope_reply, sizeof(_scope_reply))) {
+    _scope_reply_ready = true;
+    _scope_inflight.clear();
+  }
+  return true;   // ours by key and tag, even if malformed: never the client's
 }
 #endif
 
@@ -1518,6 +1528,9 @@ uint8_t MyMesh::onContactRequest(const ContactInfo &contact, uint32_t sender_tim
 }
 
 void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, uint8_t len) {
+#if defined(OFFBAND_OBSERVER) && MAX_NEIGHBOURS
+  if (onRegionsReply(contact, data, len)) return;   // #1398: our scope query, by key + tag
+#endif
   uint32_t tag;
   memcpy(&tag, data, 4);
 
@@ -1872,7 +1885,8 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _obs_cli_buf[0] = 0;
   _ob_stream = OB_STREAM_NONE;   // F8 (#169): no config-response stream in flight
 #if MAX_NEIGHBOURS
-  _scope_contact_valid = false;  // #1398: no transient scope-query contact yet
+  _scope_reply_ready = false;    // #1398: no regions reply waiting for loop()
+  _scope_reply[0] = 0;
 #endif
 #endif
   _blk_listing = false;   // #241: no block-LIST stream in flight
