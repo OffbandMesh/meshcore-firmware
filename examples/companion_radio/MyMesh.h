@@ -295,6 +295,10 @@ public:
   // #1398: ask one neighbor for its flood regions (anon-regions request, zero-hop
   // direct). False when no packet could be built; tag identifies the reply.
   bool sendRegionsReq(const uint8_t* pub_key, uint32_t& tag);
+  // #1398: query every neighbor's regions, one at a time from loop(); a walk already
+  // running starts over. Results stay until the next start.
+  void startScopeQuery() { _scope_run.start(_neighbours); }
+  const offband::ScopeQueryRun<MAX_NEIGHBOURS>& scopeQuery() const { return _scope_run; }
 #endif
 
 #if defined(OFFBAND_OBSERVER) || defined(OFFBAND_POWER_TELEMETRY)
@@ -743,11 +747,11 @@ private:
   // from the radio at advert time).
   offband::NeighborTable<MAX_NEIGHBOURS> _neighbours;
   offband::RxRssiStamps<COMPANION_PACKET_POOL_SIZE> _advert_rssi;
-  // #1398: the regions request in flight, and its parsed reply parked for loop().
-  offband::InFlightRegionsQuery _scope_inflight;
-  char    _scope_reply[offband::kScopesLen];
-  bool    _scope_reply_ready;
+  // #1398: the walk over the neighbor table, one regions request in flight at a time.
+  // Driven only from loop() and the receive path, both on the main loop.
+  offband::ScopeQueryRun<MAX_NEIGHBOURS> _scope_run;
   bool onRegionsReply(const ContactInfo& contact, const uint8_t* data, uint8_t len);
+  void scopeQueryTick();
 #endif
 #endif
   // #241: in-flight block-LIST streaming (ALWAYS compiled, unlike the observer

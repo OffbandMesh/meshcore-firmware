@@ -666,11 +666,14 @@ static_assert(offband::kNeighborKeyLen == PUB_KEY_SIZE, "neighbor rows hold a wh
 // #1398: the reply comes back as a RESPONSE datagram, which only decrypts for a contact.
 // A neighbor that is not one gets a transient ADV_TYPE_NONE contact, as the client's
 // CMD_SEND_ANON_REQ does, through addContact(), which only ever recycles a transient
-// slot and never a saved contact. The scope query's transient is stamped lastmod 0, the
-// oldest possible, so the next query recycles that same slot rather than one the client
-// stamped when it sent its own request: a walk over the table holds one of the
-// MAX_ANON_CONTACTS slots. (A client request to the very node in flight reuses our slot
-// and loses its reply when the walk moves on; the window is one query.)
+// slot (the one with the oldest lastmod) and never a saved contact. While its request is
+// in flight the query's transient carries the current time, so a client request recycles
+// an older slot instead of ours; scopeQueryTick() sets it back to 0 when the request
+// closes, so the next query recycles that same slot rather than one the client is
+// waiting on. A walk therefore holds one of the MAX_ANON_CONTACTS slots. Not covered:
+// when all of them hold client requests younger than ours, ours takes the oldest client
+// one, and an advert from the node itself clears the transient; either way the query
+// simply times out.
 // The request goes zero-hop direct, whatever path a known contact has: the repeater
 // answers a regions request only on a direct route, and a neighbor is zero hops away.
 bool MyMesh::sendRegionsReq(const uint8_t* pub_key, uint32_t& tag) {
@@ -681,11 +684,11 @@ bool MyMesh::sendRegionsReq(const uint8_t* pub_key, uint32_t& tag) {
     memcpy(anon.id.pub_key, pub_key, PUB_KEY_SIZE);
     anon.out_path_len = 0;
     anon.type = ADV_TYPE_NONE;
-    anon.lastmod = 0;
     if (!addContact(anon)) return false;
     recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
     if (recipient == NULL) return false;
   }
+  if (recipient->type == ADV_TYPE_NONE) recipient->lastmod = getRTCClock()->getCurrentTime();
 
   uint8_t req[offband::kRegionsRequestLen];
   const uint32_t t = getRTCClock()->getCurrentTimeUnique();
@@ -698,19 +701,44 @@ bool MyMesh::sendRegionsReq(const uint8_t* pub_key, uint32_t& tag) {
   return true;
 }
 
-// #1398: a reply to the regions request in flight. Matched on the sender's key AND the
-// tag, so a reply the same node sends to one of the client's own requests is left to
-// the client. The parsed list is parked for loop(), which owns the query walk.
+// #1398: a reply to one of the scope query's regions requests. Matched on the sender's
+// key AND the tag, so a reply the same node sends to one of the client's own requests is
+// left to the client. A late reply to a request the walk already closed is still ours
+// and is dropped, not passed on: the client's login/status branches match a sender on
+// a key prefix alone and would misread it.
 bool MyMesh::onRegionsReply(const ContactInfo& contact, const uint8_t* data, uint8_t len) {
   if (len < 4) return false;
   uint32_t tag;
   memcpy(&tag, data, 4);
-  if (!_scope_inflight.matches(contact.id.pub_key, tag)) return false;
-  if (offband::parseRegionsResponse(data, len, tag, _scope_reply, sizeof(_scope_reply))) {
-    _scope_reply_ready = true;
-    _scope_inflight.clear();
+  switch (_scope_run.classify(contact.id.pub_key, tag)) {
+    case offband::ScopeReply::None:    return false;
+    case offband::ScopeReply::Retired: return true;
+    case offband::ScopeReply::Current: break;
   }
-  return true;   // ours by key and tag, even if malformed: never the client's
+  char scopes[offband::kScopesLen];
+  if (offband::parseRegionsResponse(data, len, tag, scopes, sizeof(scopes))) {
+    _scope_run.replied(scopes);
+  } else {
+    _scope_run.unusableReply();
+  }
+  return true;
+}
+
+// #1398: one step of the scope query walk per loop() pass. Sends at most one request,
+// never waits: the reply arrives later through onRegionsReply().
+void MyMesh::scopeQueryTick() {
+  uint8_t key[PUB_KEY_SIZE];
+  if (_scope_run.takeReleased(key)) {
+    ContactInfo* c = lookupContactByPubKey(key, PUB_KEY_SIZE);
+    if (c != NULL && c->type == ADV_TYPE_NONE) c->lastmod = 0;   // first to be recycled
+  }
+  if (!_scope_run.running()) return;
+  const uint32_t now = _ms->getMillis();
+  const uint8_t* next = _scope_run.poll(now);
+  if (next == NULL) return;
+  uint32_t tag = 0;
+  const bool ok = sendRegionsReq(next, tag);
+  _scope_run.sent(ok, tag, now);
 }
 #endif
 
@@ -1886,10 +1914,6 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _obs_cli_redact = false;
   _obs_cli_buf[0] = 0;
   _ob_stream = OB_STREAM_NONE;   // F8 (#169): no config-response stream in flight
-#if MAX_NEIGHBOURS
-  _scope_reply_ready = false;    // #1398: no regions reply waiting for loop()
-  _scope_reply[0] = 0;
-#endif
 #endif
   _blk_listing = false;   // #241: no block-LIST stream in flight
   _caplog_streaming = false;  // #396: no caplog download in flight
@@ -4881,6 +4905,9 @@ void MyMesh::loop() {
     checkObserverSerialCli();
 #endif
   }
+#if defined(OFFBAND_OBSERVER) && MAX_NEIGHBOURS
+  scopeQueryTick();   // #1398: at most one regions request per pass, never blocks
+#endif
 
 #ifdef OFFBAND_OBSERVER_BLE_COMPANION
   // Plan 3 Task 10 (Strycher/LoRa#272): drain any pending

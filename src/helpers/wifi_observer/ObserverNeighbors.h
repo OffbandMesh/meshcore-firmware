@@ -190,6 +190,12 @@ public:
 
     static constexpr int capacity() { return CAP; }
 
+    // Slot i when it holds a neighbor, else nullptr; i outside [0, CAP) is nullptr.
+    const NeighbourInfo* slotAt(int i) const {
+        if (i < 0 || i >= CAP || slots_[i].heard_timestamp == 0) return nullptr;
+        return &slots_[i];
+    }
+
 private:
     NeighbourInfo slots_[CAP];
 };
@@ -226,6 +232,196 @@ private:
     const void* keys_[SLOTS] = {};
     int8_t rssi_[SLOTS] = {};
     int next_ = 0;
+};
+
+// One neighbor's outcome in a scope query walk. The names are the CoreScope
+// /neighbors status strings; Pending means not reached yet.
+enum class ScopeStatus : uint8_t { Pending = 0, Responded, Timeout, SendFailed };
+
+inline const char* scopeStatusName(ScopeStatus s) {
+    switch (s) {
+        case ScopeStatus::Responded:  return "responded";
+        case ScopeStatus::Timeout:    return "timeout";
+        case ScopeStatus::SendFailed: return "send_failed";
+        default:                      return "pending";
+    }
+}
+
+struct ScopeResult {
+    NeighbourInfo row;            // the neighbor as it was when the walk started
+    ScopeStatus   status;
+    char          scopes[kScopesLen];   // meaningful only when status == Responded
+};
+
+// How a reply relates to the walk. Retired: it answers a request the walk already
+// closed (timed out, or replaced by a restart). It is still ours, so the caller drops
+// it rather than letting it reach the client, whose login/status branches match a
+// sender on a 4-byte key prefix alone.
+enum class ScopeReply : uint8_t { None, Current, Retired };
+
+// The walk over the neighbor table (plan T4): one regions request in flight at a
+// time, each answered, expired after kRegionQueryTimeoutMs, or failed at send. It
+// sends nothing itself and never blocks: the caller's loop() asks poll() for the next
+// key, sends it, and reports back with sent(); the reply path reports with replied().
+template <int CAP>
+class ScopeQueryRun {
+    static_assert(CAP > 0, "a scope query walk needs at least one slot");
+public:
+    static constexpr int kRetired = 4;   // closed requests whose late replies are still ours
+
+    // Snapshot rows[0..n) and start over. A walk already running is discarded; its
+    // in-flight request is retired, so a late reply to it is still recognized as ours.
+    void start(const NeighbourInfo* rows, int n) {
+        restart();
+        total_ = n < 0 ? 0 : n;
+        if (rows == nullptr) total_ = 0;
+        for (int i = 0; i < total_ && n_ < CAP; i++) add(rows[i]);
+        running_ = true;
+    }
+
+    // The same, straight from a NeighborTable, with no intermediate copy.
+    template <int C>
+    void start(const NeighborTable<C>& table) {
+        restart();
+        for (int i = 0; i < C; i++) {
+            const NeighbourInfo* r = table.slotAt(i);
+            if (r == nullptr) continue;
+            total_++;
+            if (n_ < CAP) add(*r);
+        }
+        running_ = true;
+    }
+
+    bool running() const { return running_; }
+
+    // The key to send to next, or nullptr when a request is in flight or the walk has
+    // ended. Expires a request whose reply is overdue, and ends the walk after the last.
+    const uint8_t* poll(uint32_t now_ms) {
+        if (!running_) return nullptr;
+        if (inflight_.active()) {
+            if (!inflight_.timedOut(now_ms)) return nullptr;
+            finish(ScopeStatus::Timeout, nullptr);
+        }
+        if (cur_ >= n_) {
+            running_ = false;
+            return nullptr;
+        }
+        return results_[cur_].row.pub_key;
+    }
+
+    // Report the send of the key poll() just returned.
+    void sent(bool ok, uint32_t tag, uint32_t now_ms) {
+        if (!running_ || inflight_.active() || cur_ >= n_) return;
+        if (ok) {
+            inflight_.begin(results_[cur_].row.pub_key, tag, now_ms);
+        } else {
+            finish(ScopeStatus::SendFailed, nullptr);
+        }
+    }
+
+    // True when a reply from from_key carrying tag answers the request in flight.
+    bool matches(const uint8_t* from_key, uint32_t tag) const { return inflight_.matches(from_key, tag); }
+
+    ScopeReply classify(const uint8_t* from_key, uint32_t tag) const {
+        if (inflight_.matches(from_key, tag)) return ScopeReply::Current;
+        for (int i = 0; i < kRetired; i++) {
+            if (retired_[i].used && retired_[i].tag == tag &&
+                memcmp(retired_[i].key, from_key, kNeighborKeyLen) == 0) return ScopeReply::Retired;
+        }
+        return ScopeReply::None;
+    }
+
+    // Report the parsed region list for the request in flight; ignored when none is.
+    void replied(const char* scopes) {
+        if (!inflight_.active()) return;
+        finish(ScopeStatus::Responded, scopes);
+    }
+
+    // The node answered, but with nothing usable (shorter than the reply header). Its
+    // scopes are unknown, which the report must not present as "responded, none".
+    void unusableReply() {
+        if (!inflight_.active()) return;
+        finish(ScopeStatus::Timeout, nullptr);
+    }
+
+    // Once per closed request: the key it was sent to, so the caller can let go of
+    // per-request state (the transient contact). False when nothing new closed.
+    bool takeReleased(uint8_t* key_out) {
+        if (!released_pending_) return false;
+        memcpy(key_out, released_key_, kNeighborKeyLen);
+        released_pending_ = false;
+        return true;
+    }
+
+    int resultCount() const { return n_; }
+    int totalCount() const { return total_; }   // neighbors at start, before the CAP cut
+    const ScopeResult& result(int i) const { return results_[i]; }
+    int queriedCount() const {
+        int q = 0;
+        for (int i = 0; i < n_; i++) {
+            if (results_[i].status != ScopeStatus::Pending) q++;
+        }
+        return q;
+    }
+
+private:
+    struct Retired {
+        uint8_t  key[kNeighborKeyLen];
+        uint32_t tag;
+        bool     used;
+    };
+
+    void restart() {
+        retire();
+        n_ = 0;
+        total_ = 0;
+        cur_ = 0;
+    }
+
+    void add(const NeighbourInfo& row) {
+        results_[n_].row = row;
+        results_[n_].status = ScopeStatus::Pending;
+        results_[n_].scopes[0] = 0;
+        n_++;
+    }
+
+    // Close the request in flight (if any): remember it as retired and hand its key
+    // to takeReleased().
+    void retire() {
+        if (!inflight_.active()) return;
+        Retired& r = retired_[retired_next_];
+        memcpy(r.key, inflight_.key(), kNeighborKeyLen);
+        r.tag = inflight_.tag();
+        r.used = true;
+        retired_next_ = (retired_next_ + 1) % kRetired;
+        memcpy(released_key_, inflight_.key(), kNeighborKeyLen);
+        released_pending_ = true;
+        inflight_.clear();
+    }
+
+    void finish(ScopeStatus s, const char* scopes) {
+        ScopeResult& r = results_[cur_];
+        r.status = s;
+        if (scopes != nullptr) {
+            strncpy(r.scopes, scopes, kScopesLen - 1);
+            r.scopes[kScopesLen - 1] = 0;
+        } else {
+            r.scopes[0] = 0;
+        }
+        retire();
+        cur_++;
+    }
+
+    ScopeResult results_[CAP];
+    InFlightRegionsQuery inflight_;
+    Retired retired_[kRetired] = {};
+    int retired_next_ = 0;
+    uint8_t released_key_[kNeighborKeyLen] = {};
+    bool released_pending_ = false;
+    int n_ = 0;
+    int total_ = 0;
+    int cur_ = 0;
+    bool running_ = false;
 };
 
 }  // namespace offband

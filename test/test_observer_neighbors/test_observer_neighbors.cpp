@@ -376,6 +376,241 @@ TEST(InFlightRegionsQuery, TimesOutAfterTheWindowEvenAcrossMillisWrap) {
     EXPECT_FALSE(q.timedOut(t0 + 10u * offband::kRegionQueryTimeoutMs));   // idle never times out
 }
 
+// ---- scope query walk (#1398 T4) ------------------------------------------
+
+using offband::ScopeQueryRun;
+using offband::ScopeStatus;
+
+static int loadNeighbors(NeighbourInfo* rows, int n) {
+    for (int i = 0; i < n; i++) {
+        memset(&rows[i], 0, sizeof(rows[i]));
+        keyFor(rows[i].pub_key, (uint8_t)(0x10 * (i + 1)));
+        rows[i].heard_timestamp = 100 + i;
+    }
+    return n;
+}
+
+static bool keyIs(const uint8_t* key, uint8_t tag) {
+    uint8_t k[offband::kNeighborKeyLen];
+    keyFor(k, tag);
+    return key != nullptr && memcmp(key, k, sizeof(k)) == 0;
+}
+
+TEST(ScopeQueryRun, AllThreeOutcomesAndAdvanceToNext) {
+    NeighbourInfo rows[3];
+    ScopeQueryRun<4> run;
+    run.start(rows, loadNeighbors(rows, 3));
+    ASSERT_TRUE(run.running());
+    uint32_t now = 1000;
+
+    // neighbor 1: answers
+    const uint8_t* k = run.poll(now);
+    ASSERT_TRUE(keyIs(k, 0x10));
+    run.sent(true, 11, now);
+    EXPECT_EQ(run.poll(now + 5), nullptr);   // one in flight: nothing else goes out
+    EXPECT_TRUE(run.matches(k, 11));
+    run.replied("hao,oh-sw");
+
+    // neighbor 2: the send fails (no packet), the walk moves on at once
+    k = run.poll(now + 10);
+    ASSERT_TRUE(keyIs(k, 0x20));
+    run.sent(false, 0, now + 10);
+
+    // neighbor 3: silent, expires after the timeout
+    k = run.poll(now + 20);
+    ASSERT_TRUE(keyIs(k, 0x30));
+    run.sent(true, 33, now + 20);
+    EXPECT_EQ(run.poll(now + 20 + offband::kRegionQueryTimeoutMs - 1), nullptr);
+    EXPECT_TRUE(run.running());
+    EXPECT_EQ(run.poll(now + 20 + offband::kRegionQueryTimeoutMs), nullptr);   // expires, nothing left
+    EXPECT_FALSE(run.running());
+
+    ASSERT_EQ(run.resultCount(), 3);
+    EXPECT_EQ(run.result(0).status, ScopeStatus::Responded);
+    EXPECT_STREQ(run.result(0).scopes, "hao,oh-sw");
+    EXPECT_EQ(run.result(1).status, ScopeStatus::SendFailed);
+    EXPECT_STREQ(run.result(1).scopes, "");
+    EXPECT_EQ(run.result(2).status, ScopeStatus::Timeout);
+    EXPECT_STREQ(run.result(2).scopes, "");
+    EXPECT_EQ(run.queriedCount(), 3);
+}
+
+TEST(ScopeQueryRun, AllTimeoutsStillFinish) {
+    // plan Review #1/#3: a neighborhood where nobody answers never hangs the walk.
+    NeighbourInfo rows[4];
+    ScopeQueryRun<4> run;
+    run.start(rows, loadNeighbors(rows, 4));
+    uint32_t now = 0xFFFF0000u;   // across a millis() wrap, too
+    int sends = 0;
+    for (int step = 0; step < 100 && run.running(); step++) {
+        const uint8_t* k = run.poll(now);
+        if (k != nullptr) { run.sent(true, (uint32_t)(100 + sends), now); sends++; }
+        now += offband::kRegionQueryTimeoutMs / 2;
+    }
+    EXPECT_FALSE(run.running());
+    EXPECT_EQ(sends, 4);
+    for (int i = 0; i < 4; i++) EXPECT_EQ(run.result(i).status, ScopeStatus::Timeout) << i;
+}
+
+TEST(ScopeQueryRun, StrayOrLateReplyChangesNothing) {
+    NeighbourInfo rows[2];
+    ScopeQueryRun<4> run;
+    run.start(rows, loadNeighbors(rows, 2));
+    const uint8_t* k1 = run.poll(0);
+    run.sent(true, 7, 0);
+    EXPECT_FALSE(run.matches(k1, 8));   // not our tag
+    run.poll(offband::kRegionQueryTimeoutMs);   // neighbor 1 times out
+    EXPECT_FALSE(run.matches(k1, 7));   // its late reply no longer matches anything
+    run.replied("late");                 // and a stray replied() with nothing in flight is ignored
+    EXPECT_EQ(run.result(0).status, ScopeStatus::Timeout);
+    EXPECT_STREQ(run.result(0).scopes, "");
+}
+
+TEST(ScopeQueryRun, EmptyTableIsDoneAtOnce) {
+    ScopeQueryRun<4> run;
+    run.start(nullptr, 0);
+    EXPECT_EQ(run.poll(0), nullptr);
+    EXPECT_FALSE(run.running());
+    EXPECT_EQ(run.resultCount(), 0);
+}
+
+TEST(ScopeQueryRun, MoreNeighborsThanSlotsAreCappedNotOverrun) {
+    NeighbourInfo rows[6];
+    ScopeQueryRun<4> run;
+    run.start(rows, loadNeighbors(rows, 6));
+    EXPECT_EQ(run.resultCount(), 4);
+    EXPECT_EQ(run.totalCount(), 6);   // the report says how many were left out
+}
+
+TEST(ScopeQueryRun, RestartDiscardsTheOldWalk) {
+    NeighbourInfo rows[2];
+    ScopeQueryRun<4> run;
+    run.start(rows, loadNeighbors(rows, 2));
+    const uint8_t* k = run.poll(0);
+    run.sent(true, 9, 0);
+    run.start(rows, 1);   // a new discover.scopes while one is running
+    EXPECT_FALSE(run.matches(k, 9));   // the old in-flight query is gone
+    EXPECT_EQ(run.resultCount(), 1);
+    EXPECT_EQ(run.result(0).status, ScopeStatus::Pending);
+    EXPECT_EQ(run.queriedCount(), 0);
+}
+
+TEST(ScopeQueryRun, LateReplyToAClosedRequestIsStillOurs) {
+    // T3 review: after a timeout, a late reply must not reach the client, whose
+    // login/status branches match a sender on a key prefix alone.
+    NeighbourInfo rows[2];
+    ScopeQueryRun<4> run;
+    run.start(rows, loadNeighbors(rows, 2));
+    uint8_t k1[offband::kNeighborKeyLen];
+    memcpy(k1, run.poll(0), sizeof(k1));
+    run.sent(true, 7, 0);
+    EXPECT_EQ(run.classify(k1, 7), offband::ScopeReply::Current);
+    run.poll(offband::kRegionQueryTimeoutMs);   // times out, neighbor 2 is next
+    EXPECT_EQ(run.classify(k1, 7), offband::ScopeReply::Retired);
+    EXPECT_EQ(run.classify(k1, 8), offband::ScopeReply::None);   // the client's own tag
+    uint8_t other[offband::kNeighborKeyLen]; keyFor(other, 0x99);
+    EXPECT_EQ(run.classify(other, 7), offband::ScopeReply::None);
+}
+
+TEST(ScopeQueryRun, RetiredRingRemembersTheLastFew) {
+    NeighbourInfo rows[6];
+    ScopeQueryRun<8> run;
+    run.start(rows, loadNeighbors(rows, 6));
+    uint8_t keys[6][offband::kNeighborKeyLen];
+    uint32_t now = 0;
+    for (int i = 0; i < 6; i++) {
+        memcpy(keys[i], run.poll(now), offband::kNeighborKeyLen);
+        run.sent(true, (uint32_t)(50 + i), now);
+        run.replied("x");
+    }
+    // the ring holds the most recent kRetired closed requests
+    EXPECT_EQ(run.classify(keys[5], 55), offband::ScopeReply::Retired);
+    EXPECT_EQ(run.classify(keys[2], 52), offband::ScopeReply::Retired);
+    EXPECT_EQ(run.classify(keys[1], 51), offband::ScopeReply::None);
+}
+
+TEST(ScopeQueryRun, UnusableReplyIsNotAnEmptyAnswer) {
+    NeighbourInfo rows[1];
+    ScopeQueryRun<4> run;
+    run.start(rows, loadNeighbors(rows, 1));
+    run.poll(0);
+    run.sent(true, 7, 0);
+    run.unusableReply();
+    EXPECT_EQ(run.result(0).status, ScopeStatus::Timeout);   // scopes unknown, not "none"
+    EXPECT_EQ(run.poll(1), nullptr);
+    EXPECT_FALSE(run.running());
+}
+
+TEST(ScopeQueryRun, EachClosedRequestIsReleasedOnce) {
+    NeighbourInfo rows[2];
+    ScopeQueryRun<4> run;
+    run.start(rows, loadNeighbors(rows, 2));
+    uint8_t got[offband::kNeighborKeyLen];
+    EXPECT_FALSE(run.takeReleased(got));   // nothing sent yet
+    run.poll(0);
+    run.sent(false, 0, 0);                 // a failed send held nothing
+    EXPECT_FALSE(run.takeReleased(got));
+    run.poll(0);
+    run.sent(true, 9, 0);
+    EXPECT_FALSE(run.takeReleased(got));   // still in flight
+    run.replied("hao");
+    ASSERT_TRUE(run.takeReleased(got));
+    EXPECT_TRUE(keyIs(got, 0x20));
+    EXPECT_FALSE(run.takeReleased(got));   // once
+}
+
+TEST(ScopeQueryRun, StartsStraightFromTheNeighborTable) {
+    NeighborTable<3> t;
+    uint8_t a[offband::kNeighborKeyLen]; keyFor(a, 0x10);
+    uint8_t b[offband::kNeighborKeyLen]; keyFor(b, 0x20);
+    t.put(a, 1, 100, 2.0f, -70);
+    t.put(b, 1, 200, 3.0f, -80);
+    ScopeQueryRun<1> run;
+    run.start(t);
+    EXPECT_EQ(run.totalCount(), 2);
+    ASSERT_EQ(run.resultCount(), 1);
+    EXPECT_EQ(run.result(0).row.snr, 8);
+    EXPECT_EQ(run.result(0).row.rssi, -70);
+    EXPECT_EQ(t.slotAt(-1), nullptr);
+    EXPECT_EQ(t.slotAt(3), nullptr);
+    EXPECT_EQ(t.slotAt(2), nullptr);   // empty slot
+}
+
+TEST(RegionsReply, EdgeLengthsAndCuts) {
+    uint8_t buf[64];
+    char out[16];
+    // exactly the header: a valid, empty answer
+    size_t len = makeReply(buf, 7, "", 0);
+    ASSERT_EQ(len, 8u);
+    ASSERT_TRUE(offband::parseRegionsResponse(buf, len, 7, out, sizeof(out)));
+    EXPECT_STREQ(out, "");
+    // names fill len exactly: no NUL, no padding
+    len = makeReply(buf, 7, "hao", 0);
+    ASSERT_TRUE(offband::parseRegionsResponse(buf, len, 7, out, sizeof(out)));
+    EXPECT_STREQ(out, "hao");
+    // tiny buffers
+    char one[1], two[2];
+    ASSERT_TRUE(offband::parseRegionsResponse(buf, len, 7, one, sizeof(one)));
+    EXPECT_STREQ(one, "");
+    ASSERT_TRUE(offband::parseRegionsResponse(buf, len, 7, two, sizeof(two)));
+    EXPECT_STREQ(two, "");
+    // a comma right at the last usable position, and the wildcard surviving a cut
+    len = makeReply(buf, 7, "*,abc,defghij", 0);
+    char six[6];   // index 5 (out_cap - 1) is the comma after "abc": "*,abc" fits exactly
+    ASSERT_TRUE(offband::parseRegionsResponse(buf, len, 7, six, sizeof(six)));
+    EXPECT_STREQ(six, "*,abc");
+    char five[5];  // "abc" no longer fits whole: only the wildcard survives
+    ASSERT_TRUE(offband::parseRegionsResponse(buf, len, 7, five, sizeof(five)));
+    EXPECT_STREQ(five, "*");
+}
+
+TEST(ScopeQueryRun, StatusNamesAreTheContractStrings) {
+    EXPECT_STREQ(offband::scopeStatusName(ScopeStatus::Responded), "responded");
+    EXPECT_STREQ(offband::scopeStatusName(ScopeStatus::Timeout), "timeout");
+    EXPECT_STREQ(offband::scopeStatusName(ScopeStatus::SendFailed), "send_failed");
+    EXPECT_STREQ(offband::scopeStatusName(ScopeStatus::Pending), "pending");
+}
+
 // ---- RxRssiStamps ----------------------------------------------------------
 
 TEST(RxRssiStamps, LookupReturnsTheStampedValue) {
