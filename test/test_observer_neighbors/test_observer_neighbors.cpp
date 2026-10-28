@@ -259,6 +259,30 @@ TEST(NeighborAdvert, OnlyDirectNonShareRepeaterAdvertsCount) {
     EXPECT_FALSE(offband::isNeighborAdvert(0, false, true, false));   // a companion or room
 }
 
+// ---- regions request (#1398 T2) -------------------------------------------
+
+TEST(RegionsRequest, LayoutIsWhatTheRepeaterParses) {
+    // simple_repeater MyMesh::onAnonDataRecv: data[0..3] = sender timestamp (our tag),
+    // data[4] = sub-type, and handleAnonRegionsReq reads data[5] as the reply path length.
+    uint8_t buf[offband::kRegionsRequestLen + 4];
+    memset(buf, 0xEE, sizeof(buf));
+    const uint32_t tag = 0x12345678u;
+    ASSERT_EQ(offband::buildRegionsRequest(tag, buf), offband::kRegionsRequestLen);
+    uint32_t got;
+    memcpy(&got, buf, 4);
+    EXPECT_EQ(got, tag);
+    EXPECT_EQ(buf[4], 0x01);   // ANON_REQ_TYPE_REGIONS, reused, not a new allocation
+    EXPECT_EQ(buf[5], 0x00);   // reply path length 0: answer us zero-hop direct
+    EXPECT_EQ(buf[6], 0xEE);   // nothing written past the request
+}
+
+TEST(RegionsRequest, SubTypeIsNotALoginByte) {
+    // The repeater treats data[4] == 0 or >= ' ' as a login password; the regions
+    // sub-type must sit in the gap between them or the request becomes a login.
+    EXPECT_NE(offband::kAnonReqTypeRegions, 0);
+    EXPECT_LT(offband::kAnonReqTypeRegions, ' ');
+}
+
 // ---- RxRssiStamps ----------------------------------------------------------
 
 TEST(RxRssiStamps, LookupReturnsTheStampedValue) {
