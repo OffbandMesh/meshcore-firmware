@@ -107,6 +107,19 @@ static bool safeBootButtonInMap() { const int p = (int)(PIN_USER_BTN); return p 
 if (safeBootButtonInMap()) { }
 const bool pressed_high = (USER_BTN_PRESSED == HIGH);
 if (wake != offband::SafeBootWake::TimedRestart) { sd_power_system_off(); }
+void safeBootDisplayOff()
+{
+    if (!safeBootI2cBusIdle()) return;
+    Wire.begin();
+    Wire.write(offband::kSsd1306SleepStream, sizeof(offband::kSsd1306SleepStream));
+}
+void SafeBoot::checkAndMaybeSleep()
+{
+#if defined(SAFEBOOT_SSD1306_I2C_ADDR)
+    safeBootDisplayOff();
+#endif
+    g_lastResetUnclean = detectUncleanReset();
+}
 """
 
 
@@ -137,6 +150,58 @@ def test_source_rules():
            "a mention in a comment does not satisfy a rule")
 
 
+def test_display_sleep():
+    print("display sleep (#1889)")
+    ssd = "#define DISPLAY_CLASS SSD1306Display\n"
+
+    expect(chk.check_display_sleep("qcc_badge", NRF_INI + "  -D SAFEBOOT_SSD1306_I2C_ADDR=0x3C\n"
+                                   "  -D DISPLAY_CLASS=SSD1306Display\n", "") == [],
+           "the badge declaring an SSD1306 at its address passes")
+
+    expect(len(chk.check_display_sleep("qcc_badge", NRF_INI, ssd)) == 1,
+           "the badge without the lever FAILS")
+
+    expect(chk.check_display_sleep("otherboard", NRF_INI, ssd) == [],
+           "a board not on the list may leave it undeclared")
+
+    probs = chk.check_display_sleep("otherboard", NRF_INI + "  -D SAFEBOOT_SSD1306_I2C_ADDR=0x3C\n",
+                                    "#define DISPLAY_CLASS SH1106Display\n")
+    expect(len(probs) == 1 and "SSD1306Display" in probs[0],
+           "the lever on a non-SSD1306 display FAILS")
+
+    probs = chk.check_display_sleep("otherboard", NRF_INI + "  -D SAFEBOOT_SSD1306_I2C_ADDR=0x3D\n",
+                                    ssd)
+    expect(len(probs) == 1 and "address" in probs[0],
+           "an address that is not the display's FAILS")
+
+    probs = chk.check_display_sleep("otherboard", NRF_INI + "  -D SAFEBOOT_SSD1306_I2C_ADDR=0x3D\n",
+                                    ssd + "#define DISPLAY_ADDRESS 0x3D\n")
+    expect(probs == [], "a display moved to 0x3D with the lever following it passes")
+
+    late = GOOD_SRC.replace("#if defined(SAFEBOOT_SSD1306_I2C_ADDR)\n    safeBootDisplayOff();\n#endif\n", "")
+    late = late.replace("g_lastResetUnclean = detectUncleanReset();",
+                        "g_lastResetUnclean = detectUncleanReset();\n    safeBootDisplayOff();")
+    expect(len(chk.check_safeboot_source(late)) == 1,
+           "the display sleep moved after the first statement FAILS")
+
+    unguarded = GOOD_SRC.replace("    if (!safeBootI2cBusIdle()) return;\n", "")
+    probs = chk.check_safeboot_source(unguarded)
+    expect(len(probs) == 1 and "idle" in probs[0],
+           "talking to the bus without the stuck-line check FAILS")
+
+    guard_late = GOOD_SRC.replace(
+        "    if (!safeBootI2cBusIdle()) return;\n    Wire.begin();\n",
+        "    Wire.begin();\n    if (!safeBootI2cBusIdle()) return;\n")
+    expect(len(chk.check_safeboot_source(guard_late)) == 1,
+           "checking the bus only after Wire.begin() FAILS")
+
+    emptied = GOOD_SRC.replace(
+        "    Wire.write(offband::kSsd1306SleepStream, sizeof(offband::kSsd1306SleepStream));\n", "")
+    probs = chk.check_safeboot_source(emptied)
+    expect(len(probs) == 1 and "sleep stream" in probs[0],
+           "a display-off that sends nothing FAILS")
+
+
 def test_live_tree():
     print("live tree")
     expect(chk.main([]) == 0, "the checked-in tree passes")
@@ -146,6 +211,7 @@ if __name__ == "__main__":
     test_variant_rule()
     test_exemptions_cannot_rot()
     test_source_rules()
+    test_display_sleep()
     test_live_tree()
     print("\n%d failure(s)" % len(FAILURES))
     sys.exit(1 if FAILURES else 0)
