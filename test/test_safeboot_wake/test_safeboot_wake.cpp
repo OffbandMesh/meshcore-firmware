@@ -11,6 +11,7 @@
 
 #include <cstring>
 
+#include <helpers/SafeBootDisplay.h>
 #include <helpers/SafeBootWake.h>
 
 using namespace offband;
@@ -90,6 +91,50 @@ TEST(WakeText, ABatterySleepMentionsTheButtonOnlyWhenItIsArmed) {
 
 TEST(WakeText, ButtonOnlyTellsThePersonWhatToDo) {
   EXPECT_NE(nullptr, std::strstr(safeBootWakeText(SafeBootWake::ButtonOnly, true), "press the button"));
+}
+
+// ---- #1889: the always-powered display goes to sleep first ----------------------------
+
+TEST(DisplaySleep, TheStreamIsCommandsThenDisplayOffThenChargePumpOff) {
+  // SSD1306 datasheet: control byte 0x00 = a command stream; 0xAE = display OFF (sleep);
+  // 0x8D 0x10 = charge pump disabled. Display-off comes first so the glass goes dark even
+  // if the bus drops the rest.
+  const uint8_t want[] = {0x00, 0xAE, 0x8D, 0x10};
+  ASSERT_EQ(sizeof(want), sizeof(kSsd1306SleepStream));
+  for (size_t i = 0; i < sizeof(want); i++) EXPECT_EQ(want[i], kSsd1306SleepStream[i]) << i;
+}
+
+TEST(DisplaySleep, TheStreamNeverTurnsTheDisplayOn) {
+  for (uint8_t b : kSsd1306SleepStream) {
+    EXPECT_NE(0xAF, b) << "0xAF is display ON";
+    EXPECT_NE(0x14, b) << "0x14 after 0x8D is charge pump ON";
+  }
+}
+
+TEST(DisplaySleep, OnlyRealSevenBitAddressesAreAccepted) {
+  EXPECT_TRUE(validI2cAddress(0x3C));
+  EXPECT_TRUE(validI2cAddress(0x3D));
+  EXPECT_FALSE(validI2cAddress(0x00));   // general call
+  EXPECT_FALSE(validI2cAddress(0x07));   // reserved
+  EXPECT_FALSE(validI2cAddress(0x78));   // 10-bit prefix
+  EXPECT_FALSE(validI2cAddress(0x78 << 1));   // an 8-bit (shifted) address by mistake
+}
+
+TEST(DisplaySleep, TheBusIsUsedOnlyWhenBothLinesIdleHigh) {
+  EXPECT_TRUE(i2cBusIdle(1, 1));
+  EXPECT_FALSE(i2cBusIdle(0, 1));
+  EXPECT_FALSE(i2cBusIdle(1, 0));
+  EXPECT_FALSE(i2cBusIdle(0, 0));
+}
+
+TEST(DisplaySleep, OnlyAHeldDataLineCanBeClockedFree) {
+  // A device stopped mid-byte by the reset holds SDA; clocking SCL lets it finish.
+  EXPECT_TRUE(i2cBusRecoverable(0, 1));
+  // SCL held low cannot be driven from here: leave the display alone, never hang.
+  EXPECT_FALSE(i2cBusRecoverable(1, 0));
+  EXPECT_FALSE(i2cBusRecoverable(0, 0));
+  EXPECT_FALSE(i2cBusRecoverable(1, 1));   // nothing to recover
+  EXPECT_EQ(9, kI2cRecoveryClocks);
 }
 
 int main(int argc, char** argv) {

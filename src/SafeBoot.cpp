@@ -19,6 +19,10 @@
 #include "SafeBoot.h"
 #include "MeshLog.h"
 #include "helpers/SafeBootWake.h"   // #1687: how the sleep ends, and what the log says
+#if defined(SAFEBOOT_SSD1306_I2C_ADDR)
+  #include <Wire.h>
+  #include "helpers/SafeBootDisplay.h"   // #1889: the panel sleeps before SafeBoot decides
+#endif
 #if defined(PIN_STATUS_LED)
   #include "helpers/ui/MorseBlink.h"   // #1691: SOS before a refusing board goes dark
 #endif
@@ -546,6 +550,47 @@ offband::SafeBootWake planSafeBootWake()
 #endif
 }
 
+// #1889: an always-powered SSD1306 still shows the last frame from before the reset, and
+// nothing else will touch it if SafeBoot refuses. Put it to sleep first; the display's own
+// start-up wakes it if the boot goes ahead. A missing display just NACKs.
+#if defined(SAFEBOOT_SSD1306_I2C_ADDR)
+static_assert(offband::validI2cAddress(SAFEBOOT_SSD1306_I2C_ADDR),
+              "SAFEBOOT_SSD1306_I2C_ADDR must be a 7-bit I2C address");
+#if !defined(PIN_WIRE_SDA) || !defined(PIN_WIRE_SCL)
+#error "SAFEBOOT_SSD1306_I2C_ADDR needs PIN_WIRE_SDA and PIN_WIRE_SCL to check the bus first"
+#endif
+
+// Both lines read under their pull-ups: true only when the bus is idle (SafeBootDisplay.h).
+static bool safeBootI2cBusIdle()
+{
+    pinMode(PIN_WIRE_SDA, INPUT_PULLUP);
+    pinMode(PIN_WIRE_SCL, INPUT_PULLUP);
+    delayMicroseconds(10);
+    const int sda = digitalRead(PIN_WIRE_SDA) == HIGH ? 1 : 0;
+    const int scl = digitalRead(PIN_WIRE_SCL) == HIGH ? 1 : 0;
+    if (offband::i2cBusIdle(sda, scl)) return true;
+    if (!offband::i2cBusRecoverable(sda, scl)) return false;
+    for (int i = 0; i < offband::kI2cRecoveryClocks && digitalRead(PIN_WIRE_SDA) == LOW; i++) {
+        pinMode(PIN_WIRE_SCL, OUTPUT);
+        digitalWrite(PIN_WIRE_SCL, LOW);
+        delayMicroseconds(5);
+        pinMode(PIN_WIRE_SCL, INPUT_PULLUP);
+        delayMicroseconds(5);
+    }
+    return offband::i2cBusIdle(digitalRead(PIN_WIRE_SDA) == HIGH ? 1 : 0,
+                               digitalRead(PIN_WIRE_SCL) == HIGH ? 1 : 0);
+}
+
+void safeBootDisplayOff()
+{
+    if (!safeBootI2cBusIdle()) return;   // a stuck bus would hang endTransmission()
+    Wire.begin();
+    Wire.beginTransmission((uint8_t)(SAFEBOOT_SSD1306_I2C_ADDR));
+    Wire.write(offband::kSsd1306SleepStream, sizeof(offband::kSsd1306SleepStream));
+    Wire.endTransmission();
+}
+#endif
+
 // #1691: SOS in Morse on the status LED before a refusing board goes dark. SafeBoot runs
 // before the display exists, so the LED is the only thing that can tell the person holding
 // it that the battery is the problem -- a dark, silent board otherwise reads as broken.
@@ -717,6 +762,9 @@ uint32_t bumpBackoff(uint32_t prev_secs)
 
 void SafeBoot::checkAndMaybeSleep()
 {
+#if defined(SAFEBOOT_SSD1306_I2C_ADDR)
+    safeBootDisplayOff();
+#endif
     g_lastResetUnclean = detectUncleanReset();
 
     PersistedState st = loadPersisted();

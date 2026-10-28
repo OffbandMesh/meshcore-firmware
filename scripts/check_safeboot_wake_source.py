@@ -56,6 +56,12 @@ EXEMPT = {
     "wio_wm1110": "no button, no comparator declared; timed restart",
 }
 
+# #1889: variants whose SSD1306 is always powered (no reset line, no power switch), so
+# SafeBoot must put it to sleep first. Each must declare SAFEBOOT_SSD1306_I2C_ADDR.
+REQUIRE_DISPLAY_SLEEP = {
+    "qcc_badge": "owner-seen 2026-10-28: the panel stays lit through a refused sleep",
+}
+
 # Below this many checked variants the check is not looking at the tree it thinks it is.
 COVERAGE_FLOOR = 25
 
@@ -138,6 +144,30 @@ def check_variant(name, ini, headers):
     return enabled, problems
 
 
+def check_display_sleep(name, ini, headers):
+    """#1889: the display-sleep lever is declared where needed, and only on an SSD1306."""
+    ini = strip_ini_comments(ini)
+    headers = strip_c_comments(headers)
+    addr = define_value("SAFEBOOT_SSD1306_I2C_ADDR", ini, headers)
+    problems = []
+    if addr is None:
+        if name in REQUIRE_DISPLAY_SLEEP:
+            problems.append("%s: must declare SAFEBOOT_SSD1306_I2C_ADDR (%s)"
+                            % (name, REQUIRE_DISPLAY_SLEEP[name]))
+        return problems
+    if define_value("DISPLAY_CLASS", ini, headers) != "SSD1306Display":
+        problems.append("%s: SAFEBOOT_SSD1306_I2C_ADDR is set but DISPLAY_CLASS is not "
+                        "SSD1306Display -- the sleep stream is SSD1306 commands" % name)
+    display_addr = define_value("DISPLAY_ADDRESS", ini, headers) or "0x3C"
+    try:
+        if int(addr, 0) != int(display_addr, 0):
+            problems.append("%s: SAFEBOOT_SSD1306_I2C_ADDR %s is not the display's address %s"
+                            % (name, addr, display_addr))
+    except ValueError:
+        problems.append("%s: SAFEBOOT_SSD1306_I2C_ADDR %r is not a number" % (name, addr))
+    return problems
+
+
 def check_safeboot_source(src):
     src = strip_c_comments(src)
     problems = []
@@ -155,6 +185,21 @@ def check_safeboot_source(src):
     if not (re.search(r"p\s*>=\s*0", src) and re.search(r"if\s*\(\s*safeBootButtonInMap\(\)\s*\)", src)):
         problems.append("SafeBoot.cpp no longer keeps PIN_USER_BTN=-1 out of the pin map "
                         "(lilygo_t_impulse_plus declares its button that way)")
+    # #1889: before anything else -- the battery reads and the refusal both come after.
+    if not re.search(r"void\s+SafeBoot::checkAndMaybeSleep\(\)\s*\{\s*#if\s+defined\("
+                     r"SAFEBOOT_SSD1306_I2C_ADDR\)\s*safeBootDisplayOff\(\);", src):
+        problems.append("SafeBoot.cpp no longer puts an always-powered display to sleep as "
+                        "the first thing it does (#1889)")
+    m = re.search(r"void\s+safeBootDisplayOff\(\)\s*\{(.*?)\n\}", src, re.S)
+    body = m.group(1) if m else ""
+    guard = re.search(r"if\s*\(\s*!\s*safeBootI2cBusIdle\(\)\s*\)\s*return\s*;", body)
+    begin = body.find("Wire.begin()")
+    if not guard or begin < 0 or guard.start() > begin:
+        problems.append("safeBootDisplayOff() must check the bus is idle before Wire.begin(): "
+                        "the nRF52 TwoWire has no timeout, so a stuck line hangs SafeBoot "
+                        "before it reads the battery (#1889)")
+    if not re.search(r"Wire\.write\(\s*offband::kSsd1306SleepStream", body):
+        problems.append("safeBootDisplayOff() no longer sends the SSD1306 sleep stream (#1889)")
     if not re.search(r"if\s*\(\s*wake\s*!=\s*offband::SafeBootWake::TimedRestart\s*\)", src):
         problems.append("SafeBoot.cpp no longer gates SYSTEM_OFF on having a wake source "
                         "(#1687)")
@@ -186,10 +231,11 @@ def main(argv):
         ini, headers = read_variant(path)
         applies, probs = check_variant(name, ini, headers)
         problems += probs
+        problems += check_display_sleep(name, ini, headers)
         if applies:
             checked.append(name)
-    for name in sorted(set(EXEMPT) - seen):
-        problems.append("%s: in EXEMPT but no such variant -- remove the entry" % name)
+    for name in sorted((set(EXEMPT) | set(REQUIRE_DISPLAY_SLEEP)) - seen):
+        problems.append("%s: listed here but no such variant -- remove the entry" % name)
     with open(SAFEBOOT_CPP, encoding="utf-8") as f:
         problems += check_safeboot_source(f.read())
     if len(checked) < COVERAGE_FLOOR:
