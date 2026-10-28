@@ -61,6 +61,70 @@ inline int buildRegionsRequest(uint32_t tag, uint8_t* out) {
     return kRegionsRequestLen;
 }
 
+// How long one regions request may wait for its reply before it is a timeout (plan T4).
+constexpr uint32_t kRegionQueryTimeoutMs = 20000;
+
+// Bytes kept for one neighbor's region list, NUL included. A repeater can send about
+// 170 characters; a longer list is cut at its last whole name (see below).
+constexpr size_t kScopesLen = 96;
+
+// Reads a reply built by handleAnonRegionsReq(): {tag}{their clock}{names, comma
+// separated}, followed by the cipher's zero padding. False (out untouched) unless it is
+// at least the 8-byte header and carries expect_tag. An empty list is a valid answer.
+// A list longer than out_cap - 1 is cut at the last comma that fits, so no name is
+// reported partly; when not even one name fits, out is "".
+inline bool parseRegionsResponse(const uint8_t* data, size_t len, uint32_t expect_tag,
+                                 char* out, size_t out_cap) {
+    if (data == nullptr || out == nullptr || out_cap == 0 || len < 8) return false;
+    uint32_t tag;
+    memcpy(&tag, data, 4);
+    if (tag != expect_tag) return false;
+
+    const char* names = (const char*)data + 8;
+    size_t n = 0;
+    while (8 + n < len && names[n] != 0) n++;
+
+    if (n + 1 > out_cap) {
+        size_t cut = 0;
+        for (size_t i = out_cap - 1; i > 0; i--) {
+            if (names[i] == ',') { cut = i; break; }
+        }
+        n = cut;
+    }
+    memcpy(out, names, n);
+    out[n] = 0;
+    return true;
+}
+
+// The one regions request in flight. A reply belongs to it only when both the sender's
+// key and the tag match: the same node answering one of the client's own requests
+// carries the client's tag and must fall through to the client (plan Review #5).
+class InFlightRegionsQuery {
+public:
+    void begin(const uint8_t* pub_key, uint32_t tag, uint32_t now_ms) {
+        memcpy(key_, pub_key, kNeighborKeyLen);
+        tag_ = tag;
+        sent_ms_ = now_ms;
+        active_ = true;
+    }
+    void clear() { active_ = false; }
+    bool active() const { return active_; }
+    bool matches(const uint8_t* from_key, uint32_t tag) const {
+        return active_ && tag == tag_ && memcmp(from_key, key_, kNeighborKeyLen) == 0;
+    }
+    bool timedOut(uint32_t now_ms) const {
+        return active_ && (uint32_t)(now_ms - sent_ms_) >= kRegionQueryTimeoutMs;
+    }
+    uint32_t tag() const { return tag_; }
+    const uint8_t* key() const { return key_; }
+
+private:
+    uint8_t  key_[kNeighborKeyLen] = {};
+    uint32_t tag_ = 0;
+    uint32_t sent_ms_ = 0;
+    bool     active_ = false;
+};
+
 struct NeighbourInfo {
     uint8_t  pub_key[kNeighborKeyLen];
     uint32_t advert_timestamp;   // the advert's own timestamp (sender clock)

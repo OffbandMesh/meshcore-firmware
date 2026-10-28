@@ -283,6 +283,99 @@ TEST(RegionsRequest, SubTypeIsNotALoginByte) {
     EXPECT_LT(offband::kAnonReqTypeRegions, ' ');
 }
 
+// ---- regions reply (#1398 T3) ---------------------------------------------
+
+// A reply as handleAnonRegionsReq builds it: {tag}{their clock}{csv}, then zero padding
+// up to the cipher block, which the receiver sees as part of len.
+static size_t makeReply(uint8_t* buf, uint32_t tag, const char* csv, size_t pad) {
+    memcpy(buf, &tag, 4);
+    const uint32_t clock = 1700000000u;
+    memcpy(buf + 4, &clock, 4);
+    size_t n = strlen(csv);
+    memcpy(buf + 8, csv, n);
+    memset(buf + 8 + n, 0, pad);
+    return 8 + n + pad;
+}
+
+TEST(RegionsReply, ParsesTheNamesAndDropsPadding) {
+    uint8_t buf[128];
+    size_t len = makeReply(buf, 0xA1B2C3D4u, "*,hao,oh-sw", 5);
+    char out[offband::kScopesLen];
+    ASSERT_TRUE(offband::parseRegionsResponse(buf, len, 0xA1B2C3D4u, out, sizeof(out)));
+    EXPECT_STREQ(out, "*,hao,oh-sw");
+}
+
+TEST(RegionsReply, EmptyListIsAValidAnswer) {
+    // A repeater that denies flood everywhere answers with no names; that is a reply
+    // ("no scopes"), not a failure.
+    uint8_t buf[32];
+    size_t len = makeReply(buf, 7, "", 8);
+    char out[offband::kScopesLen] = "junk";
+    ASSERT_TRUE(offband::parseRegionsResponse(buf, len, 7, out, sizeof(out)));
+    EXPECT_STREQ(out, "");
+}
+
+TEST(RegionsReply, WrongTagOrShortReplyIsRejected) {
+    uint8_t buf[64];
+    size_t len = makeReply(buf, 7, "hao", 0);
+    char out[offband::kScopesLen] = "keep";
+    EXPECT_FALSE(offband::parseRegionsResponse(buf, len, 8, out, sizeof(out)));
+    EXPECT_FALSE(offband::parseRegionsResponse(buf, 7, 7, out, sizeof(out)));   // no clock
+    EXPECT_FALSE(offband::parseRegionsResponse(nullptr, len, 7, out, sizeof(out)));
+    EXPECT_FALSE(offband::parseRegionsResponse(buf, len, 7, out, 0));
+    EXPECT_STREQ(out, "keep");   // untouched on rejection
+}
+
+TEST(RegionsReply, OverlongListCutsAtTheLastWholeName) {
+    uint8_t buf[200];
+    size_t len = makeReply(buf, 7, "alpha,bravo,charlie", 0);
+    char out[13];   // room for "alpha,bravo" (11) + NUL, not ",charlie"
+    ASSERT_TRUE(offband::parseRegionsResponse(buf, len, 7, out, sizeof(out)));
+    EXPECT_STREQ(out, "alpha,bravo");
+
+    char tiny[4];   // not even the first name fits
+    ASSERT_TRUE(offband::parseRegionsResponse(buf, len, 7, tiny, sizeof(tiny)));
+    EXPECT_STREQ(tiny, "");
+}
+
+TEST(RegionsReply, ListThatExactlyFitsIsKept) {
+    uint8_t buf[64];
+    size_t len = makeReply(buf, 7, "alpha,bravo", 0);
+    char out[12];   // 11 chars + NUL
+    ASSERT_TRUE(offband::parseRegionsResponse(buf, len, 7, out, sizeof(out)));
+    EXPECT_STREQ(out, "alpha,bravo");
+}
+
+TEST(InFlightRegionsQuery, MatchesOnlyItsOwnKeyAndTag) {
+    offband::InFlightRegionsQuery q;
+    uint8_t a[offband::kNeighborKeyLen]; keyFor(a, 0x30);
+    uint8_t b[offband::kNeighborKeyLen]; keyFor(b, 0x40);
+    EXPECT_FALSE(q.matches(a, 5));   // nothing in flight: never consume anything
+
+    q.begin(a, 5, 1000);
+    EXPECT_TRUE(q.active());
+    EXPECT_TRUE(q.matches(a, 5));
+    // Review #5: the same node answering one of the client's own requests carries the
+    // client's tag. It must fall through to the client, not be swallowed here.
+    EXPECT_FALSE(q.matches(a, 6));
+    EXPECT_FALSE(q.matches(b, 5));   // another node reusing the tag value
+
+    q.clear();
+    EXPECT_FALSE(q.active());
+    EXPECT_FALSE(q.matches(a, 5));
+}
+
+TEST(InFlightRegionsQuery, TimesOutAfterTheWindowEvenAcrossMillisWrap) {
+    offband::InFlightRegionsQuery q;
+    uint8_t a[offband::kNeighborKeyLen]; keyFor(a, 0x30);
+    const uint32_t t0 = 0xFFFFF000u;   // a few seconds before millis() wraps
+    q.begin(a, 5, t0);
+    EXPECT_FALSE(q.timedOut(t0 + offband::kRegionQueryTimeoutMs - 1));
+    EXPECT_TRUE(q.timedOut(t0 + offband::kRegionQueryTimeoutMs));
+    q.clear();
+    EXPECT_FALSE(q.timedOut(t0 + 10u * offband::kRegionQueryTimeoutMs));   // idle never times out
+}
+
 // ---- RxRssiStamps ----------------------------------------------------------
 
 TEST(RxRssiStamps, LookupReturnsTheStampedValue) {
