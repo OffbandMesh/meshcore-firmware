@@ -119,6 +119,8 @@ bool cliPassthroughIsAllowed(const char* line) {
     else if (strncmp(p, "display ", 8) == 0) skip = 8;  // #141: "display always on/off" toggle
     else if (strncmp(p, "caplog ", 7) == 0) skip = 7;   // #1194: caplog status / caplog forward
     else if (strcmp(p, "caplog") == 0) return true;      // #1194: bare `caplog` is status
+    else if (strncmp(p, "discover.neighbors", 18) == 0 ||  // #1398: dispatched in ObserverCli
+             strncmp(p, "discover.scopes", 15) == 0) return true;
     else return false;
     // Deny scan against the tail (after the verb + its trailing space).
     const char* tail = p + skip;

@@ -110,6 +110,7 @@
 
 #ifdef OFFBAND_OBSERVER
 #include <helpers/wifi_observer/ObserverNeighbors.h>   // #1386: /neighbors zero-hop table
+#include <helpers/wifi_observer/NeighborsCli.h>        // #1398: ScopeWalkSummary
 // #1386: rows in the zero-hop neighbor table that feeds the CoreScope /neighbors
 // report. Plan decision 2: 50 where the board has PSRAM, 20 otherwise. 0 compiles
 // the table out, as MAX_NEIGHBOURS does on the repeater.
@@ -296,9 +297,14 @@ public:
   // direct). False when no packet could be built; tag identifies the reply.
   bool sendRegionsReq(const uint8_t* pub_key, uint32_t& tag);
   // #1398: query every neighbor's regions, one at a time from loop(); a walk already
-  // running starts over. Results stay until the next start.
-  void startScopeQuery() { _scope_run.start(_neighbours); }
-  const offband::ScopeQueryRun<MAX_NEIGHBOURS>& scopeQuery() const { return _scope_run; }
+  // running starts over. Results stay until the next start. False when the walk has
+  // no storage (see _scope_run).
+  typedef offband::ScopeQueryRun<MAX_NEIGHBOURS> ScopeRun;
+  bool startScopeQuery();
+  const ScopeRun* scopeQuery() const { return _scope_run; }   // nullptr until first used
+  void scopeWalkSummary(offband::ScopeWalkSummary* out) const;
+  // #1398: discover.neighbors -- ask repeaters in range to identify themselves now.
+  bool sendNodeDiscoverReq();
 #endif
 
 #if defined(OFFBAND_OBSERVER) || defined(OFFBAND_POWER_TELEMETRY)
@@ -748,9 +754,25 @@ private:
   offband::NeighborTable<MAX_NEIGHBOURS> _neighbours;
   offband::RxRssiStamps<COMPANION_PACKET_POOL_SIZE> _advert_rssi;
   // #1398: the walk over the neighbor table, one regions request in flight at a time.
-  // Driven only from loop() and the receive path, both on the main loop.
-  offband::ScopeQueryRun<MAX_NEIGHBOURS> _scope_run;
+  // Driven only from loop() and the receive path, both on the main loop. Its results
+  // (about 145 bytes a neighbor) must not come out of the internal RAM the observer
+  // envs freed for TLS (#701): on a PSRAM board the walk is allocated in PSRAM the
+  // first time it is used, and stays unavailable if that fails; elsewhere (20 rows)
+  // it is static.
+  ScopeRun* _scope_run;
+#ifndef BOARD_HAS_PSRAM
+  ScopeRun _scope_run_static;
+#endif
+  // The transient contact this code added for the request in flight, the only one
+  // whose lastmod it may stamp and reset.
+  uint8_t _scope_added_key[PUB_KEY_SIZE];
+  bool    _scope_added;
+  // discover.neighbors: the tag our request carried, and until when answers count.
+  uint32_t _discover_tag;
+  unsigned long _discover_until;
   bool onRegionsReply(const ContactInfo& contact, const uint8_t* data, uint8_t len);
+  bool onNodeDiscoverResponse(mesh::Packet* packet);
+  void releaseScopeTransient();
   void scopeQueryTick();
 #endif
 #endif

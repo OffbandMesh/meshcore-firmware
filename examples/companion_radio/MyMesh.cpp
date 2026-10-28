@@ -89,6 +89,10 @@
 // now included unconditionally above (#241). Its typed dispatch backend (#165):
 #include "helpers/wifi_observer/ObserverCli.h"   // dispatchObserverCli + broker enumeration
 #include "helpers/config/ConfigDispatch.h"       // #364: role-agnostic config set/get
+#ifdef BOARD_HAS_PSRAM
+#include <new>                                   // #1398: placement new for the PSRAM scope walk
+#include <esp_heap_caps.h>
+#endif
 // wifiObserverPool() lives in WifiObserver.h (heavy transitive includes); forward-
 // declare it here as CliPassthrough.cpp does. Still needed by the VIEW passthrough
 // and the F3 broker enumeration below; the config set/get path no longer takes a
@@ -634,7 +638,10 @@ void MyMesh::logRx(mesh::Packet* pkt, int len, float score) {
   int   duration    = (int)_radio->getEstAirtimeFor(len);
   offband::observerLogRxParsedTrampoline(*pkt, rssi, snr, score_milli, duration);
 #if MAX_NEIGHBOURS
-  if (pkt->getPayloadType() == PAYLOAD_TYPE_ADVERT) _advert_rssi.stamp(pkt, rssi);   // #1386
+  // #1386/#1398: adverts and discover answers both feed the neighbor table
+  if (pkt->getPayloadType() == PAYLOAD_TYPE_ADVERT || pkt->getPayloadType() == PAYLOAD_TYPE_CONTROL) {
+    _advert_rssi.stamp(pkt, rssi);
+  }
 #endif
 #else
   (void)len;
@@ -666,29 +673,31 @@ static_assert(offband::kNeighborKeyLen == PUB_KEY_SIZE, "neighbor rows hold a wh
 // #1398: the reply comes back as a RESPONSE datagram, which only decrypts for a contact.
 // A neighbor that is not one gets a transient ADV_TYPE_NONE contact, as the client's
 // CMD_SEND_ANON_REQ does, through addContact(), which only ever recycles a transient
-// slot (the one with the oldest lastmod) and never a saved contact. While its request is
-// in flight the query's transient carries the current time, so a client request recycles
-// an older slot instead of ours; scopeQueryTick() sets it back to 0 when the request
-// closes, so the next query recycles that same slot rather than one the client is
-// waiting on. A walk therefore holds one of the MAX_ANON_CONTACTS slots. Not covered:
-// when all of them hold client requests younger than ours, ours takes the oldest client
-// one, and an advert from the node itself clears the transient; either way the query
-// simply times out.
+// slot (the one with the oldest lastmod) and never a saved contact; observer envs keep
+// only three. While its request is in flight the transient this code added carries the
+// current time, so a client request recycles an older slot instead of ours;
+// releaseScopeTransient() sets it back to 0 when the request closes, in the same pass,
+// so the next query recycles that same slot rather than one the client is waiting on.
+// A walk therefore holds one transient slot. Only a transient this code added is ever
+// stamped or reset: an existing contact of any type is used as it is. Not covered: when
+// every slot holds a client request younger than ours, ours takes the oldest client one,
+// and an advert from the node itself clears the transient; either way the query times out.
 // The request goes zero-hop direct, whatever path a known contact has: the repeater
 // answers a regions request only on a direct route, and a neighbor is zero hops away.
 bool MyMesh::sendRegionsReq(const uint8_t* pub_key, uint32_t& tag) {
   ContactInfo* recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  bool added = false;
   if (recipient == NULL) {
     ContactInfo anon;
-    memset(&anon, 0, sizeof(anon));
+    memset(&anon, 0, sizeof(anon));   // lastmod 0: free to recycle until the request is out
     memcpy(anon.id.pub_key, pub_key, PUB_KEY_SIZE);
     anon.out_path_len = 0;
     anon.type = ADV_TYPE_NONE;
     if (!addContact(anon)) return false;
     recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
     if (recipient == NULL) return false;
+    added = true;
   }
-  if (recipient->type == ADV_TYPE_NONE) recipient->lastmod = getRTCClock()->getCurrentTime();
 
   uint8_t req[offband::kRegionsRequestLen];
   const uint32_t t = getRTCClock()->getCurrentTimeUnique();
@@ -696,9 +705,48 @@ bool MyMesh::sendRegionsReq(const uint8_t* pub_key, uint32_t& tag) {
   mesh::Packet* pkt = createAnonDatagram(PAYLOAD_TYPE_ANON_REQ, self_id, recipient->id,
                                          recipient->getSharedSecret(self_id), req, sizeof(req));
   if (pkt == NULL) return false;
+  if (added) {
+    recipient->lastmod = getRTCClock()->getCurrentTime();
+    memcpy(_scope_added_key, pub_key, PUB_KEY_SIZE);
+    _scope_added = true;
+  }
   sendZeroHop(pkt);
   tag = t;   // only a request that went out has a tag worth matching
   return true;
+}
+
+// #1398: the walk's storage, created on first use. See _scope_run in MyMesh.h.
+bool MyMesh::startScopeQuery() {
+#ifdef BOARD_HAS_PSRAM
+  if (_scope_run == NULL) {
+    void* mem = heap_caps_malloc(sizeof(ScopeRun), MALLOC_CAP_SPIRAM);
+    if (mem == NULL) {
+      MESH_DEBUG_PRINTLN("scope query: no PSRAM for the walk (%u bytes); not started",
+                         (unsigned)sizeof(ScopeRun));
+      return false;
+    }
+    _scope_run = new (mem) ScopeRun();
+  }
+#endif
+  _scope_run->start(_neighbours);
+  MESH_DEBUG_PRINTLN("scope query: walk started over %d neighbors", _scope_run->resultCount());
+  return true;
+}
+
+void MyMesh::scopeWalkSummary(offband::ScopeWalkSummary* out) const {
+  memset(out, 0, sizeof(*out));
+  if (_scope_run == NULL) return;
+  out->running = _scope_run->running();
+  out->total = _scope_run->resultCount();
+  out->done = _scope_run->queriedCount();
+  for (int i = 0; i < out->total; i++) {
+    switch (_scope_run->result(i).status) {
+      case offband::ScopeStatus::Responded:  out->responded++; break;
+      case offband::ScopeStatus::Timeout:    out->timeout++; break;
+      case offband::ScopeStatus::SendFailed: out->send_failed++; break;
+      default: break;
+    }
+  }
 }
 
 // #1398: a reply to one of the scope query's regions requests. Matched on the sender's
@@ -707,39 +755,90 @@ bool MyMesh::sendRegionsReq(const uint8_t* pub_key, uint32_t& tag) {
 // and is dropped, not passed on: the client's login/status branches match a sender on
 // a key prefix alone and would misread it.
 bool MyMesh::onRegionsReply(const ContactInfo& contact, const uint8_t* data, uint8_t len) {
-  if (len < 4) return false;
+  if (_scope_run == NULL || len < 4) return false;
   uint32_t tag;
   memcpy(&tag, data, 4);
-  switch (_scope_run.classify(contact.id.pub_key, tag)) {
+  switch (_scope_run->classify(contact.id.pub_key, tag)) {
     case offband::ScopeReply::None:    return false;
     case offband::ScopeReply::Retired: return true;
     case offband::ScopeReply::Current: break;
   }
   char scopes[offband::kScopesLen];
   if (offband::parseRegionsResponse(data, len, tag, scopes, sizeof(scopes))) {
-    _scope_run.replied(scopes);
+    MESH_DEBUG_PRINTLN("scope query: %02X%02X%02X%02X answered \"%s\"", contact.id.pub_key[0],
+                       contact.id.pub_key[1], contact.id.pub_key[2], contact.id.pub_key[3], scopes);
+    _scope_run->replied(scopes);
   } else {
-    _scope_run.unusableReply();
+    _scope_run->unusableReply();
   }
   return true;
+}
+
+// #1398: when the walk closes a request, the transient contact this code added for it
+// goes back to lastmod 0, so the next query recycles that slot first.
+void MyMesh::releaseScopeTransient() {
+  uint8_t key[PUB_KEY_SIZE];
+  if (!_scope_run->takeReleased(key)) return;
+  if (!_scope_added || memcmp(key, _scope_added_key, PUB_KEY_SIZE) != 0) return;
+  _scope_added = false;
+  ContactInfo* c = lookupContactByPubKey(key, PUB_KEY_SIZE);
+  if (c != NULL && c->type == ADV_TYPE_NONE) c->lastmod = 0;
 }
 
 // #1398: one step of the scope query walk per loop() pass. Sends at most one request,
 // never waits: the reply arrives later through onRegionsReply().
 void MyMesh::scopeQueryTick() {
-  uint8_t key[PUB_KEY_SIZE];
-  if (_scope_run.takeReleased(key)) {
-    ContactInfo* c = lookupContactByPubKey(key, PUB_KEY_SIZE);
-    if (c != NULL && c->type == ADV_TYPE_NONE) c->lastmod = 0;   // first to be recycled
-  }
-  if (!_scope_run.running()) return;
+  if (_scope_run == NULL) return;
+  releaseScopeTransient();   // closed by a reply since the last pass
+  if (!_scope_run->running()) return;
   const uint32_t now = _ms->getMillis();
-  const uint8_t* next = _scope_run.poll(now);
+  const uint8_t* next = _scope_run->poll(now);
+  releaseScopeTransient();   // closed by a timeout inside poll(): free it before the next is taken
   if (next == NULL) return;
   uint32_t tag = 0;
   const bool ok = sendRegionsReq(next, tag);
-  _scope_run.sent(ok, tag, now);
+  _scope_run->sent(ok, tag, now);
 }
+
+// #1398: discover.neighbors. The same exchange our repeater uses to fill its own table:
+// one zero-hop control packet asking repeaters to identify themselves, answers accepted
+// for kNodeDiscoverWindowMs. A repeater answers only with forwarding on, and at most a
+// few times a minute, so silence is not proof it is absent.
+bool MyMesh::sendNodeDiscoverReq() {
+  uint32_t tag = 0;
+  getRNG()->random((uint8_t*)&tag, sizeof(tag));
+  if (tag == 0) tag = 1;   // 0 means "none pending"
+  uint8_t data[offband::kNodeDiscoverReqLen];
+  offband::buildNodeDiscoverRequest(tag, data);
+  mesh::Packet* pkt = createControlData(data, sizeof(data));
+  if (pkt == NULL) return false;
+  sendZeroHop(pkt);
+  _discover_tag = tag;
+  _discover_until = futureMillis(offband::kNodeDiscoverWindowMs);
+  return true;
+}
+
+// An answer to our discover.neighbors goes into the table and is not passed to the
+// client, which did not ask for it. Every other control packet goes on to the client.
+bool MyMesh::onNodeDiscoverResponse(mesh::Packet* packet) {
+  if (_discover_tag == 0) return false;
+  if (millisHasNowPassed(_discover_until)) {
+    _discover_tag = 0;
+    return false;
+  }
+  if (packet->getPathHashCount() != 0) return false;   // a neighbor answers zero-hop
+  uint8_t key[PUB_KEY_SIZE];
+  if (!offband::parseNodeDiscoverResponse(packet->payload, packet->payload_len, _discover_tag, key)) {
+    return false;
+  }
+  if (memcmp(key, self_id.pub_key, PUB_KEY_SIZE) == 0) return true;
+  int8_t rssi = 0;
+  const bool rssi_known = _advert_rssi.lookup(packet, &rssi);
+  const uint32_t now = getRTCClock()->getCurrentTime();
+  _neighbours.put(key, now, now, packet->getSNR(), rssi, rssi_known);
+  return true;
+}
+static_assert(offband::kAdvTypeRepeater == ADV_TYPE_REPEATER, "discover filter is for repeaters");
 #endif
 
 bool MyMesh::isAutoAddEnabled() const {
@@ -1670,6 +1769,9 @@ bool MyMesh::onContactPathRecv(ContactInfo& contact, uint8_t* in_path, uint8_t i
 }
 
 void MyMesh::onControlDataRecv(mesh::Packet *packet) {
+#if defined(OFFBAND_OBSERVER) && MAX_NEIGHBOURS
+  if (onNodeDiscoverResponse(packet)) return;   // #1398: an answer to our discover.neighbors
+#endif
   if (packet->payload_len + 4 > sizeof(out_frame)) {
     MESH_DEBUG_PRINTLN("onControlDataRecv(), payload_len too long: %d", packet->payload_len);
     return;
@@ -1914,6 +2016,16 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _obs_cli_redact = false;
   _obs_cli_buf[0] = 0;
   _ob_stream = OB_STREAM_NONE;   // F8 (#169): no config-response stream in flight
+#if MAX_NEIGHBOURS
+#ifdef BOARD_HAS_PSRAM
+  _scope_run = NULL;                 // #1398: PSRAM, allocated on the first discover.scopes
+#else
+  _scope_run = &_scope_run_static;   // #1398: static on boards without PSRAM
+#endif
+  _scope_added = false;
+  _discover_tag = 0;                 // #1398: no discover.neighbors pending
+  _discover_until = 0;
+#endif
 #endif
   _blk_listing = false;   // #241: no block-LIST stream in flight
   _caplog_streaming = false;  // #396: no caplog download in flight
