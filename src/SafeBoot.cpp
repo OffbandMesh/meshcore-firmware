@@ -18,9 +18,26 @@
 
 #include "SafeBoot.h"
 #include "MeshLog.h"
+#include "helpers/SafeBootWake.h"   // #1687: how the sleep ends, and what the log says
+#if defined(PIN_STATUS_LED)
+  #include "helpers/ui/MorseBlink.h"   // #1691: SOS before a refusing board goes dark
+#endif
 
 #include <Arduino.h>
 #include <stdint.h>
+
+// #1687: the user button's pressed level. LOW is the convention every UI uses; a board
+// whose button is active-high (the T1000-E) sets USER_BTN_PRESSED=HIGH. SafeBoot used to
+// assume active-low here and armed the T1000-E's button with a condition that was true at
+// idle, which woke it the moment it slept.
+#ifndef USER_BTN_PRESSED
+#define USER_BTN_PRESSED LOW
+#endif
+
+#if defined(NRF52_PLATFORM) && defined(PIN_USER_BTN) && __has_include(<nrf_gpio.h>)
+#include <nrf_gpio.h>
+#define SAFEBOOT_NRF52_BUTTON 1
+#endif
 
 // ---------------------------------------------------------------------------
 // Compile-time enablement
@@ -464,15 +481,110 @@ bool detectUncleanReset()
 }
 
 // ---------------------------------------------------------------------------
+// #1687: decide how the sleep will end, BEFORE logging it, so the log says the truth.
+// ---------------------------------------------------------------------------
+#if defined(SAFEBOOT_NRF52_BUTTON)
+// The button's CHIP pin. PIN_USER_BTN is an Arduino pin number; the nRF HAL takes a chip
+// pin, and the two differ wherever the variant's pin map is not the identity -- on the QCC
+// badge Arduino pin 6 is P1.00 while raw 6 is P0.06, the buzzer gate (#1689).
+static uint32_t safeBootButtonChipPin() { return g_ADigitalPinMap[PIN_USER_BTN]; }
+
+// A variant with no button says so as PIN_USER_BTN=-1 (lilygo_t_impulse_plus), and that
+// must never reach the pin map: g_ADigitalPinMap[-1] is whatever word precedes the array.
+static bool safeBootButtonInMap()
+{
+    const int p = (int)(PIN_USER_BTN);
+#ifdef PINS_COUNT
+    return p >= 0 && p < (int)(PINS_COUNT);
+#else
+    return p >= 0;
+#endif
+}
+#endif
+
+// Feed the nRF52 watchdog if anything before SafeBoot started it; reading RUNSTATUS is
+// safe while it is idle. Every wait in this file that can outlast a short WDT calls this.
+inline void safeBootFeedWatchdog()
+{
+#if defined(NRF52_PLATFORM) && __has_include(<nrf_wdt.h>)
+    if (nrf_wdt_started(NRF_WDT)) {
+        for (nrf_wdt_rr_register_t i = NRF_WDT_RR0; i <= NRF_WDT_RR7; i = (nrf_wdt_rr_register_t)(i + 1)) {
+            if (nrf_wdt_reload_request_is_enabled(NRF_WDT, i))
+                nrf_wdt_reload_request_set(NRF_WDT, i);
+        }
+    }
+#endif
+}
+
+offband::ButtonSense g_buttonSense = {false, false, false};
+
+offband::SafeBootWake planSafeBootWake()
+{
+#if defined(ESP32)
+    return offband::SafeBootWake::TimedDeepSleep;
+#elif defined(NRF52_PLATFORM)
+#if defined(SAFEBOOT_NRF52_BUTTON)
+    if (safeBootButtonInMap()) {
+        // Apply the idle pull, let it settle, and read: a button that already reads
+        // pressed would fire its SENSE the instant the chip sleeps, so it must not be used.
+        // 10 ms covers a ~13 k internal pull into a 100 nF debounce cap several times over.
+        const uint32_t pin = safeBootButtonChipPin();
+        const bool pressed_high = (USER_BTN_PRESSED == HIGH);
+        nrf_gpio_cfg_input(pin, pressed_high ? NRF_GPIO_PIN_PULLDOWN : NRF_GPIO_PIN_PULLUP);
+        delay(10);
+        g_buttonSense = offband::chooseButtonSense(pressed_high, (int)nrf_gpio_pin_read(pin));
+    }
+#endif
+#if defined(BATTERY_LPCOMP_INPUT)
+    const bool has_lpcomp = true;
+#else
+    const bool has_lpcomp = false;
+#endif
+    return offband::chooseNrf52Wake(has_lpcomp, g_buttonSense.usable);
+#else
+    return offband::SafeBootWake::TimedRestart;
+#endif
+}
+
+// #1691: SOS in Morse on the status LED before a refusing board goes dark. SafeBoot runs
+// before the display exists, so the LED is the only thing that can tell the person holding
+// it that the battery is the problem -- a dark, silent board otherwise reads as broken.
+// Twice through, then off. A few mA for a few seconds is nothing against a sleep that
+// saves the cell.
+//
+// Only where the variant states its LED polarity. Guessing active-high on an active-low
+// LED would run the pattern inverted and leave the LED LIT afterwards -- and nRF52 keeps
+// output state through SYSTEM_OFF, so it would drain the cell SafeBoot is protecting.
+void blinkSafeBootSos()
+{
+#if defined(PIN_STATUS_LED) && defined(LED_STATE_ON)
+    static const char kSos[] = "SOS";
+    const uint32_t total_ms =
+        offband::morseTotalUnits(kSos) * offband::kMorseUnitMs * 2u + offband::kMorseWordGap *
+        offband::kMorseUnitMs;
+    pinMode(PIN_STATUS_LED, OUTPUT);
+    const uint32_t start = millis();
+    for (uint32_t t = 0; t < total_ms; t = millis() - start) {
+        digitalWrite(PIN_STATUS_LED,
+                     offband::morseLitAt(kSos, t) ? LED_STATE_ON : !LED_STATE_ON);
+        safeBootFeedWatchdog();
+        delay(10);
+    }
+    digitalWrite(PIN_STATUS_LED, !LED_STATE_ON);
+#endif
+}
+
+// ---------------------------------------------------------------------------
 // Deep sleep entry (used while in SafeBoot, before normal board init).
 // We deliberately bypass any MeshCore sleep helper here because they touch
 // NodeDB, screen, BLE and others that we have not initialised yet.
 // ---------------------------------------------------------------------------
-[[noreturn]] void enterSafeBootSleep(uint32_t secs)
+[[noreturn]] void enterSafeBootSleep(uint32_t secs, offband::SafeBootWake wake)
 {
     if (secs == 0)
         secs = DEFAULT_SAFE_BOOT_RECHECK_SECS;
     (void)secs; // may be unused on SYSTEM_OFF paths (nRF52 LPCOMP/button)
+    (void)wake; // the ESP32 path has one way to sleep
 
 #if defined(ESP32)
     // Timer wake.
@@ -497,21 +609,20 @@ bool detectUncleanReset()
 
 #elif defined(NRF52_PLATFORM)
     // nRF52 SYSTEM_OFF cannot be timed directly: it requires a wake source
-    // (LPCOMP, GPIO SENSE, NFC field, or reset). We pick the best available
-    // option in this priority order:
+    // (LPCOMP, GPIO SENSE, NFC field, or reset). planSafeBootWake() has already
+    // chosen, and the log line already said so (#1687, SafeBootWake.h):
     //
-    //   1) BATTERY_LPCOMP_INPUT defined  -> SYSTEM_OFF + LPCOMP wake on
-    //      Vbat rise. Optimal path: ~1-3 uA.
-    //   2) PIN_USER_BTN defined          -> SYSTEM_OFF + GPIO SENSE on the
-    //      user button. Same ultra-low current, but auto-recheck is lost
-    //      (the user has to press to retry). We *also* arm a short System
-    //      ON nap below so that auto-recheck still works.
-    //   3) Otherwise                     -> System ON __WFE() loop with
-    //      watchdog feeding. Higher current (~1.5-3 mA) but the only way
-    //      to keep timer-based auto-recovery on variants that wired
-    //      neither LPCOMP nor a button.
+    //   1) BatteryRise   -> SYSTEM_OFF + LPCOMP wake on Vbat rise (~1-3 uA), plus
+    //                       the button if it is usable.
+    //   2) ButtonOnly    -> SYSTEM_OFF + GPIO SENSE on the button. Same current,
+    //                       but only a press wakes it.
+    //   3) TimedRestart  -> System ON __WFE() loop with watchdog feeding, then a
+    //                       reset after `secs`. ~1.5-3 mA, but never a loop.
     //
-    // Variants on solar deployments SHOULD define BATTERY_LPCOMP_INPUT.
+    // A button is armed ONLY when it is usable: a SENSE whose condition is already
+    // true wakes the chip the moment it sleeps, which is the 128 ms boot-loop #1687
+    // measured on the QCC badge. Variants on solar deployments SHOULD define
+    // BATTERY_LPCOMP_INPUT.
 
 #ifdef BATTERY_LPCOMP_INPUT
     {
@@ -532,49 +643,49 @@ bool detectUncleanReset()
     }
 #endif
 
-#if defined(PIN_USER_BTN) && __has_include(<nrf_gpio.h>)
-    // Manual wake via button SENSE. Cheap to arm and complements LPCOMP
-    // (the user can force a retry without waiting for solar).
-    nrf_gpio_cfg_input(PIN_USER_BTN, NRF_GPIO_PIN_PULLUP);
-    nrf_gpio_cfg_sense_set(PIN_USER_BTN, NRF_GPIO_PIN_SENSE_LOW);
+#if defined(SAFEBOOT_NRF52_BUTTON)
+    if (g_buttonSense.usable) {
+        // Manual wake via button SENSE, on the button's CHIP pin, at its own polarity.
+        // Cheap to arm, and complements LPCOMP: a press retries without waiting for
+        // the cell. A latch left from earlier would wake it at once, so clear it.
+        const uint32_t pin = safeBootButtonChipPin();
+        nrf_gpio_cfg_sense_input(pin,
+                                 g_buttonSense.pull_down ? NRF_GPIO_PIN_PULLDOWN : NRF_GPIO_PIN_PULLUP,
+                                 g_buttonSense.sense_high ? NRF_GPIO_PIN_SENSE_HIGH : NRF_GPIO_PIN_SENSE_LOW);
+        // Clear AFTER arming: configuring SENSE can itself set the latch.
+#if defined(NRF_GPIO_LATCH_PRESENT)
+        nrf_gpio_pin_latch_clear(pin);
+#endif
+    }
 #endif
 
-#if defined(BATTERY_LPCOMP_INPUT) || (defined(PIN_USER_BTN) && __has_include(<nrf_gpio.h>))
-    // We have at least one SYSTEM_OFF wake source: enter ultra-low-power.
-    // Try the SoftDevice path first (handles EasyDMA quiesce), then fall
-    // back to the bare register write.
-    Serial.flush();
+    if (wake != offband::SafeBootWake::TimedRestart) {
+        // We have at least one SYSTEM_OFF wake source: enter ultra-low-power.
+        // Try the SoftDevice path first (handles EasyDMA quiesce), then fall
+        // back to the bare register write.
+        Serial.flush();
 #if __has_include(<nrf_soc.h>)
-    if (sd_power_system_off() != NRF_SUCCESS) {
+        if (sd_power_system_off() != NRF_SUCCESS) {
+            NRF_POWER->SYSTEMOFF = 1;
+        }
+#else
         NRF_POWER->SYSTEMOFF = 1;
-    }
-#else
-    NRF_POWER->SYSTEMOFF = 1;
 #endif
-    while (1) {
-        __WFE();
+        while (1) {
+            __WFE();
+        }
     }
-#else
-    // Last-resort fallback: System ON sleep with WFE + WDT feed.
-    // Used only on nRF52 variants that wired neither LPCOMP nor a button.
-    // Honest tradeoff: current ~1.5-3 mA instead of ~3 uA. The boot loop
-    // still slows down to once per `secs`, which is the primary goal of
-    // SafeBoot. Encourage these variants to add BATTERY_LPCOMP_INPUT.
+
+    // TimedRestart: System ON sleep with WFE + WDT feed, then a reset.
+    // Taken when there is no LPCOMP and no usable button -- including a button that
+    // reads pressed at sleep time. Honest tradeoff: current ~1.5-3 mA instead of
+    // ~3 uA, but the board rechecks once per `secs` instead of looping.
     Serial.flush();
     const uint32_t start = millis();
     const uint32_t deadline_ms = secs * 1000u;
     while ((millis() - start) < deadline_ms) {
-        // Defensive WDT feed: if a watchdog was started by the bootloader
-        // or earlier init code, keep it happy. Reading RUNSTATUS is safe
-        // even when the WDT is idle (returns 0).
-#if __has_include(<nrf_wdt.h>)
-        if (nrf_wdt_started(NRF_WDT)) {
-            for (nrf_wdt_rr_register_t i = NRF_WDT_RR0; i <= NRF_WDT_RR7; i = (nrf_wdt_rr_register_t)(i + 1)) {
-                if (nrf_wdt_reload_request_is_enabled(NRF_WDT, i))
-                    nrf_wdt_reload_request_set(NRF_WDT, i);
-            }
-        }
-#endif
+        // A watchdog started by the bootloader or earlier init must be kept happy.
+        safeBootFeedWatchdog();
         __WFE();
         __SEV();
         __WFE();
@@ -585,7 +696,6 @@ bool detectUncleanReset()
     NVIC_SystemReset();
     while (1)
         ;
-#endif
 #else
     while (1)
         ;
@@ -688,15 +798,30 @@ void SafeBoot::checkAndMaybeSleep()
     next.flags = (uint16_t)(g_lastResetUnclean ? 1u : 0u);
     storePersisted(next);
 
-    mesh_log_print(MLOG_BOOT,
-                   "[SafeBoot] Vbat=%u mV below safe threshold (wake=%u sleep=%u). "
-                   "Sleep %us, attempt #%u, unclean=%d.\r\n",
-                   (unsigned)mv, (unsigned)DEFAULT_SAFE_BOOT_WAKE_MV, (unsigned)DEFAULT_SAFE_BOOT_SLEEP_MV,
-                   (unsigned)sleep_secs, (unsigned)next.attempts, (int)g_lastResetUnclean);
+    // #1687/#1690: decide how the sleep ends first, so the line says what this board
+    // will actually do. "Sleep 600s" was printed on nRF52 boards that cannot time a
+    // sleep at all -- and on the QCC badge, one that was about to wake in 128 ms.
+    const offband::SafeBootWake wake = planSafeBootWake();
+    if (offband::safeBootWakeIsTimed(wake)) {
+        mesh_log_print(MLOG_BOOT,
+                       "[SafeBoot] Vbat=%u mV below safe threshold (wake=%u sleep=%u): %s %us. "
+                       "Attempt #%u, unclean=%d.\r\n",
+                       (unsigned)mv, (unsigned)DEFAULT_SAFE_BOOT_WAKE_MV, (unsigned)DEFAULT_SAFE_BOOT_SLEEP_MV,
+                       offband::safeBootWakeText(wake, g_buttonSense.usable), (unsigned)sleep_secs,
+                       (unsigned)next.attempts, (int)g_lastResetUnclean);
+    } else {
+        mesh_log_print(MLOG_BOOT,
+                       "[SafeBoot] Vbat=%u mV below safe threshold (wake=%u sleep=%u): %s. "
+                       "Attempt #%u, unclean=%d.\r\n",
+                       (unsigned)mv, (unsigned)DEFAULT_SAFE_BOOT_WAKE_MV, (unsigned)DEFAULT_SAFE_BOOT_SLEEP_MV,
+                       offband::safeBootWakeText(wake, g_buttonSense.usable),
+                       (unsigned)next.attempts, (int)g_lastResetUnclean);
+    }
     Serial.flush();
     meshLogDrainUart();   // the sleep would cut the mirror's copy off mid-line
 
-    enterSafeBootSleep(sleep_secs);
+    blinkSafeBootSos();   // #1691: the only signal a board can give before its display exists
+    enterSafeBootSleep(sleep_secs, wake);
 }
 
 #else // !SAFE_BOOT_ENABLED
