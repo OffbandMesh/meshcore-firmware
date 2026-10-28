@@ -161,7 +161,7 @@ inline bool parseNodeDiscoverResponse(const uint8_t* payload, size_t len, uint32
 
 struct NeighbourInfo {
     uint8_t  pub_key[kNeighborKeyLen];
-    uint32_t advert_timestamp;   // the advert's own timestamp (sender clock)
+    uint32_t advert_timestamp;   // the advert's own timestamp (sender clock); 0 = unknown
     uint32_t heard_timestamp;    // our RTC when heard; 0 = free slot
     int8_t   snr;                // SNR x4, as on the repeater
     int8_t   rssi;               // dBm; 0 = no reading yet

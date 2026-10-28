@@ -704,7 +704,9 @@ bool MyMesh::sendRegionsReq(const uint8_t* pub_key, uint32_t& tag) {
   mesh::Packet* pkt = createAnonDatagram(PAYLOAD_TYPE_ANON_REQ, self_id, recipient->id,
                                          recipient->getSharedSecret(self_id), req, sizeof(req));
   if (pkt == NULL) return false;
-  if (added) {
+  // A transient left from an earlier walk was reset to lastmod 0 and is first in line to
+  // be recycled; protect it for this request too, and reset it again when it closes.
+  if (added || recipient->type == ADV_TYPE_NONE) {
     recipient->lastmod = getRTCClock()->getCurrentTime();
     memcpy(_scope_added_key, pub_key, PUB_KEY_SIZE);
     _scope_added = true;
@@ -777,7 +779,7 @@ bool MyMesh::onRegionsReply(const ContactInfo& contact, const uint8_t* data, uin
 // goes back to lastmod 0, so the next query recycles that slot first.
 void MyMesh::releaseScopeTransient() {
   uint8_t key[PUB_KEY_SIZE];
-  if (!_scope_run->takeReleased(key)) return;
+  if (_scope_run == NULL || !_scope_run->takeReleased(key)) return;
   if (!_scope_added || memcmp(key, _scope_added_key, PUB_KEY_SIZE) != 0) return;
   _scope_added = false;
   ContactInfo* c = lookupContactByPubKey(key, PUB_KEY_SIZE);
@@ -803,18 +805,26 @@ void MyMesh::scopeQueryTick() {
 // one zero-hop control packet asking repeaters to identify themselves, answers accepted
 // for kNodeDiscoverWindowMs. A repeater answers only with forwarding on, and at most a
 // few times a minute, so silence is not proof it is absent.
-bool MyMesh::sendNodeDiscoverReq() {
+// A second request while the first one's answer window is open is refused: it would
+// re-tag the window, and late answers to the first would then reach the client.
+offband::DiscoverResult MyMesh::sendNodeDiscoverReq(int* seconds_left) {
+  if (_discover_tag != 0 && !millisHasNowPassed(_discover_until)) {
+    if (seconds_left != NULL) {
+      *seconds_left = (int)((_discover_until - _ms->getMillis() + 999) / 1000);
+    }
+    return offband::DiscoverResult::Busy;
+  }
   uint32_t tag = 0;
   getRNG()->random((uint8_t*)&tag, sizeof(tag));
   if (tag == 0) tag = 1;   // 0 means "none pending"
   uint8_t data[offband::kNodeDiscoverReqLen];
   offband::buildNodeDiscoverRequest(tag, data);
   mesh::Packet* pkt = createControlData(data, sizeof(data));
-  if (pkt == NULL) return false;
+  if (pkt == NULL) return offband::DiscoverResult::Failed;
   sendZeroHop(pkt);
   _discover_tag = tag;
   _discover_until = futureMillis(offband::kNodeDiscoverWindowMs);
-  return true;
+  return offband::DiscoverResult::Queued;
 }
 
 // An answer to our discover.neighbors goes into the table and is not passed to the
@@ -833,8 +843,8 @@ bool MyMesh::onNodeDiscoverResponse(mesh::Packet* packet) {
   if (memcmp(key, self_id.pub_key, PUB_KEY_SIZE) == 0) return true;
   int8_t rssi = 0;
   const bool rssi_known = _advert_rssi.lookup(packet, &rssi);
-  const uint32_t now = getRTCClock()->getCurrentTime();
-  _neighbours.put(key, now, now, packet->getSNR(), rssi, rssi_known);
+  // A discover answer carries no advert timestamp: advert_timestamp 0 means unknown.
+  _neighbours.put(key, 0, getRTCClock()->getCurrentTime(), packet->getSNR(), rssi, rssi_known);
   return true;
 }
 static_assert(offband::kAdvTypeRepeater == ADV_TYPE_REPEATER, "discover filter is for repeaters");

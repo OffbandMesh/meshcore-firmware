@@ -24,9 +24,13 @@ struct ScopeWalkSummary {
     int  send_failed;
 };
 
+enum class DiscoverResult { Queued, Busy, Failed };
+
 struct NeighborsCliHooks {
     int  (*neighbor_count)();
-    bool (*discover_neighbors)();   // false when no request could be sent
+    // Queued: a request is on its way. Busy: the last request's answer window is still
+    // open (seconds_left set). Failed: no packet could be built.
+    DiscoverResult (*discover_neighbors)(int* seconds_left);
     void (*scope_summary)(ScopeWalkSummary* out);
     bool (*start_scopes)();         // false when the walk has no storage
 };
