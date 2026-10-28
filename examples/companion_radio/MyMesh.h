@@ -741,10 +741,11 @@ private:
   // from the radio at advert time).
   offband::NeighborTable<MAX_NEIGHBOURS> _neighbours;
   offband::RxRssiStamps<COMPANION_PACKET_POOL_SIZE> _advert_rssi;
-  // #1398: the one transient (ADV_TYPE_NONE) contact the scope query reuses for a
-  // neighbor that is not a contact, so its reply decrypts. Constructor-init.
-  uint8_t _scope_contact_key[PUB_KEY_SIZE];
-  bool    _scope_contact_valid;
+  // #1398: the regions request in flight, and its parsed reply parked for loop().
+  offband::InFlightRegionsQuery _scope_inflight;
+  char    _scope_reply[offband::kScopesLen];
+  bool    _scope_reply_ready;
+  bool onRegionsReply(const ContactInfo& contact, const uint8_t* data, uint8_t len);
 #endif
 #endif
   // #241: in-flight block-LIST streaming (ALWAYS compiled, unlike the observer
