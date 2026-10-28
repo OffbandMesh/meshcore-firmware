@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1398
+impact: none
+reason: Adds the observer commands discover.neighbors and discover.scopes, which are user-visible, but only in unreleased development builds; no published guide can describe them yet, because the manual's catalog accepts a guide only for behavior a release carries. The feature is cataloged as planned in docs/user/features.yml with source evidence, and its guide draft is kept with the plan (docs/initiatives/regional-operation/observer-neighbors/GUIDE-DRAFT.md); it is published, and this record replaced by an updated one, when a release carries the feature. Existing commands, settings, defaults and replies are unchanged.
