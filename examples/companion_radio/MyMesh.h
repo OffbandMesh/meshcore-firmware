@@ -104,6 +104,23 @@
 // (OFFBAND_PKTHASH_RING_SLOTS) rather than a duplicated literal. Safe to include
 // here -- this header pulls only <stdint.h> and defines no types of its own.
 #include "OffbandConfigProtocol.h"
+
+// The companion's packet pool. Named so RxRssiStamps below can be sized to match it.
+#define COMPANION_PACKET_POOL_SIZE   16
+
+#ifdef OFFBAND_OBSERVER
+#include <helpers/wifi_observer/ObserverNeighbors.h>   // #1386: /neighbors zero-hop table
+// #1386: rows in the zero-hop neighbor table that feeds the CoreScope /neighbors
+// report. Plan decision 2: 50 where the board has PSRAM, 20 otherwise. 0 compiles
+// the table out, as MAX_NEIGHBOURS does on the repeater.
+#ifndef MAX_NEIGHBOURS
+  #ifdef BOARD_HAS_PSRAM
+    #define MAX_NEIGHBOURS  50
+  #else
+    #define MAX_NEIGHBOURS  20
+  #endif
+#endif
+#endif
 #if OFFBAND_SCREEN_UI
 #include <helpers/BadgeSendTracker.h>   // #1227: DMs typed on the badge
 #include <helpers/BadgeStore.h>         // #1229: the badge's inbox and threads
@@ -268,6 +285,13 @@ public:
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
 
+#if defined(OFFBAND_OBSERVER) && MAX_NEIGHBOURS
+  // #1386: the zero-hop neighbor table, read by the /neighbors scope query and report.
+  // Accessor names are the repeater's (simple_repeater MyMesh), kept for #197.
+  int getNeighbourCount() const { return _neighbours.count(); }
+  int getNeighbours(offband::NeighbourInfo* out, int max_out) const { return _neighbours.copyTo(out, max_out); }
+#endif
+
 #if defined(OFFBAND_OBSERVER) || defined(OFFBAND_POWER_TELEMETRY)
   // #31 Task C: live Dispatcher stats for the /status snapshot, and (#1071)
   // the [radio] telemetry line. Guarded to the builds that call them, to keep
@@ -336,6 +360,11 @@ protected:
   // Strycher/LoRa#335: the observer's /packets path. #1232: the badge's heard repeats.
   // #1455: the GUI's heard counts by type.
   void logRx(mesh::Packet* pkt, int len, float score) override;
+#endif
+#if defined(OFFBAND_OBSERVER) && MAX_NEIGHBOURS
+  // #1386: chains to BaseChatMesh, then records zero-hop repeater adverts as neighbors.
+  void onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, uint32_t timestamp,
+                    const uint8_t* app_data, size_t app_data_len) override;
 #endif
   bool isAutoAddEnabled() const override;
   bool shouldAutoAddContactType(uint8_t type) const override;
@@ -703,6 +732,13 @@ private:
   size_t  _ob_off;        // next line (BROKERS) / chunk (VIEW) offset into _ob_buf
   uint32_t _ob_last_progress;  // #1283 (D1): last ACCEPTED frame, for the stall abort
   char    _ob_buf[1024];  // current slot's "key=value\n" lines, or the VIEW text
+#if MAX_NEIGHBOURS
+  // #1386: the zero-hop neighbor table, and each received advert's RSSI held from
+  // logRx() until onAdvertRecv() (see ObserverNeighbors.h for why it is not read
+  // from the radio at advert time).
+  offband::NeighborTable<MAX_NEIGHBOURS> _neighbours;
+  offband::RxRssiStamps<COMPANION_PACKET_POOL_SIZE> _advert_rssi;
+#endif
 #endif
   // #241: in-flight block-LIST streaming (ALWAYS compiled, unlike the observer
   // config stream above). blockListDrain() emits one key frame per idle main-loop
