@@ -125,6 +125,40 @@ private:
     bool     active_ = false;
 };
 
+// Node discovery (discover.neighbors): the control-packet exchange our repeater runs
+// for its own neighbor table (simple_repeater MyMesh: sendNodeDiscoverReq and the
+// CTL_TYPE_NODE_DISCOVER_* branches of onControlDataRecv). Same values, reused.
+constexpr uint8_t kCtlNodeDiscoverReq  = 0x80;
+constexpr uint8_t kCtlNodeDiscoverResp = 0x90;
+constexpr uint8_t kAdvTypeRepeater     = 2;    // ADV_TYPE_REPEATER, asserted at the call site
+constexpr int kNodeDiscoverReqLen      = 10;
+constexpr uint32_t kNodeDiscoverWindowMs = 60000;   // how long replies are accepted, as on the repeater
+
+// {0x80: full keys, not prefixes}{type filter: repeaters}{tag}{since 0: every node}
+inline int buildNodeDiscoverRequest(uint32_t tag, uint8_t* out) {
+    out[0] = kCtlNodeDiscoverReq;
+    out[1] = (uint8_t)(1u << kAdvTypeRepeater);
+    memcpy(out + 2, &tag, 4);
+    const uint32_t since = 0;
+    memcpy(out + 6, &since, 4);
+    return kNodeDiscoverReqLen;
+}
+
+// A repeater's answer: {0x90 | node type}{SNR it heard us at}{tag}{public key}. True,
+// with the key copied out, only for a repeater answering our tag with a whole key
+// (a prefix-only answer cannot go in the table).
+inline bool parseNodeDiscoverResponse(const uint8_t* payload, size_t len, uint32_t expect_tag,
+                                      uint8_t* key_out) {
+    if (payload == nullptr || len < 6 + kNeighborKeyLen) return false;
+    if ((payload[0] & 0xF0) != kCtlNodeDiscoverResp) return false;
+    if ((payload[0] & 0x0F) != kAdvTypeRepeater) return false;
+    uint32_t tag;
+    memcpy(&tag, payload + 2, 4);
+    if (tag != expect_tag) return false;
+    memcpy(key_out, payload + 6, kNeighborKeyLen);
+    return true;
+}
+
 struct NeighbourInfo {
     uint8_t  pub_key[kNeighborKeyLen];
     uint32_t advert_timestamp;   // the advert's own timestamp (sender clock)
@@ -267,7 +301,10 @@ template <int CAP>
 class ScopeQueryRun {
     static_assert(CAP > 0, "a scope query walk needs at least one slot");
 public:
-    static constexpr int kRetired = 4;   // closed requests whose late replies are still ours
+    // Closed requests whose late replies are still recognized as ours. A count, not a
+    // time window: eight covers a reply that trails its 20 s timeout while several
+    // quick answers close behind it.
+    static constexpr int kRetired = 8;
 
     // Snapshot rows[0..n) and start over. A walk already running is discarded; its
     // in-flight request is retired, so a late reply to it is still recognized as ours.

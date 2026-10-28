@@ -20,6 +20,7 @@
 #ifdef OFFBAND_OBSERVER
 #include "../config/WifiConfigProvider.h"      // #370: wifi.* handlers (moved out of this file)
 #include "../config/DisplayConfigProvider.h"   // #370: display.* handlers + NVS accessors (moved out)
+#include "NeighborsCli.h"                      // #1398: discover.neighbors / discover.scopes
 #endif
 // #1194: caplog forward on the observer. The repeater has these verbs in
 // CommonCLI, so here they are observer-only, and they share the repeater's
@@ -708,6 +709,9 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
     }
 
 #ifdef OFFBAND_OBSERVER   // #538 (Option A): display/wifi verbs are observer-only
+    // #1398: discover.neighbors / discover.scopes, worked by the companion's MyMesh.
+    if (handleNeighborsCli(cmd, reply, reply_size)) return true;
+
     // "display ..." commands -- #141: display always-on toggle.
     const char* disp_rest = skipPrefix(cmd, "display");
     if (disp_rest != nullptr) {

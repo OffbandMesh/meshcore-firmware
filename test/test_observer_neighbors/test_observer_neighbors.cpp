@@ -513,20 +513,74 @@ TEST(ScopeQueryRun, LateReplyToAClosedRequestIsStillOurs) {
 }
 
 TEST(ScopeQueryRun, RetiredRingRemembersTheLastFew) {
-    NeighbourInfo rows[6];
-    ScopeQueryRun<8> run;
-    run.start(rows, loadNeighbors(rows, 6));
-    uint8_t keys[6][offband::kNeighborKeyLen];
+    NeighbourInfo rows[10];
+    ScopeQueryRun<12> run;
+    run.start(rows, loadNeighbors(rows, 10));
+    uint8_t keys[10][offband::kNeighborKeyLen];
     uint32_t now = 0;
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 10; i++) {
         memcpy(keys[i], run.poll(now), offband::kNeighborKeyLen);
         run.sent(true, (uint32_t)(50 + i), now);
         run.replied("x");
     }
-    // the ring holds the most recent kRetired closed requests
-    EXPECT_EQ(run.classify(keys[5], 55), offband::ScopeReply::Retired);
+    // the ring holds the most recent kRetired (8) closed requests
+    static_assert(ScopeQueryRun<12>::kRetired == 8, "test written for an 8-entry ring");
+    EXPECT_EQ(run.classify(keys[9], 59), offband::ScopeReply::Retired);   // a duplicate reply
     EXPECT_EQ(run.classify(keys[2], 52), offband::ScopeReply::Retired);
     EXPECT_EQ(run.classify(keys[1], 51), offband::ScopeReply::None);
+}
+
+TEST(ScopeQueryRun, RestartRetiresTheRequestInFlight) {
+    NeighbourInfo rows[2];
+    ScopeQueryRun<4> run;
+    run.start(rows, loadNeighbors(rows, 2));
+    uint8_t k[offband::kNeighborKeyLen];
+    memcpy(k, run.poll(0), sizeof(k));
+    run.sent(true, 9, 0);
+    run.start(rows, 2);
+    EXPECT_EQ(run.classify(k, 9), offband::ScopeReply::Retired);   // its late reply is still ours
+    uint8_t got[offband::kNeighborKeyLen];
+    ASSERT_TRUE(run.takeReleased(got));                            // and its transient is let go
+    EXPECT_EQ(memcmp(got, k, sizeof(k)), 0);
+}
+
+TEST(ScopeQueryRun, ATimeoutReleasesInTheSamePoll) {
+    // T4 review: the caller frees the timed-out request's transient before sending
+    // the next one, so it must be available right after the poll() that expired it.
+    NeighbourInfo rows[2];
+    ScopeQueryRun<4> run;
+    run.start(rows, loadNeighbors(rows, 2));
+    run.poll(0);
+    run.sent(true, 9, 0);
+    const uint8_t* next = run.poll(offband::kRegionQueryTimeoutMs);
+    ASSERT_TRUE(keyIs(next, 0x20));
+    uint8_t got[offband::kNeighborKeyLen];
+    ASSERT_TRUE(run.takeReleased(got));
+    EXPECT_TRUE(keyIs(got, 0x10));
+}
+
+TEST(ScopeQueryRun, MisuseDoesNotCorruptTheWalk) {
+    NeighbourInfo rows[2];
+    ScopeQueryRun<4> run;
+    run.sent(true, 1, 0);        // before any start
+    run.replied("x");
+    run.unusableReply();
+    EXPECT_EQ(run.resultCount(), 0);
+    run.start(rows, loadNeighbors(rows, 2));
+    run.poll(0);
+    run.sent(true, 9, 0);
+    run.sent(false, 0, 0);       // a second sent() while one is in flight is ignored
+    EXPECT_TRUE(run.matches(rows[0].pub_key, 9));
+    run.replied("hao");
+    run.poll(1);
+    run.sent(true, 10, 1);
+    run.replied("oh-sw");
+    EXPECT_EQ(run.poll(2), nullptr);   // done
+    EXPECT_EQ(run.poll(3), nullptr);   // and stays done
+    run.sent(true, 11, 3);             // ignored after the end
+    EXPECT_EQ(run.result(0).status, ScopeStatus::Responded);
+    EXPECT_EQ(run.result(1).status, ScopeStatus::Responded);
+    EXPECT_EQ(run.queriedCount(), 2);
 }
 
 TEST(ScopeQueryRun, UnusableReplyIsNotAnEmptyAnswer) {
@@ -609,6 +663,55 @@ TEST(ScopeQueryRun, StatusNamesAreTheContractStrings) {
     EXPECT_STREQ(offband::scopeStatusName(ScopeStatus::Timeout), "timeout");
     EXPECT_STREQ(offband::scopeStatusName(ScopeStatus::SendFailed), "send_failed");
     EXPECT_STREQ(offband::scopeStatusName(ScopeStatus::Pending), "pending");
+}
+
+// ---- node discovery (#1398 T5) --------------------------------------------
+
+TEST(NodeDiscover, RequestIsWhatTheRepeaterParses) {
+    // simple_repeater onControlDataRecv: payload[0] & 0xF0 == 0x80 (bit 0 = prefix only),
+    // payload[1] = type filter, [2..5] = tag, [6..9] = since.
+    uint8_t buf[offband::kNodeDiscoverReqLen + 2];
+    memset(buf, 0xEE, sizeof(buf));
+    ASSERT_EQ(offband::buildNodeDiscoverRequest(0xCAFEF00Du, buf), 10);
+    EXPECT_EQ(buf[0], 0x80);              // full keys, not prefixes
+    EXPECT_EQ(buf[1], 1u << 2);           // repeaters only (ADV_TYPE_REPEATER = 2)
+    uint32_t tag, since;
+    memcpy(&tag, buf + 2, 4);
+    memcpy(&since, buf + 6, 4);
+    EXPECT_EQ(tag, 0xCAFEF00Du);
+    EXPECT_EQ(since, 0u);                 // every repeater, however long since it changed
+    EXPECT_EQ(buf[10], 0xEE);
+}
+
+static size_t discoverReply(uint8_t* buf, uint8_t type_byte, uint32_t tag, uint8_t key_tag, size_t key_len) {
+    buf[0] = type_byte;
+    buf[1] = 0x14;   // the SNR the repeater heard us at
+    memcpy(buf + 2, &tag, 4);
+    uint8_t key[offband::kNeighborKeyLen]; keyFor(key, key_tag);
+    memcpy(buf + 6, key, key_len);
+    return 6 + key_len;
+}
+
+TEST(NodeDiscover, ResponseFromARepeaterWithOurTagGivesItsKey) {
+    uint8_t buf[64];
+    size_t len = discoverReply(buf, 0x92, 77, 0x40, 32);
+    uint8_t key[offband::kNeighborKeyLen];
+    ASSERT_TRUE(offband::parseNodeDiscoverResponse(buf, len, 77, key));
+    EXPECT_TRUE(keyIs(key, 0x40));
+}
+
+TEST(NodeDiscover, ResponsesThatCannotBeUsedAreRejected) {
+    uint8_t buf[64];
+    uint8_t key[offband::kNeighborKeyLen];
+    size_t len = discoverReply(buf, 0x92, 77, 0x40, 32);
+    EXPECT_FALSE(offband::parseNodeDiscoverResponse(buf, len, 78, key));   // the client's tag
+    len = discoverReply(buf, 0x91, 77, 0x40, 32);                          // a companion answering
+    EXPECT_FALSE(offband::parseNodeDiscoverResponse(buf, len, 77, key));
+    len = discoverReply(buf, 0x82, 77, 0x40, 32);                          // a request, not a response
+    EXPECT_FALSE(offband::parseNodeDiscoverResponse(buf, len, 77, key));
+    len = discoverReply(buf, 0x92, 77, 0x40, 8);                           // prefix-only answer
+    EXPECT_FALSE(offband::parseNodeDiscoverResponse(buf, len, 77, key));
+    EXPECT_FALSE(offband::parseNodeDiscoverResponse(nullptr, 40, 77, key));
 }
 
 // ---- RxRssiStamps ----------------------------------------------------------
