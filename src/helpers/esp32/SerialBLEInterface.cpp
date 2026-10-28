@@ -89,7 +89,8 @@ static void traceRecord(uint8_t type, int32_t status, uint16_t handle, uint16_t 
 // A status or reason: an HCI code (0x200 + code) decoded by name, or a host
 // error by name. ATT, L2CAP and SM codes print raw as host-error.
 static const char* traceStatus(int rc) {
-  if (rc >= ble_reason::kNimbleHciBase) return ble_reason::fromNimble(rc).name;
+  if (rc >= ble_reason::kNimbleHciBase && rc < ble_reason::kNimbleHciBase + 0x100)
+    return ble_reason::fromNimble(rc).name;
   return ble_trace::hostErrorName(rc);
 }
 
@@ -154,6 +155,12 @@ static void tracePrint(const ble_trace::Event& ev) {
                     (unsigned long)ev.at_ms, name, (unsigned)ev.value, (unsigned)ev.handle, ev.host_adv);
       break;
     case BLE_GAP_EVENT_ADV_COMPLETE:
+      // On these reasons NimBLE-Arduino resets itself without the host's reset
+      // callback, and refuses to advertise until the next host-sync.
+      mesh_log_line(MLOG_BOOT, "[ble-trace] t=%lu %s reason=%ld (%s)%s host_adv=%d\n",
+                    (unsigned long)ev.at_ms, name, (long)ev.status, traceStatus(ev.status),
+                    ble_trace::isHostResetReason(ev.status) ? " nimble-reset" : "", ev.host_adv);
+      break;
     case ble_trace::kHostReset:
       mesh_log_line(MLOG_BOOT, "[ble-trace] t=%lu %s reason=%ld (%s) host_adv=%d\n",
                     (unsigned long)ev.at_ms, name, (long)ev.status, traceStatus(ev.status), ev.host_adv);
@@ -178,8 +185,10 @@ static void tracePrint(const ble_trace::Event& ev) {
 // sample the host's advertising state, logging each change, and a heartbeat
 // every 60 s so a long silence reads as "still stuck", not "loop dead".
 void SerialBLEInterface::traceAdvState() {
+  // A few records per loop pass: each line can busy-wait ~9 ms on the UART
+  // mirror, and a full ring printed at once would stall the loop ~200 ms.
   ble_trace::Event ev;
-  for (;;) {
+  for (int i = 0; i < 6; i++) {
     portENTER_CRITICAL(&s_trace_mux);
     const bool got = s_trace_ring.pop(&ev);
     portEXIT_CRITICAL(&s_trace_mux);

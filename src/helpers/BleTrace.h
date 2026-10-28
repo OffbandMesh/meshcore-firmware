@@ -110,6 +110,13 @@ inline const char* hostErrorName(int rc) {
   }
 }
 
+// The adv-complete reasons on which NimBLE-Arduino calls its own onReset()
+// directly, without the host's reset callback firing, and so marks itself
+// unsynced until the next sync. The trace flags these, as nothing else will.
+inline bool isHostResetReason(int rc) {
+  return rc == kEOs || rc == kEController || rc == kETimeoutHci || rc == kENotSynced;
+}
+
 // One trace record, captured on the NimBLE host task. Formatting and printing
 // happen later on the main loop (EventRing), because the host task's stack is
 // small and the UART log mirror busy-waits on every byte: logging there would
@@ -128,6 +135,8 @@ struct Event {
 // push is dropped and counted, so the log says how much it lost.
 template <uint8_t N>
 class EventRing {
+  static_assert(N > 0, "EventRing needs at least one slot");
+
 public:
   bool push(const Event& e) {
     if (_count == N) {
