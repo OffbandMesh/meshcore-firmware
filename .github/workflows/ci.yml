@@ -86,6 +86,14 @@ jobs:
       - name: Env capability-claim self-test
         run: python scripts/test_env_capability_claims.py
 
+      # #1399. The golden CoreScope /neighbors report, which the native test
+      # test_neighbors_json requires buildNeighborsJson to produce byte for byte,
+      # parsed as JSON and read by CoreScope's handleNeighborsReport rules: only
+      # "responded" neighbors carry scopes, keys are 64 uppercase hex, statuses are
+      # the contract's three. Also proves the checks reject a broken report.
+      - name: CoreScope /neighbors golden report
+        run: python scripts/test_neighbors_golden.py
+
       # #1619 (epic #1618, Feature #1599). MAX_FRAME_SIZE is 176: a protocol constant and
       # the frame BUFFER size. It is NOT what a link delivers -- a BLE notification
       # carries the negotiated ATT MTU minus 3, and the stack SILENTLY CLIPS a larger
