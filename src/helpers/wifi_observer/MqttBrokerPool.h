@@ -8,6 +8,9 @@
 #include "WifiObserverConfig.h"
 #include "MqttBroker.h"
 #include "MqttRingLog.h"
+#ifdef OFFBAND_OBSERVER
+#include "NeighborsReport.h"   // #1399: publishNeighbors
+#endif
 #include <atomic>   // #531: reconciling_ is a cross-task flag
 
 // #175: every broker slot is a ring reader, so the ring must have at least as
@@ -97,6 +100,16 @@ public:
     // the pre-parse logRxRaw hook and can only emit /raw.
     uint8_t publishParsedPacket(const mesh::Packet& packet, int rssi,
                                 float snr, int score, int duration);
+
+#ifdef OFFBAND_OBSERVER
+    // #1399: the CoreScope /neighbors report. The caller fills the walk's rows, the
+    // observer's own scopes and the clock; the pool adds timestamp, origin and
+    // origin_id exactly as /status does, builds the body ONCE into a temporary buffer,
+    // and queues it retained at QoS 0 on "<prefix>/<iata>/<device>/neighbors" for
+    // every Up broker. A broker is skipped (logged) when queuing its copy would take
+    // free heap below the TLS floor. Returns the number of brokers that accepted it.
+    uint8_t publishNeighbors(NeighborsReportInput in);
+#endif
 
     // Request an ASYNC reload of one slot after a CLI config change.
     // NON-BLOCKING: marks the slot "reconciling" + posts it to the lifecycle
