@@ -88,6 +88,8 @@
 // now included unconditionally above (#241). Its typed dispatch backend (#165):
 #include "helpers/wifi_observer/ObserverCli.h"   // dispatchObserverCli + broker enumeration
 #include "helpers/config/ConfigDispatch.h"       // #364: role-agnostic config set/get
+#include "helpers/ClockSanity.h"                 // #1399: plausibleEpoch for /neighbors ages
+#include "helpers/wifi_observer/MqttBrokerPool.h"   // #1399: publishNeighbors
 #ifdef BOARD_HAS_PSRAM
 #include <new>                                   // #1398: placement new for the PSRAM scope walk
 #include <esp_heap_caps.h>
@@ -848,6 +850,61 @@ bool MyMesh::onNodeDiscoverResponse(mesh::Packet* packet) {
   return true;
 }
 static_assert(offband::kAdvTypeRepeater == ADV_TYPE_REPEATER, "discover filter is for repeaters");
+static_assert(MAX_NEIGHBOURS <= 64, "buildNeighborsJson sorts at most 64 rows");
+static_assert(sizeof(NodePrefs::default_scope_name) <= offband::kScopesLen,
+              "the observer's own scope always fits the report's self.scopes uncut");
+
+bool MyMesh::startScopeQueryManual() {
+  if (!startScopeQuery()) return false;
+  _nbr_schedule.manualWalkStarted();
+  return true;
+}
+
+// #1399: one step of the /neighbors cycle per loop() pass (see NeighborsSchedule.h).
+void MyMesh::neighborsCycleTick() {
+  const uint32_t now = _ms->getMillis();
+  const bool walk_running = _scope_run != NULL && _scope_run->running();
+  // Only on the passes the schedule looks at it: it formats every broker's topic.
+  const bool ready = _nbr_schedule.needsReady(now, walk_running) &&
+                     offband::wifiObserverPool().neighborsReady(offband::plausibleEpoch);
+  switch (_nbr_schedule.tick(now, walk_running, ready)) {
+    case offband::NeighborsAction::Discover: {
+      int seconds_left = 0;
+      // Busy (a discover.neighbors by hand is already collecting) serves just as well.
+      if (sendNodeDiscoverReq(&seconds_left) == offband::DiscoverResult::Failed) {
+        MESH_DEBUG_PRINTLN("neighbors: discover request not queued (no free packet)");
+      }
+      break;
+    }
+    case offband::NeighborsAction::StartWalk:
+      _nbr_schedule.walkStarted(startScopeQuery());
+      break;
+    case offband::NeighborsAction::Publish:
+      _nbr_schedule.published(publishNeighborsReport(), now);
+      break;
+    default:
+      break;
+  }
+}
+
+// #1399: the walk's results and our own scope, handed to the broker pool, which adds
+// the identity and timestamp and hands the report to each connected broker in turn.
+bool MyMesh::publishNeighborsReport() {
+  if (_scope_run == NULL) return false;
+  offband::NeighborsReportInput in;
+  memset(&in, 0, sizeof(in));
+  in.self_scopes = _prefs.default_scope_name;   // plan decision 1 (A); "" when unset
+  in.default_scope = _prefs.default_scope_name;
+  in.rows = _scope_run->results();
+  in.n_rows = _scope_run->resultCount();
+  in.total_neighbors = _scope_run->totalCount();
+  in.now = getRTCClock()->getCurrentTime();
+  in.plausible = offband::plausibleEpoch;
+  const uint8_t brokers = offband::wifiObserverPool().publishNeighbors(in);
+  MESH_DEBUG_PRINTLN("neighbors: report of %d neighbors offered to %u broker(s)",
+                     _scope_run->queriedCount(), (unsigned)brokers);
+  return brokers > 0;
+}
 #endif
 
 bool MyMesh::isAutoAddEnabled() const {
@@ -5023,6 +5080,7 @@ void MyMesh::loop() {
   }
 #if defined(OFFBAND_OBSERVER) && MAX_NEIGHBOURS
   scopeQueryTick();   // #1398: at most one regions request per pass, never blocks
+  neighborsCycleTick();   // #1399: refresh -> query -> publish /neighbors
 #endif
 
 #ifdef OFFBAND_OBSERVER_BLE_COMPANION
