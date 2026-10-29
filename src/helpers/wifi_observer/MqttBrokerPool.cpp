@@ -472,6 +472,74 @@ uint8_t MqttBrokerPool::publishParsedPacket(const mesh::Packet& packet,
     return publishPacket(reinterpret_cast<const uint8_t*>(&rec), sizeof(rec));
 }
 
+#ifdef OFFBAND_OBSERVER
+// ---------------------------------------------------------------------------
+// publishNeighbors -- #1399, the CoreScope /neighbors report
+// ---------------------------------------------------------------------------
+uint8_t MqttBrokerPool::publishNeighbors(NeighborsReportInput in) {
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+#ifdef BOARD_HAS_PSRAM
+    const size_t cap = neighborsReportCap(true);
+    char* buf = static_cast<char*>(heap_caps_malloc(cap, MALLOC_CAP_SPIRAM));
+#else
+    const size_t cap = neighborsReportCap(false);
+    char* buf = neighborsHeapFits(ESP.getFreeHeap(), OFFBAND_TLS_HEAP_FLOOR_BYTES, cap)
+                    ? static_cast<char*>(malloc(cap)) : nullptr;
+#endif
+    if (buf == nullptr) {
+        mesh_log_line(MLOG_ERROR, "neighbors: no memory for a %u-byte report (free heap %u); not published\n",
+                      (unsigned)cap, (unsigned)ESP.getFreeHeap());
+        return 0;
+    }
+
+    char ts[32];
+    if (formatReportTimestamp(static_cast<uint32_t>(time(nullptr)), ts, sizeof(ts)) < 0) ts[0] = '\0';
+    in.timestamp = ts;
+    in.origin = (node_name_[0] != '\0') ? node_name_ : device_id_;
+    in.origin_id = device_id_;
+    const int n = buildNeighborsJson(buf, cap, in);
+    if (n <= 0) {
+        mesh_log_line(MLOG_ERROR, "neighbors: report did not fit %u bytes; not published\n", (unsigned)cap);
+        free(buf);
+        return 0;
+    }
+
+    uint8_t accepted = 0;
+    for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
+        if (reconciling_[slot]) continue;
+        MqttBroker& b = brokers_[slot];
+        if (!b.isConfigured() || b.runtime().state != BrokerState::Up) continue;
+
+        MqttPayloadCtx ctx;
+        b.fillPayloadCtx(ctx, global_iata_, device_id_, node_name_,
+                         client_version_, firmware_version_, model_);
+        char topic[160];
+        formatTopic(topic, sizeof(topic), "neighbors", ctx);
+        if (topic[0] == '\0') continue;
+
+        const uint32_t free_heap = ESP.getFreeHeap();
+        if (!neighborsHeapFits(free_heap, OFFBAND_TLS_HEAP_FLOOR_BYTES, static_cast<size_t>(n))) {
+            mesh_log_line(MLOG_ERROR, "neighbors: broker %u skipped, %d-byte report would leave too little heap (%u free)\n",
+                          (unsigned)slot, n, (unsigned)free_heap);
+            continue;
+        }
+        if (b.publish(topic, reinterpret_cast<const uint8_t*>(buf), static_cast<size_t>(n),
+                      /*retain=*/true, /*qos=*/0)) {
+            accepted++;
+        } else {
+            mesh_log_line(MLOG_ERROR, "neighbors: broker %u refused the report\n", (unsigned)slot);
+        }
+    }
+    free(buf);
+    mesh_log_line(MLOG_DEBUG, "neighbors: %d-byte report queued to %u broker(s)\n", n, (unsigned)accepted);
+    return accepted;
+#else
+    (void)in;
+    return 0;   // host build: no brokers
+#endif
+}
+#endif
+
 // ---------------------------------------------------------------------------
 // publishStatusIfDue -- scheduled in loop()
 // ---------------------------------------------------------------------------

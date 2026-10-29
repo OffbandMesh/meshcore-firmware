@@ -72,7 +72,8 @@ constexpr size_t kScopesLen = 96;
 // separated}, followed by the cipher's zero padding. False (out untouched) unless it is
 // at least the 8-byte header and carries expect_tag. An empty list is a valid answer.
 // A list longer than out_cap - 1 is cut at the last comma that fits, so no name is
-// reported partly; when not even one name fits, out is "".
+// reported partly. When not even one name fits it is false too: CoreScope would store
+// an empty list as "responded, no scopes", which would be untrue.
 inline bool parseRegionsResponse(const uint8_t* data, size_t len, uint32_t expect_tag,
                                  char* out, size_t out_cap) {
     if (data == nullptr || out == nullptr || out_cap == 0 || len < 8) return false;
@@ -89,6 +90,7 @@ inline bool parseRegionsResponse(const uint8_t* data, size_t len, uint32_t expec
         for (size_t i = out_cap - 1; i > 0; i--) {
             if (names[i] == ',') { cut = i; break; }
         }
+        if (cut == 0) return false;
         n = cut;
     }
     memcpy(out, names, n);

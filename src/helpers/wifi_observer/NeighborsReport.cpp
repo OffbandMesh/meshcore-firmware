@@ -36,6 +36,21 @@ void escapeJson(const char* in, char* out, size_t out_size) {
     out[o] = 0;
 }
 
+// in, cut at its last comma if longer than out_size - 1, so no name is passed on partly.
+void cutToWholeNames(const char* in, char* out, size_t out_size) {
+    const size_t n = in != nullptr ? strlen(in) : 0;
+    if (n + 1 <= out_size) {
+        memcpy(out, in != nullptr ? in : "", n + 1);
+        return;
+    }
+    size_t cut = 0;
+    for (size_t i = out_size - 1; i > 0; i--) {
+        if (in[i] == ',') { cut = i; break; }
+    }
+    memcpy(out, in, cut);
+    out[cut] = 0;
+}
+
 bool ageKnown(const NeighborsReportInput& in, const NeighbourInfo& r) {
     return in.plausible != nullptr && in.plausible(in.now) && in.plausible(r.heard_timestamp) &&
            r.heard_timestamp <= in.now;
@@ -71,14 +86,37 @@ int formatEntry(char* out, size_t out_size, const NeighborsReportInput& in, cons
 
 }  // namespace
 
+// Plain arithmetic rather than gmtime_r, which not every toolchain this builds on
+// declares: the proleptic Gregorian date for a count of days since 1970-01-01
+// (Howard Hinnant's civil_from_days).
+int formatReportTimestamp(uint32_t epoch, char* out, size_t out_size) {
+    if (out == nullptr || out_size < 21) return -1;
+    const uint32_t days = epoch / 86400u, secs = epoch % 86400u;
+    const int64_t z = (int64_t)days + 719468;
+    const int64_t era = z / 146097;
+    const uint32_t doe = (uint32_t)(z - era * 146097);
+    const uint32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    const uint32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const uint32_t mp = (5 * doy + 2) / 153;
+    const uint32_t day = doy - (153 * mp + 2) / 5 + 1;
+    const uint32_t month = mp < 10 ? mp + 3 : mp - 9;
+    const int64_t year = (int64_t)yoe + era * 400 + (month <= 2 ? 1 : 0);
+    const int n = snprintf(out, out_size, "%04d-%02u-%02uT%02u:%02u:%02uZ", (int)year,
+                           (unsigned)month, (unsigned)day, (unsigned)(secs / 3600),
+                           (unsigned)(secs / 60 % 60), (unsigned)(secs % 60));
+    return (n < 0 || (size_t)n >= out_size) ? -1 : n;
+}
+
 int buildNeighborsJson(char* buf, size_t buf_size, const NeighborsReportInput& in) {
     if (buf == nullptr || buf_size == 0) return -1;
 
-    char origin[80], origin_id[80], ts[40], self_scopes[kScopesLen * 2], def_scope[80];
+    // Escaping at most doubles a string; each buffer holds its whole field escaped.
+    char origin[80], origin_id[80], ts[40], self_raw[kScopesLen], self_scopes[kScopesLen * 2], def_scope[80];
     escapeJson(in.origin, origin, sizeof(origin));
     escapeJson(in.origin_id, origin_id, sizeof(origin_id));
     escapeJson(in.timestamp, ts, sizeof(ts));
-    escapeJson(in.self_scopes, self_scopes, sizeof(self_scopes));
+    cutToWholeNames(in.self_scopes, self_raw, sizeof(self_raw));
+    escapeJson(self_raw, self_scopes, sizeof(self_scopes));
     escapeJson(in.default_scope, def_scope, sizeof(def_scope));
 
     int pos = snprintf(buf, buf_size,
@@ -87,13 +125,19 @@ int buildNeighborsJson(char* buf, size_t buf_size, const NeighborsReportInput& i
                        ts, origin, origin_id, self_scopes, def_scope);
     if (pos < 0 || (size_t)pos >= buf_size) return -1;
 
-    // Rows with an outcome, in report order. A walk is at most a few dozen rows.
+    // Rows with an outcome, in report order. A walk is at most MAX_NEIGHBOURS (50)
+    // rows; any beyond kMaxRows are still counted and make the report truncated.
     constexpr int kMaxRows = 64;
     int order[kMaxRows];
     int n = 0, queried = 0;
-    for (int i = 0; in.rows != nullptr && i < in.n_rows && n < kMaxRows; i++) {
+    bool truncated = false;
+    for (int i = 0; in.rows != nullptr && i < in.n_rows; i++) {
         if (in.rows[i].status == ScopeStatus::Pending) continue;
         queried++;
+        if (n == kMaxRows) {
+            truncated = true;
+            continue;
+        }
         int j = n++;
         while (j > 0 && before(in, in.rows[i], in.rows[order[j - 1]])) {
             order[j] = order[j - 1];
@@ -105,7 +149,6 @@ int buildNeighborsJson(char* buf, size_t buf_size, const NeighborsReportInput& i
     // Room the closing needs whatever happens: ],"total_neighbors":<int>,
     // "queried_neighbors":<int>,"truncated":false} plus NUL.
     const size_t kTail = 96;
-    bool truncated = false;
     char entry[512];
     for (int k = 0; k < n; k++) {
         const int len = formatEntry(entry, sizeof(entry), in, in.rows[order[k]]);
