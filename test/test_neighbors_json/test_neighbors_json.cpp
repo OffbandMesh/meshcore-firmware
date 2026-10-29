@@ -31,7 +31,7 @@ static bool plausibleFrom1000(uint32_t t) { return t >= 1000; }
 static NeighborsReportInput baseInput(const ScopeResult* rows, int n) {
     NeighborsReportInput in;
     memset(&in, 0, sizeof(in));
-    in.timestamp = "2026-10-28T09:00:00.000000";
+    in.timestamp = "2026-10-28T13:00:00Z";
     in.origin = "Obs \"1\"";
     in.origin_id = "0011aabb";
     in.self_scopes = "hao";
@@ -166,6 +166,61 @@ TEST(NeighborsJson, NullStringsAreEmpty) {
     in.origin_id = nullptr;
     std::string j = build(in);
     EXPECT_NE(j.find("\"self\":{\"scopes\":\"\",\"default_scope\":\"\"}"), std::string::npos) << j;
+}
+
+TEST(NeighborsJson, TimestampIsUtcRfc3339WithAZone) {
+    // T6 review: CoreScope parses only RFC 3339 with a zone; anything else bypasses
+    // its newest-report-wins guard.
+    char ts[32];
+    ASSERT_EQ(offband::formatReportTimestamp(1793192400u, ts, sizeof(ts)), 20);   // 2026-10-28 13:00:00 UTC
+    EXPECT_STREQ(ts, "2026-10-28T13:00:00Z");
+    ASSERT_EQ(offband::formatReportTimestamp(0, ts, sizeof(ts)), 20);
+    EXPECT_STREQ(ts, "1970-01-01T00:00:00Z");
+    ASSERT_EQ(offband::formatReportTimestamp(951868799u, ts, sizeof(ts)), 20);    // leap day, last second
+    EXPECT_STREQ(ts, "2000-02-29T23:59:59Z");
+    ASSERT_EQ(offband::formatReportTimestamp(4294967295u, ts, sizeof(ts)), 20);   // uint32 max
+    EXPECT_STREQ(ts, "2106-02-07T06:28:15Z");
+    EXPECT_EQ(offband::formatReportTimestamp(0, ts, 20), -1);   // no room for the NUL
+    EXPECT_EQ(offband::formatReportTimestamp(0, nullptr, 32), -1);
+}
+
+TEST(NeighborsJson, RowsBeyondTheSortLimitStillCountAndTruncate) {
+    static ScopeResult rows[70];
+    for (int i = 0; i < 70; i++) rows[i] = row((uint8_t)i, ScopeStatus::Timeout, 1100, 0, -70, "");
+    NeighborsReportInput in = baseInput(rows, 70);
+    in.total_neighbors = 70;
+    std::string j = build(in, 64 * 1024);
+    EXPECT_NE(j.find("\"queried_neighbors\":70"), std::string::npos);
+    EXPECT_NE(j.find("\"truncated\":true"), std::string::npos);   // 70 queried, 64 listed
+}
+
+TEST(NeighborsJson, SelfScopesAreCutAtAWholeName) {
+    std::string longlist;
+    for (int i = 0; i < 20; i++) longlist += (i ? ",region" : "region") + std::to_string(i);
+    NeighborsReportInput in = baseInput(nullptr, 0);
+    in.self_scopes = longlist.c_str();
+    std::string j = build(in);
+    size_t a = j.find("\"self\":{\"scopes\":\"") + 18;
+    std::string self = j.substr(a, j.find('"', a) - a);
+    EXPECT_LT(self.size(), offband::kScopesLen);
+    EXPECT_EQ(longlist.compare(0, self.size(), self), 0);   // a prefix of the list...
+    EXPECT_EQ(longlist[self.size()], ',');                   // ...ending at a whole name
+}
+
+TEST(NeighborsReportLimits, CapFollowsPsram) {
+    EXPECT_EQ(offband::neighborsReportCap(true), offband::kNeighborsReportMax);
+    EXPECT_EQ(offband::neighborsReportCap(false), offband::kNeighborsReportMaxNoPsram);
+    EXPECT_LT(offband::kNeighborsReportMaxNoPsram, offband::kNeighborsReportMax);
+}
+
+TEST(NeighborsReportLimits, HeapFitKeepsTheFloorAndMargin) {
+    const uint32_t floor = 80u * 1024u;
+    const size_t len = 4096;
+    const uint32_t exact = floor + (uint32_t)len + offband::kNeighborsHeapMargin;
+    EXPECT_TRUE(offband::neighborsHeapFits(exact, floor, len));
+    EXPECT_FALSE(offband::neighborsHeapFits(exact - 1, floor, len));
+    EXPECT_FALSE(offband::neighborsHeapFits(0, floor, len));
+    EXPECT_FALSE(offband::neighborsHeapFits(0xFFFFFFFFu, 0xFFFFFFFFu, 1));   // no wrap-around "fit"
 }
 
 int main(int argc, char **argv) {

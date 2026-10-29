@@ -14,6 +14,7 @@ It also pins the shape the plan of record fixes for the report, and proves the
 checks reject a broken report.
 """
 import copy
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sys
@@ -25,10 +26,29 @@ STATUSES = {'responded', 'timeout', 'send_failed'}
 ENTRY_KEYS = {'pubkey', 'snr', 'rssi', 'heard_secs_ago', 'scopes', 'status'}
 
 
-def ingest(report):
+def normalize_report_ts(raw):
+    """CoreScope db.go normalizeReportTS: RFC 3339 (with a zone) or nothing.
+
+    An empty result makes CoreScope skip its newest-report-wins check and always
+    write, so an old report could overwrite a newer one.
+    """
+    if not isinstance(raw, str) or not raw:
+        return ''
+    try:
+        t = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+    except ValueError:
+        return ''
+    if t.tzinfo is None or 'T' not in raw:
+        return ''   # Go's RFC3339 layout requires the zone and the T
+    return t.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def ingest(report, topic_observer_id='topic-observer'):
     """CoreScope handleNeighborsReport, reduced to what it records."""
     recorded = {}
     origin = report.get('origin_id')
+    if not isinstance(origin, str) or not origin:
+        origin = topic_observer_id   # Go falls back to the topic's observer id
     if isinstance(origin, str) and origin and isinstance(report.get('self'), dict):
         sc = report['self'].get('scopes')
         if isinstance(sc, str):
@@ -48,6 +68,8 @@ def contract_errors(report):
     for field in ('timestamp', 'origin', 'origin_id'):
         if not isinstance(report.get(field), str):
             errors.append(f'{field} is not a string')
+    if normalize_report_ts(report.get('timestamp')) == '':
+        errors.append('timestamp is not RFC 3339 with a zone (CoreScope would drop it)')
     self_ = report.get('self')
     if not isinstance(self_, dict) or not isinstance(self_.get('scopes'), str) \
             or not isinstance(self_.get('default_scope'), str):
@@ -124,6 +146,16 @@ class GoldenNeighbors(unittest.TestCase):
         self.assertTrue(self.broken(lambda r: r['neighbors'][0].update(heard_secs_ago='100')))
         self.assertTrue(self.broken(lambda r: r.update(self={'scopes': 1, 'default_scope': ''})))
         self.assertTrue(self.broken(lambda r: r.update(truncated='false')))
+
+    def test_rejects_a_zoneless_timestamp(self):
+        # the /status format: valid ISO 8601, but no zone, so CoreScope drops it
+        self.assertTrue(self.broken(lambda r: r.update(timestamp='2026-10-28T09:00:00.000000')))
+        self.assertTrue(self.broken(lambda r: r.update(timestamp='')))
+
+    def test_ingest_falls_back_to_the_topic_id(self):
+        r = copy.deepcopy(self.report)
+        r['origin_id'] = ''
+        self.assertIn('topic-observer', ingest(r))
 
     def test_rejects_a_silently_short_list(self):
         self.assertTrue(self.broken(lambda r: r['neighbors'].pop()))
