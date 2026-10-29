@@ -168,6 +168,13 @@ static const char* brokerErrorWire(BrokerErrorClass e) {
 static bool handleStatus(char* reply, size_t reply_size, MqttBrokerPool& pool) {
     int n = snprintf(reply, reply_size, "mqtt: configured=%u enabled=%u up=%u\n",
                      pool.configuredCount(), pool.enabledCount(), pool.upCount());
+#ifdef OFFBAND_OBSERVER
+    // #1399: the periodic /neighbors report, ahead of the broker lines so a long
+    // broker list cannot cut it off.
+    if (n >= 0 && (size_t)n < reply_size) {
+        n += (int)formatNeighborsStatusLine(reply + n, reply_size - (size_t)n);
+    }
+#endif
     for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
         const MqttBroker& b = pool.broker(slot);
         if (!b.isConfigured()) continue;

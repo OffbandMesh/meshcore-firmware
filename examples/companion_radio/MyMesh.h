@@ -304,6 +304,9 @@ public:
   bool startScopeQueryManual();
   const ScopeRun* scopeQuery() const { return _scope_run; }   // nullptr until first used
   void scopeWalkSummary(offband::ScopeWalkSummary* out) const;
+  // #1399: mqtt.neighbors[.interval], applied live; and the "nbr:" status line's facts.
+  void configureNeighborsSchedule(bool enabled, uint16_t interval_hours);
+  void neighborsScheduleStatus(offband::NeighborsScheduleStatus* out) const;
   // #1398: discover.neighbors -- ask repeaters in range to identify themselves now.
   offband::DiscoverResult sendNodeDiscoverReq(int* seconds_left);
 #endif
