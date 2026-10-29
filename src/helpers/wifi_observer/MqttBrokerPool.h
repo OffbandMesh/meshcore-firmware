@@ -103,12 +103,18 @@ public:
 
 #ifdef OFFBAND_OBSERVER
     // #1399: the CoreScope /neighbors report. The caller fills the walk's rows, the
-    // observer's own scopes and the clock; the pool adds timestamp, origin and
-    // origin_id exactly as /status does, builds the body ONCE into a temporary buffer,
-    // and queues it retained at QoS 0 on "<prefix>/<iata>/<device>/neighbors" for
-    // every Up broker. A broker is skipped (logged) when queuing its copy would take
-    // free heap below the TLS floor. Returns the number of brokers that accepted it.
+    // observer's own scopes and the clock check; the pool adds origin and origin_id as
+    // /status does and a UTC RFC 3339 timestamp, builds the body ONCE, and then, one
+    // broker per loop() pass while the heap fits, queues it retained at QoS 0 on
+    // "<prefix>/<iata>/<device>/neighbors" (NeighborsFanOut). Nothing is published while
+    // the clock is unset, no broker is up, or the previous report is still going out
+    // (each logged). Returns the number of brokers it will be offered to.
     uint8_t publishNeighbors(NeighborsReportInput in);
+
+    // Whether publishNeighbors would take a report now: the clock passes plausible, a
+    // broker is up, and no earlier report is still going out. The schedule waits on it
+    // before spending a walk's airtime.
+    bool neighborsReady(bool (*plausible)(uint32_t));
 #endif
 
     // Request an ASYNC reload of one slot after a CLI config change.
@@ -257,6 +263,16 @@ private:
 
     // Helpers.
     void publishStatusIfDue(uint32_t now_ms);
+
+#ifdef OFFBAND_OBSERVER
+    // #1399: the /neighbors report being handed out, one broker per pass.
+    char*           nbr_buf_ = nullptr;
+    size_t          nbr_len_ = 0;
+    NeighborsFanOut nbr_fanout_;
+    bool neighborsTopicFor(uint8_t slot, char* topic, size_t topic_size);
+    uint16_t neighborsBrokerMask();   // the brokers neighborsTopicFor accepts, one bit each
+    void neighborsFanOutTick(uint32_t now_ms);
+#endif
 };
 
 }  // namespace offband

@@ -181,7 +181,7 @@ MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
 static int  nbrCount() { return the_mesh.getNeighbourCount(); }
 static offband::DiscoverResult nbrDiscover(int* seconds_left) { return the_mesh.sendNodeDiscoverReq(seconds_left); }
 static void nbrSummary(offband::ScopeWalkSummary* out) { the_mesh.scopeWalkSummary(out); }
-static bool nbrStartScopes() { return the_mesh.startScopeQuery(); }
+static bool nbrStartScopes() { return the_mesh.startScopeQueryManual(); }   // #1399: published when done
 static const offband::NeighborsCliHooks kNeighborsCliHooks = { nbrCount, nbrDiscover, nbrSummary, nbrStartScopes };
 #endif
 

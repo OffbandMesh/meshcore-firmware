@@ -180,6 +180,14 @@ TEST(NeighborsJson, TimestampIsUtcRfc3339WithAZone) {
     EXPECT_STREQ(ts, "2000-02-29T23:59:59Z");
     ASSERT_EQ(offband::formatReportTimestamp(4294967295u, ts, sizeof(ts)), 20);   // uint32 max
     EXPECT_STREQ(ts, "2106-02-07T06:28:15Z");
+    // 2100 is not a leap year: Feb 28 runs straight into Mar 1.
+    ASSERT_EQ(offband::formatReportTimestamp(4107542399u, ts, sizeof(ts)), 20);
+    EXPECT_STREQ(ts, "2100-02-28T23:59:59Z");
+    ASSERT_EQ(offband::formatReportTimestamp(4107542400u, ts, sizeof(ts)), 20);
+    EXPECT_STREQ(ts, "2100-03-01T00:00:00Z");
+    char exact[21];   // 20 characters plus the NUL: just fits
+    ASSERT_EQ(offband::formatReportTimestamp(0, exact, sizeof(exact)), 20);
+    EXPECT_STREQ(exact, "1970-01-01T00:00:00Z");
     EXPECT_EQ(offband::formatReportTimestamp(0, ts, 20), -1);   // no room for the NUL
     EXPECT_EQ(offband::formatReportTimestamp(0, nullptr, 32), -1);
 }
@@ -205,6 +213,73 @@ TEST(NeighborsJson, SelfScopesAreCutAtAWholeName) {
     EXPECT_LT(self.size(), offband::kScopesLen);
     EXPECT_EQ(longlist.compare(0, self.size(), self), 0);   // a prefix of the list...
     EXPECT_EQ(longlist[self.size()], ',');                   // ...ending at a whole name
+}
+
+static std::string selfScopesOf(const std::string& list) {
+    NeighborsReportInput in = baseInput(nullptr, 0);
+    in.self_scopes = list.c_str();
+    std::string j = build(in);
+    size_t a = j.find("\"self\":{\"scopes\":\"") + 18;
+    return j.substr(a, j.find('"', a) - a);
+}
+
+TEST(NeighborsJson, SelfScopesCutBoundaries) {
+    const size_t room = offband::kScopesLen - 1;
+    // Exactly as long as the room: kept whole.
+    std::string fits = "a," + std::string(room - 2, 'b');
+    EXPECT_EQ(selfScopesOf(fits), fits);
+    // One longer, with a comma right at the room's edge: the names before it survive.
+    std::string edge = std::string(room, 'c') + ",d";
+    EXPECT_EQ(selfScopesOf(edge), std::string(room, 'c'));
+    // One name longer than the room: nothing whole fits, so nothing is listed.
+    EXPECT_EQ(selfScopesOf(std::string(room + 1, 'e')), "");
+}
+
+TEST(NeighborsFanOut, OffersOneBrokerAtATimeInSlotOrder) {
+    offband::NeighborsFanOut f;
+    f.begin(0b1010, 1000);
+    EXPECT_TRUE(f.active());
+    EXPECT_EQ(f.next(1000, true), 1);
+    EXPECT_EQ(f.next(1001, true), -1);   // the offered broker's result is not in yet
+    f.result(true);
+    EXPECT_EQ(f.next(1002, true), 3);
+    f.result(false);
+    EXPECT_FALSE(f.active());
+    EXPECT_EQ(f.next(1003, true), -1);
+    EXPECT_EQ(f.accepted(), 1);
+    EXPECT_EQ(f.skipped(), 1);
+}
+
+TEST(NeighborsFanOut, WaitsWhileTheHeapDoesNotFit) {
+    offband::NeighborsFanOut f;
+    f.begin(0b1, 0);
+    EXPECT_EQ(f.next(10, false), -1);
+    EXPECT_TRUE(f.active());
+    EXPECT_EQ(f.next(20, true), 0);
+    f.result(true);
+    EXPECT_FALSE(f.active());
+}
+
+TEST(NeighborsFanOut, DeadlineDropsTheRestAsSkipped) {
+    offband::NeighborsFanOut f;
+    f.begin(0b111, 0xFFFFF000u);   // across the millis() wrap
+    EXPECT_EQ(f.next(0xFFFFF000u, true), 0);
+    f.result(true);
+    EXPECT_EQ(f.next(0xFFFFF000u + offband::kNeighborsFanOutDeadlineMs - 1, false), -1);
+    EXPECT_TRUE(f.active());
+    EXPECT_EQ(f.next(0xFFFFF000u + offband::kNeighborsFanOutDeadlineMs, true), -1);
+    EXPECT_FALSE(f.active());
+    EXPECT_EQ(f.accepted(), 1);
+    EXPECT_EQ(f.skipped(), 2);
+}
+
+TEST(NeighborsFanOut, NoBrokersIsNeverActive) {
+    offband::NeighborsFanOut f;
+    f.begin(0, 0);
+    EXPECT_FALSE(f.active());
+    EXPECT_EQ(f.next(0, true), -1);
+    f.result(true);   // a stray result is ignored
+    EXPECT_EQ(f.accepted(), 0);
 }
 
 TEST(NeighborsReportLimits, CapFollowsPsram) {
