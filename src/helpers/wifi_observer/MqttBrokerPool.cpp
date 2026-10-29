@@ -16,9 +16,13 @@ static_assert(sizeof(offband::PacketRecord) <= MQTT_RING_MSG_MAX,
 #include <helpers/diagnostics/CrashLog.h>   // #181: crashLogf() -- worker has no user ACK channel
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 
 #ifdef ARDUINO
   #include <Arduino.h>
+#endif
+#if defined(OFFBAND_OBSERVER) && defined(BOARD_HAS_PSRAM)
+  #include <esp_heap_caps.h>   // #1399: the /neighbors build buffer goes in PSRAM
 #endif
 
 namespace offband {
@@ -172,6 +176,12 @@ void MqttBrokerPool::shutdown() {
     for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
         brokers_[slot].shutdown();
     }
+#ifdef OFFBAND_OBSERVER
+    free(nbr_buf_);   // a /neighbors report still being handed out
+    nbr_buf_ = nullptr;
+    nbr_len_ = 0;
+    nbr_fanout_ = NeighborsFanOut();
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -227,6 +237,9 @@ void MqttBrokerPool::loop(uint32_t now_ms) {
     }
 
     publishStatusIfDue(now_ms);
+#ifdef OFFBAND_OBSERVER
+    neighborsFanOutTick(now_ms);   // #1399: one broker's /neighbors copy per pass
+#endif
     // #175: drain each Up broker's ring backlog here, on loopTask. This keeps ALL
     // ring_ access single-threaded -- append (publishPacket), drain (here +
     // publishPacket), and lag/lapped (broker dump) all run on loopTask and never
@@ -476,8 +489,61 @@ uint8_t MqttBrokerPool::publishParsedPacket(const mesh::Packet& packet,
 // ---------------------------------------------------------------------------
 // publishNeighbors -- #1399, the CoreScope /neighbors report
 // ---------------------------------------------------------------------------
+// A broker that can take a /neighbors report now: Up, not mid-reconcile, with a topic.
+bool MqttBrokerPool::neighborsTopicFor(uint8_t slot, char* topic, size_t topic_size) {
+    topic[0] = '\0';
+    if (reconciling_[slot]) return false;
+    MqttBroker& b = brokers_[slot];
+    if (!b.isConfigured() || b.runtime().state != BrokerState::Up) return false;
+    MqttPayloadCtx ctx;
+    b.fillPayloadCtx(ctx, global_iata_, device_id_, node_name_,
+                     client_version_, firmware_version_, model_);
+    formatTopic(topic, topic_size, "neighbors", ctx);
+    return topic[0] != '\0';
+}
+
+static_assert(OFFBAND_MAX_BROKERS <= 16, "NeighborsFanOut keeps one bit per broker in a uint16_t");
+
+uint16_t MqttBrokerPool::neighborsBrokerMask() {
+    uint16_t mask = 0;
+    char topic[160];
+    for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
+        if (neighborsTopicFor(slot, topic, sizeof(topic))) mask |= (uint16_t)(1u << slot);
+    }
+    return mask;
+}
+
+bool MqttBrokerPool::neighborsReady(bool (*plausible)(uint32_t)) {
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    return !nbr_fanout_.active() && plausible != nullptr &&
+           plausible(static_cast<uint32_t>(time(nullptr))) && neighborsBrokerMask() != 0;
+#else
+    (void)plausible;
+    return false;   // host build: no brokers
+#endif
+}
+
 uint8_t MqttBrokerPool::publishNeighbors(NeighborsReportInput in) {
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
+    if (nbr_fanout_.active()) {
+        mesh_log_line(MLOG_ERROR, "neighbors: the previous report is still going out; not published\n");
+        return 0;
+    }
+    // A report stamped before the clock is set reads as 1970 and can never beat a later
+    // one in CoreScope; an empty stamp would skip its ordering check altogether.
+    const uint32_t now_epoch = static_cast<uint32_t>(time(nullptr));
+    char ts[32];
+    if (in.plausible == nullptr || !in.plausible(now_epoch) ||
+        formatReportTimestamp(now_epoch, ts, sizeof(ts)) < 0) {
+        mesh_log_line(MLOG_ERROR, "neighbors: clock not set; report not published\n");
+        return 0;
+    }
+    const uint16_t mask = neighborsBrokerMask();
+    if (mask == 0) {
+        mesh_log_line(MLOG_ERROR, "neighbors: no broker connected; report not published\n");
+        return 0;
+    }
+
 #ifdef BOARD_HAS_PSRAM
     const size_t cap = neighborsReportCap(true);
     char* buf = static_cast<char*>(heap_caps_malloc(cap, MALLOC_CAP_SPIRAM));
@@ -492,8 +558,6 @@ uint8_t MqttBrokerPool::publishNeighbors(NeighborsReportInput in) {
         return 0;
     }
 
-    char ts[32];
-    if (formatReportTimestamp(static_cast<uint32_t>(time(nullptr)), ts, sizeof(ts)) < 0) ts[0] = '\0';
     in.timestamp = ts;
     in.origin = (node_name_[0] != '\0') ? node_name_ : device_id_;
     in.origin_id = device_id_;
@@ -503,39 +567,45 @@ uint8_t MqttBrokerPool::publishNeighbors(NeighborsReportInput in) {
         free(buf);
         return 0;
     }
-
-    uint8_t accepted = 0;
-    for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
-        if (reconciling_[slot]) continue;
-        MqttBroker& b = brokers_[slot];
-        if (!b.isConfigured() || b.runtime().state != BrokerState::Up) continue;
-
-        MqttPayloadCtx ctx;
-        b.fillPayloadCtx(ctx, global_iata_, device_id_, node_name_,
-                         client_version_, firmware_version_, model_);
-        char topic[160];
-        formatTopic(topic, sizeof(topic), "neighbors", ctx);
-        if (topic[0] == '\0') continue;
-
-        const uint32_t free_heap = ESP.getFreeHeap();
-        if (!neighborsHeapFits(free_heap, OFFBAND_TLS_HEAP_FLOOR_BYTES, static_cast<size_t>(n))) {
-            mesh_log_line(MLOG_ERROR, "neighbors: broker %u skipped, %d-byte report would leave too little heap (%u free)\n",
-                          (unsigned)slot, n, (unsigned)free_heap);
-            continue;
-        }
-        if (b.publish(topic, reinterpret_cast<const uint8_t*>(buf), static_cast<size_t>(n),
-                      /*retain=*/true, /*qos=*/0)) {
-            accepted++;
-        } else {
-            mesh_log_line(MLOG_ERROR, "neighbors: broker %u refused the report\n", (unsigned)slot);
-        }
-    }
-    free(buf);
-    mesh_log_line(MLOG_DEBUG, "neighbors: %d-byte report queued to %u broker(s)\n", n, (unsigned)accepted);
-    return accepted;
+    nbr_buf_ = buf;
+    nbr_len_ = static_cast<size_t>(n);
+    nbr_fanout_.begin(mask, millis());
+    uint8_t brokers = 0;
+    for (uint16_t m = mask; m != 0; m &= (uint16_t)(m - 1)) brokers++;
+    return brokers;
 #else
     (void)in;
     return 0;   // host build: no brokers
+#endif
+}
+
+// One broker's copy per loop pass, while the heap allows (see NeighborsFanOut).
+void MqttBrokerPool::neighborsFanOutTick(uint32_t now_ms) {
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    if (nbr_buf_ == nullptr) return;
+    const bool fits = neighborsHeapFits(ESP.getFreeHeap(), OFFBAND_TLS_HEAP_FLOOR_BYTES, nbr_len_);
+    const int slot = nbr_fanout_.next(now_ms, fits);
+    if (slot >= 0) {
+        char topic[160];
+        bool ok = false;
+        if (neighborsTopicFor(static_cast<uint8_t>(slot), topic, sizeof(topic))) {
+            ok = brokers_[slot].publish(topic, reinterpret_cast<const uint8_t*>(nbr_buf_), nbr_len_,
+                                        /*retain=*/true, /*qos=*/0);
+        }
+        if (!ok) mesh_log_line(MLOG_ERROR, "neighbors: broker %d did not take the report\n", slot);
+        nbr_fanout_.result(ok);
+    }
+    if (!nbr_fanout_.active()) {
+        // A skip is usually free heap held near the TLS floor; it must show in the log.
+        mesh_log_line(nbr_fanout_.skipped() > 0 ? MLOG_ERROR : MLOG_DEBUG,
+                      "neighbors: %u-byte report queued to %d broker(s), %d skipped\n",
+                      (unsigned)nbr_len_, nbr_fanout_.accepted(), nbr_fanout_.skipped());
+        free(nbr_buf_);
+        nbr_buf_ = nullptr;
+        nbr_len_ = 0;
+    }
+#else
+    (void)now_ms;
 #endif
 }
 #endif

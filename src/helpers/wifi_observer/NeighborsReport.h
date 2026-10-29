@@ -22,11 +22,11 @@ namespace offband {
 // CoreScope's cap on one report.
 constexpr size_t kNeighborsReportMax = 10240;
 
-// The report's buffer and each broker's queued copy of it are heap. On a board with
-// PSRAM a block this size is placed there (allocations above 4 KB prefer PSRAM in the
-// ESP32-S3 framework config), so the full CoreScope cap is used. Without PSRAM it comes
-// out of the internal RAM TLS needs, so the report is capped smaller and says so with
-// "truncated".
+// Memory. The build buffer is PSRAM on a board that has it. Each broker's queued copy
+// is NOT: esp-mqtt allocates it with heap_caps_malloc(MALLOC_CAP_DEFAULT), which takes
+// internal RAM first whatever the board, out of the heap TLS needs. So the copies are
+// queued one broker at a time (NeighborsFanOut), each only when the heap fits, and the
+// report is capped smaller on boards without PSRAM, where the buffer is internal too.
 constexpr size_t kNeighborsReportMaxNoPsram = 4096;
 
 inline size_t neighborsReportCap(bool has_psram) {
@@ -37,12 +37,71 @@ inline size_t neighborsReportCap(bool has_psram) {
 // else the same loop pass allocates.
 constexpr uint32_t kNeighborsHeapMargin = 4096;
 
-// True when taking len more bytes still leaves free_heap at or above floor plus the
-// margin. Checked before the buffer is allocated and before each broker's copy is
-// queued; a "no" skips that step rather than pushing a TLS session out of memory.
+// True when taking len more bytes still leaves free_heap (internal) at or above floor
+// plus the margin. Checked before the buffer is allocated and before each broker's copy
+// is queued; a "no" waits or skips rather than pushing a TLS session out of memory.
 inline bool neighborsHeapFits(uint32_t free_heap, uint32_t floor, size_t len) {
     return (uint64_t)free_heap >= (uint64_t)floor + (uint64_t)len + kNeighborsHeapMargin;
 }
+
+// Hands one built report to the connected brokers one at a time, so at most about one
+// queued copy is in memory at once: next() offers the next broker only while the heap
+// fits, which in practice waits for the previous copy to be sent and freed. Brokers not
+// offered within kNeighborsFanOutDeadlineMs are dropped and counted as skipped.
+constexpr uint32_t kNeighborsFanOutDeadlineMs = 60000;
+
+class NeighborsFanOut {
+public:
+    void begin(uint16_t slot_mask, uint32_t now_ms) {
+        pending_ = slot_mask;
+        started_ms_ = now_ms;
+        offered_ = false;
+        accepted_ = skipped_ = 0;
+        active_ = slot_mask != 0;
+    }
+
+    bool active() const { return active_; }
+
+    // The broker slot to queue a copy on now, or -1 (wait, or finished). Call
+    // result() after every slot it returns.
+    int next(uint32_t now_ms, bool heap_fits) {
+        if (!active_ || offered_) return -1;
+        if ((uint32_t)(now_ms - started_ms_) >= kNeighborsFanOutDeadlineMs) {
+            for (uint16_t m = pending_; m != 0; m &= (uint16_t)(m - 1)) skipped_++;
+            pending_ = 0;
+            active_ = false;
+            return -1;
+        }
+        if (!heap_fits || pending_ == 0) return -1;
+        for (int s = 0; s < 16; s++) {
+            if (pending_ & (1u << s)) {
+                pending_ &= (uint16_t)~(1u << s);
+                offered_ = true;
+                return s;
+            }
+        }
+        return -1;
+    }
+
+    void result(bool accepted) {
+        if (!offered_) return;
+        offered_ = false;
+        if (accepted) accepted_++;
+        else skipped_++;
+        if (pending_ == 0) active_ = false;
+    }
+
+    int accepted() const { return accepted_; }
+    int skipped() const { return skipped_; }
+
+private:
+    uint16_t pending_ = 0;
+    uint32_t started_ms_ = 0;
+    bool offered_ = false;
+    bool active_ = false;
+    int accepted_ = 0;
+    int skipped_ = 0;
+};
 
 struct NeighborsReportInput {
     const char* timestamp;       // as /status stamps it; nullptr = ""

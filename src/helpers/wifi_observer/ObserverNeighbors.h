@@ -395,6 +395,7 @@ public:
     int resultCount() const { return n_; }
     int totalCount() const { return total_; }   // neighbors at start, before the CAP cut
     const ScopeResult& result(int i) const { return results_[i]; }
+    const ScopeResult* results() const { return results_; }   // resultCount() rows
     int queriedCount() const {
         int q = 0;
         for (int i = 0; i < n_; i++) {

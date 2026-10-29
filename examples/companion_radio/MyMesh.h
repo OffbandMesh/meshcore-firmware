@@ -111,6 +111,7 @@
 #ifdef OFFBAND_OBSERVER
 #include <helpers/wifi_observer/ObserverNeighbors.h>   // #1386: /neighbors zero-hop table
 #include <helpers/wifi_observer/NeighborsCli.h>        // #1398: ScopeWalkSummary
+#include <helpers/wifi_observer/NeighborsSchedule.h>   // #1399: refresh -> query -> publish
 // #1386: rows in the zero-hop neighbor table that feeds the CoreScope /neighbors
 // report. Plan decision 2: 50 where the board has PSRAM, 20 otherwise. 0 compiles
 // the table out, as MAX_NEIGHBOURS does on the repeater.
@@ -301,6 +302,8 @@ public:
   // no storage (see _scope_run).
   typedef offband::ScopeQueryRun<MAX_NEIGHBOURS> ScopeRun;
   bool startScopeQuery();
+  // #1399: discover.scopes -- a walk started by hand, published to /neighbors when it ends.
+  bool startScopeQueryManual();
   const ScopeRun* scopeQuery() const { return _scope_run; }   // nullptr until first used
   void scopeWalkSummary(offband::ScopeWalkSummary* out) const;
   // #1398: discover.neighbors -- ask repeaters in range to identify themselves now.
@@ -774,6 +777,10 @@ private:
   bool onNodeDiscoverResponse(mesh::Packet* packet);
   void releaseScopeTransient();
   void scopeQueryTick();
+  // #1399: refresh -> query -> publish, one step per loop() pass.
+  offband::NeighborsSchedule _nbr_schedule;
+  void neighborsCycleTick();
+  bool publishNeighborsReport();   // false: nothing went out (logged by the pool)
 #endif
 #endif
   // #241: in-flight block-LIST streaming (ALWAYS compiled, unlike the observer
