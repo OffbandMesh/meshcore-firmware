@@ -333,9 +333,11 @@ TEST(RegionsReply, OverlongListCutsAtTheLastWholeName) {
     ASSERT_TRUE(offband::parseRegionsResponse(buf, len, 7, out, sizeof(out)));
     EXPECT_STREQ(out, "alpha,bravo");
 
-    char tiny[4];   // not even the first name fits
-    ASSERT_TRUE(offband::parseRegionsResponse(buf, len, 7, tiny, sizeof(tiny)));
-    EXPECT_STREQ(tiny, "");
+    // Not even the first name fits: that is not an answer, because CoreScope would
+    // record an empty list as "responded, no scopes".
+    char tiny[4] = "kee";
+    EXPECT_FALSE(offband::parseRegionsResponse(buf, len, 7, tiny, sizeof(tiny)));
+    EXPECT_STREQ(tiny, "kee");   // untouched
 }
 
 TEST(RegionsReply, ListThatExactlyFitsIsKept) {
@@ -644,10 +646,11 @@ TEST(RegionsReply, EdgeLengthsAndCuts) {
     EXPECT_STREQ(out, "hao");
     // tiny buffers
     char one[1], two[2];
-    ASSERT_TRUE(offband::parseRegionsResponse(buf, len, 7, one, sizeof(one)));
+    EXPECT_FALSE(offband::parseRegionsResponse(buf, len, 7, one, sizeof(one)));   // a name, none fits
+    EXPECT_FALSE(offband::parseRegionsResponse(buf, len, 7, two, sizeof(two)));
+    len = makeReply(buf, 7, "", 0);
+    ASSERT_TRUE(offband::parseRegionsResponse(buf, len, 7, one, sizeof(one)));    // a real empty list
     EXPECT_STREQ(one, "");
-    ASSERT_TRUE(offband::parseRegionsResponse(buf, len, 7, two, sizeof(two)));
-    EXPECT_STREQ(two, "");
     // a comma right at the last usable position, and the wildcard surviving a cut
     len = makeReply(buf, 7, "*,abc,defghij", 0);
     char six[6];   // index 5 (out_cap - 1) is the comma after "abc": "*,abc" fits exactly

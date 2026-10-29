@@ -548,7 +548,7 @@ void MqttBroker::loop(uint32_t now_ms) {
 // publish
 // ---------------------------------------------------------------------------
 bool MqttBroker::publish(const char* topic, const uint8_t* payload, size_t len,
-                         bool retain) {
+                         bool retain, int qos) {
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     ClientLockGuard _g(client_lock_);
 #endif
@@ -558,14 +558,14 @@ bool MqttBroker::publish(const char* topic, const uint8_t* payload, size_t len,
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     if (client_ == nullptr) return false;
     int rc = esp_mqtt_client_enqueue(client_, topic, (const char*)payload, (int)len,
-                                     /*qos=*/1, retain ? 1 : 0, /*store=*/true);
+                                     qos, retain ? 1 : 0, /*store=*/true);
     if (rc < 0) {
         return false;
     }
     rt_.last_publish_ms = millis();
     return true;
 #else
-    (void)topic; (void)payload; (void)len; (void)retain;
+    (void)topic; (void)payload; (void)len; (void)retain; (void)qos;
     return false;  // host stub
 #endif
 }

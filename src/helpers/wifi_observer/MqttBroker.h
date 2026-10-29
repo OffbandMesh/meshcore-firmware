@@ -145,9 +145,10 @@ public:
     void loop(uint32_t now_ms);
 
     // Publish raw bytes to a fully-formatted topic. Returns false if
-    // state != Up or enqueue fails.
+    // state != Up or enqueue fails. qos 0 frees the queued copy once it is
+    // sent instead of holding it until the broker acknowledges (#1399).
     bool publish(const char* topic, const uint8_t* payload, size_t len,
-                 bool retain);
+                 bool retain, int qos = 1);
 
     // Build a payload context for fan-out callers.
     void fillPayloadCtx(MqttPayloadCtx& ctx,
