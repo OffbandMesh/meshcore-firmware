@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1896
+impact: none
+reason: Public can no longer be removed and lives in slot 0. The radio refuses to clear Public; joining Public writes slot 0 and replaces any channel there; Public elsewhere is refused and an older copy is cleared; a radio that lost Public gets it back at boot; the device GUI offers no Leave on Public, and typing "public" in its hashtag join joins the real Public. No new screens or wording. The public manual does not describe channel add, leave or slots, so no guide changes; the protocol rules are recorded for app authors in docs/companion_protocol.md (Set Channel).

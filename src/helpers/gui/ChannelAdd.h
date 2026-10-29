@@ -30,6 +30,12 @@ constexpr size_t kChannelNameMax = 31;
 // or it would be longer than kChannelNameMax.
 bool hashtagName(const char* typed, char* out, size_t n);
 
+// #1896: "Public" typed into the hashtag join means the real Public (owner,
+// 2026-10-28). Public's key is fixed, not derived from its name, so making it a
+// hashtag channel would put the radio on "#public", a different channel. True
+// for "public" in any case, with or without leading '#'s and outer spaces.
+bool namesPublic(const char* typed);
+
 // A private key typed as hex. Spaces, dashes and colons are skipped, so a key
 // shown in groups can be typed as shown; any other character means it isn't
 // a key. Returns how many hex digits it read; the key is complete, and *out

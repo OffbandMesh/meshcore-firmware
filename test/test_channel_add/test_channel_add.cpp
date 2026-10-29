@@ -197,6 +197,32 @@ TEST(ChannelSlots, AnUnusedSlotIsNeverAMatch) {
   EXPECT_EQ(-1, findChannelByKey(s, 3, nullptr));
 }
 
+// #1896: "Public" typed into the hashtag join is the real Public, never a
+// #public hashtag channel (owner, 2026-10-28).
+TEST(NamesPublic, PublicInAnyCaseWithOrWithoutHashIsPublic) {
+  EXPECT_TRUE(namesPublic("Public"));
+  EXPECT_TRUE(namesPublic("public"));
+  EXPECT_TRUE(namesPublic("PUBLIC"));
+  EXPECT_TRUE(namesPublic("#Public"));
+  EXPECT_TRUE(namesPublic("##public"));
+  EXPECT_TRUE(namesPublic("  #public  "));
+}
+
+TEST(NamesPublic, OtherNamesAreNot) {
+  EXPECT_FALSE(namesPublic("publics"));
+  EXPECT_FALSE(namesPublic("publi"));
+  EXPECT_FALSE(namesPublic("pub lic"));
+  EXPECT_FALSE(namesPublic("#publicchat"));
+  EXPECT_FALSE(namesPublic("qcchams"));
+  EXPECT_FALSE(namesPublic("public1"));
+}
+
+TEST(NamesPublic, NothingIsNot) {
+  EXPECT_FALSE(namesPublic(""));
+  EXPECT_FALSE(namesPublic("#"));
+  EXPECT_FALSE(namesPublic(nullptr));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

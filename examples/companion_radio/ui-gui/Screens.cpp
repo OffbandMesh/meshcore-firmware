@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include <MeshLog.h>
+#include <helpers/ChannelKeys.h>
 #include <helpers/TimeZones.h>
 #include <helpers/gui/SignalLevel.h>
 #include <helpers/gui/hw/GuiFonts.h>
@@ -1743,7 +1744,9 @@ void GuiShell::openSheet(Sheet kind) {
     _menu_rows[_sheet_count++] = MenuWrite;
     _menu_rows[_sheet_count++] = MenuNotify;
     if (held && priv) _menu_rows[_sheet_count++] = MenuKey;
-    if (held) _menu_rows[_sheet_count++] = MenuLeave;
+    // #1896: Public can't be left (owner, 2026-10-28); the radio refuses it too.
+    const bool is_public = held && memcmp(key, offband::kPublicChannelKey, kChannelKeyLen) == 0;
+    if (held && !is_public) _menu_rows[_sheet_count++] = MenuLeave;
   }
   for (uint8_t i = 0; i < _sheet_count; i++) {
     const bool chosen = kind == Sheet::Notify && i == uint8_t(mode);

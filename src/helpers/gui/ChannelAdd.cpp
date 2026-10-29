@@ -26,6 +26,21 @@ bool hashtagName(const char* typed, char* out, size_t n) {
   return true;
 }
 
+bool namesPublic(const char* typed) {
+  if (!typed) return false;
+  while (*typed == '#' || *typed == ' ') typed++;
+  size_t len = strlen(typed);
+  while (len && typed[len - 1] == ' ') len--;
+  static const char kPublic[] = "public";
+  if (len != sizeof kPublic - 1) return false;
+  for (size_t i = 0; i < len; i++) {
+    char c = typed[i];
+    if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+    if (c != kPublic[i]) return false;
+  }
+  return true;
+}
+
 static int hexValue(char c) {
   if (c >= '0' && c <= '9') return c - '0';
   if (c >= 'a' && c <= 'f') return c - 'a' + 10;
