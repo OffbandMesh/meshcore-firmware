@@ -174,6 +174,36 @@ int main() {
         puts("PASS #1194 caplog forward sink + until-off round-trip");
     }
 
+    // #1399: mqtt.neighbors. A miss reads "off, every 24 h"; out of range is refused.
+    {
+        if (readNeighborsEnabled()) { puts("FAIL nbr_on miss must read off"); return 1; }
+        if (readNeighborsIntervalHours() != kNeighborsIntervalDefaultHours) {
+            printf("FAIL nbr_int_h miss: %u\n", readNeighborsIntervalHours()); return 1;
+        }
+        if (!writeNeighborsEnabled(true) || !readNeighborsEnabled()) { puts("FAIL nbr_on on"); return 1; }
+        if (!writeNeighborsEnabled(false) || readNeighborsEnabled()) { puts("FAIL nbr_on off"); return 1; }
+        if (!writeNeighborsIntervalHours(kNeighborsIntervalMinHours) ||
+            readNeighborsIntervalHours() != kNeighborsIntervalMinHours) { puts("FAIL nbr_int_h min"); return 1; }
+        if (!writeNeighborsIntervalHours(kNeighborsIntervalMaxHours) ||
+            readNeighborsIntervalHours() != kNeighborsIntervalMaxHours) { puts("FAIL nbr_int_h max"); return 1; }
+        if (writeNeighborsIntervalHours(kNeighborsIntervalMinHours - 1) ||
+            writeNeighborsIntervalHours(kNeighborsIntervalMaxHours + 1) ||
+            readNeighborsIntervalHours() != kNeighborsIntervalMaxHours) {
+            puts("FAIL nbr_int_h out of range must be refused and leave the value"); return 1;
+        }
+        // A stored value outside the range (an older build, a hand edit) reads clamped.
+        Preferences raw;
+        raw.begin(kNvsMqtt, false);
+        raw.putUShort(kKeyMqttNeighborsInterval, 1);
+        raw.end();
+        if (readNeighborsIntervalHours() != kNeighborsIntervalMinHours) { puts("FAIL nbr_int_h clamp low"); return 1; }
+        raw.begin(kNvsMqtt, false);
+        raw.putUShort(kKeyMqttNeighborsInterval, 9999);
+        raw.end();
+        if (readNeighborsIntervalHours() != kNeighborsIntervalMaxHours) { puts("FAIL nbr_int_h clamp high"); return 1; }
+        puts("PASS #1399 mqtt.neighbors round-trip");
+    }
+
     // -----------------------------------------------------------------------
     // populateDefaultBrokers — Plan 2 v2 Task 3 Step 5
     // -----------------------------------------------------------------------

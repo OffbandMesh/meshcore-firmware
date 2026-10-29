@@ -113,6 +113,12 @@ public:
 
     // When the next cycle is due, in millis(); the first-cycle point before any ran.
     uint32_t nextDueMs() const { return have_cycle_ ? cycle_start_ms_ + interval_ms_ : kNeighborsFirstCycleMs; }
+    // How long until then; 0 once it is due, however long ago that was.
+    uint32_t msUntilDue(uint32_t now_ms) const {
+        if (!have_cycle_) return now_ms >= kNeighborsFirstCycleMs ? 0 : kNeighborsFirstCycleMs - now_ms;
+        const uint32_t elapsed = now_ms - cycle_start_ms_;
+        return elapsed >= interval_ms_ ? 0 : interval_ms_ - elapsed;
+    }
     bool enabled() const { return enabled_; }
     uint32_t intervalMs() const { return interval_ms_; }
     bool cycleRunning() const { return phase_ != Phase::Idle; }

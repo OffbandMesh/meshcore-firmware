@@ -10,6 +10,7 @@
 
 #pragma once
 #include "WifiObserverConfig.h"
+#include "NeighborsSchedule.h"   // #1399: the mqtt.neighbors.interval range
 #include <stdint.h>
 #include <stddef.h>
 
@@ -85,6 +86,16 @@ bool writeGlobalIata(const char* iata);
 
 uint16_t readStatusIntervalSec();
 bool     writeStatusIntervalSec(uint16_t seconds);
+
+// #1399: mqtt.neighbors / mqtt.neighbors.interval, the periodic CoreScope /neighbors
+// report (range and default in NeighborsSchedule.h). Off on a miss: like the broker
+// slots (#262), a fresh flash publishes nothing until the operator turns it on.
+constexpr const char* kKeyMqttNeighborsOn       = "nbr_on";
+constexpr const char* kKeyMqttNeighborsInterval = "nbr_int_h";
+bool     readNeighborsEnabled();
+bool     writeNeighborsEnabled(bool on);
+uint16_t readNeighborsIntervalHours();              // clamped to the range
+bool     writeNeighborsIntervalHours(uint16_t hours);   // false (nothing written) outside it
 
 // ---------------------------------------------------------------------------
 // #1194: caplog forward -- the syslog sink and whether `caplog forward on`
