@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1865
+impact: none
+reason: The firmware now refuses a CMD_SET_CHANNEL that would write a different channel over an occupied slot (ERR_CODE_BAD_STATE), and a clear zeroes the stored key. Adding, renaming and leaving channels behave as before, and the public manual documents none of the channel add, edit or slot behavior, so no guide changes. The protocol change is recorded for app authors in docs/companion_protocol.md (Set Channel, Channel Lifecycle).

@@ -17,6 +17,7 @@ enum class CmdResult : uint8_t {
   NotFound,  // no such contact or channel
   Busy,      // the send queue or the request slot is full
   Failed,    // the radio or the store refused
+  Occupied,  // a different channel holds that slot; nothing changed (#1865)
 };
 
 // Radio settings as the phone sends them: frequency in kHz, bandwidth in Hz,
