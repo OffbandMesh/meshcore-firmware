@@ -125,6 +125,55 @@ bool writeStatusIntervalSec(uint16_t seconds) {
     return true;
 }
 
+bool readNeighborsEnabled() {
+    Preferences p;
+    p.begin(kNvsMqtt, /*readOnly=*/true);
+    const bool on = p.getBool(kKeyMqttNeighborsOn, false);
+    p.end();
+    return on;
+}
+
+bool writeNeighborsEnabled(bool on) {
+    Preferences p;
+    if (!p.begin(kNvsMqtt, /*readOnly=*/false)) {
+        logCfgWriteFailure("writeNeighborsEnabled.begin", kNvsMqtt);
+        return false;
+    }
+    size_t wrote = p.putBool(kKeyMqttNeighborsOn, on);
+    p.end();
+    if (wrote == 0) {
+        logCfgWriteFailure("writeNeighborsEnabled.putBool", kNvsMqtt);
+        return false;
+    }
+    return true;
+}
+
+uint16_t readNeighborsIntervalHours() {
+    Preferences p;
+    p.begin(kNvsMqtt, /*readOnly=*/true);
+    uint16_t h = p.getUShort(kKeyMqttNeighborsInterval, kNeighborsIntervalDefaultHours);
+    p.end();
+    if (h < kNeighborsIntervalMinHours) h = kNeighborsIntervalMinHours;
+    if (h > kNeighborsIntervalMaxHours) h = kNeighborsIntervalMaxHours;
+    return h;
+}
+
+bool writeNeighborsIntervalHours(uint16_t hours) {
+    if (hours < kNeighborsIntervalMinHours || hours > kNeighborsIntervalMaxHours) return false;
+    Preferences p;
+    if (!p.begin(kNvsMqtt, /*readOnly=*/false)) {
+        logCfgWriteFailure("writeNeighborsIntervalHours.begin", kNvsMqtt);
+        return false;
+    }
+    size_t wrote = p.putUShort(kKeyMqttNeighborsInterval, hours);
+    p.end();
+    if (wrote != sizeof(uint16_t)) {
+        logCfgWriteFailure("writeNeighborsIntervalHours.putUShort", kNvsMqtt);
+        return false;
+    }
+    return true;
+}
+
 // #1194: caplog forward sink + until-off state ("observer" namespace). The
 // readers follow the read-miss contract above: no sink, default port, off.
 

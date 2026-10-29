@@ -194,6 +194,22 @@ TEST(NeighborsSchedule, AManualWalkReplacesAReportStillWaiting) {
     EXPECT_EQ(s.tick(3000, false, true), NeighborsAction::Publish);   // offered at once
 }
 
+// Review of #1880: "due" must stay due however long ago it fell due, past the point a
+// signed millis() difference would flip.
+TEST(NeighborsSchedule, TimeUntilDueIsZeroOnceDueHoweverLongAgo) {
+    NeighborsSchedule s;
+    s.configure(true, 24 * H);
+    EXPECT_EQ(s.msUntilDue(0), offband::kNeighborsFirstCycleMs);
+    EXPECT_EQ(s.msUntilDue(offband::kNeighborsFirstCycleMs - 1), 1u);
+    EXPECT_EQ(s.msUntilDue(offband::kNeighborsFirstCycleMs), 0u);
+    const uint32_t start = offband::kNeighborsFirstCycleMs;
+    runCycle(s, start);
+    EXPECT_EQ(s.msUntilDue(start + 24 * H - 1), 1u);
+    EXPECT_EQ(s.msUntilDue(start + 24 * H), 0u);
+    s.configure(false, 24 * H);   // off for a month: still due, never "next in 500 h"
+    EXPECT_EQ(s.msUntilDue(start + 30u * 24u * H), 0u);
+}
+
 TEST(NeighborsSchedule, IntervalIsHeldToTheSettingRange) {
     NeighborsSchedule s;
     s.configure(true, 0);
