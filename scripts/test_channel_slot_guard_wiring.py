@@ -57,12 +57,60 @@ def strip_comments(text):
     return "".join(out)
 
 
-# The guard as it must read: asked before the write, its Refuse answered with Occupied,
-# and only for a slot that exists (got), so an out-of-range index still reaches NotFound.
+# The guard as it must read: asked before the write, with Public's key so a clear of
+# Public is refused (#1896), any refusal answered with Occupied, and only for a slot
+# that exists (got), so an out-of-range index still reaches NotFound.
 GUARD = re.compile(
-    r"if\s*\(\s*got\s*&&\s*offband::slotWriteDecision\(\s*before\.name\s*,\s*before\.channel\.secret\s*,"
-    r"\s*name\s*,\s*secret\s*\)\s*==\s*offband::SlotWrite::Refuse\s*\)\s*\{[^{}]*?return\s+CmdResult::Occupied\s*;",
+    r"verdict\s*=\s*got\s*\?\s*offband::slotWriteDecision\(\s*idx\s*,\s*before\.name\s*,\s*before\.channel\.secret\s*,"
+    r"\s*name\s*,\s*secret\s*,\s*offband::kPublicChannelKey\s*\)\s*:\s*offband::SlotWrite::Write\s*;"
+    r"\s*if\s*\(\s*verdict\s*!=\s*offband::SlotWrite::Write\s*\)\s*\{[^{}]*?return\s+CmdResult::Occupied\s*;",
     re.S)
+SCREENS = ROOT / "examples" / "companion_radio" / "ui-gui" / "Screens.cpp"
+
+# #1896: the channel menu offers Leave on every held channel except Public.
+LEAVE = re.compile(
+    r"is_public\s*=\s*held\s*&&\s*memcmp\(\s*key\s*,\s*offband::kPublicChannelKey\s*,\s*kChannelKeyLen\s*\)\s*==\s*0\s*;"
+    r"\s*if\s*\(\s*held\s*&&\s*!is_public\s*\)\s*_menu_rows\[_sheet_count\+\+\]\s*=\s*MenuLeave\s*;",
+    re.S)
+
+
+CHANNELS = ROOT / "examples" / "companion_radio" / "ui-gui" / "ChannelScreens.cpp"
+
+
+def public_failures(mymesh, channels):
+    """#1896's other sites: one Public, in its slot, restored at boot, and "public" typed is Public."""
+    out = []
+    code = strip_comments(mymesh)
+    body = function_body(code, "CmdResult MyMesh::cmdSetChannel(") or ""
+    if not re.search(r"if\s*\(\s*writing_public\s*&&\s*idx\s*==\s*offband::kPublicSlot\s*\)\s*\{"
+                     r"[^}]*?slotHoldsKey\(\s*other\.channel\.secret\s*,\s*offband::kPublicChannelKey\s*\)", body, re.S):
+        out.append("cmdSetChannel() no longer clears an older copy of Public when Public goes to its slot")
+    load = code.find("_store->loadChannels(this);")
+    repair = code.find("offband::publicRepairSlot(")
+    if load < 0 or repair < 0 or repair < load:
+        out.append("begin() no longer restores a lost Public after loading the stored channels")
+    ch = strip_comments(channels)
+    join = function_body(ch, "int GuiShell::chanJoin(") or ""
+    if not re.search(r"memcmp\(\s*key\s*,\s*offband::kPublicChannelKey\s*,\s*kChannelKeyLen\s*\)\s*==\s*0\s*\)"
+                     r"\s*slot\s*=\s*offband::kPublicSlot\s*;", join):
+        out.append("ChannelScreens.cpp: chanJoin() no longer puts Public in its slot")
+    submit = function_body(ch, "void GuiShell::chanSubmit(") or ""
+    np, ht = submit.find("namesPublic("), submit.find("hashtagName(")
+    if np < 0 or ht < 0 or np > ht:
+        out.append("ChannelScreens.cpp: chanSubmit() no longer checks for Public before making a hashtag")
+    return out
+
+
+def _public_real():
+    return MYMESH.read_text(encoding="utf-8"), CHANNELS.read_text(encoding="utf-8")
+
+
+def gui_failures(text):
+    code = strip_comments(text)
+    # Assignments only: "== MenuLeave" is a comparison, not a row being offered.
+    if not LEAVE.search(code) or len(re.findall(r"(?<![=!<>])=\s*MenuLeave\s*;", code)) != 1:
+        return ["Screens.cpp: the channel menu can offer Leave on Public"]
+    return []
 
 
 def failures(text):
@@ -101,21 +149,83 @@ def test_negative_a_dropped_guard_is_caught():
 
 def test_negative_an_inverted_guard_is_caught():
     text = MYMESH.read_text(encoding="utf-8").replace(
-        "offband::SlotWrite::Refuse) {", "offband::SlotWrite::Write) {", 1)
+        "if (verdict != offband::SlotWrite::Write) {", "if (verdict == offband::SlotWrite::Write) {", 1)
     assert any("no longer asks slotWriteDecision" in f for f in failures(text))
 
 
 def test_negative_a_guard_without_the_got_check_is_caught():
-    text = MYMESH.read_text(encoding="utf-8").replace("if (got && offband::slotWriteDecision(",
-                                                      "if (offband::slotWriteDecision(", 1)
+    text = MYMESH.read_text(encoding="utf-8").replace("got ? offband::slotWriteDecision(",
+                                                      "true ? offband::slotWriteDecision(", 1)
+    assert any("no longer asks slotWriteDecision" in f for f in failures(text))
+
+
+def test_negative_a_guard_without_publics_key_is_caught():
+    # #1896: without it, the guard lets a client clear Public.
+    text = re.sub(r"(slotWriteDecision\([^;]*?)offband::kPublicChannelKey", r"\1nullptr",
+                  MYMESH.read_text(encoding="utf-8"), count=1, flags=re.S)
+    assert any("no longer asks slotWriteDecision" in f for f in failures(text))
+
+
+def test_negative_a_guard_told_the_wrong_slot_is_caught():
+    # #1896: the slot decides whether Public may land, so it must be the slot written.
+    text = MYMESH.read_text(encoding="utf-8").replace("slotWriteDecision(idx,", "slotWriteDecision(0,", 1)
     assert any("no longer asks slotWriteDecision" in f for f in failures(text))
 
 
 def test_negative_a_commented_out_guard_is_caught():
-    text = MYMESH.read_text(encoding="utf-8").replace("if (got && offband::slotWriteDecision(",
-                                                      "/* if (got && offband::slotWriteDecision(", 1)
+    text = MYMESH.read_text(encoding="utf-8").replace("const offband::SlotWrite verdict",
+                                                      "/* const offband::SlotWrite verdict", 1)
     text = text.replace("return CmdResult::Occupied;\n  }", "return CmdResult::Occupied;\n  } */", 1)
     assert any("no longer asks slotWriteDecision" in f for f in failures(text))
+
+
+def test_the_public_sites_are_wired():
+    got = public_failures(*_public_real())
+    assert not got, "\n".join(got)
+
+
+def test_negative_no_clearing_of_older_public_copies_is_caught():
+    mymesh, channels = _public_real()
+    bad = mymesh.replace("if (writing_public && idx == offband::kPublicSlot) {", "if (false) {", 1)
+    assert any("older copy of Public" in f for f in public_failures(bad, channels))
+
+
+def test_negative_no_boot_repair_is_caught():
+    mymesh, channels = _public_real()
+    bad = mymesh.replace("offband::publicRepairSlot(", "offband::publicRepairSlotX(", 1)
+    assert any("restores a lost Public" in f for f in public_failures(bad, channels))
+
+
+def test_negative_chanjoin_without_publics_slot_is_caught():
+    mymesh, channels = _public_real()
+    bad = channels.replace("slot = offband::kPublicSlot;", "slot = -1;", 1)
+    assert any("chanJoin()" in f for f in public_failures(mymesh, bad))
+
+
+def test_negative_hashtag_before_public_check_is_caught():
+    mymesh, channels = _public_real()
+    bad = channels.replace("if (namesPublic(_chan_buf.text())) {", "if (false) {", 1)
+    assert any("chanSubmit()" in f for f in public_failures(mymesh, bad))
+
+
+def test_the_gui_never_offers_leave_on_public():
+    got = gui_failures(SCREENS.read_text(encoding="utf-8"))
+    assert not got, "\n".join(got)
+
+
+def test_negative_leave_offered_on_public_is_caught():
+    text = SCREENS.read_text(encoding="utf-8").replace(
+        "if (held && !is_public) _menu_rows[_sheet_count++] = MenuLeave;",
+        "if (held) _menu_rows[_sheet_count++] = MenuLeave;", 1)
+    assert gui_failures(text)
+
+
+def test_negative_a_second_unguarded_leave_row_is_caught():
+    text = SCREENS.read_text(encoding="utf-8").replace(
+        "if (held && !is_public) _menu_rows[_sheet_count++] = MenuLeave;",
+        "if (held && !is_public) _menu_rows[_sheet_count++] = MenuLeave;\n    "
+        "if (held) _menu_rows[_sheet_count++] = MenuLeave;", 1)
+    assert gui_failures(text)
 
 
 def test_negative_a_clear_that_keeps_its_key_is_caught():
@@ -137,8 +247,9 @@ def test_negative_a_refusal_reported_as_not_found_is_caught():
 def test_negative_writing_before_the_guard_is_caught():
     text = ("CmdResult MyMesh::cmdSetChannel(uint8_t idx, const char* name, const uint8_t secret[16]) {\n"
             "  setChannel(idx, channel);\n"
-            "  if (got && offband::slotWriteDecision(before.name, before.channel.secret, name, secret) ==\n"
-            "      offband::SlotWrite::Refuse) {\n    return CmdResult::Occupied;\n  }\n"
+            "  const offband::SlotWrite verdict = got ? offband::slotWriteDecision(idx, before.name,\n"
+            "      before.channel.secret, name, secret, offband::kPublicChannelKey) : offband::SlotWrite::Write;\n"
+            "  if (verdict != offband::SlotWrite::Write) {\n    return CmdResult::Occupied;\n  }\n"
             "  if (name[0] != 0) memcpy(channel.channel.secret, secret, 16);\n}\n")
     assert any("before asking" in f for f in failures(text))
 

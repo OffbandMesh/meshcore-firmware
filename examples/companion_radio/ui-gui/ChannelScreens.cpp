@@ -11,6 +11,7 @@
 
 #include <MeshLog.h>
 #include <helpers/ChannelKeys.h>
+#include <helpers/ChannelSlotGuard.h>   // #1896: Public's slot
 
 #include "Screens.h"
 #include "ShellWidgets.h"
@@ -228,6 +229,8 @@ int GuiShell::chanJoin(const char* name, const uint8_t key[kChannelKeyLen]) {
   ChannelSlot slots[kMaxSlots];
   const int n = _model->channelSlots(slots, kMaxSlots);
   int slot = findChannelByKey(slots, n, key);
+  // #1896: Public goes into its own slot, displacing what's there (owner, 2026-10-28).
+  if (slot < 0 && memcmp(key, offband::kPublicChannelKey, kChannelKeyLen) == 0) slot = offband::kPublicSlot;
   if (slot < 0) slot = firstFreeChannelSlot(slots, n);
   if (slot < 0) return -1;
   const int t = _model->addChannel(slot, name, key);
@@ -253,6 +256,11 @@ void GuiShell::chanOpenThread(int thread) {
 // The confirm key (Join / Done), or Enter on a keyboard.
 void GuiShell::chanSubmit() {
   if (_chan == ChanStep::Hashtag) {
+    if (namesPublic(_chan_buf.text())) {
+      // #1896: "public" is the real Public, never a #public hashtag channel.
+      later([](GuiShell* g) { g->chanOpenThread(g->chanJoin("Public", offband::kPublicChannelKey)); });
+      return;
+    }
     if (!hashtagName(_chan_buf.text(), _chan_name, sizeof _chan_name)) return;   // empty: nothing to join
     offband::hashtagChannelKey(_chan_name, _chan_key);
     // After this event: opening the chat rebuilds, deleting the key that sent it.
@@ -280,7 +288,7 @@ void GuiShell::chanPick(int row) {
   const bool full = firstFreeChannelSlot(slots, n) < 0;
   switch (row) {
     case RowPublic:
-      if (full) return;
+      // #1896: never refused for a full table; Public takes its own slot.
       chanOpenThread(chanJoin("Public", offband::kPublicChannelKey));
       return;
     case RowHashtag:
@@ -359,7 +367,13 @@ void GuiShell::refreshChanField() {
     // "You're already in #name": Join then opens that chat (mockup 4).
     char name[kChannelNameMax + 1];
     bool held = false;
-    if (hashtagName(_chan_buf.text(), name, sizeof name)) {
+    if (namesPublic(_chan_buf.text())) {
+      // #1896: Join takes "public" to the real Public, so the note checks that.
+      textf(name, sizeof name, "Public");
+      ChannelSlot slots[kMaxSlots];
+      const int n = _model->channelSlots(slots, kMaxSlots);
+      held = findChannelByKey(slots, n, offband::kPublicChannelKey) >= 0;
+    } else if (hashtagName(_chan_buf.text(), name, sizeof name)) {
       uint8_t key[kChannelKeyLen];
       offband::hashtagChannelKey(name, key);
       ChannelSlot slots[kMaxSlots];
@@ -505,7 +519,8 @@ void GuiShell::buildAddChannel(lv_obj_t* scr) {
       lv_obj_t* l = list(top);
       // Public only when this radio doesn't hold it (mockup 3).
       if (findChannelByKey(slots, n, offband::kPublicChannelKey) < 0) {
-        row(l, kGlyphPublic, "Public", "The channel every MeshCore radio shares", RowPublic, full);
+        // #1896: never dimmed for a full table; Public takes its own slot.
+        row(l, kGlyphPublic, "Public", "The channel every MeshCore radio shares", RowPublic, false);
       }
       row(l, "#", "Hashtag channel", "Anyone who knows the name can read it", RowHashtag, full);
       row(l, kGlyphPrivate, "Private channel", "Only people with its key can read it", RowPrivate, full);
