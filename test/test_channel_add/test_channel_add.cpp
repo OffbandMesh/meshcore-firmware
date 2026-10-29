@@ -171,6 +171,14 @@ TEST(ChannelSlots, TheFirstFreeSlotIsUsed) {
   EXPECT_EQ(2, usedChannelSlots(s, 4));
 }
 
+TEST(ChannelSlots, SlotZeroIsNeverOfferedEvenWhenEmpty) {
+  // #1896: slot 0 is Public's.
+  ChannelSlot s[3] = {slot(false, 0), slot(true, 2), slot(false, 0)};
+  EXPECT_EQ(2, firstFreeChannelSlot(s, 3));
+  ChannelSlot only0[2] = {slot(false, 0), slot(true, 2)};
+  EXPECT_EQ(-1, firstFreeChannelSlot(only0, 2));
+}
+
 TEST(ChannelSlots, AllFullHasNoFreeSlot) {
   ChannelSlot s[40];
   for (int i = 0; i < 40; i++) s[i] = slot(true, uint8_t(i));

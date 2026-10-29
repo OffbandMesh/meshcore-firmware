@@ -171,6 +171,8 @@ public:
   offband::gui::CmdResult cmdSendChannel(uint8_t idx, uint32_t timestamp, const char* text, size_t len);
   offband::gui::CmdResult cmdSendAdvert(bool flood);
   offband::gui::CmdResult cmdSetChannel(uint8_t idx, const char* name, const uint8_t secret[16]);
+  // #1896: Public into slot 0, moving (not wiping) what's there; one Public.
+  bool placePublicInSlot0(const char* name, bool live);
   offband::gui::CmdResult cmdSetRadio(uint32_t freq_khz, uint32_t bw_hz, uint8_t sf, uint8_t cr, bool repeat);
   offband::gui::CmdResult cmdSetTxPower(int8_t dbm);          // -9..MAX_LORA_TX_POWER
   offband::gui::CmdResult cmdSetPathHashMode(uint8_t mode);   // 0..2: 1- to 3-byte hashes

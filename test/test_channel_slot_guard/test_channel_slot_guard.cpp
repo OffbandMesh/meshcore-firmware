@@ -73,12 +73,18 @@ TEST(ChannelSlotGuard, AnOlderRadiosPublicElsewhereCanStillBeRenamed) {
 }
 
 TEST(ChannelSlotGuard, AnotherChannelOverPublicsSlotIsRefused) {
-  EXPECT_EQ(SlotWrite::Refuse, decideAt(0, "Public", kPublic.secret, "#qcchams", kHashtag16));
+  // The bench case of #1865, now refused for the slot as well as the overwrite.
+  EXPECT_EQ(SlotWrite::RefuseReserved, decideAt(0, "Public", kPublic.secret, "#qcchams", kHashtag16));
 }
 
-TEST(ChannelSlotGuard, AnotherChannelIntoPublicsEmptySlotIsWritten) {
-  // Slot 0 isn't reserved while empty; Public displaces it when joined.
-  EXPECT_EQ(SlotWrite::Write, decideAt(0, "", kEmpty.secret, "#qcchams", kHashtag16));
+TEST(ChannelSlotGuard, SlotZeroIsPublicsEvenWhileEmpty) {
+  // "slot 0 should no longer become unavailable and should always remain public".
+  EXPECT_EQ(SlotWrite::RefuseReserved, decideAt(0, "", kEmpty.secret, "#qcchams", kHashtag16));
+  EXPECT_EQ(SlotWrite::RefuseReserved, decideAt(0, "#test", kHashtag.secret, "Test net", kHashtag16));
+}
+
+TEST(ChannelSlotGuard, AnotherChannelInSlotZeroCanBeClearedToMakeWay) {
+  EXPECT_EQ(SlotWrite::Write, decideAt(0, "#qcchams", kHashtag.secret, "", kEmpty.secret));
 }
 
 TEST(ChannelSlotGuard, ClearingAnyOtherChannelIsWritten) {
@@ -142,13 +148,13 @@ TEST(ChannelSlotGuard, AMissingKeyFailsClosed) {
   EXPECT_EQ(SlotWrite::Refuse, decide("#test", kHashtag.secret, "#test", nullptr));
 }
 
-// #1896: boot puts Public back on a radio that lost it under older firmware.
+// #1896: when Public takes slot 0, the channel there moves ("move don't wipe").
 namespace {
 struct Table {
   const char* names[5];
   const uint8_t* secrets[5];
-  int repair() const {
-    return offband::publicRepairSlot(
+  int destination() const {
+    return offband::slotZeroDestination(
         5,
         [this](int i, const char** n, const uint8_t** s) {
           *n = names[i];
@@ -160,32 +166,33 @@ struct Table {
 };
 }  // namespace
 
-TEST(PublicRepair, PublicHeldAnywhereNeedsNothing) {
-  Table t{{"#a", "", "Public", "", ""}, {kHashtag.secret, kEmpty.secret, kPublic.secret, kEmpty.secret, kEmpty.secret}};
-  EXPECT_EQ(-1, t.repair());
-  Table renamed{{"Everyone", "", "", "", ""}, {kPublic.secret, kEmpty.secret, kEmpty.secret, kEmpty.secret, kEmpty.secret}};
-  EXPECT_EQ(-1, renamed.repair());
+TEST(SlotZeroDestination, ItSwapsWithPublicWhenPublicIsElsewhere) {
+  // The WR8's state: #qcchams took slot 0, Public sat in slot 3.
+  Table t{{"#qcchams", "", "#a", "Public", ""}, {kHashtag.secret, kEmpty.secret, kHashtag.secret, kPublic.secret, kEmpty.secret}};
+  EXPECT_EQ(3, t.destination());
 }
 
-TEST(PublicRepair, LostPublicGoesBackIntoAnEmptySlotZero) {
-  Table t{{"", "#a", "", "", ""}, {kEmpty.secret, kHashtag.secret, kEmpty.secret, kEmpty.secret, kEmpty.secret}};
-  EXPECT_EQ(0, t.repair());
+TEST(SlotZeroDestination, PublicIsFoundByKeyNotName) {
+  Table renamed{{"#qcchams", "Everyone", "", "", ""}, {kHashtag.secret, kPublic.secret, kEmpty.secret, kEmpty.secret, kEmpty.secret}};
+  EXPECT_EQ(1, renamed.destination());
+  Table impostor{{"#qcchams", "Public", "", "", ""}, {kHashtag.secret, kHashtag.secret, kEmpty.secret, kEmpty.secret, kEmpty.secret}};
+  EXPECT_EQ(2, impostor.destination());   // not Public: the first empty slot instead
 }
 
-TEST(PublicRepair, BootNeverDisplacesTheChannelInSlotZero) {
-  // A private key in slot 0 couldn't be recovered: the first empty slot instead.
+TEST(SlotZeroDestination, NoPublicMeansTheFirstEmptySlotAfterZero) {
   Table t{{"Family", "#a", "", "", ""}, {kHashtag.secret, kHashtag.secret, kEmpty.secret, kEmpty.secret, kEmpty.secret}};
-  EXPECT_EQ(2, t.repair());
+  EXPECT_EQ(2, t.destination());
 }
 
-TEST(PublicRepair, AChannelMerelyNamedPublicIsNotPublic) {
-  Table t{{"Public", "", "", "", ""}, {kHashtag.secret, kEmpty.secret, kEmpty.secret, kEmpty.secret, kEmpty.secret}};
-  EXPECT_EQ(1, t.repair());
+TEST(SlotZeroDestination, ItNeverReturnsSlotZero) {
+  Table t{{"", "#a", "#b", "#c", "#d"}, {kEmpty.secret, kHashtag.secret, kHashtag.secret, kHashtag.secret, kHashtag.secret}};
+  EXPECT_EQ(-1, t.destination());
 }
 
-TEST(PublicRepair, AFullTableWithoutPublicHasNowhereToPutIt) {
+TEST(SlotZeroDestination, AFullTableWithoutPublicHasNowhere) {
+  // The one case where slot 0's channel is lost.
   Table t{{"#a", "#b", "#c", "#d", "#e"}, {kHashtag.secret, kHashtag.secret, kHashtag.secret, kHashtag.secret, kHashtag.secret}};
-  EXPECT_EQ(-1, t.repair());
+  EXPECT_EQ(-1, t.destination());
 }
 
 int main(int argc, char** argv) {
