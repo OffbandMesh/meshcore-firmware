@@ -182,7 +182,24 @@ static int  nbrCount() { return the_mesh.getNeighbourCount(); }
 static offband::DiscoverResult nbrDiscover(int* seconds_left) { return the_mesh.sendNodeDiscoverReq(seconds_left); }
 static void nbrSummary(offband::ScopeWalkSummary* out) { the_mesh.scopeWalkSummary(out); }
 static bool nbrStartScopes() { return the_mesh.startScopeQueryManual(); }   // #1399: published when done
-static const offband::NeighborsCliHooks kNeighborsCliHooks = { nbrCount, nbrDiscover, nbrSummary, nbrStartScopes };
+// #1399: mqtt.neighbors[.interval], saved in NVS and applied to the schedule at once.
+static void nbrReadSettings(offband::NeighborsSettings* out) {
+  out->enabled = offband::readNeighborsEnabled();
+  out->interval_hours = offband::readNeighborsIntervalHours();
+}
+// Each command changes one setting, so only that key is written: a failure leaves NVS
+// and the live schedule as they were, never half a change waiting for the next boot.
+static bool nbrSaveSettings(const offband::NeighborsSettings& s) {
+  offband::NeighborsSettings was;
+  nbrReadSettings(&was);
+  if (s.interval_hours != was.interval_hours && !offband::writeNeighborsIntervalHours(s.interval_hours)) return false;
+  if (s.enabled != was.enabled && !offband::writeNeighborsEnabled(s.enabled)) return false;
+  the_mesh.configureNeighborsSchedule(s.enabled, s.interval_hours);
+  return true;
+}
+static void nbrScheduleStatus(offband::NeighborsScheduleStatus* out) { the_mesh.neighborsScheduleStatus(out); }
+static const offband::NeighborsCliHooks kNeighborsCliHooks = {
+  nbrCount, nbrDiscover, nbrSummary, nbrStartScopes, nbrReadSettings, nbrSaveSettings, nbrScheduleStatus };
 #endif
 
 /* END GLOBAL OBJECTS */
@@ -752,6 +769,8 @@ void setup() {
 #endif
 #if defined(OFFBAND_OBSERVER) && MAX_NEIGHBOURS
   offband::setNeighborsCliHooks(&kNeighborsCliHooks);   // #1398: discover.* CLI
+  // #1399: the periodic /neighbors report as last saved (off on a fresh flash).
+  the_mesh.configureNeighborsSchedule(offband::readNeighborsEnabled(), offband::readNeighborsIntervalHours());
 #endif
   board.onBootComplete();
 

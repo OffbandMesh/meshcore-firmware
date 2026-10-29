@@ -861,6 +861,18 @@ bool MyMesh::startScopeQueryManual() {
   return true;
 }
 
+void MyMesh::configureNeighborsSchedule(bool enabled, uint16_t interval_hours) {
+  _nbr_schedule.configure(enabled, offband::neighborsIntervalMs(interval_hours));
+}
+
+void MyMesh::neighborsScheduleStatus(offband::NeighborsScheduleStatus* out) const {
+  const uint32_t now = _ms->getMillis();
+  out->cycle_running = _nbr_schedule.cycleRunning();
+  out->next_in_s = (int32_t)((_nbr_schedule.msUntilDue(now) + 999u) / 1000u);   // 0 = due; at most 336 h
+  out->has_published = _nbr_schedule.hasPublished();
+  out->last_ago_s = out->has_published ? (now - _nbr_schedule.lastPublishMs()) / 1000u : 0;
+}
+
 // #1399: one step of the /neighbors cycle per loop() pass (see NeighborsSchedule.h).
 void MyMesh::neighborsCycleTick() {
   const uint32_t now = _ms->getMillis();
