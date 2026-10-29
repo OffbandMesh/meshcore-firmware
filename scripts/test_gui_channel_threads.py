@@ -221,8 +221,9 @@ def test_negative_rewriting_a_held_channel_is_caught():
 
 def test_negative_a_doubled_channel_is_caught():
     real = CHANSCREENS.read_text(encoding="utf-8")
-    broken = real.replace("int slot = findChannelByKey(slots, n, key);\n  if (slot < 0) slot = firstFreeChannelSlot(slots, n);",
-                          "int slot = firstFreeChannelSlot(slots, n);")
+    # The lookup alone is dropped; #1896 put Public's slot rule between it and
+    # the free-slot fallback, so the mutation can't depend on what follows.
+    broken = real.replace("int slot = findChannelByKey(slots, n, key);", "int slot = -1;")
     assert broken != real, "sanity: chanJoin's lookup must be in the tree"
     got = add_failures(UITASK.read_text(encoding="utf-8"), broken)
     assert any("doubled" in f for f in got), got
