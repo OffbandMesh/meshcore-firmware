@@ -11,7 +11,8 @@
 #define LV_COLOR_16_SWAP 1
 
 // LVGL objects come from the system heap, so the [mem] telemetry counts them.
-// #1738: on the ESP32 builds they go to PSRAM first (LvAlloc.h says why).
+// #1738: on the ESP32 builds they go to PSRAM first (LvAlloc.h says why), so
+// they show in [mem]'s psram fields, and lv_int counts any that fell back.
 #define LV_MEM_CUSTOM 1
 #if defined(ARDUINO_ARCH_ESP32) && !defined(OFFBAND_NATIVE_LVGL)
 #define LV_MEM_CUSTOM_INCLUDE "LvAlloc.h"

@@ -34,6 +34,8 @@ def esp32_branch(lv_conf):
 
 def conf_failures(lv_conf):
     out = []
+    if not re.search(r"^\s*#define\s+LV_MEM_CUSTOM\s+1\b", strip_comments(lv_conf), re.M):
+        out.append("lv_conf.h: LV_MEM_CUSTOM is not 1, so LVGL uses its own pool, not offband_lv_*")
     branch = esp32_branch(lv_conf)
     if not branch:
         out.append("lv_conf.h has no ESP32 branch for LVGL's allocator")
@@ -57,8 +59,17 @@ def impl_failures(impl):
         out.append("hw/LvAlloc.cpp: the fallback heap is not internal RAM")
     for fn in ("offband_lv_alloc", "offband_lv_realloc"):
         body = re.search(fn + r"\s*\([^)]*\)\s*\{(.*?)\n\}", code, re.S)
-        if not body or "Preferring(" not in body.group(1) or body.group(1).find("kPsram") > body.group(1).find("kInternal"):
+        text = body.group(1) if body else ""
+        at_psram, at_internal = text.find("kPsram"), text.find("kInternal")
+        if "Preferring(" not in text or at_psram < 0 or at_internal < 0 or at_psram > at_internal:
             out.append("hw/LvAlloc.cpp: %s does not ask PSRAM first, then internal RAM" % fn)
+    free_body = re.search(r"offband_lv_free\s*\([^)]*\)\s*\{([^}]*)\}", code)
+    if not free_body or "heap_caps_free" not in free_body.group(1):
+        out.append("hw/LvAlloc.cpp: offband_lv_free does not use heap_caps_free")
+    for key, fn in (("ALLOC", "offband_lv_alloc"), ("FREE", "offband_lv_free"),
+                    ("REALLOC", "offband_lv_realloc")):
+        if not re.search(r"static_assert\(\s*&LV_MEM_CUSTOM_%s\s*==\s*&%s\b" % (key, fn), code):
+            out.append("hw/LvAlloc.cpp: no build-time check that lv_conf.h routes LV_MEM_CUSTOM_%s to %s" % (key, fn))
     return out
 
 
@@ -131,6 +142,33 @@ def test_negative_internal_asked_first_is_caught():
         "heap_caps_malloc(n, TMP)", "heap_caps_malloc(n, kInternal)")
     got = failures(lv_conf, bad, port, inis)
     assert any("offband_lv_alloc does not ask PSRAM first" in f for f in got), got
+
+
+def test_negative_lv_mem_custom_off_is_caught():
+    lv_conf, impl, port, inis = _real()
+    bad = lv_conf.replace("#define LV_MEM_CUSTOM 1", "#define LV_MEM_CUSTOM 0")
+    assert any("LV_MEM_CUSTOM is not 1" in f for f in failures(bad, impl, port, inis))
+
+
+def test_negative_both_heaps_internal_is_caught():
+    lv_conf, impl, port, inis = _real()
+    bad = impl.replace("heap_caps_malloc(n, kPsram)", "heap_caps_malloc(n, kInternal)").replace(
+        "heap_caps_realloc(q, n, kPsram)", "heap_caps_realloc(q, n, kInternal)")
+    got = failures(lv_conf, bad, port, inis)
+    assert any("offband_lv_alloc does not ask PSRAM first" in f for f in got), got
+    assert any("offband_lv_realloc does not ask PSRAM first" in f for f in got), got
+
+
+def test_negative_free_not_heap_caps_is_caught():
+    lv_conf, impl, port, inis = _real()
+    bad = impl.replace("{ heap_caps_free(p); }", "{ free(p); }")
+    assert any("offband_lv_free" in f for f in failures(lv_conf, bad, port, inis))
+
+
+def test_negative_build_time_check_removed_is_caught():
+    lv_conf, impl, port, inis = _real()
+    bad = re.sub(r"static_assert\(&LV_MEM_CUSTOM_ALLOC[^;]*;", "", impl)
+    assert any("LV_MEM_CUSTOM_ALLOC" in f and "build-time" in f for f in failures(lv_conf, bad, port, inis))
 
 
 def test_negative_draw_buffers_through_lvgl_are_caught():
