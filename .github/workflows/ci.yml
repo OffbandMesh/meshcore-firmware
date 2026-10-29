@@ -223,6 +223,11 @@ jobs:
       - name: BLE trace only in GUI diag envs
         run: python scripts/test_ble_trace_envs.py
 
+      # #1738: LVGL's objects in PSRAM on the ESP32 GUI builds. Through plain malloc
+      # every one landed in internal RAM, leaving no room for Wi-Fi beside BLE (#1891).
+      - name: LVGL allocator on PSRAM
+        run: python scripts/test_lvgl_alloc_wiring.py
+
       # #1434: the T-Deck GUI env. Display, SD and radio share one SPI bus, so the
       # radio must reach it through ESP-IDF (EspSharedSpiHal on SPI2), never an Arduino
       # SPIClass that would take the pins from the display and card. Pins from LilyGo's

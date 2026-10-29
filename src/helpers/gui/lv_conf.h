@@ -11,11 +11,19 @@
 #define LV_COLOR_16_SWAP 1
 
 // LVGL objects come from the system heap, so the [mem] telemetry counts them.
+// #1738: on the ESP32 builds they go to PSRAM first (LvAlloc.h says why).
 #define LV_MEM_CUSTOM 1
+#if defined(ARDUINO_ARCH_ESP32) && !defined(OFFBAND_NATIVE_LVGL)
+#define LV_MEM_CUSTOM_INCLUDE "LvAlloc.h"
+#define LV_MEM_CUSTOM_ALLOC offband_lv_alloc
+#define LV_MEM_CUSTOM_FREE offband_lv_free
+#define LV_MEM_CUSTOM_REALLOC offband_lv_realloc
+#else
 #define LV_MEM_CUSTOM_INCLUDE <stdlib.h>
 #define LV_MEM_CUSTOM_ALLOC malloc
 #define LV_MEM_CUSTOM_FREE free
 #define LV_MEM_CUSTOM_REALLOC realloc
+#endif
 
 #ifdef OFFBAND_NATIVE_LVGL
 // #1671: the native LVGL tests (env:native_lvgl) advance the tick themselves
