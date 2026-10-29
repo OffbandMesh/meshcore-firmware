@@ -98,10 +98,16 @@ features:
     roles: [companion-observer]
     boards: [heltec_v3, heltec_v4, heltec_v4_r8, heltec_rcc6, xiao_s3_wio]
     availability: {channel: development, verified_releases: []}
-    verification: discover.neighbors and discover.scopes checked against source and native tests only; not in any release, no on-air or hardware trial. The published /neighbors report arrives with Epic 1399; the guide is published when a release carries the feature.
+    verification: discover.neighbors, discover.scopes, the CoreScope /neighbors report and the mqtt.neighbors settings checked against source, native tests and a golden report fed through CoreScope's ingest rules only; not in any release, no on-air, hardware or live-broker trial. The guide is published when a release carries the feature.
     evidence:
       - path: src/helpers/wifi_observer/NeighborsCli.cpp
-        contains: ['discover.neighbors: request queued', 'discover.scopes: querying %d neighbors, one at a time (up to 20 s each)']
+        contains: ['discover.neighbors: request queued', 'discover.scopes: querying %d neighbors, one at a time (up to 20 s each)', 'mqtt.neighbors = on, every %u h', 'nbr: on, every %u h, %s%s, last %s']
+      - path: src/helpers/wifi_observer/NeighborsReport.h
+        contains: ['constexpr size_t kNeighborsReportMax = 10240;']
+      - path: src/helpers/wifi_observer/NeighborsSchedule.h
+        contains: ['constexpr uint16_t kNeighborsIntervalMinHours = 12;', 'constexpr uint16_t kNeighborsIntervalMaxHours = 336;', 'constexpr uint16_t kNeighborsIntervalDefaultHours = 24;']
+      - path: src/helpers/wifi_observer/MqttBrokerPool.cpp
+        contains: ['formatTopic(topic, topic_size, "neighbors", ctx);']
       - path: src/helpers/wifi_observer/ObserverNeighbors.h
         contains: ['constexpr uint8_t kAnonReqTypeRegions = 0x01;', 'constexpr uint32_t kRegionQueryTimeoutMs = 20000;']
       - path: src/helpers/wifi_observer/CliPassthrough.cpp
