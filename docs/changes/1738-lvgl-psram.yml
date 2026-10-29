@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1738
+impact: none
+reason: LVGL's objects move from internal RAM to PSRAM on the ESP32 GUI builds, falling back to internal RAM when PSRAM can't serve a request. Nothing a user sees, sets or does changes; it frees internal RAM for the radios. The public manual does not describe memory use, so no guide changes.
