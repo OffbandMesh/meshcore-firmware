@@ -210,6 +210,11 @@ jobs:
       - name: R8 TFT GUI env pins
         run: python scripts/test_r8_tft_gui_env.py
 
+      # #1830: the BLE trace that hunts the advertising loss (#1828) rides in the GUI
+      # diag envs only. A release env carrying it logs every BLE event to every user.
+      - name: BLE trace only in GUI diag envs
+        run: python scripts/test_ble_trace_envs.py
+
       # #1434: the T-Deck GUI env. Display, SD and radio share one SPI bus, so the
       # radio must reach it through ESP-IDF (EspSharedSpiHal on SPI2), never an Arduino
       # SPIClass that would take the pins from the display and card. Pins from LilyGo's
@@ -238,6 +243,11 @@ jobs:
       # build, rebooted the T-Deck on every Send advert. Child 1+ is checked first.
       - name: GUI styles on children a layout may not build
         run: python scripts/test_gui_child_styles.py
+
+      # #1865: adding a channel from the client wrote it over Public. cmdSetChannel
+      # refuses a different channel into an occupied slot; this keeps it wired.
+      - name: Channel slot guard wired into cmdSetChannel
+        run: python scripts/test_channel_slot_guard_wiring.py
 
       # #1625: which preflashed channels ship quiet. A silent channel and a channel that
       # made no choice are one byte apart, and swapping them is invisible until a badge is

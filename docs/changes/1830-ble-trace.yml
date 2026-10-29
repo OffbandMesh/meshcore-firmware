@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1830
+impact: none
+reason: The BLE trace is compiled only into the two GUI diag envs (OFFBAND_BLE_TRACE), and adds [ble-trace] log lines for diagnosing a lost BLE advertisement. Release images are unchanged, nothing a user sees or configures changes, and the public manual does not cover diag builds or their logs, so no guide changes.
