@@ -1993,32 +1993,11 @@ void MyMesh::begin(bool has_display) {
   addChannel("Public", PUBLIC_GROUP_PSK); // pre-configure Andy's public channel
   const bool had_stored_channels = _store->hasChannels();   // #1364: asked BEFORE the load
   _store->loadChannels(this);
-  // #1896: Public can't be lost. The load replays every stored slot over the seed
-  // above, so a radio that lost Public under older firmware would never get it
-  // back; put it in its slot, or the first empty one (boot displaces nothing).
-  {
-    ChannelDetails ch;
-    const int slot = offband::publicRepairSlot(
-        MAX_GROUP_CHANNELS,
-        // The rule reads each slot before asking for the next, so one buffer serves.
-        [&](int i, const char** name, const uint8_t** secret) {
-          if (!getChannel(i, ch)) return false;
-          *name = ch.name;
-          *secret = ch.channel.secret;
-          return true;
-        },
-        offband::kPublicChannelKey);
-    if (slot >= 0) {
-      ChannelDetails pub;
-      memset(&pub, 0, sizeof pub);
-      StrHelper::strncpy(pub.name, "Public", sizeof pub.name);
-      memcpy(pub.channel.secret, offband::kPublicChannelKey, 16);
-      if (setChannel(slot, pub)) {
-        saveChannels();
-        mesh_log_line(MLOG_BOOT, "[chan] Public restored at boot in slot %d\n", slot);
-      }
-    }
-  }
+  // #1896: every radio boots with Public in slot 0. The load replays every stored
+  // slot over the seed above, so a radio whose slot 0 was taken, or that lost
+  // Public, under older firmware would stay that way; this heals it, moving
+  // (never wiping) whatever channel held slot 0. A radio already right writes nothing.
+  placePublicInSlot0(nullptr, false);
 
 #ifdef OFFBAND_GUI
   // #1463: the message store, in PSRAM, loaded from flash. Without PSRAM it
@@ -4979,8 +4958,8 @@ CmdResult MyMesh::cmdSetChannel(uint8_t idx, const char* name, const uint8_t sec
 
   // #1865: never put a different channel over one already in the slot. The
   // caller cannot know what a slot holds; changing a key is clear-then-add.
-  // #1896: never clear Public, whichever client or screen asks, and Public goes
-  // only into its own slot, displacing whatever is there.
+  // #1896: slot 0 is Public's: Public is never cleared, goes nowhere else, and
+  // no other channel goes into slot 0.
   const offband::SlotWrite verdict =
       got ? offband::slotWriteDecision(idx, before.name, before.channel.secret, name, secret,
                                        offband::kPublicChannelKey)
@@ -4988,11 +4967,16 @@ CmdResult MyMesh::cmdSetChannel(uint8_t idx, const char* name, const uint8_t sec
   if (verdict != offband::SlotWrite::Write) {
     const char* what = verdict == offband::SlotWrite::RefusePublic       ? "clearing Public"
                        : verdict == offband::SlotWrite::RefusePublicSlot ? "Public outside its slot"
+                       : verdict == offband::SlotWrite::RefuseReserved   ? "another channel in Public's slot"
                                                                           : "overwrite";
     mesh_log_line(MLOG_BOOT, "[chan] refused %s slot=%u\n", what, (unsigned)idx);
     return CmdResult::Occupied;
   }
-  const bool writing_public = name[0] != 0 && memcmp(secret, offband::kPublicChannelKey, 16) == 0;
+  // #1896: Public into its slot moves whatever is there rather than wiping it.
+  if (name[0] != 0 && idx == offband::kPublicSlot) {
+    placePublicInSlot0(name, true);
+    return CmdResult::Ok;
+  }
 
   ChannelDetails channel;
   StrHelper::strncpy(channel.name, name, 32);
@@ -5009,45 +4993,121 @@ CmdResult MyMesh::cmdSetChannel(uint8_t idx, const char* name, const uint8_t sec
                             memcmp(before.channel.secret, secret, 16) == 0;
   channel.tune = offband::channelTuneAfterEdit(was_empty, same_channel, before.tune);
   if (!setChannel(idx, channel)) return CmdResult::NotFound;
-  int public_moved_from = -1;
-  if (writing_public && idx == offband::kPublicSlot) {
-    // #1896: Public now lives in its slot, so an older radio's copy elsewhere
-    // goes: one Public, never two. Cleared here, past the guard, because the
-    // guard refuses any clear of Public.
-    ChannelDetails other;
-    for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
-      if (i == offband::kPublicSlot || !getChannel(i, other) || other.name[0] == 0) continue;
-      if (!offband::slotHoldsKey(other.channel.secret, offband::kPublicChannelKey)) continue;
-      public_moved_from = i;
-      memset(&other, 0, sizeof other);
-      setChannel(i, other);
-      mesh_log_line(MLOG_BOOT, "[chan] Public moved to slot %u from slot %d\n",
-                    (unsigned)offband::kPublicSlot, i);
-    }
-  }
-  if (!was_empty && !same_channel && name[0] != 0) {
-    mesh_log_line(MLOG_BOOT, "[chan] Public displaced the channel in slot %u\n", (unsigned)idx);
-  }
   saveChannels();
 #ifdef OFFBAND_GUI
   // A channel the app adds is in Chats straight away, before its first
   // message (#1741).
   if (name[0] != 0) guiThreadForChannel(idx);
   // A newly joined channel takes the default notification mode (#1457); an
-  // edit of an existing one keeps the mode it has. Public displacing another
-  // channel (#1896) is a join, not an edit of that channel.
-  if ((was_empty || !same_channel) && name[0] != 0) {
+  // edit of an existing one keeps the mode it has.
+  if (was_empty && name[0] != 0) {
     _prefs.gui.onChannelJoined(idx);
-    // Public moved here from another slot keeps the mode it had there.
-    if (public_moved_from >= 0) {
-      _prefs.gui.setChannelMode(idx, _prefs.gui.channelMode(uint8_t(public_moved_from)));
-    }
     savePrefs();
   }
-#else
-  (void)public_moved_from;
 #endif
   return CmdResult::Ok;
+}
+
+// #1896: Public into slot 0, and one Public on the radio (owner, 2026-10-28:
+// slot 0 "should always remain public"; "move don't wipe"). The channel found
+// in slot 0 moves to the slot Public leaves, or the first empty one; only a
+// full table with no Public leaves it nowhere. A tune and a notification mode
+// travel with their channel. `name` renames Public (nullptr keeps its name, or
+// "Public"); `live` is false at boot, before the GUI's message store exists.
+// Returns whether anything changed, so an already-correct boot writes nothing.
+bool MyMesh::placePublicInSlot0(const char* name, bool live) {
+  const uint8_t* key = offband::kPublicChannelKey;
+  const int s0 = offband::kPublicSlot;
+  ChannelDetails at0;
+  const bool got0 = getChannel(s0, at0);
+  const bool zero_used = got0 && at0.name[0] != 0;
+  const bool zero_public = zero_used && offband::slotHoldsKey(at0.channel.secret, key);
+  bool changed = false;
+#ifdef OFFBAND_GUI
+  const offband::gui::NotifyMode zero_mode = _prefs.gui.channelMode(uint8_t(s0));
+#endif
+
+  if (zero_public) {
+    if (name && name[0] && strcmp(at0.name, name) != 0) {   // a rename; tune and mode stay
+      StrHelper::strncpy(at0.name, name, sizeof(at0.name));
+      setChannel(s0, at0);
+      changed = true;
+    }
+  } else {
+    ChannelDetails scratch;
+    const int dest = offband::slotZeroDestination(
+        MAX_GROUP_CHANNELS,
+        // The rule reads each slot before asking for the next, so one buffer serves.
+        [&](int i, const char** n, const uint8_t** s) {
+          if (!getChannel(i, scratch)) return false;
+          *n = scratch.name;
+          *s = scratch.channel.secret;
+          return true;
+        },
+        key);
+    ChannelDetails old_public;
+    const bool public_was_at_dest = dest >= 0 && getChannel(dest, old_public) && old_public.name[0] != 0 &&
+                                    offband::slotHoldsKey(old_public.channel.secret, key);
+
+    ChannelDetails pub;
+    memset(&pub, 0, sizeof pub);
+    const char* pub_name = name && name[0] ? name : (public_was_at_dest ? old_public.name : "Public");
+    StrHelper::strncpy(pub.name, pub_name, sizeof(pub.name));
+    memcpy(pub.channel.secret, key, 16);
+    pub.tune = public_was_at_dest ? old_public.tune : offband::kChannelTuneUnset;
+#ifdef OFFBAND_GUI
+    const offband::gui::NotifyMode public_mode =
+        public_was_at_dest ? _prefs.gui.channelMode(uint8_t(dest)) : offband::gui::NotifyMode(_prefs.gui.notify_default);
+#endif
+    setChannel(s0, pub);
+
+    if (zero_used) {
+      if (dest >= 0) {
+        setChannel(dest, at0);   // moved whole: name, key, tune
+#ifdef OFFBAND_GUI
+        _prefs.gui.setChannelMode(uint8_t(dest), zero_mode);
+#endif
+        mesh_log_line(MLOG_BOOT, "[chan] '%s' moved from slot 0 to slot %d for Public\n", at0.name, dest);
+      } else {
+        mesh_log_line(MLOG_BOOT, "[chan] '%s' in slot 0 lost: no empty slot to move it to\n", at0.name);
+      }
+    } else if (public_was_at_dest) {
+      ChannelDetails empty;
+      memset(&empty, 0, sizeof empty);
+      setChannel(dest, empty);
+    }
+#ifdef OFFBAND_GUI
+    _prefs.gui.setChannelMode(uint8_t(s0), public_mode);
+#endif
+    if (public_was_at_dest) mesh_log_line(MLOG_BOOT, "[chan] Public moved to slot 0 from slot %d\n", dest);
+    else mesh_log_line(MLOG_BOOT, "[chan] Public placed in slot 0\n");
+    changed = true;
+  }
+
+  // One Public: any other copy is cleared, past the guard (which refuses it).
+  ChannelDetails other;
+  for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+    if (i == s0 || !getChannel(i, other) || other.name[0] == 0) continue;
+    if (!offband::slotHoldsKey(other.channel.secret, key)) continue;
+    memset(&other, 0, sizeof other);
+    setChannel(i, other);
+    mesh_log_line(MLOG_BOOT, "[chan] duplicate Public cleared from slot %d\n", i);
+    changed = true;
+  }
+
+  if (!changed) return false;
+  saveChannels();
+#ifdef OFFBAND_GUI
+  savePrefs();
+  if (live) {
+    for (int i = 0; i < MAX_GROUP_CHANNELS; i++) {
+      if (getChannel(i, other) && other.name[0] != 0) guiThreadForChannel(uint8_t(i));
+    }
+  }
+#else
+  (void)live;
+#endif
+  return true;
 }
 
 #if defined(OFFBAND_GPS_POWER_SAVE)

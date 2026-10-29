@@ -82,13 +82,19 @@ def public_failures(mymesh, channels):
     out = []
     code = strip_comments(mymesh)
     body = function_body(code, "CmdResult MyMesh::cmdSetChannel(") or ""
-    if not re.search(r"if\s*\(\s*writing_public\s*&&\s*idx\s*==\s*offband::kPublicSlot\s*\)\s*\{"
-                     r"[^}]*?slotHoldsKey\(\s*other\.channel\.secret\s*,\s*offband::kPublicChannelKey\s*\)", body, re.S):
-        out.append("cmdSetChannel() no longer clears an older copy of Public when Public goes to its slot")
+    hand_off = re.search(r"if\s*\(\s*name\[0\]\s*!=\s*0\s*&&\s*idx\s*==\s*offband::kPublicSlot\s*\)\s*\{"
+                         r"\s*placePublicInSlot0\(\s*name\s*,\s*true\s*\)\s*;\s*return\s+CmdResult::Ok\s*;", body)
+    if not hand_off or hand_off.start() > body.find("setChannel(idx"):
+        out.append("cmdSetChannel() no longer hands Public's slot to placePublicInSlot0() before writing")
+    place = function_body(code, "bool MyMesh::placePublicInSlot0(") or ""
+    if "offband::slotZeroDestination(" not in place or not re.search(r"setChannel\(\s*dest\s*,\s*at0\s*\)", place):
+        out.append("placePublicInSlot0() no longer moves slot 0's channel: it would be wiped")
+    if not re.search(r"for\s*\([^)]*\)\s*\{[^}]*?slotHoldsKey\(\s*other\.channel\.secret\s*,\s*key\s*\)", place, re.S):
+        out.append("placePublicInSlot0() no longer clears an older copy of Public")
     load = code.find("_store->loadChannels(this);")
-    repair = code.find("offband::publicRepairSlot(")
-    if load < 0 or repair < 0 or repair < load:
-        out.append("begin() no longer restores a lost Public after loading the stored channels")
+    heal = code.find("placePublicInSlot0(nullptr, false);")
+    if load < 0 or heal < 0 or heal < load:
+        out.append("begin() no longer heals Public into slot 0 after loading the stored channels")
     ch = strip_comments(channels)
     join = function_body(ch, "int GuiShell::chanJoin(") or ""
     if not re.search(r"memcmp\(\s*key\s*,\s*offband::kPublicChannelKey\s*,\s*kChannelKeyLen\s*\)\s*==\s*0\s*\)"
@@ -184,16 +190,28 @@ def test_the_public_sites_are_wired():
     assert not got, "\n".join(got)
 
 
+def test_negative_no_hand_off_to_the_mover_is_caught():
+    mymesh, channels = _public_real()
+    bad = mymesh.replace("placePublicInSlot0(name, true);", "(void)0;", 1)
+    assert any("hands Public's slot" in f for f in public_failures(bad, channels))
+
+
+def test_negative_wiping_instead_of_moving_is_caught():
+    mymesh, channels = _public_real()
+    bad = mymesh.replace("setChannel(dest, at0);", "(void)dest;", 1)
+    assert any("would be wiped" in f for f in public_failures(bad, channels))
+
+
 def test_negative_no_clearing_of_older_public_copies_is_caught():
     mymesh, channels = _public_real()
-    bad = mymesh.replace("if (writing_public && idx == offband::kPublicSlot) {", "if (false) {", 1)
+    bad = mymesh.replace("if (!offband::slotHoldsKey(other.channel.secret, key)) continue;", "continue;", 1)
     assert any("older copy of Public" in f for f in public_failures(bad, channels))
 
 
-def test_negative_no_boot_repair_is_caught():
+def test_negative_no_boot_heal_is_caught():
     mymesh, channels = _public_real()
-    bad = mymesh.replace("offband::publicRepairSlot(", "offband::publicRepairSlotX(", 1)
-    assert any("restores a lost Public" in f for f in public_failures(bad, channels))
+    bad = mymesh.replace("placePublicInSlot0(nullptr, false);", "", 1)
+    assert any("heals Public" in f for f in public_failures(bad, channels))
 
 
 def test_negative_chanjoin_without_publics_slot_is_caught():

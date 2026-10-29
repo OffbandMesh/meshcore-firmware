@@ -263,14 +263,18 @@ its key, not its name: renaming it is still allowed. A client should not offer
 to delete or leave Public, and should treat a name of "Public" (any case, with
 or without `#`) as Public itself, never as a `#public` hashtag channel.
 
-**Public lives in slot 0 (Offband, #1896)**: set Public at index 0. Written
-there, it replaces whatever channel slot 0 held, and any copy of Public in
-another slot is cleared, so a radio has one Public. Public written to any other
-index is refused with `ERR_CODE_BAD_STATE`, unless that index already holds it
-(an older radio's Public, renamed in place). Another channel over slot 0 while
-it holds Public is refused like any occupied slot. A radio that boots with no
-Public (lost under older firmware) gets it back: in slot 0 if that is empty,
-otherwise the first empty slot. Boot never replaces a channel.
+**Slot 0 is always Public (Offband, #1896)**: index 0 is reserved for Public.
+- Any other channel written to index 0 is refused with `ERR_CODE_BAD_STATE`,
+  even while it is empty. Choose new channels from index 1 up.
+- Public written to index 0 is accepted. A channel found there is **moved**, not
+  erased: to the slot Public leaves if Public was elsewhere (a swap), else to the
+  first empty slot. Any other copy of Public is cleared, so a radio has one.
+- Public written to any other index is refused with `ERR_CODE_BAD_STATE`.
+- Every boot heals the table the same way, so a radio whose slot 0 was taken
+  under older firmware comes up with Public in slot 0 and its other channel
+  moved. Re-read the channel list after connecting; slots may have changed.
+- Only a full table with no Public leaves the channel in slot 0 nowhere to go;
+  then it is lost.
 
 **Example** (create channel "YourChannelName" at index 1 with secret):
 ```

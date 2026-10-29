@@ -85,7 +85,7 @@ void formatChannelKey(const uint8_t key[kChannelKeyLen], char* out, size_t n) {
 }
 
 int firstFreeChannelSlot(const ChannelSlot* slots, int count) {
-  for (int i = 0; slots && i < count; i++) {
+  for (int i = 1; slots && i < count; i++) {   // 0 is Public's (#1896)
     if (!slots[i].used) return i;
   }
   return -1;

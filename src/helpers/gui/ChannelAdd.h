@@ -61,7 +61,8 @@ struct ChannelSlot {
   uint8_t key[kChannelKeyLen];
 };
 
-// The first unused slot, or -1 when all `count` are in use.
+// The first unused slot, or -1 when all `count` are in use. Never slot 0: it is
+// Public's, even while empty (#1896), and the radio refuses anything else there.
 int firstFreeChannelSlot(const ChannelSlot* slots, int count);
 
 // The slot already holding this key, or -1. The key is what makes a channel
