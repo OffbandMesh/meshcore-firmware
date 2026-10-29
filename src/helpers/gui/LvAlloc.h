@@ -23,6 +23,9 @@ extern "C" {
 void* offband_lv_alloc(size_t size);
 void offband_lv_free(void* p);
 void* offband_lv_realloc(void* p, size_t size);
+// How many LVGL allocations PSRAM couldn't serve, so went to internal RAM:
+// the [mem] line prints it, since that fallback is otherwise silent.
+unsigned offband_lv_fallbacks(void);
 
 #ifdef __cplusplus
 }

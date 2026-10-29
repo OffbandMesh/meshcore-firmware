@@ -879,11 +879,21 @@ static void emitRadioStatusLine() {
 #ifndef OFFBAND_MEM_TELEMETRY_MS
   #define OFFBAND_MEM_TELEMETRY_MS 30000
 #endif
+#ifdef OFFBAND_GUI
+// #1738: LVGL lives in PSRAM; lv_int counts the allocations that fell back to
+// internal RAM because PSRAM couldn't serve them.
+#include <helpers/gui/LvAlloc.h>
+#define MEM_LV_FMT " lv_int=%u"
+#define MEM_LV_ARG , offband_lv_fallbacks()
+#else
+#define MEM_LV_FMT ""
+#define MEM_LV_ARG
+#endif
 
 static void emitMemStatusLine() {
   mesh_log_line(MLOG_BOOT,
                 "[mem] up=%lus link=%d int free=%u min=%u largest=%u "
-                "psram free=%u min=%u largest=%u fs used=%luK total=%luK\n",
+                "psram free=%u min=%u largest=%u fs used=%luK total=%luK" MEM_LV_FMT "\n",
                 (unsigned long)(millis() / 1000UL),
                 (int)interface_manager.isConnected(),
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
@@ -893,7 +903,7 @@ static void emitMemStatusLine() {
                 (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM),
                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
                 (unsigned long)store.getStorageUsedKb(),
-                (unsigned long)store.getStorageTotalKb());
+                (unsigned long)store.getStorageTotalKb() MEM_LV_ARG);
 }
 #endif
 
