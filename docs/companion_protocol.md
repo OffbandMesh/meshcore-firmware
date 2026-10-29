@@ -245,6 +245,17 @@ Bytes 34-49: Secret (16 bytes)
 - For **private channels**: 16-byte secret
 - For **public channels**: All zeros (0x00)
 
+**Occupied slots (Offband, #1865)**: a write that would put a *different* channel
+(a different secret) into a slot that already holds one is refused with
+`RESP_CODE_ERR` / `ERR_CODE_BAD_STATE` (4), and nothing changes. Allowed: a write
+to an empty slot (empty name), a write with the secret the slot already holds (a
+rename, or a re-add), and a clear (empty name; the stored secret is zeroed
+whatever the frame carries). "The same secret" means all 32 stored bytes, so a
+slot holding a 256-bit key is never replaced by a 16-byte write. To change a
+channel's secret, clear the slot first, then set it. `ERR_CODE_BAD_STATE` is also
+this firmware's answer to other commands sent at the wrong moment; on
+`CMD_SET_CHANNEL` it means only this.
+
 **Example** (create channel "YourChannelName" at index 1 with secret):
 ```
 20 01 53 4D 53 00 00 ... (name padded to 32 bytes)
@@ -452,15 +463,17 @@ Byte 0: 0x14
 ### Channel Lifecycle
 
 1. **Set Channel**:
-    - Fetch all channel slots, and find one with empty name and all-zero secret
+    - Fetch all channel slots, and find one with an empty name
+      (finish fetching every slot before choosing one)
     - Generate or provide a 16-byte secret
     - Send `CMD_SET_CHANNEL` with name and a 16-byte secret
+    - `ERR_CODE_BAD_STATE` means the slot holds another channel: nothing was written
 2. **Get Channel**:
     - Send `CMD_GET_CHANNEL` with channel index
     - Parse `RESP_CODE_CHANNEL_INFO` response
 3. **Delete Channel**:
     - Send `CMD_SET_CHANNEL` with empty name and all-zero secret
-    - Or overwrite with a new channel
+    - Offband refuses overwriting with a different channel (#1865): delete, then set
 
 ---
 
