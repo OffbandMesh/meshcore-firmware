@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1896
+impact: none
+reason: Slot 0 is always the Public channel. The radio refuses to clear Public, refuses any other channel in slot 0, and heals every radio at boot so Public is in slot 0, moving (not erasing) a channel it finds there; joining Public does the same. The device GUI offers no Leave on Public, never offers slot 0 for a new channel, and typing "public" in its hashtag join joins the real Public. No new screens or wording. The public manual does not describe channel add, leave or slots, so no guide changes; the protocol rules are recorded for app authors in docs/companion_protocol.md (Set Channel).

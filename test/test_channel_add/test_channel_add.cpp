@@ -171,6 +171,14 @@ TEST(ChannelSlots, TheFirstFreeSlotIsUsed) {
   EXPECT_EQ(2, usedChannelSlots(s, 4));
 }
 
+TEST(ChannelSlots, SlotZeroIsNeverOfferedEvenWhenEmpty) {
+  // #1896: slot 0 is Public's.
+  ChannelSlot s[3] = {slot(false, 0), slot(true, 2), slot(false, 0)};
+  EXPECT_EQ(2, firstFreeChannelSlot(s, 3));
+  ChannelSlot only0[2] = {slot(false, 0), slot(true, 2)};
+  EXPECT_EQ(-1, firstFreeChannelSlot(only0, 2));
+}
+
 TEST(ChannelSlots, AllFullHasNoFreeSlot) {
   ChannelSlot s[40];
   for (int i = 0; i < 40; i++) s[i] = slot(true, uint8_t(i));
@@ -195,6 +203,32 @@ TEST(ChannelSlots, AnUnusedSlotIsNeverAMatch) {
   memset(key, 0x44, sizeof key);
   EXPECT_EQ(-1, findChannelByKey(s, 3, key));
   EXPECT_EQ(-1, findChannelByKey(s, 3, nullptr));
+}
+
+// #1896: "Public" typed into the hashtag join is the real Public, never a
+// #public hashtag channel (owner, 2026-10-28).
+TEST(NamesPublic, PublicInAnyCaseWithOrWithoutHashIsPublic) {
+  EXPECT_TRUE(namesPublic("Public"));
+  EXPECT_TRUE(namesPublic("public"));
+  EXPECT_TRUE(namesPublic("PUBLIC"));
+  EXPECT_TRUE(namesPublic("#Public"));
+  EXPECT_TRUE(namesPublic("##public"));
+  EXPECT_TRUE(namesPublic("  #public  "));
+}
+
+TEST(NamesPublic, OtherNamesAreNot) {
+  EXPECT_FALSE(namesPublic("publics"));
+  EXPECT_FALSE(namesPublic("publi"));
+  EXPECT_FALSE(namesPublic("pub lic"));
+  EXPECT_FALSE(namesPublic("#publicchat"));
+  EXPECT_FALSE(namesPublic("qcchams"));
+  EXPECT_FALSE(namesPublic("public1"));
+}
+
+TEST(NamesPublic, NothingIsNot) {
+  EXPECT_FALSE(namesPublic(""));
+  EXPECT_FALSE(namesPublic("#"));
+  EXPECT_FALSE(namesPublic(nullptr));
 }
 
 int main(int argc, char** argv) {

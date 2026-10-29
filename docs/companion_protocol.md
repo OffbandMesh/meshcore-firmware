@@ -254,7 +254,27 @@ whatever the frame carries). "The same secret" means all 32 stored bytes, so a
 slot holding a 256-bit key is never replaced by a 16-byte write. To change a
 channel's secret, clear the slot first, then set it. `ERR_CODE_BAD_STATE` is also
 this firmware's answer to other commands sent at the wrong moment; on
-`CMD_SET_CHANNEL` it means only this.
+`CMD_SET_CHANNEL` it means only this, or the Public refusal below.
+
+**Public can't be cleared (Offband, #1896)**: a clear (empty name) of the slot
+holding Public's key (`8b3387e9c5cdea6ac9e5edbaa115cd72`) is refused with
+`RESP_CODE_ERR` / `ERR_CODE_BAD_STATE` (4), and Public stays. Public is known by
+its key, not its name: renaming it is still allowed. A client should not offer
+to delete or leave Public, and should treat a name of "Public" (any case, with
+or without `#`) as Public itself, never as a `#public` hashtag channel.
+
+**Slot 0 is always Public (Offband, #1896)**: index 0 is reserved for Public.
+- Any other channel written to index 0 is refused with `ERR_CODE_BAD_STATE`,
+  even while it is empty. Choose new channels from index 1 up.
+- Public written to index 0 is accepted. A channel found there is **moved**, not
+  erased: to the slot Public leaves if Public was elsewhere (a swap), else to the
+  first empty slot. Any other copy of Public is cleared, so a radio has one.
+- Public written to any other index is refused with `ERR_CODE_BAD_STATE`.
+- Every boot heals the table the same way, so a radio whose slot 0 was taken
+  under older firmware comes up with Public in slot 0 and its other channel
+  moved. Re-read the channel list after connecting; slots may have changed.
+- Only a full table with no Public leaves the channel in slot 0 nowhere to go;
+  then it is lost.
 
 **Example** (create channel "YourChannelName" at index 1 with secret):
 ```
