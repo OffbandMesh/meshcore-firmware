@@ -111,7 +111,7 @@ int buildNeighborsJson(char* buf, size_t buf_size, const NeighborsReportInput& i
     if (buf == nullptr || buf_size == 0) return -1;
 
     // Escaping at most doubles a string; each buffer holds its whole field escaped.
-    char origin[80], origin_id[80], ts[40], self_raw[kScopesLen], self_scopes[kScopesLen * 2], def_scope[80];
+    char origin[80], origin_id[80], ts[40], self_raw[kSelfScopesLen], self_scopes[kSelfScopesLen * 2], def_scope[80];
     escapeJson(in.origin, origin, sizeof(origin));
     escapeJson(in.origin_id, origin_id, sizeof(origin_id));
     escapeJson(in.timestamp, ts, sizeof(ts));

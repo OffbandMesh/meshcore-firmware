@@ -181,6 +181,8 @@ const char* MyMesh::getDefaultScopeName() {
 }
 
 static_assert(MAX_NEIGHBOURS > 0, "the /neighbors report counts the neighbor table (getNeighbourCount)");
+static_assert(MyMesh::FLOOD_SCOPES_MAX <= (int)offband::kSelfScopesLen,
+              "the self report lists the whole regions answer, uncut (#1905)");
 
 void MyMesh::configureNeighborsSchedule(bool enabled, uint16_t interval_hours) {
   _nbr_schedule.configure(enabled, offband::neighborsIntervalMs(interval_hours));
