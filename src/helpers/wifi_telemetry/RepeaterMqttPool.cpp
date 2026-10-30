@@ -110,7 +110,10 @@ __attribute__((used)) static void _repeaterMqttPoolLinkProof() {
     pool.loop(0);
     (void)pool.publish(nullptr, 0);
 #if defined(OFFBAND_NEIGHBORS_REPORT)
-    (void)pool.neighborsReady(nullptr);   // #1906: the /neighbors path links too
+    // #1906: the /neighbors path links too, the report builder included.
+    static offband::NeighborsReportInput report{};
+    (void)pool.neighborsReady(nullptr);
+    (void)pool.publishNeighbors(report);
 #endif
     pool.shutdown();
 }
