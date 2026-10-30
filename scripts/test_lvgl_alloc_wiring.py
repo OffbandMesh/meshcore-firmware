@@ -63,6 +63,10 @@ def impl_failures(impl):
         at_psram, at_internal = text.find("kPsram"), text.find("kInternal")
         if "Preferring(" not in text or at_psram < 0 or at_internal < 0 or at_psram > at_internal:
             out.append("hw/LvAlloc.cpp: %s does not ask PSRAM first, then internal RAM" % fn)
+        # The [mem] line's lv_int is the only sign LVGL fell back to internal RAM.
+        fallback_lambda = re.search(r"\{([^{}]*)kInternal[^{}]*\}", text)
+        if not fallback_lambda or "s_fallbacks++" not in fallback_lambda.group(1):
+            out.append("hw/LvAlloc.cpp: %s does not count its fallback to internal RAM" % fn)
     free_body = re.search(r"offband_lv_free\s*\([^)]*\)\s*\{([^}]*)\}", code)
     if not free_body or "heap_caps_free" not in free_body.group(1):
         out.append("hw/LvAlloc.cpp: offband_lv_free does not use heap_caps_free")
@@ -157,6 +161,14 @@ def test_negative_both_heaps_internal_is_caught():
     got = failures(lv_conf, bad, port, inis)
     assert any("offband_lv_alloc does not ask PSRAM first" in f for f in got), got
     assert any("offband_lv_realloc does not ask PSRAM first" in f for f in got), got
+
+
+def test_negative_fallback_not_counted_is_caught():
+    lv_conf, impl, port, inis = _real()
+    bad = impl.replace("s_fallbacks++; ", "")
+    got = failures(lv_conf, bad, port, inis)
+    assert any("offband_lv_alloc does not count" in f for f in got), got
+    assert any("offband_lv_realloc does not count" in f for f in got), got
 
 
 def test_negative_free_not_heap_caps_is_caught():

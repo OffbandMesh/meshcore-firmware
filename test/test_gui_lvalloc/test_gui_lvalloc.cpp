@@ -89,6 +89,18 @@ TEST(LvAlloc, ReallocToZeroIsNotRetried) {
   EXPECT_EQ(0, c.fallback);   // the block is already freed: a retry would be a double free
 }
 
+// realloc(NULL, n) is a malloc: PSRAM first, the fallback only if it fails.
+TEST(LvAlloc, ReallocOfNullAllocates) {
+  void* seenPrefer = psramBlock;
+  void* seenFallback = psramBlock;
+  void* p = reallocPreferring(
+      nullptr, 64, [&](void* q, size_t) { seenPrefer = q; return (void*)nullptr; },
+      [&](void* q, size_t) { seenFallback = q; return (void*)internalBlock; });
+  EXPECT_EQ(internalBlock, p);
+  EXPECT_EQ(nullptr, seenPrefer);
+  EXPECT_EQ(nullptr, seenFallback);
+}
+
 TEST(LvAlloc, ReallocWithBothHeapsFullIsNull) {
   void* p = reallocPreferring(
       psramBlock, 128, [](void*, size_t) { return (void*)nullptr; },
