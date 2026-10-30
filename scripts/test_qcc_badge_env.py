@@ -427,16 +427,29 @@ def test_negative_a_mentioned_but_unset_flag_does_not_pass_as_set():
         "a flag named inside a comment must not read as set"
 
 
+def _shipped_morse_literal():
+    """The blink text exactly as the ini writes it, quotes included.
+
+    Read from the ini rather than restated here: when the text changes (#1887), a copy in
+    this file would stop matching, every replace() below would quietly do nothing, and the
+    negatives would be checking an unmodified ini.
+    """
+    m = re.search(r"-D\s+OFFBAND_BLE_MORSE_TEXT=('[^']*')", _real()[0])
+    assert m, "OFFBAND_BLE_MORSE_TEXT not found in the badge ini"
+    return m.group(1)
+
+
 def test_negative_morse_text_with_punctuation_is_caught():
     _sanity()
+    lit = _shipped_morse_literal()
     _fails_with("contributes NOTHING",
-                ini=_real()[0].replace("'\"I AM NOT WORTHY\"'", "'\"I AM NOT WORTHY!\"'"))
+                ini=_real()[0].replace(lit, lit[:-2] + "!" + lit[-2:]))
 
 
 def test_negative_empty_morse_text_is_caught():
     _sanity()
     _fails_with("wedged loop looks identical",
-                ini=_real()[0].replace("'\"I AM NOT WORTHY\"'", "'\"\"'"))
+                ini=_real()[0].replace(_shipped_morse_literal(), "'\"\"'"))
 
 
 def test_negative_a_renamed_section_is_not_a_silent_pass():

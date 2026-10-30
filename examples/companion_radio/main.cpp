@@ -1081,7 +1081,7 @@ void loop() {
   // cheaper and would have thrown away liveness for the state the badge spends most of its
   // life in.
   //
-  // The two are unmistakable for each other: ~1 Hz blip against a ten-second sentence.
+  // The two are unmistakable for each other: ~1 Hz blip against a sentence many seconds long.
   // Which pattern currently owns the pin. Outside the branches, because the handover in
   // either direction has to know it is a handover.
   static bool s_morse_owns_led = false;
