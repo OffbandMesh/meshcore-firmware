@@ -150,6 +150,11 @@ public:
     bool publish(const char* topic, const uint8_t* payload, size_t len,
                  bool retain, int qos = 1);
 
+    // Bytes still queued in this broker's outbox; 0 with no client. A copy of len
+    // bytes has left the outbox once this is below len (#1399). Call it only while
+    // Up: esp-mqtt holds the lock it takes through a reconnect, handshake included.
+    int outboxBytes();
+
     // Build a payload context for fan-out callers.
     void fillPayloadCtx(MqttPayloadCtx& ctx,
                         const char* global_iata,

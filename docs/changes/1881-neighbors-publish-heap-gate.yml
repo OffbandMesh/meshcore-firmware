@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1881
+impact: none
+reason: Fixes the companion observer's CoreScope /neighbors report being refused on boards without PSRAM (a Heltec V3 with its brokers up never had the 80 KB the old gate demanded), and queues the report to one broker at a time. The report's content, topic, schedule, settings, defaults and replies are unchanged; only debug-level log lines are new. The behavior exists only in unreleased development builds, and the guide draft kept with the plan (docs/initiatives/regional-operation/observer-neighbors/GUIDE-DRAFT.md) never described the refusal, so no guide text changes.

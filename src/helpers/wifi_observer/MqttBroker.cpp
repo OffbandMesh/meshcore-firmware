@@ -570,6 +570,17 @@ bool MqttBroker::publish(const char* topic, const uint8_t* payload, size_t len,
 #endif
 }
 
+int MqttBroker::outboxBytes() {
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    ClientLockGuard _g(client_lock_);
+    if (client_ == nullptr) return 0;
+    const int n = esp_mqtt_client_get_outbox_size(client_);
+    return n > 0 ? n : 0;
+#else
+    return 0;  // host stub
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // fillPayloadCtx
 // ---------------------------------------------------------------------------
