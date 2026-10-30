@@ -22,11 +22,6 @@ offband::TonePlay genericBuzzer::play(const char *melody, offband::TonePriority 
         return offband::TonePlay::RefusedBusy;
     }
 
-    // The stop stays AHEAD of the quiet check, which is where it has always been. It
-    // means a request arriving while quiet still stops a tune that is still sounding.
-    // That is pre-existing behavior on every board, not a consequence of priorities,
-    // and moving it would change what ~60 variants do -- so it is left alone here and
-    // tracked on its own issue instead.
     if (isPlaying())   // interrupt existing
     {
         rtttl::stop();
@@ -63,6 +58,10 @@ void genericBuzzer::shutdown() {
 
 void genericBuzzer::quiet(bool buzzer_state) {
     _is_quiet = buzzer_state;
+    // Asking for quiet silences what is sounding. A board with no PIN_BUZZER_EN has no
+    // other way to do that, and the tune would otherwise run on until it ended or until
+    // the next request cut it off. A cue that must finish first drains before calling this.
+    if (_is_quiet) stop();
 #ifdef PIN_BUZZER_EN
     if (_is_quiet) {
       digitalWrite(PIN_BUZZER_EN, LOW);
