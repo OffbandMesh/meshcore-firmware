@@ -51,8 +51,8 @@ inline bool neighborsHeapFits(uint32_t free_heap, size_t len) {
 
 // Hands one built report to the connected brokers one at a time, so at most one queued
 // copy is in memory at once: next() offers the next broker only once the previous
-// accepted copy has been sent (prev_sent; the caller reads lastSlot()'s outbox) and the
-// heap fits. Brokers not offered within kNeighborsFanOutDeadlineMs are dropped and
+// accepted copy has left its outbox, sent or expired (prev_sent; the caller reads
+// lastSlot()'s outbox), and the heap fits. Brokers not offered within kNeighborsFanOutDeadlineMs are dropped and
 // counted as skipped, including those still waiting on a copy that never left.
 constexpr uint32_t kNeighborsFanOutDeadlineMs = 60000;
 

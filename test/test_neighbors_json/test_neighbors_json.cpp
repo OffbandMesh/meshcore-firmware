@@ -301,6 +301,32 @@ TEST(NeighborsFanOut, ARefusedCopyDoesNotHoldUpTheNext) {
     EXPECT_EQ(f.next(10, true, false), 1);   // nothing of ours is queued anywhere
 }
 
+TEST(NeighborsFanOut, ARefusalAfterAnAcceptStillWaitsOnTheAcceptedCopy) {
+    offband::NeighborsFanOut f;
+    f.begin(0b111, 0);
+    EXPECT_EQ(f.next(0, true, true), 0);
+    f.result(true);
+    EXPECT_EQ(f.next(10, true, true), 1);
+    f.result(false);                          // broker 1 queued nothing
+    EXPECT_EQ(f.lastSlot(), 0);
+    EXPECT_EQ(f.next(20, true, false), -1);   // broker 0's copy is still queued
+    EXPECT_EQ(f.next(30, true, true), 2);
+}
+
+// Report N+1 must not wait on report N's broker.
+TEST(NeighborsFanOut, BeginForgetsThePreviousReport) {
+    offband::NeighborsFanOut f;
+    f.begin(0b1, 0);
+    EXPECT_EQ(f.next(0, true, true), 0);
+    f.result(true);
+    EXPECT_EQ(f.lastSlot(), 0);
+    f.begin(0b10, 100);
+    EXPECT_EQ(f.lastSlot(), -1);
+    EXPECT_EQ(f.next(100, true, false), 1);
+    f.result(true);   // the result lands on broker 1, not a stale offered slot
+    EXPECT_EQ(f.lastSlot(), 1);
+}
+
 TEST(NeighborsFanOut, DeadlineDropsTheRestAsSkipped) {
     offband::NeighborsFanOut f;
     f.begin(0b111, 0xFFFFF000u);   // across the millis() wrap
