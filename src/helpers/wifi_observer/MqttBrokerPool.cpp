@@ -549,8 +549,7 @@ uint8_t MqttBrokerPool::publishNeighbors(NeighborsReportInput in) {
     char* buf = static_cast<char*>(heap_caps_malloc(cap, MALLOC_CAP_SPIRAM));
 #else
     const size_t cap = neighborsReportCap(false);
-    char* buf = neighborsHeapFits(ESP.getFreeHeap(), OFFBAND_TLS_HEAP_FLOOR_BYTES, cap)
-                    ? static_cast<char*>(malloc(cap)) : nullptr;
+    char* buf = neighborsHeapFits(ESP.getFreeHeap(), cap) ? static_cast<char*>(malloc(cap)) : nullptr;
 #endif
     if (buf == nullptr) {
         mesh_log_line(MLOG_ERROR, "neighbors: no memory for a %u-byte report (free heap %u); not published\n",
@@ -567,6 +566,13 @@ uint8_t MqttBrokerPool::publishNeighbors(NeighborsReportInput in) {
         free(buf);
         return 0;
     }
+#ifndef BOARD_HAS_PSRAM
+    // The buffer is internal heap here and is held until every broker has its copy;
+    // give back what the report did not use.
+    if (char* fitted = static_cast<char*>(realloc(buf, static_cast<size_t>(n) + 1))) buf = fitted;
+#endif
+    mesh_log_line(MLOG_DEBUG, "neighbors: %d-byte report built (free heap %u)\n",
+                  n, (unsigned)ESP.getFreeHeap());
     nbr_buf_ = buf;
     nbr_len_ = static_cast<size_t>(n);
     nbr_fanout_.begin(mask, millis());
@@ -583,8 +589,8 @@ uint8_t MqttBrokerPool::publishNeighbors(NeighborsReportInput in) {
 void MqttBrokerPool::neighborsFanOutTick(uint32_t now_ms) {
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     if (nbr_buf_ == nullptr) return;
-    const bool fits = neighborsHeapFits(ESP.getFreeHeap(), OFFBAND_TLS_HEAP_FLOOR_BYTES, nbr_len_);
-    const int slot = nbr_fanout_.next(now_ms, fits);
+    const uint32_t heap_before = ESP.getFreeHeap();
+    const int slot = nbr_fanout_.next(now_ms, neighborsHeapFits(heap_before, nbr_len_));
     if (slot >= 0) {
         char topic[160];
         bool ok = false;
@@ -592,11 +598,16 @@ void MqttBrokerPool::neighborsFanOutTick(uint32_t now_ms) {
             ok = brokers_[slot].publish(topic, reinterpret_cast<const uint8_t*>(nbr_buf_), nbr_len_,
                                         /*retain=*/true, /*qos=*/0);
         }
-        if (!ok) mesh_log_line(MLOG_ERROR, "neighbors: broker %d did not take the report\n", slot);
+        if (ok) {
+            mesh_log_line(MLOG_DEBUG, "neighbors: broker %d took the report (free heap %u -> %u)\n",
+                          slot, (unsigned)heap_before, (unsigned)ESP.getFreeHeap());
+        } else {
+            mesh_log_line(MLOG_ERROR, "neighbors: broker %d did not take the report\n", slot);
+        }
         nbr_fanout_.result(ok);
     }
     if (!nbr_fanout_.active()) {
-        // A skip is usually free heap held near the TLS floor; it must show in the log.
+        // A skip means a copy never fit in the free heap; it must show in the log.
         mesh_log_line(nbr_fanout_.skipped() > 0 ? MLOG_ERROR : MLOG_DEBUG,
                       "neighbors: %u-byte report queued to %d broker(s), %d skipped\n",
                       (unsigned)nbr_len_, nbr_fanout_.accepted(), nbr_fanout_.skipped());

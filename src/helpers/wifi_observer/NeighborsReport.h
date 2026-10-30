@@ -24,24 +24,27 @@ constexpr size_t kNeighborsReportMax = 10240;
 
 // Memory. The build buffer is PSRAM on a board that has it. Each broker's queued copy
 // is NOT: esp-mqtt allocates it with heap_caps_malloc(MALLOC_CAP_DEFAULT), which takes
-// internal RAM first whatever the board, out of the heap TLS needs. So the copies are
-// queued one broker at a time (NeighborsFanOut), each only when the heap fits, and the
-// report is capped smaller on boards without PSRAM, where the buffer is internal too.
+// internal RAM first whatever the board. That is the same enqueue every packet upload
+// makes, so the report costs what a packet costs: one copy of its own length. The copies
+// are queued one broker at a time (NeighborsFanOut), each only when that copy fits, and
+// the report is capped smaller on boards without PSRAM, where the buffer is internal too.
+// The TLS floor does not apply: it guards starting a handshake, which the broker pool
+// already refuses below the floor, and a V3 with its brokers up sits far below it.
 constexpr size_t kNeighborsReportMaxNoPsram = 4096;
 
 inline size_t neighborsReportCap(bool has_psram) {
     return has_psram ? kNeighborsReportMax : kNeighborsReportMaxNoPsram;
 }
 
-// Headroom kept above the TLS floor when taking memory for the report, for whatever
-// else the same loop pass allocates.
+// Headroom kept free after taking memory for the report, for whatever else the same
+// loop pass allocates.
 constexpr uint32_t kNeighborsHeapMargin = 4096;
 
-// True when taking len more bytes still leaves free_heap (internal) at or above floor
-// plus the margin. Checked before the buffer is allocated and before each broker's copy
-// is queued; a "no" waits or skips rather than pushing a TLS session out of memory.
-inline bool neighborsHeapFits(uint32_t free_heap, uint32_t floor, size_t len) {
-    return (uint64_t)free_heap >= (uint64_t)floor + (uint64_t)len + kNeighborsHeapMargin;
+// True when taking len more bytes of internal heap still leaves the margin free.
+// Checked before the buffer is allocated and before each broker's copy is queued; a
+// "no" waits or skips rather than taking the last of the heap.
+inline bool neighborsHeapFits(uint32_t free_heap, size_t len) {
+    return (uint64_t)free_heap >= (uint64_t)len + kNeighborsHeapMargin;
 }
 
 // Hands one built report to the connected brokers one at a time, so at most about one
