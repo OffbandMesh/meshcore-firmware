@@ -227,13 +227,14 @@ TEST(NeighborsJson, RowsBeyondTheSortLimitStillCountAndTruncate) {
 
 TEST(NeighborsJson, SelfScopesAreCutAtAWholeName) {
     std::string longlist;
-    for (int i = 0; i < 20; i++) longlist += (i ? ",region" : "region") + std::to_string(i);
+    for (int i = 0; i < 40; i++) longlist += (i ? ",region" : "region") + std::to_string(i);
+    ASSERT_GT(longlist.size(), offband::kSelfScopesLen);
     NeighborsReportInput in = baseInput(nullptr, 0);
     in.self_scopes = longlist.c_str();
     std::string j = build(in);
     size_t a = j.find("\"self\":{\"scopes\":\"") + 18;
     std::string self = j.substr(a, j.find('"', a) - a);
-    EXPECT_LT(self.size(), offband::kScopesLen);
+    EXPECT_LT(self.size(), offband::kSelfScopesLen);
     EXPECT_EQ(longlist.compare(0, self.size(), self), 0);   // a prefix of the list...
     EXPECT_EQ(longlist[self.size()], ',');                   // ...ending at a whole name
 }
@@ -246,8 +247,18 @@ static std::string selfScopesOf(const std::string& list) {
     return j.substr(a, j.find('"', a) - a);
 }
 
+// #1905: a repeater's longest regions answer (171 characters: MAX_PACKET_PAYLOAD - 12
+// with its NUL) is reported whole, so its own report never lists less than it answers.
+TEST(NeighborsJson, ARepeatersLongestAnswerIsReportedWhole) {
+    std::string answer;
+    for (int i = 0; answer.size() + 8 <= 171; i++) answer += (i ? ",r" : "r") + std::to_string(1000000 + i);
+    ASSERT_LE(answer.size(), 171u);
+    ASSERT_GT(answer.size(), offband::kScopesLen);   // longer than a neighbor row holds
+    EXPECT_EQ(selfScopesOf(answer), answer);
+}
+
 TEST(NeighborsJson, SelfScopesCutBoundaries) {
-    const size_t room = offband::kScopesLen - 1;
+    const size_t room = offband::kSelfScopesLen - 1;
     // Exactly as long as the room: kept whole.
     std::string fits = "a," + std::string(room - 2, 'b');
     EXPECT_EQ(selfScopesOf(fits), fits);

@@ -34,6 +34,12 @@ constexpr size_t kNeighborsReportMax = 10240;
 // copy at a time keeps the report's share of that exposure to one copy.
 constexpr size_t kNeighborsReportMaxNoPsram = 4096;
 
+// Room for the reporting node's own scopes, NUL included. A repeater's regions answer
+// holds up to MAX_PACKET_PAYLOAD - 12 = 172 bytes with its NUL, and its self report must
+// list exactly what it answers (#1905), so the whole answer fits uncut; the repeater
+// asserts it against MyMesh::FLOOD_SCOPES_MAX. Neighbors' rows keep kScopesLen.
+constexpr size_t kSelfScopesLen = 176;
+
 // A region name as a regions answer lists it: one leading '#' dropped, as RegionMap's
 // exportNamesTo does. nullptr (no default region) is "".
 inline const char* bareScopeName(const char* name) {
@@ -151,7 +157,7 @@ int formatReportTimestamp(uint32_t epoch, char* out, size_t out_size);
 // Rows with an outcome (not Pending) are listed: those with a known age first, then
 // most recently heard, then strongest SNR, then by key. When the next row would not
 // fit in buf_size, the rest are left out and "truncated" is true; the report itself
-// always closes. self_scopes longer than kScopesLen - 1 is cut at its last whole name. heard_secs_ago is null unless both our clock and the time the row
+// always closes. self_scopes longer than kSelfScopesLen - 1 is cut at its last whole name. heard_secs_ago is null unless both our clock and the time the row
 // was heard look set and the row is not from the future. An rssi of 0 (no reading)
 // is null. Returns the length written (NUL excluded), or -1 when even an empty
 // report does not fit.
