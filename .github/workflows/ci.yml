@@ -262,6 +262,11 @@ jobs:
       - name: Repeater flood scopes built in one place
         run: python scripts/test_repeater_flood_scopes_wiring.py
 
+      # #1906: the pool's /neighbors code has one gate for observer and repeater, and
+      # every file that sees the pool class sees the same fields.
+      - name: Neighbors report gate shared by both roles
+        run: python scripts/test_neighbors_report_gate.py
+
       # #1625: which preflashed channels ship quiet. A silent channel and a channel that
       # made no choice are one byte apart, and swapping them is invisible until a badge is
       # quiet in the wrong room -- or noisy in the one a tester asked to be quiet.

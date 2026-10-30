@@ -30,6 +30,8 @@ namespace mesh { class LocalIdentity; class Packet; }
 
 namespace offband {
 
+struct NeighborsReportInput;
+
 class RepeaterMqttPool {
 public:
     // Bring the pool up: seeds default broker slots (idempotent), reads each
@@ -56,6 +58,13 @@ public:
     void publishRaw(const uint8_t* raw, size_t len, float rssi, float snr);
     void publishParsed(const mesh::Packet& packet, int rssi, float snr,
                        int score, int duration);
+
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+    // #1906: the CoreScope /neighbors report, passed through to the pool (see
+    // MqttBrokerPool::publishNeighbors / neighborsReady). 0 / false until started.
+    uint8_t publishNeighbors(const NeighborsReportInput& in);
+    bool neighborsReady(bool (*plausible)(uint32_t));
+#endif
 
     // Tear the pool down. Idempotent.
     void shutdown();

@@ -21,7 +21,7 @@ static_assert(sizeof(offband::PacketRecord) <= MQTT_RING_MSG_MAX,
 #ifdef ARDUINO
   #include <Arduino.h>
 #endif
-#if defined(OFFBAND_OBSERVER) && defined(BOARD_HAS_PSRAM)
+#if defined(OFFBAND_NEIGHBORS_REPORT) && defined(BOARD_HAS_PSRAM)
   #include <esp_heap_caps.h>   // #1399: the /neighbors build buffer goes in PSRAM
 #endif
 
@@ -176,7 +176,7 @@ void MqttBrokerPool::shutdown() {
     for (uint8_t slot = 0; slot < OFFBAND_MAX_BROKERS; ++slot) {
         brokers_[slot].shutdown();
     }
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_NEIGHBORS_REPORT
     free(nbr_buf_);   // a /neighbors report still being handed out
     nbr_buf_ = nullptr;
     nbr_len_ = 0;
@@ -237,7 +237,7 @@ void MqttBrokerPool::loop(uint32_t now_ms) {
     }
 
     publishStatusIfDue(now_ms);
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_NEIGHBORS_REPORT
     neighborsFanOutTick(now_ms);   // #1399: one broker's /neighbors copy per pass
 #endif
     // #175: drain each Up broker's ring backlog here, on loopTask. This keeps ALL
@@ -485,7 +485,7 @@ uint8_t MqttBrokerPool::publishParsedPacket(const mesh::Packet& packet,
     return publishPacket(reinterpret_cast<const uint8_t*>(&rec), sizeof(rec));
 }
 
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_NEIGHBORS_REPORT
 // ---------------------------------------------------------------------------
 // publishNeighbors -- #1399, the CoreScope /neighbors report
 // ---------------------------------------------------------------------------

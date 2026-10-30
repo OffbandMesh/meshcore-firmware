@@ -20,6 +20,13 @@
           (the broker-pool engine, #536) defined. Check env build_flags."
 #endif
 
+// #1906: the pool's CoreScope /neighbors report. Every observer publishes it; a
+// repeater opts in with -D OFFBAND_NEIGHBORS_REPORT on its env (#1902). The pool's
+// header includes this file first, so every file that sees the pool sees one value.
+#if defined(OFFBAND_OBSERVER) && !defined(OFFBAND_NEIGHBORS_REPORT)
+  #define OFFBAND_NEIGHBORS_REPORT 1
+#endif
+
 // ---------------------------------------------------------------------------
 // Variant gate (companion vs. repeater)
 // ---------------------------------------------------------------------------
