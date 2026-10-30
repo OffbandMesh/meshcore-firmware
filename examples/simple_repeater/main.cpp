@@ -62,6 +62,39 @@
 class MyMesh;
 extern MyMesh the_mesh;
 
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+#include "../../src/helpers/wifi_observer/NeighborsCli.h"
+#include "../../src/helpers/wifi_observer/ConfigSchema.h"
+// #1907: mqtt.neighbors[.interval] and the nbr: line of `mqtt status` reach the mesh
+// through these. The repeater answers discover.neighbors and discover.scopes itself
+// (MyMesh::handleCommand), so the discover hooks only complete the set.
+static int  nbrCount() { return the_mesh.getNeighbourCount(); }
+static offband::DiscoverResult nbrDiscover(int* seconds_left) {
+  *seconds_left = 0;
+  the_mesh.sendNodeDiscoverReq();
+  return offband::DiscoverResult::Queued;
+}
+static void nbrSummary(offband::ScopeWalkSummary* out) { memset(out, 0, sizeof(*out)); }   // no walk until #1903
+static bool nbrStartScopes() { the_mesh.startNeighborsReportNow(); return true; }
+static void nbrReadSettings(offband::NeighborsSettings* out) {
+  out->enabled = offband::readNeighborsEnabled();
+  out->interval_hours = offband::readNeighborsIntervalHours();
+}
+// Each command changes one setting, so only that key is written: a failure leaves NVS
+// and the live schedule as they were.
+static bool nbrSaveSettings(const offband::NeighborsSettings& s) {
+  offband::NeighborsSettings was;
+  nbrReadSettings(&was);
+  if (s.interval_hours != was.interval_hours && !offband::writeNeighborsIntervalHours(s.interval_hours)) return false;
+  if (s.enabled != was.enabled && !offband::writeNeighborsEnabled(s.enabled)) return false;
+  the_mesh.configureNeighborsSchedule(s.enabled, s.interval_hours);
+  return true;
+}
+static void nbrScheduleStatus(offband::NeighborsScheduleStatus* out) { the_mesh.neighborsScheduleStatus(out); }
+static const offband::NeighborsCliHooks kNeighborsCliHooks = {
+  nbrCount, nbrDiscover, nbrSummary, nbrStartScopes, nbrReadSettings, nbrSaveSettings, nbrScheduleStatus };
+#endif
+
 static WifiMqttTransport* g_tel_transport = nullptr;
 static WifiTelemetry g_telemetry;
 static uint32_t g_tel_next_publish_ms = 0;
@@ -266,6 +299,12 @@ static void wifi_telemetry_setup() {
     offband::repeaterMqttPool().begin(the_mesh.self_id, WIFI_TELEMETRY_NODE_ID,
                                       WIFI_TELEMETRY_FRIENDLY_NAME,
                                       FIRMWARE_VERSION, FIRMWARE_HW_MODEL);
+#endif
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+    // #1907: the CoreScope /neighbors report's settings, applied from NVS (off by default).
+    offband::setNeighborsCliHooks(&kNeighborsCliHooks);
+    the_mesh.configureNeighborsSchedule(offband::readNeighborsEnabled(),
+                                        offband::readNeighborsIntervalHours());
 #endif
 
     g_tel_reset_reason = board.getResetReasonString(board.getResetReason());

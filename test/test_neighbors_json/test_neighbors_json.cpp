@@ -77,6 +77,29 @@ TEST(NeighborsJson, MatchesTheGoldenReport) {
     EXPECT_EQ(build(baseInput(rows, 4)), g);
 }
 
+// #1907: the repeater's report before it queries its neighbors (#1903): its own scopes,
+// its neighbor count, and no rows. CoreScope records self.scopes on the repeater's node
+// and takes nothing from an empty neighbors list.
+TEST(NeighborsJson, ARepeaterSelfReportHasNoNeighborRows) {
+    NeighborsReportInput in = baseInput(nullptr, 0);
+    in.origin = "rpt";
+    in.self_scopes = "*,us-midwest,oki,cvg";
+    in.default_scope = "oki";
+    in.total_neighbors = 7;
+    EXPECT_EQ(build(in),
+              "{\"timestamp\":\"2026-10-28T13:00:00Z\",\"origin\":\"rpt\",\"origin_id\":\"0011aabb\","
+              "\"self\":{\"scopes\":\"*,us-midwest,oki,cvg\",\"default_scope\":\"oki\"},"
+              "\"neighbors\":[],\"total_neighbors\":7,\"queried_neighbors\":0,\"truncated\":false}");
+}
+
+TEST(NeighborsJson, ARepeaterWithNoNeighborsStillReportsItsScopes) {
+    NeighborsReportInput in = baseInput(nullptr, 0);
+    in.total_neighbors = 0;
+    const std::string j = build(in);
+    EXPECT_NE(j.find("\"self\":{\"scopes\":\"hao\""), std::string::npos);
+    EXPECT_NE(j.find("\"neighbors\":[],\"total_neighbors\":0,\"queried_neighbors\":0"), std::string::npos);
+}
+
 TEST(NeighborsJson, AgesAreNullWhenTheClockIsNotSet) {
     // plan Review #4: never a bogus zero or garbage age
     const ScopeResult rows[] = { row(0x10, ScopeStatus::Responded, 1100, 0, -70, "hao") };

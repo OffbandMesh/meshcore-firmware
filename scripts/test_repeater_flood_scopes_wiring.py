@@ -62,6 +62,9 @@ def strip_comments(text):
 EXPORT = re.compile(
     r"return\s+region_map\.exportNamesTo\(\s*dest\s*,\s*FLOOD_SCOPES_MAX\s*,\s*REGION_DENY_FLOOD\s*\)\s*;")
 ANSWER = re.compile(r"return\s+8\s*\+\s*exportFloodScopes\(\s*\(\s*char\s*\*\s*\)\s*&reply_data\[8\]\s*\)\s*;")
+REPORT = re.compile(
+    r"char\s+self_scopes\s*\[\s*FLOOD_SCOPES_MAX\s*\]\s*;\s*exportFloodScopes\(\s*self_scopes\s*\)\s*;"
+    r".*?in\.self_scopes\s*=\s*self_scopes\s*;", re.S)
 
 
 def failures(text):
@@ -80,6 +83,15 @@ def failures(text):
             got.append("handleAnonRegionsReq no longer answers through exportFloodScopes")
         if "exportNamesTo" in answer:
             got.append("handleAnonRegionsReq builds its own list with exportNamesTo")
+    # #1907: the /neighbors self report lists the same names, at the same size.
+    report = function_body(code, "bool MyMesh::publishNeighborsReport()")
+    if report is None:
+        got.append("MyMesh::publishNeighborsReport is gone")
+    elif not REPORT.search(report):
+        got.append("publishNeighborsReport no longer takes self_scopes from exportFloodScopes")
+    # exportNamesTo is called in exactly one place: exportFloodScopes.
+    if len(re.findall(r"\bexportNamesTo\s*\(", code)) != 1:
+        got.append("MyMesh.cpp calls exportNamesTo outside exportFloodScopes")
     return got
 
 
@@ -115,6 +127,27 @@ def test_negative_a_commented_out_answer_is_caught():
         "return 8 + exportFloodScopes((char *) &reply_data[8]);",
         "// return 8 + exportFloodScopes((char *) &reply_data[8]);\n    return 8;", 1)
     assert any("no longer answers through exportFloodScopes" in f for f in failures(text))
+
+
+def test_negative_a_report_with_its_own_list_is_caught():
+    text = MYMESH.read_text(encoding="utf-8").replace(
+        "  exportFloodScopes(self_scopes);\n",
+        "  region_map.exportNamesTo(self_scopes, 96, REGION_DENY_FLOOD);\n", 1)
+    got = failures(text)
+    assert any("no longer takes self_scopes" in f for f in got), got
+    assert any("outside exportFloodScopes" in f for f in got), got
+
+
+def test_negative_a_report_with_a_smaller_buffer_is_caught():
+    text = MYMESH.read_text(encoding="utf-8").replace(
+        "char self_scopes[FLOOD_SCOPES_MAX];", "char self_scopes[96];", 1)
+    assert any("no longer takes self_scopes" in f for f in failures(text))
+
+
+def test_negative_a_report_scoped_to_the_default_only_is_caught():
+    text = MYMESH.read_text(encoding="utf-8").replace(
+        "in.self_scopes = self_scopes;", "in.self_scopes = getDefaultScopeName();", 1)
+    assert any("no longer takes self_scopes" in f for f in failures(text))
 
 
 def test_negative_a_removed_helper_is_caught():

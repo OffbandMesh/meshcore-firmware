@@ -112,3 +112,15 @@ features:
         contains: ['constexpr uint8_t kAnonReqTypeRegions = 0x01;', 'constexpr uint32_t kRegionQueryTimeoutMs = 20000;']
       - path: src/helpers/wifi_observer/CliPassthrough.cpp
         contains: ['isBareWord(p, "discover.neighbors")', 'isBareWord(p, "discover.scopes")']
+  - id: repeater-neighbors
+    title: Report a repeater's own regions to CoreScope
+    coverage: planned
+    roles: [repeater]
+    boards: [heltec_v4]
+    availability: {channel: development, verified_releases: []}
+    verification: discover.scopes on the repeater, its CoreScope /neighbors self report and the mqtt.neighbors settings checked against source, native tests and source-wiring checks only; not in any release, no on-air, hardware or live-broker trial. Neighbor scope queries on the repeater follow (Epic 1903). The guide is published when a release carries the feature.
+    evidence:
+      - path: examples/simple_repeater/MyMesh.cpp
+        contains: ['int MyMesh::exportFloodScopes(char* dest)', 'OK - publishing own scopes', 'OK - own scopes queued; waiting for clock and a broker']
+      - path: variants/heltec_v4/platformio.ini
+        contains: ['-D OFFBAND_NEIGHBORS_REPORT=1', '+<helpers/wifi_observer/NeighborsCli.cpp>']

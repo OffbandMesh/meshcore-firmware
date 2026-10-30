@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1902
+impact: none
+reason: Adds the CoreScope /neighbors self report to the WiFi-telemetry repeater (heltec_v4_repeater_telemetry), the repeater command discover.scopes, the settings mqtt.neighbors and mqtt.neighbors.interval on the repeater, and the nbr line in its mqtt status, which are user-visible, but only in unreleased development builds; no published guide can describe them yet, because the manual's catalog accepts a guide only for behavior a release carries. The feature is cataloged as planned in docs/user/features.yml (repeater-neighbors) with source evidence; it is published, and this record replaced by an updated one, when a release carries it. Periodic publishing is off unless turned on; discover.neighbors and every other existing repeater command, setting, default and reply are unchanged, and the companion observer's behavior is unchanged.

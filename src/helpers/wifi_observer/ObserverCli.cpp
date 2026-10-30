@@ -20,7 +20,9 @@
 #ifdef OFFBAND_OBSERVER
 #include "../config/WifiConfigProvider.h"      // #370: wifi.* handlers (moved out of this file)
 #include "../config/DisplayConfigProvider.h"   // #370: display.* handlers + NVS accessors (moved out)
-#include "NeighborsCli.h"                      // #1398: discover.neighbors / discover.scopes
+#endif
+#ifdef OFFBAND_NEIGHBORS_REPORT
+#include "NeighborsCli.h"   // #1398 / #1907: discover.*, mqtt.neighbors[.interval], the nbr: line
 #endif
 // #1194: caplog forward on the observer. The repeater has these verbs in
 // CommonCLI, so here they are observer-only, and they share the repeater's
@@ -168,7 +170,7 @@ static const char* brokerErrorWire(BrokerErrorClass e) {
 static bool handleStatus(char* reply, size_t reply_size, MqttBrokerPool& pool) {
     int n = snprintf(reply, reply_size, "mqtt: configured=%u enabled=%u up=%u\n",
                      pool.configuredCount(), pool.enabledCount(), pool.upCount());
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_NEIGHBORS_REPORT
     // #1399: the periodic /neighbors report, ahead of the broker lines so a long
     // broker list cannot cut it off.
     if (n >= 0 && (size_t)n < reply_size) {
@@ -715,10 +717,13 @@ bool dispatchObserverCli(const char* cmd, char* reply, size_t reply_size,
         return true;
     }
 
-#ifdef OFFBAND_OBSERVER   // #538 (Option A): display/wifi verbs are observer-only
-    // #1398: discover.neighbors / discover.scopes, worked by the companion's MyMesh.
+#ifdef OFFBAND_NEIGHBORS_REPORT
+    // #1398: discover.* and mqtt.neighbors[.interval], worked by the role's MyMesh. The
+    // repeater answers discover.neighbors and discover.scopes itself before this (#1907).
     if (handleNeighborsCli(cmd, reply, reply_size)) return true;
+#endif
 
+#ifdef OFFBAND_OBSERVER   // #538 (Option A): display/wifi verbs are observer-only
     // "display ..." commands -- #141: display always-on toggle.
     const char* disp_rest = skipPrefix(cmd, "display");
     if (disp_rest != nullptr) {

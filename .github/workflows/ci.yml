@@ -267,6 +267,11 @@ jobs:
       - name: Neighbors report gate shared by both roles
         run: python scripts/test_neighbors_report_gate.py
 
+      # #1907: the repeater steps the /neighbors cycle, answers discover.scopes itself,
+      # and reaches mqtt.neighbors[.interval] through the shared CLI.
+      - name: Repeater /neighbors cycle and commands wired
+        run: python scripts/test_repeater_neighbors_wiring.py
+
       # #1625: which preflashed channels ship quiet. A silent channel and a channel that
       # made no choice are one byte apart, and swapping them is invisible until a badge is
       # quiet in the wrong room -- or noisy in the one a tester asked to be quiet.

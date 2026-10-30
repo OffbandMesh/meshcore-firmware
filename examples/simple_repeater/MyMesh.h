@@ -35,6 +35,10 @@
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/RegionMap.h>
 #include "RateLimiter.h"
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+#include "helpers/wifi_observer/NeighborsSchedule.h"   // #1907: the /neighbors cycle
+#include "helpers/wifi_observer/NeighborsCli.h"        // #1907: NeighborsScheduleStatus
+#endif
 
 #ifdef WITH_BRIDGE
 extern AbstractBridge* bridge;
@@ -106,6 +110,9 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
 #if MAX_NEIGHBOURS
   NeighbourInfo neighbours[MAX_NEIGHBOURS];
 #endif
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+  offband::NeighborsSchedule _nbr_schedule;   // #1907
+#endif
   CayenneLPP telemetry;
   unsigned long set_radio_at, revert_radio_at;
   float pending_freq;
@@ -129,6 +136,10 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
 
   File openAppend(const char* fname);
   bool isLooped(const mesh::Packet* packet, const uint8_t max_counters[]);
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+  void neighborsCycleTick();       // #1907: one step of the /neighbors cycle per loop()
+  bool publishNeighborsReport();   // #1907: true when a broker took it
+#endif
 
 protected:
   float getAirtimeBudgetFactor() const override {
@@ -208,6 +219,12 @@ public:
   // from exportFloodScopes. Points into the region map: valid until the map next
   // changes, so copy it or use it at once.
   const char* getDefaultScopeName();
+
+  // #1907: the periodic CoreScope /neighbors report. Until the repeater queries its
+  // neighbors (#1903) it carries this repeater's own scopes and its neighbor count.
+  void configureNeighborsSchedule(bool enabled, uint16_t interval_hours);
+  void neighborsScheduleStatus(offband::NeighborsScheduleStatus* out) const;
+  void startNeighborsReportNow();   // discover.scopes: publish on the next pass
 #endif
 
   // CommonCLICallbacks
