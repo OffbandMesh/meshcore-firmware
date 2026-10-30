@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1927
+impact: none
+reason: ESP-NOW boards carry no LoRa radio and had not compiled since 2026-02-13, so nothing in this change alters a board anyone is running - those targets produced no firmware at all. On boards that do have a radio the generated code is unchanged, verified by comparing the disassembly of ESP32Board.cpp.o against baseline. The new behaviour, a timer-only light sleep where there is no radio IRQ to wake on, exists only on boards whose builds were previously broken, and no setting, command or on-screen wording changes anywhere.
