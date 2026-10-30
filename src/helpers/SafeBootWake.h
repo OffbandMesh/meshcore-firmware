@@ -51,6 +51,31 @@ inline ButtonSense chooseButtonSense(bool pressed_high, int idle_level) {
   return b;
 }
 
+// How long SafeBoot waits for a held button to be let go before calling it stuck. The press
+// that wakes a ButtonOnly sleep is still down when the restarted firmware reaches this check,
+// a few milliseconds in -- a person's tap lasts 100-300 ms and a deliberate press a second or
+// more. Read once, that press looked stuck and disarmed the next sleep, so only the first
+// press after a reset ever worked (QCC1/QCC2, 2026-10-29). Five seconds covers any human
+// press; a line still pressed after that is a real fault.
+constexpr uint32_t kButtonReleaseWaitMs = 5000;
+constexpr uint32_t kButtonReleasePollMs = 10;
+
+// Poll the button until it reads idle or `max_wait_ms` runs out, and return the last level
+// read. `read()` returns the pin level; `wait(ms)` sleeps and keeps any watchdog fed.
+template <typename ReadFn, typename WaitFn>
+inline int waitForButtonIdle(bool pressed_high, uint32_t max_wait_ms, ReadFn read, WaitFn wait) {
+  const int idle = pressed_high ? 0 : 1;
+  int level = read();
+  for (uint32_t waited = 0; level != idle && waited < max_wait_ms;) {
+    const uint32_t left = max_wait_ms - waited;
+    const uint32_t step = left < kButtonReleasePollMs ? left : kButtonReleasePollMs;
+    wait(step);
+    waited += step;
+    level = read();
+  }
+  return level;
+}
+
 // Which nRF52 sleep to take. LPCOMP first: it is the one that recovers on its own when a
 // charger or the sun brings the cell back. A usable button next: a true SYSTEM_OFF at a
 // few microamps, woken by a press. Otherwise the board stays on and restarts on a timer --

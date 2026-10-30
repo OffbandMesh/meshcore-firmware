@@ -529,14 +529,20 @@ offband::SafeBootWake planSafeBootWake()
 #elif defined(NRF52_PLATFORM)
 #if defined(SAFEBOOT_NRF52_BUTTON)
     if (safeBootButtonInMap()) {
-        // Apply the idle pull, let it settle, and read: a button that already reads
-        // pressed would fire its SENSE the instant the chip sleeps, so it must not be used.
+        // Apply the idle pull, let it settle, and wait for the button to be let go: a
+        // button that still reads pressed would fire its SENSE the instant the chip
+        // sleeps, so it must not be used. The press that woke the last sleep is usually
+        // still down here, so give it human time before calling it stuck.
         // 10 ms covers a ~13 k internal pull into a 100 nF debounce cap several times over.
         const uint32_t pin = safeBootButtonChipPin();
         const bool pressed_high = (USER_BTN_PRESSED == HIGH);
         nrf_gpio_cfg_input(pin, pressed_high ? NRF_GPIO_PIN_PULLDOWN : NRF_GPIO_PIN_PULLUP);
         delay(10);
-        g_buttonSense = offband::chooseButtonSense(pressed_high, (int)nrf_gpio_pin_read(pin));
+        const int level = offband::waitForButtonIdle(
+            pressed_high, offband::kButtonReleaseWaitMs,
+            [pin]() { return (int)nrf_gpio_pin_read(pin); },
+            [](uint32_t ms) { safeBootFeedWatchdog(); delay(ms); });
+        g_buttonSense = offband::chooseButtonSense(pressed_high, level);
     }
 #endif
 #if defined(BATTERY_LPCOMP_INPUT)
