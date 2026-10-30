@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1922
+impact: none
+reason: On a board with no PIN_BUZZER_EN, asking for quiet now stops a tune already sounding instead of letting it run to its end. Saved settings, commands and wording are unchanged, and the public manual does not describe the buzzer or mute, so no guide changes.
