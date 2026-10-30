@@ -61,6 +61,16 @@ void RepeaterMqttPool::publishParsed(const mesh::Packet& packet, int rssi, float
 #endif
 }
 
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+uint8_t RepeaterMqttPool::publishNeighbors(const NeighborsReportInput& in) {
+    return started_ ? thePool().publishNeighbors(in) : 0;
+}
+
+bool RepeaterMqttPool::neighborsReady(bool (*plausible)(uint32_t)) {
+    return started_ && thePool().neighborsReady(plausible);
+}
+#endif
+
 void RepeaterMqttPool::shutdown() {
     if (started_) {
         thePool().shutdown();
@@ -99,6 +109,9 @@ __attribute__((used)) static void _repeaterMqttPoolLinkProof() {
     pool.begin(identity, "", "", "", "");
     pool.loop(0);
     (void)pool.publish(nullptr, 0);
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+    (void)pool.neighborsReady(nullptr);   // #1906: the /neighbors path links too
+#endif
     pool.shutdown();
 }
 #endif  // ARDUINO

@@ -8,7 +8,7 @@
 #include "WifiObserverConfig.h"
 #include "MqttBroker.h"
 #include "MqttRingLog.h"
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_NEIGHBORS_REPORT
 #include "NeighborsReport.h"   // #1399: publishNeighbors
 #endif
 #include <atomic>   // #531: reconciling_ is a cross-task flag
@@ -101,7 +101,7 @@ public:
     uint8_t publishParsedPacket(const mesh::Packet& packet, int rssi,
                                 float snr, int score, int duration);
 
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_NEIGHBORS_REPORT
     // #1399: the CoreScope /neighbors report. The caller fills the walk's rows, the
     // observer's own scopes and the clock check; the pool adds origin and origin_id as
     // /status does and a UTC RFC 3339 timestamp, builds the body ONCE, and then, one
@@ -264,7 +264,7 @@ private:
     // Helpers.
     void publishStatusIfDue(uint32_t now_ms);
 
-#ifdef OFFBAND_OBSERVER
+#ifdef OFFBAND_NEIGHBORS_REPORT
     // #1399: the /neighbors report being handed out, one broker per pass.
     char*           nbr_buf_ = nullptr;
     size_t          nbr_len_ = 0;
