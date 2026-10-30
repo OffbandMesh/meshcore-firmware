@@ -3,6 +3,9 @@
 // #537: mesh-packet feed into the shared broker pool (self-guards on
 // OFFBAND_MQTT_POOL; a no-op include otherwise).
 #include "helpers/wifi_telemetry/RepeaterMqttPool.h"
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+#include "helpers/wifi_observer/NeighborsReport.h"   // #1905: bareScopeName
+#endif
 
 /* ------------------------------ Config -------------------------------- */
 
@@ -160,10 +163,22 @@ uint8_t MyMesh::handleAnonRegionsReq(const mesh::Identity& sender, uint32_t send
     uint32_t now = getRTCClock()->getCurrentTime();
     memcpy(&reply_data[4], &now, 4);     // include our clock (for easy clock sync, and packet hash uniqueness)
 
-    return 8 + region_map.exportNamesTo((char *) &reply_data[8], sizeof(reply_data) - 12, REGION_DENY_FLOOD);   // reply length
+    return 8 + exportFloodScopes((char *) &reply_data[8]);   // reply length
   }
   return 0;
 }
+
+int MyMesh::exportFloodScopes(char* dest) {
+  static_assert(sizeof(reply_data) - 12 == FLOOD_SCOPES_MAX, "the answer's room for names");
+  return region_map.exportNamesTo(dest, FLOOD_SCOPES_MAX, REGION_DENY_FLOOD);
+}
+
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+const char* MyMesh::getDefaultScopeName() {
+  RegionEntry* r = region_map.getDefaultRegion();
+  return offband::bareScopeName(r != NULL ? r->name : NULL);
+}
+#endif
 
 uint8_t MyMesh::handleAnonOwnerReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data) {
   if (anon_limiter.allow(rtc_clock.getCurrentTime())) {

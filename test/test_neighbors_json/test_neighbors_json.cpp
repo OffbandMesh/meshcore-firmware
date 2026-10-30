@@ -349,6 +349,19 @@ TEST(NeighborsFanOut, NoBrokersIsNeverActive) {
     EXPECT_EQ(f.accepted(), 0);
 }
 
+// #1905: the repeater's default scope is listed the way its regions answer lists names.
+TEST(NeighborsReportLimits, BareScopeNameDropsOneLeadingHash) {
+    EXPECT_STREQ(offband::bareScopeName("#oki"), "oki");
+    EXPECT_STREQ(offband::bareScopeName("oki"), "oki");
+    EXPECT_STREQ(offband::bareScopeName("##x"), "#x");   // one, as RegionMap's skip_hash
+    EXPECT_STREQ(offband::bareScopeName("#"), "");
+    EXPECT_STREQ(offband::bareScopeName(""), "");
+}
+
+TEST(NeighborsReportLimits, BareScopeNameOfNoRegionIsEmpty) {
+    EXPECT_STREQ(offband::bareScopeName(nullptr), "");
+}
+
 TEST(NeighborsReportLimits, CapFollowsPsram) {
     EXPECT_EQ(offband::neighborsReportCap(true), offband::kNeighborsReportMax);
     EXPECT_EQ(offband::neighborsReportCap(false), offband::kNeighborsReportMaxNoPsram);
