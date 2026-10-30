@@ -288,14 +288,22 @@ TEST(NeighborsReportLimits, CapFollowsPsram) {
     EXPECT_LT(offband::kNeighborsReportMaxNoPsram, offband::kNeighborsReportMax);
 }
 
-TEST(NeighborsReportLimits, HeapFitKeepsTheFloorAndMargin) {
-    const uint32_t floor = 80u * 1024u;
+TEST(NeighborsReportLimits, HeapFitKeepsTheMargin) {
     const size_t len = 4096;
-    const uint32_t exact = floor + (uint32_t)len + offband::kNeighborsHeapMargin;
-    EXPECT_TRUE(offband::neighborsHeapFits(exact, floor, len));
-    EXPECT_FALSE(offband::neighborsHeapFits(exact - 1, floor, len));
-    EXPECT_FALSE(offband::neighborsHeapFits(0, floor, len));
-    EXPECT_FALSE(offband::neighborsHeapFits(0xFFFFFFFFu, 0xFFFFFFFFu, 1));   // no wrap-around "fit"
+    const uint32_t exact = (uint32_t)len + offband::kNeighborsHeapMargin;
+    EXPECT_TRUE(offband::neighborsHeapFits(exact, len));
+    EXPECT_FALSE(offband::neighborsHeapFits(exact - 1, len));
+    EXPECT_FALSE(offband::neighborsHeapFits(0, len));
+    EXPECT_FALSE(offband::neighborsHeapFits(0xFFFFFFFFu, 0xFFFFFFFFu));   // no wrap-around "fit"
+}
+
+// Measured on a Heltec V3 with two brokers up, one of them TLS (#1399 T10): free
+// internal heap held at 30,484 bytes, low 18,944. The old gate demanded the 80 KB TLS
+// floor on top and refused every report; the report's own cost must fit there.
+TEST(NeighborsReportLimits, HeapFitPassesAtTheMeasuredV3Heap) {
+    EXPECT_TRUE(offband::neighborsHeapFits(30484u, offband::kNeighborsReportMaxNoPsram));
+    EXPECT_TRUE(offband::neighborsHeapFits(18944u, offband::kNeighborsReportMaxNoPsram));
+    EXPECT_FALSE(offband::neighborsHeapFits(6000u, offband::kNeighborsReportMaxNoPsram));
 }
 
 int main(int argc, char **argv) {
