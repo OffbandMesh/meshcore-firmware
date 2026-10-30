@@ -48,6 +48,71 @@ TEST(ButtonSense, AnUnreadableLevelIsNotUsable) {
   EXPECT_FALSE(chooseButtonSense(true, 2).usable);
 }
 
+// ---- the press that woke it is still down: wait for a human to let go ---------------
+
+namespace {
+// A button held for `held_ms`, then released, seen through the waiter's own clock.
+struct FakeButton {
+  bool pressed_high;
+  uint32_t held_ms;
+  uint32_t now = 0;
+  uint32_t waited = 0;
+  int read() const {
+    const int pressed = pressed_high ? 1 : 0;
+    return now < held_ms ? pressed : 1 - pressed;
+  }
+  void wait(uint32_t ms) { now += ms; waited += ms; }
+};
+
+int runWait(FakeButton& b, uint32_t max_ms) {
+  return waitForButtonIdle(b.pressed_high, max_ms, [&b]() { return b.read(); },
+                           [&b](uint32_t ms) { b.wait(ms); });
+}
+}  // namespace
+
+TEST(ButtonRelease, AWakeTapStillDownAtBootIsArmedOnceReleased) {
+  // QCC1/QCC2 2026-10-29: the tap that woke the badge was still down at the check, so the
+  // next sleep ignored the button. A 250 ms tap must come back usable.
+  FakeButton b{/*pressed_high=*/false, /*held_ms=*/250};
+  const int level = runWait(b, kButtonReleaseWaitMs);
+  EXPECT_TRUE(chooseButtonSense(false, level).usable);
+  EXPECT_GE(b.waited, 250u);
+  EXPECT_LT(b.waited, 250u + 2 * kButtonReleasePollMs);
+}
+
+TEST(ButtonRelease, ALongDeliberatePressIsStillWithinTheWindow) {
+  FakeButton b{/*pressed_high=*/true, /*held_ms=*/3000};
+  EXPECT_TRUE(chooseButtonSense(true, runWait(b, kButtonReleaseWaitMs)).usable);
+}
+
+TEST(ButtonRelease, AnIdleButtonCostsNoWait) {
+  FakeButton b{/*pressed_high=*/false, /*held_ms=*/0};
+  EXPECT_TRUE(chooseButtonSense(false, runWait(b, kButtonReleaseWaitMs)).usable);
+  EXPECT_EQ(b.waited, 0u);
+}
+
+TEST(ButtonRelease, AStuckButtonIsStillRefusedAfterTheWindow) {
+  // Negative: a line that never releases must not be armed, and the wait must end.
+  FakeButton b{/*pressed_high=*/false, /*held_ms=*/UINT32_MAX};
+  EXPECT_FALSE(chooseButtonSense(false, runWait(b, kButtonReleaseWaitMs)).usable);
+  EXPECT_EQ(b.waited, kButtonReleaseWaitMs);
+}
+
+TEST(ButtonRelease, TheWaitNeverOverrunsItsLimit) {
+  // A limit that is not a multiple of the poll step must still be the limit.
+  FakeButton b{/*pressed_high=*/false, /*held_ms=*/UINT32_MAX};
+  runWait(b, 45);
+  EXPECT_EQ(b.waited, 45u);
+  FakeButton z{/*pressed_high=*/false, /*held_ms=*/UINT32_MAX};
+  runWait(z, 0);
+  EXPECT_EQ(z.waited, 0u);
+}
+
+TEST(ButtonRelease, TheWindowCoversHumanPressesNotJustTheDebounce) {
+  // The old check waited 10 ms. Anything under a second would repeat the defect.
+  EXPECT_GE(kButtonReleaseWaitMs, 2000u);
+}
+
 // ---- which sleep -------------------------------------------------------------------
 
 TEST(Nrf52Wake, TheBatteryComparatorComesFirst) {
