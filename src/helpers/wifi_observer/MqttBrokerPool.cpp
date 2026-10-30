@@ -585,12 +585,15 @@ uint8_t MqttBrokerPool::publishNeighbors(NeighborsReportInput in) {
 #endif
 }
 
-// One broker's copy per loop pass, while the heap allows (see NeighborsFanOut).
+// One broker's copy at a time: the next only once the previous has left its outbox and
+// the heap allows (see NeighborsFanOut).
 void MqttBrokerPool::neighborsFanOutTick(uint32_t now_ms) {
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     if (nbr_buf_ == nullptr) return;
     const uint32_t heap_before = ESP.getFreeHeap();
-    const int slot = nbr_fanout_.next(now_ms, neighborsHeapFits(heap_before, nbr_len_));
+    const int prev = nbr_fanout_.lastSlot();
+    const bool prev_sent = prev < 0 || brokers_[prev].outboxBytes() < static_cast<int>(nbr_len_);
+    const int slot = nbr_fanout_.next(now_ms, neighborsHeapFits(heap_before, nbr_len_), prev_sent);
     if (slot >= 0) {
         char topic[160];
         bool ok = false;
@@ -599,8 +602,8 @@ void MqttBrokerPool::neighborsFanOutTick(uint32_t now_ms) {
                                         /*retain=*/true, /*qos=*/0);
         }
         if (ok) {
-            mesh_log_line(MLOG_DEBUG, "neighbors: broker %d took the report (free heap %u -> %u)\n",
-                          slot, (unsigned)heap_before, (unsigned)ESP.getFreeHeap());
+            mesh_log_line(MLOG_DEBUG, "neighbors: broker %d took the report (free heap %u, outbox %d bytes)\n",
+                          slot, (unsigned)heap_before, brokers_[slot].outboxBytes());
         } else {
             mesh_log_line(MLOG_ERROR, "neighbors: broker %d did not take the report\n", slot);
         }
