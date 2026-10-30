@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MYMESH = ROOT / "examples" / "simple_repeater" / "MyMesh.cpp"
 MAIN = ROOT / "examples" / "simple_repeater" / "main.cpp"
 CLI = ROOT / "src" / "helpers" / "wifi_observer" / "ObserverCli.cpp"
+V4_INI = ROOT / "variants" / "heltec_v4" / "platformio.ini"
 FLAG = "OFFBAND_NEIGHBORS_REPORT"
 
 
@@ -48,15 +49,31 @@ def strip_comments(text):
 
 
 def open_conditions(text, pos):
-    """The preprocessor conditions open at pos."""
+    """The preprocessor conditions open at pos. A branch after #else/#elif is marked
+    ELSE: and an #ifndef NDEF:, so code there does not count as under the condition."""
     stack = []
-    for m in re.finditer(r"^[ \t]*#[ \t]*(ifdef|ifndef|if|endif)\b([^\n]*)", text[:pos], re.M):
-        if m.group(1) == "endif":
+    for m in re.finditer(r"^[ \t]*#[ \t]*(ifdef|ifndef|if|elif|else|endif)\b([^\n]*)", text[:pos], re.M):
+        kind = m.group(1)
+        if kind == "endif":
             if stack:
                 stack.pop()
+        elif kind in ("else", "elif"):
+            if stack:
+                stack[-1] = "ELSE:" + stack[-1]
         else:
-            stack.append(m.group(2))
+            stack.append(("NDEF:" if kind == "ifndef" else "") + m.group(2))
     return stack
+
+
+def gated_on(conds, name):
+    """Whether one of the open conditions requires name to be defined."""
+    for c in conds:
+        flat = c.replace(" ", "")
+        if c.startswith(("ELSE:", "NDEF:")) or ("!defined(%s)" % name) in flat:
+            continue
+        if name in c:
+            return True
+    return False
 
 
 def function_body(code, signature):
@@ -77,7 +94,7 @@ def function_body(code, signature):
 
 
 def under_flag(text, at):
-    return at >= 0 and any(FLAG in c for c in open_conditions(text, at))
+    return at >= 0 and gated_on(open_conditions(text, at), FLAG)
 
 
 def mymesh_failures(text):
@@ -117,7 +134,22 @@ def main_failures(text):
     if not re.search(r"the_mesh\.configureNeighborsSchedule\(\s*offband::readNeighborsEnabled\(\)\s*,"
                      r"\s*offband::readNeighborsIntervalHours\(\)\s*\)\s*;", code):
         got.append("main.cpp no longer applies the saved mqtt.neighbors settings at boot")
+    save, _ = function_body(code, "static bool nbrSaveSettings(")
+    if save is None or not re.search(r"the_mesh\.configureNeighborsSchedule\(\s*s\.enabled\s*,\s*s\.interval_hours\s*\)", save):
+        got.append("nbrSaveSettings no longer applies a changed setting live")
     return got
+
+
+def env_failures(ini):
+    start = ini.find("[env:heltec_v4_repeater_telemetry]")
+    if start < 0:
+        return ["heltec_v4_repeater_telemetry is gone"]
+    nxt = ini.find("\n[", start + 1)
+    block = ini[start:] if nxt < 0 else ini[start:nxt]
+    live = "\n".join(line.split(";", 1)[0] for line in block.splitlines())
+    if "+<helpers/wifi_observer/NeighborsCli.cpp>" not in live:
+        return ["heltec_v4_repeater_telemetry does not build NeighborsCli.cpp"]
+    return []
 
 
 def cli_failures(text):
@@ -130,9 +162,9 @@ def cli_failures(text):
             got.append("ObserverCli no longer has the neighbors %s" % what)
             continue
         conds = open_conditions(code, at)
-        if not any(FLAG in c for c in conds):
+        if not gated_on(conds, FLAG):
             got.append("ObserverCli's neighbors %s is not under %s" % (what, FLAG))
-        if any("OFFBAND_OBSERVER" in c for c in conds):
+        if gated_on(conds, "OFFBAND_OBSERVER"):
             got.append("ObserverCli's neighbors %s is observer-only" % what)
     return got
 
@@ -142,8 +174,32 @@ def read(p):
 
 
 def test_the_real_tree_passes():
-    got = mymesh_failures(read(MYMESH)) + main_failures(read(MAIN)) + cli_failures(read(CLI))
+    got = (mymesh_failures(read(MYMESH)) + main_failures(read(MAIN)) + cli_failures(read(CLI))
+           + env_failures(read(V4_INI)))
     assert not got, "\n".join(got)
+
+
+def test_negative_a_tick_in_the_else_of_the_flag_is_caught():
+    text = read(MYMESH).replace("#if defined(%s)\n  neighborsCycleTick();" % FLAG,
+                                "#if defined(%s)\n#else\n  neighborsCycleTick();" % FLAG, 1)
+    assert text != read(MYMESH)
+    assert any("outside" in f for f in mymesh_failures(text))
+
+
+def test_negative_a_save_that_does_not_apply_live_is_caught():
+    text = read(MAIN).replace("  the_mesh.configureNeighborsSchedule(s.enabled, s.interval_hours);\n", "", 1)
+    assert text != read(MAIN)
+    assert any("applies a changed setting live" in f for f in main_failures(text))
+
+
+def test_negative_an_env_without_the_cli_source_is_caught():
+    ini = read(V4_INI).replace("+<helpers/wifi_observer/NeighborsCli.cpp>", "", 1)
+    assert env_failures(ini)
+
+
+def test_an_ifndef_observer_guard_is_not_mistaken_for_observer_only():
+    assert not gated_on(["!defined(OFFBAND_OBSERVER) && defined(%s)" % FLAG], "OFFBAND_OBSERVER")
+    assert gated_on(["!defined(OFFBAND_OBSERVER) && defined(%s)" % FLAG], FLAG)
 
 
 def test_negative_no_tick_is_caught():
