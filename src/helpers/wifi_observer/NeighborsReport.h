@@ -34,6 +34,13 @@ constexpr size_t kNeighborsReportMax = 10240;
 // copy at a time keeps the report's share of that exposure to one copy.
 constexpr size_t kNeighborsReportMaxNoPsram = 4096;
 
+// A region name as a regions answer lists it: one leading '#' dropped, as RegionMap's
+// exportNamesTo does. nullptr (no default region) is "".
+inline const char* bareScopeName(const char* name) {
+    if (name == nullptr) return "";
+    return *name == '#' ? name + 1 : name;
+}
+
 inline size_t neighborsReportCap(bool has_psram) {
     return has_psram ? kNeighborsReportMax : kNeighborsReportMaxNoPsram;
 }

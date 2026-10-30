@@ -257,6 +257,11 @@ jobs:
       - name: Channel slot guard wired into cmdSetChannel
         run: python scripts/test_channel_slot_guard_wiring.py
 
+      # #1905: a repeater's own /neighbors scopes and its regions answer come from one
+      # call, so CoreScope never records a repeater's scopes two different ways.
+      - name: Repeater flood scopes built in one place
+        run: python scripts/test_repeater_flood_scopes_wiring.py
+
       # #1625: which preflashed channels ship quiet. A silent channel and a channel that
       # made no choice are one byte apart, and swapping them is invisible until a badge is
       # quiet in the wrong room -- or noisy in the one a tester asked to be quiet.

@@ -197,6 +197,16 @@ public:
 
   void sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size);
 
+  // The flood-allowed region names this repeater answers a regions request with, into
+  // dest (FLOOD_SCOPES_MAX bytes). Its /neighbors self report uses the same call at the
+  // same size, so the two never differ (#1905).
+  static const int FLOOD_SCOPES_MAX = MAX_PACKET_PAYLOAD - 12;
+  int exportFloodScopes(char* dest);
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+  // #1905: the default region's name as the answer lists names; "" when there is none.
+  const char* getDefaultScopeName();
+#endif
+
   // CommonCLICallbacks
   void applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) override;
   bool formatFileSystem() override;
