@@ -5,6 +5,7 @@
 #include "helpers/wifi_telemetry/RepeaterMqttPool.h"
 #if defined(OFFBAND_NEIGHBORS_REPORT)
 #include "helpers/wifi_observer/NeighborsReport.h"   // #1905: bareScopeName
+#include "helpers/ClockSanity.h"                     // #1907: plausibleEpoch
 #endif
 
 /* ------------------------------ Config -------------------------------- */
@@ -177,6 +178,70 @@ int MyMesh::exportFloodScopes(char* dest) {
 const char* MyMesh::getDefaultScopeName() {
   RegionEntry* r = region_map.getDefaultRegion();
   return offband::bareScopeName(r != NULL ? r->name : NULL);
+}
+
+static_assert(MAX_NEIGHBOURS > 0, "the /neighbors report counts the neighbor table (getNeighbourCount)");
+
+void MyMesh::configureNeighborsSchedule(bool enabled, uint16_t interval_hours) {
+  _nbr_schedule.configure(enabled, offband::neighborsIntervalMs(interval_hours));
+}
+
+void MyMesh::neighborsScheduleStatus(offband::NeighborsScheduleStatus* out) const {
+  const uint32_t now = millis();
+  out->cycle_running = _nbr_schedule.cycleRunning();
+  out->next_in_s = (int32_t)((_nbr_schedule.msUntilDue(now) + 999u) / 1000u);   // 0 = due; at most 336 h
+  out->has_published = _nbr_schedule.hasPublished();
+  out->last_ago_s = out->has_published ? (now - _nbr_schedule.lastPublishMs()) / 1000u : 0;
+}
+
+// #1907: there is no walk yet (#1903), so a manual report goes straight to publishing,
+// replacing one still waiting to go out.
+void MyMesh::startNeighborsReportNow() {
+  _nbr_schedule.manualWalkStarted();
+}
+
+// #1907: one step of the /neighbors cycle per loop() pass (see NeighborsSchedule.h). The
+// walk step starts nothing until the repeater queries its neighbors (#1903): the cycle
+// refreshes the neighbor table, then publishes this repeater's own scopes.
+void MyMesh::neighborsCycleTick() {
+  const uint32_t now = millis();
+  const bool walk_running = false;
+  // Only on the passes the schedule looks at it: it formats every broker's topic.
+  const bool ready = _nbr_schedule.needsReady(now, walk_running) &&
+                     offband::repeaterMqttPool().neighborsReady(offband::plausibleEpoch);
+  switch (_nbr_schedule.tick(now, walk_running, ready)) {
+    case offband::NeighborsAction::Discover:
+      sendNodeDiscoverReq();
+      break;
+    case offband::NeighborsAction::StartWalk:
+      _nbr_schedule.walkStarted(true);
+      break;
+    case offband::NeighborsAction::Publish:
+      _nbr_schedule.published(publishNeighborsReport(), now);
+      break;
+    default:
+      break;
+  }
+}
+
+// #1907: this repeater's own scopes, from the same call that answers a neighbor's regions
+// request, handed to the broker pool, which builds the report at once and hands it to
+// each connected broker in turn.
+bool MyMesh::publishNeighborsReport() {
+  char self_scopes[FLOOD_SCOPES_MAX];
+  exportFloodScopes(self_scopes);
+  offband::NeighborsReportInput in;
+  memset(&in, 0, sizeof(in));
+  in.self_scopes = self_scopes;
+  in.default_scope = getDefaultScopeName();
+  in.rows = NULL;
+  in.n_rows = 0;
+  in.total_neighbors = getNeighbourCount();
+  in.now = getRTCClock()->getCurrentTime();
+  in.plausible = offband::plausibleEpoch;
+  const uint8_t brokers = offband::repeaterMqttPool().publishNeighbors(in);
+  MESH_DEBUG_PRINTLN("neighbors: self report offered to %u broker(s)", (unsigned)brokers);
+  return brokers > 0;
 }
 #endif
 
@@ -1312,6 +1377,23 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       sendNodeDiscoverReq();
       strcpy(reply, "OK - Discover sent");
     }
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+  } else if (memcmp(command, "discover.scopes", 15) == 0) {
+    // #1907: no neighbor queries on the repeater yet (#1903), so this publishes its own
+    // scopes now, whether or not periodic publishing is on.
+    const char* sub = command + 15;
+    while (*sub == ' ') sub++;
+    if (*sub != 0) {
+      strcpy(reply, "Err - discover.scopes has no options");
+    } else {
+      startNeighborsReportNow();
+      if (offband::repeaterMqttPool().neighborsReady(offband::plausibleEpoch)) {
+        strcpy(reply, "OK - publishing own scopes");
+      } else {
+        strcpy(reply, "OK - own scopes queued; waiting for clock and a broker");
+      }
+    }
+#endif
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
@@ -1323,6 +1405,10 @@ void MyMesh::loop() {
 #endif
 
   mesh::Mesh::loop();
+
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+  neighborsCycleTick();   // #1907: the CoreScope /neighbors report
+#endif
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
     mesh::Packet *pkt = createSelfAdvert();
