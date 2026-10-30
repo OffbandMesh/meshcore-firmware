@@ -721,15 +721,19 @@ void ESP32Board::enterDeepSleep(uint32_t secs) {
   display.turnOff();
 #endif
 
-  // Power off LoRa
+  // Power off the radio, whatever it is
   radio_driver.powerOff();
 
-  // Keep LoRa inactive during deepsleep
+  // #1927: keep LoRa inactive during deepsleep -- only where there IS a LoRa
+  // radio. An ESP-NOW board defines no P_LORA_* pins, the same way a board with
+  // no screen defines no DISPLAY_CLASS, which this function already guards above.
+#ifdef P_LORA_NSS
   digitalWrite(P_LORA_NSS, HIGH);
 #if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32C6)
   gpio_hold_en((gpio_num_t)P_LORA_NSS);
 #else
   rtc_gpio_hold_en((gpio_num_t)P_LORA_NSS);
+#endif
 #endif
 
   // Power off GPS if any

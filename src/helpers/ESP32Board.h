@@ -85,7 +85,15 @@ public:
   void enterDeepSleep(uint32_t secs);
 
   uint32_t getIRQGpio() override {
+#ifdef P_LORA_DIO_1
     return P_LORA_DIO_1; // default for SX1262
+#else
+    // #1927: an ESP-NOW board meshes over WiFi and has no LoRa radio, so its
+    // variant defines no P_LORA_* pins. MeshCore's base class already has the
+    // answer for that case -- `return -1; // not supported` -- and this override
+    // discarded it, so every ESP-NOW env failed to compile from 2026-02-13.
+    return -1;
+#endif
   }
 
   // #446: runtime watchdog via the ESP-IDF Task WDT. startWatchdog() once after
@@ -143,8 +151,24 @@ public:
       return;
     }
 
+#ifndef P_LORA_DIO_1
+    // #1927: this board has no LoRa radio, so there is no IRQ pin to wake on and
+    // everything below would be configuring an invalid GPIO. It sleeps on the
+    // timer alone; with no timer either, nothing would wake it, so it yields.
+    //
+    // Compile-time rather than a check on getIRQGpio()'s -1, because that method
+    // is virtual: the comparison would not fold on a board that HAS a radio, and
+    // this function's generated code must stay exactly as it was there. Measured
+    // on Heltec_v3_repeater -- ESP32Board.cpp.o is byte-identical with this form
+    // and differs with the runtime one.
+    if (secs == 0) { delay(1); return; }
+    esp_sleep_enable_timer_wakeup(secs * 1000000ULL);
+    esp_light_sleep_start();
+    return;
+#endif
+
     // Set GPIO wakeup
-    gpio_num_t wakeupPin = (gpio_num_t)getIRQGpio();    
+    gpio_num_t wakeupPin = (gpio_num_t)getIRQGpio();
 
     // Configure timer wakeup
     if (secs > 0) {
