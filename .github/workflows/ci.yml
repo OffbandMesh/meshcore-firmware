@@ -648,6 +648,13 @@ jobs:
           - t1000e_companion_radio_ble
           - WioTrackerL1_companion_radio_ble
           - SenseCap_Solar_repeater   # fleet-deployed fixed solar nodes (owner, 2026-07-31)
+          # #1928: the ESP-NOW board class had NO env in this matrix, and every one
+          # of them stopped compiling on 2026-02-13 when getIRQGpio() began
+          # returning P_LORA_DIO_1 unguarded. Nothing noticed for eight months.
+          # This env is also the only consumer of LGFXDisplay/SCIndicatorDisplay,
+          # so one entry covers both the radio-less board class and a display
+          # driver that nothing else builds.
+          - SenseCapIndicator-ESPNow_comp_radio_usb
           # #479: Heltec T096 (nRF52) -- in active use; repeater-improvement work
           # incoming, so its primary role + BLE companion must build in CI.
           # (No observer env exists: observer is ESP32/WiFi-only.)
