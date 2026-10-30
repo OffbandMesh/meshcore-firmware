@@ -25,11 +25,13 @@ constexpr size_t kNeighborsReportMax = 10240;
 // Memory. The build buffer is PSRAM on a board that has it. Each broker's queued copy
 // is NOT: esp-mqtt allocates it with heap_caps_malloc(MALLOC_CAP_DEFAULT), which takes
 // internal RAM first whatever the board. That is the same enqueue every packet upload
-// makes, so the report costs what a packet costs: one copy of its own length. The copies
-// are queued one broker at a time (NeighborsFanOut), each only when that copy fits, and
-// the report is capped smaller on boards without PSRAM, where the buffer is internal too.
-// The TLS floor does not apply: it guards starting a handshake, which the broker pool
-// already refuses below the floor, and a V3 with its brokers up sits far below it.
+// makes, so each copy costs what a packet costs: its own length. NeighborsFanOut queues
+// the next broker's copy only after the previous one has left its outbox, so the report
+// never holds more than one copy plus its build buffer, and the report is capped smaller
+// on boards without PSRAM, where that buffer is internal too. The TLS floor is not the
+// gate: it guards the pool starting a handshake, and a V3 with its brokers up sits far
+// below it. esp-mqtt's own reconnect is not gated by the floor for packets either; one
+// copy at a time keeps the report's share of that exposure to one copy.
 constexpr size_t kNeighborsReportMaxNoPsram = 4096;
 
 inline size_t neighborsReportCap(bool has_psram) {
@@ -47,10 +49,11 @@ inline bool neighborsHeapFits(uint32_t free_heap, size_t len) {
     return (uint64_t)free_heap >= (uint64_t)len + kNeighborsHeapMargin;
 }
 
-// Hands one built report to the connected brokers one at a time, so at most about one
-// queued copy is in memory at once: next() offers the next broker only while the heap
-// fits, which in practice waits for the previous copy to be sent and freed. Brokers not
-// offered within kNeighborsFanOutDeadlineMs are dropped and counted as skipped.
+// Hands one built report to the connected brokers one at a time, so at most one queued
+// copy is in memory at once: next() offers the next broker only once the previous
+// accepted copy has been sent (prev_sent; the caller reads lastSlot()'s outbox) and the
+// heap fits. Brokers not offered within kNeighborsFanOutDeadlineMs are dropped and
+// counted as skipped, including those still waiting on a copy that never left.
 constexpr uint32_t kNeighborsFanOutDeadlineMs = 60000;
 
 class NeighborsFanOut {
@@ -59,15 +62,20 @@ public:
         pending_ = slot_mask;
         started_ms_ = now_ms;
         offered_ = false;
+        offered_slot_ = last_slot_ = -1;
         accepted_ = skipped_ = 0;
         active_ = slot_mask != 0;
     }
 
     bool active() const { return active_; }
 
-    // The broker slot to queue a copy on now, or -1 (wait, or finished). Call
-    // result() after every slot it returns.
-    int next(uint32_t now_ms, bool heap_fits) {
+    // The slot whose copy was accepted most recently, or -1 before any.
+    int lastSlot() const { return last_slot_; }
+
+    // The broker slot to queue a copy on now, or -1 (wait, or finished). prev_sent is
+    // whether lastSlot()'s copy has left its outbox (ignored while lastSlot() is -1).
+    // Call result() after every slot it returns.
+    int next(uint32_t now_ms, bool heap_fits, bool prev_sent) {
         if (!active_ || offered_) return -1;
         if ((uint32_t)(now_ms - started_ms_) >= kNeighborsFanOutDeadlineMs) {
             for (uint16_t m = pending_; m != 0; m &= (uint16_t)(m - 1)) skipped_++;
@@ -76,10 +84,12 @@ public:
             return -1;
         }
         if (!heap_fits || pending_ == 0) return -1;
+        if (last_slot_ >= 0 && !prev_sent) return -1;
         for (int s = 0; s < 16; s++) {
             if (pending_ & (1u << s)) {
                 pending_ &= (uint16_t)~(1u << s);
                 offered_ = true;
+                offered_slot_ = s;
                 return s;
             }
         }
@@ -89,8 +99,12 @@ public:
     void result(bool accepted) {
         if (!offered_) return;
         offered_ = false;
-        if (accepted) accepted_++;
-        else skipped_++;
+        if (accepted) {
+            accepted_++;
+            last_slot_ = offered_slot_;   // a refused copy queued nothing to wait on
+        } else {
+            skipped_++;
+        }
         if (pending_ == 0) active_ = false;
     }
 
@@ -101,6 +115,8 @@ private:
     uint16_t pending_ = 0;
     uint32_t started_ms_ = 0;
     bool offered_ = false;
+    int offered_slot_ = -1;
+    int last_slot_ = -1;
     bool active_ = false;
     int accepted_ = 0;
     int skipped_ = 0;

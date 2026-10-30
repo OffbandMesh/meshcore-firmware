@@ -239,13 +239,15 @@ TEST(NeighborsFanOut, OffersOneBrokerAtATimeInSlotOrder) {
     offband::NeighborsFanOut f;
     f.begin(0b1010, 1000);
     EXPECT_TRUE(f.active());
-    EXPECT_EQ(f.next(1000, true), 1);
-    EXPECT_EQ(f.next(1001, true), -1);   // the offered broker's result is not in yet
+    EXPECT_EQ(f.next(1000, true, true), 1);
+    EXPECT_EQ(f.next(1001, true, true), -1);   // the offered broker's result is not in yet
     f.result(true);
-    EXPECT_EQ(f.next(1002, true), 3);
+    EXPECT_EQ(f.lastSlot(), 1);
+    EXPECT_EQ(f.next(1002, true, true), 3);
     f.result(false);
+    EXPECT_EQ(f.lastSlot(), 1);   // a refused copy queued nothing to wait on
     EXPECT_FALSE(f.active());
-    EXPECT_EQ(f.next(1003, true), -1);
+    EXPECT_EQ(f.next(1003, true, true), -1);
     EXPECT_EQ(f.accepted(), 1);
     EXPECT_EQ(f.skipped(), 1);
 }
@@ -253,21 +255,60 @@ TEST(NeighborsFanOut, OffersOneBrokerAtATimeInSlotOrder) {
 TEST(NeighborsFanOut, WaitsWhileTheHeapDoesNotFit) {
     offband::NeighborsFanOut f;
     f.begin(0b1, 0);
-    EXPECT_EQ(f.next(10, false), -1);
+    EXPECT_EQ(f.next(10, false, true), -1);
     EXPECT_TRUE(f.active());
-    EXPECT_EQ(f.next(20, true), 0);
+    EXPECT_EQ(f.next(20, true, true), 0);
     f.result(true);
     EXPECT_FALSE(f.active());
+}
+
+// The heap check alone let a V3 stack six 4 KB copies in outboxes at once (review of
+// 596fd4ac): the next copy must wait for the previous one to leave its outbox.
+TEST(NeighborsFanOut, WaitsUntilThePreviousCopyHasLeft) {
+    offband::NeighborsFanOut f;
+    f.begin(0b101, 0);
+    EXPECT_EQ(f.lastSlot(), -1);
+    EXPECT_EQ(f.next(0, true, false), 0);   // nothing queued yet: prev_sent is ignored
+    f.result(true);
+    EXPECT_EQ(f.next(10, true, false), -1);  // broker 0 still holds its copy
+    EXPECT_EQ(f.next(20, true, false), -1);
+    EXPECT_TRUE(f.active());
+    EXPECT_EQ(f.next(30, true, true), 2);
+    f.result(true);
+    EXPECT_FALSE(f.active());
+    EXPECT_EQ(f.accepted(), 2);
+}
+
+TEST(NeighborsFanOut, ACopyThatNeverLeavesRunsOutTheDeadline) {
+    offband::NeighborsFanOut f;
+    f.begin(0b111, 0);
+    EXPECT_EQ(f.next(0, true, true), 0);
+    f.result(true);
+    EXPECT_EQ(f.next(offband::kNeighborsFanOutDeadlineMs - 1, true, false), -1);
+    EXPECT_TRUE(f.active());
+    EXPECT_EQ(f.next(offband::kNeighborsFanOutDeadlineMs, true, false), -1);
+    EXPECT_FALSE(f.active());
+    EXPECT_EQ(f.accepted(), 1);
+    EXPECT_EQ(f.skipped(), 2);
+}
+
+TEST(NeighborsFanOut, ARefusedCopyDoesNotHoldUpTheNext) {
+    offband::NeighborsFanOut f;
+    f.begin(0b11, 0);
+    EXPECT_EQ(f.next(0, true, false), 0);
+    f.result(false);
+    EXPECT_EQ(f.lastSlot(), -1);
+    EXPECT_EQ(f.next(10, true, false), 1);   // nothing of ours is queued anywhere
 }
 
 TEST(NeighborsFanOut, DeadlineDropsTheRestAsSkipped) {
     offband::NeighborsFanOut f;
     f.begin(0b111, 0xFFFFF000u);   // across the millis() wrap
-    EXPECT_EQ(f.next(0xFFFFF000u, true), 0);
+    EXPECT_EQ(f.next(0xFFFFF000u, true, true), 0);
     f.result(true);
-    EXPECT_EQ(f.next(0xFFFFF000u + offband::kNeighborsFanOutDeadlineMs - 1, false), -1);
+    EXPECT_EQ(f.next(0xFFFFF000u + offband::kNeighborsFanOutDeadlineMs - 1, false, true), -1);
     EXPECT_TRUE(f.active());
-    EXPECT_EQ(f.next(0xFFFFF000u + offband::kNeighborsFanOutDeadlineMs, true), -1);
+    EXPECT_EQ(f.next(0xFFFFF000u + offband::kNeighborsFanOutDeadlineMs, true, true), -1);
     EXPECT_FALSE(f.active());
     EXPECT_EQ(f.accepted(), 1);
     EXPECT_EQ(f.skipped(), 2);
@@ -277,7 +318,7 @@ TEST(NeighborsFanOut, NoBrokersIsNeverActive) {
     offband::NeighborsFanOut f;
     f.begin(0, 0);
     EXPECT_FALSE(f.active());
-    EXPECT_EQ(f.next(0, true), -1);
+    EXPECT_EQ(f.next(0, true, true), -1);
     f.result(true);   // a stray result is ignored
     EXPECT_EQ(f.accepted(), 0);
 }
