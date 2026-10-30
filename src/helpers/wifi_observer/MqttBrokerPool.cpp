@@ -591,8 +591,13 @@ void MqttBrokerPool::neighborsFanOutTick(uint32_t now_ms) {
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     if (nbr_buf_ == nullptr) return;
     const uint32_t heap_before = ESP.getFreeHeap();
+    // Only a connected broker's outbox is read: esp-mqtt holds the lock that read takes
+    // through a whole reconnect, handshake included, and this is the loop task. A broker
+    // that dropped keeps its copy until it reconnects, so the fan-out waits on it.
     const int prev = nbr_fanout_.lastSlot();
-    const bool prev_sent = prev < 0 || brokers_[prev].outboxBytes() < static_cast<int>(nbr_len_);
+    const bool prev_sent = prev < 0 ||
+        (brokers_[prev].runtime().state == BrokerState::Up &&
+         brokers_[prev].outboxBytes() < static_cast<int>(nbr_len_));
     const int slot = nbr_fanout_.next(now_ms, neighborsHeapFits(heap_before, nbr_len_), prev_sent);
     if (slot >= 0) {
         char topic[160];
@@ -602,7 +607,7 @@ void MqttBrokerPool::neighborsFanOutTick(uint32_t now_ms) {
                                         /*retain=*/true, /*qos=*/0);
         }
         if (ok) {
-            mesh_log_line(MLOG_DEBUG, "neighbors: broker %d took the report (free heap %u, outbox %d bytes)\n",
+            mesh_log_line(MLOG_DEBUG, "neighbors: broker %d took the report (free heap %u before, outbox %d bytes after)\n",
                           slot, (unsigned)heap_before, brokers_[slot].outboxBytes());
         } else {
             mesh_log_line(MLOG_ERROR, "neighbors: broker %d did not take the report\n", slot);
@@ -610,7 +615,8 @@ void MqttBrokerPool::neighborsFanOutTick(uint32_t now_ms) {
         nbr_fanout_.result(ok);
     }
     if (!nbr_fanout_.active()) {
-        // A skip means a copy never fit in the free heap; it must show in the log.
+        // A skip means a broker never got its copy (refused, no heap, or the deadline ran
+        // out waiting on the heap or the previous copy); it must show in the log.
         mesh_log_line(nbr_fanout_.skipped() > 0 ? MLOG_ERROR : MLOG_DEBUG,
                       "neighbors: %u-byte report queued to %d broker(s), %d skipped\n",
                       (unsigned)nbr_len_, nbr_fanout_.accepted(), nbr_fanout_.skipped());
