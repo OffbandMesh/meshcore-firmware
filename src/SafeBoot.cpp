@@ -501,7 +501,7 @@ static bool safeBootButtonInMap()
 #ifdef PINS_COUNT
     return p >= 0 && p < (int)(PINS_COUNT);
 #else
-    return p >= 0;
+#error "SAFEBOOT_NRF52_BUTTON needs PINS_COUNT to bound the pin map lookup"
 #endif
 }
 #endif
@@ -537,6 +537,7 @@ offband::SafeBootWake planSafeBootWake()
         const uint32_t pin = safeBootButtonChipPin();
         const bool pressed_high = (USER_BTN_PRESSED == HIGH);
         nrf_gpio_cfg_input(pin, pressed_high ? NRF_GPIO_PIN_PULLDOWN : NRF_GPIO_PIN_PULLUP);
+        safeBootFeedWatchdog();
         delay(10);
         const int level = offband::waitForButtonIdle(
             pressed_high, offband::kButtonReleaseWaitMs,
