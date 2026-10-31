@@ -415,6 +415,11 @@ jobs:
       - name: Docs-only classifier and its allowlist safety property
         run: python scripts/test_classify_changes.py
 
+      # #1933: a wrong close here marks real work finished, and the workflow only
+      # runs from the default branch, so this is the one check a PR can get.
+      - name: Citadel sync self-test
+        run: python scripts/test_citadel_sync.py
+
       # #775 (epic #774). Guards the defect class behind #764/#765: an `else if`
       # that matches a CLI key and writes nothing, or a key claimed twice in one
       # chain so the later arm is unreachable. `get radio` returned an empty reply
