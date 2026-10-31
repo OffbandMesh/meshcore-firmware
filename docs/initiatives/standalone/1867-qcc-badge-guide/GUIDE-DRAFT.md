@@ -27,8 +27,9 @@ was added, and some badges have no buzzer or GPS.
 | **GPS** | See step 8. | The badge has no position of its own. With a screen, the GPS page says `No GPS Module`. |
 | **Buzzer and mute switch** | The badge plays tones. The switch cuts the buzzer in hardware. | The badge makes no sound, whatever the tone settings say. |
 
-The badge looks for its screen, keyboard and GPS each time it starts, so there is nothing
-to set up. It can't tell whether a buzzer is fitted.
+The badge finds its own parts, so there is nothing to set up. It looks for a screen and
+GPS when it starts, and keeps checking for a keyboard while it runs. It can't tell whether
+a buzzer is fitted, so it plays tones either way.
 
 Steps 3 to 11 use the badge's screen. Without one, go from step 2 to step 12. Steps 5
 and 6 still describe your badge's defaults, and step 8 explains the GPS modes you can
