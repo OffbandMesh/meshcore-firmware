@@ -7,12 +7,20 @@ features:
     roles: [companion-observer, companion, repeater]
     boards: [heltec_v3, heltec_v4, xiao_s3_wio]
     availability: {channel: beta, verified_releases: [offband-v1.6.0-beta1]}
-    verification: Current release-format and flashing implementation checked; no hardware flash performed and no blanket older-release compatibility claim.
+    verification: Current release-format and flashing implementation checked; no hardware flash performed and no blanket older-release compatibility claim. The boot-screen lines, hold times and per-board color/monochrome arrangement are read from current source, not from a device photograph.
     evidence:
       - path: scripts/pio-flash.py
         contains: ['ESP32_APP0_OFFSET = 0x10000', '--erase requires the full -merged.bin']
       - path: README.md
         contains: ['first install', 'update', 'device identity + config']
+      - path: src/helpers/ui/OffbandSplash.cpp
+        contains: ['const bool color = (art != nullptr);', 'on MeshCore %.*s', 'const char* last = info.role_line ? info.role_line : info.build_date;']
+      - path: examples/companion_radio/ui-new/UITask.cpp
+        contains: ['#define BOOT_SCREEN_MILLIS   3000', 'offband::SplashInfo si( nullptr, FIRMWARE_VERSION, FIRMWARE_BUILD_DATE );']
+      - path: examples/simple_repeater/UITask.cpp
+        contains: ['#define BOOT_SCREEN_MILLIS   4000', '"< Repeater >"']
+      - path: variants/heltec_v4/platformio.ini
+        contains: ['-D DISPLAY_CLASS=ST7789LCDDisplay', '-D DISPLAY_CLASS=SSD1306Display']
   - id: observer-wifi
     title: Connect an observer to WiFi
     coverage: documented
