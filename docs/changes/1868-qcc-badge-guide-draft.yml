@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1868
+impact: none
+reason: Adds the QCC badge guide as an unpublished draft with its plan and catalogs the feature as planned. The manual accepts a guide only for behavior a release carries, so no published page changes until then.

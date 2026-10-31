@@ -120,3 +120,27 @@ features:
         contains: ['constexpr uint8_t kAnonReqTypeRegions = 0x01;', 'constexpr uint32_t kRegionQueryTimeoutMs = 20000;']
       - path: src/helpers/wifi_observer/CliPassthrough.cpp
         contains: ['isBareWord(p, "discover.neighbors")', 'isBareWord(p, "discover.scopes")']
+  - id: qcc-badge
+    title: Use your QCC badge
+    coverage: planned
+    roles: [companion]
+    boards: [qcc_badge]
+    availability: {channel: development, verified_releases: []}
+    verification: Badge screens, settings, defaults and client-settable surfaces checked against development source. The low-battery refusal, SOS and button wake were bench-tested on QCC badges at raised test thresholds, not on a low cell; keyboardless list navigation has no recorded hardware result. The guide is published when a release carries this behavior; its draft is docs/initiatives/standalone/1867-qcc-badge-guide/GUIDE-DRAFT.md.
+    evidence:
+      - path: variants/qcc_badge/platformio.ini
+        contains: ['-D LORA_FREQ=919.5', '-D LORA_BW=500', '-D LORA_SF=7', '-D LORA_CR=5', '-D LORA_TX_POWER=22']
+      - path: variants/qcc_badge/QccChannels.h
+        contains: ['"#queencitycon"', '"#okimesh"', '"#test"', '"#echo"', '"#offband"', '"#qcchhv"', '"#qcchams"']
+      - path: src/helpers/NodeNameFromMac.h
+        contains: ['kQccNamePrefix = "QCC-"']
+      - path: src/helpers/ui/Tunes.h
+        contains: ['{"Chime",', '{"Kerplop",', '{"Knock",']
+      - path: src/helpers/GpsPowerMode.h
+        contains: ['kGpsFirstAttemptTimeoutMs = 180000']
+      - path: examples/companion_radio/ui-new/BadgeScreens.cpp
+        contains: ['" BT pin %06lu"', '" phone connected"', '"stale"']
+      - path: examples/companion_radio/ui-new/UITask.cpp
+        contains: ['"Shutting Down!"']
+      - path: src/SafeBoot.cpp
+        contains: ['static const char kSos[] = "SOS";']
