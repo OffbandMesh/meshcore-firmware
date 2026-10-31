@@ -1,0 +1,4 @@
+schema_version: 1
+issue: 1938
+impact: none
+reason: Project-tracking automation only. No firmware, setting, command or wording changes, so no guide changes.
