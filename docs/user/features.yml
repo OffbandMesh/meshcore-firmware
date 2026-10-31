@@ -126,7 +126,7 @@ features:
     roles: [companion]
     boards: [qcc_badge]
     availability: {channel: development, verified_releases: []}
-    verification: Badge screens, settings, defaults and client-settable surfaces checked against development source. The low-battery refusal, SOS and button wake were bench-tested on QCC badges at raised test thresholds, not on a low cell; keyboardless list navigation has no recorded hardware result. The guide is published when a release carries this behavior; its draft is docs/initiatives/standalone/1867-qcc-badge-guide/GUIDE-DRAFT.md.
+    verification: Badge screens, settings, defaults and client-settable surfaces checked against development source, including the Bluetooth PIN with and without a display. No badge without a screen has been paired against this text. The low-battery refusal, SOS and button wake were bench-tested on QCC badges at raised test thresholds, not on a low cell; keyboardless list navigation has no recorded hardware result. The guide is published when a release carries this behavior; its draft is docs/initiatives/standalone/1867-qcc-badge-guide/GUIDE-DRAFT.md.
     evidence:
       - path: variants/qcc_badge/platformio.ini
         contains: ['-D LORA_FREQ=919.5', '-D LORA_BW=500', '-D LORA_SF=7', '-D LORA_CR=5', '-D LORA_TX_POWER=22']
@@ -144,3 +144,5 @@ features:
         contains: ['"Shutting Down!"']
       - path: src/SafeBoot.cpp
         contains: ['static const char kSos[] = "SOS";']
+      - path: examples/companion_radio/MyMesh.cpp
+        contains: ['if (has_display && BLE_PIN_CODE == 123456) {', '_active_ble_pin = BLE_PIN_CODE; // otherwise static pin']
