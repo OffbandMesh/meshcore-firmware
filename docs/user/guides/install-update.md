@@ -80,11 +80,31 @@ Keep the device connected until the tool reports completion.
 
 ## Check it worked
 
-After the radio restarts, read the Offband version from its supported display,
-app device information or boot banner. Compare it with the downloaded release,
-not just an upstream MeshCore version. Confirm the expected role and display,
-then reconnect the app and check the identity and configuration you intended to
-preserve. For an observer, continue with [WiFi setup](observer-wifi.md).
+A radio with a supported display shows an Offband boot screen when it restarts:
+the Offband lockup, then three lines of text. It is held for about three seconds
+on a companion image and four on a repeater, so read it promptly or power-cycle
+the radio to see it again.
+
+| Line | What it says |
+|---|---|
+| 1 | The Offband version, such as `v1.6.0-beta1`. A `+` and a number means that many commits after that tag, and a trailing `*` an unclean build tree; either marks a development build rather than a release. |
+| 2 | `on MeshCore <version>` — the upstream version this image is built on. |
+| 3 | The role, written as `< Repeater >`, on a role that states one; the build date on a companion. |
+
+Compare line 1 with the release you downloaded. Line 2 agreeing with an expected
+MeshCore version does not establish that you installed the intended Offband
+image. On a repeater, line 3 is the role check step 1 asks for; a companion
+states no role here, so confirm its role from the app.
+
+The lockup is drawn in color on a color panel and in a single color on a
+monochrome OLED. Both are correct for the display fitted, and neither is a sign
+of a wrong image. A panel too small for the full lockup shows the mark and the
+version line alone.
+
+Without a display, or if it is unreadable, read the same version from the app's
+device information or the boot banner on the serial console. Then reconnect the
+app and check the identity and configuration you intended to preserve. For an
+observer, continue with [WiFi setup](observer-wifi.md).
 
 ## Troubleshooting
 
@@ -94,6 +114,8 @@ preserve. For an observer, continue with [WiFi setup](observer-wifi.md).
 | Flash succeeds but the radio will not boot | Recheck board, image type and flashing method. Do not repeatedly erase it. |
 | App cannot reconnect | Confirm the image's role, reconnect Bluetooth and check its device information. |
 | Version or display differs | Recheck the complete downloaded asset name, including OLED/TFT and role. |
+| Boot screen shows no Offband version on line 1 | The image is not an Offband build, or not the one you downloaded. Recheck the asset and reflash from the release. |
+| Boot screen is blank, or unreadable on a color panel | Recheck the board revision against the image: a TFT image on an OLED board, or the reverse, drives the wrong panel. |
 
 ## Limits and recovery
 

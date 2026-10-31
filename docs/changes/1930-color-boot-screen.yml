@@ -1,0 +1,16 @@
+schema_version: 1
+issue: 1930
+impact: updated
+guides:
+  - docs/user/guides/install-update.md
+reason: >-
+  Catches up the documentation for Epic 864, which gave every color panel the
+  color Offband lockup and shipped in PR 1777 on 2026-10-22, four days before
+  this gate existed, so it recorded no decision. The install guide already told
+  the user to read the version from the display and confirm the role, without
+  saying what that screen shows. It now describes the boot screen as the
+  post-flash check - the three lines and what each one is, the color and
+  monochrome arrangements as equally correct, the reduced screen on a panel too
+  small for the lockup, and two troubleshooting rows for a screen with no
+  Offband version and for a panel that is blank or unreadable. No firmware,
+  command, setting, default or release claim changes here.
