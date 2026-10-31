@@ -4,8 +4,9 @@ name: Sync Citadel on issue close
 # The issue trigger catches closes as they happen. The nightly run catches any
 # that were missed and rewrites the report issue with what it will not change.
 #
-# Requires repo secret CITADEL_URL. It is a secret so the address stays out of
-# this public repository and its run logs.
+# Requires repo secrets CITADEL_URL, so the address stays out of this public
+# repository and its run logs, and CITADEL_SYNC_TOKEN, the header the CDN rule
+# lets through.
 on:
   issues:
     types: [closed]
@@ -32,6 +33,7 @@ jobs:
       - name: Close the issue's Citadel tasks
         env:
           CITADEL_URL: ${{ secrets.CITADEL_URL }}
+          CITADEL_SYNC_TOKEN: ${{ secrets.CITADEL_SYNC_TOKEN }}
           ISSUE: ${{ github.event.issue.number }}
           STATE_REASON: ${{ github.event.issue.state_reason }}
         run: python scripts/citadel_sync.py close --issue "$ISSUE" --state-reason "$STATE_REASON"
@@ -47,6 +49,7 @@ jobs:
       - name: Close missed tasks and write the report
         env:
           CITADEL_URL: ${{ secrets.CITADEL_URL }}
+          CITADEL_SYNC_TOKEN: ${{ secrets.CITADEL_SYNC_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: python scripts/citadel_sync.py reconcile --report "$RUNNER_TEMP/report.md" --repo "$GITHUB_REPOSITORY"
       # always(): a refused run has written the report, and that is when it matters.

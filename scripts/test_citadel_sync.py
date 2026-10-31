@@ -6,6 +6,7 @@ Run from the repository root (config-lint does):  python scripts/test_citadel_sy
 """
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -13,8 +14,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import citadel_sync  # noqa: E402
 from citadel_sync import (  # noqa: E402
-    Citadel, MAX_RECONCILE_CLOSES, SyncError, TASK_PAGE_LIMIT, curl_json, on_close,
-    plan_reconcile, reconcile, render_report,
+    Citadel, MAX_RECONCILE_CLOSES, SYNC_TOKEN_HEADER, SyncError, TASK_PAGE_LIMIT, curl_json,
+    on_close, plan_reconcile, reconcile, render_report,
 )
 
 URL = "https://github.com/OffbandMesh/meshcore-firmware/issues/"
@@ -192,6 +193,54 @@ for name, run in (("curl not installed", curl_missing), ("curl failing", curl_fa
     error = curl_error(run)
     check(f"{name} is a SyncError", error is not None)
     check(f"{name} does not print the address", "citadel.invalid" not in (error or ""))
+
+# --- the CDN token
+
+def curl_argv(token):
+    """The argv curl would get, with the token set or not. Restores both things it touches."""
+    seen = []
+
+    def run(argv, **_kwargs):
+        seen.extend(argv)
+        return citadel_sync.subprocess.CompletedProcess(argv, 0, "[]\n200", "")
+
+    real_run, real_token = citadel_sync.subprocess.run, os.environ.pop("CITADEL_SYNC_TOKEN", None)
+    citadel_sync.subprocess.run = run
+    if token:
+        os.environ["CITADEL_SYNC_TOKEN"] = token
+    try:
+        result = curl_json([f"{BASE}/x"])
+    finally:
+        citadel_sync.subprocess.run = real_run
+        os.environ.pop("CITADEL_SYNC_TOKEN", None)
+        if real_token:
+            os.environ["CITADEL_SYNC_TOKEN"] = real_token
+    return seen, result
+
+
+argv, result = curl_argv("tok-value")
+check("the token goes out as the header", f"{SYNC_TOKEN_HEADER}: tok-value" in argv)
+check("the header comes before the request", argv.index("-H") < argv.index(f"{BASE}/x"))
+check("a request with a token still parses", result == (200, []))
+argv, _ = curl_argv(None)
+check("no token means no header", "-H" not in argv)
+argv, _ = curl_argv("")
+check("an empty token means no header", "-H" not in argv)
+
+
+def curl_failing_with_token(*_args, **_kwargs):
+    return citadel_sync.subprocess.CompletedProcess([], 6, "", "tok-value rejected")
+
+
+os.environ["CITADEL_SYNC_TOKEN"] = "tok-value"
+error = curl_error(curl_failing_with_token)
+del os.environ["CITADEL_SYNC_TOKEN"]
+check("a curl failure does not print the token", "tok-value" not in (error or "tok-value"))
+
+check("the workflow reads the token from a secret", "secrets.CITADEL_SYNC_TOKEN" in text)
+check("both jobs that reach Citadel get the token",
+      text.count("CITADEL_SYNC_TOKEN: ${{ secrets.CITADEL_SYNC_TOKEN }}") == 2)
+check("the token value is not in the script", "tok-" not in source)
 
 # --- a full page cannot be told from a cut-off list
 

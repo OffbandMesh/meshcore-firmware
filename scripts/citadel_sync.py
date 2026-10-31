@@ -10,8 +10,8 @@ and one finished task does not mean the issue is done.
                                      write what it will not change to FILE
 
 Both exit 1 if any write failed, so the workflow run goes red, and both are safe
-to run twice. The Citadel address comes from CITADEL_URL, never from this file:
-this repository is public.
+to run twice. The Citadel address comes from CITADEL_URL and the CDN token from
+CITADEL_SYNC_TOKEN, never from this file: this repository is public.
 
 curl rather than urllib: Citadel's CDN answered 403 to Python's default client
 when curl got through from the same machine.
@@ -42,6 +42,8 @@ MAX_RECONCILE_CLOSES = 25
 
 TASK_PAGE_LIMIT = 5000
 
+SYNC_TOKEN_HEADER = "X-Offband-Sync"
+
 
 class SyncError(Exception):
     pass
@@ -49,9 +51,13 @@ class SyncError(Exception):
 
 def curl_json(args):
     """Run curl and return (status, parsed body). The address stays out of errors."""
+    # GitHub's runners get a 403 from the CDN without this (#1934). A CDN rule lets the
+    # token through. Local runs get through without it, so it stays optional.
+    token = os.environ.get("CITADEL_SYNC_TOKEN")
+    auth = ["-H", f"{SYNC_TOKEN_HEADER}: {token}"] if token else []
     try:
         out = subprocess.run(
-            ["curl", "-sS", "--max-time", "30", "-w", "\n%{http_code}", *args],
+            ["curl", "-sS", "--max-time", "30", "-w", "\n%{http_code}", *auth, *args],
             capture_output=True, text=True, encoding="utf-8",
         )
     except OSError as e:
