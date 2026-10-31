@@ -4,41 +4,57 @@
 > `title: Use your QCC badge`, `feature: qcc-badge`, catalog coverage `documented`) when
 > a release carries this behavior.
 
-The Queen City Con badge is a MeshCore companion radio with its own screen, a button
-and a buzzer. You can read and send messages on the badge itself, or pair it with the
-Offband client on a phone or computer.
+The Queen City Con badge is a MeshCore companion radio. Every badge runs the same
+firmware, but not every badge has the same parts, so what yours can do depends on what
+is fitted. Pair it with the Offband client on a phone or computer, and with a screen you
+can use it on its own too.
 
 ## Applies to
 
-The QCC badge firmware, in both badge forms. They run the same firmware:
-
-- the **supporter badge**, which has a keyboard;
-- the **pyramid badge**, which has no keyboard and is driven by its button.
-
-This page describes the current development build. That build will be in the next
+The QCC badge firmware, on every badge. This page describes the current development build. That build will be in the next
 Offband release, and this page will name that release when it ships. Some of what is
 described here differs from the badge image in `offband-v1.6.0-beta1`.
+
+## What your badge has
+
+A supporter badge has a screen and a keyboard. A pyramid badge has neither unless one
+was added, and some badges have no buzzer or GPS.
+
+| Part | If it is fitted | If it is not |
+|---|---|---|
+| **Screen** | Read messages and change settings on the badge. The Bluetooth PIN is on the screen and changes every start, unless you set a fixed one. | Do everything from the client. The Bluetooth PIN is `123456` until you set your own. |
+| **Keyboard** | Type and send messages on the badge. | With a screen, the button drives the badge and you send messages from the client. |
+| **GPS** | See step 8. | The badge has no position of its own. With a screen, the GPS page says `No GPS Module`. |
+| **Buzzer and mute switch** | The badge plays tones. The switch cuts the buzzer in hardware. | The badge makes no sound, whatever the tone settings say. |
+
+The badge looks for its screen, keyboard and GPS each time it starts, so there is nothing
+to set up. It can't tell whether a buzzer is fitted.
+
+Steps 3 to 11 use the badge's screen. Without one, go from step 2 to step 12. Steps 5
+and 6 still describe your badge's defaults, and step 8 explains the GPS modes you can
+choose from the client.
 
 ## Before you start
 
 - Charge the badge. Its battery bar reads 0% at the voltage the badge will no longer
   start from, so a badge at 0% may still be running, but it will not boot.
-- For pairing, install the Offband client.
-- The **mute switch** on the badge cuts the buzzer in hardware. If you hear nothing,
-  check it first.
+- For pairing, [download the Offband client](https://offband.app/).
+- If your badge has a **mute switch** and you hear nothing, check the switch first.
 
 ## Steps
 
 ### 1. Turn it on
 
-When it starts, the badge plays a short tune and shows the Queen City Con splash
-screen for three seconds, then opens the Messages screen.
+With a buzzer, the badge plays a short tune when it starts. With a screen, it shows the
+Queen City Con splash screen for three seconds, then opens the Messages screen.
 
 A new badge names itself `QCC-` followed by four characters, for example `QCC-E7A1`.
 Those four characters match the label on your badge, so you can tell your badge apart
 from the ones around you. You can rename it from the client.
 
 ### 2. Pair with the Offband client
+
+**With a screen:**
 
 1. On the badge, open the **Status** screen (see step 3).
 2. The bottom line shows `BT pin` and a six-digit number.
@@ -47,9 +63,19 @@ from the ones around you. You can rename it from the client.
 The badge picks a **new random PIN every time it starts**, unless you have set a fixed
 PIN from the client. If pairing fails after a restart, read the PIN again.
 
+**Without a screen:**
+
+1. In the client, connect to your badge by its name.
+2. Enter `123456`.
+
+Every badge without a screen starts with that same PIN, so set your own from the client.
+A new PIN takes effect the next time the badge starts. **Write it down:** the badge has
+no way to show it to you, and if you lose it, a full erase is the only documented way
+back, which also removes your channels, settings and identity.
+
 ### 3. Get around
 
-The button does everything on a pyramid badge:
+With a screen and no keyboard, the button does everything:
 
 | Press | What it does |
 |---|---|
@@ -72,7 +98,7 @@ In a conversation, a single click goes back; a triple click does nothing there. 
 Settings, a click and a double click only move within the list, and a triple click goes
 back.
 
-**With a keyboard** (supporter badge):
+**With a keyboard:**
 
 - Up and Down move the highlight; Left and Right change screen.
 - Enter opens, selects or sends; Esc goes back.
@@ -141,10 +167,10 @@ Open **Settings**, then **Tones**.
   and Knock, and the picker plays each one as you move to it.
 - Out of the box: DM is Chime, Channel is Kerplop, Ack and Sent are Tick, Room and New
   contact are silent.
-- **A tone for one channel:** on a supporter badge, open the conversation and press
-  Right. On a pyramid badge, set it from the client.
-- **Custom** holds up to eight tunes of your own. A supporter badge can type them; on a
-  pyramid badge, fill them from the client.
+- **A tone for one channel:** with a keyboard, open the conversation and press Right.
+  Without one, set it from the client.
+- **Custom** holds up to eight tunes of your own. With a keyboard you can type them;
+  without one, fill them from the client.
 
 A triple click on the Messages screen turns the buzzer on or off without changing any
 of these settings.
@@ -184,11 +210,11 @@ treats as 100%.
 - **Set 100% here** sets it now, if the badge has been fully charged.
 - **Back to auto** returns to the learned value.
 
-When the battery runs very low while the badge is on, it shows **Low Battery. Shutting
-Down!** and turns off. It only does this after the voltage has stayed low for five
-minutes, and never while it is plugged in.
+When the battery runs very low while the badge is on, it turns off, showing **Low
+Battery. Shutting Down!** if it has a screen. It only does this after the voltage has
+stayed low for five minutes, and never while it is plugged in.
 
-If the battery is too low to start, the badge will not boot. The LED blinks SOS, the
+If the battery is too low to start, the badge will not boot. An LED blinks SOS, any
 screen goes blank and the badge goes to sleep. Charge it, then press the button to try
 again.
 
@@ -200,35 +226,41 @@ badge.**
 
 ### 12. Set it up from the client
 
-The Offband client can change most of the badge's settings, which matters most on a
-pyramid badge with no keyboard:
+The Offband client can change most of the badge's settings, and on a badge with no
+screen it is the only way to change them:
 
 | Setting | On the badge | From the client |
 |---|---|---|
-| Sound (All / DMs + @ / Off) | yes | yes |
-| Event tones | yes | yes |
-| A tone for one channel | supporter only | yes |
-| Custom tunes | supporter only | yes |
-| GPS mode and Power save | yes | yes |
-| Text sizes, screen off, time zone | yes | yes |
+| Sound (All / DMs + @ / Off) | with a screen | yes |
+| Event tones | with a screen | yes |
+| A tone for one channel | with a screen and keyboard | yes |
+| Custom tunes | with a screen and keyboard | yes |
+| GPS mode and Power save | with a screen | yes |
+| Text sizes, screen off, time zone | with a screen | yes |
 | Display always on or always dark | no | yes |
-| Battery 100% point | yes | yes |
-| Bluetooth on or off | yes | no |
+| Battery 100% point | with a screen | yes |
+| A fixed Bluetooth PIN | no | yes |
+| Bluetooth on or off | with a screen | no |
 
 ## Check it worked
 
-- **Pairing:** the Status screen footer changes from `BT pin` to `phone connected`.
-- **Sound:** move through the tone picker; each tone plays as you reach it.
+- **Pairing:** the client connects. With a screen, the Status screen footer changes from
+  `BT pin` to `phone connected`.
+- **Sound:** with a buzzer, move through the tone picker; each tone plays as you reach
+  it.
 - **Radio:** the Status screen shows the frequency, spreading factor and bandwidth in
   use.
 - **GPS:** the GPS screen shows a fix and a position.
 
 ## Troubleshooting
 
-- **No sound:** check the mute switch, then **Settings > Tones > Sound**, then whether a
-  triple click on Messages has turned the buzzer off.
-- **Pairing fails:** the PIN changes each time the badge starts. Read it again from the
-  Status screen.
+- **No sound:** not every badge has a buzzer. If yours does, check the mute switch, then
+  **Settings > Tones > Sound**, then whether a triple click on Messages has turned the
+  buzzer off.
+- **Pairing fails, with a screen:** the PIN changes each time the badge starts. Read it
+  again from the Status screen.
+- **Pairing fails, without a screen:** the PIN is `123456`, unless someone has set a
+  different one from the client. See step 2 if it has been lost.
 - **My channels did not change after an update:** that is intended. The default
   channels are only added to a badge that has none.
 - **GPS never gets a fix:** it needs a view of the sky. In Power save it waits longer
@@ -241,7 +273,9 @@ pyramid badge with no keyboard:
 ## Limits and recovery
 
 - The badge has no brightness setting.
-- On a pyramid badge, per-channel tones and custom tunes need the client.
+- Without a keyboard, per-channel tones and custom tunes need the client.
+- Without a screen, the button has no menu to drive, and turning Bluetooth off isn't
+  available.
 - Hibernate deletes the messages stored on the badge, and that cannot be undone.
 - Updating the firmware keeps your channels, radio settings and identity. A full erase
   does not: it removes them, and they cannot be recovered afterwards. Follow
