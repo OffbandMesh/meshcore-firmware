@@ -79,9 +79,9 @@ class UITask : public AbstractUITask {
 #endif
 
 #ifdef PIN_QCC_ACTIVITY_LED
-  // #1367: the activity LED -- the one beside the display, which #1366 freed by moving
-  // the heartbeat to the module's own LED. One LED says one thing at a time, so the
-  // classes are a priority stack, highest first:
+  // #1367: the activity LED on P0.08 -- beside the display on the sponsor badge, over the
+  // Q on the pyramid badge -- which #1366 freed by moving the heartbeat to P0.15. One LED
+  // says one thing at a time, so the classes are a priority stack, highest first:
   //
   //   traffic    a packet decoded. Lit for as long as that packet occupied the air, so
   //              the indicator reports something real rather than a chosen duration.
