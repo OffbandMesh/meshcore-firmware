@@ -6,7 +6,6 @@ Run from the repository root (config-lint does):  python scripts/test_citadel_sy
 """
 
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -14,8 +13,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import citadel_sync  # noqa: E402
 from citadel_sync import (  # noqa: E402
-    Citadel, MAX_RECONCILE_CLOSES, SYNC_TOKEN_HEADER, SyncError, TASK_PAGE_LIMIT, curl_json,
-    on_close, plan_reconcile, reconcile, render_report,
+    Citadel, MAX_RECONCILE_CLOSES, SyncError, TASK_PAGE_LIMIT, curl_json,
+    on_close, plan_reconcile, reconcile, render_report, update_report_issue,
 )
 
 URL = "https://github.com/OffbandMesh/meshcore-firmware/issues/"
@@ -128,8 +127,14 @@ check("issue 7 has no task of ours, so it counts as no task only if open", 7 not
 api = FakeApi(tasks)
 failed, report = reconcile(citadel(api), states)
 check("reconcile closes what it planned", api.closed == ["open-closed"] and failed == 0)
-check("report names the closed issue", "#1" in report.split("Open issue")[0])
 check("report names the finished issue", "#3" in report)
+
+# Each change is a public edit, so a close must not change the report.
+for t in tasks:
+    if t["short_id"] in api.closed:
+        t["status"] = "done"
+_, after_close = reconcile(citadel(FakeApi(tasks)), states)
+check("the report is the same before and after a close", after_close == report)
 
 over = [task(f"t{n}", n + 1) for n in range(MAX_RECONCILE_CLOSES + 1)]
 api = FakeApi(over)
@@ -143,7 +148,40 @@ api = FakeApi(at_limit)
 reconcile(citadel(api), {n + 1: "closed" for n in range(MAX_RECONCILE_CLOSES)})
 check("exactly at the limit still closes", len(api.closed) == MAX_RECONCILE_CLOSES)
 
-check("an empty report says none", "none" in render_report([], [], []))
+check("an empty report says none", "none" in render_report([], []))
+
+# --- the report issue
+
+def report_edits(current_body, read_code=0, edit_code=0):
+    """Run update_report_issue against a fake gh. Returns (result or the error, edits)."""
+    edits = []
+
+    def run(argv, **kwargs):
+        if "PATCH" in argv:
+            edits.append(json.loads(kwargs["input"])["body"])
+            return citadel_sync.subprocess.CompletedProcess(argv, edit_code, "", "")
+        return citadel_sync.subprocess.CompletedProcess(argv, read_code, current_body, "")
+
+    real = citadel_sync.subprocess.run
+    citadel_sync.subprocess.run = run
+    try:
+        return update_report_issue("o/r", 5, "same\n"), edits
+    except SyncError as e:
+        return e, edits
+    finally:
+        citadel_sync.subprocess.run = real
+
+
+result, edits = report_edits("same\n")
+check("an unchanged report is not edited", result is False and edits == [])
+result, edits = report_edits("same")
+check("a trailing newline alone is not a change", result is False and edits == [])
+result, edits = report_edits("other\n")
+check("a changed report is edited", result is True and edits == ["same\n"])
+result, edits = report_edits("same\n", read_code=1)
+check("a failed read raises and edits nothing", isinstance(result, SyncError) and edits == [])
+result, _ = report_edits("other\n", edit_code=1)
+check("a failed edit raises", isinstance(result, SyncError))
 
 # --- the public repository must not carry the address
 
@@ -158,17 +196,7 @@ source = (Path(__file__).resolve().parent / "citadel_sync.py").read_text(encodin
 check("the sync script names no web address but GitHub's", foreign_urls(source) == [])
 check("that check can fail", foreign_urls("curl https://citadel.invalid/x") != [])
 
-workflow = Path(__file__).resolve().parent.parent / ".github/workflows/sync-citadel-on-close.yml"
-text = workflow.read_text(encoding="utf-8")
-check("the workflow names no web address but GitHub's", foreign_urls(text) == [])
-check("the workflow reads the address from a secret", "secrets.CITADEL_URL" in text)
-# An expression inside run: is pasted into the shell before it runs, so an issue
-# field would be code. Everything reaches the script through env.
-run_lines = [l for l in text.splitlines() if "python scripts/citadel_sync.py" in l]
-check("the workflow calls the script", len(run_lines) == 2)
-check("no expression is pasted into a run line", all("${{" not in l for l in run_lines))
-
-# curl_json must not put the address in an error: run logs on this repo are public.
+# curl_json must not put the address in an error: a log can end up pasted on an issue.
 def curl_error(run):
     real = citadel_sync.subprocess.run
     citadel_sync.subprocess.run = run
@@ -193,54 +221,6 @@ for name, run in (("curl not installed", curl_missing), ("curl failing", curl_fa
     error = curl_error(run)
     check(f"{name} is a SyncError", error is not None)
     check(f"{name} does not print the address", "citadel.invalid" not in (error or ""))
-
-# --- the CDN token
-
-def curl_argv(token):
-    """The argv curl would get, with the token set or not. Restores both things it touches."""
-    seen = []
-
-    def run(argv, **_kwargs):
-        seen.extend(argv)
-        return citadel_sync.subprocess.CompletedProcess(argv, 0, "[]\n200", "")
-
-    real_run, real_token = citadel_sync.subprocess.run, os.environ.pop("CITADEL_SYNC_TOKEN", None)
-    citadel_sync.subprocess.run = run
-    if token:
-        os.environ["CITADEL_SYNC_TOKEN"] = token
-    try:
-        result = curl_json([f"{BASE}/x"])
-    finally:
-        citadel_sync.subprocess.run = real_run
-        os.environ.pop("CITADEL_SYNC_TOKEN", None)
-        if real_token:
-            os.environ["CITADEL_SYNC_TOKEN"] = real_token
-    return seen, result
-
-
-argv, result = curl_argv("tok-value")
-check("the token goes out as the header", f"{SYNC_TOKEN_HEADER}: tok-value" in argv)
-check("the header comes before the request", argv.index("-H") < argv.index(f"{BASE}/x"))
-check("a request with a token still parses", result == (200, []))
-argv, _ = curl_argv(None)
-check("no token means no header", "-H" not in argv)
-argv, _ = curl_argv("")
-check("an empty token means no header", "-H" not in argv)
-
-
-def curl_failing_with_token(*_args, **_kwargs):
-    return citadel_sync.subprocess.CompletedProcess([], 6, "", "tok-value rejected")
-
-
-os.environ["CITADEL_SYNC_TOKEN"] = "tok-value"
-error = curl_error(curl_failing_with_token)
-del os.environ["CITADEL_SYNC_TOKEN"]
-check("a curl failure does not print the token", "tok-value" not in (error or "tok-value"))
-
-check("the workflow reads the token from a secret", "secrets.CITADEL_SYNC_TOKEN" in text)
-check("both jobs that reach Citadel get the token",
-      text.count("CITADEL_SYNC_TOKEN: ${{ secrets.CITADEL_SYNC_TOKEN }}") == 2)
-check("the token value is not in the script", "tok-" not in source)
 
 # --- a full page cannot be told from a cut-off list
 
