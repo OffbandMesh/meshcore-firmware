@@ -14,6 +14,12 @@
 
 #include "Button.h"
 
+// #1957: opt-in per variant, so a board on this UI keeps its fixed melodies, and advertises
+// no tune controls, until someone has checked it can take the engine.
+#if defined(PIN_BUZZER) && defined(OFFBAND_UI_ORIG_TUNE_ENGINE)
+  #include "../ToneEngine.h"
+#endif
+
 #ifdef HAS_DRV2605
   #include <helpers/ui/DRV2605Vibration.h>
 #endif
@@ -23,6 +29,9 @@ class UITask : public AbstractUITask {
   SensorManager* _sensors;
 #ifdef PIN_BUZZER
   genericBuzzer buzzer;
+#endif
+#if defined(PIN_BUZZER) && defined(OFFBAND_UI_ORIG_TUNE_ENGINE)
+  offband::ToneEngine _tones;
 #endif
 #ifdef HAS_DRV2605
   DRV2605Vibration vibration;
@@ -74,6 +83,10 @@ public:
   void msgRead(int msgcount) override;
   void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) override;
   void notify(UIEventType t = UIEventType::none) override;
+#if defined(PIN_BUZZER) && defined(OFFBAND_UI_ORIG_TUNE_ENGINE)
+  void notifyChannel(uint8_t channel_idx) override;
+  offband::ToneEngine* toneEngine() override { return &_tones; }
+#endif
   void applyBuzzerMute(bool quiet) override;
   // #509: button-action dispatch. Every press sequence resolves through
   // runButtonAction() against the stored matrix, so a sequence can be reassigned
