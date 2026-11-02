@@ -945,6 +945,25 @@ TEST(ClientTextSize, TheThreeSizesAndNothingElse) {
   EXPECT_FALSE(isTextSize(0xFF));
 }
 
+// ---- #1953: the BLE PIN ---------------------------------------------------------------
+
+TEST(BlePin, DoubleSizeWhereItFits) {
+  EXPECT_EQ(2, pinScale(41)) << "the Status screen's rows, no breadcrumb, tallest title";
+  EXPECT_EQ(2, pinScale(47)) << "with the breadcrumb, which still leaves the rule its pixel";
+}
+
+TEST(BlePin, FallsBackRatherThanPaintOverARow) {
+  EXPECT_EQ(1, pinScale(48)) << "one more pixel of rows would put the rule on the last row";
+  EXPECT_EQ(1, pinScale(53));
+}
+
+TEST(BlePin, EverySizeSitsOnTheScreen) {
+  EXPECT_EQ(56, pinFootY(1));
+  EXPECT_EQ(48, pinFootY(2));
+  EXPECT_LE(kPinDigits * 6 * 2 + kEdgePx, kScreenPx) << "six double-size digits fit across";
+  EXPECT_LE(14 * 6, kScreenPx) << "' BT pin 123456' fits in the built-in face";
+}
+
 // Every row the zone picker lists, "not set" included, and nothing past the table.
 TEST(ClientTimeZone, EveryListedZoneAndNothingPastIt) {
   for (int z = 0; z < offband::tz::kZoneCount; z++) EXPECT_TRUE(offband::tz::isStorable(z));

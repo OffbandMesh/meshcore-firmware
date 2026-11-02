@@ -2014,6 +2014,9 @@ char UITask::checkDisplayOn(char c) {
 char UITask::handleLongPress(char c) {
   if (millis() - ui_started_at < 8000) {   // long press in first 8 seconds since startup -> CLI/rescue
     the_mesh.enterCLIRescue();
+    // #1952: rescue only talks over USB serial, so the board otherwise looks hung. It lasts
+    // until a restart, so the message outlasts any sitting.
+    showAlert("Rescue mode: USB", 24UL * 3600UL * 1000UL);
     c = 0;   // consume event
   }
   return c;

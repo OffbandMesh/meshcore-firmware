@@ -94,6 +94,23 @@ static_assert(kDefaultTextSize == kTextLarge,
 
 inline const Face& detailFace() { return metaFace(); }
 
+// #1953: how large the Status screen's BLE PIN is. One size on every badge, because the
+// firmware can't tell which panel it has: these OLED controllers report neither panel size
+// nor physical dimensions, and a keyboard is no stand-in, since one can be added to a
+// pyramid. Owner, 2026-11-02.
+constexpr int kPinCellPx = 8;       // the built-in face's cell height
+constexpr int kPinDigits = 6;
+
+// The PIN's top edge at a scale of the built-in 6 x 8 face.
+constexpr int pinFootY(int scale) { return kScreenRowsPx - kPinCellPx * scale; }
+
+// Double size only where it fits under the rows above it and the rule between. It fits
+// today, even with the breadcrumb and the tallest title (rows end at 47). This is here so a
+// row added to that screen shrinks the PIN instead of the PIN painting over the row.
+constexpr int pinScale(int rows_end_y) {
+  return (rows_end_y + 1 <= pinFootY(2)) ? 2 : 1;
+}
+
 // #1370: the title bar is chrome, not content. The owner: pinning the titles to the same
 // size between surfaces shows consistency. So a title is always drawn in the NAVIGATION
 // face, whatever face the surface below it uses for its body.
