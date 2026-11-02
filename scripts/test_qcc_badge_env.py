@@ -293,7 +293,15 @@ def env_failures(ini_text, variant_text, nrf52_text, hb_test_text):
 
     base = secs.get(BOARD_SECTION, "")
 
-    # 8. #1688: SafeBoot's wake source. The flags live in the board section both badge envs
+    # 8. The runtime cutoff is the owner's figure for this board's cells.
+    cutoff = flag(base, "AUTO_SHUTDOWN_MILLIVOLTS")
+    if cutoff != "3000":
+        bad.append("[%s] sets AUTO_SHUTDOWN_MILLIVOLTS=%s, expected 3000. The owner set this "
+                   "on 2026-11-01: the badge cells are safe to 3000 mV and have built-in "
+                   "protection, so a higher line stops a badge with usable charge left."
+                   % (BOARD_SECTION, cutoff))
+
+    # 9. #1688: SafeBoot's wake source. The flags live in the board section both badge envs
     #    extend. The arithmetic is checked as well as the spelling, because the two nearest
     #    references both look reasonable and both fail in the field.
     if flag(base, "BATTERY_LPCOMP_INPUT") != "NRF_LPCOMP_INPUT_7":
@@ -362,6 +370,17 @@ def test_negative_led_blue_reclaimed_by_the_core_is_caught():
 
 
 _REF = "-D BATTERY_LPCOMP_THRESHOLD=NRF_LPCOMP_REF_SUPPLY_11_16"
+
+
+def test_negative_the_old_badge_cutoff_is_caught():
+    _sanity()
+    _fails_with("expected 3000", ini=_real()[0].replace("AUTO_SHUTDOWN_MILLIVOLTS=3000",
+                                                        "AUTO_SHUTDOWN_MILLIVOLTS=3400"))
+
+
+def test_negative_a_deleted_badge_cutoff_is_caught():
+    _sanity()
+    _fails_with("expected 3000", ini=_real()[0].replace("  -D AUTO_SHUTDOWN_MILLIVOLTS=3000\n", ""))
 
 
 def test_negative_a_badge_with_no_wake_comparator_is_caught():
