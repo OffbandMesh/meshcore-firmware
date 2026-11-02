@@ -131,8 +131,19 @@ switch(t){
 }
 #endif
 
+// #1960: message waiting on the heartbeat LED, on a board that sets its lit time. On nRF52
+// the board owns that LED (#275), so the UI only says whether something is waiting.
+static void showMessageWaiting(int msgcount) {
+#if defined(NRF52_PLATFORM) && defined(OFFBAND_HEARTBEAT_MSG_ON_MS)
+  board.setHeartbeatMessageWaiting(msgcount > 0);
+#else
+  (void)msgcount;
+#endif
+}
+
 void UITask::msgRead(int msgcount) {
   _msgcount = msgcount;
+  showMessageWaiting(msgcount);
   if (msgcount == 0) {
     clearMsgPreview();
   }
@@ -146,6 +157,7 @@ void UITask::clearMsgPreview() {
 
 void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) {
   _msgcount = msgcount;
+  showMessageWaiting(msgcount);
 
 #ifdef HAS_DRV2605
   vibration.trigger();   // vibrate even while the app is connected (honors quiet + cooldown)

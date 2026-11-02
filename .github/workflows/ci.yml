@@ -284,6 +284,11 @@ jobs:
       - name: ui-orig tune engine call sites
         run: python scripts/test_ui_orig_tunes.py
 
+      # #1958-#1960: the T1000-E's send tone, GPS power save and message LED flags, and
+      # the call sites that use them.
+      - name: T1000-E parity flags and call sites
+        run: python scripts/test_t1000e_parity.py
+
       # #1639: the four .cpp call sites where the RULE is tested and the USE of the rule
       # is not -- which is the specific way a green suite coexists with a broken badge.
       # 49 trigger cases, 15 buzzer-priority cases, 8 store cases and 8 keynav cases all

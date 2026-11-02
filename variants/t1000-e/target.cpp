@@ -162,6 +162,21 @@ void T1000SensorManager::loop() {
   }
 }
 
+// #1959: the T1000-E's receiver is soldered on, so it is always "detected", and it runs at
+// the 115200 begin() opens Serial1 with.
+offband::GpsSnapshot T1000SensorManager::gpsSnapshot() const {
+  offband::GpsSnapshot g;
+  g.detected = true;
+  g.active   = gps_active;
+  g.fix      = gps_active && _nmea->isValid();
+  g.baud     = 115200;
+  offband::toSanePosition(node_lat, node_lon, g.lat_ud, g.lon_ud);
+  g.alt_cm   = offband::isNonFiniteDouble(node_altitude) ? 0 : (long)(node_altitude * 100.0);
+  g.sats     = gps_active ? _nmea->satellitesCount() : 0;
+  g.epoch    = _nmea->getTimestamp();
+  return g;
+}
+
 int T1000SensorManager::getNumSettings() const { return 1; }  // just one supported: "gps" (power switch)
 
 const char* T1000SensorManager::getSettingName(int i) const {

@@ -3694,6 +3694,11 @@ void MyMesh::handleCmdFrame(size_t len) {
         memcpy(&out_frame[2], &expected_ack, 4);
         memcpy(&out_frame[6], &est_timeout, 4);
         _serial->writeFrame(out_frame, 10);
+#ifdef OFFBAND_SENT_TONE_ON_CLIENT_SEND
+        // #1958: a board with no screen that sends still confirms a send. A client's own
+        // retries come back with attempt > 0 and stay quiet; CLI data is not a message.
+        if (_ui && attempt == 0 && txt_type == TXT_TYPE_PLAIN) _ui->notify(UIEventType::sent);
+#endif
       }
     } else {
       writeErrFrame(recipient == NULL
@@ -3733,6 +3738,9 @@ void MyMesh::handleCmdFrame(size_t len) {
       // The reply stays a bare writeOKFrame(), unchanged for stock/alternate clients.
       if (cmdSendChannel(channel_idx, msg_timestamp, text, len - i) == offband::gui::CmdResult::Ok) {
         writeOKFrame();
+#ifdef OFFBAND_SENT_TONE_ON_CLIENT_SEND
+        if (_ui) _ui->notify(UIEventType::sent);   // #1958
+#endif
       } else {
         writeErrFrame(ERR_CODE_NOT_FOUND); // bad channel_idx
       }

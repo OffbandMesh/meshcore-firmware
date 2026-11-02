@@ -58,4 +58,11 @@ inline bool heartbeatValueIsClearOfBoundary(uint32_t ms, uint32_t wake_ms = kHea
   return wake_ms != 0 && ms != 0 && (ms % wake_ms) != 0;
 }
 
+// #1960: the lit time, longer while a message is waiting. Same LED, same rate, so the blip
+// still means the loop is alive; only its length says there is something to read. A board
+// that sets no message lit time gets its ordinary blip either way.
+inline uint32_t heartbeatOnMs(bool message_waiting, uint32_t on_ms, uint32_t msg_on_ms) {
+  return (message_waiting && msg_on_ms != 0) ? msg_on_ms : on_ms;
+}
+
 }  // namespace offband
