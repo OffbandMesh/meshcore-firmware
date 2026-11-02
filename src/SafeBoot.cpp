@@ -816,7 +816,7 @@ void SafeBoot::checkAndMaybeSleep()
             // Sensor not ready / no battery rail -- bail out and continue
             // boot. Powered-from-USB nodes hit this path.
             g_settled = true;
-            mesh_log_print(MLOG_BOOT, "[SafeBoot] Vbat read %u mV is not a battery -- continuing boot\r\n",
+            mesh_log_print(MLOG_BOOT, "[SafeBoot] Vbat read %u mV, below 1000 so taken as no reading -- continuing boot\r\n",
                            (unsigned)s);
             return;
         }
