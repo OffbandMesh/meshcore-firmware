@@ -785,17 +785,17 @@ static void __attribute__((constructor(101))) safeBootEarlyCapture()
 
 void SafeBoot::checkAndMaybeSleep()
 {
+#if defined(SAFEBOOT_SSD1306_I2C_ADDR)
+    safeBootDisplayOff();
+#endif
 #if defined(SAFEBOOT_WAIT_FOR_USB_MS) && defined(NRF52_PLATFORM)
     // #1966, diagnostic builds only: on a native-USB board nothing is listening this early,
     // so SafeBoot's own lines are lost. Wait for a host to open the port, up to this long,
-    // so a capture sees why a boot was refused.
+    // so a capture sees why a boot was refused. After the display goes dark, not before.
     for (const uint32_t t0 = millis(); !Serial && millis() - t0 < (uint32_t)(SAFEBOOT_WAIT_FOR_USB_MS);)
         delay(10);
     mesh_log_print(MLOG_BOOT, "[SafeBoot] RESETREAS=0x%08lx GPREGRET2=0x%02x\r\n",
                    (unsigned long)s_early_resetreas, (unsigned)s_early_gpregret2);
-#endif
-#if defined(SAFEBOOT_SSD1306_I2C_ADDR)
-    safeBootDisplayOff();
 #endif
     g_lastResetUnclean = detectUncleanReset();
 
