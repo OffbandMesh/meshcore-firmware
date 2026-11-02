@@ -1,6 +1,7 @@
 #include <Arduino.h>   // needed for PlatformIO
 #include <Mesh.h>
 #include <SafeBoot.h>
+#include <helpers/diagnostics/StallWatch.h>
 #include "MyMesh.h"
 
 // #740: raw-UART0 boot beacon. This translation unit owns the single
@@ -780,6 +781,7 @@ void setup() {
   // instead of wedging until a physical power-cycle. Fed at loop top + sleep entry.
   // Armed on every platform with a runtime watchdog.
   board.startWatchdog(WDT_TIMEOUT_SECS);
+  offband::stallWatchBegin();   // #1966: diag only; says where a hang is before the reset
 #if defined(NRF52_PLATFORM)
   // #275 (P0): start the true, ungated green-LED heartbeat + its ~10 Hz loop-wake
   // timer. The heartbeat is loop-driven (heartbeatTick below), NOT gated by UI /
@@ -1066,6 +1068,7 @@ void loop() {
   }
 #endif
   board.feedWatchdog();  // #257/#1083: feed from the MAIN LOOP only -> a hung loop trips the WDT
+  offband::stallWatchFeed();   // #1966
   mesh::wdtTestHangTick();  // bench-only (WDT_TEST_HANG_AFTER_MS); compiles to nothing otherwise
 #if defined(NRF52_PLATFORM)
   #if defined(OFFBAND_BLE_MORSE) && defined(PIN_STATUS_LED)
