@@ -202,6 +202,24 @@ TEST(DisplaySleep, OnlyAHeldDataLineCanBeClockedFree) {
   EXPECT_EQ(9, kI2cRecoveryClocks);
 }
 
+// #1966: the T1000-E read 1 and 7 mV with its divider unpowered and powered off on a
+// charged cell. A reading no running chip could survive is no reading at all.
+TEST(SafeBootReading, ReadingsARunningChipCannotHaveAreNotBatteries) {
+  EXPECT_FALSE(safeBootReadingIsPlausible(0));
+  EXPECT_FALSE(safeBootReadingIsPlausible(1));
+  EXPECT_FALSE(safeBootReadingIsPlausible(7));
+  EXPECT_FALSE(safeBootReadingIsPlausible(kSafeBootMinPlausibleMv - 1));
+}
+
+TEST(SafeBootReading, EveryRealCellVoltageStillCounts) {
+  EXPECT_TRUE(safeBootReadingIsPlausible(kSafeBootMinPlausibleMv));
+  EXPECT_TRUE(safeBootReadingIsPlausible(3000));   // the badge floor
+  EXPECT_TRUE(safeBootReadingIsPlausible(3399));   // below the T1000-E sleep line: still refuses
+  EXPECT_TRUE(safeBootReadingIsPlausible(4170));   // the T1000-E's reading today
+  // Below the lowest sleep line any board uses, or a flat cell would boot unchecked.
+  EXPECT_LT(kSafeBootMinPlausibleMv, 3000);
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

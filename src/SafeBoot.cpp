@@ -379,9 +379,12 @@ uint16_t readVbatMillivoltsLight()
 # ifndef SAFEBOOT_VBAT_ENABLE_ACTIVE
 #  define SAFEBOOT_VBAT_ENABLE_ACTIVE LOW
 # endif
+# ifndef SAFEBOOT_VBAT_ENABLE_SETTLE_MS
+#  define SAFEBOOT_VBAT_ENABLE_SETTLE_MS 2
+# endif
     pinMode(SAFEBOOT_VBAT_ENABLE_PIN, OUTPUT);
     digitalWrite(SAFEBOOT_VBAT_ENABLE_PIN, SAFEBOOT_VBAT_ENABLE_ACTIVE);
-    delay(2);
+    delay(SAFEBOOT_VBAT_ENABLE_SETTLE_MS);
 #endif
 
     pinMode(SAFEBOOT_PIN_VBAT_READ, INPUT);
@@ -809,13 +812,12 @@ void SafeBoot::checkAndMaybeSleep()
     int stable = 0;
     for (int i = 0; i < DEFAULT_SAFE_BOOT_STABLE_SAMPLES; i++) {
         uint16_t s = readVbatMillivoltsLight();
-        if (s == 0) {
+        if (!offband::safeBootReadingIsPlausible(s)) {
             // Sensor not ready / no battery rail -- bail out and continue
             // boot. Powered-from-USB nodes hit this path.
             g_settled = true;
-#if defined(SAFEBOOT_WAIT_FOR_USB_MS)
-            mesh_log_print(MLOG_BOOT, "[SafeBoot] Vbat read 0 mV -- continuing boot, state left as is\r\n");
-#endif
+            mesh_log_print(MLOG_BOOT, "[SafeBoot] Vbat read %u mV is not a battery -- continuing boot\r\n",
+                           (unsigned)s);
             return;
         }
         if (s >= DEFAULT_SAFE_BOOT_WAKE_MV)
