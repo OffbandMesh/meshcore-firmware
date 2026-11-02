@@ -32,6 +32,11 @@
 #define BATTERY_SENSE_RES       (12)
 
 #define AREF_VOLTAGE            (3.0)
+// #1805: SafeBoot reads Vbat before board.begin(), and without this it sets the core's
+// 3.6 V reference while dividing by the 3.0 above, reading 17% low. A full cell then landed
+// in the band where a wake from SafeBoot's own sleep is refused, so the board slept again
+// on every wake and couldn't boot. Same override heltec_t1 and rak3401 carry.
+#define VBAT_AR_INTERNAL        AR_INTERNAL_3_0
 
 ////////////////////////////////////////////////////////////////////////////////
 // Number of pins

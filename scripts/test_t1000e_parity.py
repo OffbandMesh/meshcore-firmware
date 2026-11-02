@@ -16,6 +16,7 @@ TARGET_H = ROOT / "variants" / "t1000-e" / "target.h"
 MYMESH = ROOT / "examples" / "companion_radio" / "MyMesh.cpp"
 UI_CPP = ROOT / "examples" / "companion_radio" / "ui-orig" / "UITask.cpp"
 HB_TEST = ROOT / "test" / "test_heartbeat_cadence" / "test_heartbeat_cadence.cpp"
+VARIANT_H = ROOT / "variants" / "t1000-e" / "variant.h"
 ENVS = ("env:t1000e_companion_radio_usb", "env:t1000e_companion_radio_ble")
 FLAGS = {
     "OFFBAND_SENT_TONE_ON_CLIENT_SEND": None,
@@ -30,7 +31,7 @@ def section(text, name):
     return None if m is None else "\n".join(l.split(";", 1)[0] for l in m.group(1).splitlines())
 
 
-def failures(ini, target_h, mymesh, ui, hb):
+def failures(ini, target_h, mymesh, ui, hb, variant_h):
     bad = []
     for env in ENVS:
         body = section(ini, env)
@@ -55,12 +56,16 @@ def failures(ini, target_h, mymesh, ui, hb):
         bad.append("a client's retries must not replay the send tone (#1958)")
     if ui.count("showMessageWaiting(msgcount);") < 2 or "setHeartbeatMessageWaiting" not in ui:
         bad.append("ui-orig must report message waiting on arrival and on read (#1960)")
+    if (re.search(r"#define\s+AREF_VOLTAGE\s+\(3\.0\)", variant_h)
+            and not re.search(r"#define\s+VBAT_AR_INTERNAL\s+AR_INTERNAL_3_0", variant_h)):
+        bad.append("variant.h divides by a 3.0 V reference without VBAT_AR_INTERNAL, so SafeBoot "
+                   "reads Vbat 17% low and a charged board sleeps on every wake (#1805)")
     return bad
 
 
 def _real():
     return (INI.read_text(), TARGET_H.read_text(), MYMESH.read_text(encoding="utf-8", errors="replace"),
-            UI_CPP.read_text(), HB_TEST.read_text())
+            UI_CPP.read_text(), HB_TEST.read_text(), VARIANT_H.read_text())
 
 
 def test_invariants_hold():
@@ -105,6 +110,10 @@ def test_negative_one_send_path_silent():
 
 def test_negative_retries_replaying_the_tone():
     _fails("retries", 2, "attempt == 0", "attempt >= 0")
+
+
+def test_negative_safeboot_reading_vbat_low():
+    _fails("17% low", 5, "#define VBAT_AR_INTERNAL        AR_INTERNAL_3_0", "")
 
 
 def test_negative_message_waiting_never_reported():
