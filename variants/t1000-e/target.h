@@ -8,6 +8,7 @@
 #include <helpers/ArduinoHelpers.h>
 #include <helpers/SensorManager.h>
 #include <helpers/sensors/LocationProvider.h>
+#include <helpers/sensors/GpsStatusLine.h>
 #ifdef DISPLAY_CLASS
   #include "NullDisplayDriver.h"
 #endif
@@ -29,6 +30,10 @@ public:
   const char* getSettingValue(int i) const override;
   bool setSettingValue(const char* name, const char* value) override;
   LocationProvider* getLocationProvider() { return _nmea; }
+  // #1959: what GPS power save needs to tell a fix from a timeout, the same two accessors
+  // EnvironmentSensorManager has.
+  bool gpsHasFix() { return gps_active && _nmea->isValid(); }
+  offband::GpsSnapshot gpsSnapshot() const;
 };
 
 #ifdef DISPLAY_CLASS

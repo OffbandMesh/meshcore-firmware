@@ -37,6 +37,7 @@ protected:
   // #275: nap-independent green-LED heartbeat state (loop-driven; see startHeartbeat).
   bool _hb_started = false;
   bool _hb_on = false;
+  bool _hb_msg_waiting = false;       // #1960
   uint32_t _hb_next_ms = 0;
   SoftwareTimer _hb_wake_timer;       // repeating ~10 Hz loop-wake (RTC1) so the blink isn't nap-gated
 
@@ -88,6 +89,8 @@ public:
   // ~10 Hz so the blink is NOT gated by the power-save nap, UI, display, or traffic.
   void startHeartbeat();
   void heartbeatTick();
+  // #1960: lengthens the blip while a message is waiting, where the variant sets a lit time.
+  void setHeartbeatMessageWaiting(bool waiting) { _hb_msg_waiting = waiting; }
 
 #ifdef NRF52_POWER_MANAGEMENT
   uint16_t getBootVoltage() override { return boot_voltage_mv; }

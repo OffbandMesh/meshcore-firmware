@@ -103,6 +103,27 @@ TEST(BoundaryGuard, AValueOnABoundaryIsFlagged) {
   EXPECT_FALSE(heartbeatValueIsClearOfBoundary(0));
 }
 
+// ---- #1960: message waiting ------------------------------------------------------------
+
+constexpr uint32_t kT1000MsgOn = 490;   // the T1000-E's lit time while a message waits
+
+TEST(MessageWaiting, AWaitingMessageLengthensTheBlip) {
+  EXPECT_EQ(kT1000MsgOn, heartbeatOnMs(true, kOn, kT1000MsgOn));
+  EXPECT_EQ(500u, heartbeatObservedMs(heartbeatOnMs(true, kOn, kT1000MsgOn)));
+}
+
+TEST(MessageWaiting, NothingWaitingIsTheOrdinaryBlip) {
+  EXPECT_EQ(kOn, heartbeatOnMs(false, kOn, kT1000MsgOn));
+}
+
+TEST(MessageWaiting, ABoardThatSetsNoLitTimeNeverChanges) {
+  EXPECT_EQ(kOn, heartbeatOnMs(true, kOn, 0)) << "every board but the T1000-E";
+}
+
+TEST(MessageWaiting, TheT1000ValueIsClearOfABoundary) {
+  EXPECT_TRUE(heartbeatValueIsClearOfBoundary(kT1000MsgOn));
+}
+
 TEST(BoundaryGuard, ADegenerateWakeIsNotClear) {
   EXPECT_FALSE(heartbeatValueIsClearOfBoundary(4890, 0));
 }

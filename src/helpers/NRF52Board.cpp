@@ -1,5 +1,6 @@
 #if defined(NRF52_PLATFORM)
 #include "NRF52Board.h"
+#include "ui/HeartbeatCadence.h"   // #1960
 #include <target.h>
 
 #include <bluefruit.h>
@@ -16,6 +17,10 @@
 #endif
 #ifndef OFFBAND_HEARTBEAT_OFF_MS
   #define OFFBAND_HEARTBEAT_OFF_MS 890
+#endif
+// #1960: 0 means no message-waiting blink, which is every board that doesn't set it.
+#ifndef OFFBAND_HEARTBEAT_MSG_ON_MS
+  #define OFFBAND_HEARTBEAT_MSG_ON_MS 0
 #endif
 
 static BLEDfu bledfu;
@@ -114,7 +119,9 @@ void NRF52Board::heartbeatTick() {
     // under the board it was written for. The arithmetic and the wake-boundary rule are
     // host-tested in test/test_heartbeat_cadence; keep any override a hair UNDER a
     // boundary (4890, not 4900) or the observed gap starts depending on jitter.
-    _hb_next_ms = now + (_hb_on ? OFFBAND_HEARTBEAT_ON_MS : OFFBAND_HEARTBEAT_OFF_MS);
+    _hb_next_ms = now + (_hb_on ? offband::heartbeatOnMs(_hb_msg_waiting, OFFBAND_HEARTBEAT_ON_MS,
+                                                         OFFBAND_HEARTBEAT_MSG_ON_MS)
+                                : OFFBAND_HEARTBEAT_OFF_MS);
   }
 #endif
 }
