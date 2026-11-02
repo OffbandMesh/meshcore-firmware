@@ -2,8 +2,8 @@
 
 These are source assertions, not behavioral tests. They catch a deleted flag, a changed
 number or a dropped call. They are not evidence the board works: no OKIMesh board has run
-this firmware. The envs aren't in the build matrix either, so nothing else in CI looks at
-them.
+this firmware. The build matrix compiles the two non-diag envs; this checks what compiling
+can't.
 
     Serial1 on P0.20/P0.22, GPS power on P0.24    GPS is dead (stock ProMicro's pins)
     1.68 divider                                  every battery line reads ~8% wrong
