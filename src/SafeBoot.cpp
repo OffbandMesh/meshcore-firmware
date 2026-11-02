@@ -767,6 +767,19 @@ uint32_t bumpBackoff(uint32_t prev_secs)
 
 } // namespace
 
+#if defined(SAFEBOOT_WAIT_FOR_USB_MS) && defined(NRF52_PLATFORM)
+// The core's init() clears RESETREAS before setup() runs, so the register reads 0 by the time
+// SafeBoot logs it. NRF52Board keeps an early copy only under NRF52_POWER_MANAGEMENT, which
+// not every board sets. Priority 101 runs before main() and so before init().
+static uint32_t s_early_resetreas = 0;
+static uint8_t s_early_gpregret2 = 0;
+static void __attribute__((constructor(101))) safeBootEarlyCapture()
+{
+    s_early_resetreas = NRF_POWER->RESETREAS;
+    s_early_gpregret2 = (uint8_t)NRF_POWER->GPREGRET2;
+}
+#endif
+
 void SafeBoot::checkAndMaybeSleep()
 {
 #if defined(SAFEBOOT_WAIT_FOR_USB_MS) && defined(NRF52_PLATFORM)
@@ -776,7 +789,7 @@ void SafeBoot::checkAndMaybeSleep()
     for (const uint32_t t0 = millis(); !Serial && millis() - t0 < (uint32_t)(SAFEBOOT_WAIT_FOR_USB_MS);)
         delay(10);
     mesh_log_print(MLOG_BOOT, "[SafeBoot] RESETREAS=0x%08lx GPREGRET2=0x%02x\r\n",
-                   (unsigned long)NRF_POWER->RESETREAS, (unsigned)(NRF_POWER->GPREGRET2 & 0xFF));
+                   (unsigned long)s_early_resetreas, (unsigned)s_early_gpregret2);
 #endif
 #if defined(SAFEBOOT_SSD1306_I2C_ADDR)
     safeBootDisplayOff();
@@ -800,6 +813,9 @@ void SafeBoot::checkAndMaybeSleep()
             // Sensor not ready / no battery rail -- bail out and continue
             // boot. Powered-from-USB nodes hit this path.
             g_settled = true;
+#if defined(SAFEBOOT_WAIT_FOR_USB_MS)
+            mesh_log_print(MLOG_BOOT, "[SafeBoot] Vbat read 0 mV -- continuing boot, state left as is\r\n");
+#endif
             return;
         }
         if (s >= DEFAULT_SAFE_BOOT_WAKE_MV)
