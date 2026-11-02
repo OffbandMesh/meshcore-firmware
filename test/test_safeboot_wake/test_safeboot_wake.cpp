@@ -116,18 +116,33 @@ TEST(ButtonRelease, TheWindowCoversHumanPressesNotJustTheDebounce) {
 // ---- which sleep -------------------------------------------------------------------
 
 TEST(Nrf52Wake, TheBatteryComparatorComesFirst) {
-  EXPECT_EQ(SafeBootWake::BatteryRise, chooseNrf52Wake(true, true));
-  EXPECT_EQ(SafeBootWake::BatteryRise, chooseNrf52Wake(true, false));
+  EXPECT_EQ(SafeBootWake::BatteryRise, chooseNrf52Wake(true, false, true));
+  EXPECT_EQ(SafeBootWake::BatteryRise, chooseNrf52Wake(true, false, false));
+}
+
+TEST(Nrf52Wake, ACellAlreadyAboveTheLineCannotUseTheComparator) {
+  // LPCOMP needs an upward crossing. Sleeping on it from above the line never wakes.
+  EXPECT_EQ(SafeBootWake::TimedRestart, chooseNrf52Wake(true, true, false));
+}
+
+TEST(Nrf52Wake, ACellAboveTheLineIsNotLeftWaitingForAPress) {
+  // The button is usable, but nothing is wrong with this cell. It rechecks by itself.
+  EXPECT_EQ(SafeBootWake::TimedRestart, chooseNrf52Wake(true, true, true));
+}
+
+TEST(Nrf52Wake, TheLineMeansNothingWithoutAComparator) {
+  EXPECT_EQ(SafeBootWake::ButtonOnly, chooseNrf52Wake(false, true, true));
+  EXPECT_EQ(SafeBootWake::TimedRestart, chooseNrf52Wake(false, true, false));
 }
 
 TEST(Nrf52Wake, AUsableButtonAloneMeansButtonOnly) {
-  EXPECT_EQ(SafeBootWake::ButtonOnly, chooseNrf52Wake(false, true));
+  EXPECT_EQ(SafeBootWake::ButtonOnly, chooseNrf52Wake(false, false, true));
 }
 
 TEST(Nrf52Wake, NoUsableWakeSourceMeansATimedRestartNotALoop) {
   // Before #1687 a board with a button but no comparator always entered SYSTEM_OFF on
   // the button, usable or not. An unusable one must take the timed path instead.
-  EXPECT_EQ(SafeBootWake::TimedRestart, chooseNrf52Wake(false, false));
+  EXPECT_EQ(SafeBootWake::TimedRestart, chooseNrf52Wake(false, false, false));
 }
 
 // ---- what the log may claim (#1690) --------------------------------------------------

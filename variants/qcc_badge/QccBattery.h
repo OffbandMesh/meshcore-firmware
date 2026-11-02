@@ -19,6 +19,11 @@ constexpr float kBattMvPerCount = kDividerRatio * kAdcFullScaleMv / (float)(1 <<
 // 680k || 1M is ~405k of source impedance; the core's 3 us default under-reads it.
 constexpr unsigned kAdcSampleUs = 40;
 
+// #1688: where LPCOMP wakes a refused badge. Its reference is 11/16 of VDD and its input is
+// the divided cell. 3300 is nominal VDD; the diag env logs the real one at every boot.
+constexpr float kNominalVddMv = 3300.0f;
+constexpr float kLpcompWakeMv = kDividerRatio * kNominalVddMv * 11.0f / 16.0f;
+
 // raw_avg is an average of 12-bit reads (0..4095), rounded to the nearest mV.
 constexpr uint16_t battMilliVolts(uint32_t raw_avg) {
   return (uint16_t)(kBattMvPerCount * (float)raw_avg + 0.5f);

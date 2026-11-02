@@ -80,8 +80,17 @@ inline int waitForButtonIdle(bool pressed_high, uint32_t max_wait_ms, ReadFn rea
 // charger or the sun brings the cell back. A usable button next: a true SYSTEM_OFF at a
 // few microamps, woken by a press. Otherwise the board stays on and restarts on a timer --
 // costing milliamps, but never a loop.
-inline SafeBootWake chooseNrf52Wake(bool has_battery_comparator, bool button_usable) {
-  if (has_battery_comparator) return SafeBootWake::BatteryRise;
+//
+// `battery_above_line` is the comparator's own reading at sleep time. LPCOMP wakes on an
+// upward CROSSING, so a cell already above its line can never fire it: a forced cooldown on
+// a healthy cell, or a board whose supply sits low enough to move the line under the cell.
+// That board must restart on the timer. A button sleep would strand it until someone
+// pressed, on a battery with nothing wrong with it.
+inline SafeBootWake chooseNrf52Wake(bool has_battery_comparator, bool battery_above_line,
+                                    bool button_usable) {
+  if (has_battery_comparator) {
+    return battery_above_line ? SafeBootWake::TimedRestart : SafeBootWake::BatteryRise;
+  }
   if (button_usable) return SafeBootWake::ButtonOnly;
   return SafeBootWake::TimedRestart;
 }

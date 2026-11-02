@@ -14,6 +14,7 @@ Deleting any of them leaves CI green, the matrix green and the badge wrong.
     ..._CHARS == 4 (= the header)        the name stops matching the badge labels (#1807)
     OFFBAND_TUNE_TRIGGER badge-only      sixty other variants compile the trigger
     OFFBAND_NAME_MAC_VERIFY diag-only    the SHIPPING image prints the BLE address (#1635)
+    BATTERY_LPCOMP_* on AIN7, 11/16 VDD  a refused badge cannot wake by itself (#1688)
 
 WHAT THIS IS, SAID PLAINLY. These are source assertions, not behavioural tests. They
 catch a deleted flag or a changed number. They pass any refactor that preserves the text
@@ -62,6 +63,9 @@ NAME_MAC_CHARS = int(_header_constant(r"kQccNameMacChars\s*=\s*(\d+)"))
 
 SHIPPING_ENV = "env:QCC_Badge_companion_radio_ble"
 DIAG_SECTION = "qcc_badge_diag"
+BOARD_SECTION = "QCC_Badge"
+DIVIDER_RATIO = 1.68
+NOMINAL_VDD_MV = 3300
 
 
 # --- reading the sources ----------------------------------------------------------------
@@ -287,6 +291,43 @@ def env_failures(ini_text, variant_text, nrf52_text, hb_test_text):
                 "so the badge silently blinks a shorter message than the string reads "
                 "(#1640)." % inner)
 
+    base = secs.get(BOARD_SECTION, "")
+
+    # 8. #1688: SafeBoot's wake source. The flags live in the board section both badge envs
+    #    extend. The arithmetic is checked as well as the spelling, because the two nearest
+    #    references both look reasonable and both fail in the field.
+    if flag(base, "BATTERY_LPCOMP_INPUT") != "NRF_LPCOMP_INPUT_7":
+        bad.append("[%s] must set -D BATTERY_LPCOMP_INPUT=NRF_LPCOMP_INPUT_7. The badge's "
+                   "battery divider is on P0.31, which is AIN7; any other input watches "
+                   "the wrong voltage, and none at all means no self-recovery (#1688)."
+                   % BOARD_SECTION)
+    ref = re.fullmatch(r"NRF_LPCOMP_REF_SUPPLY_(\d+)_(8|16)",
+                       flag(base, "BATTERY_LPCOMP_THRESHOLD") or "")
+    wake_mv = flag(base, "DEFAULT_SAFE_BOOT_WAKE_MV")
+    full_mv = flag(base, "BATT_MAX_MILLIVOLTS")
+    if ref is None or wake_mv is None or full_mv is None:
+        bad.append("[%s] must set BATTERY_LPCOMP_THRESHOLD to a supply fraction, with "
+                   "DEFAULT_SAFE_BOOT_WAKE_MV and BATT_MAX_MILLIVOLTS, or the LPCOMP wake "
+                   "line cannot be checked (#1688)." % BOARD_SECTION)
+    else:
+        line_mv = (DIVIDER_RATIO * NOMINAL_VDD_MV * int(ref.group(1)) / int(ref.group(2)))
+        if line_mv <= int(wake_mv):
+            bad.append(
+                "the LPCOMP wake line is %.0f mV, at or under WAKE_MV %s. The badge would "
+                "wake on a cell SafeBoot still refuses, then sleep already above the line, "
+                "with no crossing left to wake it (#1688)." % (line_mv, wake_mv))
+        if line_mv >= int(full_mv):
+            bad.append(
+                "the LPCOMP wake line is %.0f mV, at or over the %s mV a charged cell "
+                "settles at, so a charger might never wake the badge (#1688)."
+                % (line_mv, full_mv))
+    if flag(diag, "SAFEBOOT_LOG_VDD") is None:
+        bad.append("[%s] must set -D SAFEBOOT_LOG_VDD. The wake line is a fraction of VDD, "
+                   "and that log line is the only reading of it (#1688)." % DIAG_SECTION)
+    if flag(ship, "SAFEBOOT_LOG_VDD") is not None or flag(base, "SAFEBOOT_LOG_VDD") is not None:
+        bad.append("SAFEBOOT_LOG_VDD belongs in [%s] only, not in the shipping image (#1688)."
+                   % DIAG_SECTION)
+
     return bad
 
 
@@ -318,6 +359,51 @@ def test_negative_led_blue_reclaimed_by_the_core_is_caught():
     _sanity()
     _fails_with("strobe again", variant=_real()[1].replace("#define LED_BLUE             (-1)",
                                                            "#define LED_BLUE             PIN_LED"))
+
+
+_REF = "-D BATTERY_LPCOMP_THRESHOLD=NRF_LPCOMP_REF_SUPPLY_11_16"
+
+
+def test_negative_a_badge_with_no_wake_comparator_is_caught():
+    _sanity()
+    _fails_with("no self-recovery",
+                ini=_real()[0].replace("  -D BATTERY_LPCOMP_INPUT=NRF_LPCOMP_INPUT_7\n", ""))
+
+
+def test_negative_the_comparator_on_the_wrong_input_is_caught():
+    _sanity()
+    _fails_with("watches the wrong voltage",
+                ini=_real()[0].replace("BATTERY_LPCOMP_INPUT=NRF_LPCOMP_INPUT_7",
+                                       "BATTERY_LPCOMP_INPUT=NRF_LPCOMP_INPUT_3"))
+
+
+def test_negative_a_wake_line_under_the_boot_gate_is_caught():
+    _sanity()
+    _fails_with("no crossing left",
+                ini=_real()[0].replace(_REF, "-D BATTERY_LPCOMP_THRESHOLD=NRF_LPCOMP_REF_SUPPLY_5_8"))
+
+
+def test_negative_a_wake_line_a_charger_cannot_reach_is_caught():
+    _sanity()
+    _fails_with("might never wake",
+                ini=_real()[0].replace(_REF, "-D BATTERY_LPCOMP_THRESHOLD=NRF_LPCOMP_REF_SUPPLY_6_8"))
+
+
+def test_negative_a_deleted_wake_line_is_caught():
+    _sanity()
+    _fails_with("cannot be checked", ini=_real()[0].replace("  " + _REF + "\n", ""))
+
+
+def test_negative_losing_the_vdd_log_from_diag_is_caught():
+    _sanity()
+    _fails_with("only reading of it", ini=_real()[0].replace("  -D SAFEBOOT_LOG_VDD\n", ""))
+
+
+def test_negative_the_vdd_log_in_the_shipping_image_is_caught():
+    _sanity()
+    ini = _real()[0].replace("  -D OFFBAND_TUNE_TRIGGER=1\n",
+                             "  -D OFFBAND_TUNE_TRIGGER=1\n  -D SAFEBOOT_LOG_VDD\n")
+    _fails_with("not in the shipping image", ini=ini)
 
 
 def test_negative_a_deleted_badge_heartbeat_value_is_caught():
