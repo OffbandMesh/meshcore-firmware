@@ -28,6 +28,14 @@ void check(TimerHandle_t) {
   // The first word of a FreeRTOS TCB is pxTopOfStack: where the loop task's saved context
   // sits while the timer task is running.
   const uint32_t* top = *reinterpret_cast<uint32_t* const*>(s_loop);
+  // A stack overflow can leave this pointer anywhere, and reading through it would fault
+  // inside the diagnostic. Keep every read below inside the nRF52840's 256 KB of RAM.
+  const uintptr_t t = reinterpret_cast<uintptr_t>(top);
+  if (t < 0x20000000u || t + 41u * 4u > 0x20040000u || (t & 3u) != 0) {
+    crashLogf("[stall] #%u loop stuck %lu ms: saved stack pointer 0x%08lx is not in RAM",
+              (unsigned)s_sent, (unsigned long)stalled, (unsigned long)t);
+    return;
+  }
   const uint32_t* hw = top + stallHwFrameWords(top[8]);
   crashLogf("[stall] #%u loop stuck %lu ms: pc=0x%08lx lr=0x%08lx state=%d", (unsigned)s_sent,
             (unsigned long)stalled, (unsigned long)hw[kStallFramePc],
