@@ -279,6 +279,11 @@ jobs:
       - name: QCC badge env invariants
         run: python scripts/test_qcc_badge_env.py
 
+      # #1957: the tune engine on ui-orig is opt-in per variant. This checks the T1000-E
+      # opted in, no unchecked board did, and ui-orig actually plays through the engine.
+      - name: ui-orig tune engine call sites
+        run: python scripts/test_ui_orig_tunes.py
+
       # #1639: the four .cpp call sites where the RULE is tested and the USE of the rule
       # is not -- which is the specific way a green suite coexists with a broken badge.
       # 49 trigger cases, 15 buzzer-priority cases, 8 store cases and 8 keynav cases all

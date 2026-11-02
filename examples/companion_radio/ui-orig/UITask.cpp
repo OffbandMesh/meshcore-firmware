@@ -3,6 +3,9 @@
 #include <Arduino.h>
 #include <helpers/TxtDataHelpers.h>
 #include "../MyMesh.h"
+#if defined(PIN_BUZZER) && defined(OFFBAND_UI_ORIG_TUNE_ENGINE)
+  #include "../ToneEvents.h"
+#endif
 
 #define AUTO_OFF_MILLIS     15000   // 15 seconds
 #define BOOT_SCREEN_MILLIS   3000   // 3 seconds
@@ -48,6 +51,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #ifdef PIN_BUZZER
   buzzer.begin();
   buzzer.quiet(_node_prefs->buzzer_quiet);
+#ifdef OFFBAND_UI_ORIG_TUNE_ENGINE
+  _tones.begin(&buzzer, the_mesh.dataStore(), _node_prefs);
+#endif
   buzzer.startup();
 #endif
 
@@ -86,6 +92,20 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   ui_started_at = millis();
 }
 
+#if defined(PIN_BUZZER) && defined(OFFBAND_UI_ORIG_TUNE_ENGINE)
+// #1957: the defaults in Tunes.h are the melodies below, so an unconfigured board sounds
+// the same. What changes is that a client can now choose.
+void UITask::notify(UIEventType t) {
+  offband::ToneEvent ev;
+  if (offband::toneEventFor(t, ev)) _tones.playEvent(ev);
+}
+
+void UITask::notifyChannel(uint8_t channel_idx) {
+  ChannelDetails ch;
+  _tones.playChannel(the_mesh.getChannel(channel_idx, ch) ? ch.tune
+                                                          : offband::kChannelTuneUnset);
+}
+#else
 void UITask::notify(UIEventType t) {
 #if defined(PIN_BUZZER)
 switch(t){
@@ -109,6 +129,7 @@ switch(t){
 //  Serial.print("DBG:  Alert user -> ");
 //  Serial.println((int) t);
 }
+#endif
 
 void UITask::msgRead(int msgcount) {
   _msgcount = msgcount;

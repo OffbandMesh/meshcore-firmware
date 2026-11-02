@@ -1208,22 +1208,7 @@ void UITask::showAlert(const char* text, int duration_millis) {
 }
 
 #if defined(PIN_BUZZER)
-// #1419: the UI's event enum, in the tune table's terms. `none` and anything unmapped
-// has no tone event, so it stays silent rather than falling onto some other event's
-// tune.
-static bool toneEventFor(UIEventType t, offband::ToneEvent& out) {
-  switch (t) {
-    case UIEventType::contactMessage:    out = offband::ToneEvent::ContactMessage; return true;
-    case UIEventType::channelMessage:    out = offband::ToneEvent::ChannelMessage; return true;
-    case UIEventType::roomMessage:       out = offband::ToneEvent::RoomMessage;    return true;
-    case UIEventType::newContactMessage: out = offband::ToneEvent::NewContact;     return true;
-    case UIEventType::ack:               out = offband::ToneEvent::Ack;            return true;
-    case UIEventType::sent:              out = offband::ToneEvent::Sent;           return true;
-    case UIEventType::none:
-    default:
-      return false;
-  }
-}
+#include "../ToneEvents.h"
 
 // #1420: the id stored for this event, or `kTuneUnset` when nothing is stored -- which
 // is also the answer when prefs are not available yet. Unset means "use this board's
@@ -1271,7 +1256,7 @@ void UITask::notify(UIEventType t) {
   // silenced event stays silent. #1549: through the one resolver that also plays slots,
   // so a third kind of tune cannot reach the audition and not the event.
   offband::ToneEvent ev;
-  if (toneEventFor(t, ev)) _tones.playEvent(ev);
+  if (offband::toneEventFor(t, ev)) _tones.playEvent(ev);
 #endif
   vibrateFor(t);
 }
