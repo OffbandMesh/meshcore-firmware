@@ -60,6 +60,11 @@ def failures(ini, target_h, mymesh, ui, hb, variant_h):
             and not re.search(r"#define\s+VBAT_AR_INTERNAL\s+AR_INTERNAL_3_0", variant_h)):
         bad.append("variant.h divides by a 3.0 V reference without VBAT_AR_INTERNAL, so SafeBoot "
                    "reads Vbat 17% low and a charged board sleeps on every wake (#1805)")
+    base = section(ini, "t1000-e") or ""
+    if (not re.search(r"-D\s+SAFEBOOT_VBAT_ENABLE_PIN=PIN_3V3_EN\b", base)
+            or not re.search(r"-D\s+SAFEBOOT_VBAT_ENABLE_ACTIVE=HIGH\b", base)):
+        bad.append("[t1000-e] must power the battery divider for SafeBoot (PIN_3V3_EN, HIGH), "
+                   "or it reads ~0 mV and powers off a charged board (#1966)")
     return bad
 
 
@@ -114,6 +119,14 @@ def test_negative_retries_replaying_the_tone():
 
 def test_negative_safeboot_reading_vbat_low():
     _fails("17% low", 5, "#define VBAT_AR_INTERNAL        AR_INTERNAL_3_0", "")
+
+
+def test_negative_safeboot_divider_unpowered():
+    _fails("power the battery divider", 0, "-D SAFEBOOT_VBAT_ENABLE_PIN=PIN_3V3_EN", "")
+
+
+def test_negative_safeboot_divider_wrong_polarity():
+    _fails("power the battery divider", 0, "SAFEBOOT_VBAT_ENABLE_ACTIVE=HIGH", "SAFEBOOT_VBAT_ENABLE_ACTIVE=LOW")
 
 
 def test_negative_message_waiting_never_reported():

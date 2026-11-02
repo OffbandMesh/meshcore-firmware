@@ -109,4 +109,14 @@ inline bool safeBootWakeIsTimed(SafeBootWake w) {
   return w == SafeBootWake::TimedDeepSleep || w == SafeBootWake::TimedRestart;
 }
 
+// #1966: a chip that is running SafeBoot has at least 1.7 V on its supply, so a battery
+// reading far below that is a broken read (an unpowered divider, a floating pin), never a
+// cell. The T1000-E read 1 and 7 mV with its divider off and powered itself off on a
+// charged battery. Such a reading means "no reading", as 0 always did: continue the boot.
+constexpr uint16_t kSafeBootMinPlausibleMv = 1000;
+
+inline bool safeBootReadingIsPlausible(uint16_t mv) {
+  return mv >= kSafeBootMinPlausibleMv;
+}
+
 }  // namespace offband
