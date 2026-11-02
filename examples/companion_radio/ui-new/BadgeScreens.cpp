@@ -763,9 +763,11 @@ void ThreadScreen::tuneHint(char* out, size_t cap) const {
 bool ThreadScreen::handleInput(char c) {
   const uint8_t key = (uint8_t)c;
   if (!_task->inputFromKeyboard()) {   // SW1: a click leaves. A hold does nothing here:
-    if (key == KEY_NEXT) leave();      // the design keeps it for the supporter card, and
-    return true;                       // a stray one mustn't send a half-typed message
-  }
+    // #1951: a triple click is Back on every other screen, so it leaves here too. It
+    // arrives as KEY_CANCEL, and a keyboard's Esc takes the case below instead.
+    if (key == KEY_NEXT || keynav::backsOut(key)) leave();  // the design keeps a hold for
+    return true;                       // the supporter card, and a stray one mustn't send
+  }                                    // a half-typed message
   switch (key) {
     case KEY_UP:
       selectOlder();
@@ -1238,12 +1240,32 @@ int StatusScreen::drawAs(DisplayDriver& d, const char* title, int pos) {
   textAt(d, kMeta, kScreenPx - kEdgePx - textPx(kMeta, tx_rx), y, tx_rx);
 
   // The footer: the Bluetooth pairing PIN while a phone could pair, which used to be
-  // Home's job on this board.
+  // Home's job on this board. #1953: someone has to read the PIN off the badge to type it
+  // in, so it never uses the smallest face, whatever the text size is set to.
+  y += kMeta.row_px;
+  if (!_task->hasConnection() && _task->isBluetoothEnabled() && the_mesh.getBLEPin() != 0) {
+    const int scale = pinScale(y);
+    const int pin_y = pinFootY(scale);
+    dottedRule(d, pin_y - 1);
+    if (scale == 1) {
+      snprintf(buf, sizeof(buf), " BT pin %06lu", (unsigned long)the_mesh.getBLEPin());
+      textAt(d, fixedFace(), 0, pin_y, buf);
+    } else {
+      textAt(d, kMeta, 0, pin_y + kPinCellPx, " BT pin");
+      snprintf(buf, sizeof(buf), "%06lu", (unsigned long)the_mesh.getBLEPin());
+      d.setFace(fixedFace().id);
+      d.setTextSize(scale);
+      lit(d);
+      d.setCursor(kScreenPx - kEdgePx - kPinDigits * fixedFace().missing * scale, pin_y);
+      d.print(buf);
+      d.setTextSize(1);
+    }
+    return crumb ? 250 : 1000;
+  }
   const int foot_y = kScreenRowsPx - kMeta.row_px;
   dottedRule(d, foot_y - 1);
   if (_task->hasConnection()) snprintf(buf, sizeof(buf), " phone connected");
   else if (!_task->isBluetoothEnabled()) snprintf(buf, sizeof(buf), " bluetooth off");
-  else if (the_mesh.getBLEPin() != 0) snprintf(buf, sizeof(buf), " BT pin %06lu", (unsigned long)the_mesh.getBLEPin());
   else snprintf(buf, sizeof(buf), " quiet on the mesh");
   textAt(d, kMeta, 0, foot_y, buf);
   return crumb ? 250 : 1000;

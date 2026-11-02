@@ -245,6 +245,29 @@ def backout_failures(screens_src):
     return bad
 
 
+# --- 5: the button and the PIN (#1951, #1952, #1953) ------------------------------------
+
+def button_and_pin_failures(uitask, screens):
+    uitask, screens = strip_c_comments(uitask), strip_c_comments(screens)
+    bad = []
+    thread = function_body(screens, "ThreadScreen::handleInput")
+    if thread is None or "backsOut" not in thread:
+        bad.append("ThreadScreen::handleInput does not consult keynav::backsOut(): a triple "
+                   "click does nothing in a conversation, though it is Back everywhere else "
+                   "(#1951).")
+    long_press = function_body(uitask, "UITask::handleLongPress")
+    if long_press is None or "enterCLIRescue" not in long_press or "showAlert" not in long_press:
+        bad.append("UITask::handleLongPress must show an alert when it enters rescue mode, or "
+                   "the board looks hung (#1952).")
+    status = function_body(screens, "StatusScreen::drawAs")
+    if status is None or "pinScale(y)" not in status:
+        bad.append("StatusScreen::drawAs must size the BLE PIN with pinScale(), or it can "
+                   "paint over a row or stop being double size (#1953).")
+    elif re.search(r"textAt\(d,\s*kMeta,[^;]*\n?[^;]*getBLEPin", status) or "fixedFace()" not in status:
+        bad.append("StatusScreen::drawAs draws the BLE PIN in the smallest face (#1953).")
+    return bad
+
+
 # --- everything, over the real tree -----------------------------------------------------
 
 def _real():
@@ -253,7 +276,8 @@ def _real():
 
 def all_failures(uitask, screens, mymesh, store):
     return (trigger_priority_failures(uitask) + wire_text_failures(mymesh)
-            + sigil_failures(screens, store) + backout_failures(screens))
+            + sigil_failures(screens, store) + backout_failures(screens)
+            + button_and_pin_failures(uitask, screens))
 
 
 def test_the_four_call_sites_are_intact():
@@ -272,6 +296,30 @@ def _fails_with(phrase, uitask=None, screens=None, mymesh=None, store=None):
     bad = all_failures(uitask or u, screens or s, mymesh or m, store or st)
     assert any(phrase in b for b in bad), (
         "expected a failure mentioning %r; got %s" % (phrase, bad or "NO FAILURES AT ALL"))
+
+
+def test_negative_a_conversation_ignoring_triple_click_is_caught():
+    _sanity()
+    s = _real()[1]
+    old = "if (key == KEY_NEXT || keynav::backsOut(key)) leave();"
+    assert old in s
+    _fails_with("#1951", screens=s.replace(old, "if (key == KEY_NEXT) leave();"))
+
+
+def test_negative_a_silent_rescue_mode_is_caught():
+    _sanity()
+    u = _real()[0]
+    old = 'showAlert("Rescue mode: USB", 24UL * 3600UL * 1000UL);'
+    assert old in u
+    _fails_with("#1952", uitask=u.replace(old, ""))
+
+
+def test_negative_a_fixed_pin_size_is_caught():
+    _sanity()
+    s = _real()[1]
+    old = "const int scale = pinScale(y);"
+    assert old in s
+    _fails_with("#1953", screens=s.replace(old, "const int scale = 1;"))
 
 
 def test_negative_the_trigger_dropped_to_event_priority_is_caught():
