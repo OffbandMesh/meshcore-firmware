@@ -47,8 +47,12 @@ reach USB on a native-USB board; absence of a visible line does not prove SafeBo
 was disabled or that the board is dead.
 
 A zero/unavailable battery reading can cause the implementation to continue
-boot rather than sleep. Do not use that behavior to infer battery health.
-SafeBoot behavior on USB power can differ from battery-only operation.
+boot rather than sleep. In builds after `offband-v1.6.0-beta1` this covers any
+reading below 1000 mV, on every board: no cell that low can be running the radio,
+so such a reading means the measurement is missing, not that the battery is flat,
+and the log says `below 1000 so taken as no reading -- continuing boot`. Do not use
+that behavior to infer battery health. SafeBoot behavior on USB power can differ
+from battery-only operation.
 
 ### 3. Separate power guard from update rollback
 

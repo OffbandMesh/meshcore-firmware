@@ -1,0 +1,17 @@
+schema_version: 1
+issue: 1956
+impact: updated
+guides:
+  - docs/user/guides/power-and-recovery.md
+reason: >-
+  SafeBoot now treats any battery reading below 1000 mV as no reading and
+  continues the boot, on every board, where before only an exact 0 did; the
+  low-power guide says so and quotes the new log line. The T1000-E changes
+  (client-chosen tunes, a send tone, the message-waiting LED, GPS power save,
+  and SafeBoot no longer switching a charged T1000-E off) are not in any
+  release, so they are written up as an unpublished draft guide,
+  docs/initiatives/standalone/1956-t1000e-guide/GUIDE-DRAFT.md, and catalogued
+  as the planned feature t1000e. The draft also documents the device-wide
+  notification scope and that the client's per-channel Mentions only does not
+  reach the radio. The diag and hang-test images are bench-only and are not
+  user-facing.

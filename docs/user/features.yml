@@ -87,6 +87,10 @@ features:
         contains: ['#define DEFAULT_SAFE_BOOT_WAKE_MV 3700', 'SAFE_BOOT_DISABLED', 'below safe threshold']
       - path: src/helpers/ESP32Board.cpp
         contains: ['esp_ota_mark_app_valid_cancel_rollback', 'ROLLBACK_THRESHOLD']
+      - path: src/helpers/SafeBootWake.h
+        contains: ['constexpr uint16_t kSafeBootMinPlausibleMv = 1000;']
+      - path: src/SafeBoot.cpp
+        contains: ['below 1000 so taken as no reading -- continuing boot']
   - id: diagnostic-logs
     title: Collect logs for support
     coverage: documented
@@ -146,3 +150,23 @@ features:
         contains: ['static const char kSos[] = "SOS";']
       - path: examples/companion_radio/MyMesh.cpp
         contains: ['if (has_display && BLE_PIN_CODE == 123456) {', '_active_ble_pin = BLE_PIN_CODE; // otherwise static pin']
+  - id: t1000e
+    title: Use your SenseCAP T1000-E
+    coverage: planned
+    roles: [companion]
+    boards: [t1000-e]
+    availability: {channel: development, verified_releases: []}
+    verification: Sounds, send tone, per-channel and per-event tunes, the device-wide notification scope, button defaults, the message-waiting LED and GPS power save checked against development source and native/source tests; none of these has a recorded T1000-E hardware result yet. SafeBoot start-up on a charged battery was bench-tested on a T1000-E (about 4.17 V read and boot continued on every start). The guide is published when a release carries this behavior; its draft is docs/initiatives/standalone/1956-t1000e-guide/GUIDE-DRAFT.md.
+    evidence:
+      - path: variants/t1000-e/platformio.ini
+        contains: ['-D OFFBAND_UI_ORIG_TUNE_ENGINE', '-D OFFBAND_SENT_TONE_ON_CLIENT_SEND', '-D DEFAULT_TONE_SENT=offband::kTuneTick', '-D OFFBAND_GPS_POWER_SAVE=1', '-D OFFBAND_HEARTBEAT_MSG_ON_MS=490', '-D SAFEBOOT_VBAT_ENABLE_PIN=PIN_3V3_EN']
+      - path: src/helpers/ui/Tunes.h
+        contains: ['#define DEFAULT_TONE_CONTACT  offband::kTuneChime', '#define DEFAULT_TONE_CHANNEL  offband::kTuneKerplop', '#define DEFAULT_TONE_ACK      offband::kTuneTick']
+      - path: examples/companion_radio/ui-orig/UITask.cpp
+        contains: ['buzzer.play("scopeAll:d=32,o=6,b=180:c,e,g");', 'buzzer.play("scopeSelf:d=16,o=6,b=180:e");', 'buzzer.play("scopeNone:d=32,o=6,b=180:g,e,c");']
+      - path: examples/companion_radio/MyMesh.cpp
+        contains: ['_prefs.button_actions[OFFBAND_UI_SEQ_DOUBLE] = OFFBAND_UI_ACTION_ADVERT;', '_prefs.button_actions[OFFBAND_UI_SEQ_TRIPLE] = OFFBAND_UI_ACTION_CYCLE_SCOPE;', '_prefs.button_actions[OFFBAND_UI_SEQ_QUAD]   = OFFBAND_UI_ACTION_GPS_TOGGLE;', 'if (_ui && attempt == 0 && txt_type == TXT_TYPE_PLAIN) _ui->notify(UIEventType::sent);']
+      - path: src/helpers/NRF52Board.cpp
+        contains: ['#define OFFBAND_HEARTBEAT_ON_MS 90', '#define OFFBAND_HEARTBEAT_OFF_MS 890']
+      - path: src/helpers/GpsPowerMode.h
+        contains: ['constexpr uint32_t kGpsIntervalMs = 3600000;', 'constexpr uint32_t kGpsMinPsIntervalS = 300;']
