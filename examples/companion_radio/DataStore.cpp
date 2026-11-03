@@ -4,6 +4,7 @@
 #include <helpers/ClockSanity.h>
 #include <MeshLog.h>                     // #631 diagnostics: OFFBAND_FORCE_CAPLOG
 #include <helpers/ui/TuneSlots.h>        // #1523: the tune in the channel record's spare field
+#include <helpers/ChannelNotify.h>       // #606: the notify mode beside it, and the one writer
 
 #if defined(EXTRAFS) || defined(QSPIFLASH)
   #define MAX_BLOBRECS 100
@@ -510,8 +511,9 @@ void DataStore::loadChannels(DataStoreHost* host) {
       uint8_t channel_idx = 0;
       while (!full) {
         ChannelDetails ch;
-        // #1523: no longer entirely unused -- the first byte is the channel's tune. The
-        // other three stay spare, and the read is the same four bytes it always was.
+        // #1523/#606: no longer unused -- byte 0 is the channel's tune and byte 1 its
+        // notification mode. The other two stay spare, and the read is the same four
+        // bytes it always was.
         uint8_t spare[offband::kChannelSpareBytes];
 
         bool success = (file.read(spare, sizeof(spare)) == sizeof(spare));
@@ -520,9 +522,10 @@ void DataStore::loadChannels(DataStoreHost* host) {
 
         if (!success) break; // EOF
 
-        // A file written before this existed has zeros here, which decode to "unset" and
+        // A file written before these existed has zeros here, which decode to "unset" and
         // leave the channel sounding exactly as it did.
         ch.tune = offband::channelTuneFromSpare(spare);
+        ch.notify = offband::channelNotifyFromSpare(spare);
 
         if (host->onChannelLoaded(channel_idx, ch)) {
           channel_idx++;
@@ -542,9 +545,12 @@ void DataStore::saveChannels(DataStoreHost* host) {
     uint8_t spare[offband::kChannelSpareBytes];
 
     while (host->getChannelForSave(channel_idx, ch)) {
-      // #1523: built per record now rather than zeroed once -- the first byte is this
-      // channel's tune, written back byte-for-byte even if this build cannot resolve it.
-      offband::channelTuneToSpare(ch.tune, spare);
+      // #1523/#606: built per record now rather than zeroed once -- byte 0 is this
+      // channel's tune, written back byte-for-byte even if this build cannot resolve it,
+      // and byte 1 its notification mode. ONE writer for the whole field: the tune's
+      // writer zeroes all four bytes first, so a separate second call made before it
+      // would be silently erased.
+      offband::channelSpareToFile(ch.tune, ch.notify, spare);
 
       bool success = (file.write(spare, sizeof(spare)) == sizeof(spare));
       success = success && (file.write((uint8_t *)ch.name, 32) == 32);

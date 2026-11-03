@@ -19,6 +19,7 @@
 // #1523: the per-channel tune's encoding. Header-only constexpr, and the builtin table is
 // internal-linkage, so a variant that only names the unset value emits nothing of it.
 #include <helpers/ui/TuneSlots.h>
+#include <helpers/ChannelNotify.h>
 #include <helpers/ChannelSlotGuard.h>   // #1865: no channel written over another
 #include <helpers/ChannelKeys.h>        // #1896: Public's key, for the slot guard
 #ifdef PIN_BUZZER
@@ -46,6 +47,21 @@
 // block cap bit and 0xC2 codes resolve on EVERY companion build, not just observer
 // ones. The config *backend* (ConfigSchema/ObserverCli) stays observer-gated below. #241.
 #include "OffbandConfigProtocol.h"
+
+// #606: three sets of constants describe the same four values -- the wire contract
+// (OFFBAND_CHNOTIFY_*), the host-testable decision header (offband::kChanNotify*), and
+// the device scope (NOTIFY_SCOPE_*). ChannelNotify.h mirrors the last two rather than
+// including NodePrefs.h, which is companion-only and pulls Arduino. These assert the
+// mirrors still agree, so a drift breaks the build here instead of quietly changing
+// whether a radio sounds.
+static_assert(offband::kChanNotifyUnset    == offband::OFFBAND_CHNOTIFY_UNSET, "chnotify wire/decision drift");
+static_assert(offband::kChanNotifyAll      == offband::OFFBAND_CHNOTIFY_ALL, "chnotify wire/decision drift");
+static_assert(offband::kChanNotifyMentions == offband::OFFBAND_CHNOTIFY_MENTIONS, "chnotify wire/decision drift");
+static_assert(offband::kChanNotifyOff      == offband::OFFBAND_CHNOTIFY_OFF, "chnotify wire/decision drift");
+static_assert(offband::kChanNotifyCount    == offband::OFFBAND_CHNOTIFY_COUNT, "chnotify wire/decision drift");
+static_assert(offband::kScopeAll  == NOTIFY_SCOPE_ALL,  "notify scope mirror drift");
+static_assert(offband::kScopeSelf == NOTIFY_SCOPE_SELF, "notify scope mirror drift");
+static_assert(offband::kScopeNone == NOTIFY_SCOPE_NONE, "notify scope mirror drift");
 
 #ifdef OFFBAND_NAME_FROM_BLE_MAC
 // #1598: on a fresh flash a badge names itself from its BLE MAC, so the name on the badge
@@ -5313,6 +5329,12 @@ CmdResult MyMesh::cmdSetChannel(uint8_t idx, const char* name, const uint8_t sec
   const bool same_channel = !was_empty &&
                             memcmp(before.channel.secret, secret, 16) == 0;
   channel.tune = offband::channelTuneAfterEdit(was_empty, same_channel, before.tune);
+  // #606: the notification mode follows the tune's rule exactly -- kept through a
+  // rename, dropped across a replacement. Without this, renaming a channel from the
+  // phone would silently clear the mode set on the device; with occupancy alone, a
+  // different channel dropped into the slot would inherit a mode chosen for the one
+  // that is gone.
+  channel.notify = offband::channelNotifyAfterEdit(was_empty, same_channel, before.notify);
   if (!setChannel(idx, channel)) return CmdResult::NotFound;
   saveChannels();
 #ifdef OFFBAND_GUI
@@ -5511,6 +5533,20 @@ bool MyMesh::setChannelTune(uint8_t idx, uint8_t stored) {
   if (!getChannel(idx, ch)) return false;
   if (ch.tune == stored) return true;   // no flash write for a no-op
   ch.tune = stored;
+  if (!setChannel(idx, ch)) return false;
+  saveChannels();
+  return true;
+}
+
+// #606: the one writer for a channel's notification mode, mirroring setChannelTune.
+// A no-op writes no flash -- a client control bound to onChange can emit a burst of
+// SETs, and an unconditional saveChannels() would put that burst on the filesystem.
+bool MyMesh::setChannelNotify(uint8_t idx, uint8_t stored) {
+  if (!offband::channelNotifySettable(stored)) return false;
+  ChannelDetails ch;
+  if (!getChannel(idx, ch)) return false;
+  if (ch.notify == stored) return true;
+  ch.notify = stored;
   if (!setChannel(idx, ch)) return false;
   saveChannels();
   return true;

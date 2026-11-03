@@ -443,6 +443,8 @@ public:
   // out of the existing one. That is the #1523 lesson, and it only has to be learned once
   // if there is one place that does it. False when the slot holds no channel.
   bool setChannelTune(uint8_t idx, uint8_t stored);
+  // #606: per-channel notification mode. One writer, like setChannelTune.
+  bool setChannelNotify(uint8_t idx, uint8_t stored);
 
   bool savePrefs() {   // #1194: false when the store could not write them
     _prefs.node_lat = sensors.node_lat;
