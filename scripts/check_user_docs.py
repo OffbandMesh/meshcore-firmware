@@ -189,6 +189,20 @@ def check_catalog(repo_root: Path, catalog_path: Path, content_root: Path) -> li
                         errors.append(f'{label}: missing guide section: {heading}')
             except (ValueError, OSError, UnicodeError):
                 errors.append(f'{label}: unreadable guide/front matter')
+    # #1968: a published guide nobody can navigate to is not published. Promotion adds the
+    # link; this keeps a hand-moved guide to the same rule.
+    index = content / 'index.md'
+    try:
+        start = index.read_text(encoding='utf-8') if index.is_file() and not index.is_symlink() else ''
+    except (OSError, UnicodeError):
+        start = ''
+    # Real Markdown links only: not one inside an HTML comment or a fenced example.
+    start = re.sub(r'<!--.*?-->', '', start, flags=re.S)
+    start = re.sub(r'^```[^\n]*\n.*?^```\s*$', '', start, flags=re.M | re.S)
+    linked = {PurePosixPath(urlsplit(raw.strip('<>')).path).as_posix() for raw in LINK.findall(start)}
+    for guide in sorted(guides):
+        if PurePosixPath(guide).as_posix() not in linked:
+            errors.append(f'{guide}: documented guide is not linked from index.md')
     for page in content.rglob('*.md'):
         if page.is_symlink():
             continue
@@ -381,6 +395,9 @@ def main(argv=None):
             errors.extend(check_content(content))
             config = args.build_config if args.build_config.is_absolute() else root / args.build_config
             errors.extend(check_build_config(root, config))
+            # #1968: drafts are checked as if published, so promotion cannot break the manual.
+            from promote_drafts import check_drafts
+            errors.extend(check_drafts(root))
         if args.changed_files:
             changed = args.changed_files.read_text(encoding='utf-8').splitlines()
             errors.extend(check_impact(root, changed, [p if p.is_absolute() else root / p for p in args.impact]))

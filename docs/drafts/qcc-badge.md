@@ -1,8 +1,9 @@
-# DRAFT — Use your QCC badge
+---
+title: Use your QCC badge
+feature: qcc-badge
+---
 
-> Not published. Moves to `docs/user/guides/qcc-badge.md` (front matter
-> `title: Use your QCC badge`, `feature: qcc-badge`, catalog coverage `documented`) when
-> a release carries this behavior.
+# Use your QCC badge
 
 The Queen City Con badge is a MeshCore companion radio. Every badge runs the same
 firmware, but not every badge has the same parts, so what yours can do depends on what

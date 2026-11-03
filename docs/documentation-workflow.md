@@ -23,6 +23,13 @@ Integration Testing checks the complete path across Epics, including the website
 
 Use `docs/templates/USER-GUIDE.md` for a new journey. Add or update its entry in
 `docs/user/features.yml`; keep evidence paths/snippets and release claims accurate.
+
+The manual only describes behavior a release carries. A feature that has merged but
+not shipped is documented as `docs/drafts/<feature-id>.md`, written exactly as it will
+publish, with a `coverage: planned` catalog entry; see
+[`docs/drafts/README.md`](drafts/README.md). The release PR publishes every draft with
+`python scripts/promote_drafts.py --release <tag>`, and the release workflow refuses a
+tag while one is waiting, unless its entry carries a `hold:` reason.
 Existing references are evidence to review, not an instruction to publish the
 whole `docs/` directory. Do not copy private notes, actual credentials or identifying
 network details into examples.

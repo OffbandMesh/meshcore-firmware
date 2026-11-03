@@ -27,6 +27,9 @@ jobs:
         run: python scripts/test_check_user_docs.py
       - name: Documentation-impact Git diff regression tests
         run: python scripts/test_docs_impact.py
+      # #1968: docs/drafts/<feature-id>.md convention, the release gate and promotion.
+      - name: Draft-guide promotion positive and negative tests
+        run: python scripts/test_promote_drafts.py
       - name: Require documentation-impact decisions for firmware changes
         if: github.event_name == 'pull_request' || github.event_name == 'push'
         env:
