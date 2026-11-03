@@ -77,8 +77,37 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # #1968: a release never ships a feature whose guide is still a draft. Drafts live at
+  # docs/drafts/<feature-id>.md, so this finds every one without being told; the release
+  # PR publishes them with `python scripts/promote_drafts.py --release <tag>` before the
+  # tag, or puts an entry on hold with a reason. Tag pushes only, like the release job.
+  docs-gate:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    outputs:
+      notes: ${{ steps.notes.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install pinned documentation dependencies
+        run: python -m pip install -r requirements-docs.txt
+      - name: Every draft guide is published or on hold
+        run: python scripts/promote_drafts.py --check
+      - id: notes
+        name: List the guides published for this release
+        run: |
+          # A random delimiter, so no line of the notes can end the value early.
+          eof="NOTES_EOF_$(openssl rand -hex 16)"
+          {
+            echo "notes<<$eof"
+            python scripts/promote_drafts.py --notes "$GITHUB_REF_NAME"
+            echo "$eof"
+          } >> "$GITHUB_OUTPUT"
+
   release:
-    needs: [list, build]
+    needs: [list, build, docs-gate]
     # Publish only on tag pushes (not on dispatch test runs).
     #
     # NO PARTIAL RELEASES -- owner ruling 2026-08-28 (#1016). always() used to be
@@ -150,6 +179,8 @@ jobs:
           echo "Purged $purged stale asset(s)."
 
       - name: Extract release body
+        env:
+          MANUAL_NOTES: ${{ needs.docs-gate.outputs.notes }}   # #1968; data, never run as shell
         run: |
           ver="${GITHUB_REF_NAME#offband-}"; ver="${ver#crosswire-}"   # e.g. v1.1.0-rc1
           exact="${ver#v}"                         # the version as tagged: 1.5.0-beta7
@@ -202,6 +233,8 @@ jobs:
           if [ ! -s body.md ]; then
             echo "(No CHANGELOG entry for ${ver}.)" > body.md
           fi
+          # #1968: the guides this release published, linked into the manual.
+          if [ -n "$MANUAL_NOTES" ]; then printf '%s\n' "$MANUAL_NOTES" >> body.md; fi
           # Append the static "which file do I download?" flashing guide to every release
           cat .github/release-footer.md >> body.md 2>/dev/null || true
 
