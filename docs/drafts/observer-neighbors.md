@@ -1,8 +1,9 @@
-# DRAFT — Find the repeaters an observer hears, and their regions
+---
+title: Report the repeaters an observer hears and their regions
+feature: observer-neighbors
+---
 
-> Not published. Moves to `docs/user/guides/observer-neighbors.md` (front matter
-> `feature: observer-neighbors`, catalog coverage `documented`) when a release carries
-> the feature.
+# Report the repeaters an observer hears and their regions
 
 An observer can list the repeaters it hears directly (zero hops) and ask each one which
 flood regions it serves. It publishes the result to its MQTT brokers as a `/neighbors`

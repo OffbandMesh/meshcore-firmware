@@ -110,7 +110,7 @@ features:
     roles: [companion-observer]
     boards: [heltec_v3, heltec_v4, heltec_v4_r8, heltec_rcc6, xiao_s3_wio]
     availability: {channel: development, verified_releases: []}
-    verification: discover.neighbors, discover.scopes, the CoreScope /neighbors report and the mqtt.neighbors settings checked against source, native tests and a golden report fed through CoreScope's ingest rules only; not in any release, no on-air, hardware or live-broker trial. The guide is published when a release carries the feature.
+    verification: discover.neighbors, discover.scopes, the CoreScope /neighbors report and the mqtt.neighbors settings checked against source, native tests and a golden report fed through CoreScope's ingest rules only; not in any release, no on-air, hardware or live-broker trial.
     evidence:
       - path: src/helpers/wifi_observer/NeighborsCli.cpp
         contains: ['discover.neighbors: request queued', 'discover.scopes: querying %d neighbors, one at a time (up to 20 s each)', 'mqtt.neighbors = on, every %u h', 'nbr: on, every %u h, %s%s, last %s']
@@ -130,7 +130,7 @@ features:
     roles: [companion]
     boards: [qcc_badge]
     availability: {channel: development, verified_releases: []}
-    verification: Badge screens, settings, defaults and client-settable surfaces checked against development source, including the Bluetooth PIN with and without a display. No badge without a screen has been paired against this text. The low-battery refusal, SOS and button wake were bench-tested on QCC badges at raised test thresholds, not on a low cell; keyboardless list navigation has no recorded hardware result. The guide is published when a release carries this behavior; its draft is docs/initiatives/standalone/1867-qcc-badge-guide/GUIDE-DRAFT.md.
+    verification: Badge screens, settings, defaults and client-settable surfaces checked against development source, including the Bluetooth PIN with and without a display. No badge without a screen has been paired against this text. The low-battery refusal, SOS and button wake were bench-tested on QCC badges at raised test thresholds, not on a low cell; keyboardless list navigation has no recorded hardware result.
     evidence:
       - path: variants/qcc_badge/platformio.ini
         contains: ['-D LORA_FREQ=919.5', '-D LORA_BW=500', '-D LORA_SF=7', '-D LORA_CR=5', '-D LORA_TX_POWER=22']
@@ -156,7 +156,7 @@ features:
     roles: [companion]
     boards: [t1000-e]
     availability: {channel: development, verified_releases: []}
-    verification: Sounds, send tone, per-channel and per-event tunes, the device-wide notification scope, button defaults, the message-waiting LED and GPS power save checked against development source and native/source tests; none of these has a recorded T1000-E hardware result yet. SafeBoot start-up on a charged battery was bench-tested on a T1000-E (about 4.17 V read and boot continued on every start). The guide is published when a release carries this behavior; its draft is docs/initiatives/standalone/1956-t1000e-guide/GUIDE-DRAFT.md.
+    verification: Sounds, send tone, per-channel and per-event tunes, the device-wide notification scope, button defaults, the message-waiting LED and GPS power save checked against development source and native/source tests; none of these has a recorded T1000-E hardware result yet. SafeBoot start-up on a charged battery was bench-tested on a T1000-E (about 4.17 V read and boot continued on every start).
     evidence:
       - path: variants/t1000-e/platformio.ini
         contains: ['-D OFFBAND_UI_ORIG_TUNE_ENGINE', '-D OFFBAND_SENT_TONE_ON_CLIENT_SEND', '-D DEFAULT_TONE_SENT=offband::kTuneTick', '-D OFFBAND_GPS_POWER_SAVE=1', '-D OFFBAND_HEARTBEAT_MSG_ON_MS=490', '-D SAFEBOOT_VBAT_ENABLE_PIN=PIN_3V3_EN']
