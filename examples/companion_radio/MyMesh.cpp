@@ -3582,11 +3582,24 @@ void MyMesh::handleCmdFrame(size_t len) {
     // the channel-send path, which every companion build has -- so unlike the bits
     // above this is advertised unconditionally.
     offband_caps2 |= offband::OFFBAND_CAP2_PKT_HASH;
+#ifdef PIN_BUZZER
+    // #606: per-channel notification mode. Gated on the buzzer, like NOTIFY_SCOPE --
+    // a board that cannot sound must not offer a per-channel notify control. The
+    // storage is on the channel record, so this needs nothing of the UI.
+    offband_caps2 |= offband::OFFBAND_CAP2_CHAN_NOTIFY;
+#endif
     out_frame[i++] = offband_caps2;          // v18+
     // #542 B1: current indicator state, so the client renders the toggles on connect
     // with no extra GET round-trip (the FEM-LNA precedent). Appended UNCONDITIONALLY.
     out_frame[i++] = _prefs.ui_led_enabled;   // v21+
     out_frame[i++] = _prefs.ui_display_mode;  // v21+
+    // #606: offband_caps BYTE 3, at offset 87 -- AFTER the indicator state, not beside
+    // byte 2. The client reads these at fixed absolute offsets, so this byte goes at the
+    // end of the frame; a client detects it by LENGTH (>= 88), never by version code
+    // (#1970). Byte 2's last bit is spent by this change, so the byte is added now
+    // rather than leaving the next feature to extend the frame under pressure.
+    uint8_t offband_caps3 = 0;
+    out_frame[i++] = offband_caps3;
     _serial->writeFrame(out_frame, i);
   } else if (cmd_frame[0] == CMD_APP_START &&
              len >= 8) { // sent when app establishes connection, respond with node ID

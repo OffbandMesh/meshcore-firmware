@@ -246,6 +246,37 @@ constexpr uint8_t OFFBAND_UI_TEXT_SET    = 0x14;
 constexpr uint8_t OFFBAND_UI_SCROFF_SET  = 0x15;
 constexpr uint8_t OFFBAND_UI_TZ_SET      = 0x16;
 constexpr uint8_t OFFBAND_UI_BATT_SET    = 0x17;
+// #606: per-channel notification mode. Addressed by channel SLOT, exactly as CHTUNE
+// (0x0B/0x0C) is, and stored on the same channel record -- one pref per channel, which
+// the client and the device's own UI both write. There is no separate table.
+//
+//   [0xC5][0x18][chan_idx]          GET -> [0xC5][0x18][chan_idx][mode]
+//   [0xC5][0x19][chan_idx][mode]    SET -> [0xC5][0x19][chan_idx][mode]
+//
+// The SET reply is the value RE-READ after the write, never an echo of the request, so a
+// client always renders what the device holds. Gated on OFFBAND_CAP2_CHAN_NOTIFY.
+constexpr uint8_t OFFBAND_UI_CHNOTIFY_GET = 0x18;
+constexpr uint8_t OFFBAND_UI_CHNOTIFY_SET = 0x19;
+
+// #606: the per-channel mode, AS STORED. 1-based, and 0 is NOT "all".
+//
+//   0  unset   -> inherit the device-wide notify_scope
+//   1  all
+//   2  mentions only  (the @[name] rule, same matcher as NOTIFY_SCOPE_SELF)
+//   3  off
+//
+// 0 MUST mean "no choice made". The byte lives in the channel record's spare field,
+// which is zero on every record written before this feature and on every fresh channel,
+// so an encoding where 0 meant "all" would silently set every channel in the field to
+// All. The tune byte in the same spare field is 1-based for the same reason.
+//
+// Inheriting rather than defaulting to All is also the better behaviour: a device set to
+// Self keeps Self on channels the user has never touched.
+constexpr uint8_t OFFBAND_CHNOTIFY_UNSET    = 0;
+constexpr uint8_t OFFBAND_CHNOTIFY_ALL      = 1;
+constexpr uint8_t OFFBAND_CHNOTIFY_MENTIONS = 2;
+constexpr uint8_t OFFBAND_CHNOTIFY_OFF      = 3;
+constexpr uint8_t OFFBAND_CHNOTIFY_COUNT    = 4;   // valid stored values are < this
 
 // === 0xC6 PACKET-HASH QUERY -- CANONICAL WIRE CONTRACT (#611) =================
 // FIRMWARE OWNS THIS CONTRACT (same discipline as 0xC5). Agreed with the client
@@ -427,7 +458,33 @@ enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUT
 //    4   0x10   OFFBAND_CAP2_TUNES            this change  #1788 / #1789
 //    5   0x20   OFFBAND_CAP2_GPS_MODE         this change  #1791
 //    6   0x40   OFFBAND_CAP2_SCREEN_SETTINGS  this change  #1788
-//    7   0x80   -- free --  (last byte-2 bit: HEADROOM, do not spend casually)
+//    7   0x80   OFFBAND_CAP2_CHAN_NOTIFY      this change  #606
+// ===============================================================================
+//
+// === offband_caps BYTE 3 (#606) -- frame offset 87 =============================
+// Byte 2 is now exhausted. #606 spends its last bit AND adds this byte in the same
+// change, for the reason byte 2 itself records: spending the last bit and leaving the
+// next feature to extend the frame under pressure is the condition that produced the
+// #427-vs-#365 double-claim. Nothing is blocked today, so the byte is added today.
+//
+// ⚠ POSITION: byte 3 is at offset 87, NOT 85. Offsets 85 and 86 are the #542 indicator
+// state (ui_led_enabled, ui_display_mode), appended unconditionally after byte 2, and
+// the client reads all of these at FIXED ABSOLUTE OFFSETS. Byte 3 therefore goes after
+// them, at the end of the frame.
+// Client reads byte 3 as: frame.length >= 88 ? frame[87] : null.
+//
+// ⚠ LENGTH-GATED, NEVER VERSION-GATED. Do not pair this byte with a FIRMWARE_VER_CODE
+// floor. That number is upstream's, upstream moves it, and a floor on a capability gate
+// is always redundant -- so it can only ever turn a SUPPORTED capability off (#1970).
+// The frame length is the only signal for whether the byte is present.
+//
+// Same reservation discipline as bytes 1 and 2: record the bit HERE with its issue in
+// the SAME PR, and Agent-Mail the reservation so parallel sessions see it.
+//
+//   bit  value  symbol                        state       issue
+//   ---  -----  ----------------------------  ----------  --------------------------
+//    0   0x01   -- free --
+//    1-7 0x02.. -- free --
 // ===============================================================================
 // bit 0 (0x01): device notification scope ALL/SELF/NONE is supported and settable.
 // Set only where the device can actually make a sound -- gated on PIN_BUZZER, exactly
@@ -459,6 +516,11 @@ constexpr uint8_t OFFBAND_CAP2_GPS_MODE = 0x20;
 // bit 6 (0x40): screen settings -- SCREEN_GET, TEXT_SET, SCROFF_SET, TZ_SET, BATT_SET
 // (#1788). Set where the UI's screens honor them (AbstractUITask::clientScreenSettings()).
 constexpr uint8_t OFFBAND_CAP2_SCREEN_SETTINGS = 0x40;
+// bit 7 (0x80): per-channel notification mode is readable and settable over 0xC5
+// CHNOTIFY (#606). Gated on PIN_BUZZER, like NOTIFY_SCOPE above -- a board that cannot
+// sound must not offer a per-channel notify control. The device-wide scope stays the
+// master switch; this bit says the per-channel layer under it exists.
+constexpr uint8_t OFFBAND_CAP2_CHAN_NOTIFY = 0x80;
 constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: config backend (wifi_observer) compiled in
 constexpr uint8_t OFFBAND_CAP_BLOCK         = 0x02;  // bit 1: user-block list (BlockStore) compiled in (#241)
 constexpr uint8_t OFFBAND_CAP_FEM_LNA       = 0x04;  // bit 2: FEM LNA runtime control available (#298)
