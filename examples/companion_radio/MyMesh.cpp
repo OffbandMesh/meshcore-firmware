@@ -2958,8 +2958,14 @@ void MyMesh::handleCmdFrame(size_t len) {
                                  sub == offband::OFFBAND_UI_DISPLAY_SET);
     const bool is_led_sub     = (sub == offband::OFFBAND_UI_LED_GET ||
                                  sub == offband::OFFBAND_UI_LED_SET);
+    // #606: per-channel notification mode. Buzzer-gated like the scope above, and
+    // deliberately NOT part of is_tune_sub: the mode lives on the channel record and the
+    // decision is made in the mesh layer, so it needs no tone engine. A board with a
+    // buzzer but fixed melodies still has per-channel modes.
+    const bool is_chnotify_sub = (sub == offband::OFFBAND_UI_CHNOTIFY_GET ||
+                                  sub == offband::OFFBAND_UI_CHNOTIFY_SET);
 #ifndef PIN_BUZZER
-    if (is_scope_sub) {
+    if (is_scope_sub || is_chnotify_sub) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = offband::OFFBAND_UI_ERR;
       out_frame[2] = offband::OFFBAND_UI_ERR_NO_BUZZER;
@@ -3030,6 +3036,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
     (void)is_scope_sub; (void)is_matrix_sub; (void)is_display_sub; (void)is_led_sub;
     (void)is_gps_sub; (void)is_tune_sub; (void)is_screen_sub; (void)tones;
+    (void)is_chnotify_sub;
 {
 #ifdef PIN_BUZZER
     // #1478: the custom tune slots, through the UI's tune engine (#1788). The engine and
@@ -3204,6 +3211,36 @@ void MyMesh::handleCmdFrame(size_t len) {
       out_frame[1] = sub;
       out_frame[2] = cmd_frame[2];
       out_frame[3] = ch.tune;
+      _serial->writeFrame(out_frame, 4);
+      return;
+    }
+    // #606: the per-channel notification mode, addressed by slot and stored on the same
+    // channel record. Mirrors CHTUNE above deliberately -- same validation, and the reply
+    // is the value RE-READ after the write rather than an echo, so a client always
+    // renders what the device holds rather than what it asked for.
+    //
+    // No tone-engine dependency: unlike CHTUNE this decides WHETHER the radio sounds,
+    // not what it sounds like, so a buzzer with fixed melodies still has modes.
+    if (sub == offband::OFFBAND_UI_CHNOTIFY_GET || sub == offband::OFFBAND_UI_CHNOTIFY_SET) {
+      const bool is_set = (sub == offband::OFFBAND_UI_CHNOTIFY_SET);
+      ChannelDetails ch;
+      const bool ok = len >= (is_set ? 4 : 3) && getChannel(cmd_frame[2], ch) && ch.name[0] != 0 &&
+                      (!is_set || (offband::channelNotifySettable(cmd_frame[3]) &&
+                                   setChannelNotify(cmd_frame[2], cmd_frame[3]) &&
+                                   getChannel(cmd_frame[2], ch)));
+      if (!ok) {
+        ui_err(offband::OFFBAND_UI_ERR_MALFORMED);
+        return;
+      }
+      if (is_set) {
+        // On a screenless board caplog is the only record that a client changed this.
+        MESH_DEBUG_PRINTLN("[0xC5] channel %d notify -> stored %d via client",
+                           (int)cmd_frame[2], (int)ch.notify);
+      }
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = cmd_frame[2];
+      out_frame[3] = ch.notify;
       _serial->writeFrame(out_frame, 4);
       return;
     }
