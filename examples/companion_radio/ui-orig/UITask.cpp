@@ -657,7 +657,13 @@ void UITask::cycleNotifyScope() {
   // by playing its descending cue BEFORE the mute takes effect, then draining the buzzer
   // so the tone is not cut off mid-note.
   #ifdef PIN_BUZZER
-    uint8_t scope = (_node_prefs->notify_scope + 1) % NOTIFY_SCOPE_COUNT;
+    // #606: through the shared helper, not `(scope + 1) % COUNT`. COUNT grew to 4 when
+    // Inherit was added, so the arithmetic that used to live here would have added a
+    // fourth stop to the triple-press cycle -- a scope that does nothing until
+    // per-channel modes are set. nextNotifyScope() is the one cycle, is host-tested, and
+    // ui-new's badge control already calls it; ui-orig doing its own arithmetic was a
+    // latent drift between the two.
+    uint8_t scope = offband::nextNotifyScope(_node_prefs->notify_scope);
     _node_prefs->notify_scope = scope;
 
     switch (scope) {

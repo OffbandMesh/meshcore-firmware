@@ -29,17 +29,41 @@ TEST(NotifyScopeCycle, FollowsTheDocumentedOrder) {
   EXPECT_EQ(NOTIFY_SCOPE_ALL,  nextNotifyScope(NOTIFY_SCOPE_NONE));
 }
 
-// Cycling must visit every value and come home, or some setting is unreachable from the
-// badge -- which is the defect this whole issue is about.
-TEST(NotifyScopeCycle, VisitsEveryValueAndReturns) {
+// Cycling must visit every CYCLE value and come home, or a setting is unreachable from
+// the badge -- which is the defect this whole issue is about.
+//
+// #606 parted COUNT from the cycle length. COUNT is the validation bound and is now 4;
+// the cycle is still the three the button walks. Asserted as a literal 3 rather than as
+// a second constant, so that adding a scope cannot quietly satisfy this test by moving
+// the number it checks against -- the gesture is a contract with the user and with the
+// client's control, and it changes only deliberately.
+TEST(NotifyScopeCycle, VisitsEveryCycleValueAndReturns) {
   std::set<int> seen;
   uint8_t s = NOTIFY_SCOPE_ALL;
-  for (int i = 0; i < NOTIFY_SCOPE_COUNT; i++) {
+  for (int i = 0; i < 3; i++) {
     seen.insert(s);
     s = nextNotifyScope(s);
   }
-  EXPECT_EQ((size_t)NOTIFY_SCOPE_COUNT, seen.size()) << "a scope cannot be reached by cycling";
+  EXPECT_EQ((size_t)3, seen.size()) << "a cycle scope cannot be reached by cycling";
   EXPECT_EQ(NOTIFY_SCOPE_ALL, s) << "the cycle does not return to its start";
+  EXPECT_EQ(std::set<int>({NOTIFY_SCOPE_ALL, NOTIFY_SCOPE_SELF, NOTIFY_SCOPE_NONE}), seen);
+}
+
+// #606: INHERIT is deliberately NOT in the button cycle, and a press made while it is
+// set must LEAVE it rather than sit there.
+//
+// It is the one scope that does nothing on its own -- until per-channel modes are set it
+// behaves as All -- so a user cycling onto it would hear the device get louder for no
+// visible reason. The negative half of the test above: that one says the three are
+// reachable, this one says the fourth is not.
+TEST(NotifyScopeCycle, InheritIsNotReachableByCycling) {
+  uint8_t s = NOTIFY_SCOPE_ALL;
+  for (int i = 0; i < NOTIFY_SCOPE_COUNT * 2; i++) {
+    s = nextNotifyScope(s);
+    EXPECT_NE(NOTIFY_SCOPE_INHERIT, s) << "the button cycled onto Inherit";
+  }
+  EXPECT_EQ(NOTIFY_SCOPE_ALL, nextNotifyScope(NOTIFY_SCOPE_INHERIT))
+      << "a press while Inherit is set must re-enter the cycle at All";
 }
 
 // A stored value from a longer table (a downgrade) or a corrupt byte must not strand the

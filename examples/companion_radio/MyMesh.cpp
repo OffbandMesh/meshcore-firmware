@@ -1377,15 +1377,28 @@ bool MyMesh::textMentionsSelf(const char* text) const {
   return false;
 }
 
-// #510: should a received CHANNEL message make a sound, given the current scope?
-// ALL  -> always. SELF -> only when it @[mentions] us. NONE -> never.
-bool MyMesh::channelMsgShouldNotify(const char* text) const {
-  switch (_prefs.notify_scope) {
-    case NOTIFY_SCOPE_NONE: return false;
-    case NOTIFY_SCOPE_SELF: return textMentionsSelf(text);
-    case NOTIFY_SCOPE_ALL:
-    default:                return true;
-  }
+// #510/#606: should a received CHANNEL message make a sound?
+//
+// ALL -> always. SELF -> only when it @[mentions] us. NONE -> never. Those three are the
+// MASTER SWITCH and do not consult the channel: the control keeps meaning exactly what it
+// meant before #606.
+//
+// INHERIT -> the answer comes from this channel's own stored mode, and from All when the
+// channel has none. That is why the index is a parameter now: the mode lives on the
+// channel record, so the decision needs to know which channel this is.
+//
+// A slot that cannot be read falls back to the scope-only answer rather than to silence.
+// Failing loud is the right direction here -- a missed beep is the complaint this whole
+// feature exists to fix.
+// Not const: it reads the channel store through getChannel(), so this is no longer a
+// pure function of the prefs the way the scope-only version was.
+bool MyMesh::channelMsgShouldNotify(const char* text, uint8_t channel_idx) {
+  uint8_t stored = offband::kChanNotifyUnset;
+  ChannelDetails ch;
+  if (getChannel(channel_idx, ch)) stored = ch.notify;
+
+  const uint8_t resolved = offband::resolveChannelNotify(_prefs.notify_scope, stored);
+  return offband::channelNotifyAlerts(resolved, textMentionsSelf(text));
 }
 
 bool MyMesh::filterRecvFloodPacket(mesh::Packet* packet) {
@@ -1590,10 +1603,17 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   // master switch.
   // Setup › Messages & alerts: notifications and Channel messages are master
   // switches over every channel's own mode (Epic G).
-  const bool alert = _prefs.gui.notify_on && _prefs.gui.notify_channels && channelMsgShouldNotify(text) &&
+  // #606: BOTH terms apply on GUI builds, for now. channelMsgShouldNotify() consults the
+  // channel record, and gui.channelMode() still consults the GUI's own array -- the two
+  // stores the owner's ruling collapses into one. Leaving both AND-ed until the carry-over
+  // lands can only make a device QUIETER than one store alone would, never louder, so no
+  // GUI user starts hearing a channel they had silenced. ChartreuseOtter retires
+  // gui.channel_notify onto the channel record and drops the second term with it.
+  const bool alert = _prefs.gui.notify_on && _prefs.gui.notify_channels &&
+                     channelMsgShouldNotify(text, channel_idx) &&
                      offband::gui::channelAlerts(_prefs.gui.channelMode(channel_idx), textMentionsSelf(text));
 #else
-  const bool alert = channelMsgShouldNotify(text);
+  const bool alert = channelMsgShouldNotify(text, channel_idx);
 #endif
   if (_ui && alert) _ui->notifyChannel(channel_idx);
 #endif

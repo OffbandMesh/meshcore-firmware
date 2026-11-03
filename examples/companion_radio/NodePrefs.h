@@ -322,10 +322,24 @@ public:
 // #510: values for NodePrefs::notify_scope. Kept as an enum-like constant set rather
 // than a bare magic number so the CLI, the button handler and the config command all
 // agree. Order is the triple-press cycle order: ALL -> SELF -> NONE -> ALL.
-#define NOTIFY_SCOPE_ALL    0
-#define NOTIFY_SCOPE_SELF   1
-#define NOTIFY_SCOPE_NONE   2
-#define NOTIFY_SCOPE_COUNT  3
+// #606 appends INHERIT, and the button cycle deliberately does NOT reach it.
+//
+// COUNT is the VALIDATION bound -- every value a client may store. It is NOT the cycle
+// length, and the two parted company here. nextNotifyScope() below is the only cycle,
+// and it already walks ALL -> SELF -> NONE -> ALL and treats anything at or past NONE
+// as a re-entry at ALL, so Inherit falls out of the cycle without a second constant.
+//
+// Inherit is the one scope that does nothing on its own: until per-channel modes are set
+// it behaves as All. A user cycling onto it with the button would hear the device get
+// louder for no visible reason, so it is a client or menu choice only.
+//
+// Anything computing the cycle as `(scope + 1) % NOTIFY_SCOPE_COUNT` is now WRONG and
+// would add that fourth stop. Call nextNotifyScope().
+#define NOTIFY_SCOPE_ALL     0
+#define NOTIFY_SCOPE_SELF    1
+#define NOTIFY_SCOPE_NONE    2
+#define NOTIFY_SCOPE_INHERIT 3
+#define NOTIFY_SCOPE_COUNT   4
 
 // #1468: the three decisions a scope control has to make, kept out of the screen so
 // they are host-tested and so the badge and the 0xC5 handler cannot drift apart.
@@ -366,6 +380,11 @@ inline const char* notifyScopeLabel(uint8_t scope) {
     case NOTIFY_SCOPE_ALL:  return "All";
     case NOTIFY_SCOPE_SELF: return "DMs + @";
     case NOTIFY_SCOPE_NONE: return "Off";
+    // #606: PROVISIONAL WORDING -- owner sign-off pending before this ships. It must say
+    // the answer comes from each channel, and it must fit NINE characters: the Tones row
+    // is label + value on one 21-column line, "New contact" is the widest label at 11,
+    // and test_notify_scope asserts the ceiling. "Per channel" is 11 and does not fit.
+    case NOTIFY_SCOPE_INHERIT: return "Per chan";
     default:                return "All";   // an unknown stored value reads as its fallback
   }
 }
