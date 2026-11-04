@@ -70,80 +70,127 @@ TEST(KeyNav, TripleClickKeepsItsOtherJobAtHome) {
   EXPECT_FALSE(keynav::backsOut(keynav::tripleClickKey(true)));
 }
 
-// ---- #1884: a tap on a main list screen ---------------------------------------------
+// ---- #1989: SW1 on a main list screen ---------------------------------------------
 
 using keynav::ListTap;
 using keynav::listTap;
 
-TEST(ListTap, WithoutAKeyboardATapWalksDownTheList) {
-  const auto r = listTap(KEY_NEXT, false, 0, 3);
+constexpr bool kNoKbd = false, kKbd = true;
+constexpr bool kOnScreens = false, kInList = true;
+
+// On the screens: the owner's rule, a tap forward and a double tap back, whatever the list
+// holds. This is what #1884 got wrong -- it walked the rows first.
+TEST(ListTap, OnTheScreensATapMovesToTheNextScreen) {
+  EXPECT_EQ(ListTap::CycleNext, listTap(KEY_NEXT, kNoKbd, kOnScreens, 0, 40).action);
+}
+
+TEST(ListTap, OnTheScreensADoubleTapMovesToThePreviousScreen) {
+  EXPECT_EQ(ListTap::CyclePrev, listTap(KEY_PREV, kNoKbd, kOnScreens, 5, 40).action);
+}
+
+TEST(ListTap, OnTheScreensATapNeverWalksTheList) {
+  for (int sel = 0; sel < 3; sel++) {
+    EXPECT_NE(ListTap::Select, listTap(KEY_NEXT, kNoKbd, kOnScreens, sel, 3).action) << sel;
+    EXPECT_NE(ListTap::Select, listTap(KEY_PREV, kNoKbd, kOnScreens, sel, 3).action) << sel;
+  }
+}
+
+TEST(ListTap, OnTheScreensALongPressEntersTheListAtItsTop) {
+  const auto r = listTap(KEY_ENTER, kNoKbd, kOnScreens, 7, 10);
+  EXPECT_EQ(ListTap::EnterList, r.action);
+  EXPECT_EQ(0, r.sel) << "the list is entered at the top, not at a remembered row";
+}
+
+TEST(ListTap, OnTheScreensALongPressOpensNothing) {
+  EXPECT_NE(ListTap::Open, listTap(KEY_ENTER, kNoKbd, kOnScreens, 0, 3).action);
+}
+
+TEST(ListTap, ALongPressOnAnEmptyListDoesNothing) {
+  EXPECT_EQ(ListTap::None, listTap(KEY_ENTER, kNoKbd, kOnScreens, 0, 0).action);
+}
+
+// In the list.
+TEST(ListTap, InTheListATapMovesDown) {
+  const auto r = listTap(KEY_NEXT, kNoKbd, kInList, 0, 3);
   EXPECT_EQ(ListTap::Select, r.action);
   EXPECT_EQ(1, r.sel);
 }
 
-TEST(ListTap, WithoutAKeyboardADoubleTapWalksUpTheList) {
-  const auto r = listTap(KEY_PREV, false, 2, 3);
+TEST(ListTap, InTheListADoubleTapMovesUp) {
+  const auto r = listTap(KEY_PREV, kNoKbd, kInList, 2, 3);
   EXPECT_EQ(ListTap::Select, r.action);
   EXPECT_EQ(1, r.sel);
 }
 
-TEST(ListTap, WalkingOffTheBottomMovesToTheNextScreen) {
-  EXPECT_EQ(ListTap::CycleNext, listTap(KEY_NEXT, false, 2, 3).action);
+TEST(ListTap, ADoubleTapOnTheTopRowReturnsToTheScreens) {
+  EXPECT_EQ(ListTap::LeaveList, listTap(KEY_PREV, kNoKbd, kInList, 0, 3).action);
 }
 
-TEST(ListTap, WalkingOffTheTopMovesToThePreviousScreen) {
-  EXPECT_EQ(ListTap::CyclePrev, listTap(KEY_PREV, false, 0, 3).action);
+TEST(ListTap, ATapOnTheLastRowStaysThere) {
+  const auto r = listTap(KEY_NEXT, kNoKbd, kInList, 2, 3);
+  EXPECT_EQ(ListTap::Select, r.action);
+  EXPECT_EQ(2, r.sel);
 }
 
-TEST(ListTap, AnEmptyListMovesStraightOn) {
-  EXPECT_EQ(ListTap::CycleNext, listTap(KEY_NEXT, false, 0, 0).action);
-  EXPECT_EQ(ListTap::CyclePrev, listTap(KEY_PREV, false, 0, 0).action);
+TEST(ListTap, ATapInTheListNeverChangesScreen) {
+  for (int sel = 0; sel < 3; sel++) {
+    for (uint8_t key : {(uint8_t)KEY_NEXT, (uint8_t)KEY_PREV}) {
+      const ListTap a = listTap(key, kNoKbd, kInList, sel, 3).action;
+      EXPECT_NE(ListTap::CycleNext, a) << sel;
+      EXPECT_NE(ListTap::CyclePrev, a) << sel;
+    }
+  }
 }
 
-TEST(ListTap, AOneRowListMovesStraightOnBothWays) {
-  EXPECT_EQ(ListTap::CycleNext, listTap(KEY_NEXT, false, 0, 1).action);
-  EXPECT_EQ(ListTap::CyclePrev, listTap(KEY_PREV, false, 0, 1).action);
+TEST(ListTap, InTheListALongPressOpensTheRow) {
+  const auto r = listTap(KEY_ENTER, kNoKbd, kInList, 1, 3);
+  EXPECT_EQ(ListTap::Open, r.action);
+  EXPECT_EQ(1, r.sel);
 }
 
-TEST(ListTap, WithAKeyboardFittedATapStillCyclesScreens) {
-  // The supporter badge keeps its design: the arrow keys walk the list, a tap cycles.
-  EXPECT_EQ(ListTap::CycleNext, listTap(KEY_NEXT, true, 0, 3).action);
-  EXPECT_EQ(ListTap::CyclePrev, listTap(KEY_PREV, true, 2, 3).action);
+TEST(ListTap, ALongPressOnAStaleSelectionOpensARowThatExists) {
+  const auto r = listTap(KEY_ENTER, kNoKbd, kInList, 5, 3);
+  EXPECT_EQ(ListTap::Open, r.action);
+  EXPECT_EQ(2, r.sel);
+}
+
+TEST(ListTap, AListThatEmptiedHandsTheFocusBack) {
+  EXPECT_EQ(ListTap::LeaveList, listTap(KEY_NEXT, kNoKbd, kInList, 0, 0).action);
+  EXPECT_EQ(ListTap::LeaveList, listTap(KEY_PREV, kNoKbd, kInList, 0, 0).action);
+  EXPECT_EQ(ListTap::LeaveList, listTap(KEY_ENTER, kNoKbd, kInList, 0, 0).action);
 }
 
 TEST(ListTap, AStaleSelectionPastTheEndStepsBackOntoTheList) {
-  const auto r = listTap(KEY_PREV, false, 5, 3);
+  auto r = listTap(KEY_PREV, kNoKbd, kInList, 5, 3);
   EXPECT_EQ(ListTap::Select, r.action);
   EXPECT_EQ(2, r.sel);
-  EXPECT_EQ(ListTap::CycleNext, listTap(KEY_NEXT, false, 5, 3).action);
+  r = listTap(KEY_NEXT, kNoKbd, kInList, 5, 3);
+  EXPECT_EQ(ListTap::Select, r.action);
+  EXPECT_EQ(2, r.sel);
 }
 
-using keynav::ListEntry;
-using keynav::listEntry;
-
-TEST(ListEntry, WithoutAKeyboardAForwardStepStartsAtTheTop) {
-  EXPECT_EQ(ListEntry::Top, listEntry(1, false));
+// A keyboard badge keeps its design: a tap cycles, the arrow keys walk the list, and a
+// long press opens the highlighted row, wherever the focus flag happens to be.
+TEST(ListTap, WithAKeyboardFittedATapCyclesScreens) {
+  for (bool in_list : {kOnScreens, kInList}) {
+    EXPECT_EQ(ListTap::CycleNext, listTap(KEY_NEXT, kKbd, in_list, 0, 3).action);
+    EXPECT_EQ(ListTap::CyclePrev, listTap(KEY_PREV, kKbd, in_list, 2, 3).action);
+  }
 }
 
-TEST(ListEntry, WithoutAKeyboardABackwardStepStartsAtTheBottom) {
-  // Otherwise a double tap off the top of Nearby lands on Contacts' top row and the next
-  // double tap leaves at once: a list could never be walked up from its end.
-  EXPECT_EQ(ListEntry::Bottom, listEntry(-1, false));
-}
-
-TEST(ListEntry, WithAKeyboardTheRememberedRowIsKept) {
-  EXPECT_EQ(ListEntry::Keep, listEntry(1, true));
-  EXPECT_EQ(ListEntry::Keep, listEntry(-1, true));
-}
-
-TEST(ListEntry, NoStepKeepsTheRow) {
-  EXPECT_EQ(ListEntry::Keep, listEntry(0, false));
+TEST(ListTap, WithAKeyboardFittedALongPressOpensTheRow) {
+  const auto r = listTap(KEY_ENTER, kKbd, kOnScreens, 2, 3);
+  EXPECT_EQ(ListTap::Open, r.action);
+  EXPECT_EQ(2, r.sel);
+  EXPECT_EQ(ListTap::None, listTap(KEY_ENTER, kKbd, kOnScreens, 0, 0).action);
 }
 
 TEST(ListTap, OtherKeysAreNotATap) {
-  EXPECT_EQ(ListTap::None, listTap(KEY_ENTER, false, 0, 3).action);
-  EXPECT_EQ(ListTap::None, listTap(KEY_UP, false, 1, 3).action);
-  EXPECT_EQ(ListTap::None, listTap(KEY_CANCEL, true, 1, 3).action);
+  for (bool in_list : {kOnScreens, kInList}) {
+    EXPECT_EQ(ListTap::None, listTap(KEY_UP, kNoKbd, in_list, 1, 3).action);
+    EXPECT_EQ(ListTap::None, listTap(KEY_CANCEL, kNoKbd, in_list, 1, 3).action);
+    EXPECT_EQ(ListTap::None, listTap((uint8_t)'a', kKbd, in_list, 1, 3).action);
+  }
 }
 
 int main(int argc, char** argv) {

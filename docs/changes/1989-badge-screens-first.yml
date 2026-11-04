@@ -1,0 +1,11 @@
+schema_version: 1
+issue: 1989
+impact: none
+reason: >-
+  No published guide covers the QCC badge's controls yet. On a badge without a
+  keyboard the button now moves between the main screens first, and a long
+  press enters a list. This replaces the #1884 rule, where a click walked
+  every row before the next screen. The badge guide in progress under #1868
+  (GUIDE-DRAFT.md) describes the new rule in this change. Its line saying a
+  triple click does nothing in a conversation, which #1951 in this epic made
+  untrue, is corrected in the same edit.

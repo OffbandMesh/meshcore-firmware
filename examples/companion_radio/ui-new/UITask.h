@@ -195,6 +195,7 @@ class UITask : public AbstractUITask {
   UIScreen* gps = nullptr;        // #1235
   UIScreen* battery = nullptr;    // #1254
   uint32_t _cycle_at = 0;   // #1231: when SW1 last moved along the cycle
+  UIScreen* _list_focus = nullptr;   // #1989: the list SW1 drives, or none: the screens
 #endif
 #if OFFBAND_SCREEN_UI && defined(PIN_BUZZER)
   // #1421: Settings -> Tones -> a tune. The screens and a buzzer, and nothing on a
@@ -297,7 +298,17 @@ public:
   // (design 1f).
   void cycle(int step);
   int cyclePos() const;   // 0 Messages, 1 Contacts, 2 Nearby, 3 Status
-  bool breadcrumbShown() const { return _cycle_at != 0 && millis() - _cycle_at < 2000; }
+  // #1989: without a keyboard the focus is on the screens or in a list. On the screens no
+  // row is highlighted and the breadcrumb stays up, so it is plain which one SW1 drives.
+  bool breadcrumbShown() const { return breadcrumbHeld() || (_cycle_at != 0 && millis() - _cycle_at < 2000); }
+  bool breadcrumbHeld() const;   // on a list screen, with the focus on the screens
+  // A held breadcrumb never goes, so only a fading one needs the 250 ms redraw.
+  bool breadcrumbFading() const { return breadcrumbShown() && !breadcrumbHeld(); }
+  // The focus belongs to the list it was entered on: a conversation opened from elsewhere
+  // and closed back to Messages must not land in Messages' list.
+  bool listFocused() const { return hasKeyboard() || (_list_focus != nullptr && _list_focus == curr); }
+  void enterList() { _list_focus = curr; }
+  void leaveList() { _list_focus = nullptr; }
   void gotoStatus();
   void gotoSettings();   // #1233: from Status, or Fn+S from anywhere (design 3a)
   void gotoZones();      // #1233

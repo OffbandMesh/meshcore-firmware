@@ -91,14 +91,21 @@ If the screen has gone dark, the first press only wakes it.
 The four main screens are **Messages**, **Contacts**, **Nearby** and **Status**. When
 you change screen, a strip at the top names the four and shows where you are.
 
-**Without a keyboard**, a click moves the highlight down the list and a double click
-moves it up. On Messages, Contacts and Nearby, click past the last row to go to the
-next screen, or double click above the first row to go to the previous one. A long
-press opens the highlighted row.
+**Without a keyboard**, the button moves between the screens first and goes into a list
+only when you ask it to. On Messages, Contacts and Nearby:
 
-In a conversation, a single click goes back; a triple click does nothing there. In
-Settings, a click and a double click only move within the list, and a triple click goes
-back.
+- On the screens, a click goes to the next screen and a double click to the previous
+  one. No row is highlighted, and the strip that names the four screens stays at the
+  top.
+- A long press goes into the list, at its top row.
+- In the list, a click moves the highlight down and a double click moves it up. A long
+  press opens the highlighted row.
+- A double click on the top row goes back to the screens.
+
+Status has no list, so a long press there opens Settings.
+
+In a conversation, a single click or a triple click goes back. In Settings, a click and
+a double click only move within the list, and a triple click goes back.
 
 **With a keyboard:**
 

@@ -21,7 +21,6 @@ public:
   explicit InboxScreen(UITask* task) : _task(task) {}
   int render(DisplayDriver& display) override;
   bool handleInput(char c) override;
-  void enterList(bool at_bottom);   // #1884: a keyboardless cycle step lands on an end
 
   // A message arrived: its conversation's row inverts for a second.
   void flash();
@@ -60,7 +59,6 @@ class ContactsScreen : public UIScreen {
 public:
   explicit ContactsScreen(UITask* task) : _task(task) {}
   void reload();   // on the way in, and every few seconds while shown
-  void enterList(bool at_bottom);   // #1884: a keyboardless cycle step lands on an end
   int render(DisplayDriver& display) override;
   bool handleInput(char c) override;
 
@@ -91,7 +89,6 @@ class NearbyScreen : public UIScreen {
 public:
   explicit NearbyScreen(UITask* task) : _task(task) {}
   void reload();   // on the way in, and every few seconds while shown
-  void enterList(bool at_bottom);   // #1884: a keyboardless cycle step lands on an end
   int render(DisplayDriver& display) override;
   bool handleInput(char c) override;
 
