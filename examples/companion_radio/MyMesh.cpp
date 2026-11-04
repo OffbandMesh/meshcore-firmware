@@ -2192,12 +2192,26 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   // nearly every notification, and a device in a pocket or on a badge is the wrong place
   // for that default.
   //
-  // Set BEFORE loadPrefs, for the same reason as caplog below: a prefs record written
-  // before this field existed short-reads to EOF and keeps this default. So the change
-  // DOES reach existing devices on upgrade -- their channel chatter goes quiet while DMs
-  // and mentions still sound. That is the direction the owner asked for, and SELF is not
-  // a mute: nothing a device could do before becomes unreachable, and the triple press
-  // still walks ALL -> SELF -> NONE.
+  // WHICH DEVICES THIS ACTUALLY REACHES, stated precisely, because an earlier version of
+  // this comment got it wrong and the wrong version is the kind that gets believed:
+  //
+  //   * a fresh or wiped device, and any record written before the key existed  -> SELF
+  //   * a device whose saved prefs already carry the key                        -> unchanged
+  //
+  // notify_scope is a SAVED KEY -- `def("notify", notify_scope)` in NodePrefs.h -- and
+  // since the 1.17.0 base prefs are keyed JSON, not offsets in a binary record. So
+  // loadPrefs puts the saved value back over this default whenever the key is present,
+  // and setting it before loadPrefs buys only the pre-key case (where the key is absent
+  // from the JSON, or the legacy binary record short-reads to EOF before offset 143).
+  //
+  // The earlier comment reasoned purely from that short-read and concluded the change
+  // "DOES reach existing devices on upgrade". It does not. Any device flashed since #510
+  // that has saved its prefs keeps the ALL it has -- which includes every bench unit
+  // here. Rewriting a saved ALL to SELF would be a migration, and whether to do one is
+  // the owner's call, not a side effect of a default.
+  //
+  // SELF is not a mute either way: nothing a device could do becomes unreachable, and the
+  // triple press still walks ALL -> SELF -> NONE.
   _prefs.notify_scope = NOTIFY_SCOPE_SELF;
 
   // #509: button-matrix defaults preserve today's hardcoded behaviour exactly.
@@ -5455,6 +5469,11 @@ bool MyMesh::placePublicInSlot0(const char* name, bool live) {
           return true;
         },
         key);
+    // Not zeroed, and does not need to be: the carry below reads only .tune and .notify
+    // when `dest < 0` short-circuits before getChannel() fills this, and ChannelDetails
+    // gives both of those in-struct initializers precisely so a site that does not write
+    // them reads "unset" instead of a stack byte (see ChannelDetails.h). `name` is read
+    // only on the public_was_at_dest path, where getChannel() has filled it.
     ChannelDetails old_public;
     const bool public_was_at_dest = dest >= 0 && getChannel(dest, old_public) && old_public.name[0] != 0 &&
                                     offband::slotHoldsKey(old_public.channel.secret, key);
@@ -5464,7 +5483,12 @@ bool MyMesh::placePublicInSlot0(const char* name, bool live) {
     const char* pub_name = name && name[0] ? name : (public_was_at_dest ? old_public.name : "Public");
     StrHelper::strncpy(pub.name, pub_name, sizeof(pub.name));
     memcpy(pub.channel.secret, key, 16);
-    pub.tune = public_was_at_dest ? old_public.tune : offband::kChannelTuneUnset;
+    // #606: the tune AND the notify mode travel with Public. Through one helper that
+    // writes both, because #1625 wrote the tune's carry as a bare line here and #606 then
+    // added a second resident to the same spare field that this line did not copy -- so a
+    // user who silenced Public had it sound again at the next boot that re-placed slot 0.
+    offband::carryChannelPrefs(public_was_at_dest, old_public.tune, old_public.notify,
+                               &pub.tune, &pub.notify);
 #ifdef OFFBAND_GUI
     const offband::gui::NotifyMode public_mode =
         public_was_at_dest ? _prefs.gui.channelMode(uint8_t(dest)) : offband::gui::NotifyMode(_prefs.gui.notify_default);

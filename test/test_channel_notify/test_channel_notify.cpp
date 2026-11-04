@@ -222,6 +222,69 @@ TEST(ChanNotifyAfterEdit, MatchesTheTunesRuleNotTheRetiredGuiArrays) {
   }
 }
 
+// ------------------------------------------------- what Public carries across slot 0
+
+TEST(ChanNotifyCarry, PublicKeepsItsModeAndItsTuneAcrossTheMove) {
+  // THE regression. placePublicInSlot0 rebuilds Public's record rather than moving it,
+  // and before this helper existed it copied the tune and dropped the notify byte -- so
+  // a user who silenced Public heard it again at the next boot that re-placed slot 0.
+  // Public cannot be deleted, so this is the one channel where a lost mode is permanent
+  // until the user finds the setting again.
+  //
+  // Both outputs are pre-loaded with a value the carry must overwrite, so a helper that
+  // wrote neither would fail here rather than pass on whatever the caller already had.
+  uint8_t tune = 99, notify = 99;
+  carryChannelPrefs(true, 5, kChanNotifyOff, &tune, &notify);
+  EXPECT_EQ(5u, tune);
+  EXPECT_EQ(kChanNotifyOff, notify);
+}
+
+TEST(ChanNotifyCarry, NoPriorPublicCarriesNothing) {
+  // The negative half: with no prior Public there is nothing to carry, and both fields
+  // must come out UNSET rather than an invented All. Unset means the channel takes the
+  // device scope, which is the only answer that is not a guess about what the user wants.
+  uint8_t tune = 99, notify = 99;
+  carryChannelPrefs(false, 5, kChanNotifyOff, &tune, &notify);
+  EXPECT_EQ(kChannelTuneUnset, tune);
+  EXPECT_EQ(kChanNotifyUnset, notify);
+}
+
+TEST(ChanNotifyCarry, EveryModeSurvivesTheMoveUnchanged) {
+  // Walked across the whole space rather than spot-checked: a carry that mapped one mode
+  // wrong would be a channel that changes how it sounds at a boot the user did not cause.
+  for (uint8_t m = 0; m < kChanNotifyCount; m++) {
+    uint8_t tune = 0, notify = 0xFF;
+    carryChannelPrefs(true, kChannelTuneUnset, m, &tune, &notify);
+    EXPECT_EQ(m, notify) << "mode " << (int)m << " did not survive the slot-0 move";
+  }
+}
+
+TEST(ChanNotifyCarry, EveryTuneSurvivesTheMoveUnchanged) {
+  // Symmetric coverage for the other resident, and not redundant: the tune is carried
+  // BYTE-FOR-BYTE, including ids this build cannot resolve (TuneSlots.h keeps an unknown
+  // id rather than clearing it, because a later build may know it). So the boundaries are
+  // the interesting part -- a carry that validated or clamped the tune would silently
+  // rewrite a channel's sound on a board that merely has an older tune table.
+  const uint8_t tunes[] = {kChannelTuneUnset, 1, 7, 0x7F, 0xFE, 0xFF};
+  for (uint8_t t : tunes) {
+    uint8_t tune = 0xAA, notify = 0;
+    carryChannelPrefs(true, t, kChanNotifyAll, &tune, &notify);
+    EXPECT_EQ(t, tune) << "tune " << (int)t << " did not survive the slot-0 move";
+  }
+}
+
+TEST(ChanNotifyCarry, NeitherOutputIsWrittenThroughANullPointer) {
+  // The guard, matching channelSpareToFile's. A call site that passes one field and not
+  // the other is a programming error, and the helper must not write a partial carry --
+  // half a carry is worse than none, because the record then disagrees with itself.
+  uint8_t only = 42;
+  carryChannelPrefs(true, 5, kChanNotifyOff, &only, nullptr);
+  EXPECT_EQ(42u, only) << "a partial carry was written when one output was null";
+  carryChannelPrefs(true, 5, kChanNotifyOff, nullptr, &only);
+  EXPECT_EQ(42u, only) << "a partial carry was written when one output was null";
+  carryChannelPrefs(true, 5, kChanNotifyOff, nullptr, nullptr);   // must not crash
+}
+
 // ---------------------------------------------------------------- the record on disk
 
 TEST(ChanNotifyRecord, TheChannelRecordStrideIsUnchanged) {

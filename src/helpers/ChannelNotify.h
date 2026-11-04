@@ -140,4 +140,34 @@ inline uint8_t channelNotifyAfterEdit(bool was_empty, bool same_channel, uint8_t
   return same_channel ? before : kChanNotifyUnset;
 }
 
+// What a rebuilt Public record carries in from the slot Public came from.
+//
+// placePublicInSlot0 does not MOVE Public's record into slot 0, it builds a fresh one
+// from the known key and then copies forward what belongs to the channel rather than to
+// the slot. Public is the one channel a user cannot delete, so the mode and the tune they
+// chose for it have to survive a shuffle they never asked for and cannot see.
+//
+// BOTH FIELDS MOVE TOGETHER, and the signature is what enforces it.
+//
+// They already failed to once: #1625 wrote the tune's carry as a bare line at the call
+// site, #606 added a second resident to the same spare field, and the notify byte was
+// simply not copied -- so a user who silenced Public had it sound again at the next boot
+// that re-placed the slot.
+//
+// WRITTEN THROUGH OUT-PARAMETERS, not returned, which is the point. A third resident in
+// that field becomes a third required argument, so a call site that has not been taught
+// about it FAILS TO COMPILE. Returning a struct -- or a tuple -- would leave the
+// assignment at the call site optional, and an optional assignment is exactly the thing
+// that was missed the first time. This also matches channelSpareToFile above, which takes
+// the field it writes for the same reason.
+inline void carryChannelPrefs(bool had_prior_public,
+                              uint8_t prior_tune, uint8_t prior_notify,
+                              uint8_t* out_tune, uint8_t* out_notify) {
+  if (out_tune == nullptr || out_notify == nullptr) return;
+  // No prior Public means there is nothing to carry. Unset for both, so the channel takes
+  // the device scope rather than an invented All.
+  *out_tune   = had_prior_public ? prior_tune   : kChannelTuneUnset;
+  *out_notify = had_prior_public ? prior_notify : kChanNotifyUnset;
+}
+
 }  // namespace offband
