@@ -20,6 +20,7 @@
 // internal-linkage, so a variant that only names the unset value emits nothing of it.
 #include <helpers/ui/TuneSlots.h>
 #include <helpers/ChannelNotify.h>
+#include <helpers/OffbandInfoAdvert.h>   // #1994: the 0xC5 0x1C capability advert
 #include <helpers/ChannelSlotGuard.h>   // #1865: no channel written over another
 #include <helpers/ChannelKeys.h>        // #1896: Public's key, for the slot guard
 #ifdef PIN_BUZZER
@@ -3306,6 +3307,87 @@ void MyMesh::handleCmdFrame(size_t len) {
       return;
     }
 #endif  // PIN_BUZZER
+    // #1994: THE CAPABILITY ADVERT. One request, the whole list.
+    //
+    // This is where Offband stops announcing itself inside upstream's device-info frame.
+    // Six features had announced themselves by appending a byte there and incrementing
+    // UPSTREAM's FIRMWARE_VER_CODE (ver codes 18..23), and three then independently
+    // computed "the next free byte" as offset 87 -- each correct in isolation, because
+    // that frame is built by out_frame[i++] with no declared layout. A position clash
+    // there is a plausible wrong number with no error raised on either side.
+    //
+    // A TAG'S PRESENCE IS THE CAPABILITY. No bitmap: the tags already answer "is this
+    // supported", so a bitmap beside them would be a second source of truth for one
+    // question. A board that lacks a feature OMITS its tag; it does not send a zero.
+    //
+    // Values are NOT carried here. A client reads them through each feature's own
+    // sub-code, which is what keeps this frame small enough to be one round trip. The
+    // single exception is ACK_CAPACITY, which has no sub-code of its own.
+    //
+    // Contract: docs/offband_info_frame_contract.md. Registry: OFFBAND_INFO_TAG_* in
+    // OffbandConfigProtocol.h. Tag order here MUST ascend -- InfoAdvert enforces it,
+    // because the resume cursor names a tag and an unordered advert would make the
+    // cursor silently drop records.
+    if (sub == offband::OFFBAND_UI_INFO_GET) {
+      // The writer mirrors the CONTINUE tag rather than including the companion-only
+      // protocol header; tie the two so a drift breaks the build, not the behaviour.
+      static_assert(offband::InfoAdvert::kInfoTagContinue == offband::OFFBAND_INFO_TAG_CONTINUE,
+                    "advert CONTINUE tag drifted from the protocol registry");
+
+      // len counts the whole command frame: [0]=0xC5, [1]=sub, optional [2]=cursor.
+      // Anything longer is malformed. A ZERO-PAYLOAD request is also what a client uses
+      // to probe: an older device answers ERR_MALFORMED from the terminal arm below, and
+      // reason 5 is unambiguous as "not implemented" only for a zero-payload request,
+      // because a known sub-code with a short payload returns the same reason.
+      if (len > 3) {
+        ui_err(offband::OFFBAND_UI_ERR_MALFORMED);
+        return;
+      }
+      const uint8_t cursor = (len == 3) ? cmd_frame[2] : 0;
+
+      // [0],[1] are the header; the rest is the record area. Transport-aware, never a
+      // constant: maxFramePayload() reports the 20-byte MIN_ATT_MTU floor until BLE
+      // negotiates and ~244 after.
+      const size_t cap = _serial->maxFramePayload(2);
+      if (cap < offband::kInfoMinCapacity) {
+        // Below the floor neither a record nor the CONTINUE announcing its absence fits,
+        // and an EMPTY advert is a confident claim that the device has no capabilities.
+        // Refusing is the only honest answer. Unreachable on any real link.
+        ui_err(offband::OFFBAND_UI_ERR_MALFORMED);
+        return;
+      }
+
+      offband::InfoAdvert advert(&out_frame[2], cap);
+
+      // ---- tags, ascending. `cursor` skips what a previous round already delivered.
+#ifdef PIN_BUZZER
+      // #606: per-channel notification modes. Gated on the buzzer, like the device-wide
+      // scope -- a board that cannot sound must not offer the control.
+      if (offband::OFFBAND_INFO_TAG_CHAN_NOTIFY >= cursor) {
+        advert.addFlag(offband::OFFBAND_INFO_TAG_CHAN_NOTIFY);
+      }
+#endif
+      // #1990: display rotation advertises itself here; the value is read with 0x1A.
+      // Emitted only where the UI can actually rotate, so a fixed-orientation display
+      // omits the tag rather than claiming a capability it will refuse.
+      if (offband::OFFBAND_INFO_TAG_DISPLAY_ROTATION >= cursor && _ui != NULL &&
+          _ui->displaySupportsRotation()) {
+        advert.addFlag(offband::OFFBAND_INFO_TAG_DISPLAY_ROTATION);
+      }
+      // #1001: outstanding-ACK capacity. Carries its byte by the contract's one exception
+      // -- one byte, fixed for the build, and no sub-code of its own to read it from.
+      // This replaces the byte feat/994-delivery-observability put at offset 87, and
+      // needs no FIRMWARE_VER_CODE bump: the tag's presence is the version.
+      if (offband::OFFBAND_INFO_TAG_ACK_CAPACITY >= cursor) {
+        advert.addByte(offband::OFFBAND_INFO_TAG_ACK_CAPACITY, (uint8_t)EXPECTED_ACK_TABLE_SIZE);
+      }
+
+      const size_t area = advert.finish();
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      _serial->writeFrame(out_frame, 2 + area);
+      return;
+    }
     // #1788: the screen settings -- both text sizes, Screen off, time zone, and the
     // battery's full point -- through the UI, whose setters carry the screens' own rules.
     // Every reply is the whole set, re-read after any write, so a client always renders
