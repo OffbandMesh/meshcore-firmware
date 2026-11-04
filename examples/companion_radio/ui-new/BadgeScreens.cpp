@@ -289,9 +289,11 @@ int InboxScreen::render(DisplayDriver& d) {
   const bool crumb = _task->breadcrumbShown();
   const int first_row = crumb ? 2 : 1;
   const int rows = kListRows - (crumb ? 1 : 0);
-  int top = listTop(_sel, count, rows);
+  // #1989: with the focus on the screens no row is lit, and the list shows from its top.
+  const int hl = _task->listFocused() ? _sel : -1;
+  int top = listTop(hl < 0 ? 0 : hl, count, rows);
   const bool more_below = count - top > rows;
-  if (more_below) top = listTop(_sel, count, rows - 1);
+  if (more_below) top = listTop(hl < 0 ? 0 : hl, count, rows - 1);
 
   char right[20] = "";
   if (crumb) {
@@ -326,7 +328,7 @@ int InboxScreen::render(DisplayDriver& d) {
   const uint32_t now_ms = millis();
   bool scrolling = false;
   for (int r = 0; r < rows && top + r < count; r++) {
-    scrolling |= drawItem(d, first_row + r, list[top + r], top + r == _sel, now_ms);
+    scrolling |= drawItem(d, first_row + r, list[top + r], top + r == hl, now_ms);
   }
   if (more_below) {
     dark(d);
@@ -334,15 +336,9 @@ int InboxScreen::render(DisplayDriver& d) {
     lit(d);
   }
   if (scrolling) return 80;
-  if (crumb) return 250;   // redraw when the breadcrumb goes
+  if (_task->breadcrumbFading()) return 250;   // redraw when the breadcrumb goes
   if (before(now_ms, _flash_until)) return (int)(_flash_until - now_ms) + 10;
   return 1000;
-}
-
-void InboxScreen::enterList(bool at_bottom) {
-  Item list[kMaxItems];
-  const int count = items(list, kMaxItems);
-  if (count > 0) select(list, count, at_bottom ? count - 1 : 0);
 }
 
 bool InboxScreen::handleInput(char c) {
@@ -351,12 +347,18 @@ bool InboxScreen::handleInput(char c) {
   const int count = items(list, kMaxItems);
   follow(list, count);
 
-  if (!_task->inputFromKeyboard()) {   // SW1: a tap cycles (design 1f), or walks the list
-    const keynav::ListTapResult t = keynav::listTap(key, _task->hasKeyboard(), _sel, count);
-    if (t.action == keynav::ListTap::Select) select(list, count, t.sel);
-    else if (t.action == keynav::ListTap::CycleNext) _task->cycle(1);
-    else if (t.action == keynav::ListTap::CyclePrev) _task->cycle(-1);
-    else if (key == KEY_ENTER && count > 0) open(list[_sel], 0);
+  if (!_task->inputFromKeyboard()) {   // SW1: the screens, or the list (#1989)
+    const keynav::ListTapResult t =
+        keynav::listTap(key, _task->hasKeyboard(), _task->listFocused(), _sel, count);
+    switch (t.action) {
+      case keynav::ListTap::EnterList: _task->enterList(); select(list, count, t.sel); break;
+      case keynav::ListTap::Select:    select(list, count, t.sel); break;
+      case keynav::ListTap::Open:      open(list[t.sel], 0); break;
+      case keynav::ListTap::LeaveList: _task->leaveList(); break;
+      case keynav::ListTap::CycleNext: _task->cycle(1); break;
+      case keynav::ListTap::CyclePrev: _task->cycle(-1); break;
+      default: break;
+    }
     return true;
   }
   switch (key) {
@@ -868,9 +870,10 @@ int ContactsScreen::render(DisplayDriver& d) {
   const bool crumb = _task->breadcrumbShown();
   const int first_row = crumb ? 2 : 1;
   const int rows = kListRows - (crumb ? 1 : 0);
-  int top = listTop(_sel, _count, rows);
+  const int hl = _task->listFocused() ? _sel : -1;   // #1989: as Messages
+  int top = listTop(hl < 0 ? 0 : hl, _count, rows);
   const bool more_below = _count - top > rows;
-  if (more_below) top = listTop(_sel, _count, rows - 1);
+  if (more_below) top = listTop(hl < 0 ? 0 : hl, _count, rows - 1);
 
   char right[16];
   if (crumb) cycleTitle(right, sizeof(right), 1);
@@ -890,14 +893,14 @@ int ContactsScreen::render(DisplayDriver& d) {
 
   if (_count == 0) {
     line(d, kBody, first_row + 1, " nobody heard yet");
-    return crumb ? 250 : 5000;
+    return _task->breadcrumbFading() ? 250 : 5000;
   }
   const uint32_t now = rtc_clock.getCurrentTime();
   for (int r = 0; r < rows && top + r < _count; r++) {
     const Entry& e = _list[top + r];
     const ContactInfo* c = the_mesh.lookupContactByPubKey(e.key, PUB_KEY_SIZE);
     const int row = first_row + r;
-    const bool selected = (top + r == _sel);
+    const bool selected = (top + r == hl);
     char shown[32], left[34], age[6], info[16];
     d.translateUTF8ToBlocks(shown, c != nullptr ? c->name : "?", sizeof(shown));
     snprintf(left, sizeof(left), " @%s", shown);
@@ -926,19 +929,23 @@ int ContactsScreen::render(DisplayDriver& d) {
     d.fillRect(0, kScreenRowsPx - 4, kScreenPx, 4);
     lit(d);
   }
-  return crumb ? 250 : 1000;
+  return _task->breadcrumbFading() ? 250 : 1000;
 }
-
-void ContactsScreen::enterList(bool at_bottom) { select(at_bottom ? _count - 1 : 0); }
 
 bool ContactsScreen::handleInput(char c) {
   const uint8_t key = (uint8_t)c;
-  if (!_task->inputFromKeyboard()) {   // SW1: a tap cycles, or walks the list (#1884)
-    const keynav::ListTapResult t = keynav::listTap(key, _task->hasKeyboard(), _sel, _count);
-    if (t.action == keynav::ListTap::Select) select(t.sel);
-    else if (t.action == keynav::ListTap::CycleNext) _task->cycle(1);
-    else if (t.action == keynav::ListTap::CyclePrev) _task->cycle(-1);
-    else if (key == KEY_ENTER) open(0);
+  if (!_task->inputFromKeyboard()) {   // SW1: the screens, or the list (#1989)
+    const keynav::ListTapResult t =
+        keynav::listTap(key, _task->hasKeyboard(), _task->listFocused(), _sel, _count);
+    switch (t.action) {
+      case keynav::ListTap::EnterList: _task->enterList(); select(t.sel); break;
+      case keynav::ListTap::Select:    select(t.sel); break;
+      case keynav::ListTap::Open:      open(0); break;
+      case keynav::ListTap::LeaveList: _task->leaveList(); break;
+      case keynav::ListTap::CycleNext: _task->cycle(1); break;
+      case keynav::ListTap::CyclePrev: _task->cycle(-1); break;
+      default: break;
+    }
     return true;
   }
   switch (key) {
@@ -1062,9 +1069,10 @@ int NearbyScreen::render(DisplayDriver& d) {
   const bool crumb = _task->breadcrumbShown();
   const int first_row = crumb ? 2 : 1;
   const int rows = kListRows - (crumb ? 1 : 0);
-  int top = listTop(_sel, count, rows);
+  const int hl = _task->listFocused() ? _sel : -1;   // #1989: as Messages
+  int top = listTop(hl < 0 ? 0 : hl, count, rows);
   const bool more_below = count - top > rows;
-  if (more_below) top = listTop(_sel, count, rows - 1);
+  if (more_below) top = listTop(hl < 0 ? 0 : hl, count, rows - 1);
 
   char right[16];
   if (crumb) cycleTitle(right, sizeof(right), 2);
@@ -1084,13 +1092,13 @@ int NearbyScreen::render(DisplayDriver& d) {
 
   if (count == 0) {
     line(d, kBody, first_row + 1, " nobody heard lately");
-    return crumb ? 250 : 5000;
+    return _task->breadcrumbFading() ? 250 : 5000;
   }
   const uint32_t now = rtc_clock.getCurrentTime();
   for (int r = 0; r < rows && top + r < count; r++) {
     const NearbyNode& n = _list.at(top + r);
     const int row = first_row + r;
-    const bool selected = (top + r == _sel);
+    const bool selected = (top + r == hl);
     char shown[24], left[28], age[6], info[16];
     d.translateUTF8ToBlocks(shown, n.name, sizeof(shown));
     snprintf(left, sizeof(left), " %c%s", nearbyMarker(n), shown);
@@ -1109,22 +1117,23 @@ int NearbyScreen::render(DisplayDriver& d) {
     d.fillRect(0, kScreenRowsPx - 4, kScreenPx, 4);
     lit(d);
   }
-  return crumb ? 250 : 1000;
-}
-
-void NearbyScreen::enterList(bool at_bottom) {
-  select(at_bottom ? (int)_list.count() - 1 : 0);
+  return _task->breadcrumbFading() ? 250 : 1000;
 }
 
 bool NearbyScreen::handleInput(char c) {
   const uint8_t key = (uint8_t)c;
-  if (!_task->inputFromKeyboard()) {   // SW1: a tap cycles, or walks the list (#1884)
-    const keynav::ListTapResult t =
-        keynav::listTap(key, _task->hasKeyboard(), _sel, (int)_list.count());
-    if (t.action == keynav::ListTap::Select) select(t.sel);
-    else if (t.action == keynav::ListTap::CycleNext) _task->cycle(1);
-    else if (t.action == keynav::ListTap::CyclePrev) _task->cycle(-1);
-    else if (key == KEY_ENTER) open(0);
+  if (!_task->inputFromKeyboard()) {   // SW1: the screens, or the list (#1989)
+    const keynav::ListTapResult t = keynav::listTap(key, _task->hasKeyboard(), _task->listFocused(),
+                                                    _sel, (int)_list.count());
+    switch (t.action) {
+      case keynav::ListTap::EnterList: _task->enterList(); select(t.sel); break;
+      case keynav::ListTap::Select:    select(t.sel); break;
+      case keynav::ListTap::Open:      open(0); break;
+      case keynav::ListTap::LeaveList: _task->leaveList(); break;
+      case keynav::ListTap::CycleNext: _task->cycle(1); break;
+      case keynav::ListTap::CyclePrev: _task->cycle(-1); break;
+      default: break;
+    }
     return true;
   }
   switch (key) {
@@ -1260,7 +1269,7 @@ int StatusScreen::drawAs(DisplayDriver& d, const char* title, int pos) {
       d.print(buf);
       d.setTextSize(1);
     }
-    return crumb ? 250 : 1000;
+    return crumb && _task->breadcrumbFading() ? 250 : 1000;
   }
   const int foot_y = kScreenRowsPx - kMeta.row_px;
   dottedRule(d, foot_y - 1);
@@ -1268,7 +1277,7 @@ int StatusScreen::drawAs(DisplayDriver& d, const char* title, int pos) {
   else if (!_task->isBluetoothEnabled()) snprintf(buf, sizeof(buf), " bluetooth off");
   else snprintf(buf, sizeof(buf), " quiet on the mesh");
   textAt(d, kMeta, 0, foot_y, buf);
-  return crumb ? 250 : 1000;
+  return crumb && _task->breadcrumbFading() ? 250 : 1000;
 }
 
 bool StatusScreen::handleInput(char c) {
