@@ -184,7 +184,16 @@ TEST(InfoAdvert, ThereIsALWAYSRoomToAnnounceATruncation) {
       continue;
     }
 
-    if (!a.complete()) {
+    if (a.stalled()) {
+      // Nothing was sent, so there is nothing to continue FROM. A cursor here would name
+      // a tag the device refuses again at this capacity and loop the client forever, so
+      // the writer must stay silent and the caller must error. This branch is the
+      // correction to what this test originally asserted -- see the note below.
+      for (const auto& r : recs) {
+        EXPECT_NE(InfoAdvert::kInfoTagContinue, r.tag)
+            << "cap=" << cap << " sent a cursor with no progress behind it";
+      }
+    } else if (!a.complete()) {
       ASSERT_FALSE(recs.empty()) << "cap=" << cap << " truncated with no records at all";
       EXPECT_EQ(InfoAdvert::kInfoTagContinue, recs.back().tag)
           << "cap=" << cap << " truncated WITHOUT announcing it -- a client would read this"
@@ -196,6 +205,59 @@ TEST(InfoAdvert, ThereIsALWAYSRoomToAnnounceATruncation) {
       }
     }
   }
+}
+
+TEST(InfoAdvert, ACursorIsNeverSentWhenNoProgressWasMade) {
+  // THE INFINITE LOOP, found by review. If nothing fits, a CONTINUE would name a tag the
+  // device refuses again at the same capacity -- and a client doing exactly what the
+  // contract says would re-request from that cursor forever.
+  //
+  // Raising a capacity floor does NOT fix this, which is why the guard is "did anything
+  // get sent" and not a size: records vary in length, so any floor that admits a 2-byte
+  // flag can still stall on a 3-byte one. Both cases are swept here.
+  for (size_t cap = 0; cap <= 6; cap++) {
+    // A flag record (2 bytes) and a valued record (3 bytes), separately.
+    for (int valued = 0; valued < 2; valued++) {
+      std::vector<uint8_t> buf(cap + 8, 0);
+      InfoAdvert a(buf.data(), cap);
+      const uint8_t v = 7;
+      const bool added = valued ? a.addByte(kTagA, v) : a.addFlag(kTagA);
+      const size_t len = a.finish();
+      const auto recs = parse(buf.data(), len);
+
+      if (!added) {
+        EXPECT_TRUE(a.stalled()) << "cap=" << cap << " valued=" << valued
+                                 << ": nothing was sent but the writer does not say so";
+        for (const auto& r : recs) {
+          EXPECT_NE(InfoAdvert::kInfoTagContinue, r.tag)
+              << "cap=" << cap << " valued=" << valued
+              << ": sent a cursor with no progress -- the client would loop forever";
+        }
+      } else {
+        EXPECT_FALSE(a.stalled()) << "cap=" << cap << " valued=" << valued;
+      }
+    }
+  }
+}
+
+TEST(InfoAdvert, AStalledAdvertIsDistinctFromAnIncompleteOne) {
+  // Incomplete means "more to come, here is where" and is recoverable by the cursor.
+  // Stalled means "nothing could be sent" and is NOT recoverable -- the caller must
+  // error. Conflating them is what produced the loop.
+  uint8_t small[3] = {0};
+  InfoAdvert stalled(small, sizeof small);
+  EXPECT_FALSE(stalled.addFlag(kTagA));
+  stalled.finish();
+  EXPECT_TRUE(stalled.stalled());
+  EXPECT_FALSE(stalled.complete());
+
+  uint8_t roomy[2 + 3] = {0};
+  InfoAdvert partial(roomy, sizeof roomy);
+  EXPECT_TRUE(partial.addFlag(kTagA));
+  EXPECT_FALSE(partial.addFlag(kTagB));
+  partial.finish();
+  EXPECT_FALSE(partial.stalled()) << "one record went out, so the cursor is real";
+  EXPECT_FALSE(partial.complete());
 }
 
 TEST(InfoAdvert, BelowTheMinimumCapacityNothingCanBeSaid) {
@@ -210,16 +272,21 @@ TEST(InfoAdvert, BelowTheMinimumCapacityNothingCanBeSaid) {
     EXPECT_EQ(0u, a.finish()) << "cap=" << cap;
     EXPECT_FALSE(a.complete()) << "cap=" << cap;
   }
-  // And at exactly the minimum, one flag record fits with nothing left over -- so the
-  // writer must refuse it and spend the space announcing the truncation instead.
+  // At exactly the minimum, a flag record would fit only by borrowing the reserve, so it
+  // is refused -- and because NOTHING was sent, no cursor may be emitted either.
+  //
+  // THIS TEST ORIGINALLY ASSERTED THE OPPOSITE: that the space be spent announcing the
+  // truncation. That was the bug. A cursor with no progress behind it names a tag the
+  // device refuses again at the same capacity, and a client doing what the contract says
+  // re-requests from it forever. Review caught it; the assertion is inverted here on
+  // purpose so the loop cannot be reintroduced by restoring the "helpful" cursor.
   uint8_t buf[8] = {0};
   InfoAdvert a(buf, kInfoMinCapacity);
   EXPECT_FALSE(a.addFlag(kTagA)) << "the reserve is never lent, even to the first record";
   const size_t len = a.finish();
-  const auto recs = parse(buf, len);
-  ASSERT_EQ(1u, recs.size());
-  EXPECT_EQ(InfoAdvert::kInfoTagContinue, recs[0].tag);
-  EXPECT_EQ(kTagA, recs[0].value[0]) << "resume from the record that did not fit";
+  EXPECT_TRUE(a.stalled()) << "nothing fit, and the writer must say so";
+  EXPECT_EQ(0u, len) << "a cursor with no progress behind it loops the client forever";
+  EXPECT_TRUE(parse(buf, len).empty());
 }
 
 TEST(InfoAdvert, NothingFollowsAStop) {

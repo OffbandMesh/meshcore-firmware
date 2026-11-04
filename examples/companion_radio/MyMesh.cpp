@@ -3353,7 +3353,14 @@ void MyMesh::handleCmdFrame(size_t len) {
         // Below the floor neither a record nor the CONTINUE announcing its absence fits,
         // and an EMPTY advert is a confident claim that the device has no capabilities.
         // Refusing is the only honest answer. Unreachable on any real link.
-        ui_err(offband::OFFBAND_UI_ERR_MALFORMED);
+        //
+        // NOT ERR_MALFORMED, deliberately. The contract tells a client that reason 5 in
+        // reply to a zero-payload request means "this device predates the advert", at
+        // which point it falls back to the old absolute offsets and stops asking. A
+        // capacity shortfall answered with reason 5 would therefore be misdiagnosed as
+        // old firmware -- permanently, on a device that supports the advert perfectly
+        // well. The request is well formed; the transport cannot carry the answer.
+        ui_err(offband::OFFBAND_UI_ERR_UNSUPPORTED_ACTION);
         return;
       }
 
@@ -3383,6 +3390,16 @@ void MyMesh::handleCmdFrame(size_t len) {
       }
 
       const size_t area = advert.finish();
+      if (advert.stalled()) {
+        // Nothing fit at this capacity, so there is no cursor worth sending: a CONTINUE
+        // here would name a tag the device refuses again at the same capacity, and a
+        // client following the contract would re-request from it forever. Raising the
+        // capacity floor does not prevent this -- records vary in length, so any floor
+        // that admits a 2-byte flag can still stall on a 3-byte one. Same reason code as
+        // the floor check above, and for the same reason it is not MALFORMED.
+        ui_err(offband::OFFBAND_UI_ERR_UNSUPPORTED_ACTION);
+        return;
+      }
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = sub;
       _serial->writeFrame(out_frame, 2 + area);

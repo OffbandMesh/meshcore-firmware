@@ -719,9 +719,15 @@ void ThreadScreen::cycleNotify() {
   // Re-read rather than trusting `want`, so the note shows what the device HOLDS. Same
   // discipline as the 0xC5 reply, and for the same reason: a user who is told "Off" and
   // still hears the channel has been lied to by the thing they just used.
+  //
+  // AND IF THE RE-READ FAILS, SAY SO rather than falling back to `want`. An earlier
+  // version did fall back, which made this comment a lie in exactly the failure path the
+  // comment is about -- reporting a state it had not been able to confirm. There is no
+  // value in guessing here: the write may well have landed, but "probably Off" is not
+  // something a notification setting may claim.
   ChannelDetails after;
-  const uint8_t shown = the_mesh.getChannel((uint8_t)slot, after) ? after.notify : want;
-  note(offband::channelNotifyLabel(shown));
+  if (!the_mesh.getChannel((uint8_t)slot, after)) { note("unknown"); return; }
+  note(offband::channelNotifyLabel(after.notify));
 }
 
 // The entry bar's hint: ">Knock" for a conversation with its own tune, ">Default" for one

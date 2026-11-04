@@ -107,8 +107,16 @@ public:
   //
   // `continue_tag` is the tag the client should resume FROM -- the first one that did not
   // fit, not the last one that did.
+  // A CURSOR IS ONLY MEANINGFUL IF PROGRESS WAS MADE. If nothing fit, a CONTINUE would
+  // name a tag the device will refuse again at the same capacity, and the client -- doing
+  // exactly what the contract tells it -- re-requests from that cursor forever.
+  //
+  // Raising a minimum capacity does not fix this, which is why the condition is `_count`
+  // and not a size: records vary in length, so any fixed floor that admits a 2-byte flag
+  // can still stall on a 3-byte record. The only honest signal is "I sent nothing", and
+  // the caller must then return an error instead of an advert. See stalled().
   size_t finish(uint8_t continue_tag_value) {
-    if (_truncated && _len + kInfoRecordHeader + 1 <= _cap) {
+    if (_truncated && _count > 0 && _len + kInfoRecordHeader + 1 <= _cap) {
       _buf[_len++] = kInfoTagContinue;
       _buf[_len++] = 1;
       _buf[_len++] = continue_tag_value;
@@ -120,6 +128,12 @@ public:
   size_t finish() { return finish(_next_tag); }
 
   bool complete() const { return !_truncated; }
+
+  // Nothing fit at all: the advert cannot make progress at this capacity, so there is no
+  // cursor worth sending. THE CALLER MUST RETURN AN ERROR rather than an advert -- an
+  // empty advert reads as "this device has no capabilities", and a cursor that cannot
+  // advance loops the client forever. Both are confident wrong answers.
+  bool stalled() const { return _truncated && _count == 0; }
   uint8_t nextTag() const { return _next_tag; }     // meaningful only when !complete()
   size_t length() const { return _len; }
   uint8_t count() const { return _count; }
