@@ -393,10 +393,15 @@ public:
   void setDisplayMode(uint8_t mode) override;
 
   // #148: request a display rotation (deg 0/180); applied at the next render cycle.
-  void requestRotation(uint8_t deg);
+  // #1990: now an AbstractUITask override, so the 0xC5 0x19 handler can reach it.
+  void requestRotation(uint8_t deg) override;
 
   // #148: does the live display driver implement a verified runtime rotation?
-  bool displaySupportsRotation() const;
+  bool displaySupportsRotation() const override;
+
+  // #1990: what the display is currently set to, in degrees. The 0x19 echo is built
+  // from this, so it must report the applied value and not the requested one.
+  uint8_t displayRotation() const override { return (uint8_t)_rotation; }
 
   // from AbstractUITask
   void msgRead(int msgcount) override;

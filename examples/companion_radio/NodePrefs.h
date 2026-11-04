@@ -188,6 +188,11 @@ public:
   uint8_t button_actions[4] = {0, 0, 0, 0};  // #509
   uint8_t ui_led_enabled = 1;     // #542 B1
   uint8_t ui_display_mode = 0;    // #542 B1
+  // #1990: display rotation in DEGREES, 0 or 180. Kept here beside ui_display_mode
+  // rather than in DisplayConfigProvider, whose persistence is <Preferences.h> and so
+  // ESP32-only -- nRF52 companions have screens too. 0 is the default on every board,
+  // including those whose driver cannot rotate.
+  uint8_t ui_display_rotation = 0;   // #1990
   uint8_t ui_tz = 0;              // #1233: a TimeZones.h index; 0 = not set (show ages)
   // #1238: 0 large, 1 medium (Org_01), 2 small. #1244: the owner asked for large.
   // Named, because BadgeLayout.h has to agree and this header is shared by every
@@ -240,6 +245,7 @@ private:
     void structure() override {
       def("led", _parent->ui_led_enabled);        // #542 B1
       def("disp", _parent->ui_display_mode);      // #542 B1
+      def("rot", _parent->ui_display_rotation);   // #1990
       def("notify", _parent->notify_scope);       // #510
       def("tz", _parent->ui_tz);                  // #1233
       def("txt", _parent->ui_text_size);          // #1238, #1362: navigation screens

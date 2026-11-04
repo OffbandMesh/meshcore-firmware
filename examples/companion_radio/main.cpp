@@ -766,6 +766,20 @@ void setup() {
   // Only restore a persisted rotation on displays that actually support it (#148).
   if (ui_task.displaySupportsRotation()) ui_task.requestRotation(offband::getDisplayRotation());
   CW_PHASE("post:display.prefs");
+#else
+  // #1990: a plain companion restores rotation from NodePrefs, which is where the
+  // 0xC5 0x19 handler persists it. The observer branch above keeps using
+  // DisplayConfigProvider because its 0xC0 `display.rotation` key is backed by that
+  // store; the provider is not reachable here, as its persistence is <Preferences.h>
+  // and so ESP32-only while nRF52 companions also have screens.
+  //
+  // Guarded on driver support for the same reason as the observer branch: restoring a
+  // rotation onto a display that cannot rotate would be a silent no-op, and #1992 is
+  // what silent no-ops in this area cost.
+  if (ui_task.displaySupportsRotation()) {
+    ui_task.requestRotation(the_mesh.getNodePrefs()->ui_display_rotation);
+    CW_PHASE("post:display.rotation");
+  }
 #endif
 #endif
 #if defined(OFFBAND_OBSERVER) && MAX_NEIGHBOURS

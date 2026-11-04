@@ -137,5 +137,24 @@ public:
   // without a controllable display inherit it and are unaffected. Applied live from
   // the 0xC5 display SET sub-code and at boot.
   virtual void setDisplayMode(uint8_t mode) { (void)mode; }
+
+  // #1990: display rotation in degrees (0/180).
+  //
+  // The default REFUSES rather than silently accepting, which is deliberate and is
+  // the opposite of setDisplayMode's no-op above. #1992 is what that no-op costs: on
+  // ui-gui, which never overrides setDisplayMode, a mode SET is persisted and echoed
+  // as success while nothing is applied, so the client is told a setting took effect
+  // that did not. Defaulting rotation to "unsupported" means a UI family with no
+  // implementation answers OFFBAND_UI_ERR_NO_ROTATION instead -- an honest refusal
+  // the client can render, rather than a lie it cannot detect.
+  //
+  // A UI that can rotate overrides all three. `displayRotation()` must report what
+  // the display is ACTUALLY set to, since the 0x19 echo is built from it.
+  // const on the two getters so ui-new's existing `displaySupportsRotation() const`
+  // (#148) overrides without changing its signature.
+  virtual bool displaySupportsRotation() const { return false; }
+  virtual void requestRotation(uint8_t deg) { (void)deg; }
+  virtual uint8_t displayRotation() const { return 0; }   // degrees
+
   virtual void loop() = 0;
 };

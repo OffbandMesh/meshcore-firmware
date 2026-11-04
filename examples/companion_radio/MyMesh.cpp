@@ -3008,6 +3008,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     // buzzer but fixed melodies still has per-channel modes.
     const bool is_chnotify_sub = (sub == offband::OFFBAND_UI_CHNOTIFY_GET ||
                                   sub == offband::OFFBAND_UI_CHNOTIFY_SET);
+    // #1990: rotation rides the same INDICATORS capability as display/LED.
+    const bool is_rotation_sub = (sub == offband::OFFBAND_UI_ROTATION_GET ||
+                                  sub == offband::OFFBAND_UI_ROTATION_SET);
 #ifndef PIN_BUZZER
     if (is_scope_sub || is_chnotify_sub) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
@@ -3030,7 +3033,10 @@ void MyMesh::handleCmdFrame(size_t len) {
     // controllable LED (runtime, like FEM LNA). Same NO_BUZZER-style typed error so
     // the client shows WHY, not a bare illegal-arg.
 #ifndef DISPLAY_CLASS
-    if (is_display_sub) {
+    // #1990: rotation joins display here -- no screen at all is reason 6, the same
+    // answer a mode SET gets. "Cannot rotate" is a DIFFERENT condition (reason 10),
+    // checked below, and only reachable on a build that has a display.
+    if (is_display_sub || is_rotation_sub) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = offband::OFFBAND_UI_ERR;
       out_frame[2] = offband::OFFBAND_UI_ERR_UNSUPPORTED_INDICATOR;
@@ -3038,6 +3044,17 @@ void MyMesh::handleCmdFrame(size_t len) {
       return;
     }
 #endif
+    // #1990: a display that exists but cannot be rotated. Runtime, not compile-time:
+    // the same firmware image serves boards whose drivers differ, so the live driver
+    // is the only thing that can answer. Refusing here is what keeps the no-op
+    // default on AbstractUITask honest -- see #1992 for what a silent accept costs.
+    if (is_rotation_sub && !(_ui && _ui->displaySupportsRotation())) {
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = offband::OFFBAND_UI_ERR;
+      out_frame[2] = offband::OFFBAND_UI_ERR_NO_ROTATION;
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
     if (is_led_sub && !board.canControlLed()) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = offband::OFFBAND_UI_ERR;
@@ -3523,6 +3540,50 @@ void MyMesh::handleCmdFrame(size_t len) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = sub;
       out_frame[2] = _prefs.ui_display_mode;   // echo stored value
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
+    // #1990: display rotation, degrees 0/180. Both paths are only reached on a build
+    // with a display whose live driver reports rotation support -- the gates above
+    // have already answered reason 6 (no display) and reason 10 (cannot rotate).
+    if (sub == offband::OFFBAND_UI_ROTATION_GET) {
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      // Report what the display is actually set to, not what was last asked for.
+      out_frame[2] = _ui->displayRotation();
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
+    if (sub == offband::OFFBAND_UI_ROTATION_SET && len >= 3) {
+      const uint8_t want = cmd_frame[2];
+      if (!offband::isValidUiRotation(want)) {
+        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+        out_frame[1] = offband::OFFBAND_UI_ERR;
+        out_frame[2] = offband::OFFBAND_UI_ERR_MALFORMED;
+        _serial->writeFrame(out_frame, 3);
+        return;
+      }
+      // Persist beside ui_display_mode in NodePrefs rather than through
+      // DisplayConfigProvider (#370). The provider looked like the natural home --
+      // it owns `display.rotation` for the observer and calls itself role-neutral --
+      // but its persistence is `#ifdef ARDUINO` -> <Preferences.h>, which is ESP32
+      // only. Calling it from here would be a LINK ERROR on every nRF52 companion
+      // (RAK4631, T1000-E, the badge), all of which have screens. NodePrefs/DataStore
+      // is already universal and is where this setting's sibling lives.
+      //
+      // Known consequence, recorded on #1990: on a companion-observer build the 0xC0
+      // `display.rotation` key still writes the provider's own NVS, so the two stores
+      // can disagree across a reboot. At RUNTIME there is one truth either way,
+      // because every read below reports the live display -- which is what the
+      // contract actually requires.
+      if (_prefs.ui_display_rotation != want) {
+        _prefs.ui_display_rotation = want;
+        savePrefs();
+      }
+      _ui->requestRotation(want);            // apply live
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = _ui->displayRotation();  // echo APPLIED value, not the request
       _serial->writeFrame(out_frame, 3);
       return;
     }
