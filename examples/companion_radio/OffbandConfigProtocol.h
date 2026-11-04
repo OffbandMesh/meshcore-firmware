@@ -247,6 +247,43 @@ constexpr uint8_t OFFBAND_UI_SCROFF_SET  = 0x15;
 constexpr uint8_t OFFBAND_UI_TZ_SET      = 0x16;
 constexpr uint8_t OFFBAND_UI_BATT_SET    = 0x17;
 
+// --- CLAIMED, NOT YET IMPLEMENTED (#1994) ------------------------------------
+//
+// These five are CLAIMS. They are merged ahead of their implementations on purpose:
+// docs/offband_info_frame_contract.md §2 requires a number to be merged to
+// firmware-base BEFORE a plan that uses it is approved and before any work begins.
+//
+// Why that order, in one sentence: an unmerged claim is INVISIBLE -- `git ls-remote`
+// cannot see a branch nobody pushed, so two sessions reading the merged tree both
+// correctly conclude the same number is free. That is how #606, #1001 and #1990 each
+// independently took device-info offset 87, and how 0x18/0x19 came to be claimed twice.
+//
+// A constant here with no handler is therefore CORRECT, not dead code. The config-lint
+// guard checks the reverse direction -- source using a number absent from this header.
+constexpr uint8_t OFFBAND_UI_CHNOTIFY_GET = 0x18;   // #606: per-channel notify mode, read
+constexpr uint8_t OFFBAND_UI_CHNOTIFY_SET = 0x19;   // #606: per-channel notify mode, write
+constexpr uint8_t OFFBAND_UI_ROTATION_GET = 0x1A;   // #1990: display rotation, read
+constexpr uint8_t OFFBAND_UI_ROTATION_SET = 0x1B;   // #1990: display rotation, write
+constexpr uint8_t OFFBAND_UI_INFO_GET     = 0x1C;   // #1994: the capability advert
+// Next free sub-code: 0x1D. 0x7F is OFFBAND_UI_ERR and is not available.
+
+// === 0xC5 0x1C CAPABILITY ADVERT TAGS (#1994) ================================
+//
+// Contract: docs/offband_info_frame_contract.md. THIS HEADER IS THE REGISTRY; the
+// table in §5 of that document is a convenience copy and this file wins.
+//
+// A TAG'S PRESENCE IS THE CAPABILITY. There is no capability bitmap in this frame --
+// the tags already answer "is this supported", and a bitmap beside them would be a
+// second source of truth for one question. len 0 is the normal case and means "I have
+// this feature, nothing to report"; a value is carried only where it is one or two
+// bytes, fixed for the build, and has no sub-code of its own. An ABSENT tag means the
+// board does not have the feature -- not an error, and not a zero value.
+constexpr uint8_t OFFBAND_INFO_TAG_CHAN_NOTIFY      = 0x01;  // #606,  len 0; value via 0x18/0x19
+constexpr uint8_t OFFBAND_INFO_TAG_DISPLAY_ROTATION = 0x02;  // #1990, len 0; value via 0x1A/0x1B
+constexpr uint8_t OFFBAND_INFO_TAG_ACK_CAPACITY     = 0x03;  // #1001, len 1; no sub-code of its own
+constexpr uint8_t OFFBAND_INFO_TAG_CONTINUE         = 0xFF;  // #1994, len 1; resume cursor
+// Next free tag: 0x04. 0x00 is not a valid tag.
+
 // === 0xC6 PACKET-HASH QUERY -- CANONICAL WIRE CONTRACT (#611) =================
 // FIRMWARE OWNS THIS CONTRACT (same discipline as 0xC5). Agreed with the client
 // (QuietSnow) 2026-08-10; owner-approved. The client codes to what is written here.
@@ -318,6 +355,13 @@ constexpr uint8_t OFFBAND_UI_ERR_SLOT_OFFSET           = 7;
 // #1788: BATT_SET's "set 100% here" refused, the two ways the Battery screen refuses it.
 constexpr uint8_t OFFBAND_UI_ERR_BATT_TOO_HIGH         = 8;   // reading above a full cell
 constexpr uint8_t OFFBAND_UI_ERR_BATT_NOT_CHARGED      = 9;   // reading below a full cell
+// #1990: CLAIM, not yet implemented -- see the #1994 note above the sub-codes. A display
+// that is present but cannot rotate. DISTINCT from reason 6 UNSUPPORTED_INDICATOR, which
+// means there is no controllable display at all; 6 keeps its meaning and is not reused.
+//
+// Two of us read the allocated range as 1-7 while 8 and 9 have been merged since #1788,
+// so "next free" was being computed as 8. It is 10, and the next one after this is 11.
+constexpr uint8_t OFFBAND_UI_ERR_NO_ROTATION           = 10;  // display present, cannot rotate
 constexpr uint8_t CMD_OFFBAND_CONFIG       = 0xC0;  // request:  cmd_frame[0]
 constexpr uint8_t RESP_CODE_OFFBAND_CONFIG = 0xC0;  // response: out_frame[0]
 
@@ -459,6 +503,15 @@ constexpr uint8_t OFFBAND_CAP2_GPS_MODE = 0x20;
 // bit 6 (0x40): screen settings -- SCREEN_GET, TEXT_SET, SCROFF_SET, TZ_SET, BATT_SET
 // (#1788). Set where the UI's screens honor them (AbstractUITask::clientScreenSettings()).
 constexpr uint8_t OFFBAND_CAP2_SCREEN_SETTINGS = 0x40;
+// bit 7 (0x80): per-channel notification mode (#606). CLAIM -- see the #1994 note above
+// the sub-codes. Set only where PIN_BUZZER is defined: a board that cannot sound must not
+// offer the control.
+//
+// THIS IS THE LAST BIT IN BYTE 2. There is no byte 3 and there will not be one: a further
+// capability byte would have to be appended to UPSTREAM's device-info frame, which no
+// session may do (contract §2). Capabilities after this one are TAGS in the 0xC5 0x1C
+// advert, which has no scarcity to run out of.
+constexpr uint8_t OFFBAND_CAP2_CHAN_NOTIFY = 0x80;
 constexpr uint8_t OFFBAND_CAP_WIFI_OBSERVER = 0x01;  // bit 0: config backend (wifi_observer) compiled in
 constexpr uint8_t OFFBAND_CAP_BLOCK         = 0x02;  // bit 1: user-block list (BlockStore) compiled in (#241)
 constexpr uint8_t OFFBAND_CAP_FEM_LNA       = 0x04;  // bit 2: FEM LNA runtime control available (#298)
