@@ -31,6 +31,10 @@ TEST(NotifyScopeCycle, FollowsTheDocumentedOrder) {
 
 // Cycling must visit every value and come home, or some setting is unreachable from the
 // badge -- which is the defect this whole issue is about.
+//
+// #606 adds per-channel modes WITHOUT adding a scope, so this invariant still holds as
+// written: the scope set and the cycle are the same three. An earlier draft added a
+// fourth value and had to weaken this test; dropping that value restored it.
 TEST(NotifyScopeCycle, VisitsEveryValueAndReturns) {
   std::set<int> seen;
   uint8_t s = NOTIFY_SCOPE_ALL;
@@ -40,6 +44,15 @@ TEST(NotifyScopeCycle, VisitsEveryValueAndReturns) {
   }
   EXPECT_EQ((size_t)NOTIFY_SCOPE_COUNT, seen.size()) << "a scope cannot be reached by cycling";
   EXPECT_EQ(NOTIFY_SCOPE_ALL, s) << "the cycle does not return to its start";
+}
+
+// #606: the scope set must stay exactly the three the button walks. A fourth value is
+// how the per-channel work first went wrong -- it made COUNT and the cycle length
+// disagree, so `(scope + 1) % COUNT` in ui-orig would have added a stop to the press
+// cycle that does nothing a user can see.
+TEST(NotifyScopeCycle, TheScopeSetIsTheCycleSet) {
+  EXPECT_EQ(3, NOTIFY_SCOPE_COUNT)
+      << "a scope was added; per-channel modes are a channel byte, not a scope";
 }
 
 // A stored value from a longer table (a downgrade) or a corrupt byte must not strand the

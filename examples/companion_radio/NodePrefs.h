@@ -178,7 +178,13 @@ public:
   uint8_t radio_fem_rxgain = 1;   // #298: 1 = LNA on, 0 = bypass
   uint8_t caplog_enabled = 0;     // #428
   uint8_t caplog_level = 0;       // #428
-  uint8_t notify_scope = 0;       // #510
+  // #510/#606: the default is SELF -- DMs and @[mentions] sound, other channel traffic
+  // does not. Upstream's shape is "All", which on a mesh with any real channel activity
+  // means a device beeping for nearly every notification; a radio in a pocket or on a
+  // badge is the wrong place for that default. Literal 1 rather than NOTIFY_SCOPE_SELF
+  // because the scope constants are defined below this struct; MyMesh.cpp static_asserts
+  // that 1 is still SELF.
+  uint8_t notify_scope = 1;       // #510: NOTIFY_SCOPE_SELF
   uint8_t button_actions[4] = {0, 0, 0, 0};  // #509
   uint8_t ui_led_enabled = 1;     // #542 B1
   uint8_t ui_display_mode = 0;    // #542 B1
@@ -322,6 +328,14 @@ public:
 // #510: values for NodePrefs::notify_scope. Kept as an enum-like constant set rather
 // than a bare magic number so the CLI, the button handler and the config command all
 // agree. Order is the triple-press cycle order: ALL -> SELF -> NONE -> ALL.
+// #606 adds NO scope value. The device-wide scope stays these three.
+//
+// An earlier draft of #606 added a fourth, "INHERIT", carried over from the client's
+// design. That was a category error: "inherit" is a CLIENT concept -- a channel row in
+// the app that follows the device setting rather than carrying its own -- and the
+// firmware is the authority, so there is nothing above it to inherit from. The device
+// expresses the same idea by a per-channel byte that is simply NOT SET, which falls back
+// to the scope below. The client's Inherit row writes that unset value.
 #define NOTIFY_SCOPE_ALL    0
 #define NOTIFY_SCOPE_SELF   1
 #define NOTIFY_SCOPE_NONE   2
