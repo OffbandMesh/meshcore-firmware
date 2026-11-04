@@ -1,0 +1,22 @@
+schema_version: 1
+issue: 1999
+impact: none
+reason: >-
+  Header constants only, with no handlers behind them, so nothing a user can
+  observe changes: no new command is answered, no reply gains a field, no
+  setting appears, and no existing behaviour moves. The device built from this
+  commit is byte-for-byte equivalent on the wire to one built from its parent.
+  That is the intent rather than an oversight -- docs/offband_info_frame_contract.md
+  section 2 requires a wire number to be merged BEFORE the work using it starts,
+  because an unmerged claim is invisible to other sessions and three features
+  each took device-info offset 87 on exactly that basis. A claim with no
+  implementation is therefore the correct state for this commit.
+  The user-facing documentation belongs to the features these numbers are
+  claimed for, and each carries its own record when it lands: per-channel
+  notification modes (#606), display rotation (#1990) and the outstanding-ACK
+  capacity report (#1001). Writing a guide now would document behaviour that
+  does not yet exist on any image.
+  One claim is retroactive and worth noting for the reviewer: 0x18/0x19 and
+  caps2 0x80 are already running on sensecap-t1000e-1 and qcc-badge-1 from
+  unmerged branch work. Their user-facing surface is still unwritten and is
+  #606's to carry; this record does not discharge that.
