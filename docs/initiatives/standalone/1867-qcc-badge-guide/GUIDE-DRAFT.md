@@ -162,7 +162,9 @@ settings keeps them across a firmware update.
 Open **Settings**, then **Tones**.
 
 - **Sound** chooses what makes a noise: **All**, **DMs + @** (direct messages and
-  mentions only) or **Off**. Off also mutes the buzzer.
+  mentions only) or **Off**. Off also mutes the buzzer. **Out of the box it is DMs + @**,
+  so a busy channel does not make the badge chirp all day; a channel you want to hear
+  everything from is set per channel, below.
 - One row each for **DM**, **Channel**, **Room**, **New contact**, **Ack** and **Sent**
   picks the tone for that event. The tones are Silent, Chime, Kerplop, Tick, Bloop, Drop
   and Knock, and the picker plays each one as you move to it.
@@ -170,6 +172,19 @@ Open **Settings**, then **Tones**.
   contact are silent.
 - **A tone for one channel:** with a keyboard, open the conversation and press Right.
   Without one, set it from the client.
+- **Whether one channel makes a noise at all:** with a keyboard, open the conversation and
+  press **Left**. Each press moves to the next setting and the badge shows which one:
+  **Default** (follow the Sound setting above), **All**, **Mentions** (only when someone
+  writes `@[your name]`) and **Off**. Without a keyboard, set it from the client.
+
+  Right is what a channel sounds like; Left is whether it sounds. A channel left on
+  **Default** follows Sound, so changing Sound still moves every channel you have not
+  touched. **Off** on one channel silences it even when Sound is All — and Sound set to
+  **Off** silences everything regardless of any channel's own setting, because asking for
+  silence should give silence.
+
+  The setting belongs to the channel, not to the badge: set it here and the client shows
+  the same value, set it in the client and the badge shows that. There is only one of it.
 - **Custom** holds up to eight tunes of your own. With a keyboard you can type them;
   without one, fill them from the client.
 
