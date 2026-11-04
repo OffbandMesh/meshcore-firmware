@@ -140,6 +140,37 @@ inline uint8_t channelNotifyAfterEdit(bool was_empty, bool same_channel, uint8_t
   return same_channel ? before : kChanNotifyUnset;
 }
 
+// ---- the device's own control over a channel's mode ------------------------------
+//
+// The badge cycles a channel's mode in place, the way the device-wide scope is cycled from
+// Settings, rather than opening a picker screen. Same byte the client writes over 0xC5
+// CHNOTIFY -- one pref per channel, no second store (owner's ruling, 2026-11-02).
+//
+// UNSET is IN the cycle, deliberately. Without it a user who has touched a channel can
+// never hand it back to the device default, and "follow the device" is the state most
+// channels should be in; leaving it reachable only from the client would make the badge a
+// one-way door.
+inline uint8_t nextChannelNotify(uint8_t stored) {
+  if (!channelNotifySettable(stored)) return kChanNotifyUnset;   // junk lands on the default
+  return (uint8_t)((stored + 1) % kChanNotifyCount);
+}
+
+// Short labels for a badge line. Kept to eight characters: the thread screen's note area
+// is narrow and a clipped word is worse than a terse one.
+//
+// "Default" rather than "Unset" or "Inherit": the user is not setting an absence, they are
+// choosing to follow the device. "Inherit" is the CLIENT's word for a row that follows the
+// device and has no meaning on the device itself, which is the authority.
+inline const char* channelNotifyLabel(uint8_t stored) {
+  switch (stored) {
+    case kChanNotifyAll:      return "All";
+    case kChanNotifyMentions: return "Mentions";
+    case kChanNotifyOff:      return "Off";
+    case kChanNotifyUnset:
+    default:                  return "Default";
+  }
+}
+
 // What a rebuilt Public record carries in from the slot Public came from.
 //
 // placePublicInSlot0 does not MOVE Public's record into slot 0, it builds a fresh one

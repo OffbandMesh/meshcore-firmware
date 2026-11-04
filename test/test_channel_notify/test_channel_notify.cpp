@@ -222,6 +222,56 @@ TEST(ChanNotifyAfterEdit, MatchesTheTunesRuleNotTheRetiredGuiArrays) {
   }
 }
 
+// ------------------------------------------------- the badge's own cycle
+
+TEST(ChanNotifyCycle, VisitsEveryModeAndReturns) {
+  // A cycle that skipped a value would make it unreachable from the badge entirely.
+  uint8_t m = kChanNotifyUnset;
+  std::set<uint8_t> seen;
+  for (int i = 0; i < kChanNotifyCount; i++) {
+    seen.insert(m);
+    m = nextChannelNotify(m);
+  }
+  EXPECT_EQ((size_t)kChanNotifyCount, seen.size()) << "a mode is unreachable from the badge";
+  EXPECT_EQ(kChanNotifyUnset, m) << "the cycle must close";
+}
+
+TEST(ChanNotifyCycle, DefaultIsReachable) {
+  // THE case this exists for. Without UNSET in the cycle a user who has touched a channel
+  // could never hand it back to the device default from the badge -- a one-way door, with
+  // the way back available only from the client.
+  bool found = false;
+  uint8_t m = kChanNotifyAll;
+  for (int i = 0; i < kChanNotifyCount; i++) {
+    m = nextChannelNotify(m);
+    if (m == kChanNotifyUnset) found = true;
+  }
+  EXPECT_TRUE(found) << "there is no way back to following the device scope";
+}
+
+TEST(ChanNotifyCycle, JunkLandsOnTheDefault) {
+  // A byte outside the known set must resolve to something a user can then cycle out of,
+  // not stick or wrap into another junk value.
+  EXPECT_EQ(kChanNotifyUnset, nextChannelNotify(0xFF));
+  EXPECT_EQ(kChanNotifyUnset, nextChannelNotify(kChanNotifyCount));
+}
+
+TEST(ChanNotifyLabel, EveryModeHasAShortLabel) {
+  for (uint8_t m = 0; m < kChanNotifyCount; m++) {
+    const char* s = channelNotifyLabel(m);
+    ASSERT_NE(nullptr, s);
+    EXPECT_GT(strlen(s), 0u) << "mode " << (int)m << " has no label";
+    EXPECT_LE(strlen(s), 8u) << "label '" << s << "' will clip on the badge's note line";
+  }
+}
+
+TEST(ChanNotifyLabel, UnsetReadsAsDefaultNotAsInherit) {
+  // "Inherit" is the CLIENT's word for a row that follows the device. The device IS the
+  // authority and has nothing to inherit from, so the badge says Default.
+  EXPECT_STREQ("Default", channelNotifyLabel(kChanNotifyUnset));
+  EXPECT_STREQ("Default", channelNotifyLabel(0xFF)) << "junk must read as the default too";
+}
+
 // ------------------------------------------------- what Public carries across slot 0
 
 TEST(ChanNotifyCarry, PublicKeepsItsModeAndItsTuneAcrossTheMove) {
