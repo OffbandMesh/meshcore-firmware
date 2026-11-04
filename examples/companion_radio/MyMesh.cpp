@@ -3833,13 +3833,31 @@ void MyMesh::handleCmdFrame(size_t len) {
     // with no extra GET round-trip (the FEM-LNA precedent). Appended UNCONDITIONALLY.
     out_frame[i++] = _prefs.ui_led_enabled;   // v21+
     out_frame[i++] = _prefs.ui_display_mode;  // v21+
-    // #606: offband_caps BYTE 3, at offset 87 -- AFTER the indicator state, not beside
-    // byte 2. The client reads these at fixed absolute offsets, so this byte goes at the
-    // end of the frame; a client detects it by LENGTH (>= 88), never by version code
-    // (#1970). Byte 2's last bit is spent by this change, so the byte is added now
-    // rather than leaving the next feature to extend the frame under pressure.
-    uint8_t offband_caps3 = 0;
-    out_frame[i++] = offband_caps3;
+    //
+    // THE FRAME ENDS HERE, AND NOTHING MAY BE APPENDED TO IT AGAIN (#1994, contract §2).
+    //
+    // An earlier version of this code added an offband_caps BYTE 3 at offset 87, reasoning
+    // that byte 2's last bit was spent so the byte should be added now rather than leaving
+    // the next feature to extend the frame under pressure. The reasoning was sound and the
+    // conclusion was wrong: TWO other features were computing the same "next free byte" at
+    // the same time -- #1001's outstanding-ACK capacity and display rotation's withdrawn
+    // first contract -- each correct in isolation, because this frame is assembled by
+    // out_frame[i++] with no declared layout, so "next free" is unanswerable from the
+    // merged tree and gives a different answer per branch.
+    //
+    // Worse than the clash: byte 1 of this frame is UPSTREAM's FIRMWARE_VER_CODE, and
+    // upstream uses it to discriminate upstream's own fields. Every Offband byte from 82
+    // onward was announced by incrementing upstream's counter (ver codes 18..23). The day
+    // upstream ships one field and bumps their code, one number means two things and every
+    // Offband offset shifts under every deployed client at once -- and a client reading a
+    // plausible wrong number at a fixed offset does not error.
+    //
+    // Capabilities now live in the 0xC5 0x1C advert, which is Offband's own namespace and
+    // cannot collide on position; a value gets its own sub-code. Bytes 82-86 stay exactly
+    // as they are so no shipped client changes behaviour, and migrating them off upstream's
+    // frame is a separate, later effort. scripts/check_wire_allocations.py fails the build
+    // if anything is appended here, scanning unmerged branches and worktrees because that
+    // is where all three colliding claims lived.
     _serial->writeFrame(out_frame, i);
   } else if (cmd_frame[0] == CMD_APP_START &&
              len >= 8) { // sent when app establishes connection, respond with node ID
