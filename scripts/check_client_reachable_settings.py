@@ -83,6 +83,10 @@ ENGINE = "examples/companion_radio/ToneEngine.h"
 WRITER_CALLS = {
     "setStoredTone": "event tones (ui_tone_*)",
     "setChannelTune": "channel tone",
+    # #606/#2020: the badge's Left key on a thread screen. Sits beside setChannelTune
+    # above and is reachable the same way -- both are stored on the channel record, not in
+    # NodePrefs, and both have a 0xC5 path the client uses to write the same byte.
+    "setChannelNotify": "channel notification mode",
     "saveSlotRtttl": "custom tune slots",
     "clearSlot": "custom tune slots",
     "setGpsMode": "gps mode",
@@ -160,6 +164,13 @@ REACHABLE: dict[str, list[tuple[str, str]]] = {
     "channel tone": [
         (MYMESH, r"sub\s*==\s*offband::OFFBAND_UI_CHTUNE_SET"),
         (MYMESH, r"setChannelTune\(cmd_frame\[2\],\s*cmd_frame\[3\]\)"),
+    ],
+    # #606: the per-channel notification mode. Same shape as the channel tone above --
+    # addressed by slot, stored on the channel record, written by the client through 0xC5
+    # and by the badge's Left key through the same setter. One pref, not two stores.
+    "channel notification mode": [
+        (MYMESH, r"sub\s*==\s*offband::OFFBAND_UI_CHNOTIFY_SET"),
+        (MYMESH, r"setChannelNotify\(cmd_frame\[2\],\s*cmd_frame\[3\]\)"),
     ],
     "custom tune slots": [
         (MYMESH, r"tones->feedSlot\("),
