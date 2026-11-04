@@ -367,9 +367,9 @@ protected:
   // bracketed, case-insensitive rule that is a CONTRACT with the client -- see the
   // definition in MyMesh.cpp before changing it.
   bool textMentionsSelf(const char* text) const;
-  // #606: takes the channel index -- under NOTIFY_SCOPE_INHERIT the answer comes from
-  // that channel's own stored mode, not from the scope alone. Not const: it reads the
-  // channel store through getChannel().
+  // #606: takes the channel index -- a channel with its own mode set answers for itself,
+  // so the decision needs to know which channel this is. Not const: it reads the channel
+  // store through getChannel().
   bool channelMsgShouldNotify(const char* text, uint8_t channel_idx);
 
   void sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis);

@@ -48,12 +48,12 @@
 // ones. The config *backend* (ConfigSchema/ObserverCli) stays observer-gated below. #241.
 #include "OffbandConfigProtocol.h"
 
-// #606: three sets of constants describe the same four values -- the wire contract
-// (OFFBAND_CHNOTIFY_*), the host-testable decision header (offband::kChanNotify*), and
-// the device scope (NOTIFY_SCOPE_*). ChannelNotify.h mirrors the last two rather than
-// including NodePrefs.h, which is companion-only and pulls Arduino. These assert the
-// mirrors still agree, so a drift breaks the build here instead of quietly changing
-// whether a radio sounds.
+// #606: the per-channel mode is described in two places -- the wire contract
+// (OFFBAND_CHNOTIFY_*) and the host-testable decision header (offband::kChanNotify*) --
+// and the device scope in two more. ChannelNotify.h mirrors rather than including
+// NodePrefs.h, which is companion-only and pulls Arduino. These assert the mirrors still
+// agree, so a drift breaks the build here instead of quietly changing whether a radio
+// sounds.
 static_assert(offband::kChanNotifyUnset    == offband::OFFBAND_CHNOTIFY_UNSET, "chnotify wire/decision drift");
 static_assert(offband::kChanNotifyAll      == offband::OFFBAND_CHNOTIFY_ALL, "chnotify wire/decision drift");
 static_assert(offband::kChanNotifyMentions == offband::OFFBAND_CHNOTIFY_MENTIONS, "chnotify wire/decision drift");
@@ -62,6 +62,9 @@ static_assert(offband::kChanNotifyCount    == offband::OFFBAND_CHNOTIFY_COUNT, "
 static_assert(offband::kScopeAll  == NOTIFY_SCOPE_ALL,  "notify scope mirror drift");
 static_assert(offband::kScopeSelf == NOTIFY_SCOPE_SELF, "notify scope mirror drift");
 static_assert(offband::kScopeNone == NOTIFY_SCOPE_NONE, "notify scope mirror drift");
+// #606: NodePrefs's in-struct default is the literal 1, because the scope constants are
+// defined below the struct. This pins what that 1 means.
+static_assert(NOTIFY_SCOPE_SELF == 1, "NodePrefs defaults notify_scope to a literal 1");
 
 #ifdef OFFBAND_NAME_FROM_BLE_MAC
 // #1598: on a fresh flash a badge names itself from its BLE MAC, so the name on the badge
@@ -1379,13 +1382,10 @@ bool MyMesh::textMentionsSelf(const char* text) const {
 
 // #510/#606: should a received CHANNEL message make a sound?
 //
-// ALL -> always. SELF -> only when it @[mentions] us. NONE -> never. Those three are the
-// MASTER SWITCH and do not consult the channel: the control keeps meaning exactly what it
-// meant before #606.
-//
-// INHERIT -> the answer comes from this channel's own stored mode, and from All when the
-// channel has none. That is why the index is a parameter now: the mode lives on the
-// channel record, so the decision needs to know which channel this is.
+// A channel the user has SET decides for itself -- that is the whole point, and why the
+// index is a parameter now: the mode lives on the channel record, so the decision has to
+// know which channel this is. A channel nobody has set falls back to the device scope,
+// which is what the scope is for. NONE is the one absolute: it mutes everything.
 //
 // A slot that cannot be read falls back to the scope-only answer rather than to silence.
 // Failing loud is the right direction here -- a missed beep is the complaint this whole
@@ -2184,11 +2184,21 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _prefs.ui_led_enabled = 1;    // #542 B1 default: LED on (set before loadPrefs)
   _prefs.ui_display_mode = 0;   // #542 B1 default: display auto
 
-  // #510: notification scope. Default ALL = today's behaviour. Set BEFORE loadPrefs for
-  // the same reason as caplog below: a prefs file written before this field existed
-  // short-reads to EOF and keeps this default, so upgrading an existing device never
-  // silently mutes it.
-  _prefs.notify_scope = NOTIFY_SCOPE_ALL;
+  // #510/#606: notification scope. Default SELF -- DMs and @[mentions] sound, other
+  // channel traffic does not.
+  //
+  // This was ALL, chosen so an upgrade could not change what a device did. The owner
+  // has ruled the other way (2026-11-03): upstream's "All" means a radio beeping for
+  // nearly every notification, and a device in a pocket or on a badge is the wrong place
+  // for that default.
+  //
+  // Set BEFORE loadPrefs, for the same reason as caplog below: a prefs record written
+  // before this field existed short-reads to EOF and keeps this default. So the change
+  // DOES reach existing devices on upgrade -- their channel chatter goes quiet while DMs
+  // and mentions still sound. That is the direction the owner asked for, and SELF is not
+  // a mute: nothing a device could do before becomes unreachable, and the triple press
+  // still walks ALL -> SELF -> NONE.
+  _prefs.notify_scope = NOTIFY_SCOPE_SELF;
 
   // #509: button-matrix defaults preserve today's hardcoded behaviour exactly.
   // Single press stays UNASSIGNED (owner: opt-in only, never defaulted on).

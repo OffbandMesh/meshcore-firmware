@@ -260,7 +260,7 @@ constexpr uint8_t OFFBAND_UI_CHNOTIFY_SET = 0x19;
 
 // #606: the per-channel mode, AS STORED. 1-based, and 0 is NOT "all".
 //
-//   0  unset   -> inherit the device-wide notify_scope
+//   0  not set -> the device-wide notify_scope answers for this channel
 //   1  all
 //   2  mentions only  (the @[name] rule, same matcher as NOTIFY_SCOPE_SELF)
 //   3  off
@@ -270,8 +270,19 @@ constexpr uint8_t OFFBAND_UI_CHNOTIFY_SET = 0x19;
 // so an encoding where 0 meant "all" would silently set every channel in the field to
 // All. The tune byte in the same spare field is 1-based for the same reason.
 //
-// Inheriting rather than defaulting to All is also the better behaviour: a device set to
-// Self keeps Self on channels the user has never touched.
+// HOW A SET VALUE COMPOSES WITH THE DEVICE SCOPE -- the client needs this to render
+// truthfully:
+//   * A channel that HAS a mode decides for itself. There is no second switch to enable
+//     first: write the mode and the radio obeys it.
+//   * A channel with NO mode falls back to notify_scope, which is the default for
+//     everything nobody has touched. That default is SELF.
+//   * notify_scope NONE is ABSOLUTE and overrides a set channel. A user asking for
+//     silence gets silence.
+//
+// There is NO "inherit" scope on the device, and firmware never grows one: inherit is a
+// CLIENT concept -- a channel row in the app that follows the device setting instead of
+// carrying its own. The firmware is the authority, so it has nothing to inherit from.
+// A client's Inherit row maps to writing OFFBAND_CHNOTIFY_UNSET here.
 constexpr uint8_t OFFBAND_CHNOTIFY_UNSET    = 0;
 constexpr uint8_t OFFBAND_CHNOTIFY_ALL      = 1;
 constexpr uint8_t OFFBAND_CHNOTIFY_MENTIONS = 2;

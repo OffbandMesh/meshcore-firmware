@@ -178,7 +178,13 @@ public:
   uint8_t radio_fem_rxgain = 1;   // #298: 1 = LNA on, 0 = bypass
   uint8_t caplog_enabled = 0;     // #428
   uint8_t caplog_level = 0;       // #428
-  uint8_t notify_scope = 0;       // #510
+  // #510/#606: the default is SELF -- DMs and @[mentions] sound, other channel traffic
+  // does not. Upstream's shape is "All", which on a mesh with any real channel activity
+  // means a device beeping for nearly every notification; a radio in a pocket or on a
+  // badge is the wrong place for that default. Literal 1 rather than NOTIFY_SCOPE_SELF
+  // because the scope constants are defined below this struct; MyMesh.cpp static_asserts
+  // that 1 is still SELF.
+  uint8_t notify_scope = 1;       // #510: NOTIFY_SCOPE_SELF
   uint8_t button_actions[4] = {0, 0, 0, 0};  // #509
   uint8_t ui_led_enabled = 1;     // #542 B1
   uint8_t ui_display_mode = 0;    // #542 B1
@@ -322,24 +328,18 @@ public:
 // #510: values for NodePrefs::notify_scope. Kept as an enum-like constant set rather
 // than a bare magic number so the CLI, the button handler and the config command all
 // agree. Order is the triple-press cycle order: ALL -> SELF -> NONE -> ALL.
-// #606 appends INHERIT, and the button cycle deliberately does NOT reach it.
+// #606 adds NO scope value. The device-wide scope stays these three.
 //
-// COUNT is the VALIDATION bound -- every value a client may store. It is NOT the cycle
-// length, and the two parted company here. nextNotifyScope() below is the only cycle,
-// and it already walks ALL -> SELF -> NONE -> ALL and treats anything at or past NONE
-// as a re-entry at ALL, so Inherit falls out of the cycle without a second constant.
-//
-// Inherit is the one scope that does nothing on its own: until per-channel modes are set
-// it behaves as All. A user cycling onto it with the button would hear the device get
-// louder for no visible reason, so it is a client or menu choice only.
-//
-// Anything computing the cycle as `(scope + 1) % NOTIFY_SCOPE_COUNT` is now WRONG and
-// would add that fourth stop. Call nextNotifyScope().
-#define NOTIFY_SCOPE_ALL     0
-#define NOTIFY_SCOPE_SELF    1
-#define NOTIFY_SCOPE_NONE    2
-#define NOTIFY_SCOPE_INHERIT 3
-#define NOTIFY_SCOPE_COUNT   4
+// An earlier draft of #606 added a fourth, "INHERIT", carried over from the client's
+// design. That was a category error: "inherit" is a CLIENT concept -- a channel row in
+// the app that follows the device setting rather than carrying its own -- and the
+// firmware is the authority, so there is nothing above it to inherit from. The device
+// expresses the same idea by a per-channel byte that is simply NOT SET, which falls back
+// to the scope below. The client's Inherit row writes that unset value.
+#define NOTIFY_SCOPE_ALL    0
+#define NOTIFY_SCOPE_SELF   1
+#define NOTIFY_SCOPE_NONE   2
+#define NOTIFY_SCOPE_COUNT  3
 
 // #1468: the three decisions a scope control has to make, kept out of the screen so
 // they are host-tested and so the badge and the 0xC5 handler cannot drift apart.
@@ -380,11 +380,6 @@ inline const char* notifyScopeLabel(uint8_t scope) {
     case NOTIFY_SCOPE_ALL:  return "All";
     case NOTIFY_SCOPE_SELF: return "DMs + @";
     case NOTIFY_SCOPE_NONE: return "Off";
-    // #606: PROVISIONAL WORDING -- owner sign-off pending before this ships. It must say
-    // the answer comes from each channel, and it must fit NINE characters: the Tones row
-    // is label + value on one 21-column line, "New contact" is the widest label at 11,
-    // and test_notify_scope asserts the ceiling. "Per channel" is 11 and does not fit.
-    case NOTIFY_SCOPE_INHERIT: return "Per chan";
     default:                return "All";   // an unknown stored value reads as its fallback
   }
 }

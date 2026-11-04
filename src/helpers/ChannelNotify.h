@@ -41,14 +41,18 @@ inline bool channelNotifySettable(uint8_t stored) { return stored < kChanNotifyC
 
 // ---- the device-wide scope, mirrored ---------------------------------------------
 //
-// Mirrored rather than included: NODE scope lives in NodePrefs.h, which is companion-only
+// Mirrored rather than included: the scope lives in NodePrefs.h, which is companion-only
 // and pulls Arduino, and this header stays host-testable. MyMesh.cpp carries
 // static_asserts that these equal NOTIFY_SCOPE_*; if one side moves, the build breaks
 // rather than the behaviour drifting.
-constexpr uint8_t kScopeAll     = 0;
-constexpr uint8_t kScopeSelf    = 1;
-constexpr uint8_t kScopeNone    = 2;
-constexpr uint8_t kScopeInherit = 3;   // #606: defer to each channel's own mode
+//
+// #606 adds NO scope value. "Inherit" is a CLIENT concept -- a channel row in the app
+// that follows the device setting rather than carrying its own. The firmware is the
+// authority, so there is nothing for it to inherit from; the device expresses the same
+// idea by a per-channel byte that is not set, and the client's Inherit row writes that.
+constexpr uint8_t kScopeAll  = 0;
+constexpr uint8_t kScopeSelf = 1;
+constexpr uint8_t kScopeNone = 2;
 
 // ---- where it sits in the record -------------------------------------------------
 constexpr size_t kChannelNotifySpareIndex = 1;
@@ -85,24 +89,23 @@ inline void channelSpareToFile(uint8_t tune_stored, uint8_t notify_stored, uint8
 // Returns the effective mode for a channel message: kChanNotifyAll, kChanNotifyMentions
 // or kChanNotifyOff. Never returns Unset -- the caller gets a decision, not a lookup.
 //
-// The device-wide scope is the MASTER SWITCH. All / Self / None answer for every channel
-// and the per-channel byte is not consulted; only Inherit defers to it. That keeps the
-// existing control meaning exactly what it meant before this feature, and it is what the
-// user-facing wording already promises.
+// A CHANNEL THAT HAS BEEN SET DECIDES FOR ITSELF. There is no second switch to find and
+// flip: a client writes a channel's mode and the radio obeys it. An earlier draft made
+// the scope a master switch that ignored these unless a fourth "Inherit" scope was
+// selected, which meant a client could set a channel to Off and nothing happened until
+// the user discovered and changed a separate device setting -- the same "why will this
+// channel not shut up" complaint the feature exists to end.
 //
-// Inherit with an unset channel resolves to All: the app's own default for a channel
-// nobody has touched, and the direction that cannot silently mute someone.
+// A channel that has NOT been set falls back to the device scope, which is what the
+// scope is for: the default for everything nobody has touched.
+//
+// NONE IS ABSOLUTE, and is the one exception. A user who sets the device to Off is
+// asking for silence, not for a negotiation, and a channel still sounding through it is
+// the worst failure this feature has. ALL and SELF are defaults; NONE is a mute.
 inline uint8_t resolveChannelNotify(uint8_t scope, uint8_t stored) {
-  switch (scope) {
-    case kScopeNone: return kChanNotifyOff;
-    case kScopeSelf: return kChanNotifyMentions;
-    case kScopeInherit:
-      return channelNotifySettable(stored) && stored != kChanNotifyUnset
-                 ? stored
-                 : kChanNotifyAll;
-    case kScopeAll:
-    default:         return kChanNotifyAll;
-  }
+  if (scope == kScopeNone) return kChanNotifyOff;        // absolute, overrides a channel
+  if (channelNotifySettable(stored) && stored != kChanNotifyUnset) return stored;
+  return (scope == kScopeSelf) ? kChanNotifyMentions : kChanNotifyAll;
 }
 
 // Should a channel message sound, given the resolved mode and whether it @[mentions] us?

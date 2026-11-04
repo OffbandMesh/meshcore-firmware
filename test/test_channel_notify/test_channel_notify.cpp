@@ -89,31 +89,38 @@ TEST(ChanNotifySpare, NullIsSafeBothWays) {
 
 // ---------------------------------------------------------------- the decision
 
-TEST(ChanNotifyResolve, TheScopeIsTheMasterSwitch) {
-  // All / Self / None answer for EVERY channel and never consult the stored mode, so the
-  // control a user already has keeps meaning exactly what it meant before #606.
-  for (uint8_t stored = 0; stored < kChanNotifyCount; stored++) {
-    EXPECT_EQ(kChanNotifyAll,      resolveChannelNotify(kScopeAll, stored))  << (int)stored;
-    EXPECT_EQ(kChanNotifyMentions, resolveChannelNotify(kScopeSelf, stored)) << (int)stored;
-    EXPECT_EQ(kChanNotifyOff,      resolveChannelNotify(kScopeNone, stored)) << (int)stored;
+TEST(ChanNotifyResolve, ASetChannelDecidesForItself) {
+  // THE point of the feature. A client writes a channel's mode and the radio obeys it --
+  // there is no second switch to find and enable first. An earlier draft made the scope a
+  // master switch that ignored these unless a fourth "Inherit" scope was selected, which
+  // meant setting a channel to Off did nothing until the user discovered a separate
+  // device setting. That is the complaint this work exists to end, so it is asserted.
+  for (uint8_t scope : {kScopeAll, kScopeSelf}) {
+    EXPECT_EQ(kChanNotifyAll,      resolveChannelNotify(scope, kChanNotifyAll))      << (int)scope;
+    EXPECT_EQ(kChanNotifyMentions, resolveChannelNotify(scope, kChanNotifyMentions)) << (int)scope;
+    EXPECT_EQ(kChanNotifyOff,      resolveChannelNotify(scope, kChanNotifyOff))      << (int)scope;
   }
 }
 
-TEST(ChanNotifyResolve, OnlyInheritDefersToTheChannel) {
-  EXPECT_EQ(kChanNotifyAll,      resolveChannelNotify(kScopeInherit, kChanNotifyAll));
-  EXPECT_EQ(kChanNotifyMentions, resolveChannelNotify(kScopeInherit, kChanNotifyMentions));
-  EXPECT_EQ(kChanNotifyOff,      resolveChannelNotify(kScopeInherit, kChanNotifyOff));
+TEST(ChanNotifyResolve, AnUnsetChannelFallsBackToTheScope) {
+  EXPECT_EQ(kChanNotifyAll,      resolveChannelNotify(kScopeAll,  kChanNotifyUnset));
+  EXPECT_EQ(kChanNotifyMentions, resolveChannelNotify(kScopeSelf, kChanNotifyUnset));
+  EXPECT_EQ(kChanNotifyOff,      resolveChannelNotify(kScopeNone, kChanNotifyUnset));
 }
 
-TEST(ChanNotifyResolve, InheritWithAnUnsetChannelIsAllNotSilence) {
-  // The direction that cannot silently mute someone. A channel nobody has touched
-  // behaves as the app's own default rather than disappearing.
-  EXPECT_EQ(kChanNotifyAll, resolveChannelNotify(kScopeInherit, kChanNotifyUnset));
+TEST(ChanNotifyResolve, NoneIsAbsoluteAndOverridesASetChannel) {
+  // The one exception to "a set channel decides". A user who sets the device to Off is
+  // asking for silence, not a negotiation -- a channel still sounding through it is the
+  // worst failure this feature has.
+  for (uint8_t stored = 0; stored < kChanNotifyCount; stored++) {
+    EXPECT_EQ(kChanNotifyOff, resolveChannelNotify(kScopeNone, stored)) << (int)stored;
+  }
 }
 
-TEST(ChanNotifyResolve, InheritWithAJunkStoredByteIsAllNotSilence) {
+TEST(ChanNotifyResolve, AJunkStoredByteFallsBackToTheScopeNotToSilence) {
   for (int junk : {4, 9, 200, 255}) {
-    EXPECT_EQ(kChanNotifyAll, resolveChannelNotify(kScopeInherit, (uint8_t)junk)) << junk;
+    EXPECT_EQ(kChanNotifyAll,      resolveChannelNotify(kScopeAll,  (uint8_t)junk)) << junk;
+    EXPECT_EQ(kChanNotifyMentions, resolveChannelNotify(kScopeSelf, (uint8_t)junk)) << junk;
   }
 }
 
@@ -128,10 +135,19 @@ TEST(ChanNotifyResolve, NeverReturnsUnset) {
   }
 }
 
-TEST(ChanNotifyResolve, AnUnknownScopeFallsBackToAll) {
-  for (int junk : {4, 7, 99, 255}) {
-    EXPECT_EQ(kChanNotifyAll, resolveChannelNotify((uint8_t)junk, kChanNotifyOff)) << junk;
+TEST(ChanNotifyResolve, AnUnknownScopeFallsBackToAllForAnUnsetChannel) {
+  for (int junk : {3, 7, 99, 255}) {
+    EXPECT_EQ(kChanNotifyAll, resolveChannelNotify((uint8_t)junk, kChanNotifyUnset)) << junk;
   }
+}
+
+TEST(ChanNotifyResolve, ThereIsNoInheritScope) {
+  // Guards the category error this feature first made: "inherit" is a CLIENT concept --
+  // a channel row in the app that follows the device setting rather than carrying its
+  // own. The firmware is the authority and has nothing to inherit from; the device says
+  // the same thing with a per-channel byte that is not set. If a fourth scope value ever
+  // appears, NOTIFY_SCOPE_COUNT moves and this fails.
+  EXPECT_EQ(3, (int)kScopeNone + 1) << "a scope was added; unset is how a channel defers";
 }
 
 // ---------------------------------------------------------------- alerting
@@ -149,13 +165,24 @@ TEST(ChanNotifyAlerts, OffBeatsAMention) {
   // A channel set to Off stays silent even when the message names you. Asserted on its
   // own because the opposite is a plausible reading of "mentions always get through",
   // and it is not what Off means.
-  EXPECT_FALSE(channelNotifyAlerts(resolveChannelNotify(kScopeInherit, kChanNotifyOff), true));
+  EXPECT_FALSE(channelNotifyAlerts(resolveChannelNotify(kScopeAll, kChanNotifyOff), true));
 }
 
-TEST(ChanNotifyAlerts, SelfScopeFiltersEveryChannelEvenOneSetToAll) {
-  // The master switch again, stated through the alert so the composition is covered:
-  // a channel explicitly set to All does NOT escape a device-wide Self.
+TEST(ChanNotifyAlerts, AChannelSetToAllEscapesADeviceWideSelf) {
+  // The composition stated through the alert. The device default is SELF, so this is the
+  // case a user hits when they want ONE channel audible on an otherwise quiet radio:
+  // setting that channel to All must actually make it sound, not be filtered by the
+  // default it was meant to escape.
   const uint8_t resolved = resolveChannelNotify(kScopeSelf, kChanNotifyAll);
+  EXPECT_TRUE(channelNotifyAlerts(resolved, false));
+  EXPECT_TRUE(channelNotifyAlerts(resolved, true));
+}
+
+TEST(ChanNotifyAlerts, TheDeviceDefaultIsMentionsOnlyForAnUntouchedChannel) {
+  // #606: the default scope is SELF, not upstream's ALL -- a radio in a pocket beeping
+  // for nearly every channel message is the wrong default. An untouched channel is
+  // therefore quiet unless it names you.
+  const uint8_t resolved = resolveChannelNotify(kScopeSelf, kChanNotifyUnset);
   EXPECT_FALSE(channelNotifyAlerts(resolved, false));
   EXPECT_TRUE(channelNotifyAlerts(resolved, true));
 }
