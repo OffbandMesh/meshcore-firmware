@@ -1184,7 +1184,15 @@ void loop() {
         // The store is NOT on InternalFS when a secondary filesystem exists -- DataStore
         // migrates contacts and channels to it. Probing InternalFS reported ABSENT and
         // that was the probe looking in the wrong place, not the file being gone.
-#if defined(EXTRAFS)
+        //
+        // THE PRECEDENCE HERE MUST MATCH THE DECLARATION ABOVE, exactly. A board can
+        // define BOTH QSPIFLASH and EXTRAFS -- WioTrackerL1 does -- and the declaration
+        // picks QSPIFLASH first, so ExtraFS is never created on it. An independent
+        // `#if defined(EXTRAFS)` here therefore named an object that does not exist and
+        // broke that board's build while every board I had tested kept compiling.
+#if defined(QSPIFLASH)
+        auto& chanfs = QSPIFlash;
+#elif defined(EXTRAFS)
         auto& chanfs = ExtraFS;
 #else
         auto& chanfs = InternalFS;
