@@ -19,6 +19,8 @@
 // #1523: the per-channel tune's encoding. Header-only constexpr, and the builtin table is
 // internal-linkage, so a variant that only names the unset value emits nothing of it.
 #include <helpers/ui/TuneSlots.h>
+#include <helpers/ChannelNotify.h>
+#include <helpers/OffbandInfoAdvert.h>   // #1994: the 0xC5 0x1C capability advert
 #include <helpers/ChannelSlotGuard.h>   // #1865: no channel written over another
 #include <helpers/ChannelKeys.h>        // #1896: Public's key, for the slot guard
 #ifdef PIN_BUZZER
@@ -46,6 +48,24 @@
 // block cap bit and 0xC2 codes resolve on EVERY companion build, not just observer
 // ones. The config *backend* (ConfigSchema/ObserverCli) stays observer-gated below. #241.
 #include "OffbandConfigProtocol.h"
+
+// #606: the per-channel mode is described in two places -- the wire contract
+// (OFFBAND_CHNOTIFY_*) and the host-testable decision header (offband::kChanNotify*) --
+// and the device scope in two more. ChannelNotify.h mirrors rather than including
+// NodePrefs.h, which is companion-only and pulls Arduino. These assert the mirrors still
+// agree, so a drift breaks the build here instead of quietly changing whether a radio
+// sounds.
+static_assert(offband::kChanNotifyUnset    == offband::OFFBAND_CHNOTIFY_UNSET, "chnotify wire/decision drift");
+static_assert(offband::kChanNotifyAll      == offband::OFFBAND_CHNOTIFY_ALL, "chnotify wire/decision drift");
+static_assert(offband::kChanNotifyMentions == offband::OFFBAND_CHNOTIFY_MENTIONS, "chnotify wire/decision drift");
+static_assert(offband::kChanNotifyOff      == offband::OFFBAND_CHNOTIFY_OFF, "chnotify wire/decision drift");
+static_assert(offband::kChanNotifyCount    == offband::OFFBAND_CHNOTIFY_COUNT, "chnotify wire/decision drift");
+static_assert(offband::kScopeAll  == NOTIFY_SCOPE_ALL,  "notify scope mirror drift");
+static_assert(offband::kScopeSelf == NOTIFY_SCOPE_SELF, "notify scope mirror drift");
+static_assert(offband::kScopeNone == NOTIFY_SCOPE_NONE, "notify scope mirror drift");
+// #606: NodePrefs's in-struct default is the literal 1, because the scope constants are
+// defined below the struct. This pins what that 1 means.
+static_assert(NOTIFY_SCOPE_SELF == 1, "NodePrefs defaults notify_scope to a literal 1");
 
 #ifdef OFFBAND_NAME_FROM_BLE_MAC
 // #1598: on a fresh flash a badge names itself from its BLE MAC, so the name on the badge
@@ -1361,15 +1381,25 @@ bool MyMesh::textMentionsSelf(const char* text) const {
   return false;
 }
 
-// #510: should a received CHANNEL message make a sound, given the current scope?
-// ALL  -> always. SELF -> only when it @[mentions] us. NONE -> never.
-bool MyMesh::channelMsgShouldNotify(const char* text) const {
-  switch (_prefs.notify_scope) {
-    case NOTIFY_SCOPE_NONE: return false;
-    case NOTIFY_SCOPE_SELF: return textMentionsSelf(text);
-    case NOTIFY_SCOPE_ALL:
-    default:                return true;
-  }
+// #510/#606: should a received CHANNEL message make a sound?
+//
+// A channel the user has SET decides for itself -- that is the whole point, and why the
+// index is a parameter now: the mode lives on the channel record, so the decision has to
+// know which channel this is. A channel nobody has set falls back to the device scope,
+// which is what the scope is for. NONE is the one absolute: it mutes everything.
+//
+// A slot that cannot be read falls back to the scope-only answer rather than to silence.
+// Failing loud is the right direction here -- a missed beep is the complaint this whole
+// feature exists to fix.
+// Not const: it reads the channel store through getChannel(), so this is no longer a
+// pure function of the prefs the way the scope-only version was.
+bool MyMesh::channelMsgShouldNotify(const char* text, uint8_t channel_idx) {
+  uint8_t stored = offband::kChanNotifyUnset;
+  ChannelDetails ch;
+  if (getChannel(channel_idx, ch)) stored = ch.notify;
+
+  const uint8_t resolved = offband::resolveChannelNotify(_prefs.notify_scope, stored);
+  return offband::channelNotifyAlerts(resolved, textMentionsSelf(text));
 }
 
 bool MyMesh::filterRecvFloodPacket(mesh::Packet* packet) {
@@ -1574,10 +1604,17 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   // master switch.
   // Setup › Messages & alerts: notifications and Channel messages are master
   // switches over every channel's own mode (Epic G).
-  const bool alert = _prefs.gui.notify_on && _prefs.gui.notify_channels && channelMsgShouldNotify(text) &&
+  // #606: BOTH terms apply on GUI builds, for now. channelMsgShouldNotify() consults the
+  // channel record, and gui.channelMode() still consults the GUI's own array -- the two
+  // stores the owner's ruling collapses into one. Leaving both AND-ed until the carry-over
+  // lands can only make a device QUIETER than one store alone would, never louder, so no
+  // GUI user starts hearing a channel they had silenced. ChartreuseOtter retires
+  // gui.channel_notify onto the channel record and drops the second term with it.
+  const bool alert = _prefs.gui.notify_on && _prefs.gui.notify_channels &&
+                     channelMsgShouldNotify(text, channel_idx) &&
                      offband::gui::channelAlerts(_prefs.gui.channelMode(channel_idx), textMentionsSelf(text));
 #else
-  const bool alert = channelMsgShouldNotify(text);
+  const bool alert = channelMsgShouldNotify(text, channel_idx);
 #endif
   if (_ui && alert) _ui->notifyChannel(channel_idx);
 #endif
@@ -2148,11 +2185,35 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _prefs.ui_led_enabled = 1;    // #542 B1 default: LED on (set before loadPrefs)
   _prefs.ui_display_mode = 0;   // #542 B1 default: display auto
 
-  // #510: notification scope. Default ALL = today's behaviour. Set BEFORE loadPrefs for
-  // the same reason as caplog below: a prefs file written before this field existed
-  // short-reads to EOF and keeps this default, so upgrading an existing device never
-  // silently mutes it.
-  _prefs.notify_scope = NOTIFY_SCOPE_ALL;
+  // #510/#606: notification scope. Default SELF -- DMs and @[mentions] sound, other
+  // channel traffic does not.
+  //
+  // This was ALL, chosen so an upgrade could not change what a device did. The owner
+  // has ruled the other way (2026-11-03): upstream's "All" means a radio beeping for
+  // nearly every notification, and a device in a pocket or on a badge is the wrong place
+  // for that default.
+  //
+  // WHICH DEVICES THIS ACTUALLY REACHES, stated precisely, because an earlier version of
+  // this comment got it wrong and the wrong version is the kind that gets believed:
+  //
+  //   * a fresh or wiped device, and any record written before the key existed  -> SELF
+  //   * a device whose saved prefs already carry the key                        -> unchanged
+  //
+  // notify_scope is a SAVED KEY -- `def("notify", notify_scope)` in NodePrefs.h -- and
+  // since the 1.17.0 base prefs are keyed JSON, not offsets in a binary record. So
+  // loadPrefs puts the saved value back over this default whenever the key is present,
+  // and setting it before loadPrefs buys only the pre-key case (where the key is absent
+  // from the JSON, or the legacy binary record short-reads to EOF before offset 143).
+  //
+  // The earlier comment reasoned purely from that short-read and concluded the change
+  // "DOES reach existing devices on upgrade". It does not. Any device flashed since #510
+  // that has saved its prefs keeps the ALL it has -- which includes every bench unit
+  // here. Rewriting a saved ALL to SELF would be a migration, and whether to do one is
+  // the owner's call, not a side effect of a default.
+  //
+  // SELF is not a mute either way: nothing a device could do becomes unreachable, and the
+  // triple press still walks ALL -> SELF -> NONE.
+  _prefs.notify_scope = NOTIFY_SCOPE_SELF;
 
   // #509: button-matrix defaults preserve today's hardcoded behaviour exactly.
   // Single press stays UNASSIGNED (owner: opt-in only, never defaulted on).
@@ -2942,8 +3003,17 @@ void MyMesh::handleCmdFrame(size_t len) {
                                  sub == offband::OFFBAND_UI_DISPLAY_SET);
     const bool is_led_sub     = (sub == offband::OFFBAND_UI_LED_GET ||
                                  sub == offband::OFFBAND_UI_LED_SET);
+    // #606: per-channel notification mode. Buzzer-gated like the scope above, and
+    // deliberately NOT part of is_tune_sub: the mode lives on the channel record and the
+    // decision is made in the mesh layer, so it needs no tone engine. A board with a
+    // buzzer but fixed melodies still has per-channel modes.
+    const bool is_chnotify_sub = (sub == offband::OFFBAND_UI_CHNOTIFY_GET ||
+                                  sub == offband::OFFBAND_UI_CHNOTIFY_SET);
+    // #1990: rotation rides the same INDICATORS capability as display/LED.
+    const bool is_rotation_sub = (sub == offband::OFFBAND_UI_ROTATION_GET ||
+                                  sub == offband::OFFBAND_UI_ROTATION_SET);
 #ifndef PIN_BUZZER
-    if (is_scope_sub) {
+    if (is_scope_sub || is_chnotify_sub) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = offband::OFFBAND_UI_ERR;
       out_frame[2] = offband::OFFBAND_UI_ERR_NO_BUZZER;
@@ -2964,7 +3034,10 @@ void MyMesh::handleCmdFrame(size_t len) {
     // controllable LED (runtime, like FEM LNA). Same NO_BUZZER-style typed error so
     // the client shows WHY, not a bare illegal-arg.
 #ifndef DISPLAY_CLASS
-    if (is_display_sub) {
+    // #1990: rotation joins display here -- no screen at all is reason 6, the same
+    // answer a mode SET gets. "Cannot rotate" is a DIFFERENT condition (reason 10),
+    // checked below, and only reachable on a build that has a display.
+    if (is_display_sub || is_rotation_sub) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = offband::OFFBAND_UI_ERR;
       out_frame[2] = offband::OFFBAND_UI_ERR_UNSUPPORTED_INDICATOR;
@@ -2972,6 +3045,17 @@ void MyMesh::handleCmdFrame(size_t len) {
       return;
     }
 #endif
+    // #1990: a display that exists but cannot be rotated. Runtime, not compile-time:
+    // the same firmware image serves boards whose drivers differ, so the live driver
+    // is the only thing that can answer. Refusing here is what keeps the no-op
+    // default on AbstractUITask honest -- see #1992 for what a silent accept costs.
+    if (is_rotation_sub && !(_ui && _ui->displaySupportsRotation())) {
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = offband::OFFBAND_UI_ERR;
+      out_frame[2] = offband::OFFBAND_UI_ERR_NO_ROTATION;
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
     if (is_led_sub && !board.canControlLed()) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = offband::OFFBAND_UI_ERR;
@@ -3014,6 +3098,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
     (void)is_scope_sub; (void)is_matrix_sub; (void)is_display_sub; (void)is_led_sub;
     (void)is_gps_sub; (void)is_tune_sub; (void)is_screen_sub; (void)tones;
+    (void)is_chnotify_sub;
 {
 #ifdef PIN_BUZZER
     // #1478: the custom tune slots, through the UI's tune engine (#1788). The engine and
@@ -3191,7 +3276,135 @@ void MyMesh::handleCmdFrame(size_t len) {
       _serial->writeFrame(out_frame, 4);
       return;
     }
+    // #606: the per-channel notification mode, addressed by slot and stored on the same
+    // channel record. Mirrors CHTUNE above deliberately -- same validation, and the reply
+    // is the value RE-READ after the write rather than an echo, so a client always
+    // renders what the device holds rather than what it asked for.
+    //
+    // No tone-engine dependency: unlike CHTUNE this decides WHETHER the radio sounds,
+    // not what it sounds like, so a buzzer with fixed melodies still has modes.
+    if (sub == offband::OFFBAND_UI_CHNOTIFY_GET || sub == offband::OFFBAND_UI_CHNOTIFY_SET) {
+      const bool is_set = (sub == offband::OFFBAND_UI_CHNOTIFY_SET);
+      ChannelDetails ch;
+      const bool ok = len >= (is_set ? 4 : 3) && getChannel(cmd_frame[2], ch) && ch.name[0] != 0 &&
+                      (!is_set || (offband::channelNotifySettable(cmd_frame[3]) &&
+                                   setChannelNotify(cmd_frame[2], cmd_frame[3]) &&
+                                   getChannel(cmd_frame[2], ch)));
+      if (!ok) {
+        ui_err(offband::OFFBAND_UI_ERR_MALFORMED);
+        return;
+      }
+      if (is_set) {
+        // On a screenless board caplog is the only record that a client changed this.
+        MESH_DEBUG_PRINTLN("[0xC5] channel %d notify -> stored %d via client",
+                           (int)cmd_frame[2], (int)ch.notify);
+      }
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = cmd_frame[2];
+      out_frame[3] = ch.notify;
+      _serial->writeFrame(out_frame, 4);
+      return;
+    }
 #endif  // PIN_BUZZER
+    // #1994: THE CAPABILITY ADVERT. One request, the whole list.
+    //
+    // This is where Offband stops announcing itself inside upstream's device-info frame.
+    // Six features had announced themselves by appending a byte there and incrementing
+    // UPSTREAM's FIRMWARE_VER_CODE (ver codes 18..23), and three then independently
+    // computed "the next free byte" as offset 87 -- each correct in isolation, because
+    // that frame is built by out_frame[i++] with no declared layout. A position clash
+    // there is a plausible wrong number with no error raised on either side.
+    //
+    // A TAG'S PRESENCE IS THE CAPABILITY. No bitmap: the tags already answer "is this
+    // supported", so a bitmap beside them would be a second source of truth for one
+    // question. A board that lacks a feature OMITS its tag; it does not send a zero.
+    //
+    // Values are NOT carried here. A client reads them through each feature's own
+    // sub-code, which is what keeps this frame small enough to be one round trip. The
+    // single exception is ACK_CAPACITY, which has no sub-code of its own.
+    //
+    // Contract: docs/offband_info_frame_contract.md. Registry: OFFBAND_INFO_TAG_* in
+    // OffbandConfigProtocol.h. Tag order here MUST ascend -- InfoAdvert enforces it,
+    // because the resume cursor names a tag and an unordered advert would make the
+    // cursor silently drop records.
+    if (sub == offband::OFFBAND_UI_INFO_GET) {
+      // The writer mirrors the CONTINUE tag rather than including the companion-only
+      // protocol header; tie the two so a drift breaks the build, not the behaviour.
+      static_assert(offband::InfoAdvert::kInfoTagContinue == offband::OFFBAND_INFO_TAG_CONTINUE,
+                    "advert CONTINUE tag drifted from the protocol registry");
+
+      // len counts the whole command frame: [0]=0xC5, [1]=sub, optional [2]=cursor.
+      // Anything longer is malformed. A ZERO-PAYLOAD request is also what a client uses
+      // to probe: an older device answers ERR_MALFORMED from the terminal arm below, and
+      // reason 5 is unambiguous as "not implemented" only for a zero-payload request,
+      // because a known sub-code with a short payload returns the same reason.
+      if (len > 3) {
+        ui_err(offband::OFFBAND_UI_ERR_MALFORMED);
+        return;
+      }
+      const uint8_t cursor = (len == 3) ? cmd_frame[2] : 0;
+
+      // [0],[1] are the header; the rest is the record area. Transport-aware, never a
+      // constant: maxFramePayload() reports the 20-byte MIN_ATT_MTU floor until BLE
+      // negotiates and ~244 after.
+      const size_t cap = _serial->maxFramePayload(2);
+      if (cap < offband::kInfoMinCapacity) {
+        // Below the floor neither a record nor the CONTINUE announcing its absence fits,
+        // and an EMPTY advert is a confident claim that the device has no capabilities.
+        // Refusing is the only honest answer. Unreachable on any real link.
+        //
+        // NOT ERR_MALFORMED, deliberately. The contract tells a client that reason 5 in
+        // reply to a zero-payload request means "this device predates the advert", at
+        // which point it falls back to the old absolute offsets and stops asking. A
+        // capacity shortfall answered with reason 5 would therefore be misdiagnosed as
+        // old firmware -- permanently, on a device that supports the advert perfectly
+        // well. The request is well formed; the transport cannot carry the answer.
+        ui_err(offband::OFFBAND_UI_ERR_UNSUPPORTED_ACTION);
+        return;
+      }
+
+      offband::InfoAdvert advert(&out_frame[2], cap);
+
+      // ---- tags, ascending. `cursor` skips what a previous round already delivered.
+#ifdef PIN_BUZZER
+      // #606: per-channel notification modes. Gated on the buzzer, like the device-wide
+      // scope -- a board that cannot sound must not offer the control.
+      if (offband::OFFBAND_INFO_TAG_CHAN_NOTIFY >= cursor) {
+        advert.addFlag(offband::OFFBAND_INFO_TAG_CHAN_NOTIFY);
+      }
+#endif
+      // #1990: display rotation advertises itself here; the value is read with 0x1A.
+      // Emitted only where the UI can actually rotate, so a fixed-orientation display
+      // omits the tag rather than claiming a capability it will refuse.
+      if (offband::OFFBAND_INFO_TAG_DISPLAY_ROTATION >= cursor && _ui != NULL &&
+          _ui->displaySupportsRotation()) {
+        advert.addFlag(offband::OFFBAND_INFO_TAG_DISPLAY_ROTATION);
+      }
+      // #1001: outstanding-ACK capacity. Carries its byte by the contract's one exception
+      // -- one byte, fixed for the build, and no sub-code of its own to read it from.
+      // This replaces the byte feat/994-delivery-observability put at offset 87, and
+      // needs no FIRMWARE_VER_CODE bump: the tag's presence is the version.
+      if (offband::OFFBAND_INFO_TAG_ACK_CAPACITY >= cursor) {
+        advert.addByte(offband::OFFBAND_INFO_TAG_ACK_CAPACITY, (uint8_t)EXPECTED_ACK_TABLE_SIZE);
+      }
+
+      const size_t area = advert.finish();
+      if (advert.stalled()) {
+        // Nothing fit at this capacity, so there is no cursor worth sending: a CONTINUE
+        // here would name a tag the device refuses again at the same capacity, and a
+        // client following the contract would re-request from it forever. Raising the
+        // capacity floor does not prevent this -- records vary in length, so any floor
+        // that admits a 2-byte flag can still stall on a 3-byte one. Same reason code as
+        // the floor check above, and for the same reason it is not MALFORMED.
+        ui_err(offband::OFFBAND_UI_ERR_UNSUPPORTED_ACTION);
+        return;
+      }
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      _serial->writeFrame(out_frame, 2 + area);
+      return;
+    }
     // #1788: the screen settings -- both text sizes, Screen off, time zone, and the
     // battery's full point -- through the UI, whose setters carry the screens' own rules.
     // Every reply is the whole set, re-read after any write, so a client always renders
@@ -3429,6 +3642,50 @@ void MyMesh::handleCmdFrame(size_t len) {
       _serial->writeFrame(out_frame, 3);
       return;
     }
+    // #1990: display rotation, degrees 0/180. Both paths are only reached on a build
+    // with a display whose live driver reports rotation support -- the gates above
+    // have already answered reason 6 (no display) and reason 10 (cannot rotate).
+    if (sub == offband::OFFBAND_UI_ROTATION_GET) {
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      // Report what the display is actually set to, not what was last asked for.
+      out_frame[2] = _ui->displayRotation();
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
+    if (sub == offband::OFFBAND_UI_ROTATION_SET && len >= 3) {
+      const uint8_t want = cmd_frame[2];
+      if (!offband::isValidUiRotation(want)) {
+        out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+        out_frame[1] = offband::OFFBAND_UI_ERR;
+        out_frame[2] = offband::OFFBAND_UI_ERR_MALFORMED;
+        _serial->writeFrame(out_frame, 3);
+        return;
+      }
+      // Persist beside ui_display_mode in NodePrefs rather than through
+      // DisplayConfigProvider (#370). The provider looked like the natural home --
+      // it owns `display.rotation` for the observer and calls itself role-neutral --
+      // but its persistence is `#ifdef ARDUINO` -> <Preferences.h>, which is ESP32
+      // only. Calling it from here would be a LINK ERROR on every nRF52 companion
+      // (RAK4631, T1000-E, the badge), all of which have screens. NodePrefs/DataStore
+      // is already universal and is where this setting's sibling lives.
+      //
+      // Known consequence, recorded on #1990: on a companion-observer build the 0xC0
+      // `display.rotation` key still writes the provider's own NVS, so the two stores
+      // can disagree across a reboot. At RUNTIME there is one truth either way,
+      // because every read below reports the live display -- which is what the
+      // contract actually requires.
+      if (_prefs.ui_display_rotation != want) {
+        _prefs.ui_display_rotation = want;
+        savePrefs();
+      }
+      _ui->requestRotation(want);            // apply live
+      out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
+      out_frame[1] = sub;
+      out_frame[2] = _ui->displayRotation();  // echo APPLIED value, not the request
+      _serial->writeFrame(out_frame, 3);
+      return;
+    }
     // #542 B1: status/traffic LED. Gated above on board.canControlLed().
     if (sub == offband::OFFBAND_UI_LED_GET) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
@@ -3582,11 +3839,42 @@ void MyMesh::handleCmdFrame(size_t len) {
     // the channel-send path, which every companion build has -- so unlike the bits
     // above this is advertised unconditionally.
     offband_caps2 |= offband::OFFBAND_CAP2_PKT_HASH;
+#ifdef PIN_BUZZER
+    // #606: per-channel notification mode. Gated on the buzzer, like NOTIFY_SCOPE --
+    // a board that cannot sound must not offer a per-channel notify control. The
+    // storage is on the channel record, so this needs nothing of the UI.
+    offband_caps2 |= offband::OFFBAND_CAP2_CHAN_NOTIFY;
+#endif
     out_frame[i++] = offband_caps2;          // v18+
     // #542 B1: current indicator state, so the client renders the toggles on connect
     // with no extra GET round-trip (the FEM-LNA precedent). Appended UNCONDITIONALLY.
     out_frame[i++] = _prefs.ui_led_enabled;   // v21+
     out_frame[i++] = _prefs.ui_display_mode;  // v21+
+    //
+    // THE FRAME ENDS HERE, AND NOTHING MAY BE APPENDED TO IT AGAIN (#1994, contract §2).
+    //
+    // An earlier version of this code added an offband_caps BYTE 3 at offset 87, reasoning
+    // that byte 2's last bit was spent so the byte should be added now rather than leaving
+    // the next feature to extend the frame under pressure. The reasoning was sound and the
+    // conclusion was wrong: TWO other features were computing the same "next free byte" at
+    // the same time -- #1001's outstanding-ACK capacity and display rotation's withdrawn
+    // first contract -- each correct in isolation, because this frame is assembled by
+    // out_frame[i++] with no declared layout, so "next free" is unanswerable from the
+    // merged tree and gives a different answer per branch.
+    //
+    // Worse than the clash: byte 1 of this frame is UPSTREAM's FIRMWARE_VER_CODE, and
+    // upstream uses it to discriminate upstream's own fields. Every Offband byte from 82
+    // onward was announced by incrementing upstream's counter (ver codes 18..23). The day
+    // upstream ships one field and bumps their code, one number means two things and every
+    // Offband offset shifts under every deployed client at once -- and a client reading a
+    // plausible wrong number at a fixed offset does not error.
+    //
+    // Capabilities now live in the 0xC5 0x1C advert, which is Offband's own namespace and
+    // cannot collide on position; a value gets its own sub-code. Bytes 82-86 stay exactly
+    // as they are so no shipped client changes behaviour, and migrating them off upstream's
+    // frame is a separate, later effort. scripts/check_wire_allocations.py fails the build
+    // if anything is appended here, scanning unmerged branches and worktrees because that
+    // is where all three colliding claims lived.
     _serial->writeFrame(out_frame, i);
   } else if (cmd_frame[0] == CMD_APP_START &&
              len >= 8) { // sent when app establishes connection, respond with node ID
@@ -5300,6 +5588,12 @@ CmdResult MyMesh::cmdSetChannel(uint8_t idx, const char* name, const uint8_t sec
   const bool same_channel = !was_empty &&
                             memcmp(before.channel.secret, secret, 16) == 0;
   channel.tune = offband::channelTuneAfterEdit(was_empty, same_channel, before.tune);
+  // #606: the notification mode follows the tune's rule exactly -- kept through a
+  // rename, dropped across a replacement. Without this, renaming a channel from the
+  // phone would silently clear the mode set on the device; with occupancy alone, a
+  // different channel dropped into the slot would inherit a mode chosen for the one
+  // that is gone.
+  channel.notify = offband::channelNotifyAfterEdit(was_empty, same_channel, before.notify);
   if (!setChannel(idx, channel)) return CmdResult::NotFound;
   saveChannels();
 #ifdef OFFBAND_GUI
@@ -5353,6 +5647,11 @@ bool MyMesh::placePublicInSlot0(const char* name, bool live) {
           return true;
         },
         key);
+    // Not zeroed, and does not need to be: the carry below reads only .tune and .notify
+    // when `dest < 0` short-circuits before getChannel() fills this, and ChannelDetails
+    // gives both of those in-struct initializers precisely so a site that does not write
+    // them reads "unset" instead of a stack byte (see ChannelDetails.h). `name` is read
+    // only on the public_was_at_dest path, where getChannel() has filled it.
     ChannelDetails old_public;
     const bool public_was_at_dest = dest >= 0 && getChannel(dest, old_public) && old_public.name[0] != 0 &&
                                     offband::slotHoldsKey(old_public.channel.secret, key);
@@ -5362,7 +5661,12 @@ bool MyMesh::placePublicInSlot0(const char* name, bool live) {
     const char* pub_name = name && name[0] ? name : (public_was_at_dest ? old_public.name : "Public");
     StrHelper::strncpy(pub.name, pub_name, sizeof(pub.name));
     memcpy(pub.channel.secret, key, 16);
-    pub.tune = public_was_at_dest ? old_public.tune : offband::kChannelTuneUnset;
+    // #606: the tune AND the notify mode travel with Public. Through one helper that
+    // writes both, because #1625 wrote the tune's carry as a bare line here and #606 then
+    // added a second resident to the same spare field that this line did not copy -- so a
+    // user who silenced Public had it sound again at the next boot that re-placed slot 0.
+    offband::carryChannelPrefs(public_was_at_dest, old_public.tune, old_public.notify,
+                               &pub.tune, &pub.notify);
 #ifdef OFFBAND_GUI
     const offband::gui::NotifyMode public_mode =
         public_was_at_dest ? _prefs.gui.channelMode(uint8_t(dest)) : offband::gui::NotifyMode(_prefs.gui.notify_default);
@@ -5498,6 +5802,20 @@ bool MyMesh::setChannelTune(uint8_t idx, uint8_t stored) {
   if (!getChannel(idx, ch)) return false;
   if (ch.tune == stored) return true;   // no flash write for a no-op
   ch.tune = stored;
+  if (!setChannel(idx, ch)) return false;
+  saveChannels();
+  return true;
+}
+
+// #606: the one writer for a channel's notification mode, mirroring setChannelTune.
+// A no-op writes no flash -- a client control bound to onChange can emit a burst of
+// SETs, and an unconditional saveChannels() would put that burst on the filesystem.
+bool MyMesh::setChannelNotify(uint8_t idx, uint8_t stored) {
+  if (!offband::channelNotifySettable(stored)) return false;
+  ChannelDetails ch;
+  if (!getChannel(idx, ch)) return false;
+  if (ch.notify == stored) return true;
+  ch.notify = stored;
   if (!setChannel(idx, ch)) return false;
   saveChannels();
   return true;

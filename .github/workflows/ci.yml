@@ -182,6 +182,27 @@ jobs:
       - name: Release workflows build clean, never from a cached object tree
         run: python scripts/check_release_no_build_cache.py
 
+      # #1994: two efforts claiming one wire number, or anything appended to upstream's
+      # device-info frame. Both compile perfectly and only misbehave against a live
+      # client, so they are checked rather than reviewed.
+      #
+      # On 2026-11-04 three features independently claimed device-info offset 87 and two
+      # claimed 0xC5 0x18/0x19. A duplicate sub-code is at least refused at runtime; a
+      # duplicate frame offset is read as a plausible wrong value with no error on either
+      # side, which is why the frame check has no warning level.
+      #
+      # SCOPE IN CI: refs/heads here holds only the branch under test, so this guards the
+      # change being proposed. The cross-branch detection that finds another session's
+      # unmerged claim works on a developer machine and in a pre-push hook, because that
+      # is where the colliding claims lived -- git ls-remote cannot see an unpushed branch.
+      # Self-test first, so a guard that cannot classify fails here rather than passing
+      # vacuously.
+      - name: Wire-allocation guard self-test
+        run: python scripts/test_check_wire_allocations.py
+
+      - name: No duplicate wire numbers, and nothing appended to the device-info frame
+        run: python scripts/check_wire_allocations.py
+
       # #749/#758: the asset generators. The native-tests job discovers and runs the
       # C++ suites on its own, but nothing discovers scripts/test_*.py -- they only
       # run if named here. A generator bug is silent (the splash renders in the wrong

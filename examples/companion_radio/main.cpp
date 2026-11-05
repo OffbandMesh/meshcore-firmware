@@ -766,6 +766,20 @@ void setup() {
   // Only restore a persisted rotation on displays that actually support it (#148).
   if (ui_task.displaySupportsRotation()) ui_task.requestRotation(offband::getDisplayRotation());
   CW_PHASE("post:display.prefs");
+#else
+  // #1990: a plain companion restores rotation from NodePrefs, which is where the
+  // 0xC5 0x19 handler persists it. The observer branch above keeps using
+  // DisplayConfigProvider because its 0xC0 `display.rotation` key is backed by that
+  // store; the provider is not reachable here, as its persistence is <Preferences.h>
+  // and so ESP32-only while nRF52 companions also have screens.
+  //
+  // Guarded on driver support for the same reason as the observer branch: restoring a
+  // rotation onto a display that cannot rotate would be a silent no-op, and #1992 is
+  // what silent no-ops in this area cost.
+  if (ui_task.displaySupportsRotation()) {
+    ui_task.requestRotation(the_mesh.getNodePrefs()->ui_display_rotation);
+    CW_PHASE("post:display.rotation");
+  }
 #endif
 #endif
 #if defined(OFFBAND_OBSERVER) && MAX_NEIGHBOURS
@@ -1136,6 +1150,67 @@ void loop() {
     if (s_cl_last_ms == 0 || now_ms - s_cl_last_ms >= 30000u) {
       s_cl_last_ms = now_ms;
       offband::crashLogf("[hb] up=%us", (unsigned)(now_ms / 1000));
+      // #2026: how many channel slots actually hold a channel, and what the first
+      // non-empty one looks like.
+      //
+      // ON THE HEARTBEAT RATHER THAN AT BOOT, deliberately. The same facts were logged
+      // at boot first and were unreadable: a BLE build's USB serial carries MeshLog but
+      // not the companion protocol, the board has no power switch, and the only reset
+      // available is the DFU's own -- which re-enumerates USB, so attaching in time to
+      // catch a line printed 4.7 s after boot is a race against the OS that cannot be
+      // won reliably. A fact you can only read by winning a race is not instrumentation.
+      // Every 30 s, anyone can attach whenever and wait.
+      {
+        uint8_t occupied = 0, erased = 0, first = 0xFF;
+        ChannelDetails c;
+        for (uint8_t i = 0; i < MAX_GROUP_CHANNELS; i++) {
+          if (!the_mesh.getChannel(i, c)) continue;
+          const uint8_t n0 = (uint8_t)c.name[0];
+          if (n0 == 0xFF) { erased++; }
+          else if (n0 != 0x00) { occupied++; if (first == 0xFF) first = i; }
+        }
+        offband::crashLogf("[chan] live: named=%u erased0xFF=%u first=%d",
+                           (unsigned)occupied, (unsigned)erased, (int)(first == 0xFF ? -1 : first));
+      }
+      // #2026: and what the STORE holds, as distinct from the table. Once, on the first
+      // heartbeat: the table can only have got its 0xFF from the loader, so the question
+      // is whether the file is full-length-but-erased (flash wiped under a surviving
+      // filesystem) or short (a truncating save). Those have different causes and
+      // different fixes, and nothing else can tell them apart.
+      // Every heartbeat, not once: a "first heartbeat only" guard fires at boot, which is
+      // precisely the moment nothing can be attached to read it. That is the same race
+      // this instrument exists to avoid, reintroduced by trying to be tidy.
+      {
+        // The store is NOT on InternalFS when a secondary filesystem exists -- DataStore
+        // migrates contacts and channels to it. Probing InternalFS reported ABSENT and
+        // that was the probe looking in the wrong place, not the file being gone.
+        //
+        // THE PRECEDENCE HERE MUST MATCH THE DECLARATION ABOVE, exactly. A board can
+        // define BOTH QSPIFLASH and EXTRAFS -- WioTrackerL1 does -- and the declaration
+        // picks QSPIFLASH first, so ExtraFS is never created on it. An independent
+        // `#if defined(EXTRAFS)` here therefore named an object that does not exist and
+        // broke that board's build while every board I had tested kept compiling.
+#if defined(QSPIFLASH)
+        auto& chanfs = QSPIFlash;
+#elif defined(EXTRAFS)
+        auto& chanfs = ExtraFS;
+#else
+        auto& chanfs = InternalFS;
+#endif
+        File f = chanfs.open("/channels2", FILE_O_READ);
+        if (!f) {
+          offband::crashLogf("[chan] store: /channels2 ABSENT");
+        } else {
+          const uint32_t sz = f.size();
+          uint8_t head[12] = {0};
+          const int got = f.read(head, sizeof(head));
+          f.close();
+          offband::crashLogf("[chan] store: size=%u recs=%u rem=%u head=%02X%02X%02X%02X%02X%02X%02X%02X (got=%d)",
+                             (unsigned)sz, (unsigned)(sz / 68), (unsigned)(sz % 68),
+                             head[0], head[1], head[2], head[3],
+                             head[4], head[5], head[6], head[7], got);
+        }
+      }
     }
   }
   #endif

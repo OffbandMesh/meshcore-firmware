@@ -1,0 +1,30 @@
+schema_version: 1
+issue: 1994
+impact: none
+reason: >-
+  No PUBLISHED guide changes, and the reason is release state rather than an
+  absence of user-facing work. This epic adds three things a user can notice:
+  a channel's notification mode can now be set on the badge itself (Left on the
+  thread screen, cycling Default / All / Mentions / Off), display rotation is
+  readable and settable from the client, and the device answers a capability
+  advert so a client can stop guessing what it supports. None of it is in a
+  release, and docs/user/ is the published manual.
+  The badge control is written up where the badge's own guide lives while it is
+  unpublished: docs/initiatives/standalone/1867-qcc-badge-guide/GUIDE-DRAFT.md,
+  section 7, beside the existing per-channel tone control it sits next to on the
+  keypad. That section also now states the device Sound default is DMs + @ rather
+  than All, which changed in #1975 and was not written down anywhere a user would
+  read -- a default that quiet is a surprise if it is not documented.
+  Display rotation has no published or draft guide to carry it: the feature is
+  inherited work whose UI behaviour has not been exercised on a screen by this
+  session, and writing instructions for a screen nobody has looked at would be
+  inventing them. It is the first thing to document once it has been seen on
+  hardware, and the bench pass is already the gate in front of it.
+  The advert itself is not user-facing in any direction. A client either finds the
+  capability list or falls back to the offsets it reads today, and either way the
+  user sees the same controls.
+  Nothing is removed from upstream's device-info frame, so no shipped client
+  changes behaviour and no existing instruction becomes wrong. The guides to
+  update are the badge guide when #1867 publishes and a rotation guide after the
+  bench pass; this record is the pointer to both rather than a claim that there
+  is nothing to write.

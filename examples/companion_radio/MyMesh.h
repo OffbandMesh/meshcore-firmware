@@ -367,7 +367,10 @@ protected:
   // bracketed, case-insensitive rule that is a CONTRACT with the client -- see the
   // definition in MyMesh.cpp before changing it.
   bool textMentionsSelf(const char* text) const;
-  bool channelMsgShouldNotify(const char* text) const;
+  // #606: takes the channel index -- a channel with its own mode set answers for itself,
+  // so the decision needs to know which channel this is. Not const: it reads the channel
+  // store through getChannel().
+  bool channelMsgShouldNotify(const char* text, uint8_t channel_idx);
 
   void sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis);
   void sendFloodScoped(const ContactInfo& recipient, mesh::Packet* pkt, uint32_t delay_millis=0) override;
@@ -443,6 +446,8 @@ public:
   // out of the existing one. That is the #1523 lesson, and it only has to be learned once
   // if there is one place that does it. False when the slot holds no channel.
   bool setChannelTune(uint8_t idx, uint8_t stored);
+  // #606: per-channel notification mode. One writer, like setChannelTune.
+  bool setChannelNotify(uint8_t idx, uint8_t stored);
 
   bool savePrefs() {   // #1194: false when the store could not write them
     _prefs.node_lat = sensors.node_lat;

@@ -440,6 +440,9 @@ private:
   // Right does nothing there.
   int channelSlot() const;
   void openTunePicker();
+  // #606: cycle THIS channel's notification mode. Left, because Right is the tune and
+  // those are the only two keys this screen does not already spend.
+  void cycleNotify();
   // What the entry bar shows: the conversation's tune, or "Default".
   void tuneHint(char* out, size_t cap) const;
 #endif

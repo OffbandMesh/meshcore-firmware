@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <helpers/ui/KeyNav.h>   // #1590: backsOut(), so a screen cannot swallow an exit
+#include <helpers/ChannelNotify.h>   // #606: the per-channel notify cycle and its labels
 #include "BadgeUi.h"
 #include "UITask.h"
 #include "target.h"
@@ -692,6 +693,43 @@ void ThreadScreen::openTunePicker() {
   _task->gotoTonePickerForChannel((uint8_t)slot, _convo);
 }
 
+// #606: cycle this channel's notification mode -- Default -> All -> Mentions -> Off.
+//
+// CYCLED IN PLACE, not a picker screen, matching how Settings cycles the device-wide
+// scope. Four values do not earn a screen, and the badge's own idiom for a small enum is
+// already a cycle with a note.
+//
+// This writes the SAME byte the client writes over 0xC5 CHNOTIFY. One pref per channel,
+// no second store -- the owner's ruling, and the reason this is a cycle over the channel
+// record rather than a badge-local setting that would then disagree with the app.
+void ThreadScreen::cycleNotify() {
+  const int slot = channelSlot();
+  if (slot < 0) {
+    // A DM, or a channel no longer in the table. Say so rather than appearing to do
+    // nothing, exactly as the tune picker does -- the key has no fallback meaning here.
+    note(_kind == Store::Channel ? "no channel" : "channels only");
+    return;
+  }
+  ChannelDetails ch;
+  if (!the_mesh.getChannel((uint8_t)slot, ch)) { note("no channel"); return; }
+
+  const uint8_t want = offband::nextChannelNotify(ch.notify);
+  if (!the_mesh.setChannelNotify((uint8_t)slot, want)) { note("not saved"); return; }
+
+  // Re-read rather than trusting `want`, so the note shows what the device HOLDS. Same
+  // discipline as the 0xC5 reply, and for the same reason: a user who is told "Off" and
+  // still hears the channel has been lied to by the thing they just used.
+  //
+  // AND IF THE RE-READ FAILS, SAY SO rather than falling back to `want`. An earlier
+  // version did fall back, which made this comment a lie in exactly the failure path the
+  // comment is about -- reporting a state it had not been able to confirm. There is no
+  // value in guessing here: the write may well have landed, but "probably Off" is not
+  // something a notification setting may claim.
+  ChannelDetails after;
+  if (!the_mesh.getChannel((uint8_t)slot, after)) { note("unknown"); return; }
+  note(offband::channelNotifyLabel(after.notify));
+}
+
 // The entry bar's hint: ">Knock" for a conversation with its own tune, ">Default" for one
 // that follows the global channel tune. The '>' is the key: Right opens it.
 void ThreadScreen::tuneHint(char* out, size_t cap) const {
@@ -749,6 +787,12 @@ bool ThreadScreen::handleInput(char c) {
       // typing. They reach _line.apply() today, which rejects them as non-printable, so
       // nothing is being taken away. No letter could ever be a shortcut here.
       openTunePicker();
+      return true;
+    case KEY_LEFT:    // #606: this channel's notification mode
+      // The other half of the pair the #1525 comment above reserved. Right answers "what
+      // does this channel sound like", Left answers "should it sound at all" -- the two
+      // questions a conversation has about its own noise, on the two free keys.
+      cycleNotify();
       return true;
 #endif
     default:

@@ -109,9 +109,79 @@ constexpr uint8_t OFFBAND_UI_DISPLAY_SET = 0x06;  // [0xC5][0x06][mode] -> echo
 constexpr uint8_t OFFBAND_UI_LED_GET     = 0x07;  // -> [0xC5][0x07][on]
 constexpr uint8_t OFFBAND_UI_LED_SET     = 0x08;  // [0xC5][0x08][on]   -> echo
 
+// #1990: display rotation, in DEGREES (0 or 180). Its own GET/SET pair rather than a
+// trailing byte on 0x05/0x06 -- owner-ruled 2026-11-04. Every other setting on this
+// command is a paired GET/SET, and overloading DISPLAY_SET with a variable-length
+// payload would have been the first exception; the sub-code space is not scarce.
+//
+//   ROTATION_GET  [0xC5][0x1A]        -> [0xC5][0x1A][deg]
+//   ROTATION_SET  [0xC5][0x1B][deg]   -> [0xC5][0x1B][deg]
+//
+// #1990: originally allocated 0x18/0x19. MOVED to 0x1A/0x1B on 2026-11-04 after a
+// COLLISION: epic/606-channel-notify had already taken 0x18/0x19 for
+// OFFBAND_UI_CHNOTIFY_GET/SET in commit b66a1cfa (2026-11-03), a local branch with
+// seven unlanded commits. Nothing on `origin` claimed them, which is exactly why
+// scanning the merged tree and the remote was not enough -- see the allocation note
+// below, and scripts/check_subcode_uniqueness.py, which now scans unmerged work too.
+//
+// The SET echo carries the value as STORED AND APPLIED, not as requested, so a client
+// can tell a refusal from a silent discard. Errors:
+//   [0xC5][0x7F][5]   MALFORMED               deg is neither 0 nor 180
+//   [0xC5][0x7F][10]  NO_ROTATION             display present, driver cannot rotate
+//   [0xC5][0x7F][6]   UNSUPPORTED_INDICATOR   no controllable display at all
+//
+// Gated on OFFBAND_CAP2_INDICATORS only -- NO new capability bit, and explicitly
+// **NO FIRMWARE_VER_CODE gate** (owner directive 2026-11-04). A client discovers
+// support by sending ROTATION_GET once and treating any error as "hide the control";
+// firmware predating this answers an unknown sub-code with [0xC5][0x7F][5], never
+// silence, so the probe is always conclusive.
+// SETTLED. This paragraph documents the wire shape; the VALUES live in the claim block
+// below with every other number this work depends on, and are not redefined here.
+//
+// They were provisional when this was written, and the note said so: 0x1A/0x1B were the
+// next free pair after #606's 0x18/0x19, but #606's registry lived on an unpushed branch
+// and nothing could confirm them. They were claimed and merged in #1999, which is what
+// made them real -- one definition, on the default branch, where another session reading
+// the merged tree can see it. Two definitions of one number is how a registry stops being
+// a registry, so the pair below is the only one.
+
+// #1990: the only two legal rotations on the wire. Pure, so the native suite can pin
+// it without standing up MyMesh. These are DEGREES, not sub-codes -- see
+// scripts/check_subcode_uniqueness.py, which excludes them for that reason.
+constexpr uint8_t OFFBAND_UI_ROTATION_0   = 0;
+constexpr uint8_t OFFBAND_UI_ROTATION_180 = 180;
+inline bool isValidUiRotation(uint8_t deg) {
+  return deg == OFFBAND_UI_ROTATION_0 || deg == OFFBAND_UI_ROTATION_180;
+}
+
+// ---------------------------------------------------------------------------
+// 0xC5 SUB-CODE ALLOCATION -- the constants are the authoritative list
+// ---------------------------------------------------------------------------
+// #1990: this note used to claim "0x01-0x08 were taken". It went stale as sub-codes
+// were added and then MISLED a session into filing an epic against the wrong range.
+// Do not restate the range in prose here -- grep the constants, or run the guard.
+//
+//   TAKEN on this branch: 0x01-0x17, plus 0x1A/0x1B (rotation, #1990).
+//   CLAIMED ELSEWHERE, UNMERGED: 0x18/0x19 -- OFFBAND_UI_CHNOTIFY_GET/SET on
+//     epic/606-channel-notify (#606), commit b66a1cfa, 2026-11-03. DO NOT REUSE.
+//   NEXT FREE: 0x1C.   0x7F is the error code, never reallocate.
+//
+// ALLOCATION IS MERGE-ORDERED, AND THAT IS NOT A FORMALITY. #1990 first took 0x18/0x19
+// and collided head-on with #606. Both claims were invisible to every obvious check:
+// nothing on `origin` referenced them, the merged tree did not, and a GitHub code
+// search did not -- #606 lived on a LOCAL branch with seven unpushed commits, and the
+// client half of #1990 lived in an unpushed worktree of another repo.
+//
+// So before taking a sub-code: scan local branches and every worktree, not just
+// firmware-base and origin. `git for-each-ref refs/heads` plus `git worktree list`
+// finds what `git ls-remote` cannot. scripts/check_subcode_uniqueness.py does this
+// and fails on a cross-branch claim, because a collision compiles perfectly and only
+// misbehaves against a real client.
+//
+// Treat any value as provisional until it merges.
+//
 // #1478: the eight custom tune slots. Gated on OFFBAND_CAP2_TUNES (#1788) -- a board
-// whose UI does not play through the tune engine has no slots to fill. Allocated 2026-10-16 after checking
-// every live branch: 0x01-0x08 were taken on all of them and 0x7F is the error code.
+// whose UI does not play through the tune engine has no slots to fill.
 //
 // SLOT_GET  [0xC5][0x09][slot]
 //   -> [0xC5][0x09][slot][len][name...]
@@ -246,6 +316,51 @@ constexpr uint8_t OFFBAND_UI_TEXT_SET    = 0x14;
 constexpr uint8_t OFFBAND_UI_SCROFF_SET  = 0x15;
 constexpr uint8_t OFFBAND_UI_TZ_SET      = 0x16;
 constexpr uint8_t OFFBAND_UI_BATT_SET    = 0x17;
+// #606: per-channel notification mode. Addressed by channel SLOT, exactly as CHTUNE
+// (0x0B/0x0C) is, and stored on the same channel record -- one pref per channel, which
+// the client and the device's own UI both write. There is no separate table.
+//
+//   [0xC5][0x18][chan_idx]          GET -> [0xC5][0x18][chan_idx][mode]
+//   [0xC5][0x19][chan_idx][mode]    SET -> [0xC5][0x19][chan_idx][mode]
+//
+// The SET reply is the value RE-READ after the write, never an echo of the request, so a
+// client always renders what the device holds. Gated on OFFBAND_CAP2_CHAN_NOTIFY.
+//
+// The two sub-code constants are NOT defined here. They live in the claim block below with
+// every other number this epic depends on, because contract §2 makes the merged claim the
+// registry and two definitions of one number is how a registry stops being one. This
+// paragraph documents the wire shape; the claim owns the value.
+
+// #606: the per-channel mode, AS STORED. 1-based, and 0 is NOT "all".
+//
+//   0  not set -> the device-wide notify_scope answers for this channel
+//   1  all
+//   2  mentions only  (the @[name] rule, same matcher as NOTIFY_SCOPE_SELF)
+//   3  off
+//
+// 0 MUST mean "no choice made". The byte lives in the channel record's spare field,
+// which is zero on every record written before this feature and on every fresh channel,
+// so an encoding where 0 meant "all" would silently set every channel in the field to
+// All. The tune byte in the same spare field is 1-based for the same reason.
+//
+// HOW A SET VALUE COMPOSES WITH THE DEVICE SCOPE -- the client needs this to render
+// truthfully:
+//   * A channel that HAS a mode decides for itself. There is no second switch to enable
+//     first: write the mode and the radio obeys it.
+//   * A channel with NO mode falls back to notify_scope, which is the default for
+//     everything nobody has touched. That default is SELF.
+//   * notify_scope NONE is ABSOLUTE and overrides a set channel. A user asking for
+//     silence gets silence.
+//
+// There is NO "inherit" scope on the device, and firmware never grows one: inherit is a
+// CLIENT concept -- a channel row in the app that follows the device setting instead of
+// carrying its own. The firmware is the authority, so it has nothing to inherit from.
+// A client's Inherit row maps to writing OFFBAND_CHNOTIFY_UNSET here.
+constexpr uint8_t OFFBAND_CHNOTIFY_UNSET    = 0;
+constexpr uint8_t OFFBAND_CHNOTIFY_ALL      = 1;
+constexpr uint8_t OFFBAND_CHNOTIFY_MENTIONS = 2;
+constexpr uint8_t OFFBAND_CHNOTIFY_OFF      = 3;
+constexpr uint8_t OFFBAND_CHNOTIFY_COUNT    = 4;   // valid stored values are < this
 
 // --- CLAIMED, NOT YET IMPLEMENTED (#1994) ------------------------------------
 //
@@ -326,7 +441,14 @@ constexpr uint8_t OFFBAND_INFO_TAG_CONTINUE         = 0xFF;  // #1994, len 1; re
 // rejected: it would mean changing CMD_SEND_CHANNEL_TXT_MSG, i.e. the stock-client
 // surface this design exists to avoid touching.
 //
-// Gated on OFFBAND_CAP2_PKT_HASH (caps byte 2, bit 3) + FIRMWARE_VER_CODE >= 22.
+// Gated on OFFBAND_CAP2_PKT_HASH (caps byte 2, bit 3).
+//
+// #1990: this line used to read "+ FIRMWARE_VER_CODE >= 22". Owner directive
+// 2026-11-04: NO GATING ON FIRMWARE_VER_CODE -- capability-bit recognition only. The
+// version code is reported in device-info as a merge-ordered contract number
+// (MyMesh.h:20) and is NOT a feature gate. The code here never compared it; only this
+// comment claimed so, which is how a version floor gets reintroduced in good faith by
+// someone trusting the header over the source.
 // ==============================================================================
 constexpr uint8_t CMD_OFFBAND_PKT_HASH       = 0xC6;
 constexpr uint8_t RESP_CODE_OFFBAND_PKT_HASH = 0xC6;
@@ -355,19 +477,27 @@ constexpr uint8_t OFFBAND_UI_ERR_SLOT_OFFSET           = 7;
 // #1788: BATT_SET's "set 100% here" refused, the two ways the Battery screen refuses it.
 constexpr uint8_t OFFBAND_UI_ERR_BATT_TOO_HIGH         = 8;   // reading above a full cell
 constexpr uint8_t OFFBAND_UI_ERR_BATT_NOT_CHARGED      = 9;   // reading below a full cell
-// #1990: CLAIM, not yet implemented -- see the #1994 note above the sub-codes. A display
-// that is present but cannot rotate. DISTINCT from reason 6 UNSUPPORTED_INDICATOR, which
-// means there is no controllable display at all; 6 keeps its meaning and is not reused.
+// #1990: display present, driver cannot rotate. DISTINCT from reason 6
+// (UNSUPPORTED_INDICATOR = no controllable display at all) on purpose -- a client must be
+// able to tell "there is no screen" from "the screen works but its orientation is fixed".
+// Reusing 6 was proposed and rejected for exactly that reason.
 //
-// Two of us read the allocated range as 1-7 while 8 and 9 have been merged since #1788,
-// so "next free" was being computed as 8. It is 10, and the next one after this is 11.
-constexpr uint8_t OFFBAND_UI_ERR_NO_ROTATION           = 10;  // display present, cannot rotate
+// Claimed in #1999 ahead of this implementation, per contract §2. Worth keeping the reason
+// the NUMBER is 10: two sessions independently read the allocated range as 1-7, because 8
+// and 9 arrived with #1788 and were easy to miss, and both computed "next free" as 8 --
+// which would have collided with a shipped battery error on the default branch, the one
+// place a clash bites immediately rather than latently. Next free after this is 11.
+constexpr uint8_t OFFBAND_UI_ERR_NO_ROTATION           = 10;
 constexpr uint8_t CMD_OFFBAND_CONFIG       = 0xC0;  // request:  cmd_frame[0]
 constexpr uint8_t RESP_CODE_OFFBAND_CONFIG = 0xC0;  // response: out_frame[0]
 
-// Capability negotiation: the command exists when the device reports
-// FIRMWARE_VER_CODE >= this value (bumped 13 -> 14 in F4). Stock / lower-version
-// clients never send CMD_OFFBAND_CONFIG, so they are unaffected (purely additive).
+// Capability negotiation for CMD_OFFBAND_CONFIG (0xC0) is the WIFI_OBSERVER_SUPPORT
+// capability bit. Stock clients never send it, so it is purely additive.
+//
+// #1990 / owner directive 2026-11-04: NO GATING ON FIRMWARE_VER_CODE -- capability-bit
+// recognition only. This constant is retained because the existing client contract
+// references it, but it must NOT gate anything new, and nothing added from here on may
+// key off a version floor. Capability bits and behavioural probes are the only gates.
 constexpr uint8_t OFFBAND_CONFIG_MIN_VER = 14;
 
 // ---------------------------------------------------------------------------
@@ -419,11 +549,20 @@ enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUT
 // path_hash_mode byte (additive -- pre-v14 clients read a shorter frame and ignore
 // it). The ENTIRE config command is observer-only: its backend (ConfigSchema +
 // dispatchObserverCli) compiles only under OFFBAND_OBSERVER, so on a non-observer
-// node type there is no config at all -- display config included (the #141/#148
-// display prefs are persisted via ConfigSchema, itself observer-only). Version code
-// alone cannot tell an observer-out build from an observer-in one, so the client
-// gates the WHOLE command -- every key, display included -- on WIFI_OBSERVER_SUPPORT
-// (in addition to FIRMWARE_VER_CODE >= 14). There is NO display-without-observer path.
+// node type there is no config at all. The client therefore gates the WHOLE 0xC0
+// command on WIFI_OBSERVER_SUPPORT.
+//
+// #1990: the last sentence here used to read "There is NO display-without-observer
+// path", and the parenthetical claimed display prefs persist via ConfigSchema. BOTH
+// WERE STALE, and a later issue cited them as current:
+//   * #370 relocated the display-preference accessors out of ConfigSchema into
+//     src/helpers/config/DisplayConfigProvider.
+//   * #542 B1 gave display MODE its own non-observer transport on 0xC5 (0x05/0x06)
+//     gated on OFFBAND_CAP2_INDICATORS, and #1990 added ROTATION on 0x18/0x19 the
+//     same way, persisting in NodePrefs.
+// So there IS a display-without-observer path and it is the 0xC5 one. What remains
+// observer-only is the 0xC0 flat-key surface, which is what this paragraph describes.
+// The "FIRMWARE_VER_CODE >= 14" clause is also struck -- see the directive above.
 // === CANONICAL offband_caps BIT ALLOCATION -- SINGLE SOURCE OF TRUTH ===========
 // Firmware OWNS this byte (the client mirrors it, gated per #304). Before claiming
 // a bit, CHECK THIS TABLE -- not just the constants defined below. In-flight bits
@@ -471,7 +610,33 @@ enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUT
 //    4   0x10   OFFBAND_CAP2_TUNES            this change  #1788 / #1789
 //    5   0x20   OFFBAND_CAP2_GPS_MODE         this change  #1791
 //    6   0x40   OFFBAND_CAP2_SCREEN_SETTINGS  this change  #1788
-//    7   0x80   -- free --  (last byte-2 bit: HEADROOM, do not spend casually)
+//    7   0x80   OFFBAND_CAP2_CHAN_NOTIFY      this change  #606
+// ===============================================================================
+//
+// === offband_caps BYTE 3 (#606) -- frame offset 87 =============================
+// Byte 2 is now exhausted. #606 spends its last bit AND adds this byte in the same
+// change, for the reason byte 2 itself records: spending the last bit and leaving the
+// next feature to extend the frame under pressure is the condition that produced the
+// #427-vs-#365 double-claim. Nothing is blocked today, so the byte is added today.
+//
+// ⚠ POSITION: byte 3 is at offset 87, NOT 85. Offsets 85 and 86 are the #542 indicator
+// state (ui_led_enabled, ui_display_mode), appended unconditionally after byte 2, and
+// the client reads all of these at FIXED ABSOLUTE OFFSETS. Byte 3 therefore goes after
+// them, at the end of the frame.
+// Client reads byte 3 as: frame.length >= 88 ? frame[87] : null.
+//
+// ⚠ LENGTH-GATED, NEVER VERSION-GATED. Do not pair this byte with a FIRMWARE_VER_CODE
+// floor. That number is upstream's, upstream moves it, and a floor on a capability gate
+// is always redundant -- so it can only ever turn a SUPPORTED capability off (#1970).
+// The frame length is the only signal for whether the byte is present.
+//
+// Same reservation discipline as bytes 1 and 2: record the bit HERE with its issue in
+// the SAME PR, and Agent-Mail the reservation so parallel sessions see it.
+//
+//   bit  value  symbol                        state       issue
+//   ---  -----  ----------------------------  ----------  --------------------------
+//    0   0x01   -- free --
+//    1-7 0x02.. -- free --
 // ===============================================================================
 // bit 0 (0x01): device notification scope ALL/SELF/NONE is supported and settable.
 // Set only where the device can actually make a sound -- gated on PIN_BUZZER, exactly
@@ -503,9 +668,15 @@ constexpr uint8_t OFFBAND_CAP2_GPS_MODE = 0x20;
 // bit 6 (0x40): screen settings -- SCREEN_GET, TEXT_SET, SCROFF_SET, TZ_SET, BATT_SET
 // (#1788). Set where the UI's screens honor them (AbstractUITask::clientScreenSettings()).
 constexpr uint8_t OFFBAND_CAP2_SCREEN_SETTINGS = 0x40;
-// bit 7 (0x80): per-channel notification mode (#606). CLAIM -- see the #1994 note above
-// the sub-codes. Set only where PIN_BUZZER is defined: a board that cannot sound must not
-// offer the control.
+// bit 7 (0x80): per-channel notification mode, readable and settable over 0xC5 CHNOTIFY
+// (#606). Gated on PIN_BUZZER, like NOTIFY_SCOPE above -- a board that cannot sound must
+// not offer a per-channel notify control.
+//
+// The bit says the per-channel layer EXISTS. It does not say the device-wide scope
+// outranks it: a channel with a mode set decides for itself, an unset channel falls back
+// to the scope, and scope NONE is the one absolute (#1975 removed the master-switch
+// reading). An earlier version of this comment called the scope a master switch and was
+// wrong; see offband::resolveChannelNotify for the rule that actually runs.
 //
 // THIS IS THE LAST BIT IN BYTE 2. There is no byte 3 and there will not be one: a further
 // capability byte would have to be appended to UPSTREAM's device-info frame, which no

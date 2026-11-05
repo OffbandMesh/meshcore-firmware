@@ -4,6 +4,8 @@
 #include <helpers/ClockSanity.h>
 #include <MeshLog.h>                     // #631 diagnostics: OFFBAND_FORCE_CAPLOG
 #include <helpers/ui/TuneSlots.h>        // #1523: the tune in the channel record's spare field
+#include <helpers/ChannelNotify.h>       // #606: the notify mode beside it, and the one writer
+#include <helpers/ChannelRecord.h>       // #2026: is a stored record a channel, or erased flash?
 
 #if defined(EXTRAFS) || defined(QSPIFLASH)
   #define MAX_BLOBRECS 100
@@ -505,13 +507,28 @@ bool DataStore::hasChannels() const {
 
 void DataStore::loadChannels(DataStoreHost* host) {
     File file = openRead(_getContactsChannelsFS(), "/channels2");
+    // #2026: say what the channel store actually held. Until this existed there was no
+    // way to tell "the file is gone", "the file is short" and "the file is full of 0xFF"
+    // apart from the outside -- all three present identically as a radio with no
+    // channels, and a session chasing lost channels had to guess between them.
+    if (!file) {
+      mesh_log_line(MLOG_BOOT, "[chan] load: /channels2 ABSENT -- no channels restored\n");
+      return;
+    }
+    {
+      const size_t sz = file.size();
+      mesh_log_line(MLOG_BOOT, "[chan] load: /channels2 size=%u (%u whole records, %u trailing)\n",
+                    (unsigned)sz, (unsigned)(sz / 68), (unsigned)(sz % 68));
+    }
     if (file) {
       bool full = false;
       uint8_t channel_idx = 0;
+      uint8_t erased_records = 0;   // #2026
       while (!full) {
         ChannelDetails ch;
-        // #1523: no longer entirely unused -- the first byte is the channel's tune. The
-        // other three stay spare, and the read is the same four bytes it always was.
+        // #1523/#606: no longer unused -- byte 0 is the channel's tune and byte 1 its
+        // notification mode. The other two stay spare, and the read is the same four
+        // bytes it always was.
         uint8_t spare[offband::kChannelSpareBytes];
 
         bool success = (file.read(spare, sizeof(spare)) == sizeof(spare));
@@ -520,9 +537,39 @@ void DataStore::loadChannels(DataStoreHost* host) {
 
         if (!success) break; // EOF
 
-        // A file written before this existed has zeros here, which decode to "unset" and
+        // #2026: an ERASED record is not a channel and must not become one.
+        //
+        // 0xFF is what erased flash reads as. Loading it installed 38 phantom channels on
+        // a real device; the slot-0 heal then set `changed`, saveChannels() wrote the
+        // whole table back, and the garbage was persisted into the store it came from --
+        // permanent, self-sustaining, and re-made on every boot. Skipping the record here
+        // is what stops a transient flash fault becoming unrecoverable data loss.
+        //
+        // The slot is still CONSUMED: records are positional, so skipping without
+        // advancing would shift every later channel down a slot -- silently renumbering
+        // the user's channels, which is its own kind of corruption.
+        if (offband::channelRecordErased((const uint8_t *)ch.name)) {
+          erased_records++;
+          channel_idx++;
+          continue;
+        }
+
+        // A file written before these existed has zeros here, which decode to "unset" and
         // leave the channel sounding exactly as it did.
         ch.tune = offband::channelTuneFromSpare(spare);
+        ch.notify = offband::channelNotifyFromSpare(spare);
+
+        // #2026: the first record's raw head, which is what distinguishes an erased store
+        // from a written one. A name beginning 0xFF is erased flash, not a channel; a
+        // name beginning 0x00 is an empty slot that was deliberately written.
+        if (channel_idx == 0) {
+          mesh_log_line(MLOG_BOOT,
+                        "[chan] load: rec0 spare=%02X%02X%02X%02X name0=%02X%02X%02X%02X sec0=%02X%02X%02X%02X\n",
+                        spare[0], spare[1], spare[2], spare[3],
+                        (uint8_t)ch.name[0], (uint8_t)ch.name[1], (uint8_t)ch.name[2], (uint8_t)ch.name[3],
+                        ch.channel.secret[0], ch.channel.secret[1],
+                        ch.channel.secret[2], ch.channel.secret[3]);
+        }
 
         if (host->onChannelLoaded(channel_idx, ch)) {
           channel_idx++;
@@ -530,6 +577,16 @@ void DataStore::loadChannels(DataStoreHost* host) {
           full = true;
         }
       }
+      // #2026: erased records are reported, not swallowed. A radio that quietly came up
+      // with fewer channels than its owner had is how this went unnoticed; a count here
+      // says the store is damaged and by how much.
+      if (erased_records > 0) {
+        mesh_log_line(MLOG_ERROR,
+                      "[chan] load: %u ERASED record(s) skipped -- store damaged, those slots are empty\n",
+                      (unsigned)erased_records);
+      }
+      mesh_log_line(MLOG_BOOT, "[chan] load: %u slot(s) read, %u erased\n",
+                    (unsigned)channel_idx, (unsigned)erased_records);
       file.close();
     }
 }
@@ -542,9 +599,25 @@ void DataStore::saveChannels(DataStoreHost* host) {
     uint8_t spare[offband::kChannelSpareBytes];
 
     while (host->getChannelForSave(channel_idx, ch)) {
-      // #1523: built per record now rather than zeroed once -- the first byte is this
-      // channel's tune, written back byte-for-byte even if this build cannot resolve it.
-      offband::channelTuneToSpare(ch.tune, spare);
+      // #1523/#606: built per record now rather than zeroed once -- byte 0 is this
+      // channel's tune, written back byte-for-byte even if this build cannot resolve it,
+      // and byte 1 its notification mode. ONE writer for the whole field: the tune's
+      // writer zeroes all four bytes first, so a separate second call made before it
+      // would be silently erased.
+      offband::channelSpareToFile(ch.tune, ch.notify, spare);
+
+      // #2026: NEVER write an erased record back. This is the step that turned a
+      // transient flash fault into permanent loss -- the table was loaded full of 0xFF
+      // and then saved, writing the damage into the store and recreating it every boot.
+      //
+      // Written as an EMPTY slot rather than skipped: records are positional and the file
+      // has a fixed record per slot, so skipping would renumber every later channel.
+      // Zeros say "no channel here", which is true and is recoverable by an import.
+      if (!offband::channelRecordSavable((const uint8_t *)ch.name)) {
+        memset(spare, 0, sizeof(spare));
+        memset(ch.name, 0, 32);
+        memset(ch.channel.secret, 0, 32);
+      }
 
       bool success = (file.write(spare, sizeof(spare)) == sizeof(spare));
       success = success && (file.write((uint8_t *)ch.name, 32) == 32);
@@ -553,6 +626,11 @@ void DataStore::saveChannels(DataStoreHost* host) {
       if (!success) break; // write failed
       channel_idx++;
     }
+    // #2026: saveChannels TRUNCATES and rewrites the whole store, so how many records it
+    // wrote is the difference between a save and a wipe. Logged with the first name byte
+    // because a run of records whose names start 0xFF is the store being destroyed, and
+    // the only moment that is visible is while it happens.
+    mesh_log_line(MLOG_BOOT, "[chan] save: %u record(s) written\n", (unsigned)channel_idx);
     file.close();
   }
 }
