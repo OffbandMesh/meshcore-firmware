@@ -77,7 +77,7 @@ No repo change. Nothing is written to the unit.
 
 | Task | Pts |
 |---|---|
-| **B1 · Two full reads** ([#2017](https://github.com/OffbandMesh/meshcore-firmware/issues/2017)): `pio-flash backup <unit> --no-stub` twice, 16 MB each, 60 s apart, capture running. Checked by: both files are 16,777,216 bytes and their SHA-256 match. | 2 |
+| **B1 · Two full reads** ([#2017](https://github.com/OffbandMesh/meshcore-firmware/issues/2017)): `pio-flash backup <unit> --no-stub` twice, 16 MB each, 60 s apart, capture running, each read under a hard time limit well above 29 minutes (row 9). Checked by: both files are 16,777,216 bytes and their SHA-256 match. | 2 |
 | **B2 · Store and record** ([#2018](https://github.com/OffbandMesh/meshcore-firmware/issues/2018)): both files under the per-host flash-backups folder; names, sizes and hashes in the hardware log; hash and size only on #2008. | 1 |
 | **B3 · Epic verification** ([#2019](https://github.com/OffbandMesh/meshcore-firmware/issues/2019)): the owner confirms the backup before the first write. | 1 |
 
@@ -117,11 +117,11 @@ P → A → B → C → D.
 
 | Term | Proposed | Why |
 |---|---|---|
-| **What merging this plan authorizes** | Epics A to D as written, end to end, holding merges to each Epic's PR. | The plan is the master layout. |
+| **What merging this plan authorizes** | Epics C and D as written, end to end, holding merges to each Epic's PR. That is the `epic_chain` below. Epics A and B change no repo file, so no grant covers them; each of their device steps runs on its own owner go. | The plan is the master layout. |
 | **Merges** | 2 | One PR each for Epic C and Epic D. Epics A and B change no repo file. This plan's own merge is the approval, not a grant use. |
 | **Epic verification** | The owner approves each Epic's PR. | Each one ends on a bench result only the owner can see on the panel. |
 | **Owner steps during the run** | Plug in the bench unit; read the board revision if the factory firmware doesn't report it; confirm the panel draws in C5 and D1. | The panel is the thing under test. |
-| **Stops** | A backup hash mismatch; an identity that doesn't match the A1 record; a blank panel after the RST fix; any SafeBoot boot count of 3. | Each one means the next step would act on a wrong premise. |
+| **Stops** | A backup hash mismatch; an identity that doesn't match the A1 record; a blank panel after the reset path for the unit's revision (row 4) has been tried; any SafeBoot boot count of 3. | Each one means the next step would act on a wrong premise. |
 | **Flash** | None in the grant. Each device operation gets the owner's go naming the unit. | Owner directive 2026-11-04: one flash, one explicit go. |
 
 ```grant-terms
@@ -144,7 +144,7 @@ P → A → B → C → D.
 | A1 registration | The hardware revision | **ask**: the owner reads the silkscreen if the factory firmware doesn't say. Never guessed from the vendor's default. |
 | B1 backup | The two reads' hashes differ, or a read is short | **stop**: no write; report and re-read only on the owner's go. |
 | C2 panel init | BUSY never goes low | **stop** the display path: log the timeout through MeshLog and leave the panel alone. The radio boot carries on so the capture can show the failure. |
-| C2 panel init | The panel reports success but draws nothing | **stop**: report it on #2009 as a bench finding; check RST per row 4 before any code change. |
+| C2 panel init | The panel reports success but draws nothing | **stop**: report it on #2009 as a bench finding, and check the reset path per row 4 before any code change. On V1.1, confirm RST is driven. On V1.0, RST is not wired: the owner disconnects the battery for 10 s, as the vendor FAQ says. |
 | C5 / D1 flash | The connected unit doesn't match the A1 identity | **stop**: `pio-flash` refuses; never pass `--approve-class-match` without the owner's word. |
 | C5 / D1 boot | SafeBoot boot count reaches 3 | **stop** all port-opens until the unit has run 60 s. |
 | C3 config-lint | The diag env lacks a flag of the diag surface | **stop**: CI fails. |
