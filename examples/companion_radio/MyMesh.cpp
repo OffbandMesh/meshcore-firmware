@@ -3370,6 +3370,10 @@ void MyMesh::handleCmdFrame(size_t len) {
 #ifdef PIN_BUZZER
       // #606: per-channel notification modes. Gated on the buzzer, like the device-wide
       // scope -- a board that cannot sound must not offer the control.
+      //
+      // PIN_BUZZER is a build flag, not a part that is fitted. See the longer note at
+      // the caps2 CHAN_NOTIFY bit: an unpopulated buzzer on a QCC pyramid badge is
+      // meant to be soldered on, so this tag stays permissive on purpose.
       if (offband::OFFBAND_INFO_TAG_CHAN_NOTIFY >= cursor) {
         advert.addFlag(offband::OFFBAND_INFO_TAG_CHAN_NOTIFY);
       }
@@ -3843,6 +3847,18 @@ void MyMesh::handleCmdFrame(size_t len) {
     // #606: per-channel notification mode. Gated on the buzzer, like NOTIFY_SCOPE --
     // a board that cannot sound must not offer a per-channel notify control. The
     // storage is on the channel record, so this needs nothing of the UI.
+    //
+    // PIN_BUZZER IS A BUILD FLAG, NOT A PART THAT IS FITTED, AND THAT IS DELIBERATE.
+    // One image serves both QCC badge kinds. On the pyramid badge BZ1, the MUTE switch,
+    // the keyboard and the OLED are unpopulated positions on the same PCB, and the
+    // buzzer is MEANT to be soldered on -- there are buzzers at Queen City Con for
+    // exactly that. So an unfitted buzzer is a temporary state, and gating this bit on
+    // it would mean a badge that stays silent after its owner solders one on.
+    //
+    // Do not "fix" this by compiling the capability out, adding a pyramid env, or
+    // probing for the part. Owner's call, and it already settled once: on a
+    // keyboard-less pyramid the per-channel mode is a CLIENT setting, and the firmware
+    // advertises and honors it regardless of what is populated.
     offband_caps2 |= offband::OFFBAND_CAP2_CHAN_NOTIFY;
 #endif
     out_frame[i++] = offband_caps2;          // v18+
