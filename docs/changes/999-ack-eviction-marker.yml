@@ -1,0 +1,24 @@
+schema_version: 1
+issue: 999
+impact: none
+reason: >-
+  Diagnostics only, and deliberately so. The circular expected-ACK table still
+  overwrites a pending entry exactly as it did before, so no send succeeds or
+  fails differently, no reply gains a field, no setting appears and nothing on
+  the wire changes. What is added is one MeshLog line when the overwrite
+  destroys a delivery confirmation, behind the existing g_meshLogEnabled gate,
+  so a build with caplog off pays one flag test.
+  There is nothing for a user guide to say because there is nothing a user can
+  do differently. The audience is whoever reads a capture: until now "my
+  message never showed as delivered" and "the radio never got an ACK" presented
+  identically, with nothing logged at the moment the confirmation was lost.
+  The user-facing half of this problem is #1000, which surfaces the eviction to
+  the client over a new 0xC7 push, and #1001, which tells the client the real
+  table capacity so it can pace sends rather than hardcode 8. #1001 shipped in
+  PR 2022 as the TAG_ACK_CAPACITY advert tag. Each of those carries its own
+  record when it lands; this one documents nothing a user reads.
+  Worth recording for the reviewer that the eviction is NOT fixed here and must
+  not be: late-ACK acceptance depends on entries persisting, so expiring them
+  is the change that would break delivery confirmation rather than repair it.
+  #994's position is diagnose before changing behavior, and this is the
+  diagnosis step.
