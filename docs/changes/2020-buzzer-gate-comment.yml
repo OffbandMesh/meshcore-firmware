@@ -1,0 +1,23 @@
+schema_version: 1
+issue: 2020
+impact: none
+reason: >-
+  Comment-only, verified mechanically rather than asserted: the diff filtered
+  for lines that are neither file headers nor comments is empty. 16 insertions,
+  0 deletions, no constant, no gate and no value changed, so the image built
+  from this commit is byte-for-byte equivalent on the wire to one built from its
+  parent and there is nothing a user can observe.
+  What it records is why the two CHAN_NOTIFY capability gates in MyMesh.cpp stay
+  permissive: PIN_BUZZER is a build flag, not a part that is fitted, and on the
+  QCC pyramid badge the buzzer position is unpopulated on purpose because
+  attendees solder buzzers on at the event. Gating the capability on the part
+  would leave a freshly soldered badge silent. The existing comment invited
+  exactly that change, so the correction belongs beside the gate.
+  No user documentation is owed. The audience is a future session reading the
+  gate, not a user: nothing a user can see or do changes, and the behavior the
+  comment protects is the behavior that already ships. The companion ruling --
+  that on a keyboard-less pyramid the per-channel mode is a client setting -- is
+  the owner's and is recorded here and in HARDWARE.local.md, which is gitignored
+  and therefore not in this commit; the hardware log is where "what is fitted"
+  belongs, and the source comment is where a reader will be standing when the
+  idea occurs to them.
