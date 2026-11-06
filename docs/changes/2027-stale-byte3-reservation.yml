@@ -1,0 +1,31 @@
+schema_version: 1
+issue: 2027
+impact: none
+reason: >-
+  Comment-only. Not one non-comment line changed, which was verified
+  mechanically rather than asserted: the diff filtered for lines that are
+  neither file headers nor comments is empty. No constant, no value and no
+  allocation moves, so the device built from this commit is byte-for-byte
+  equivalent on the wire to one built from its parent, and there is nothing
+  a user can observe.
+  What is deleted is a reservation block in
+  examples/companion_radio/OffbandConfigProtocol.h for an offband_caps byte 3
+  at device-info frame offset 87 -- a free-bit table, the client-side read
+  and an instruction to claim a bit in it. The byte it described has not
+  existed since #1994 removed the write; the same file already states the
+  correct rule forty-one lines below, that bit 7 of byte 2 is the last
+  capability bit and there is no byte 3. The header contradicted itself and
+  this removes the wrong half.
+  No user documentation is owed, and that is not an oversight. The audience
+  for this text is a future session reading the registry, so its home is the
+  header and the contract, not a guide. The user-facing surface of the
+  capability advert that replaced offset 87 belongs to #1994 and shipped with
+  it in PR 2022; this change documents nothing new and withdraws nothing a
+  reader of the guides was ever told.
+  Worth recording why the stale text mattered, since "a stale comment" would
+  understate it: it did not merely describe a removed byte, it advertised free
+  bits in that byte and told the reader how to claim one. Three features took
+  offset 87 independently -- #606, #1001 and #1990 -- each correct against
+  this header and each invisible to the others. The header was the
+  instruction, not a bystander, which is why deleting it is a fix and not
+  tidying.

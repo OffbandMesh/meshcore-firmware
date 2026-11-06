@@ -613,30 +613,18 @@ enum MqttAuthType  : uint8_t { MQTT_AUTH_NONE = 0, MQTT_AUTH_BASIC = 1, MQTT_AUT
 //    7   0x80   OFFBAND_CAP2_CHAN_NOTIFY      this change  #606
 // ===============================================================================
 //
-// === offband_caps BYTE 3 (#606) -- frame offset 87 =============================
-// Byte 2 is now exhausted. #606 spends its last bit AND adds this byte in the same
-// change, for the reason byte 2 itself records: spending the last bit and leaving the
-// next feature to extend the frame under pressure is the condition that produced the
-// #427-vs-#365 double-claim. Nothing is blocked today, so the byte is added today.
+// === offband_caps BYTE 3 -- DOES NOT EXIST, AND WILL NOT (#1994) ===============
+// Bit 7 of byte 2 is the last capability bit, and nothing follows it.
 //
-// ⚠ POSITION: byte 3 is at offset 87, NOT 85. Offsets 85 and 86 are the #542 indicator
-// state (ui_led_enabled, ui_display_mode), appended unconditionally after byte 2, and
-// the client reads all of these at FIXED ABSOLUTE OFFSETS. Byte 3 therefore goes after
-// them, at the end of the frame.
-// Client reads byte 3 as: frame.length >= 88 ? frame[87] : null.
+// An earlier version of this header reserved a byte 3 at device-info frame offset 87 and
+// listed free bits for the next feature to take. Three features then took that offset
+// independently -- #606, #1001 and #1990 -- each correct against this header and each
+// invisible to the others, because an unmerged claim is invisible. #1994 deleted the
+// write; this note replaces the reservation that invited it.
 //
-// ⚠ LENGTH-GATED, NEVER VERSION-GATED. Do not pair this byte with a FIRMWARE_VER_CODE
-// floor. That number is upstream's, upstream moves it, and a floor on a capability gate
-// is always redundant -- so it can only ever turn a SUPPORTED capability off (#1970).
-// The frame length is the only signal for whether the byte is present.
-//
-// Same reservation discipline as bytes 1 and 2: record the bit HERE with its issue in
-// the SAME PR, and Agent-Mail the reservation so parallel sessions see it.
-//
-//   bit  value  symbol                        state       issue
-//   ---  -----  ----------------------------  ----------  --------------------------
-//    0   0x01   -- free --
-//    1-7 0x02.. -- free --
+// A new capability is a TAG in the 0xC5 0x1C advert, never a byte in upstream's frame.
+// The reasoning is at bit 7 below, the contract is docs/offband_info_frame_contract.md,
+// and scripts/check_wire_allocations.py fails the build on any append to that frame.
 // ===============================================================================
 // bit 0 (0x01): device notification scope ALL/SELF/NONE is supported and settable.
 // Set only where the device can actually make a sound -- gated on PIN_BUZZER, exactly
