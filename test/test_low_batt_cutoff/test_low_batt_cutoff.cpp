@@ -15,7 +15,7 @@ using namespace offband;
 
 namespace {
 
-constexpr uint16_t kThreshold = 3400;   // AUTO_SHUTDOWN_MILLIVOLTS on the badge
+constexpr uint16_t kThreshold = 3400;   // the badge's cutoff when #1666 was measured
 constexpr uint32_t kSustain = 300000;   // the owner's 300 s
 constexpr uint32_t kTick = 8000;        // the check cadence
 

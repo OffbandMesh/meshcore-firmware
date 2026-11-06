@@ -231,8 +231,8 @@ Battery. Shutting Down!** if it has a screen. It only does this after the voltag
 stayed low for five minutes, and never while it is plugged in.
 
 If the battery is too low to start, the badge will not boot. An LED blinks SOS, any
-screen goes blank and the badge goes to sleep. Charge it, then press the button to try
-again.
+screen goes blank and the badge goes to sleep. Charge it: the badge starts again by
+itself once the battery has recovered. Pressing the button makes it try again sooner.
 
 ### 11. Hibernate
 
@@ -284,7 +284,7 @@ screen it is the only way to change them:
 - **Bluetooth is off and I can't connect:** turning Bluetooth off on the badge lasts
   until it restarts. Restart the badge.
 - **It won't turn on and the LED blinks SOS:** the battery is too low to start. Charge
-  it, then press the button.
+  it, and it starts by itself once the battery has recovered.
 
 ## Limits and recovery
 

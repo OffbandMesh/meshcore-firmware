@@ -74,7 +74,7 @@ The stock firmware is Meshtastic 2.7.15 built from `nrf52_promicro_diy_tcxo`, th
 Agreed with the implementation plan (2026-09-12):
 
 - **D1, departure radio defaults:** the US community preset, 910.525 MHz / 62.5 kHz / SF7 / CR 5.
-- **D2, one low-voltage policy:** SafeBoot, before `board.begin()`, sleeps below 3500 mV and wakes at 3700 mV. At runtime, `AUTO_SHUTDOWN_MILLIVOLTS` is 3400 mV. Sleeping above the runtime cutoff stops a pack that just tripped shutdown from reboot-looping.
+- **D2, one low-voltage policy:** SafeBoot, before `board.begin()`, sleeps below 3500 mV and wakes at 3700 mV. At runtime, `AUTO_SHUTDOWN_MILLIVOLTS` is 3000 mV (owner, 2026-11-01; the cells have built-in protection). Sleeping above the runtime cutoff stops a pack that just tripped shutdown from reboot-looping.
 - **D3:** the badge's BLE companion env is in the CI build matrix.
 - **D4:** keep the ProMicro sensor drivers.
 
@@ -158,7 +158,7 @@ Badge behavior is switched on by flags set only in the badge envs. Shared-code c
   - The 1.68 divider on P0.31 is read against the internal 0.6 V reference at gain 1/6 (3.6 V full scale), 12-bit, with a 40 µs acquisition for the ~405 kΩ source. That gives 1.4765625 mV per count.
   - The multiplier is user-settable. A NaN, infinite or non-positive result reads 0 ("no reading"), and an oversized one saturates, rather than wrapping to a plausible voltage.
   - Calibration against a meter (Task 1.10, #1186) is deferred by the owner (2026-09-12); battery readings get their own thread.
-- **One low-voltage policy (D2):** SafeBoot sleeps at 3500 mV and wakes at 3700 mV, then the runtime `AUTO_SHUTDOWN_MILLIVOLTS` cuts at 3400 mV. `PWRMGT_VOLTAGE_BOOTLOCK` is not compiled for this board.
+- **One low-voltage policy (D2):** SafeBoot sleeps at 3500 mV and wakes at 3700 mV, then the runtime `AUTO_SHUTDOWN_MILLIVOLTS` cuts at 3000 mV. `PWRMGT_VOLTAGE_BOOTLOCK` is not compiled for this board.
 - **SafeBoot runs on this board only because the env sets `SAFEBOOT_PIN_VBAT_READ`.**
   - `SafeBoot.cpp` cannot see `PromicroBoard.h`, where `PIN_VBAT_READ` lives. Without the flag, SafeBoot compiles out silently; the stock ProMicro envs have exactly that gap (#1176).
   - The badge build fails without the SafeBoot flags. It also static-asserts that SafeBoot and the board share one pin, one divider ratio and one acquisition time.

@@ -456,6 +456,12 @@ uint16_t readVbatMillivoltsLight()
 // ---------------------------------------------------------------------------
 // Reset reason inspection
 // ---------------------------------------------------------------------------
+#if defined(NRF52_PLATFORM)
+// POWER_RESETREAS_DOG_Msk (bit 1) = watchdog
+// POWER_RESETREAS_LOCKUP_Msk (bit 3) = CPU lockup
+constexpr uint32_t kUncleanResetMask = (1u << 1) | (1u << 3);
+#endif
+
 bool detectUncleanReset()
 {
 #if defined(ESP32)
@@ -475,13 +481,10 @@ bool detectUncleanReset()
     }
 #elif defined(NRF52_PLATFORM)
     uint32_t why = NRF_POWER->RESETREAS;
-    // POWER_RESETREAS_DOG_Msk (bit 1) = watchdog
-    // POWER_RESETREAS_LOCKUP_Msk (bit 3) = CPU lockup
     // Brownout on nRF52 typically appears as a fresh power-on (RESETREAS == 0)
     // or via the POF event during operation; we conservatively treat
     // dog/lockup as unclean.
-    constexpr uint32_t kUncleanMask = (1u << 1) | (1u << 3);
-    return (why & kUncleanMask) != 0;
+    return (why & kUncleanResetMask) != 0;
 #else
     return false;
 #endif
@@ -525,6 +528,42 @@ inline void safeBootFeedWatchdog()
 
 offband::ButtonSense g_buttonSense = {false, false, false};
 
+#if defined(NRF52_PLATFORM) && defined(BATTERY_LPCOMP_INPUT)
+// Start the comparator and report whether its input is already above the line. Registers
+// are set before ENABLE, as the datasheet requires, and SYSTEM_OFF must not be entered with
+// a READY event still pending, so this waits for it. Clearing READY first keeps a second
+// arm from reading the first arm's event and sampling a comparator that isn't ready yet.
+bool armBatteryComparator()
+{
+#ifdef SAFEBOOT_PIN_VBAT_READ
+    // The divider holds this pin mid-rail, inside the undefined band of a connected input
+    // buffer, and pin configuration is kept through SYSTEM_OFF. The comparator doesn't use
+    // the buffer, so disconnect it. Nothing later reads the pin before the next reset.
+    nrf_gpio_cfg_default(g_ADigitalPinMap[SAFEBOOT_PIN_VBAT_READ]);
+#endif
+    nrf_lpcomp_config_t c = {};
+#ifdef BATTERY_LPCOMP_THRESHOLD
+    c.reference = BATTERY_LPCOMP_THRESHOLD;
+#else
+    c.reference = NRF_LPCOMP_REF_SUPPLY_3_8;
+#endif
+    c.detection = NRF_LPCOMP_DETECT_UP;
+    c.hyst = NRF_LPCOMP_HYST_NOHYST;
+    nrf_lpcomp_configure(NRF_LPCOMP, &c);
+    nrf_lpcomp_input_select(NRF_LPCOMP, BATTERY_LPCOMP_INPUT);
+    nrf_lpcomp_event_clear(NRF_LPCOMP, NRF_LPCOMP_EVENT_READY);
+    nrf_lpcomp_event_clear(NRF_LPCOMP, NRF_LPCOMP_EVENT_DOWN);
+    nrf_lpcomp_event_clear(NRF_LPCOMP, NRF_LPCOMP_EVENT_UP);
+    nrf_lpcomp_event_clear(NRF_LPCOMP, NRF_LPCOMP_EVENT_CROSS);
+    nrf_lpcomp_enable(NRF_LPCOMP);
+    nrf_lpcomp_task_trigger(NRF_LPCOMP, NRF_LPCOMP_TASK_START);
+    while (!nrf_lpcomp_event_check(NRF_LPCOMP, NRF_LPCOMP_EVENT_READY))
+        ;
+    nrf_lpcomp_task_trigger(NRF_LPCOMP, NRF_LPCOMP_TASK_SAMPLE);
+    return nrf_lpcomp_result_get(NRF_LPCOMP) != 0;
+}
+#endif
+
 offband::SafeBootWake planSafeBootWake()
 {
 #if defined(ESP32)
@@ -551,10 +590,15 @@ offband::SafeBootWake planSafeBootWake()
 #endif
 #if defined(BATTERY_LPCOMP_INPUT)
     const bool has_lpcomp = true;
+    const bool above_line = armBatteryComparator();
+    // The datasheet requires STOP before disable. enterSafeBootSleep() arms it again.
+    nrf_lpcomp_task_trigger(NRF_LPCOMP, NRF_LPCOMP_TASK_STOP);
+    nrf_lpcomp_disable(NRF_LPCOMP);
 #else
     const bool has_lpcomp = false;
+    const bool above_line = false;
 #endif
-    return offband::chooseNrf52Wake(has_lpcomp, g_buttonSense.usable);
+    return offband::chooseNrf52Wake(has_lpcomp, above_line, g_buttonSense.usable);
 #else
     return offband::SafeBootWake::TimedRestart;
 #endif
@@ -680,21 +724,11 @@ void blinkSafeBootSos()
     // BATTERY_LPCOMP_INPUT.
 
 #ifdef BATTERY_LPCOMP_INPUT
-    {
-        nrf_lpcomp_config_t c = {};
-#ifdef BATTERY_LPCOMP_THRESHOLD
-        c.reference = BATTERY_LPCOMP_THRESHOLD;
-#else
-        c.reference = NRF_LPCOMP_REF_SUPPLY_3_8;
-#endif
-        c.detection = NRF_LPCOMP_DETECT_UP;
-        c.hyst = NRF_LPCOMP_HYST_NOHYST;
-        nrf_lpcomp_configure(NRF_LPCOMP, &c);
-        nrf_lpcomp_input_select(NRF_LPCOMP, BATTERY_LPCOMP_INPUT);
-        nrf_lpcomp_enable(NRF_LPCOMP);
-        nrf_lpcomp_task_trigger(NRF_LPCOMP, NRF_LPCOMP_TASK_START);
-        while (!nrf_lpcomp_event_check(NRF_LPCOMP, NRF_LPCOMP_EVENT_READY))
-            ;
+    // The SOS and the button wait put seconds between the plan and this point. A cell that
+    // crossed the line meanwhile has no crossing left to wake on, so recheck it now.
+    if (wake == offband::SafeBootWake::BatteryRise && armBatteryComparator()) {
+        Serial.flush();
+        NVIC_SystemReset();
     }
 #endif
 
@@ -828,6 +862,14 @@ void SafeBoot::checkAndMaybeSleep()
         delay(DEFAULT_SAFE_BOOT_SAMPLE_INTERVAL_MS);
     }
 
+#if defined(SAFEBOOT_LOG_VDD) && defined(NRF52_PLATFORM)
+    // LPCOMP's line is a fraction of VDD, so its real voltage depends on this reading. The
+    // Vbat read above left the ADC on SAFEBOOT_AREF_VOLTAGE full scale.
+    mesh_log_print(MLOG_BOOT, "[SafeBoot] VDD=%u mV\r\n",
+                   (unsigned)((1000.0f * (float)SAFEBOOT_AREF_VOLTAGE * (float)analogReadVDD()) /
+                              (float)(1 << kBatteryResolutionBits)));
+#endif
+
     // Decision matrix:
     //   - Vbat below sleep threshold       -> sleep with current backoff
     //   - Vbat above wake threshold (stable) and no forced cooldown -> proceed
@@ -879,6 +921,14 @@ void SafeBoot::checkAndMaybeSleep()
     next.last_vbat_mv = mv;
     next.flags = (uint16_t)(g_lastResetUnclean ? 1u : 0u);
     storePersisted(next);
+
+#if defined(NRF52_PLATFORM)
+    // #1688: RESETREAS is cumulative, and neither a soft reset nor a wake from SYSTEM_OFF
+    // clears it. board.begin() does, but a refused boot never gets there, so one watchdog
+    // reset would read as unclean on every wake and force a cooldown each time: the board
+    // would never boot again until it lost power. `next.flags` has recorded it.
+    NRF_POWER->RESETREAS = kUncleanResetMask;
+#endif
 
     // #1687/#1690: decide how the sleep ends first, so the line says what this board
     // will actually do. "Sleep 600s" was printed on nRF52 boards that cannot time a

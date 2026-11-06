@@ -1343,8 +1343,8 @@ void UITask::setActivityLed(bool on) {
   _activity_lit = on;
   // Active HIGH, and that is proven rather than assumed: P0.08 drives a 2N7000 gate with
   // the LED's anode at VCC through R8, so a high gate sinks the cathode and lights it
-  // (badge schematic). This is deliberately NOT LED_STATE_ON, which describes the
-  // module's LED on P0.15 -- a different part whose polarity is a separate question.
+  // (badge schematic). This is deliberately NOT LED_STATE_ON, which describes P0.15 -- a
+  // different part with its own polarity (variant.h).
   digitalWrite(PIN_QCC_ACTIVITY_LED, on ? HIGH : LOW);
 }
 

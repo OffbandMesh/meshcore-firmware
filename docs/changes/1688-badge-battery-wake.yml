@@ -1,0 +1,11 @@
+schema_version: 1
+issue: 1688
+impact: none
+reason: >-
+  No published guide covers the QCC badge yet. A badge that refuses to boot on
+  a low battery now sleeps and starts again by itself when the cell recovers on
+  a charger, where before only a button press could wake it. The button still
+  wakes it. The badge guide in progress under #1868 (GUIDE-DRAFT.md) is updated
+  in this change: its Battery step and its troubleshooting line no longer tell
+  the reader a press is required. The LED comment corrections in the same task
+  change nothing a user can see.

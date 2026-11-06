@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <hal/nrf_lpcomp.h>
 #include "QccBadgeBoard.h"
 
 // The badge's low-voltage policy (D2) starts with SafeBoot, which can't see this
@@ -13,6 +14,16 @@ static_assert(SAFEBOOT_ADC_MULTIPLIER - qcc::kDividerRatio < 0.0005f &&
               qcc::kDividerRatio - SAFEBOOT_ADC_MULTIPLIER < 0.0005f,
               "SAFEBOOT_ADC_MULTIPLIER must equal qcc::kDividerRatio");
 static_assert(SAFEBOOT_ADC_SAMPLE_US == qcc::kAdcSampleUs, "SafeBoot must sample like the board");
+
+// #1688: SafeBoot's wake source. Without it a refused badge cannot recover by itself.
+#if !defined(BATTERY_LPCOMP_INPUT) || !defined(BATTERY_LPCOMP_THRESHOLD)
+#error "QCC badge: set BATTERY_LPCOMP_INPUT and BATTERY_LPCOMP_THRESHOLD"
+#endif
+static_assert(BATTERY_LPCOMP_INPUT == NRF_LPCOMP_INPUT_7, "the badge's battery pin, P0.31, is AIN7");
+static_assert(BATTERY_LPCOMP_THRESHOLD == NRF_LPCOMP_REF_SUPPLY_11_16,
+              "the wake line must match qcc::kLpcompWakeMv");
+static_assert(qcc::kLpcompWakeMv > DEFAULT_SAFE_BOOT_WAKE_MV && qcc::kLpcompWakeMv < BATT_MAX_MILLIVOLTS,
+              "the wake line must be above WAKE_MV and below where a charged cell settles");
 
 // #1246: 0% on the battery bar is the voltage SafeBoot refuses to start from, not the one
 // a running badge dies at. Below SLEEP the badge will not come back; between SLEEP and

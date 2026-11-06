@@ -19,11 +19,11 @@ using namespace offband;
 namespace {
 
 // The badge's own ends. Empty is the voltage SafeBoot refuses to start from, not the one
-// a running badge dies at (3400) -- there is reserve below 0%. Full is where a charged
+// a running badge dies at (3000) -- there is reserve below 0%. Full is where a charged
 // cell settles once the charger lets go.
 constexpr uint16_t kEmpty = 3500;
 constexpr uint16_t kFull = 4150;
-constexpr uint16_t kDies = 3400;
+constexpr uint16_t kDies = 3000;
 
 int pct(uint16_t mv) { return batteryPercent(mv, kEmpty, kFull); }
 

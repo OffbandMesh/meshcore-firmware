@@ -103,30 +103,30 @@
 #define LED_BLUE             (-1)   // stops Bluefruit blinking P0.15 during advertising
 #define LED_BUILTIN          PIN_LED
 
-// #1366: the LED on the ProMicro module itself, P0.15. Named, because the badge has two
-// LEDs and "the LED" is ambiguous: this one is on the module, the other (PIN_QCC_MSG_LED,
-// P0.08) is the one beside the display. The owner's split: this is the heartbeat, that
-// one is traffic and notifications.
+// #1366: P0.15, the heartbeat pin. Named, because one image runs on two badges and "the
+// LED" means different parts on each (#1596):
+//
+//   P0.15              sponsor badge: the small LED on the ProMicro module
+//                      pyramid badge: the three bright front LEDs
+//   PIN_QCC_MSG_LED    sponsor badge: the LED beside the display
+//   (P0.08)            pyramid badge: the single LED over the Q
+//
+// The owner's split: P0.15 is the heartbeat, P0.08 is traffic and notifications.
 //
 // LED_BLUE above WAS inherited from the ProMicro variant, aliased onto this pin, and wrong
 // about the colour -- the part on this module is red. It said "left alone because shared
 // code keys off the name", which was true and was the wrong conclusion: the shared code
 // that keys off it is the core's advertising blink, and four other nRF52 variants key off
 // it to switch that OFF. Set to -1 above (#1597).
-#define PIN_QCC_MODULE_LED   PIN_LED   // P0.15, the module's own LED
+#define PIN_QCC_MODULE_LED   PIN_LED   // P0.15: module LED, or the pyramid's front three
 
-// ⚠ UNVERIFIED POLARITY. Zephyr and RIOT both place LED0 on P0.15 for this board and
-// both decline to say which way round it is, because the clones differ; the badge
-// schematic cannot settle it either, since the ProMicro is drawn as a module symbol and
-// this LED is internal to it. No variant in this tree has ever driven P0.15, so the `1`
-// here is inherited boilerplate rather than a tested fact.
-//
-// It is one glance to settle: the heartbeat is a ~1 Hz blip, on 90 ms and off 890 ms. If
-// the module LED is instead lit about nine tenths of the time, the polarity is inverted
-// and this constant becomes 0. Nothing else needs to change -- every reader of
-// LED_STATE_ON pairs it with PIN_STATUS_LED, and on this board that is now this LED
-// alone (the MSG_LED carries its own polarity, which the schematic does prove: P0.08
-// drives a 2N7000 gate with the LED anode at VCC, so it is active HIGH).
+// Active HIGH on the sponsor badge, verified by eye on the heartbeat (#1382). The schematic
+// cannot show it, since the ProMicro is drawn as a module symbol and its LED is internal,
+// and clone modules differ. If a badge's P0.15 LED is lit about nine tenths of the time
+// instead of a ~1 Hz blip, it is inverted there. Every reader of LED_STATE_ON pairs it with
+// PIN_STATUS_LED, which on this board is P0.15 alone (the MSG_LED carries its own polarity,
+// which the schematic does prove: P0.08 drives a 2N7000 gate with the LED anode at VCC, so
+// it is active HIGH).
 #define LED_STATE_ON         1
 
 ////////////////////////////////////////////////////////////////////////////////

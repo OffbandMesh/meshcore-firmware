@@ -1,0 +1,12 @@
+schema_version: 1
+issue: 1948
+impact: none
+reason: >-
+  No published guide covers the QCC badge yet. A running badge now turns
+  itself off at 3000 mV instead of 3400 mV, so it runs longer below 0% on the
+  battery bar. The badge guide in progress under #1868 (GUIDE-DRAFT.md) already
+  describes this correctly without naming a voltage: it says the badge turns
+  off when the battery runs very low, after five minutes low and never while
+  plugged in, and that 0% is the voltage the badge will no longer start from.
+  Neither statement changes, so the draft needs no edit. The start and wake
+  lines are unchanged.
