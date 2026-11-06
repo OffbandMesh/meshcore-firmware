@@ -20,6 +20,7 @@
 // internal-linkage, so a variant that only names the unset value emits nothing of it.
 #include <helpers/ui/TuneSlots.h>
 #include <helpers/ChannelNotify.h>
+#include <helpers/AckTable.h>            // #999: what reusing a pending ACK slot costs
 #include <helpers/OffbandInfoAdvert.h>   // #1994: the 0xC5 0x1C capability advert
 #include <helpers/ChannelSlotGuard.h>   // #1865: no channel written over another
 #include <helpers/ChannelKeys.h>        // #1896: Public's key, for the slot guard
@@ -5498,13 +5499,42 @@ CmdResult MyMesh::cmdSendDirect(ContactInfo& to, uint32_t timestamp, uint8_t att
   }
 #endif
   if (ack) {
+    // #999: this table is circular and overwrite-oldest with NO free-slot search, so
+    // wrapping onto a slot whose ACK has not arrived yet permanently destroys that
+    // message's delivery confirmation: processAck() finds no match and pushes no
+    // PUSH_CODE_SEND_CONFIRMED, so a message that really was delivered reads as
+    // unconfirmed forever. On a GUI build the write below also overwrites
+    // _gui_ack_seq[], orphaning that message's Delivery::Sending in the store.
+    //
+    // Today that happens silently, which is why it has never been diagnosed from a
+    // capture. This makes it observable and nothing more -- DIAGNOSTIC ONLY, the
+    // eviction still occurs. Reporting it to the client is #1000, and do NOT "fix" it
+    // by expiring entries: late-ACK acceptance depends on them persisting (#994).
+    //
+    // The decision is in offband::ackEvictionOn so it can be host-tested; the rollover
+    // and the free-slot age are the two ways a diagnostic like this lies. MESH_DEBUG_PRINTLN
+    // is runtime-gated on g_meshLogEnabled and routes to the caplog sink, so this costs
+    // one flag test when caplog is off. `contact` points into the fixed contacts[] array
+    // and cannot dangle; after a reuse it may name a different contact, which is
+    // acceptable in a diagnostic line.
+    const offband::AckEviction evict = offband::ackEvictionOn(
+        expected_ack_table[next_ack_idx].ack,
+        (uint32_t) expected_ack_table[next_ack_idx].msg_sent,
+        (uint32_t) _ms->getMillis());
+    if (evict.loses_confirmation) {
+      MESH_DEBUG_PRINTLN("[ack-evict] pending ack=%08X age=%lums contact=%s",
+                         (unsigned int) expected_ack_table[next_ack_idx].ack,
+                         (unsigned long) evict.age_ms,
+                         expected_ack_table[next_ack_idx].contact
+                             ? expected_ack_table[next_ack_idx].contact->name : "?");
+    }
 #ifdef OFFBAND_GUI
     _gui_ack_seq[next_ack_idx] = stored;
 #endif
     expected_ack_table[next_ack_idx].msg_sent = _ms->getMillis();  // add to circular table
     expected_ack_table[next_ack_idx].ack = ack;
     expected_ack_table[next_ack_idx].contact = &to;
-    next_ack_idx = (next_ack_idx + 1) % EXPECTED_ACK_TABLE_SIZE;
+    next_ack_idx = offband::ackSlotAfter(next_ack_idx, EXPECTED_ACK_TABLE_SIZE);
   }
   if (flood) *flood = result == MSG_SEND_SENT_FLOOD;
   if (expected_ack) *expected_ack = ack;
