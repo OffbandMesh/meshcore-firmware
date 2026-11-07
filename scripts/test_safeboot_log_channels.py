@@ -28,6 +28,20 @@ def test_both_battery_lines_go_through_mesh_log_print():
     assert sorted(lines) == ["below", "below", "stable"], lines
 
 
+def test_the_button_line_goes_through_mesh_log_print():
+    # #2039: a refusal that leaves the button unarmed has to say what the pin read.
+    assert re.search(r"mesh_log_print\(\s*MLOG_BOOT\s*,\s*\"\[SafeBoot\] button P%u\.%02u: first=%d last=%d", SRC), \
+        "the [SafeBoot] button line is missing or bypasses MeshLog"
+
+
+def test_negative_a_button_line_on_serial_is_caught():
+    bad = SRC.replace('mesh_log_print(MLOG_BOOT,\n                       "[SafeBoot] button',
+                      'Serial.printf(\n                       "[SafeBoot] button')
+    assert bad != SRC, "fixture no longer matches SafeBoot.cpp's text"
+    assert re.search(r"Serial\.print(f|ln)?\s*\(\s*\"\[SafeBoot\]", bad)
+    assert not re.search(r"mesh_log_print\(\s*MLOG_BOOT\s*,\s*\"\[SafeBoot\] button", bad)
+
+
 def test_low_battery_path_drains_the_mirror_before_sleeping():
     below = SRC.rindex('"[SafeBoot] Vbat=%u mV below')
     drain = SRC.find("meshLogDrainUart();", below)
