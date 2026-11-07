@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include <helpers/SafeBootDisplay.h>
+#include <helpers/SafeBootGps.h>
 #include <helpers/SafeBootWake.h>
 
 using namespace offband;
@@ -233,6 +234,35 @@ TEST(SafeBootReading, EveryRealCellVoltageStillCounts) {
   EXPECT_TRUE(safeBootReadingIsPlausible(4170));   // the T1000-E's reading today
   // Below the lowest sleep line any board uses, or a flat cell would boot unchecked.
   EXPECT_LT(kSafeBootMinPlausibleMv, 3000);
+}
+
+// ---- #2032: the GPS goes off before a hold ------------------------------------------
+//
+// Measured on the QCC badge: a refused boot held with the GPS powered, 52-77 mA from the
+// cell for the whole hold. SafeBoot now drives the enable to its off level first.
+
+TEST(SafeBootGps, AnActiveHighEnableIsDrivenLow) {
+  // The QCC badge: P0.24 gates Q1, HIGH powers the GPS.
+  EXPECT_EQ(gpsEnableOffLevel(1), 0);
+}
+
+TEST(SafeBootGps, AnActiveLowEnableIsDrivenHigh) {
+  // Heltec V4 and others: PIN_GPS_EN_ACTIVE=LOW. Driving LOW here would power the GPS.
+  EXPECT_EQ(gpsEnableOffLevel(0), 1);
+}
+
+TEST(SafeBootGps, ANonZeroActiveLevelCountsAsHigh) {
+  // HIGH is 1 in the Arduino cores, but any true value means active-high.
+  EXPECT_EQ(gpsEnableOffLevel(2), 0);
+}
+
+TEST(SafeBootGps, ABoardWithoutAnEnableIsLeftAlone) {
+  EXPECT_FALSE(gpsEnablePinUsable(-1));   // MicroNMEALocationProvider.h's "none"
+}
+
+TEST(SafeBootGps, ARealPinIsUsable) {
+  EXPECT_TRUE(gpsEnablePinUsable(5));     // the QCC badge's PIN_GPS_EN
+  EXPECT_TRUE(gpsEnablePinUsable(0));
 }
 
 int main(int argc, char** argv) {

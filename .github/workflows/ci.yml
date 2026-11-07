@@ -388,6 +388,12 @@ jobs:
       - name: SafeBoot log-channel guard
         run: python scripts/test_safeboot_log_channels.py
 
+      # #2032: a refused boot held with the GPS powered, 52-77 mA from the cell on the
+      # QCC badge. The refusal path must switch it off before the SOS and the sleep, at
+      # the polarity the runtime GPS code uses. Carries its own negative cases.
+      - name: SafeBoot turns the GPS off before a hold
+        run: python scripts/test_safeboot_gps_off.py
+
       # #1692 (epic #1687). nRF52 SYSTEM_OFF has no timer: it ends only on a wake
       # source. The QCC badge armed its button on the wrong pin at the wrong polarity
       # and reset every 128 ms instead of sleeping. Every nRF52 SafeBoot variant must

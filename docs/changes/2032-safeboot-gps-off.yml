@@ -1,0 +1,12 @@
+schema_version: 1
+issue: 2032
+impact: none
+reason: >-
+  Internal power behavior with nothing for a user to do differently. When the
+  battery is too low to start, the device now switches its GPS off before it
+  waits for the battery to recover, instead of leaving it running and draining
+  the battery it is waiting on. The GPS comes back under the user's own GPS
+  setting as soon as the device starts normally. No published guide describes
+  the GPS during a low-battery hold, and the badge guide draft (#1868) already
+  says the badge stays off until the battery recovers, which is now true of
+  the GPS as well.

@@ -19,6 +19,7 @@
 #include "SafeBoot.h"
 #include "MeshLog.h"
 #include "helpers/SafeBootWake.h"   // #1687: how the sleep ends, and what the log says
+#include "helpers/SafeBootGps.h"    // #2032: the GPS goes off before a hold
 #if defined(SAFEBOOT_SSD1306_I2C_ADDR)
   #include <Wire.h>
   #include "helpers/SafeBootDisplay.h"   // #1889: the panel sleeps before SafeBoot decides
@@ -645,6 +646,30 @@ void safeBootDisplayOff()
 }
 #endif
 
+// #2032: switch the GPS off before a hold (SafeBootGps.h). Resolved as MicroNMEALocationProvider.h
+// resolves it, so this is the same line at the same polarity the firmware turns on.
+#if defined(GPS_EN)
+  #define SAFEBOOT_GPS_EN GPS_EN
+#elif defined(PIN_GPS_EN)
+  #define SAFEBOOT_GPS_EN PIN_GPS_EN
+#endif
+#if defined(GPS_EN_ACTIVE)
+  #define SAFEBOOT_GPS_EN_ACTIVE GPS_EN_ACTIVE
+#elif defined(PIN_GPS_EN_ACTIVE)
+  #define SAFEBOOT_GPS_EN_ACTIVE PIN_GPS_EN_ACTIVE
+#else
+  #define SAFEBOOT_GPS_EN_ACTIVE HIGH
+#endif
+
+void safeBootGpsOff()
+{
+#if defined(SAFEBOOT_GPS_EN)
+    if (!offband::gpsEnablePinUsable((long)(SAFEBOOT_GPS_EN))) return;
+    pinMode(SAFEBOOT_GPS_EN, OUTPUT);
+    digitalWrite(SAFEBOOT_GPS_EN, offband::gpsEnableOffLevel(SAFEBOOT_GPS_EN_ACTIVE));
+#endif
+}
+
 // #1691: SOS in Morse on the status LED before a refusing board goes dark. SafeBoot runs
 // before the display exists, so the LED is the only thing that can tell the person holding
 // it that the battery is the problem -- a dark, silent board otherwise reads as broken.
@@ -952,6 +977,7 @@ void SafeBoot::checkAndMaybeSleep()
     Serial.flush();
     meshLogDrainUart();   // the sleep would cut the mirror's copy off mid-line
 
+    safeBootGpsOff();     // #2032: a held GPS drew 52-77 mA from the cell on the QCC badge
     blinkSafeBootSos();   // #1691: the only signal a board can give before its display exists
     enterSafeBootSleep(sleep_secs, wake);
 }
