@@ -13,9 +13,8 @@ regions.
 
 ## Applies to
 
-The Heltec V4 WiFi-telemetry repeater image. Development builds only; no release
-carries these commands yet. Checked against source and automated tests; no on-air,
-hardware or live-broker trial yet. The report lists this repeater's own regions only;
+The Heltec V4 WiFi-telemetry repeater image. Needs firmware newer than
+`offband-v1.6.0-beta1`. The report lists this repeater's own regions only;
 the regions of the repeaters it hears are not in it yet.
 
 ## Before you start

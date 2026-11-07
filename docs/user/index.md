@@ -15,6 +15,10 @@ Use this manual to configure your radio and check whether a feature is working.
 - [Choose time and location sharing](guides/observer-location.md).
 - [Understand low-power boot and recovery](guides/power-and-recovery.md).
 - [Collect useful support evidence](guides/support-logs.md).
+- [Report the repeaters an observer hears and their regions](guides/observer-neighbors.md).
+- [Report a repeater's own regions to CoreScope](guides/repeater-neighbors.md).
+- [Use your QCC badge](guides/qcc-badge.md).
+- [Use your SenseCAP T1000-E](guides/t1000e.md).
 - [Download firmware](https://github.com/OffbandMesh/meshcore-firmware/releases).
 - [Report a problem](https://github.com/OffbandMesh/meshcore-firmware/issues/new/choose).
 

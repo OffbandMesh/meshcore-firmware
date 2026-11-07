@@ -89,6 +89,17 @@ class ManualTests(unittest.TestCase):
                 self.catalog['features'][0]['availability'] = availability
                 self.assertTrue(self.errors())
 
+    def test_a_guide_publishes_before_any_release(self):
+        # #2044: a documented guide for development behavior needs no verified release.
+        self.catalog['features'][0]['availability'] = {'channel': 'development', 'verified_releases': []}
+        self.assertEqual(self.errors(), [])
+
+    def test_negative_a_beta_or_stable_claim_still_names_its_release(self):
+        for channel in ('beta', 'stable'):
+            with self.subTest(channel=channel):
+                self.catalog['features'][0]['availability'] = {'channel': channel, 'verified_releases': []}
+                self.assertTrue(any('needs a verified release' in x for x in self.errors()))
+
     def test_beta_release_cannot_be_called_stable(self):
         self.catalog['features'][0]['availability']['verified_releases'] = ['offband-v1.5.0-beta7']
         self.assertTrue(any('stable' in x for x in self.errors()))

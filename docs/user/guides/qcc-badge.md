@@ -12,9 +12,7 @@ can use it on its own too.
 
 ## Applies to
 
-The QCC badge firmware, on every badge. This page describes the current development build. That build will be in the next
-Offband release, and this page will name that release when it ships. Some of what is
-described here differs from the badge image in `offband-v1.6.0-beta1`.
+The QCC badge firmware, on every badge. Needs firmware newer than `offband-v1.6.0-beta1`.
 
 ## What your badge has
 
