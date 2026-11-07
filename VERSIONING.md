@@ -101,7 +101,6 @@ Before pushing **any release tag** (`-rc` or stable), post a concise **release p
 - the **version** + whether it's **`-rc` or stable**
 - the **CHANGELOG entry** being released
 - any **user-facing string change** in the release (exact before → after)
-- the **user guides it publishes**: the release PR runs `python scripts/promote_drafts.py --release <tag>`, which moves every `docs/drafts/<feature-id>.md` into the manual (#1968). The release workflow will not publish the tag while a draft is still waiting, unless its catalog entry carries a `hold:` reason. Publishing the manual site afterwards stays a manual step on `offband-site`.
 
 Scale the preview to the change — a line or two for a patch, a short list for a feature; don't make it a wall. Two rules behind it:
 

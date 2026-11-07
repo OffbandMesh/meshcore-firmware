@@ -13,9 +13,7 @@ belongs to, from the repeater itself rather than from guesswork.
 ## Applies to
 
 WiFi companion-observer images: Heltec V3, Heltec V4 OLED/TFT, Heltec V4 R8, Heltec
-RCC6 and XIAO S3 WIO. Development builds only; no release carries these commands yet.
-Checked against source and automated tests; no on-air, hardware or live-broker trial
-yet.
+RCC6 and XIAO S3 WIO. Needs firmware newer than `offband-v1.6.0-beta1`.
 
 ## Before you start
 

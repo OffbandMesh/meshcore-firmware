@@ -106,7 +106,8 @@ features:
         contains: ['"caplog status"', 'OFFBAND_CAPLOG_FORWARD']
   - id: observer-neighbors
     title: Report the repeaters an observer hears and their regions
-    coverage: planned
+    coverage: documented
+    guide: guides/observer-neighbors.md
     roles: [companion-observer]
     boards: [heltec_v3, heltec_v4, heltec_v4_r8, heltec_rcc6, xiao_s3_wio]
     availability: {channel: development, verified_releases: []}
@@ -126,7 +127,8 @@ features:
         contains: ['isBareWord(p, "discover.neighbors")', 'isBareWord(p, "discover.scopes")']
   - id: qcc-badge
     title: Use your QCC badge
-    coverage: planned
+    coverage: documented
+    guide: guides/qcc-badge.md
     roles: [companion]
     boards: [qcc_badge]
     availability: {channel: development, verified_releases: []}
@@ -152,7 +154,8 @@ features:
         contains: ['if (has_display && BLE_PIN_CODE == 123456) {', '_active_ble_pin = BLE_PIN_CODE; // otherwise static pin']
   - id: t1000e
     title: Use your SenseCAP T1000-E
-    coverage: planned
+    coverage: documented
+    guide: guides/t1000e.md
     roles: [companion]
     boards: [t1000-e]
     availability: {channel: development, verified_releases: []}
@@ -172,7 +175,8 @@ features:
         contains: ['constexpr uint32_t kGpsIntervalMs = 3600000;', 'constexpr uint32_t kGpsMinPsIntervalS = 300;']
   - id: repeater-neighbors
     title: Report a repeater's own regions to CoreScope
-    coverage: planned
+    coverage: documented
+    guide: guides/repeater-neighbors.md
     roles: [repeater]
     boards: [heltec_v4]
     availability: {channel: development, verified_releases: []}
