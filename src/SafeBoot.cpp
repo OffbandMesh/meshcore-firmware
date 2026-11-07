@@ -856,7 +856,8 @@ uint32_t bumpBackoff(uint32_t prev_secs)
 // The core's init() clears RESETREAS before setup() runs, so the register reads 0 by the time
 // SafeBoot logs it. NRF52Board keeps an early copy only under NRF52_POWER_MANAGEMENT, which
 // not every board sets. Priority 101 runs before main() and so before init().
-// #2039: GPREGRET too -- it is what the bootloader reads to decide on DFU mode.
+// #2039: GPREGRET too. The UF2 bootloader clears its own DFU magics before it starts the app,
+// so a value here is one it did not recognize; RESETREAS is what shows a pin or double reset.
 static uint32_t s_early_resetreas = 0;
 static uint8_t s_early_gpregret = 0;
 static uint8_t s_early_gpregret2 = 0;
