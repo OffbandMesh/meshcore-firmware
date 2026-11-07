@@ -768,6 +768,8 @@ void blinkSafeBootSos()
     // The SOS and the button wait put seconds between the plan and this point. A cell that
     // crossed the line meanwhile has no crossing left to wake on, so recheck it now.
     if (wake == offband::SafeBootWake::BatteryRise && armBatteryComparator()) {
+        mesh_log_print(MLOG_BOOT, "[SafeBoot] cell above the wake line at sleep time: restarting\r\n");
+        meshLogDrainUart();   // #2039: say so before the reset cuts the mirror off
         Serial.flush();
         NVIC_SystemReset();
     }
@@ -793,6 +795,11 @@ void blinkSafeBootSos()
         // We have at least one SYSTEM_OFF wake source: enter ultra-low-power.
         // Try the SoftDevice path first (handles EasyDMA quiesce), then fall
         // back to the bare register write.
+        // #2039: the last line before SYSTEM_OFF, so a capture can tell a hold's current
+        // from whatever ran before it.
+        mesh_log_print(MLOG_BOOT, "[SafeBoot] entering SYSTEM_OFF (button %s)\r\n",
+                       g_buttonSense.usable ? "armed" : "not armed");
+        meshLogDrainUart();
         Serial.flush();
 #if __has_include(<nrf_soc.h>)
         if (sd_power_system_off() != NRF_SUCCESS) {
@@ -845,15 +852,18 @@ uint32_t bumpBackoff(uint32_t prev_secs)
 
 } // namespace
 
-#if defined(SAFEBOOT_WAIT_FOR_USB_MS) && defined(NRF52_PLATFORM)
+#if (defined(SAFEBOOT_WAIT_FOR_USB_MS) || defined(SAFEBOOT_LOG_RESET_REASON)) && defined(NRF52_PLATFORM)
 // The core's init() clears RESETREAS before setup() runs, so the register reads 0 by the time
 // SafeBoot logs it. NRF52Board keeps an early copy only under NRF52_POWER_MANAGEMENT, which
 // not every board sets. Priority 101 runs before main() and so before init().
+// #2039: GPREGRET too -- it is what the bootloader reads to decide on DFU mode.
 static uint32_t s_early_resetreas = 0;
+static uint8_t s_early_gpregret = 0;
 static uint8_t s_early_gpregret2 = 0;
 static void __attribute__((constructor(101))) safeBootEarlyCapture()
 {
     s_early_resetreas = NRF_POWER->RESETREAS;
+    s_early_gpregret = (uint8_t)NRF_POWER->GPREGRET;
     s_early_gpregret2 = (uint8_t)NRF_POWER->GPREGRET2;
 }
 #endif
@@ -869,8 +879,11 @@ void SafeBoot::checkAndMaybeSleep()
     // so a capture sees why a boot was refused. After the display goes dark, not before.
     for (const uint32_t t0 = millis(); !Serial && millis() - t0 < (uint32_t)(SAFEBOOT_WAIT_FOR_USB_MS);)
         delay(10);
-    mesh_log_print(MLOG_BOOT, "[SafeBoot] RESETREAS=0x%08lx GPREGRET2=0x%02x\r\n",
-                   (unsigned long)s_early_resetreas, (unsigned)s_early_gpregret2);
+#endif
+#if (defined(SAFEBOOT_WAIT_FOR_USB_MS) || defined(SAFEBOOT_LOG_RESET_REASON)) && defined(NRF52_PLATFORM)
+    mesh_log_print(MLOG_BOOT, "[SafeBoot] RESETREAS=0x%08lx GPREGRET=0x%02x GPREGRET2=0x%02x\r\n",
+                   (unsigned long)s_early_resetreas, (unsigned)s_early_gpregret,
+                   (unsigned)s_early_gpregret2);
 #endif
     g_lastResetUnclean = detectUncleanReset();
 
