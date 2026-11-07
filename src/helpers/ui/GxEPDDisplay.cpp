@@ -1,5 +1,9 @@
 
 #include "GxEPDDisplay.h"
+#ifdef OFFBAND_EINK_TIMING
+  #include <MeshCore.h>
+  #include <MeshLog.h>
+#endif
 
 #ifdef EXP_PIN_BACKLIGHT
   #include <PCA9557.h>
@@ -27,6 +31,9 @@ ColorVal UIColor::corp_blue = GxEPD_BLACK;
 
 
 bool GxEPDDisplay::begin() {
+#ifdef OFFBAND_EINK_TIMING
+  uint32_t t0 = millis();
+#endif
   display.epd2.selectSPI(SPI1, SPISettings(4000000, MSBFIRST, SPI_MODE0));
 #ifdef ESP32
   SPI1.begin(PIN_DISPLAY_SCLK, PIN_DISPLAY_MISO, PIN_DISPLAY_MOSI, PIN_DISPLAY_CS);
@@ -40,6 +47,11 @@ bool GxEPDDisplay::begin() {
 
   display.fillScreen(GxEPD_WHITE);
   display.display(true);
+#ifdef OFFBAND_EINK_TIMING
+  // The panel's first update after init() is a full refresh, so this is the
+  // full-refresh time plus the controller's init.
+  _init_ms = millis() - t0;
+#endif
   #if DISP_BACKLIGHT
   digitalWrite(DISP_BACKLIGHT, LOW);
   pinMode(DISP_BACKLIGHT, OUTPUT);
@@ -180,7 +192,17 @@ uint16_t GxEPDDisplay::getTextWidth(const char* str) {
 void GxEPDDisplay::endFrame() {
   uint32_t crc = display_crc.finalize();
   if (crc != last_display_crc_value) {
+#ifdef OFFBAND_EINK_TIMING
+    uint32_t t0 = millis();
+#endif
     display.display(true);
     last_display_crc_value = crc;
+#ifdef OFFBAND_EINK_TIMING
+    if (!_init_reported && meshLogIsEnabled()) {
+      MESH_DEBUG_PRINTLN("eink: init + full refresh %lu ms", (unsigned long)_init_ms);
+      _init_reported = true;
+    }
+    MESH_DEBUG_PRINTLN("eink: partial refresh %lu ms", (unsigned long)(millis() - t0));
+#endif
   }
 }

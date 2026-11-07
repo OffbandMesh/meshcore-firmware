@@ -36,6 +36,12 @@ class GxEPDDisplay : public DisplayDriver {
   uint16_t _curr_color;
   CRC32 display_crc;
   int last_display_crc_value = 0;
+#ifdef OFFBAND_EINK_TIMING
+  // Bring-up diag (#2034): begin() runs before caplog is on, so its time is
+  // held here and reported with the first refresh that can be recorded.
+  uint32_t _init_ms = 0;
+  bool _init_reported = false;
+#endif
 
 public:
 #if defined(EINK_DISPLAY_MODEL)
