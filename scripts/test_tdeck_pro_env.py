@@ -109,6 +109,21 @@ def hw_cs_failures(*sources):
     return []
 
 
+def eink_log_failures(display):
+    """Under OFFBAND_EINK_TIMING the panel's init, refreshes and BUSY timeouts reach MeshLog.
+
+    GxEPD2 reports a BUSY timeout only on Serial, which the capture never records.
+    """
+    code = strip_comments(display, "//")
+    out = []
+    for what, pat in (("the init time", r'MESH_DEBUG_PRINTLN\("eink: init \+ full refresh'),
+                      ("each refresh time", r'MESH_DEBUG_PRINTLN\("eink: partial refresh'),
+                      ("a BUSY timeout", r'MESH_DEBUG_PRINTLN\("eink: BUSY timeout')):
+        if not re.search(pat, code):
+            out.append("GxEPDDisplay must log %s through MeshLog under OFFBAND_EINK_TIMING" % what)
+    return out
+
+
 def board_failures(board):
     """TDeckProBoard::begin() parks every chip-select high and powers the radio."""
     code = strip_comments(board, "//")
@@ -126,7 +141,8 @@ def board_failures(board):
 
 def failures(ini, target, board, ci, display=None):
     out = target_failures(target) + board_failures(board)
-    out += hw_cs_failures(target, board, display if display is not None else DISPLAY.read_text())
+    display = display if display is not None else DISPLAY.read_text()
+    out += hw_cs_failures(target, board, display) + eink_log_failures(display)
     secs = ini_sections(ini)
     for s in (HW, DIAG):
         if s not in secs:
@@ -246,6 +262,13 @@ def test_negative_hardware_cs_on_the_shared_bus_is_caught():
     r = _real()
     got = failures(r[0], r[1], r[2], r[3], display=disp)
     assert any("hardware chip-select" in f for f in got), got
+
+
+def test_negative_a_busy_timeout_left_to_serial_is_caught():
+    disp = DISPLAY.read_text().replace('MESH_DEBUG_PRINTLN("eink: BUSY timeout', 'Serial.printf("eink: BUSY timeout')
+    r = _real()
+    got = failures(r[0], r[1], r[2], r[3], display=disp)
+    assert any("a BUSY timeout" in f for f in got), got
 
 
 def test_negative_a_renamed_section_is_not_a_silent_pass():
