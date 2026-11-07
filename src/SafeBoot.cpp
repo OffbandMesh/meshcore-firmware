@@ -582,11 +582,27 @@ offband::SafeBootWake planSafeBootWake()
         nrf_gpio_cfg_input(pin, pressed_high ? NRF_GPIO_PIN_PULLDOWN : NRF_GPIO_PIN_PULLUP);
         safeBootFeedWatchdog();
         delay(10);
+        // #2039: count what the pin read, so a refusal that leaves the button unarmed says why.
+        int first = -1;
+        uint32_t reads = 0, pressed_reads = 0;
+        const int pressed_level = pressed_high ? 1 : 0;
+        const uint32_t t0 = millis();
         const int level = offband::waitForButtonIdle(
             pressed_high, offband::kButtonReleaseWaitMs,
-            [pin]() { return (int)nrf_gpio_pin_read(pin); },
+            [pin, pressed_level, &first, &reads, &pressed_reads]() {
+                const int v = (int)nrf_gpio_pin_read(pin);
+                if (first < 0) first = v;
+                reads++;
+                if (v == pressed_level) pressed_reads++;
+                return v;
+            },
             [](uint32_t ms) { safeBootFeedWatchdog(); delay(ms); });
         g_buttonSense = offband::chooseButtonSense(pressed_high, level);
+        mesh_log_print(MLOG_BOOT,
+                       "[SafeBoot] button P%u.%02u: first=%d last=%d pressed %u/%u reads in %u ms -> %s\r\n",
+                       (unsigned)(pin >> 5), (unsigned)(pin & 31u), first, level,
+                       (unsigned)pressed_reads, (unsigned)reads, (unsigned)(millis() - t0),
+                       g_buttonSense.usable ? "armed" : "NOT armed");
     }
 #endif
 #if defined(BATTERY_LPCOMP_INPUT)
