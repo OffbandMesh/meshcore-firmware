@@ -3,6 +3,12 @@
 #ifdef OFFBAND_EINK_TIMING
   #include <MeshCore.h>
   #include <MeshLog.h>
+  // GxEPD2 gives up on a BUSY wait after this long and only prints to Serial.
+  // A normal refresh is a second or two, so one that reaches this limit had a
+  // wait time out or stall (10 s is GxEPD2's value for GDEQ031T10).
+  #ifndef EINK_BUSY_TIMEOUT_MS
+    #define EINK_BUSY_TIMEOUT_MS 10000UL
+  #endif
 #endif
 
 #ifdef EXP_PIN_BACKLIGHT
@@ -200,9 +206,16 @@ void GxEPDDisplay::endFrame() {
 #ifdef OFFBAND_EINK_TIMING
     if (!_init_reported && meshLogIsEnabled()) {
       MESH_DEBUG_PRINTLN("eink: init + full refresh %lu ms", (unsigned long)_init_ms);
+      if (_init_ms >= EINK_BUSY_TIMEOUT_MS) {
+        MESH_DEBUG_PRINTLN("eink: BUSY timeout or stall in init (limit %lu ms)", (unsigned long)EINK_BUSY_TIMEOUT_MS);
+      }
       _init_reported = true;
     }
-    MESH_DEBUG_PRINTLN("eink: partial refresh %lu ms", (unsigned long)(millis() - t0));
+    uint32_t dt = millis() - t0;
+    MESH_DEBUG_PRINTLN("eink: partial refresh %lu ms", (unsigned long)dt);
+    if (dt >= EINK_BUSY_TIMEOUT_MS) {
+      MESH_DEBUG_PRINTLN("eink: BUSY timeout or stall in refresh (limit %lu ms)", (unsigned long)EINK_BUSY_TIMEOUT_MS);
+    }
 #endif
   }
 }
