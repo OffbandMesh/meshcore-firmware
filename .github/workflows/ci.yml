@@ -298,6 +298,11 @@ jobs:
       - name: Repeater /neighbors cycle and commands wired
         run: python scripts/test_repeater_neighbors_wiring.py
 
+      # #1903: the repeater's scope query to its neighbors - the request, the reply
+      # matching outside the ACL, and the walk in the cycle.
+      - name: Repeater scope query wired
+        run: python scripts/test_repeater_scope_query_wiring.py
+
       # #1625: which preflashed channels ship quiet. A silent channel and a channel that
       # made no choice are one byte apart, and swapping them is invisible until a badge is
       # quiet in the wrong room -- or noisy in the one a tester asked to be quiet.
