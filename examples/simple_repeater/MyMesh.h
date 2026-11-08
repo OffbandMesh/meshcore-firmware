@@ -112,6 +112,11 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
 #endif
 #if defined(OFFBAND_NEIGHBORS_REPORT)
   offband::NeighborsSchedule _nbr_schedule;   // #1907
+  // #1909: the regions request in flight, to decrypt its reply with (#1910). The secret
+  // is worked out once per request; the peer is not in the ACL and never becomes one.
+  uint8_t _regions_peer_key[PUB_KEY_SIZE];
+  uint8_t _regions_peer_secret[PUB_KEY_SIZE];
+  bool _regions_peer_set;
 #endif
   CayenneLPP telemetry;
   unsigned long set_radio_at, revert_radio_at;
@@ -139,6 +144,9 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
 #if defined(OFFBAND_NEIGHBORS_REPORT)
   void neighborsCycleTick();       // #1907: one step of the /neighbors cycle per loop()
   bool publishNeighborsReport();   // #1907: true when a broker took it
+  // #1909: ask one neighbor, zero-hop, for its flood regions. tag is set only when the
+  // request went out; false when no packet could be built.
+  bool sendRegionsReq(const uint8_t* pub_key, uint32_t* tag);
 #endif
 
 protected:
