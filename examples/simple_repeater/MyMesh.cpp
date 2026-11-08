@@ -201,18 +201,27 @@ void MyMesh::neighborsScheduleStatus(offband::NeighborsScheduleStatus* out) cons
   out->last_ago_s = out->has_published ? (now - _nbr_schedule.lastPublishMs()) / 1000u : 0;
 }
 
-// #1907: there is no walk yet (#1903), so a manual report goes straight to publishing,
-// replacing one still waiting to go out.
-void MyMesh::startNeighborsReportNow() {
+// #1912: discover.scopes. With neighbors, query them all and publish when the walk ends;
+// with none, publish this repeater's own scopes now. Either replaces a report still
+// waiting to go out. Returns how many neighbors are being queried, or -1 when the walk
+// has no memory (nothing started).
+int MyMesh::startNeighborsReportNow() {
+  if (getNeighbourCount() > 0) {
+    if (!startScopeQuery()) return -1;
+    _nbr_schedule.manualWalkStarted();
+    return _scope_run->resultCount();
+  }
+  if (_scope_run != NULL) _scope_run->start(NULL, 0);   // no rows left from an earlier walk
   _nbr_schedule.manualWalkStarted();
+  return 0;
 }
 
-// #1907: one step of the /neighbors cycle per loop() pass (see NeighborsSchedule.h). The
-// walk step starts nothing until the repeater queries its neighbors (#1903): the cycle
-// refreshes the neighbor table, then publishes this repeater's own scopes.
+// #1907 / #1912: one step of the /neighbors cycle per loop() pass (see
+// NeighborsSchedule.h): refresh the neighbor table, query every neighbor, publish when
+// the walk ends. A walk that cannot start still publishes the self report.
 void MyMesh::neighborsCycleTick() {
   const uint32_t now = millis();
-  const bool walk_running = false;
+  const bool walk_running = _scope_run != NULL && _scope_run->running();
   // Only on the passes the schedule looks at it: it formats every broker's topic.
   const bool ready = _nbr_schedule.needsReady(now, walk_running) &&
                      offband::repeaterMqttPool().neighborsReady(offband::plausibleEpoch);
@@ -221,6 +230,7 @@ void MyMesh::neighborsCycleTick() {
       sendNodeDiscoverReq();
       break;
     case offband::NeighborsAction::StartWalk:
+      if (!startScopeQuery()) MESH_DEBUG_PRINTLN("neighbors: no walk this cycle; publishing own scopes only");
       _nbr_schedule.walkStarted(true);
       break;
     case offband::NeighborsAction::Publish:
@@ -301,6 +311,7 @@ bool MyMesh::startScopeQuery() {
   offband::NeighbourInfo* rows = static_cast<offband::NeighbourInfo*>(scopeAlloc(sizeof(offband::NeighbourInfo) * MAX_NEIGHBOURS));
   if (rows == NULL) {
     MESH_DEBUG_PRINTLN("scope query: no memory for the neighbor snapshot; not started");
+    _scope_run->start(NULL, 0);   // no earlier walk's rows reach the next report
     return false;
   }
   int n = 0;
@@ -363,9 +374,10 @@ void MyMesh::scopeWalkSummary(offband::ScopeWalkSummary* out) const {
   }
 }
 
-// #1907: this repeater's own scopes, from the same call that answers a neighbor's regions
-// request, handed to the broker pool, which builds the report at once and hands it to
-// each connected broker in turn.
+// #1907 / #1912: this repeater's own scopes, from the same call that answers a neighbor's
+// regions request, and the last walk's results, handed to the broker pool, which builds
+// the report at once and hands it to each connected broker in turn. With no walk rows
+// the neighbor count is the table's.
 bool MyMesh::publishNeighborsReport() {
   char self_scopes[FLOOD_SCOPES_MAX];
   exportFloodScopes(self_scopes);
@@ -373,13 +385,14 @@ bool MyMesh::publishNeighborsReport() {
   memset(&in, 0, sizeof(in));
   in.self_scopes = self_scopes;
   in.default_scope = getDefaultScopeName();
-  in.rows = NULL;
-  in.n_rows = 0;
-  in.total_neighbors = getNeighbourCount();
+  const int walked = _scope_run != NULL ? _scope_run->resultCount() : 0;
+  in.rows = walked > 0 ? _scope_run->results() : NULL;
+  in.n_rows = walked;
+  in.total_neighbors = walked > 0 ? _scope_run->totalCount() : getNeighbourCount();
   in.now = getRTCClock()->getCurrentTime();
   in.plausible = offband::plausibleEpoch;
   const uint8_t brokers = offband::repeaterMqttPool().publishNeighbors(in);
-  MESH_DEBUG_PRINTLN("neighbors: self report offered to %u broker(s)", (unsigned)brokers);
+  MESH_DEBUG_PRINTLN("neighbors: report of %d neighbors offered to %u broker(s)", walked, (unsigned)brokers);
   return brokers > 0;
 }
 #endif
@@ -1558,15 +1571,24 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     }
 #if defined(OFFBAND_NEIGHBORS_REPORT)
   } else if (memcmp(command, "discover.scopes", 15) == 0) {
-    // #1907: no neighbor queries on the repeater yet (#1903), so this publishes its own
-    // scopes now, whether or not periodic publishing is on.
+    // #1907 / #1912: query every neighbor, then publish, whether or not periodic
+    // publishing is on; with no neighbors, publish this repeater's own scopes now. While
+    // a walk is running, report its progress instead of restarting it.
     const char* sub = command + 15;
     while (*sub == ' ') sub++;
+    offband::ScopeWalkSummary walk;
+    scopeWalkSummary(&walk);
     if (*sub != 0) {
       strcpy(reply, "Err - discover.scopes has no options");
+    } else if (walk.running) {
+      sprintf(reply, "OK - querying neighbors: %d of %d done", walk.done, walk.total);
     } else {
-      startNeighborsReportNow();
-      if (offband::repeaterMqttPool().neighborsReady(offband::plausibleEpoch)) {
+      const int n = startNeighborsReportNow();
+      if (n < 0) {
+        strcpy(reply, "Err - no memory for the query");
+      } else if (n > 0) {
+        sprintf(reply, "OK - querying %d neighbors, then publishing", n);
+      } else if (offband::repeaterMqttPool().neighborsReady(offband::plausibleEpoch)) {
         strcpy(reply, "OK - publishing own scopes");
       } else {
         strcpy(reply, "OK - own scopes queued; waiting for clock and a broker");
