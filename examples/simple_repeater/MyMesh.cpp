@@ -230,7 +230,12 @@ void MyMesh::neighborsCycleTick() {
       sendNodeDiscoverReq();
       break;
     case offband::NeighborsAction::StartWalk:
-      if (!startScopeQuery()) MESH_DEBUG_PRINTLN("neighbors: no walk this cycle; publishing own scopes only");
+      // A walk that cannot start still publishes the self report this cycle, with no
+      // rows: the last cycle's are a day old and must not be republished as current.
+      if (!startScopeQuery()) {
+        MESH_DEBUG_PRINTLN("neighbors: no walk this cycle; publishing own scopes only");
+        if (_scope_run != NULL) _scope_run->start(NULL, 0);
+      }
       _nbr_schedule.walkStarted(true);
       break;
     case offband::NeighborsAction::Publish:
@@ -245,6 +250,9 @@ void MyMesh::neighborsCycleTick() {
 // answers zero-hop direct. The peer's key and secret are kept only once a packet exists,
 // so a failed build leaves no in-flight peer for the reply path to match.
 bool MyMesh::sendRegionsReq(const uint8_t* pub_key, uint32_t* tag) {
+  // No free packet: fail before the key exchange, so an exhausted pool does not cost
+  // one exchange per neighbor on the loop task as the walk marks each send_failed.
+  if (_mgr->getFreeCount() == 0) return false;
   mesh::Identity peer(pub_key);
   uint8_t secret[PUB_KEY_SIZE];
   self_id.calcSharedSecret(secret, peer);
@@ -311,8 +319,7 @@ bool MyMesh::startScopeQuery() {
   offband::NeighbourInfo* rows = static_cast<offband::NeighbourInfo*>(scopeAlloc(sizeof(offband::NeighbourInfo) * MAX_NEIGHBOURS));
   if (rows == NULL) {
     MESH_DEBUG_PRINTLN("scope query: no memory for the neighbor snapshot; not started");
-    _scope_run->start(NULL, 0);   // no earlier walk's rows reach the next report
-    return false;
+    return false;   // the last walk is left as it was; the caller decides
   }
   int n = 0;
   for (int i = 0; i < MAX_NEIGHBOURS; i++) {
