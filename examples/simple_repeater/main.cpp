@@ -74,8 +74,8 @@ static offband::DiscoverResult nbrDiscover(int* seconds_left) {
   the_mesh.sendNodeDiscoverReq();
   return offband::DiscoverResult::Queued;
 }
-static void nbrSummary(offband::ScopeWalkSummary* out) { memset(out, 0, sizeof(*out)); }   // no walk until #1903
-static bool nbrStartScopes() { the_mesh.startNeighborsReportNow(); return true; }
+static void nbrSummary(offband::ScopeWalkSummary* out) { the_mesh.scopeWalkSummary(out); }   // #1912
+static bool nbrStartScopes() { return the_mesh.startNeighborsReportNow() >= 0; }
 static void nbrReadSettings(offband::NeighborsSettings* out) {
   out->enabled = offband::readNeighborsEnabled();
   out->interval_hours = offband::readNeighborsIntervalHours();
