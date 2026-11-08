@@ -1,0 +1,28 @@
+schema_version: 1
+issue: 1796
+impact: updated
+guides:
+  - docs/user/guides/t1000e.md
+  - docs/user/guides/qcc-badge.md
+reason: >-
+  The published T1000-E guide told readers that sounds, the send tone, the
+  message-waiting LED and GPS power save had never been tested on a T1000-E. The
+  owner had been using the first three on his own T1000-E for several weeks,
+  per-channel tunes included, and had watched the LED flash on arriving messages.
+  The claim was written while those behaviors were unverified and was never
+  revisited once they were exercised, so a promoted draft carried it onto a public
+  page. The catalog's verification line said the same thing and is corrected with
+  it.
+  GPS power save is the one row that stays negative, and it is now stated
+  accurately rather than pessimistically: the attempt-and-back-off cycle was
+  captured on a QCC badge running the same pure rules, so the machine is proven on
+  hardware, but nothing confirms it on a T1000-E specifically.
+  The badge guide gains screen rotation, which shipped and was hardware-verified on
+  a QCC badge but appeared in no user-facing document at all. It is a client-only
+  control on the badge -- there is no rotation item in the badge's own Settings --
+  so it belongs in the Screen step and in the client-settings table, not in a guide
+  of its own. Rotation is deliberately NOT added as a separate catalog feature: a
+  standalone feature entry requires its own guide page, and a page about one display
+  setting is the wrong unit next to "Use your QCC badge".
+  No code changes, no behavior changes, nothing on the wire. What changes is that
+  three documents stop contradicting the hardware.
