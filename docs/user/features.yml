@@ -132,7 +132,7 @@ features:
     roles: [companion]
     boards: [qcc_badge]
     availability: {channel: development, verified_releases: []}
-    verification: Badge screens, settings, defaults and client-settable surfaces checked against development source, including the Bluetooth PIN with and without a display. No badge without a screen has been paired against this text. The low-battery refusal, SOS and button wake were bench-tested on QCC badges at raised test thresholds, not on a low cell; keyboardless list navigation has no recorded hardware result.
+    verification: Badge screens, settings, defaults and client-settable surfaces checked against development source, including the Bluetooth PIN with and without a display. No badge without a screen has been paired against this text. The low-battery refusal, SOS and button wake were bench-tested on QCC badges at raised test thresholds, not on a low cell; keyboardless list navigation has no recorded hardware result. Screen rotation set from the client was hardware-tested on a QCC badge, flipped repeatedly between 0 and 180 degrees and applied every time, with the display always-on/auto/dark modes exercised in the same session.
     evidence:
       - path: variants/qcc_badge/platformio.ini
         contains: ['-D LORA_FREQ=919.5', '-D LORA_BW=500', '-D LORA_SF=7', '-D LORA_CR=5', '-D LORA_TX_POWER=22']
@@ -159,7 +159,7 @@ features:
     roles: [companion]
     boards: [t1000-e]
     availability: {channel: development, verified_releases: []}
-    verification: Sounds, send tone, per-channel and per-event tunes, the device-wide notification scope, button defaults, the message-waiting LED and GPS power save checked against development source and native/source tests; none of these has a recorded T1000-E hardware result yet. SafeBoot start-up on a charged battery was bench-tested on a T1000-E (about 4.17 V read and boot continued on every start).
+    verification: Sounds, per-channel and per-event tunes and the message-waiting LED are in regular use on a T1000-E over several weeks, per-channel tunes included; the send tone rode in that same use rather than being isolated as its own check. The device-wide notification scope and button defaults are checked against development source and native/source tests only. GPS power save has no T1000-E result at all -- its attempt-and-back-off cycle was captured on a QCC badge, which runs the same rules. SafeBoot start-up on a charged battery was bench-tested on a T1000-E (about 4.17 V read and boot continued on every start).
     evidence:
       - path: variants/t1000-e/platformio.ini
         contains: ['-D OFFBAND_UI_ORIG_TUNE_ENGINE', '-D OFFBAND_SENT_TONE_ON_CLIENT_SEND', '-D DEFAULT_TONE_SENT=offband::kTuneTick', '-D OFFBAND_GPS_POWER_SAVE=1', '-D OFFBAND_HEARTBEAT_MSG_ON_MS=490', '-D SAFEBOOT_VBAT_ENABLE_PIN=PIN_3V3_EN']

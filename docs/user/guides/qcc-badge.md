@@ -229,7 +229,11 @@ In **Settings**:
   The default is one minute.
 - **Time zone** shows the zone in use and, with a GPS fix, the zone the GPS suggests.
 
-From the client you can also set the display to stay on, or to stay dark.
+From the client you can also:
+
+- set the display to stay on, or to stay dark;
+- **turn the screen upside down** — rotation is either 0 or 180 degrees, and it sticks
+  across a restart. There is no rotation control on the badge itself.
 
 ### 10. Battery
 
@@ -268,6 +272,7 @@ screen it is the only way to change them:
 | GPS mode and Power save | with a screen | yes |
 | Text sizes, screen off, time zone | with a screen | yes |
 | Display always on or always dark | no | yes |
+| Screen rotation (0 or 180 degrees) | no | yes |
 | Battery 100% point | with a screen | yes |
 | A fixed Bluetooth PIN | no | yes |
 | Bluetooth on or off | with a screen | no |
