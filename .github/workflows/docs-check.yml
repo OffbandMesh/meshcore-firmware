@@ -27,6 +27,8 @@ jobs:
         run: python scripts/test_check_user_docs.py
       - name: Documentation-impact Git diff regression tests
         run: python scripts/test_docs_impact.py
+      - name: Docs-site dispatch contract tests
+        run: python scripts/test_docs_site_dispatch.py
       - name: Require documentation-impact decisions for firmware changes
         if: github.event_name == 'pull_request' || github.event_name == 'push'
         env:
