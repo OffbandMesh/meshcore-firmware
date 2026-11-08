@@ -174,15 +174,17 @@ features:
       - path: src/helpers/GpsPowerMode.h
         contains: ['constexpr uint32_t kGpsIntervalMs = 3600000;', 'constexpr uint32_t kGpsMinPsIntervalS = 300;']
   - id: repeater-neighbors
-    title: Report a repeater's own regions to CoreScope
+    title: Report the regions of a repeater and its neighbors to CoreScope
     coverage: documented
     guide: guides/repeater-neighbors.md
     roles: [repeater]
     boards: [heltec_v4]
     availability: {channel: development, verified_releases: []}
-    verification: discover.scopes on the repeater, its CoreScope /neighbors self report and the mqtt.neighbors settings checked against source, native tests and source-wiring checks only; not in any release, no on-air, hardware or live-broker trial. Neighbor scope queries on the repeater follow (Epic 1903).
+    verification: discover.scopes on the repeater, its scope query to the repeaters it hears directly, its CoreScope /neighbors report and the mqtt.neighbors settings checked against source, native tests and source-wiring checks only; not in any release, no on-air, hardware or live-broker trial.
     evidence:
       - path: examples/simple_repeater/MyMesh.cpp
-        contains: ['int MyMesh::exportFloodScopes(char* dest)', 'OK - publishing own scopes', 'OK - own scopes queued; waiting for clock and a broker']
+        contains: ['int MyMesh::exportFloodScopes(char* dest)', 'OK - querying %d neighbors, then publishing', 'OK - querying neighbors: %d of %d done', 'OK - publishing own scopes', 'OK - own scopes queued; waiting for clock and a broker', 'Err - no memory for the query']
+      - path: src/helpers/wifi_observer/RegionsPeer.h
+        contains: ['constexpr int kRegionsPeerIdx = -2;']
       - path: variants/heltec_v4/platformio.ini
         contains: ['-D OFFBAND_NEIGHBORS_REPORT=1', '+<helpers/wifi_observer/NeighborsCli.cpp>']

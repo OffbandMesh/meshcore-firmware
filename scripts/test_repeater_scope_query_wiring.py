@@ -22,6 +22,12 @@ repeater-side wiring the native tests cannot reach.
   (checked before and after poll(), which can close one by timeout);
 - a walk starts over every filled row of the neighbor table, RSSI 0 (unknown).
 
+#1912, the cycle (neighborsCycleTick / publishNeighborsReport / discover.scopes):
+- the cycle's walk step starts the walk, and the cycle waits on the walk itself;
+- the report lists the walk's results;
+- discover.scopes reports a running walk's progress rather than restarting it, and the
+  NeighborsCli scope_summary hook reports the walk.
+
 Run: python scripts/test_repeater_scope_query_wiring.py
 """
 import re
@@ -176,14 +182,78 @@ def walk_failures(text):
     return got
 
 
+MAIN = ROOT / "examples" / "simple_repeater" / "main.cpp"
+
+
+def cycle_failures(text, main):
+    """#1912: the walk runs inside the /neighbors cycle and feeds its report."""
+    code = strip_comments(text)
+    got = []
+    tick = function_body(code, "void MyMesh::neighborsCycleTick()")
+    if tick is None:
+        return ["MyMesh::neighborsCycleTick is gone"]
+    if not re.search(r"const\s+bool\s+walk_running\s*=\s*_scope_run\s*!=\s*NULL\s*&&\s*_scope_run->running\(\)\s*;", tick):
+        got.append("neighborsCycleTick no longer takes walk_running from the walk")
+    m = re.search(r"case\s+offband::NeighborsAction::StartWalk:(.*?)break;", tick, re.S)
+    if m is None or "startScopeQuery()" not in m.group(1):
+        got.append("the cycle's walk step no longer starts the walk")
+    report = function_body(code, "bool MyMesh::publishNeighborsReport()")
+    if report is None or not re.search(r"in\.rows\s*=\s*walked\s*>\s*0\s*\?\s*_scope_run->results\(\)\s*:\s*NULL\s*;", report):
+        got.append("publishNeighborsReport no longer lists the walk's results")
+    cmd = function_body(code, "void MyMesh::handleCommand(")
+    if cmd is None:
+        return got + ["MyMesh::handleCommand is gone"]
+    scopes = cmd.find('"discover.scopes"')
+    running = cmd.find("} else if (walk.running) {", scopes)
+    start = cmd.find("startNeighborsReportNow()", scopes)
+    if running < 0 or start < 0 or running > start:
+        got.append("discover.scopes no longer reports progress before it would start a walk")
+    if not re.search(r"static\s+void\s+nbrSummary\([^)]*\)\s*\{\s*the_mesh\.scopeWalkSummary\(\s*out\s*\)\s*;", strip_comments(main)):
+        got.append("the scope_summary hook no longer reports the walk")
+    return got
+
+
 def read(p):
     return p.read_text(encoding="utf-8")
 
 
 def test_the_real_tree_passes():
     got = (request_failures(read(MYMESH)) + matching_failures(read(MYMESH), read(MYMESH_H))
-           + walk_failures(read(MYMESH)))
+           + walk_failures(read(MYMESH)) + cycle_failures(read(MYMESH), read(MAIN)))
     assert not got, "\n".join(got)
+
+
+def test_negative_a_cycle_blind_to_the_walk_is_caught():
+    text = read(MYMESH).replace("const bool walk_running = _scope_run != NULL && _scope_run->running();",
+                                "const bool walk_running = false;", 1)
+    assert text != read(MYMESH)
+    assert any("walk_running from the walk" in f for f in cycle_failures(text, read(MAIN)))
+
+
+def test_negative_a_cycle_that_starts_no_walk_is_caught():
+    text = read(MYMESH).replace(
+        '      if (!startScopeQuery()) MESH_DEBUG_PRINTLN("neighbors: no walk this cycle; publishing own scopes only");\n',
+        "", 1)
+    assert text != read(MYMESH)
+    assert any("no longer starts the walk" in f for f in cycle_failures(text, read(MAIN)))
+
+
+def test_negative_a_report_without_the_walks_rows_is_caught():
+    text = read(MYMESH).replace("in.rows = walked > 0 ? _scope_run->results() : NULL;", "in.rows = NULL;", 1)
+    assert text != read(MYMESH)
+    assert any("walk's results" in f for f in cycle_failures(text, read(MAIN)))
+
+
+def test_negative_discover_scopes_that_restarts_a_running_walk_is_caught():
+    text = read(MYMESH).replace("    } else if (walk.running) {\n", "    } else if (false) {\n", 1)
+    assert text != read(MYMESH)
+    assert any("reports progress" in f for f in cycle_failures(text, read(MAIN)))
+
+
+def test_negative_an_empty_summary_hook_is_caught():
+    main = read(MAIN).replace("{ the_mesh.scopeWalkSummary(out); }", "{ memset(out, 0, sizeof(*out)); }", 1)
+    assert main != read(MAIN)
+    assert any("scope_summary hook" in f for f in cycle_failures(read(MYMESH), main))
 
 
 def test_negative_a_peer_that_is_never_forgotten_is_caught():

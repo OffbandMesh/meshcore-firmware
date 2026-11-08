@@ -221,7 +221,8 @@ def test_negative_discover_scopes_left_to_the_common_cli_is_caught():
 
 
 def test_negative_discover_scopes_that_starts_nothing_is_caught():
-    text = read(MYMESH).replace("      startNeighborsReportNow();\n", "", 1)
+    text = read(MYMESH).replace("const int n = startNeighborsReportNow();", "const int n = 0;", 1)
+    assert text != read(MYMESH)
     assert any("no longer starts the report" in f for f in mymesh_failures(text))
 
 
