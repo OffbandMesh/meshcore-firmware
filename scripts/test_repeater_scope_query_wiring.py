@@ -16,6 +16,12 @@ repeater-side wiring the native tests cannot reach.
 - onPeerDataRecv routes through routePeerData before it picks up a client, hands the
   walk's reply to onRegionsReply, and stops anything else matched as the regions peer.
 
+#1911, the walk (startScopeQuery / scopeQueryTick / releaseScopePeer):
+- loop() steps it; each pass polls, sends at most one request and reports the send;
+- the in-flight peer is forgotten, and its secret wiped, the moment its request closes
+  (checked before and after poll(), which can close one by timeout);
+- a walk starts over every filled row of the neighbor table, RSSI 0 (unknown).
+
 Run: python scripts/test_repeater_scope_query_wiring.py
 """
 import re
@@ -81,7 +87,8 @@ def request_failures(text):
         got.append("sendRegionsReq no longer sends zero-hop")
     if re.search(r"\bsendFlood\w*\(", body):
         got.append("sendRegionsReq floods the request")
-    null_check = body.find("if (pkt == NULL) return false;")
+    m = re.search(r"if\s*\(\s*pkt\s*==\s*NULL\s*\)\s*\{?[^}]*?return\s+false\s*;", body)
+    null_check = m.start() if m else -1
     peer_set = body.find("_regions_peer_set = true;")
     if null_check < 0 or peer_set < 0 or peer_set < null_check:
         got.append("sendRegionsReq keeps the in-flight peer before a packet exists")
@@ -136,13 +143,77 @@ def matching_failures(text, header):
     return got
 
 
+def walk_failures(text):
+    """#1911: the walk is stepped from loop(), sends at most one request per pass, and
+    the in-flight peer is forgotten the moment its request closes."""
+    code = strip_comments(text)
+    got = []
+    loop = function_body(code, "void MyMesh::loop()")
+    if loop is None or "scopeQueryTick();" not in loop:
+        got.append("MyMesh::loop() no longer steps the walk")
+    tick = function_body(code, "void MyMesh::scopeQueryTick()")
+    if tick is None:
+        return got + ["MyMesh::scopeQueryTick is gone"]
+    poll = tick.find("_scope_run->poll(now)")
+    send = tick.find("sendRegionsReq(next, &tag)")
+    sent = tick.find("_scope_run->sent(ok, tag, now)")
+    if poll < 0 or send < 0 or sent < 0 or not (poll < send < sent):
+        got.append("scopeQueryTick no longer polls, sends, then reports the send")
+    if tick.count("releaseScopePeer();") < 2 or tick.find("releaseScopePeer();", poll) < 0:
+        got.append("scopeQueryTick no longer releases the peer before and after poll()")
+    release = function_body(code, "void MyMesh::releaseScopePeer()")
+    if release is None or "_regions_peer_set = false;" not in release:
+        got.append("releaseScopePeer no longer forgets the in-flight peer")
+    elif "memset(_regions_peer_secret, 0, PUB_KEY_SIZE);" not in release:
+        got.append("releaseScopePeer no longer wipes the peer's secret")
+    start = function_body(code, "bool MyMesh::startScopeQuery()")
+    if start is None:
+        return got + ["MyMesh::startScopeQuery is gone"]
+    if "if (nb.heard_timestamp == 0) continue;" not in start or "r.rssi = 0;" not in start:
+        got.append("startScopeQuery no longer snapshots every filled neighbor row")
+    if "_scope_run->start(rows, n);" not in start:
+        got.append("startScopeQuery no longer starts the walk over the snapshot")
+    return got
+
+
 def read(p):
     return p.read_text(encoding="utf-8")
 
 
 def test_the_real_tree_passes():
-    got = request_failures(read(MYMESH)) + matching_failures(read(MYMESH), read(MYMESH_H))
+    got = (request_failures(read(MYMESH)) + matching_failures(read(MYMESH), read(MYMESH_H))
+           + walk_failures(read(MYMESH)))
     assert not got, "\n".join(got)
+
+
+def test_negative_a_peer_that_is_never_forgotten_is_caught():
+    text = read(MYMESH).replace("    _regions_peer_set = false;\n    memset(_regions_peer_secret, 0, PUB_KEY_SIZE);\n", "", 1)
+    assert text != read(MYMESH)
+    assert any("forgets the in-flight peer" in f for f in walk_failures(text))
+
+
+def test_negative_a_secret_left_after_release_is_caught():
+    text = read(MYMESH).replace("    memset(_regions_peer_secret, 0, PUB_KEY_SIZE);\n  }\n}", "  }\n}", 1)
+    assert text != read(MYMESH)
+    assert any("wipes the peer's secret" in f for f in walk_failures(text))
+
+
+def test_negative_no_release_after_poll_is_caught():
+    text = read(MYMESH).replace(
+        "  releaseScopePeer();   // closed by a timeout inside poll(): forget it before the next is taken\n", "", 1)
+    assert text != read(MYMESH)
+    assert any("before and after poll()" in f for f in walk_failures(text))
+
+
+def test_negative_a_walk_not_stepped_from_loop_is_caught():
+    text = read(MYMESH).replace("  scopeQueryTick();       // #1911", "  // scopeQueryTick();", 1)
+    assert text != read(MYMESH)
+    assert any("no longer steps the walk" in f for f in walk_failures(text))
+
+
+def test_negative_a_send_not_reported_is_caught():
+    text = read(MYMESH).replace("  _scope_run->sent(ok, tag, now);\n", "", 1)
+    assert any("polls, sends, then reports" in f for f in walk_failures(text))
 
 
 def test_negative_the_regions_peer_matched_before_the_acl_is_caught():

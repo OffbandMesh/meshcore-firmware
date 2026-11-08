@@ -7,6 +7,10 @@
 #include "helpers/wifi_observer/NeighborsReport.h"   // #1905: bareScopeName
 #include "helpers/ClockSanity.h"                     // #1907: plausibleEpoch
 #include "helpers/wifi_observer/RegionsPeer.h"       // #1910: kRegionsPeerIdx, routePeerData
+#include <new>                                       // #1911: placement new for the walk
+#ifdef BOARD_HAS_PSRAM
+#include <esp_heap_caps.h>                           // #1911: the walk lives in PSRAM
+#endif
 #endif
 
 /* ------------------------------ Config -------------------------------- */
@@ -238,9 +242,13 @@ bool MyMesh::sendRegionsReq(const uint8_t* pub_key, uint32_t* tag) {
   const uint32_t t = getRTCClock()->getCurrentTimeUnique();
   offband::buildRegionsRequest(t, req);
   mesh::Packet* pkt = createAnonDatagram(PAYLOAD_TYPE_ANON_REQ, self_id, peer, secret, req, sizeof(req));
-  if (pkt == NULL) return false;
+  if (pkt == NULL) {
+    memset(secret, 0, sizeof(secret));
+    return false;
+  }
   memcpy(_regions_peer_key, pub_key, PUB_KEY_SIZE);
   memcpy(_regions_peer_secret, secret, PUB_KEY_SIZE);
+  memset(secret, 0, sizeof(secret));
   _regions_peer_set = true;
   sendZeroHop(pkt);
   *tag = t;   // only a request that went out has a tag worth matching
@@ -265,6 +273,93 @@ void MyMesh::onRegionsReply(offband::ScopeReply reply, const uint8_t* data, size
     _scope_run->replied(scopes);
   } else {
     _scope_run->unusableReply();
+  }
+}
+
+static_assert(offband::kNeighborKeyLen == PUB_KEY_SIZE, "the walk keys rows by the full public key");
+
+// #1911: the walk's storage, in PSRAM, created on the first walk. Its rows are this
+// repeater's neighbor table as it stands now; RSSI is not kept here, so it reads 0 (null
+// in the report).
+static void* scopeAlloc(size_t n) {
+#ifdef BOARD_HAS_PSRAM
+  return heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
+#else
+  return malloc(n);
+#endif
+}
+
+bool MyMesh::startScopeQuery() {
+  if (_scope_run == NULL) {
+    void* mem = scopeAlloc(sizeof(ScopeRun));
+    if (mem == NULL) {
+      MESH_DEBUG_PRINTLN("scope query: no memory for the walk (%u bytes); not started", (unsigned)sizeof(ScopeRun));
+      return false;
+    }
+    _scope_run = new (mem) ScopeRun();
+  }
+  offband::NeighbourInfo* rows = static_cast<offband::NeighbourInfo*>(scopeAlloc(sizeof(offband::NeighbourInfo) * MAX_NEIGHBOURS));
+  if (rows == NULL) {
+    MESH_DEBUG_PRINTLN("scope query: no memory for the neighbor snapshot; not started");
+    return false;
+  }
+  int n = 0;
+  for (int i = 0; i < MAX_NEIGHBOURS; i++) {
+    const NeighbourInfo& nb = neighbours[i];
+    if (nb.heard_timestamp == 0) continue;   // a free slot
+    offband::NeighbourInfo& r = rows[n++];
+    memcpy(r.pub_key, nb.id.pub_key, offband::kNeighborKeyLen);
+    r.advert_timestamp = nb.advert_timestamp;
+    r.heard_timestamp = nb.heard_timestamp;
+    r.snr = nb.snr;
+    r.rssi = 0;
+  }
+  _scope_run->start(rows, n);
+  free(rows);
+  MESH_DEBUG_PRINTLN("scope query: walk started over %d neighbors", _scope_run->resultCount());
+  return true;
+}
+
+// The neighbor stops being matched as a peer, and its secret is wiped, the moment its
+// request closes (answered, timed out, or retired by a restart): no decrypt path to it
+// outlives the request.
+void MyMesh::releaseScopePeer() {
+  uint8_t key[PUB_KEY_SIZE];
+  if (_scope_run == NULL || !_scope_run->takeReleased(key)) return;
+  if (_regions_peer_set && memcmp(key, _regions_peer_key, PUB_KEY_SIZE) == 0) {
+    _regions_peer_set = false;
+    memset(_regions_peer_secret, 0, PUB_KEY_SIZE);
+  }
+}
+
+// #1911: one step of the walk per loop() pass. Sends at most one request, never waits:
+// the reply arrives later through onPeerDataRecv.
+void MyMesh::scopeQueryTick() {
+  if (_scope_run == NULL) return;
+  releaseScopePeer();   // closed by a reply since the last pass
+  if (!_scope_run->running()) return;
+  const uint32_t now = millis();
+  const uint8_t* next = _scope_run->poll(now);
+  releaseScopePeer();   // closed by a timeout inside poll(): forget it before the next is taken
+  if (next == NULL) return;
+  uint32_t tag = 0;
+  const bool ok = sendRegionsReq(next, &tag);
+  _scope_run->sent(ok, tag, now);
+}
+
+void MyMesh::scopeWalkSummary(offband::ScopeWalkSummary* out) const {
+  memset(out, 0, sizeof(*out));
+  if (_scope_run == NULL) return;
+  out->running = _scope_run->running();
+  out->total = _scope_run->resultCount();
+  out->done = _scope_run->queriedCount();
+  for (int i = 0; i < out->total; i++) {
+    switch (_scope_run->result(i).status) {
+      case offband::ScopeStatus::Responded:  out->responded++; break;
+      case offband::ScopeStatus::Timeout:    out->timeout++; break;
+      case offband::ScopeStatus::SendFailed: out->send_failed++; break;
+      default: break;
+    }
   }
 }
 
@@ -1491,6 +1586,7 @@ void MyMesh::loop() {
   mesh::Mesh::loop();
 
 #if defined(OFFBAND_NEIGHBORS_REPORT)
+  scopeQueryTick();       // #1911: the walk, one request at a time
   neighborsCycleTick();   // #1907: the CoreScope /neighbors report
 #endif
 
