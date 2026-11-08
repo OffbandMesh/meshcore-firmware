@@ -24,9 +24,23 @@
   #include <Wire.h>
   #include "helpers/SafeBootDisplay.h"   // #1889: the panel sleeps before SafeBoot decides
 #endif
-#if defined(PIN_STATUS_LED)
-  #include "helpers/ui/MorseBlink.h"   // #1691: SOS before a refusing board goes dark
-#endif
+// #1691: SOS before a refusing board goes dark.
+//
+// UNCONDITIONAL, and it must stay that way (#2060). This include used to sit behind
+// `#if defined(PIN_STATUS_LED)`, matching the guard on blinkSafeBootSos() below -- which
+// reads as correct and is not. PIN_STATUS_LED reaches this file through variant.h, which
+// arrives with <Arduino.h> on the NEXT line; SafeBoot.h and MeshLog.h pull only stdint,
+// stddef and string.h. So a board that defines PIN_STATUS_LED *only in variant.h* has it
+// undefined here and defined by the time the function body is compiled: the header is
+// skipped, the body is kept, and every offband::morse* symbol is undeclared. That is
+// exactly what broke all four Xiao_nrf52 release envs and blocked the 1.7.0 publish.
+// Boards that escaped it did so for unrelated reasons -- they set the macro in build_flags
+// (visible here), or never set it (body compiled out).
+//
+// Including it always costs nothing: MorseBlink.h is #pragma once, depends only on
+// <stdint.h>, and is entirely constexpr/inline, so an env that never calls it emits no
+// code. Do not re-add a guard here to "match" the one on the function.
+#include "helpers/ui/MorseBlink.h"
 
 #include <Arduino.h>
 #include <stdint.h>
