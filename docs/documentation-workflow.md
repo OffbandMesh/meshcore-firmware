@@ -119,12 +119,8 @@ Merge approved guide changes into `firmware-base`. The website's canonical build
 reads that branch at an immutable commit and labels its source revision. An
 unmerged local preview is explicitly marked as a preview and cannot publish.
 
-Rebuild notification integration is tracked by Epic C task #1834 and blocked by
-site verification gate #1800 plus a verified scoped credential. Do not assume a
-merge currently sends a notification. Until enabled, the owner can start a site
-build manually. A future notification builds an artifact; it does not publish.
-
-Publication remains an explicit owner-initiated action on `offband-site` `main`
-with `publish=true`. See that repository's `docs/documentation-publishing.md`.
-Merging a feature or passing documentation checks does not itself publish the
-manual, validate hardware, or close outstanding release/applicability gaps.
+A merge that changes `docs/user/` publishes the manual. `.github/workflows/docs-notify.yml`
+sends offband-site a `firmware-docs` dispatch, and the site builds the current
+`firmware-base` head and deploys it. See that repository's
+`docs/documentation-publishing.md`. Publishing the manual does not validate
+hardware; a guide's **Applies to** says which firmware it needs.
