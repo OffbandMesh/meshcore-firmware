@@ -1,16 +1,17 @@
 schema_version: 1
 issue: 1903
-impact: none
+impact: updated
+guides:
+  - docs/user/guides/repeater-neighbors.md
 reason: >-
-  No published guide changes, because no release carries this yet; docs/user/ is
-  the published manual. The change is user-visible: the WiFi-telemetry repeater's
-  /neighbors report (#1902) now also lists the regions of each repeater it hears
-  directly, which it asks for one at a time, and discover.scopes on the repeater
-  queries them before publishing, reports progress while a query runs, and
-  publishes its own regions straight away when it has heard no neighbors. The
-  guide draft docs/drafts/repeater-neighbors.md is updated in this change, and
-  its catalog entry (repeater-neighbors in docs/user/features.yml) is retitled to
-  match; both publish with the release that carries the feature. Periodic
-  publishing is still off unless turned on; settings, defaults and every other
-  repeater command and reply are unchanged, and admin logins and forwarding are
-  unaffected while a query runs.
+  The WiFi-telemetry repeater's /neighbors report (#1902) now also lists the
+  regions of each repeater it hears directly, which it asks for one at a time,
+  and discover.scopes on the repeater queries them before publishing, reports
+  progress while a query runs, and publishes its own regions straight away when
+  it has heard no neighbors. The repeater-neighbors guide describes the query,
+  its three new replies and the worst-case duration, and drops its note that
+  neighbors' regions are not in the report yet; it and its catalog entry
+  (repeater-neighbors in docs/user/features.yml) are retitled to match.
+  Periodic publishing is still off unless turned on; settings, defaults and
+  every other repeater command and reply are unchanged, and admin logins and
+  forwarding are unaffected while a query runs.
