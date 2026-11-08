@@ -19,7 +19,7 @@ The QCC badge firmware, on every badge. Needs firmware newer than `offband-v1.6.
 A supporter badge has a screen and a keyboard. A pyramid badge has neither unless one
 was added, and some badges have no buzzer or GPS.
 
-![Pyramid badge, front and rear: LoRa antenna, LoRa module, OLED display, USR button, USB-C, RST button, battery connector, rear battery and lanyard slot](../assets/qcc/qcc-badge-pyramid.png)
+![Pyramid badge, front and rear: LoRa antenna, LoRa module, OLED display, USR button, USB-C, RST button, battery connector, rear battery, lanyard slot, message LED above the Q, main controller, two corner LEDs and the LED beside the buzzer](../assets/qcc/qcc-badge-pyramid.png)
 
 ![Supporter badge, with and without the display and keyboard: LoRa antenna, OLED display, message LED, SW1 user button, keyboard, LoRa module, GPS module, battery, RESET, MUTE switch and buzzer, ProMicro with USB-C, and POWER switch](../assets/qcc/qcc-badge-supporter.png)
 
