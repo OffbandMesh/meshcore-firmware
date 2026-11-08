@@ -159,6 +159,12 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   // tag); None while no walk exists. onRegionsReply() takes one that is the walk's.
   offband::ScopeReply classifyRegionsReply(const uint8_t* from_key, const uint8_t* data, size_t len) const;
   void onRegionsReply(offband::ScopeReply reply, const uint8_t* data, size_t len);
+  // #1911: the walk. startScopeQuery() snapshots the neighbor table (false when the
+  // walk has no storage); scopeQueryTick() sends at most one request per loop() pass and
+  // never waits; releaseScopePeer() forgets the in-flight peer once its request closes.
+  bool startScopeQuery();
+  void scopeQueryTick();
+  void releaseScopePeer();
 #endif
 
 protected:
@@ -245,6 +251,7 @@ public:
   void configureNeighborsSchedule(bool enabled, uint16_t interval_hours);
   void neighborsScheduleStatus(offband::NeighborsScheduleStatus* out) const;
   void startNeighborsReportNow();   // discover.scopes: publish on the next pass
+  void scopeWalkSummary(offband::ScopeWalkSummary* out) const;   // #1911
 #endif
 
   // CommonCLICallbacks

@@ -179,9 +179,11 @@ def test_the_real_tree_passes():
     assert not got, "\n".join(got)
 
 
+TICK_GUARD = re.compile(r"#if defined\(%s\)\n((?:  [^\n]*\n)*?)(  neighborsCycleTick\(\);)" % FLAG)
+
+
 def test_negative_a_tick_in_the_else_of_the_flag_is_caught():
-    text = read(MYMESH).replace("#if defined(%s)\n  neighborsCycleTick();" % FLAG,
-                                "#if defined(%s)\n#else\n  neighborsCycleTick();" % FLAG, 1)
+    text = TICK_GUARD.sub(lambda m: "#if defined(%s)\n%s#else\n%s" % (FLAG, m.group(1), m.group(2)), read(MYMESH), 1)
     assert text != read(MYMESH)
     assert any("outside" in f for f in mymesh_failures(text))
 
@@ -208,7 +210,7 @@ def test_negative_no_tick_is_caught():
 
 
 def test_negative_an_unguarded_tick_is_caught():
-    text = read(MYMESH).replace("#if defined(%s)\n  neighborsCycleTick();" % FLAG, "#if 1\n  neighborsCycleTick();", 1)
+    text = TICK_GUARD.sub(lambda m: "#if 1\n%s%s" % (m.group(1), m.group(2)), read(MYMESH), 1)
     assert text != read(MYMESH)
     assert any("outside" in f for f in mymesh_failures(text))
 
