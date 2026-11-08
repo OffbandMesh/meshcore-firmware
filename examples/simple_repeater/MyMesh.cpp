@@ -6,6 +6,7 @@
 #if defined(OFFBAND_NEIGHBORS_REPORT)
 #include "helpers/wifi_observer/NeighborsReport.h"   // #1905: bareScopeName
 #include "helpers/ClockSanity.h"                     // #1907: plausibleEpoch
+#include "helpers/wifi_observer/RegionsPeer.h"       // #1910: kRegionsPeerIdx, routePeerData
 #endif
 
 /* ------------------------------ Config -------------------------------- */
@@ -244,6 +245,27 @@ bool MyMesh::sendRegionsReq(const uint8_t* pub_key, uint32_t* tag) {
   sendZeroHop(pkt);
   *tag = t;   // only a request that went out has a tag worth matching
   return true;
+}
+
+// #1910: a reply belongs to the walk only when both the sender's key and the tag match;
+// a late reply to a request the walk already closed is Retired, still ours, and dropped.
+offband::ScopeReply MyMesh::classifyRegionsReply(const uint8_t* from_key, const uint8_t* data, size_t len) const {
+  if (_scope_run == NULL || len < 4) return offband::ScopeReply::None;
+  uint32_t tag;
+  memcpy(&tag, data, 4);
+  return _scope_run->classify(from_key, tag);
+}
+
+void MyMesh::onRegionsReply(offband::ScopeReply reply, const uint8_t* data, size_t len) {
+  if (reply != offband::ScopeReply::Current) return;   // Retired: answered a closed request
+  uint32_t tag;
+  memcpy(&tag, data, 4);
+  char scopes[offband::kScopesLen];
+  if (offband::parseRegionsResponse(data, len, tag, scopes, sizeof(scopes))) {
+    _scope_run->replied(scopes);
+  } else {
+    _scope_run->unusableReply();
+  }
 }
 
 // #1907: this repeater's own scopes, from the same call that answers a neighbor's regions
@@ -732,11 +754,25 @@ int MyMesh::searchPeersByHash(const uint8_t *hash) {
       matching_peer_indexes[n++] = i; // store the INDEXES of matching contacts (for subsequent 'peer' methods)
     }
   }
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+  // #1910: the neighbor a regions request is out to, after the ACL: one that is also a
+  // client is tried as that client first, and onPeerDataRecv still hands its regions
+  // reply to the walk. kRegionsPeerIdx is refused by every ACL path (RegionsPeer.h).
+  if (_regions_peer_set && mesh::Identity(_regions_peer_key).isHashMatch(hash)) {
+    matching_peer_indexes[n++] = offband::kRegionsPeerIdx;
+  }
+#endif
   return n;
 }
 
 void MyMesh::getPeerSharedSecret(uint8_t *dest_secret, int peer_idx) {
   int i = matching_peer_indexes[peer_idx];
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+  if (i == offband::kRegionsPeerIdx) {   // #1910: worked out when the request went out
+    memcpy(dest_secret, _regions_peer_secret, PUB_KEY_SIZE);
+    return;
+  }
+#endif
   if (i >= 0 && i < acl.getNumClients()) {
     // lookup pre-calculated shared_secret
     memcpy(dest_secret, acl.getClientByIdx(i)->shared_secret, PUB_KEY_SIZE);
@@ -768,6 +804,28 @@ void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32
 void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, const uint8_t *secret,
                             uint8_t *data, size_t len) {
   int i = matching_peer_indexes[sender_idx];
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+  // #1910: a regions reply goes to the walk, whoever it was matched as; anything else
+  // matched through the regions peer is dropped here, before any client path.
+  {
+    const bool is_client = i >= 0 && i < acl.getNumClients();
+    const uint8_t* from = (i == offband::kRegionsPeerIdx) ? _regions_peer_key
+                          : is_client ? acl.getClientByIdx(i)->id.pub_key : NULL;
+    const bool is_response = type == PAYLOAD_TYPE_RESPONSE;
+    const offband::ScopeReply reply = (is_response && from != NULL)
+                                          ? classifyRegionsReply(from, data, len) : offband::ScopeReply::None;
+    switch (offband::routePeerData(i, acl.getNumClients(), is_response, reply)) {
+      case offband::PeerRoute::Regions:
+        onRegionsReply(reply, data, len);
+        return;
+      case offband::PeerRoute::Drop:
+        if (i == offband::kRegionsPeerIdx) return;   // not the walk's: never a client's
+        break;   // an invalid ACL index: the check below logs and returns
+      case offband::PeerRoute::Client:
+        break;
+    }
+  }
+#endif
   if (i < 0 || i >= acl.getNumClients()) { // get from our known_clients table (sender SHOULD already be known in this context)
     MESH_DEBUG_PRINTLN("onPeerDataRecv: invalid peer idx: %d", i);
     return;
@@ -995,6 +1053,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 #endif
 #if defined(OFFBAND_NEIGHBORS_REPORT)
   _regions_peer_set = false;   // #1909
+  _scope_run = NULL;           // #1910: allocated on the first walk
 #endif
 
   // defaults
