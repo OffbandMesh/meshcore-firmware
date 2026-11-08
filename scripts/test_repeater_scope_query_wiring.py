@@ -101,6 +101,10 @@ def request_failures(text):
     tag_set = body.find("*tag = t;")
     if tag_set < 0 or send < 0 or tag_set < send:
         got.append("sendRegionsReq sets the tag before the request went out")
+    free_check = body.find("if (_mgr->getFreeCount() == 0) return false;")
+    exchange = body.find("self_id.calcSharedSecret(")
+    if free_check < 0 or exchange < 0 or free_check > exchange:
+        got.append("sendRegionsReq runs the key exchange before checking for a free packet")
     return got
 
 
@@ -167,11 +171,15 @@ def walk_failures(text):
         got.append("scopeQueryTick no longer polls, sends, then reports the send")
     if tick.count("releaseScopePeer();") < 2 or tick.find("releaseScopePeer();", poll) < 0:
         got.append("scopeQueryTick no longer releases the peer before and after poll()")
+    if tick.find("releaseScopePeer();") > poll:
+        got.append("scopeQueryTick no longer releases the peer before poll()")
     release = function_body(code, "void MyMesh::releaseScopePeer()")
     if release is None or "_regions_peer_set = false;" not in release:
         got.append("releaseScopePeer no longer forgets the in-flight peer")
     elif "memset(_regions_peer_secret, 0, PUB_KEY_SIZE);" not in release:
         got.append("releaseScopePeer no longer wipes the peer's secret")
+    elif "memcmp(key, _regions_peer_key, PUB_KEY_SIZE) == 0" not in release:
+        got.append("releaseScopePeer forgets the peer without checking it is the closed request's")
     start = function_body(code, "bool MyMesh::startScopeQuery()")
     if start is None:
         return got + ["MyMesh::startScopeQuery is gone"]
@@ -179,6 +187,10 @@ def walk_failures(text):
         got.append("startScopeQuery no longer snapshots every filled neighbor row")
     if "_scope_run->start(rows, n);" not in start:
         got.append("startScopeQuery no longer starts the walk over the snapshot")
+    if "free(rows);" not in start:
+        got.append("startScopeQuery no longer frees its snapshot")
+    if "start(NULL" in start:
+        got.append("startScopeQuery clears the last walk on failure (the caller decides)")
     return got
 
 
@@ -197,6 +209,16 @@ def cycle_failures(text, main):
     m = re.search(r"case\s+offband::NeighborsAction::StartWalk:(.*?)break;", tick, re.S)
     if m is None or "startScopeQuery()" not in m.group(1):
         got.append("the cycle's walk step no longer starts the walk")
+    else:
+        if "_nbr_schedule.walkStarted(true);" not in m.group(1):
+            got.append("the cycle's walk step no longer goes on to publish when the walk fails")
+        if "_scope_run->start(NULL, 0);" not in m.group(1):
+            got.append("a failed scheduled walk no longer clears the last cycle's rows")
+    now = function_body(code, "int MyMesh::startNeighborsReportNow()")
+    if now is None or now.count("_nbr_schedule.manualWalkStarted();") < 2:
+        got.append("startNeighborsReportNow no longer starts the manual report on both paths")
+    elif not re.search(r"if\s*\(\s*!startScopeQuery\(\)\s*\)\s*return\s+-1\s*;", now):
+        got.append("startNeighborsReportNow no longer reports a walk with no memory")
     report = function_body(code, "bool MyMesh::publishNeighborsReport()")
     if report is None or not re.search(r"in\.rows\s*=\s*walked\s*>\s*0\s*\?\s*_scope_run->results\(\)\s*:\s*NULL\s*;", report):
         got.append("publishNeighborsReport no longer lists the walk's results")
@@ -208,6 +230,8 @@ def cycle_failures(text, main):
     start = cmd.find("startNeighborsReportNow()", scopes)
     if running < 0 or start < 0 or running > start:
         got.append("discover.scopes no longer reports progress before it would start a walk")
+    if not re.search(r'if\s*\(\s*n\s*<\s*0\s*\)\s*\{\s*strcpy\(\s*reply\s*,\s*"Err - no memory for the query"\s*\)\s*;', cmd):
+        got.append("discover.scopes no longer says the query had no memory")
     if not re.search(r"static\s+void\s+nbrSummary\([^)]*\)\s*\{\s*the_mesh\.scopeWalkSummary\(\s*out\s*\)\s*;", strip_comments(main)):
         got.append("the scope_summary hook no longer reports the walk")
     return got
@@ -231,9 +255,7 @@ def test_negative_a_cycle_blind_to_the_walk_is_caught():
 
 
 def test_negative_a_cycle_that_starts_no_walk_is_caught():
-    text = read(MYMESH).replace(
-        '      if (!startScopeQuery()) MESH_DEBUG_PRINTLN("neighbors: no walk this cycle; publishing own scopes only");\n',
-        "", 1)
+    text = read(MYMESH).replace("      if (!startScopeQuery()) {\n", "      if (true) {\n", 1)
     assert text != read(MYMESH)
     assert any("no longer starts the walk" in f for f in cycle_failures(text, read(MAIN)))
 
@@ -283,7 +305,67 @@ def test_negative_a_walk_not_stepped_from_loop_is_caught():
 
 def test_negative_a_send_not_reported_is_caught():
     text = read(MYMESH).replace("  _scope_run->sent(ok, tag, now);\n", "", 1)
+    assert text != read(MYMESH)
     assert any("polls, sends, then reports" in f for f in walk_failures(text))
+
+
+def test_negative_a_key_exchange_before_the_pool_check_is_caught():
+    text = read(MYMESH).replace("  if (_mgr->getFreeCount() == 0) return false;\n", "", 1)
+    assert text != read(MYMESH)
+    assert any("before checking for a free packet" in f for f in request_failures(text))
+
+
+def test_negative_no_release_before_poll_is_caught():
+    text = read(MYMESH).replace("  releaseScopePeer();   // closed by a reply since the last pass\n", "", 1)
+    assert text != read(MYMESH)
+    assert any("before poll()" in f for f in walk_failures(text))
+
+
+def test_negative_a_release_that_ignores_which_request_closed_is_caught():
+    text = read(MYMESH).replace("if (_regions_peer_set && memcmp(key, _regions_peer_key, PUB_KEY_SIZE) == 0) {",
+                                "if (_regions_peer_set) {", 1)
+    assert text != read(MYMESH)
+    assert any("without checking" in f for f in walk_failures(text))
+
+
+def test_negative_a_snapshot_never_freed_is_caught():
+    text = read(MYMESH).replace("  free(rows);\n", "", 1)
+    assert text != read(MYMESH)
+    assert any("frees its snapshot" in f for f in walk_failures(text))
+
+
+def test_negative_a_manual_failure_that_clears_the_walk_is_caught():
+    text = read(MYMESH).replace("    return false;   // the last walk is left as it was; the caller decides\n",
+                                "    _scope_run->start(NULL, 0);\n    return false;\n", 1)
+    assert text != read(MYMESH)
+    assert any("clears the last walk on failure" in f for f in walk_failures(text))
+
+
+def test_negative_a_failed_scheduled_walk_that_keeps_old_rows_is_caught():
+    text = read(MYMESH).replace("        if (_scope_run != NULL) _scope_run->start(NULL, 0);\n", "", 1)
+    assert text != read(MYMESH)
+    assert any("clears the last cycle's rows" in f for f in cycle_failures(text, read(MAIN)))
+
+
+def test_negative_a_failed_scheduled_walk_that_skips_the_report_is_caught():
+    text = read(MYMESH).replace("      _nbr_schedule.walkStarted(true);\n", "      _nbr_schedule.walkStarted(false);\n", 1)
+    assert text != read(MYMESH)
+    assert any("goes on to publish" in f for f in cycle_failures(text, read(MAIN)))
+
+
+def test_negative_a_manual_report_that_never_starts_is_caught():
+    text = read(MYMESH)
+    at = text.find("int MyMesh::startNeighborsReportNow()")
+    end = text.find("\n}\n", at)
+    body = text[at:end].replace("  _nbr_schedule.manualWalkStarted();\n", "", 1)
+    text = text[:at] + body + text[end:]
+    assert any("on both paths" in f for f in cycle_failures(text, read(MAIN)))
+
+
+def test_negative_no_memory_said_as_success_is_caught():
+    text = read(MYMESH).replace('strcpy(reply, "Err - no memory for the query");', 'strcpy(reply, "OK");', 1)
+    assert text != read(MYMESH)
+    assert any("had no memory" in f for f in cycle_failures(text, read(MAIN)))
 
 
 def test_negative_the_regions_peer_matched_before_the_acl_is_caught():

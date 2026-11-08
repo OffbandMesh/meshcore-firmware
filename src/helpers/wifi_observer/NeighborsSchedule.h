@@ -92,7 +92,9 @@ public:
         }
     }
 
-    // After a StartWalk: false (no walk could start) ends this cycle unpublished.
+    // After a StartWalk: false ends this cycle unpublished; true goes on to publish once
+    // the walk is no longer running. A caller with something to report even without a
+    // walk (the repeater's own scopes) passes true after a failed start, with no rows.
     void walkStarted(bool ok) {
         if (phase_ == Phase::Refreshing) phase_ = ok ? Phase::Querying : Phase::Idle;
     }
