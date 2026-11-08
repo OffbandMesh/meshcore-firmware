@@ -246,11 +246,11 @@ public:
   // changes, so copy it or use it at once.
   const char* getDefaultScopeName();
 
-  // #1907: the periodic CoreScope /neighbors report. Until the repeater queries its
-  // neighbors (#1903) it carries this repeater's own scopes and its neighbor count.
+  // #1907 / #1912: the periodic CoreScope /neighbors report: this repeater's own scopes
+  // and the regions each neighbor answered with.
   void configureNeighborsSchedule(bool enabled, uint16_t interval_hours);
   void neighborsScheduleStatus(offband::NeighborsScheduleStatus* out) const;
-  void startNeighborsReportNow();   // discover.scopes: publish on the next pass
+  int startNeighborsReportNow();    // discover.scopes: neighbors queried, or -1 (no memory)
   void scopeWalkSummary(offband::ScopeWalkSummary* out) const;   // #1911
 #endif
 
