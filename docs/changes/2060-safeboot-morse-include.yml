@@ -1,0 +1,30 @@
+schema_version: 1
+issue: 2060
+impact: none
+reason: >-
+  Build fix only: one conditional include in src/SafeBoot.cpp becomes
+  unconditional, plus the comment explaining why it must stay that way. No
+  constant, gate, default, setting or wire format changes, and no public
+  Markdown is touched.
+  Nothing a user can observe changes on any board that already built. The
+  include was guarded on PIN_STATUS_LED at a point in the translation unit
+  before <Arduino.h> had pulled variant.h in to define it, so a board setting
+  that macro only in variant.h skipped the header while still compiling the
+  blinkSafeBootSos() body that needs it. That is a compile error, not a
+  behavior difference: an affected env produced no image at all. Boards that
+  built before set the macro in build_flags (so the header was already
+  included) or never set it (so the body was already compiled out) -- both
+  paths are byte-for-byte unchanged by this commit.
+  The affected family is the four Xiao_nrf52 release envs, which built green in
+  offband-v1.6.0-beta1 and regressed in 4c422343 (task(#1689), 2026-10-27).
+  Their images are already described by the existing SafeBoot documentation,
+  which is accurate as written -- the low-battery SOS hold behaves exactly as
+  #1691 specified once the env compiles. So the fix restores documented
+  behavior rather than introducing any, and no user documentation is owed.
+  Not changed here, deliberately: moving <Arduino.h> above the conditional
+  block would be the broader fix, but it would also newly satisfy the
+  SAFEBOOT_SSD1306_I2C_ADDR guard on the lines above for any board whose macro
+  arrives late, which is a behavior change and not one to make unreviewed
+  during a release. That macro is currently set only in
+  variants/qcc_badge/platformio.ini build_flags, so it is already visible at
+  its guard and is unaffected by this bug.
