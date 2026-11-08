@@ -37,8 +37,9 @@ discover.scopes
 ```
 
 Reply: `OK - querying <N> neighbors, then publishing`. The repeater asks one neighbor at
-a time and waits up to 20 seconds for each, so a long list takes a while; forwarding and
-admin logins keep working meanwhile. When the last one is done, the report goes to every
+a time and waits up to 20 seconds for each, so a long list takes a while (up to about
+17 minutes for 50 neighbors that all stay silent); forwarding and admin logins keep
+working meanwhile. When the last one is done, the report goes to every
 connected broker, whether or not periodic publishing is on.
 
 Send `discover.scopes` again to see progress: `OK - querying neighbors: <D> of <M> done`.
