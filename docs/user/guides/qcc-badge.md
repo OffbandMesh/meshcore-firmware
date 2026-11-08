@@ -19,6 +19,14 @@ The QCC badge firmware, on every badge. Needs firmware newer than `offband-v1.6.
 A supporter badge has a screen and a keyboard. A pyramid badge has neither unless one
 was added, and some badges have no buzzer or GPS.
 
+![Pyramid badge, front and rear: LoRa antenna, LoRa module, OLED display, USR button, USB-C, RST button, battery connector, rear battery and lanyard slot](../assets/qcc/qcc-badge-pyramid.png)
+
+![Supporter badge, with and without the display and keyboard: LoRa antenna, OLED display, message LED, SW1 user button, keyboard, LoRa module, GPS module, battery, RESET, MUTE switch and buzzer, ProMicro with USB-C, and POWER switch](../assets/qcc/qcc-badge-supporter.png)
+
+Part positions are approximate, and parts fitted to your badge may differ: the pyramid
+shown has a screen added. The button this guide refers to is marked **USR** on a pyramid
+badge and **SW1** on a supporter badge.
+
 | Part | If it is fitted | If it is not |
 |---|---|---|
 | **Screen** | Read messages and change settings on the badge. The Bluetooth PIN is on the screen and changes every start, unless you set a fixed one. | Do everything from the client. The Bluetooth PIN is `123456` until you set your own. |
