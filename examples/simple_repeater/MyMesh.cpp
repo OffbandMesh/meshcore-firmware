@@ -226,6 +226,26 @@ void MyMesh::neighborsCycleTick() {
   }
 }
 
+// #1909: the regions request a neighbor's handleAnonRegionsReq answers, zero-hop so it
+// answers zero-hop direct. The peer's key and secret are kept only once a packet exists,
+// so a failed build leaves no in-flight peer for the reply path to match.
+bool MyMesh::sendRegionsReq(const uint8_t* pub_key, uint32_t* tag) {
+  mesh::Identity peer(pub_key);
+  uint8_t secret[PUB_KEY_SIZE];
+  self_id.calcSharedSecret(secret, peer);
+  uint8_t req[offband::kRegionsRequestLen];
+  const uint32_t t = getRTCClock()->getCurrentTimeUnique();
+  offband::buildRegionsRequest(t, req);
+  mesh::Packet* pkt = createAnonDatagram(PAYLOAD_TYPE_ANON_REQ, self_id, peer, secret, req, sizeof(req));
+  if (pkt == NULL) return false;
+  memcpy(_regions_peer_key, pub_key, PUB_KEY_SIZE);
+  memcpy(_regions_peer_secret, secret, PUB_KEY_SIZE);
+  _regions_peer_set = true;
+  sendZeroHop(pkt);
+  *tag = t;   // only a request that went out has a tag worth matching
+  return true;
+}
+
 // #1907: this repeater's own scopes, from the same call that answers a neighbor's regions
 // request, handed to the broker pool, which builds the report at once and hands it to
 // each connected broker in turn.
@@ -972,6 +992,9 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 
 #if MAX_NEIGHBOURS
   memset(neighbours, 0, sizeof(neighbours));
+#endif
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+  _regions_peer_set = false;   // #1909
 #endif
 
   // defaults
