@@ -38,6 +38,7 @@
 #if defined(OFFBAND_NEIGHBORS_REPORT)
 #include "helpers/wifi_observer/NeighborsSchedule.h"   // #1907: the /neighbors cycle
 #include "helpers/wifi_observer/NeighborsCli.h"        // #1907: NeighborsScheduleStatus
+#include "helpers/wifi_observer/ObserverNeighbors.h"   // #1910: ScopeQueryRun, ScopeReply
 #endif
 
 #ifdef WITH_BRIDGE
@@ -117,6 +118,9 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   uint8_t _regions_peer_key[PUB_KEY_SIZE];
   uint8_t _regions_peer_secret[PUB_KEY_SIZE];
   bool _regions_peer_set;
+  // #1910: the walk over the neighbor table, allocated on its first start (#1911).
+  typedef offband::ScopeQueryRun<MAX_NEIGHBOURS> ScopeRun;
+  ScopeRun* _scope_run;
 #endif
   CayenneLPP telemetry;
   unsigned long set_radio_at, revert_radio_at;
@@ -124,7 +128,11 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   float pending_bw;
   uint8_t pending_sf;
   uint8_t pending_cr;
+#if defined(OFFBAND_NEIGHBORS_REPORT)
+  int  matching_peer_indexes[MAX_CLIENTS + 1];   // #1910: the ACL, plus the regions peer
+#else
   int  matching_peer_indexes[MAX_CLIENTS];
+#endif
 #if defined(WITH_RS232_BRIDGE)
   RS232Bridge bridge;
 #elif defined(WITH_ESPNOW_BRIDGE)
@@ -147,6 +155,10 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   // #1909: ask one neighbor, zero-hop, for its flood regions. tag is set only when the
   // request went out; false when no packet could be built.
   bool sendRegionsReq(const uint8_t* pub_key, uint32_t* tag);
+  // #1910: what the walk makes of a response from from_key (its first 4 bytes are the
+  // tag); None while no walk exists. onRegionsReply() takes one that is the walk's.
+  offband::ScopeReply classifyRegionsReply(const uint8_t* from_key, const uint8_t* data, size_t len) const;
+  void onRegionsReply(offband::ScopeReply reply, const uint8_t* data, size_t len);
 #endif
 
 protected:

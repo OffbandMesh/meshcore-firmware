@@ -10,6 +10,12 @@ repeater-side wiring the native tests cannot reach.
 - the in-flight peer (its key and secret, which the reply path decrypts with) is kept
   only once a packet exists, and the tag only once the request has gone out.
 
+#1910, the reply (searchPeersByHash / getPeerSharedSecret / onPeerDataRecv):
+- the in-flight neighbor is matched under kRegionsPeerIdx, after the ACL, and only
+  while a request is out; it decrypts with its own secret, never an ACL entry's;
+- onPeerDataRecv routes through routePeerData before it picks up a client, hands the
+  walk's reply to onRegionsReply, and stops anything else matched as the regions peer.
+
 Run: python scripts/test_repeater_scope_query_wiring.py
 """
 import re
@@ -85,13 +91,96 @@ def request_failures(text):
     return got
 
 
+MYMESH_H = ROOT / "examples" / "simple_repeater" / "MyMesh.h"
+
+
+def matching_failures(text, header):
+    """#1910: the regions peer is matched after the ACL, decrypts with its own secret, and
+    is routed (RegionsPeer.h) before onPeerDataRecv touches a client."""
+    code = strip_comments(text)
+    got = []
+    search = function_body(code, "int MyMesh::searchPeersByHash(")
+    if search is None:
+        return ["MyMesh::searchPeersByHash is gone"]
+    loop_end = search.find("return n;")
+    acl_loop = search.find("for (int i = 0; i < acl.getNumClients(); i++)")
+    peer = search.find("matching_peer_indexes[n++] = offband::kRegionsPeerIdx;")
+    if peer < 0:
+        got.append("searchPeersByHash no longer matches the regions peer")
+    elif acl_loop < 0 or peer < acl_loop or peer > loop_end:
+        got.append("searchPeersByHash matches the regions peer before the ACL")
+    elif "_regions_peer_set &&" not in search[:peer]:
+        got.append("searchPeersByHash matches the regions peer with no request out")
+    secret = function_body(code, "void MyMesh::getPeerSharedSecret(")
+    if secret is None or not re.search(
+            r"if\s*\(\s*i\s*==\s*offband::kRegionsPeerIdx\s*\)\s*\{\s*memcpy\(\s*dest_secret\s*,\s*_regions_peer_secret\s*,"
+            r"\s*PUB_KEY_SIZE\s*\)\s*;\s*return\s*;", secret):
+        got.append("getPeerSharedSecret no longer gives the regions peer its own secret")
+    elif secret.find("kRegionsPeerIdx") > secret.find("acl.getClientByIdx"):
+        got.append("getPeerSharedSecret looks the regions peer up in the ACL")
+    data = function_body(code, "void MyMesh::onPeerDataRecv(")
+    if data is None:
+        return got + ["MyMesh::onPeerDataRecv is gone"]
+    route = data.find("offband::routePeerData(i, acl.getNumClients(), is_response, reply)")
+    client = data.find("ClientInfo* client = acl.getClientByIdx(i);")
+    if route < 0:
+        got.append("onPeerDataRecv no longer routes through routePeerData")
+    elif client >= 0 and route > client:
+        got.append("onPeerDataRecv picks up a client before routing")
+    if not re.search(r"case\s+offband::PeerRoute::Regions:\s*onRegionsReply\(\s*reply\s*,\s*data\s*,\s*len\s*\)\s*;\s*return\s*;", data):
+        got.append("onPeerDataRecv no longer hands the walk's reply to onRegionsReply and returns")
+    if not re.search(r"case\s+offband::PeerRoute::Drop:\s*if\s*\(\s*i\s*==\s*offband::kRegionsPeerIdx\s*\)\s*return\s*;", data):
+        got.append("onPeerDataRecv does not stop a dropped regions-peer packet")
+    if not re.search(r"int\s+matching_peer_indexes\[\s*MAX_CLIENTS\s*\+\s*1\s*\]\s*;", strip_comments(header)):
+        got.append("matching_peer_indexes has no room for the regions peer")
+    return got
+
+
 def read(p):
     return p.read_text(encoding="utf-8")
 
 
 def test_the_real_tree_passes():
-    got = request_failures(read(MYMESH))
+    got = request_failures(read(MYMESH)) + matching_failures(read(MYMESH), read(MYMESH_H))
     assert not got, "\n".join(got)
+
+
+def test_negative_the_regions_peer_matched_before_the_acl_is_caught():
+    text = read(MYMESH)
+    peer_block = ("  if (_regions_peer_set && mesh::Identity(_regions_peer_key).isHashMatch(hash)) {\n"
+                  "    matching_peer_indexes[n++] = offband::kRegionsPeerIdx;\n  }\n")
+    assert peer_block in text
+    text = text.replace(peer_block, "", 1).replace(
+        "int MyMesh::searchPeersByHash(const uint8_t *hash) {\n  int n = 0;\n",
+        "int MyMesh::searchPeersByHash(const uint8_t *hash) {\n  int n = 0;\n" + peer_block, 1)
+    assert any("before the ACL" in f for f in matching_failures(text, read(MYMESH_H)))
+
+
+def test_negative_routing_after_the_client_lookup_is_caught():
+    text = read(MYMESH)
+    lookup = "  ClientInfo* client = acl.getClientByIdx(i);\n"
+    at = text.find("void MyMesh::onPeerDataRecv(")
+    route_at = text.find("  // #1910: a regions reply goes to the walk", at)
+    assert route_at > 0 and lookup in text[at:]
+    text = text[:route_at] + lookup + text[route_at:]
+    assert any("picks up a client before routing" in f for f in matching_failures(text, read(MYMESH_H)))
+
+
+def test_negative_a_dropped_peer_packet_that_falls_through_is_caught():
+    text = read(MYMESH).replace("        if (i == offband::kRegionsPeerIdx) return;   // not the walk's: never a client's\n", "", 1)
+    assert text != read(MYMESH)
+    assert any("does not stop a dropped" in f for f in matching_failures(text, read(MYMESH_H)))
+
+
+def test_negative_a_peer_secret_from_the_acl_is_caught():
+    text = read(MYMESH).replace("    memcpy(dest_secret, _regions_peer_secret, PUB_KEY_SIZE);\n    return;\n", "", 1)
+    assert text != read(MYMESH)
+    assert any("its own secret" in f for f in matching_failures(text, read(MYMESH_H)))
+
+
+def test_negative_no_room_for_the_peer_is_caught():
+    header = read(MYMESH_H).replace("matching_peer_indexes[MAX_CLIENTS + 1];", "matching_peer_indexes[MAX_CLIENTS];", 1)
+    assert any("no room" in f for f in matching_failures(read(MYMESH), header))
 
 
 def test_negative_a_flooded_request_is_caught():
