@@ -4,6 +4,13 @@
 // panel hardware and hands frames to LVGL; the text-drawing half of
 // DisplayDriver belongs to the old status-screen UI, which GUI builds don't
 // compile, so those calls are deliberately empty.
+//
+// An e-paper board sets GUI_PANEL_EINK and gets EinkPanel.h's GuiPanel
+// instead (#2009).
+
+#ifdef GUI_PANEL_EINK
+  #include "EinkPanel.h"
+#else
 
 #include <helpers/RefCountedDigitalPin.h>
 #include <helpers/ui/DisplayDriver.h>
@@ -67,3 +74,5 @@ private:
   bool _ready = false;
   bool _on = false;
 };
+
+#endif  // GUI_PANEL_EINK

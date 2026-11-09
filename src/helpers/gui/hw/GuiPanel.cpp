@@ -1,3 +1,6 @@
+// The TFT panel. An e-paper build's GuiPanel is in EinkPanel.cpp.
+#ifndef GUI_PANEL_EINK
+
 #include "GuiPanel.h"
 
 #include <Arduino.h>
@@ -66,3 +69,5 @@ void GuiPanel::turnOff() {
   _panel.sleep(true);
   _on = false;
 }
+
+#endif  // !GUI_PANEL_EINK

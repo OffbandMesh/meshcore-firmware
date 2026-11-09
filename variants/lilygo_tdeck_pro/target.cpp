@@ -4,9 +4,10 @@
 TDeckProBoard board;
 
 // The radio and the e-paper panel are on the same SPI pins, and a pin routes
-// to one SPI peripheral at a time. So the radio uses GxEPDDisplay's own
-// SPIClass (FSPI) rather than a second one: whichever of the two begins it
-// first, the other's begin() returns early and both share one bus.
+// to one SPI peripheral at a time. So the radio uses the panel driver's own
+// SPIClass (FSPI; GxEPDDisplay.cpp, or EinkPanel.cpp in the GUI build) rather
+// than a second one: whichever of the two begins it first, the other's
+// begin() returns early and both share one bus.
 extern SPIClass SPI1;
 RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY, SPI1);
 
