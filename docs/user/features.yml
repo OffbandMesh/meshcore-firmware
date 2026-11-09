@@ -158,10 +158,10 @@ features:
     roles: [companion]
     boards: [lilygo_tdeck_pro]
     availability: {channel: development, verified_releases: []}
-    verification: Bring-up only. One diagnostic Bluetooth companion image for the T-Deck Pro V1.1 e-paper, drawing the standard home screen on the e-paper panel. Pins checked against LilyGo's V1.1 schematic and pin header; the env builds in CI with source tests of its pins, shared SPI bus and diag flags. No hardware result is recorded yet; the guide is published when a release carries a non-diagnostic T-Deck Pro image. Its draft is docs/initiatives/2004-tdeck-pro/2005-bringup/GUIDE-DRAFT.md.
+    verification: Bring-up only. Two diagnostic Bluetooth companion images for the T-Deck Pro V1.1 e-paper, one drawing the Offband GUI in black and white and one the text screens. Pins checked against LilyGo's V1.1 schematic and pin header; both envs build in CI with source tests of their pins, shared SPI bus and diag flags, and the GUI's black-and-white conversion and refresh pacing have native tests. The text image drew its home screen on a V1.1 unit; the GUI image has no hardware result yet. The guide is published when a release carries a non-diagnostic T-Deck Pro image. Its draft is docs/initiatives/2004-tdeck-pro/2005-bringup/GUIDE-DRAFT.md.
     evidence:
       - path: variants/lilygo_tdeck_pro/platformio.ini
-        contains: ['[env:LilyGo_TDeck_Pro_companion_radio_ble_diag]', '-D EINK_DISPLAY_MODEL=GxEPD2_310_GDEQ031T10', '-D P_LORA_EN=46']
+        contains: ['[env:LilyGo_TDeck_Pro_companion_radio_ble_gui_diag]', '[env:LilyGo_TDeck_Pro_companion_radio_ble_diag]', '-D GUI_PANEL_EINK=1', '-D EINK_DISPLAY_MODEL=GxEPD2_310_GDEQ031T10', '-D P_LORA_EN=46']
       - path: variants/lilygo_tdeck_pro/target.cpp
         contains: ['return radio.std_init(&SPI1);']
   - id: t1000e

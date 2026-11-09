@@ -7,13 +7,17 @@
 
 The LilyGo T-Deck Pro is a handheld MeshCore radio with a 3.1" e-paper screen, a keyboard,
 touch, GPS and a LoRa radio. Offband runs on it as a companion radio: you pair it with the
-Offband client on a phone or computer, and the e-paper screen shows the radio's home screen.
+Offband client on a phone or computer, and the e-paper screen shows the Offband home screen.
 
 ## Applies to
 
-The T-Deck Pro **V1.1** only, and one development image:
-`LilyGo_TDeck_Pro_companion_radio_ble_diag`, a Bluetooth companion with the diagnostic
-log turned on. It is not in any release yet.
+The T-Deck Pro **V1.1** only, and two development images, both Bluetooth companions with
+the diagnostic log turned on. Neither is in any release yet.
+
+- `LilyGo_TDeck_Pro_companion_radio_ble_gui_diag`: the Offband GUI, the same screens as
+  the color radios, in black and white.
+- `LilyGo_TDeck_Pro_companion_radio_ble_diag`: the simpler text screens, kept as a
+  fallback.
 
 To tell V1.1 from V1.0 without opening the case: V1.1 has a haptic motor driver on the
 I2C bus at 0x5A (LilyGo's own detection rule), and its factory firmware reports hardware
@@ -25,8 +29,9 @@ What has been checked, and how:
 |---|---|
 | Pins (radio, screen, SD, power enables) | Against LilyGo's V1.1 schematic and pin header. |
 | The image builds | In CI, with source tests of its pins, shared SPI bus and diag flags. |
-| Home screen on the e-paper panel | Not yet tested on a T-Deck Pro. |
-| Radio | Not yet tested on a T-Deck Pro. |
+| Text screens on the e-paper panel | On a T-Deck Pro V1.1: the home screen drew; a full refresh took 1.9 s and a partial one 0.8 s. |
+| Offband GUI on the e-paper panel | Not yet tested on a T-Deck Pro. Its black-and-white conversion and refresh pacing have unit tests. |
+| Radio | On a T-Deck Pro V1.1, it powered up and read the noise floor. Sending and receiving not yet tested. |
 
 ## Before you start
 
@@ -37,13 +42,20 @@ What has been checked, and how:
 
 ### 1. Pair it with the client
 
-The image is a Bluetooth companion. Pair it from the Offband client as you would any other
-companion radio. The PIN is `123456`.
+Both images are Bluetooth companions. Pair from the Offband client as you would any other
+companion radio, with the PIN the screen shows. It is a new random PIN each time the radio
+starts, unless you have set a fixed one from the client.
 
 ### 2. Read the home screen
 
-The e-paper screen shows the standard companion home screen. E-paper keeps its last image
-with no power, so the screen does not go dark when the radio sleeps or turns off.
+The GUI image shows the Offband home screen in black and white. Each e-paper update takes
+most of a second, and the screen waits at least a second after one before the next, so
+changes show up a moment late. Now and then
+the whole screen flashes once to clear faint traces of earlier images. The BOOT button is
+the only control so far.
+
+E-paper keeps its last image with no power, so the screen does not go blank when the
+radio sleeps or turns off. The front-light follows the GUI's brightness setting.
 
 ## Not yet supported
 

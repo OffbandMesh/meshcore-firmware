@@ -6,11 +6,11 @@
 | **Serves** | Initiative [#2004](https://github.com/OffbandMesh/meshcore-firmware/issues/2004), LilyGo T-Deck Pro e-paper (H693) device support. The Initiative has no plan of record of its own; this is its first Feature. |
 | **Status** | Approved (merged as `0b1a62f0`, PR #2024). Owner's §9 rulings recorded 2026-11-07. |
 | **Owner** | @Strycher |
-| **Last updated** | 2026-11-07 |
+| **Last updated** | 2026-11-09 |
 
 ## At a glance
 
-- **What:** one T-Deck Pro e-paper unit on the bench, identified, backed up, and running an Offband diag build that draws on its e-paper panel.
+- **What:** one T-Deck Pro e-paper unit on the bench, identified, backed up, and running an Offband diag build that draws the Offband GUI on its e-paper panel.
 - **Why now:** two units are on the bench and nothing in this repo or upstream MeshCore can run on them.
 - **How:** identify the unit, take a verified backup of its factory flash, add a `lilygo_tdeck_pro` variant with a diag env, then prove it all together.
 - **Done when:** the bench unit boots the diag build, the panel shows the home screen, the capture log shows the boot and display lines, and the factory backup is on disk with matching hashes.
@@ -32,7 +32,8 @@ What's true today. Each Epic traces back to a row here.
 | 9 | Multi-MB esptool reads on S3 USB-Serial/JTAG die with the stub. With `--no-stub`, a full 16 MB read of the bench unit took 1,717.8 s (about 29 minutes); one read stalled at 0.7% and never exited. | Project record of the 2026-06-29 recovery; `pio-flash backup --help`; read log on #2017 [verified 2026-11-04]. | The backup uses `--no-stub`, and every read runs under a hard time limit well above 29 minutes. |
 | 10 | The bring-up directive: every env built is a full diag build (forced caplog, boot beacon, log mirror), named `_diag`. | Standing owner directive 2026-08-22; `[rc32_diag]` in `variants/heltec_rc32/platformio.ini`. | Epic C ships only a `_diag` env. |
 | 11 | Registering a unit writes nothing to it. `pio-flash bootstrap` reads the USB identity and, on ESP32 boards, the MAC through the ROM loader, then writes the host-side registry. It resets the chip once. | `pio-flash --help` lists `bootstrap` apart from the write commands (`confirm`, `erase-region`, `factory-reset`); the per-host flash history's `bootstrap` records for ESP32-S3 units carry only the USB identity and the MAC. On the bench unit, the flash history holds one `bootstrap` and two `backup` records and no write [verified 2026-11-04]. | A1 can run before the backup without touching the factory image. |
-| 12 | The GUI's class-A portrait layout is exactly 240x320. | `src/helpers/gui/GuiLayout.h:8`. | A later GUI Feature should carry over. Not this Feature's job. |
+| 12 | The GUI's class-A portrait layout is exactly 240x320, the panel's size. The GUI flushes only through the color TFT driver (`St7789Dma`), and its themes are light ink on dark backgrounds. | `src/helpers/gui/GuiLayout.h:8`; `src/helpers/gui/hw/LvglPort.cpp`; `src/helpers/gui/GuiTheme.cpp`. | C2 adds an e-paper flush: each grey pixel to black or white, inverted so every theme reads black on white, with refreshes paced because each one blocks (row 15). |
+| 15 | On `tdeck-pro-1`, init plus the first full refresh took 1,881 ms and a partial refresh 772 ms, with no BUSY timeout. | Capture `C:/Dev/.offband/captures/tdeck-pro-1/diag-boot.log`, text-UI diag build `6111eecd` [verified 2026-11-07, #2037]. | The GUI leaves at least a second after each refresh before the next, so the main loop gets that time, and makes every 20th one full. Both are bench values to tune. |
 | 13 | The 4-pin 1.0 mm connector (P6, the same JST-SH size as Qwiic) is UART0, not I2C. Pins: 1 GND, 2 3.3 V, 3 U0TXD (GPIO43), 4 U0RXD (GPIO44). Both nets also run to the GPS, MIA-M10Q TX to U0RXD and RX from U0TXD, each through 22 Ω, so the connector taps the GPS link. P6 is the only 4-pin 1.0 mm connector on either revision, and no connector carries the I2C bus (GPIO13/14). | Vendor schematics V1.0 and V1.1, sheet 2 (P6) and sheet 3 (GPS); `BOARD_GPS_RXD 44` and `BOARD_GPS_TXD 43` in both pin headers [read, not tested]. The schematic does not show where P6 sits on the case. | A Qwiic I2C sensor in P6 does nothing: its SDA and SCL land on TX and RX. An I2C sensor needs a wire onto the internal bus. P6 can be a 3.3 V log port outside USB, so reading it does not reset the chip (row 8), but only with the GPS held off (`GPS_EN`, GPIO39) and a log TX routed to GPIO43. Whether a powered-off GPS loads the line is not known and gets measured before anyone relies on it. |
 | 14 | The radio has its own 3.3 V regulator (RT9080, U3) whose enable is GPIO46 (`LORA_EN`): the SX1262 has no power until firmware drives it HIGH. The radio is an HPB16B3 module with its TCXO and RF switch inside; LilyGo's V1.1 firmware sets TCXO 2.4 V, DIO2 as the RF switch and a 140 mA current limit. | V1.1 schematic sheet 1 (U3) and sheet 3 (U10); `examples/factory2/peri_lora.cpp` and `factory.ino` on `HD-V2-250915` [read, not tested]. Full pin map on #2007. | C1 drives `LORA_EN` high in `TDeckProBoard::begin()` and carries LilyGo's radio settings. |
 
@@ -41,13 +42,13 @@ What's true today. Each Epic traces back to a row here.
 **In:**
 - Identify and register **one** bench unit, with its hardware revision.
 - A full, verified backup of that unit's factory flash, before any write.
-- A `lilygo_tdeck_pro` variant with one `_diag` env that boots and drives the e-paper panel.
+- A `lilygo_tdeck_pro` variant whose `_diag` env boots and draws the Offband GUI on the e-paper panel, plus the text-UI `_diag` env that came first, kept as the fallback.
 - CI for that env, with positive and negative tests.
 - Integration testing on the bench unit, and `OUTCOMES.md`.
 
 **Out:**
 - The second unit. It stays untouched.
-- The GUI port (Initiative #1312; the #1313 plan's §2 lists "T-Deck Pro and the E-ink theme" as a later Feature).
+- A GUI theme of its own for e-paper (the #1313 plan's "E-ink theme"). This Feature converts the existing themes to black and white.
 - Keyboard input, touch, GPS, charging and the fuel gauge, IMU, light sensor, SD, 4G and audio. Each becomes its own Feature.
 - A release build. Bring-up ships no non-diag env.
 
@@ -89,7 +90,7 @@ Tasks filed 2026-11-07: [#2033](https://github.com/OffbandMesh/meshcore-firmware
 | Task | Pts |
 |---|---|
 | **C1 · Variant skeleton:** `variants/lilygo_tdeck_pro/` (board, target, `platformio.ini`) with the A2 pin map, a `[tdeck_pro_hw]` section and a `[tdeck_pro_diag]` block carrying the fleet diag surface (forced caplog, boot beacon, log mirror where a pin exists). One env: the BLE companion `_diag`. Checked by: it builds with no warnings new to the variant. | 3 |
-| **C2 · E-paper panel:** our ui-new home screen on GDEQ031T10 through `GxEPDDisplay`, settling the canvas size and SPI bus sharing from row 6, driving RST on GPIO16 (row 4), and logging init, BUSY timeouts and refresh time through MeshLog. Partial refresh measured, not assumed. Checked by: the build, plus native tests of any pure logic it adds. | 4 |
+| **C2 · E-paper panel:** our home screen, the Offband GUI's, on GDEQ031T10. First ui-new's through `GxEPDDisplay` (bench-flashed, #2037), then the GUI through an e-paper `GuiPanel` and LVGL flush (row 12), settling the canvas size and SPI bus sharing from row 6, driving RST on GPIO16 (row 4), and logging init, BUSY timeouts and refresh time through MeshLog. Partial refresh measured, not assumed. Checked by: the build, plus native tests of any pure logic it adds. | 4 |
 | **C3 · CI:** the env in the curated matrix; a config-lint check that the T-Deck Pro diag env carries the full diag surface (positive: the env passes; negative: a fixture missing a flag fails). | 3 |
 | **C4 · Docs:** the `docs/changes/` record and a `GUIDE-DRAFT.md` with a `coverage: planned` catalog entry, per the documentation workflow. | 2 |
 | **C5 · Bench flash and Epic verification:** after B3 closes and with the owner's go naming the unit, flash the diag image through `scripts/pio-flash`, check the image identity first, hold the capture, and confirm the panel draws our home screen, and the log shows the boot and display-init lines and the measured full- and partial-refresh times. | 2 |
@@ -101,7 +102,7 @@ Tasks are filed when this plan merges.
 
 | Task | Pts |
 |---|---|
-| **D1 · Integrated bench run:** cold-boot the merged diag build on the bench unit; the unit resolves to the A1 identity; the backups on disk still hash to the B2 record; the panel draws; the capture shows a clean boot that passes SafeBoot validation. | 2 |
+| **D1 · Integrated bench run:** cold-boot the merged diag build on the bench unit; the unit resolves to the A1 identity; the backups on disk still hash to the B2 record; the panel draws the GUI; the capture shows a clean boot with no SafeBoot fallback and no reset line on the boot screen. | 2 |
 | **D2 · `OUTCOMES.md`** beside this plan: plain summary first, then what was delivered, the evidence, and what's left. | 2 |
 | **D3 · Push, PR, merge.** | 1 |
 
@@ -156,7 +157,8 @@ No branch proceeds without its condition, so no fail-open grant is needed.
 ## 7. Verification
 
 - **Named command:** `pio run -e LilyGo_TDeck_Pro_companion_radio_ble_diag`, plus the native suite and the full config-lint job from `.github/workflows/ci.yml` (including `scripts/test_tdeck_pro_env.py`).
-- **Acceptance bar:** the bench unit's panel shows our home screen; the capture log shows the boot beacon, the display init line and a SafeBoot-validated boot; the backup hashes match.
+- **Named command, GUI:** `pio run -e LilyGo_TDeck_Pro_companion_radio_ble_gui_diag`, plus the native `test_gui_eink`.
+- **Acceptance bar:** the bench unit's panel shows the GUI's home screen; the USB capture shows the display init line and the measured refresh times; the backup hashes match. Two lines the bar first named can't come from this build: the boot beacon writes to UART0 (GPIO43, P6), not USB, and the companion role never marks its boot valid (only the repeater calls `markBootValid()`), so it prints no SafeBoot validation line [read from source, #2037].
 
 ## 8. Done when
 
@@ -175,7 +177,7 @@ Owner's rulings, 2026-11-07 ([#2009](https://github.com/OffbandMesh/meshcore-fir
 | 1 | Where does this Feature sit? | Under device Initiative #2004. |
 | 2 | Which unit goes on the bench? | The unit already on the bench, `tdeck-pro-1` (V1.1, row 7). The second stays boxed. |
 | 3 | Which role does the diag env build? | The BLE companion `_diag`, and only that for now. USB stays free for the log. |
-| 4 | What does the diag draw? | Our own ui-new home screen, through `GxEPDDisplay`, with full and partial refresh timed on it. |
+| 4 | What does the diag draw? | Our home screen: the Offband GUI's, on the e-paper panel, with full and partial refresh timed on it. (Recorded as ui-new's on 2026-11-07, which was wrong; corrected 2026-11-09.) |
 
 ## 10. Carried-in work
 
