@@ -1,0 +1,20 @@
+schema_version: 1
+issue: 2068
+impact: none
+reason: >-
+  A radio stops claiming indicator control it cannot honor. That is a change in
+  what the radio says about itself, not a change in what a user can do, and no
+  shipped client acts on the new tags yet -- the client half is 2069. Until that
+  lands the user-visible behavior is unchanged: the same controls appear and the
+  same writes are refused, because a client reading only the capability bit sees
+  the bit set on exactly the boards that have at least one working indicator.
+  What does change, and is worth a reviewer's attention rather than a guide's: a
+  display-mode SET arriving at a board with no screen is now refused with
+  UNSUPPORTED_INDICATOR instead of being persisted to flash and echoed back as the
+  stored value. That old path reported success for a setting nothing could apply,
+  on the 15 variants whose DISPLAY_CLASS is the NullDisplayDriver stub. A refusal
+  is the correct answer and the error reason already existed, so no client needs a
+  new case; a client that was relying on the false success was relying on a lie.
+  The user-facing documentation lands with 2071, once a board's behavior actually
+  differs from what a user sees today. Writing it now would describe a capability
+  split that no client yet reads.

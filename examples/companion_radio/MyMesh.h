@@ -539,6 +539,12 @@ public:
   bool hasPendingWork() const;
 
 private:
+  // #2068: whether a display actually came up, as main.cpp decided it -- `disp != NULL`,
+  // and `disp` is assigned only inside `if (display_begin_ok)`. NOT `#ifdef DISPLAY_CLASS`:
+  // NullDisplayDriver satisfies that macro on 15 variants while reporting no screen, which
+  // is how a display SET came to be accepted and persisted on boards with nothing to show
+  // it. Unconditional on purpose -- every indicator decision reads it, GUI build or not.
+  bool _has_display = false;
 #if ENV_INCLUDE_GPS == 1
   // #1556: bumped by every writer of the GPS prefs, including a re-selection of the mode
   // already in effect. The power machine watches it.

@@ -22,6 +22,7 @@
 #include <helpers/ChannelNotify.h>
 #include <helpers/AckTable.h>            // #999: what reusing a pending ACK slot costs
 #include <helpers/OffbandInfoAdvert.h>   // #1994: the 0xC5 0x1C capability advert
+#include <helpers/IndicatorCaps.h>      // #2068: what this radio may claim about its indicators
 #include <helpers/ChannelSlotGuard.h>   // #1865: no channel written over another
 #include <helpers/ChannelKeys.h>        // #1896: Public's key, for the slot guard
 #ifdef PIN_BUZZER
@@ -2237,6 +2238,11 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
 }
 
 void MyMesh::begin(bool has_display) {
+  // #2068: retained, because the indicator capability has to be decided from it. The
+  // argument was used once, for the BLE PIN, and thrown away; the capability decision
+  // then reached for `#ifdef DISPLAY_CLASS` instead and advertised a screen that 15
+  // variants do not have.
+  _has_display = has_display;
   BaseChatMesh::begin();
 #ifdef OFFBAND_GUI
   // Before contacts load, so an overwrite during the load can forget its entry.
@@ -3031,21 +3037,29 @@ void MyMesh::handleCmdFrame(size_t len) {
       return;
     }
 #endif
-    // #542 B1: display needs a display (compile-time DISPLAY_CLASS); led needs a
-    // controllable LED (runtime, like FEM LNA). Same NO_BUZZER-style typed error so
-    // the client shows WHY, not a bare illegal-arg.
-#ifndef DISPLAY_CLASS
+    // #542 B1: display needs a display; led needs a controllable LED. Both are now
+    // runtime questions (#2068) -- like FEM LNA, and unlike the compile-time gate this
+    // used to be. Same NO_BUZZER-style typed error so the client shows WHY, not a bare
+    // illegal-arg.
     // #1990: rotation joins display here -- no screen at all is reason 6, the same
     // answer a mode SET gets. "Cannot rotate" is a DIFFERENT condition (reason 10),
     // checked below, and only reachable on a build that has a display.
-    if (is_display_sub || is_rotation_sub) {
+    //
+    // #2068: RUNTIME, not `#ifndef DISPLAY_CLASS`. The macro is defined on boards whose
+    // DISPLAY_CLASS is NullDisplayDriver -- a stub whose begin() returns false and is
+    // marked "not present" -- so the compile-time gate let a display SET through on 15
+    // variants that have no screen. It was then persisted to flash and echoed as the
+    // stored value, which reads as success: the #1992 defect, on a different path.
+    // `_has_display` is main.cpp's own answer (`disp != NULL`, and `disp` is only set
+    // when `display.begin()` returned true), so it is the one signal that already knows
+    // a stub from a screen.
+    if (offband::refusesDisplaySubCode(_has_display) && (is_display_sub || is_rotation_sub)) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = offband::OFFBAND_UI_ERR;
       out_frame[2] = offband::OFFBAND_UI_ERR_UNSUPPORTED_INDICATOR;
       _serial->writeFrame(out_frame, 3);
       return;
     }
-#endif
     // #1990: a display that exists but cannot be rotated. Runtime, not compile-time:
     // the same firmware image serves boards whose drivers differ, so the live driver
     // is the only thing that can answer. Refusing here is what keeps the no-op
@@ -3057,7 +3071,7 @@ void MyMesh::handleCmdFrame(size_t len) {
       _serial->writeFrame(out_frame, 3);
       return;
     }
-    if (is_led_sub && !board.canControlLed()) {
+    if (is_led_sub && offband::refusesLedSubCode(board.canControlLed())) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = offband::OFFBAND_UI_ERR;
       out_frame[2] = offband::OFFBAND_UI_ERR_UNSUPPORTED_INDICATOR;
@@ -3386,6 +3400,23 @@ void MyMesh::handleCmdFrame(size_t len) {
           _ui->displaySupportsRotation()) {
         advert.addFlag(offband::OFFBAND_INFO_TAG_DISPLAY_ROTATION);
       }
+      // #2068: display control and LED control, as SEPARATE capabilities (#2067 claimed
+      // the tags). One caps2 bit answered both, so a board with a working screen and an
+      // uncontrollable LED advertised LED control and then refused the write -- owner-seen
+      // on a T096, a T1000-E and a QCC badge (#2065).
+      //
+      // `_has_display` rather than `#ifdef DISPLAY_CLASS`: NullDisplayDriver satisfies the
+      // macro on 15 variants while reporting no screen. `canControlLed()` is the board's
+      // own answer and is false by default on MeshCore's base class, which is why only the
+      // two Heltec V4 classes advertise LED control today -- #2073 is what changes that.
+      if (offband::OFFBAND_INFO_TAG_DISPLAY_CONTROL >= cursor &&
+          offband::advertisesDisplayControl(_has_display)) {
+        advert.addFlag(offband::OFFBAND_INFO_TAG_DISPLAY_CONTROL);
+      }
+      if (offband::OFFBAND_INFO_TAG_LED_CONTROL >= cursor &&
+          offband::advertisesLedControl(board.canControlLed())) {
+        advert.addFlag(offband::OFFBAND_INFO_TAG_LED_CONTROL);
+      }
       // #1001: outstanding-ACK capacity. Carries its byte by the contract's one exception
       // -- one byte, fixed for the build, and no sub-code of its own to read it from.
       // This replaces the byte feat/994-delivery-observability put at offset 87, and
@@ -3617,7 +3648,10 @@ void MyMesh::handleCmdFrame(size_t len) {
       _serial->writeFrame(out_frame, 4);
       return;
     }
-    // #542 B1: OLED mode (0 auto, 1 always-on, 2 always-off). Gated above on DISPLAY_CLASS.
+    // #542 B1: OLED mode (0 auto, 1 always-on, 2 always-off). Gated above on whether a
+    // display actually came up (#2068), not on DISPLAY_CLASS -- a stub driver satisfies
+    // that macro, and this path persists to flash and echoes the stored value, so a board
+    // with no screen used to read a SET back as success.
     if (sub == offband::OFFBAND_UI_DISPLAY_GET) {
       out_frame[0] = offband::RESP_CODE_OFFBAND_DEVICE_UI;
       out_frame[1] = sub;
@@ -3832,14 +3866,23 @@ void MyMesh::handleCmdFrame(size_t len) {
     // board may have either without the other.
     offband_caps2 |= offband::OFFBAND_CAP2_BUTTON_MATRIX;
 #endif
-    // #542 B1: led/display indicator control. DISPLAY_CLASS boards always advertise it
-    // (they have an OLED); non-display boards advertise it only if the LED is controllable.
-    // Independent of NOTIFY_SCOPE so a buzzer-less display board still gets the control.
-#ifdef DISPLAY_CLASS
-    offband_caps2 |= offband::OFFBAND_CAP2_INDICATORS;
-#else
-    if (board.canControlLed()) offband_caps2 |= offband::OFFBAND_CAP2_INDICATORS;
-#endif
+    // #542 B1: led/display indicator control. Independent of NOTIFY_SCOPE so a
+    // buzzer-less display board still gets the control.
+    //
+    // #2068: this bit answers display control and LED control with ONE answer, which is
+    // why it is now the COARSE answer and the 0x1C tags are the precise one. It was
+    // `#ifdef DISPLAY_CLASS` -> always set, and the macro is defined on 15 variants whose
+    // DISPLAY_CLASS is NullDisplayDriver, so boards with no screen and no controllable LED
+    // claimed indicator control and refused every write (#2065).
+    //
+    // Kept rather than retired, deliberately -- contract section 4 would retire a migrated
+    // bit, but radios on 1.7.0 and earlier answer the advert WITHOUT the new tags, so a
+    // tags-only client would hide display control on a working Heltec V4. The bit is the
+    // compatibility answer for firmware that predates this change; where the tags are
+    // present they win. Same precedence shape as CHAN_NOTIFY.
+    if (offband::indicatorsCapabilityBit(_has_display, board.canControlLed())) {
+      offband_caps2 |= offband::OFFBAND_CAP2_INDICATORS;
+    }
     // #611: on-air packet-hash query (0xC6). No hardware dependency -- it only needs
     // the channel-send path, which every companion build has -- so unlike the bits
     // above this is advertised unconditionally.
