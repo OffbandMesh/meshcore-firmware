@@ -39,7 +39,9 @@ public:
   bool canControlLed() const override { return true; }
   bool setLedEnabled(bool on) override {
     _led_enabled = on;
-    if (!on) ledDark();   // immediately, not at the next transmit
+    // #2075: no darken here -- the on-write gate below is enough, because a TX LED is only
+    // lit during a transmit and onAfterTransmit() drives it dark with this board's own
+    // polarity. See the longer note in ESP32Board.h.
     return true;
   }
   void onBeforeTransmit() override {
