@@ -61,7 +61,7 @@ void HeltecTowerV2Board::begin() {
 }
 
 void HeltecTowerV2Board::onBeforeTransmit() {
-  digitalWrite(P_LORA_TX_LED, LED_STATE_ON);
+  if (_led_enabled) digitalWrite(P_LORA_TX_LED, LED_STATE_ON);   // #2075: operator can switch it off
   loRaFEMControl.setTxModeEnable();
 }
 

@@ -18,7 +18,7 @@ public:
 
 #if defined(LED_GREEN)
   void onBeforeTransmit() override {
-    digitalWrite(LED_RED, HIGH);
+    if (_led_enabled) digitalWrite(LED_RED, HIGH);   // #2075: operator can switch it off
   }
   void onAfterTransmit() override {
     digitalWrite(LED_RED, LOW);

@@ -33,7 +33,10 @@ public:
   uint8_t getStartupReason() const override { return startup_reason; }
 
 #ifdef P_LORA_TX_LED
-  void onBeforeTransmit() override { digitalWrite(P_LORA_TX_LED, HIGH); }
+  // #2075: derives straight from MainBoard -- see the note in RAK11310Board.h.
+  bool canControlLed() const override { return true; }
+  bool setLedEnabled(bool on) override { _led_enabled = on; return true; }
+  void onBeforeTransmit() override { if (_led_enabled) digitalWrite(P_LORA_TX_LED, HIGH); }   // #2075
   void onAfterTransmit() override { digitalWrite(P_LORA_TX_LED, LOW); }
 #endif
 

@@ -211,7 +211,13 @@ public:
   bool canControlLed() const override { return true; }
   bool setLedEnabled(bool on) override {
     _led_enabled = on;
-    if (!on) ledDark();   // immediately, not at the next transmit
+    // #2075: deliberately does NOT darken here, and that is load-bearing for the ~34 board
+    // classes that override onBeforeTransmit() and inherit this setter. A TX LED is only lit
+    // DURING a transmit, so suppressing the on-write is enough -- the class's own
+    // onAfterTransmit() darkens it microseconds later with ITS own polarity. Darkening from
+    // here would have to pick a level, and the level is not the same on all of them: HIGH-on,
+    // LOW-on, LED_STATE_ON, a neopixel and an I2C expander all appear in that set. A
+    // hardcoded LOW here would LIGHT the active-low boards.
     return true;
   }
   void onBeforeTransmit() override {

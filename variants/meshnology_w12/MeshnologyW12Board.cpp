@@ -28,7 +28,10 @@ void MeshnologyW12Board::begin() {
   }
 
   void MeshnologyW12Board::onBeforeTransmit(void) {
-    neopixelWrite(NEOPIXEL_LED, NEOPIXEL_BRIGHTNESS, NEOPIXEL_BRIGHTNESS, NEOPIXEL_BRIGHTNESS);   // turn TX neopixel on (White)
+    // #2075: operator can switch it off. A neopixel does not darken by pin level, so the
+    // off-write below (0,0,0) is the only way dark -- which is why this gates the ON write
+    // and leaves that one unconditional.
+    if (_led_enabled) neopixelWrite(NEOPIXEL_LED, NEOPIXEL_BRIGHTNESS, NEOPIXEL_BRIGHTNESS, NEOPIXEL_BRIGHTNESS);   // turn TX neopixel on (White)
   }
 
   void MeshnologyW12Board::onAfterTransmit(void) {

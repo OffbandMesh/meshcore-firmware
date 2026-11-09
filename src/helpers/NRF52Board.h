@@ -115,11 +115,23 @@ public:
   // platformio.ini -- today only the QCC badge, by the owner's decision for the conference
   // artifact. It is not a hardware fact and not a judgement this header gets to make: a
   // board that sets it will not honor the setting, so it must not advertise it.
-#if defined(PIN_STATUS_LED) && !defined(OFFBAND_LED_NOT_DISABLEABLE)
+  // #2075: P_LORA_TX_LED too, not just the heartbeat LED. An nRF52 board whose only LED is a
+  // TX LED gates it in its own transmit hook but has no other way to ADVERTISE that it can --
+  // xiao_nrf52, the Ikoka family, thinknode_m7, meshsmith_photon_nrf52 and others are in that
+  // set. Without this they would honor the setting while reporting they cannot.
+#if (defined(PIN_STATUS_LED) || defined(P_LORA_TX_LED)) && !defined(OFFBAND_LED_NOT_DISABLEABLE)
   bool canControlLed() const override { return true; }
   bool setLedEnabled(bool on) override {
     _led_enabled = on;
-    if (!on) ledDark();   // immediately, not on the next tick
+#ifdef PIN_STATUS_LED
+    // The HEARTBEAT LED needs darkening now: it blinks continuously at ~10% duty, so waiting
+    // for a transmit to end would leave it visibly blinking after the operator switched it
+    // off. A TX-LED-only board needs nothing here -- its LED is lit only during a transmit
+    // and its own onAfterTransmit() darkens it with its own level, which is also why this is
+    // guarded: ledDark() is the heartbeat pin's off-write and does not exist on a board that
+    // has no PIN_STATUS_LED. T096 and T114 are exactly that case.
+    if (!on) ledDark();
+#endif
     return true;
   }
 #endif

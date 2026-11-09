@@ -59,7 +59,7 @@ void T1Board::begin() {
 }
 
 void T1Board::onBeforeTransmit() {
-  digitalWrite(P_LORA_TX_LED, LED_STATE_ON);
+  if (_led_enabled) digitalWrite(P_LORA_TX_LED, LED_STATE_ON);   // #2075: operator can switch it off
 }
 
 void T1Board::onAfterTransmit() {

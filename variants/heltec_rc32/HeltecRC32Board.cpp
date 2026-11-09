@@ -36,7 +36,7 @@ void HeltecRC32Board::powerOff() {
 }
 
 void HeltecRC32Board::onBeforeTransmit() {
-  digitalWrite(P_LORA_TX_LED, HIGH);
+  if (_led_enabled) digitalWrite(P_LORA_TX_LED, HIGH);   // #2075: operator can switch it off
 }
 
 void HeltecRC32Board::onAfterTransmit() {
