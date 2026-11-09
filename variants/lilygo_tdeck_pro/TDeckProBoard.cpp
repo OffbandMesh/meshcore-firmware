@@ -7,7 +7,7 @@ void TDeckProBoard::begin() {
   // The radio, the e-paper panel and the micro-SD share one SPI bus. Every
   // chip-select is driven high before anything talks on it, so a device whose
   // CS floats can't answer while another one is being read.
-  for (int cs : {P_LORA_NSS, PIN_DISPLAY_CS, PIN_SD_CS}) {
+  for (int cs : {P_LORA_NSS, PIN_DISPLAY_CS, TDECK_PRO_SD_CS}) {
     pinMode(cs, OUTPUT);
     digitalWrite(cs, HIGH);
   }
@@ -23,8 +23,8 @@ void TDeckProBoard::begin() {
   pinMode(PIN_GPS_EN, OUTPUT);
   digitalWrite(PIN_GPS_EN, HIGH);
 
-  // Not used by this build: the 4G modem, the panel's front-light and the
-  // keyboard backlight.
+  // Off from boot: the 4G modem, the panel's front-light and the keyboard
+  // backlight. The GUI build takes the front-light over once it starts.
   for (int off : {PIN_MODEM_EN, PIN_DISPLAY_FRONTLIGHT, PIN_KEYBOARD_LED}) {
     pinMode(off, OUTPUT);
     digitalWrite(off, LOW);

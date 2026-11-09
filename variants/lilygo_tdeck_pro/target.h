@@ -9,7 +9,11 @@
 #include <helpers/SensorManager.h>
 #include <helpers/sensors/EnvironmentSensorManager.h>
 #ifdef DISPLAY_CLASS
-  #include <helpers/ui/GxEPDDisplay.h>
+  #ifdef OFFBAND_GUI
+    #include <helpers/gui/hw/GuiPanel.h>   // the e-paper GuiPanel (#2009)
+  #else
+    #include <helpers/ui/GxEPDDisplay.h>
+  #endif
   #include <helpers/ui/MomentaryButton.h>
 #endif
 
