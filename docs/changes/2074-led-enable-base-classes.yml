@@ -1,0 +1,24 @@
+schema_version: 1
+issue: 2074
+impact: none
+reason: >-
+  A capability becomes real where the hardware always supported it. Boards that
+  inherit their transmit hooks from ESP32Board, STM32Board or TBeamBoard can now
+  have their LoRa TX LED switched off, and they report that they can. Nothing is
+  switched off by anybody: the enable flag defaults to lit, so a radio that has
+  never been asked keeps behaving exactly as it did, and the upgrade darkens no
+  LED in the field.
+  The user-facing half is not reachable yet. The client control is gated on the
+  LED-control advert tag from 2067, which a board only emits once it reports the
+  capability -- so this change is what makes that control appear at all, but the
+  client half is 2069 and the per-board guide wording is 2078. Writing a guide
+  now would describe a switch that no shipped client draws.
+  Worth a reviewer's attention rather than a guide's: "off" is not one action in
+  this tree. ESP32Board's GPIO branch is active-high, STM32Board and TBeamBoard are
+  active-low, and ESP32Board's neopixel branch needs a zero-pixel write. Each class
+  darkens through the same call its own onAfterTransmit already used, so the two can
+  never disagree -- a hardcoded LOW would have lit the LED on the active-low boards
+  while reporting it off.
+  The QCC badge is deliberately untouched and gains nothing: the owner ruled its
+  LEDs are not to be disableable, the nRF52 base class drives no transmit LED, and
+  the badge defines no TX LED pin.

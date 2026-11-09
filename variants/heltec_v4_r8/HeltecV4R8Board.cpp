@@ -145,7 +145,8 @@ bool HeltecV4R8Board::canControlLed() const {
 #endif
 }
 
-bool HeltecV4R8Board::isLedEnabled() const { return _led_enabled; }
+// #2074: isLedEnabled() override REMOVED -- see the note in HeltecV4Board.cpp. MainBoard's
+// gated answer is inherited instead of restating the raw flag here.
 
 const char* HeltecV4R8Board::getManufacturerName() const {
 #ifdef HELTEC_V4_R8_TFT

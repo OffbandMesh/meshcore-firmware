@@ -13,7 +13,10 @@ class HeltecV4Board : public ESP32Board {
 
 protected:
   float adc_mult = ADC_MULTIPLIER;
-  bool _led_enabled = true;   // #542: default on = today's behavior
+  // #2074: `_led_enabled` moved to MainBoard. The copy that used to live here shadowed it
+  // once the base gained one, leaving two members of the same name -- this class wrote the
+  // derived copy and anything reading the base's saw a stale default. Harmless while this
+  // class also overrode isLedEnabled(), and a silent trap the moment it stopped.
 
 public:
   RefCountedDigitalPin periph_power;
@@ -35,7 +38,7 @@ public:
   // Status/traffic (TX) LED runtime control (`led on/off` CLI). #542.
   bool setLedEnabled(bool on) override;
   bool canControlLed() const override;
-  bool isLedEnabled() const override;
+  // #2074: no isLedEnabled() override -- MainBoard's gated answer is correct here.
 
   bool setAdcMultiplier(float multiplier) override {
     if (multiplier == 0.0f) {

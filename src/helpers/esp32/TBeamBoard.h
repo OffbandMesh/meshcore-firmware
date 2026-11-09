@@ -122,13 +122,36 @@ public:
 #endif
   void begin();
 
+  // #2074: the TX LED becomes user-controllable. THIS ARM IS ACTIVE-LOW -- dark is HIGH, not
+  // LOW. `ledDark()` holds that once so both onAfterTransmit() and setLedEnabled(false) agree,
+  // and so "off" is never the LOW that would light this LED.
+  //
+  // WHY THE SUPREME IS EXCLUDED, so this is not re-flagged as a polarity bug: the inversion is
+  // an SX1276 trait, not a T-Beam trait. The Supreme is SX1262
+  // (`variants/lilygo_tbeam_supreme_SX1262`, `board = t_beams3_supreme`), is NOT inverted, and
+  // deliberately inherits ESP32Board's active-high implementation, where LOW is correctly
+  // dark. It defines P_LORA_TX_LED=6, so it picks up ESP32Board's gated hooks and gains
+  // working LED control from this change -- with the right polarity for its own wiring.
+  // A review flagged the fall-through as a defect on the assumption that every T-Beam shares
+  // the inversion; it does not.
   #ifndef TBEAM_SUPREME_SX1262
+  bool canControlLed() const override { return true; }
+  bool setLedEnabled(bool on) override {
+    _led_enabled = on;
+    if (!on) ledDark();   // immediately, not at the next transmit
+    return true;
+  }
   void onBeforeTransmit() override{
-    digitalWrite(P_LORA_TX_LED, LOW);   // turn TX LED on - invert pin for SX1276
+    if (_led_enabled) digitalWrite(P_LORA_TX_LED, LOW);   // turn TX LED on - invert pin for SX1276
   }
   void onAfterTransmit() override{
-    digitalWrite(P_LORA_TX_LED, HIGH);   // turn TX LED off - invert pin for SX1276
+    ledDark();
   }
+
+private:
+  void ledDark() { digitalWrite(P_LORA_TX_LED, HIGH); }   // active-LOW (SX1276 invert): HIGH is off
+
+public:
   #endif
 
   void enterDeepSleep(uint32_t secs, int pin_wake_btn) {

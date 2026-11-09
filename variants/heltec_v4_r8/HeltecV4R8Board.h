@@ -14,7 +14,8 @@ class HeltecV4R8Board : public ESP32Board {
 protected:
   float adc_mult = ADC_MULTIPLIER;
   bool _tx_active = false;   // #1339: between onBeforeTransmit and onAfterTransmit
-  bool _led_enabled = true;  // #1340 (#542): default on = today's behavior
+  // #2074: `_led_enabled` moved to MainBoard -- see the note in HeltecV4Board.h. Keeping a
+  // copy here would shadow the base member and give two answers to one question.
 
 public:
   RefCountedDigitalPin periph_power;
@@ -47,5 +48,5 @@ public:
   // Status/traffic (TX) LED runtime control (`led on/off` CLI). #542, #1340.
   bool setLedEnabled(bool on) override;
   bool canControlLed() const override;
-  bool isLedEnabled() const override;
+  // #2074: no isLedEnabled() override -- MainBoard's gated answer is correct here.
 };
