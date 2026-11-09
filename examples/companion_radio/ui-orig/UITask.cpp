@@ -288,6 +288,11 @@ void UITask::renderCurrScreen() {
 
 #ifdef STATUS_LED_RGB
 static void statusLedWrite(uint8_t r, uint8_t g, uint8_t b) {
+  // #2074: an RGB status LED is still an LED the operator can switch off, so it honors the
+  // same flag as every other. Gated HERE rather than at each caller because this is the one
+  // place the three channels are written -- a caller-side gate would leave whichever colour
+  // path someone adds next still lit.
+  if (!board.isLedEnabled()) { r = g = b = 0; }
   analogWrite(PIN_STATUS_LED_R, r);
   analogWrite(PIN_STATUS_LED_G, g);
   analogWrite(PIN_STATUS_LED_B, b);
@@ -417,7 +422,8 @@ void UITask::userLedHandler() {
       state = 0;
       next_change = cur_time + LED_CYCLE_MILLIS - last_increment;
     }
-    digitalWrite(PIN_STATUS_LED, state == LED_STATE_ON);
+    // #2074: honors the operator's setting, same as every other LED in the tree.
+    if (board.isLedEnabled()) digitalWrite(PIN_STATUS_LED, state == LED_STATE_ON);
   }
 #endif
 }

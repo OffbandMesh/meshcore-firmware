@@ -107,7 +107,23 @@ void NRF52Board::heartbeatTick() {
   uint32_t now = millis();
   if ((int32_t)(now - _hb_next_ms) >= 0) {
     _hb_on = !_hb_on;
+    // #2074: the human can switch this indicator off, which is what the setting is for.
+    // The TICK still runs and the phase bookkeeping still advances, so #275's property is
+    // untouched: while the LED is on it is still loop-driven, so a hung loop still freezes
+    // it and the blink still cannot lie about liveness. Switching it off removes a light,
+    // not a liveness mechanism -- feedWatchdog() is called from the main loop in
+    // examples/companion_radio/main.cpp and never touches an LED, and the 100 ms RTC1 wake
+    // that keeps an idle loop cycling has an empty callback. #275 forbids this LED being
+    // gated by INCIDENTAL state -- UI, display, connection, the power-save nap, traffic --
+    // and a deliberate request from the operator is none of those.
+#ifdef OFFBAND_LED_NOT_DISABLEABLE
+    // This board opted out of LED control (owner decision in its variant), so it also
+    // never reports the capability and nothing can have set the flag. Written
+    // unconditionally so the opt-out cannot be defeated by a stray write to the flag.
     digitalWrite(PIN_STATUS_LED, _hb_on ? LED_STATE_ON : !LED_STATE_ON);
+#else
+    if (_led_enabled) digitalWrite(PIN_STATUS_LED, _hb_on ? LED_STATE_ON : !LED_STATE_ON);
+#endif
     // #275 Option A: ~1 Hz low-duty blip. on ~100 ms (rounds up to the next 100 ms
     // wake) / off ~900 ms => ~10% duty (~0.2-0.5 mA) instead of ~50%. Both values sit
     // just under a 100 ms wake boundary so the edge lands on the following wake.

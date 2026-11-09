@@ -238,6 +238,24 @@ public:
   }
 #endif
 
+// #2074: a THIRD case on ESP32 -- boards whose only LED is PIN_STATUS_LED, with no TX LED
+// and no neopixel. Those (xiao_s3, xiao_s3_wio) have their status LED written by the UI, not
+// by any board class, so this reports the capability and holds the flag while
+// ui-new/UITask.cpp honors it. Without this they would be the only boards with an LED and no
+// way to switch it off, which is not a hardware limit -- just a gap.
+#if !defined(P_LORA_TX_LED) && !defined(P_LORA_TX_NEOPIXEL_LED) && defined(PIN_STATUS_LED) \
+    && !defined(OFFBAND_LED_NOT_DISABLEABLE)
+  bool canControlLed() const override { return true; }
+  bool setLedEnabled(bool on) override {
+    _led_enabled = on;
+    // The UI's writer darkens it on its next tick (ui-new/UITask.cpp honors this flag).
+    // Deliberately NOT written here: this LED's off level is the variant's LED_STATE_ON,
+    // which is not in scope in this header -- xiao_s3's user LED is LOW=on, so any level
+    // hardcoded here would be wrong on some board. The owner of the writes owns the level.
+    return true;
+  }
+#endif
+
 private:
 #if defined(P_LORA_TX_LED)
   void ledDark() { digitalWrite(P_LORA_TX_LED, LOW); }          // active-high on this board

@@ -1443,7 +1443,11 @@ void UITask::userLedHandler() {
       led_state = 0;
       next_led_change = cur_time + LED_CYCLE_MILLIS - last_led_increment;
     }
-    digitalWrite(PIN_STATUS_LED, led_state == LED_STATE_ON);
+    // #2074: the operator can switch this indicator off. This LED is UI-owned on ESP32 --
+    // no board class writes it -- so the board reports the capability and holds the flag,
+    // and this writer honors it. The phase bookkeeping above still advances, so switching
+    // it back on resumes in step rather than waiting out a stale interval.
+    if (board.isLedEnabled()) digitalWrite(PIN_STATUS_LED, led_state == LED_STATE_ON);
   }
 #endif
 }
