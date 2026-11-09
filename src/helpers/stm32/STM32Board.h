@@ -32,13 +32,27 @@ public:
     HAL_PWREx_EnterSHUTDOWNMode();
   }
 
+// #2074: the TX LED becomes user-controllable. THIS BOARD IS ACTIVE-LOW -- dark is HIGH, not
+// LOW. `ledDark()` carries that fact once, and both onAfterTransmit() and setLedEnabled(false)
+// use it, so "off" can never be implemented as the LOW that would light this LED.
 #if defined(P_LORA_TX_LED)
+  bool canControlLed() const override { return true; }
+  bool setLedEnabled(bool on) override {
+    _led_enabled = on;
+    if (!on) ledDark();   // immediately, not at the next transmit
+    return true;
+  }
   void onBeforeTransmit() override {
-    digitalWrite(P_LORA_TX_LED, LOW);   // turn TX LED on
+    if (_led_enabled) digitalWrite(P_LORA_TX_LED, LOW);   // turn TX LED on (active-low)
   }
   void onAfterTransmit() override {
-    digitalWrite(P_LORA_TX_LED, HIGH);   // turn TX LED off
+    ledDark();
   }
+
+private:
+  void ledDark() { digitalWrite(P_LORA_TX_LED, HIGH); }   // active-LOW board: HIGH is off
+
+public:
 #endif
 
   bool startOTAUpdate(const char* id, char reply[]) override { return false; };

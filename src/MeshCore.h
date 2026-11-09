@@ -23,6 +23,7 @@
 #define MAX_TRANS_UNIT      255
 
 #include "MeshLog.h"
+#include "helpers/LedEnable.h"   // #2074: what a board may report about its LED
 
 // MESH_DEBUG_PRINTLN is now fully RUNTIME (#411). It routes into the serial-capture
 // sink, which captures to the ring AND mirrors to the live serial console wherever
@@ -178,11 +179,34 @@ public:
   virtual bool canControlLoRaFemLna() const { return false; }
   virtual bool isLoRaFemLnaEnabled() const { return false; }
 
+protected:
+  // #2074: one home for the enable flag, so the base classes that gate their own transmit
+  // hooks do not each keep a private copy that can drift from what isLedEnabled() reports.
+  //
+  // A board that CANNOT control its LED never writes this -- the default setLedEnabled()
+  // below returns false without touching it -- so isLedEnabled() keeps answering true,
+  // which is the truth: the LED is behaving normally. That matters because a caller that
+  // discards the return value would otherwise record a setting nothing applied and then
+  // report the LED as off while it is visibly lit.
+  bool _led_enabled = true;
+
+public:
   // Status/traffic indicator LED control (boards with a controllable LED override these).
   // Default: not supported. #542.
+  //
+  // #2074, for anyone overriding these: "off" is NOT `digitalWrite(pin, LOW)`. The three
+  // shapes in this tree disagree on what dark means -- ESP32Board's GPIO branch is
+  // active-high, STM32Board and TBeamBoard are active-LOW ("invert pin for SX1276"), and
+  // ESP32Board's neopixel branch needs a zero-pixel write. Drive dark with the SAME action
+  // your onAfterTransmit() already uses, so the two can never disagree.
   virtual bool setLedEnabled(bool /*on*/) { return false; }
   virtual bool canControlLed() const { return false; }
-  virtual bool isLedEnabled() const { return true; }  // default: LED behaves normally
+  // Gated on the capability, not on the request: a board that cannot control its LED reports
+  // it ENABLED whatever was asked, because the LED is behaving normally. "Not controllable"
+  // is not "off". Rule and reasoning in helpers/LedEnable.h, host-tested there.
+  virtual bool isLedEnabled() const {
+    return offband::ledEnabledReport(canControlLed(), _led_enabled);
+  }
 
   // D9 / issue #63: app-level boot rollback safety. Boards with ESP-IDF
   // rollback APIs override these. Default no-op for non-ESP32 boards.

@@ -149,4 +149,7 @@ void HeltecV4Board::begin() {
 #endif
   }
 
-  bool HeltecV4Board::isLedEnabled() const { return _led_enabled; }
+  // #2074: isLedEnabled() override REMOVED. It returned the raw flag, which is a second
+  // implementation of a rule that now lives in one place -- MainBoard gates the answer on
+  // canControlLed() so a board that cannot darken its LED never reports it dark. Inheriting
+  // that is strictly better than restating half of it here.

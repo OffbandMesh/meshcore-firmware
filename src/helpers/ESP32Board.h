@@ -202,23 +202,50 @@ public:
 
   uint8_t getStartupReason() const override { return startup_reason; }
 
+// #2074: the TX LED becomes user-controllable. `ledDark()` is the single off-action for this
+// board shape, and BOTH onAfterTransmit() and setLedEnabled(false) go through it -- so the
+// "off" a user asks for is byte-identical to the "off" the transmit hook already performs,
+// and the two cannot drift. Note the two branches below disagree on what dark IS, which is
+// exactly why this is a function and not a hardcoded LOW.
 #if defined(P_LORA_TX_LED)
+  bool canControlLed() const override { return true; }
+  bool setLedEnabled(bool on) override {
+    _led_enabled = on;
+    if (!on) ledDark();   // immediately, not at the next transmit
+    return true;
+  }
   void onBeforeTransmit() override {
-    digitalWrite(P_LORA_TX_LED, HIGH);   // turn TX LED on
+    if (_led_enabled) digitalWrite(P_LORA_TX_LED, HIGH);   // turn TX LED on
   }
   void onAfterTransmit() override {
-    digitalWrite(P_LORA_TX_LED, LOW);   // turn TX LED off
+    ledDark();
   }
 #elif defined(P_LORA_TX_NEOPIXEL_LED)
   #define NEOPIXEL_BRIGHTNESS    64  // white brightness (max 255)
 
+  bool canControlLed() const override { return true; }
+  bool setLedEnabled(bool on) override {
+    _led_enabled = on;
+    if (!on) ledDark();
+    return true;
+  }
   void onBeforeTransmit() override {
-    neopixelWrite(P_LORA_TX_NEOPIXEL_LED, NEOPIXEL_BRIGHTNESS, NEOPIXEL_BRIGHTNESS, NEOPIXEL_BRIGHTNESS);   // turn TX neopixel on (White)
+    // turn TX neopixel on (White)
+    if (_led_enabled) neopixelWrite(P_LORA_TX_NEOPIXEL_LED, NEOPIXEL_BRIGHTNESS, NEOPIXEL_BRIGHTNESS, NEOPIXEL_BRIGHTNESS);
   }
   void onAfterTransmit() override {
-    neopixelWrite(P_LORA_TX_NEOPIXEL_LED, 0, 0, 0);   // turn TX neopixel off
+    ledDark();
   }
 #endif
+
+private:
+#if defined(P_LORA_TX_LED)
+  void ledDark() { digitalWrite(P_LORA_TX_LED, LOW); }          // active-high on this board
+#elif defined(P_LORA_TX_NEOPIXEL_LED)
+  void ledDark() { neopixelWrite(P_LORA_TX_NEOPIXEL_LED, 0, 0, 0); }   // not a pin level
+#endif
+
+public:
 
   uint16_t getBattMilliVolts() override {
     #ifdef PIN_VBAT_READ
