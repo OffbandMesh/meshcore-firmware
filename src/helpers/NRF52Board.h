@@ -41,6 +41,13 @@ protected:
   uint32_t _hb_next_ms = 0;
   SoftwareTimer _hb_wake_timer;       // repeating ~10 Hz loop-wake (RTC1) so the blink isn't nap-gated
 
+#ifdef PIN_STATUS_LED
+  // #2074: one off-action, used by both setLedEnabled(false) and nothing else -- the tick
+  // writes the live phase. LED_STATE_ON carries this variant's polarity, so "dark" is
+  // correct on active-high and active-low boards without either being special-cased.
+  void ledDark() { digitalWrite(PIN_STATUS_LED, !LED_STATE_ON); }
+#endif
+
 #ifdef NRF52_POWER_MANAGEMENT
   uint32_t reset_reason;              // RESETREAS register value
   uint8_t shutdown_reason;            // GPREGRET value (why we entered last SYSTEMOFF)
@@ -91,6 +98,31 @@ public:
   void heartbeatTick();
   // #1960: lengthens the blip while a message is waiting, where the variant sets a lit time.
   void setHeartbeatMessageWaiting(bool waiting) { _hb_msg_waiting = waiting; }
+
+  // #2074: the operator can switch this indicator off. FOURTH LED shape in this tree --
+  // not a transmit-hook TX LED like the ESP32/STM32/TBeam cases, but the heartbeat LED,
+  // and the only one whose "dark" level comes from a per-variant macro (LED_STATE_ON), so
+  // active-high and active-low boards are both already correct here.
+  //
+  // #275 is not a blocker on this and was checked rather than assumed: the watchdog is fed
+  // by feedWatchdog() from the main loop and never touches an LED, and what keeps an idle
+  // loop cycling is the 100 ms RTC1 wake whose callback is deliberately empty. The LED is
+  // the HUMAN-readable view of liveness, not the mechanism. #275 forbids it being gated by
+  // incidental state -- UI, display, connection, the nap, traffic -- so that it can never
+  // lie while it is running; a deliberate request from the operator is not that, and
+  // turning an indicator off is precisely what this setting exists for.
+  // OFFBAND_LED_NOT_DISABLEABLE is a PER-BOARD OWNER OPT-OUT, set in a variant's own
+  // platformio.ini -- today only the QCC badge, by the owner's decision for the conference
+  // artifact. It is not a hardware fact and not a judgement this header gets to make: a
+  // board that sets it will not honor the setting, so it must not advertise it.
+#if defined(PIN_STATUS_LED) && !defined(OFFBAND_LED_NOT_DISABLEABLE)
+  bool canControlLed() const override { return true; }
+  bool setLedEnabled(bool on) override {
+    _led_enabled = on;
+    if (!on) ledDark();   // immediately, not on the next tick
+    return true;
+  }
+#endif
 
 #ifdef NRF52_POWER_MANAGEMENT
   uint16_t getBootVoltage() override { return boot_voltage_mv; }
