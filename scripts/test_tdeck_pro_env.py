@@ -4,11 +4,13 @@ The T-Deck Pro's e-paper panel (CS 34), SX1262 (CS 3) and micro-SD (CS 48) share
 SPI bus, SCK 36 / MOSI 33 / MISO 47. A pin routes to one SPI peripheral at a time, so:
 
     every pin matches LilyGo's V1.1 schematic and pin header (#2015)
-    the radio uses GxEPDDisplay's own SPIClass (SPI1) and begins no second one
+    the radio uses the panel driver's own SPIClass (SPI1) and begins no second one
     TDeckProBoard::begin() drives every chip-select high, and the radio's regulator on
     the radio carries LilyGo's V1.1 settings: TCXO 2.4 V, DIO2 as RF switch, 140 mA
     every env in the variant is a _diag env carrying the fleet diag surface (bring-up
         directive 2026-08-22), and each one is in the CI build matrix
+    the GUI env (#2009) draws through the e-paper GuiPanel, and no env turns on the
+        GUI's card driver (PIN_SD_CS), which would run the radio's bus through the IDF
 
 Source assertions: the bench unit (C5, #2037) is what shows the panel and radio work.
 
@@ -27,10 +29,18 @@ INI = VARIANT / "platformio.ini"
 TARGET = VARIANT / "target.cpp"
 BOARD = VARIANT / "TDeckProBoard.cpp"
 DISPLAY = ROOT / "src" / "helpers" / "ui" / "GxEPDDisplay.cpp"
+EINK_PANEL = ROOT / "src" / "helpers" / "gui" / "hw" / "EinkPanel.cpp"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 
 HW = "LilyGo_TDeck_Pro_hw"
 DIAG = "tdeck_pro_diag"
+GUI_ENV = "env:LilyGo_TDeck_Pro_companion_radio_ble_gui_diag"
+TEXT_ENV = "env:LilyGo_TDeck_Pro_companion_radio_ble_diag"
+# What each env must set to draw on the right panel class.
+ENV_FLAGS = {
+    GUI_ENV: {"DISPLAY_CLASS": "GuiPanel", "GUI_PANEL_EINK": "1", "OFFBAND_GUI": "1"},
+    TEXT_ENV: {"DISPLAY_CLASS": "GxEPDDisplay", "DISPLAY_ROTATION": "0"},
+}
 
 # LilyGo's V1.1 schematic and examples/factory2/utilities.h, branch HD-V2-250915 (#2015).
 HW_PINS = {
@@ -38,13 +48,12 @@ HW_PINS = {
     "P_LORA_RESET": "4", "P_LORA_DIO_1": "5", "P_LORA_BUSY": "6", "P_LORA_EN": "46",
     "PIN_DISPLAY_SCLK": "36", "PIN_DISPLAY_MISO": "47", "PIN_DISPLAY_MOSI": "33",
     "PIN_DISPLAY_CS": "34", "PIN_DISPLAY_DC": "35", "PIN_DISPLAY_BUSY": "37",
-    "PIN_DISPLAY_RST": "16", "PIN_DISPLAY_FRONTLIGHT": "45", "PIN_SD_CS": "48",
+    "PIN_DISPLAY_RST": "16", "PIN_DISPLAY_FRONTLIGHT": "45", "TDECK_PRO_SD_CS": "48",
     "PIN_GPS_EN": "39", "PIN_MODEM_EN": "41", "PIN_KEYBOARD_LED": "42",
     "PIN_BOARD_SDA": "13", "PIN_BOARD_SCL": "14", "PIN_USER_BTN": "0",
 }
 HW_FLAGS = {
-    "DISPLAY_CLASS": "GxEPDDisplay", "EINK_DISPLAY_MODEL": "GxEPD2_310_GDEQ031T10",
-    "DISPLAY_ROTATION": "0",
+    "EINK_DISPLAY_MODEL": "GxEPD2_310_GDEQ031T10",
     # LilyGo's V1.1 peri_lora.cpp: setTCXO(2.4), setDio2AsRfSwitch(), setCurrentLimit(140).
     "SX126X_DIO3_TCXO_VOLTAGE": "2.4f", "SX126X_DIO2_AS_RF_SWITCH": "true",
     "SX126X_CURRENT_LIMIT": "140",
@@ -82,11 +91,11 @@ def matrix_envs(ci):
 
 
 def target_failures(target):
-    """The radio shares GxEPDDisplay's SPIClass and begins nothing else."""
+    """The radio shares the panel driver's SPIClass and begins nothing else."""
     code = strip_comments(target, "//")
     out = []
     if not re.search(r"extern\s+SPIClass\s+SPI1\s*;", code):
-        out.append("target.cpp must use GxEPDDisplay's SPIClass (extern SPIClass SPI1): one bus, one SPIClass")
+        out.append("target.cpp must use the panel's SPIClass (extern SPIClass SPI1): one bus, one SPIClass")
     if not re.search(r"new\s+Module\([^)]*,\s*SPI1\s*\)", code):
         out.append("the radio's Module must be built on SPI1, the panel's SPIClass")
     if re.search(r"\bSPIClass\s+(?!SPI1\b)\w+", code):
@@ -124,6 +133,26 @@ def eink_log_failures(display):
     return out
 
 
+def eink_panel_failures(panel):
+    """The GUI's e-paper panel: SPI1 on FSPI for the radio, and its refreshes in the log.
+
+    Its refresh lines go through one helper, so the check looks for the helper's MeshLog
+    line, each refresh's call to it, and the BUSY line outside the timing flag.
+    """
+    code = strip_comments(panel, "//")
+    out = []
+    if not re.search(r"SPIClass\s+SPI1\s*=\s*SPIClass\(\s*FSPI\s*\)\s*;", code):
+        out.append("EinkPanel.cpp must define SPI1 on FSPI: the radio's Module is built on it")
+    if not re.search(r'mesh_log_line\(\s*MLOG_BOOT\s*,\s*"\[gui\] eink: %s %lu ms', code):
+        out.append("EinkPanel.cpp must log each refresh time through MeshLog")
+    if not re.search(r'mesh_log_line\(\s*MLOG_BOOT\s*,\s*"\[gui\] eink: BUSY timeout', code):
+        out.append("EinkPanel.cpp must log a BUSY timeout through MeshLog: GxEPD2 says it only on Serial")
+    for what in ("init + full refresh", "full refresh", "partial refresh"):
+        if not re.search(r'noteRefresh\(\s*"%s"' % re.escape(what), code):
+            out.append("EinkPanel.cpp must time the %s" % what)
+    return out
+
+
 def board_failures(board):
     """TDeckProBoard::begin() parks every chip-select high and powers the radio."""
     code = strip_comments(board, "//")
@@ -131,7 +160,7 @@ def board_failures(board):
     m = re.search(r"for\s*\(\s*int\s+cs\s*:\s*\{([^}]*)\}\s*\)\s*\{\s*pinMode\(\s*cs\s*,\s*OUTPUT\s*\)\s*;"
                   r"\s*digitalWrite\(\s*cs\s*,\s*HIGH\s*\)", code)
     pins = {p.strip() for p in m.group(1).split(",")} if m else set()
-    for need in ("P_LORA_NSS", "PIN_DISPLAY_CS", "PIN_SD_CS"):
+    for need in ("P_LORA_NSS", "PIN_DISPLAY_CS", "TDECK_PRO_SD_CS"):
         if need not in pins:
             out.append("TDeckProBoard::begin() must drive %s high: the three chips share one SPI bus" % need)
     if not re.search(r"digitalWrite\(\s*P_LORA_EN\s*,\s*HIGH\s*\)", code):
@@ -139,15 +168,25 @@ def board_failures(board):
     return out
 
 
-def failures(ini, target, board, ci, display=None):
+def failures(ini, target, board, ci, display=None, panel=None):
     out = target_failures(target) + board_failures(board)
     display = display if display is not None else DISPLAY.read_text()
-    out += hw_cs_failures(target, board, display) + eink_log_failures(display)
+    panel = panel if panel is not None else EINK_PANEL.read_text()
+    out += hw_cs_failures(target, board, display, panel) + eink_log_failures(display)
+    out += eink_panel_failures(panel)
     secs = ini_sections(ini)
-    for s in (HW, DIAG):
+    for s in (HW, DIAG, GUI_ENV, TEXT_ENV):
         if s not in secs:
             return ["[%s] is missing: this check cannot see what it is protecting" % s]
     hw, diag = secs[HW], secs[DIAG]
+    for s, want in ENV_FLAGS.items():
+        for name, value in want.items():
+            if flag(secs[s], name) != value:
+                out.append("[%s] must set %s=%s; got %r" % (s, name, value, flag(secs[s], name)))
+    for s, body in secs.items():
+        if has_flag(body, "PIN_SD_CS"):
+            out.append("[%s] sets PIN_SD_CS: the GUI's card driver would run the shared bus through the "
+                       "IDF and take it from the radio" % s)
 
     for name, want in HW_PINS.items():
         if flag(hw, name) != want:
@@ -248,7 +287,52 @@ def test_negative_radio_init_on_another_bus_is_caught():
 
 
 def test_negative_the_sd_cs_left_floating_is_caught():
-    _fails_with("must drive PIN_SD_CS high", board=_sub(_real()[2], ", PIN_SD_CS}", "}"))
+    _fails_with("must drive TDECK_PRO_SD_CS high", board=_sub(_real()[2], ", TDECK_PRO_SD_CS}", "}"))
+
+
+def test_negative_the_gui_card_driver_turned_on_is_caught():
+    _fails_with("sets PIN_SD_CS", ini=_sub(_real()[0], "  -D TDECK_PRO_SD_CS=48\n",
+                                           "  -D TDECK_PRO_SD_CS=48\n  -D PIN_SD_CS=48\n"))
+
+
+def test_negative_the_gui_env_on_the_tft_panel_is_caught():
+    _fails_with("must set GUI_PANEL_EINK=1", ini=_sub(_real()[0], "  -D GUI_PANEL_EINK=1\n", ""))
+
+
+def test_negative_the_gui_env_on_the_text_ui_is_caught():
+    _fails_with("must set DISPLAY_CLASS=GuiPanel",
+                ini=_sub(_real()[0], "-D DISPLAY_CLASS=GuiPanel", "-D DISPLAY_CLASS=GxEPDDisplay"))
+
+
+def test_negative_dropping_the_gui_env_from_ci_is_caught():
+    _fails_with("not in ci.yml's build matrix",
+                ci=_sub(_real()[3], "- LilyGo_TDeck_Pro_companion_radio_ble_gui_diag\n", ""))
+
+
+def _panel_fails_with(fragment, panel):
+    r = _real()
+    got = failures(r[0], r[1], r[2], r[3], panel=panel)
+    assert any(fragment in f for f in got), "expected a failure naming %r, got %s" % (fragment, got)
+
+
+def test_negative_the_gui_panel_without_spi1_is_caught():
+    _panel_fails_with("define SPI1 on FSPI",
+                      _sub(EINK_PANEL.read_text(), "SPIClass SPI1 = SPIClass(FSPI);", "SPIClass SPI1 = SPIClass(HSPI);"))
+
+
+def test_negative_the_gui_panel_busy_timeout_left_to_serial_is_caught():
+    _panel_fails_with("BUSY timeout", EINK_PANEL.read_text().replace(
+        'mesh_log_line(MLOG_BOOT, "[gui] eink: BUSY timeout', 'Serial.printf("[gui] eink: BUSY timeout'))
+
+
+def test_negative_the_gui_panel_untimed_partial_is_caught():
+    _panel_fails_with("time the partial refresh",
+                      _sub(EINK_PANEL.read_text(), 'noteRefresh("partial refresh"', 'noteRefresh("refresh"'))
+
+
+def test_negative_hardware_cs_in_the_gui_panel_is_caught():
+    _panel_fails_with("hardware chip-select", _sub(EINK_PANEL.read_text(), "  s_epd.init(0, true, 2, false);",
+                                                   "  SPI1.setHwCs(true);\n  s_epd.init(0, true, 2, false);"))
 
 
 def test_negative_the_radio_left_unpowered_is_caught():

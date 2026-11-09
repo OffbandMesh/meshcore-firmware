@@ -741,6 +741,8 @@ jobs:
           - LilyGo_TDeck_companion_radio_ble_gui_diag
           # #2033: LilyGo T-Deck Pro V1.1, e-paper bring-up (Feature #2005). BLE companion
           # _diag only, owner ruling 2026-11-07; matrix entry approved with the plan (C3).
+          # The GUI env is ruling 4's home screen (#2009); the text-UI env is the fallback.
+          - LilyGo_TDeck_Pro_companion_radio_ble_gui_diag
           - LilyGo_TDeck_Pro_companion_radio_ble_diag
           # #733: Heltec Vision Master E290 (ESP32-S3 + SX1262, 2.9" e-ink) --
           # first e-ink board; community-tester enablement off the upstream-1.17
