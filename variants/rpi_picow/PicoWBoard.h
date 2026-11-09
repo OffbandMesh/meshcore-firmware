@@ -16,8 +16,12 @@ public:
   void begin();
   uint8_t getStartupReason() const override { return startup_reason; }
 
+  // #2075: derives straight from MainBoard -- see the note in RAK11310Board.h.
+  bool canControlLed() const override { return true; }
+  bool setLedEnabled(bool on) override { _led_enabled = on; return true; }
+
   void onBeforeTransmit() override {
-    digitalWrite(LED_BUILTIN, HIGH);   // turn TX LED on
+    if (_led_enabled) digitalWrite(LED_BUILTIN, HIGH);   // turn TX LED on (#2075: operator can switch it off)
   }
 
   void onAfterTransmit() override {

@@ -15,7 +15,7 @@ public:
   void powerOff() override;
   const char* getManufacturerName() const override;
   void onBeforeTransmit() override {
-    digitalWrite(P_LORA_TX_LED, LOW);
+    if (_led_enabled) digitalWrite(P_LORA_TX_LED, LOW);   // active-low (#2075: operator can switch it off)
   }
   void onAfterTransmit() override {
     digitalWrite(P_LORA_TX_LED, HIGH);

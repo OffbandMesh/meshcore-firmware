@@ -14,7 +14,7 @@ public:
 
 #if defined(P_LORA_TX_LED)
   void onBeforeTransmit() override {
-    digitalWrite(P_LORA_TX_LED, HIGH);   // turn TX LED on
+    if (_led_enabled) digitalWrite(P_LORA_TX_LED, HIGH);   // turn TX LED on (#2075: operator can switch it off)
   }
   void onAfterTransmit() override {
     digitalWrite(P_LORA_TX_LED, LOW);   // turn TX LED off
