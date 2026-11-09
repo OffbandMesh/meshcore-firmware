@@ -14,7 +14,7 @@ public:
 
   #ifdef P_LORA_TX_LED
     void onBeforeTransmit() override{
-      digitalWrite(P_LORA_TX_LED, LOW); // turn TX LED on - invert pin for SX1276
+      if (_led_enabled) digitalWrite(P_LORA_TX_LED, LOW); // turn TX LED on - invert pin for SX1276 (#2075: operator can switch it off)
     }
 
     void onAfterTransmit() override{

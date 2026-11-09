@@ -138,7 +138,7 @@ public:
   bool canControlLed() const override { return true; }
   bool setLedEnabled(bool on) override {
     _led_enabled = on;
-    if (!on) ledDark();   // immediately, not at the next transmit
+    // #2075: no darken here -- see the note in ESP32Board.h. The on-write gate suffices.
     return true;
   }
   void onBeforeTransmit() override{

@@ -42,7 +42,7 @@ public:
 #if defined(LORA_TX_BOOST_PIN) || defined(P_LORA_TX_LED)
   void onBeforeTransmit() override {
   #if defined(P_LORA_TX_LED)
-    digitalWrite(P_LORA_TX_LED, HIGH);   // turn TX LED on
+    if (_led_enabled) digitalWrite(P_LORA_TX_LED, HIGH);   // turn TX LED on (#2075: operator can switch it off)
   #endif
   #if defined(LORA_TX_BOOST_PIN)
     digitalWrite(LORA_TX_BOOST_PIN, LOW);

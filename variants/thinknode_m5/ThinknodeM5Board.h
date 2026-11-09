@@ -16,7 +16,9 @@ public:
   const char* getManufacturerName() const override ;
 
   void onBeforeTransmit() override {
-    expander.digitalWrite(EXP_PIN_LED, HIGH);   // turn TX LED on
+    // #2075: operator can switch it off. This LED is behind an I2C expander, so the write is
+    // a bus transaction rather than a pin level -- gating it also spares the bus traffic.
+    if (_led_enabled) expander.digitalWrite(EXP_PIN_LED, HIGH);   // turn TX LED on
   }
   void onAfterTransmit() override {
     expander.digitalWrite(EXP_PIN_LED, LOW);   // turn TX LED off
