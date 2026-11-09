@@ -167,11 +167,50 @@ present here with no merged constant means the number is still unclaimed and nob
 | `0x01` | `TAG_CHAN_NOTIFY` | 0 | per-channel notification mode supported | `0xC5 0x18`/`0x19` | #606 |
 | `0x02` | `TAG_DISPLAY_ROTATION` | 0 | display can rotate | `0xC5 0x1A`/`0x1B` | #1990 |
 | `0x03` | `TAG_ACK_CAPACITY` | 1 | outstanding-ACK capacity. Carries its value by the §3 exception: one byte, fixed for the build, no sub-code of its own | — | #994/#1001 |
-| `0x04`–`0xFE` | free | | | | |
+| `0x04` | `TAG_DISPLAY_CONTROL` | 0 | the display can be switched on/off/auto | `0xC5 0x05`/`0x06` | #2067 |
+| `0x05` | `TAG_LED_CONTROL` | 0 | the LED can be switched on/off | `0xC5 0x07`/`0x08` | #2067 |
+| `0x06`–`0xFE` | free | | | | |
 | `0xFF` | `TAG_CONTINUE` | 1 | resume cursor | — | #1994 |
 
 `0x00` is not a valid tag. `0xC5` sub-codes `0x01`–`0x1B` are allocated; `0x1C` is this advert;
 `0x1D` is next free; `0x7F` is ERR with reasons 1–10 taken.
+
+### `0x04` / `0x05` — why two tags and not one bit (#2065, #2067)
+
+`OFFBAND_CAP2_INDICATORS` (caps byte 2 bit 2, device-info frame offset 84) is documented as
+"led/display indicator control" and was gated on `canControlLed() || DISPLAY_CLASS`. One bit, two
+pieces of unrelated hardware. A board with a working display and an uncontrollable LED set the bit,
+the client offered both controls, and the LED write came back `[0xC5][0x7F][0x06]`
+`UNSUPPORTED_INDICATOR`. Owner-verified on a Heltec T096, a SenseCAP T1000-E and a QCC badge.
+
+There is no bit available to fix it with: caps byte 2 is full and byte 3 does not exist (§7, #1994).
+So the per-indicator answer is a tag.
+
+**Emission rules** (implemented by #2068, not by the claim itself):
+
+- `0x04` only when the **live display driver** reports a usable display. Not `#ifdef DISPLAY_CLASS`:
+  `NullDisplayDriver::begin()` returns `false` and is marked "not present", yet satisfies that macro
+  on 15 variants. Ask the driver, as `displaySupportsRotation()` asks `_display->supportsRotation()`.
+- `0x05` only when `board.canControlLed()` is true **and** the write is honored. A board that reports
+  the capability and ignores the setting is the #1992 defect.
+
+**Precedence.** `OFFBAND_CAP2_INDICATORS` is **kept, not retired**, which is a deliberate departure
+from §4's "the bits are retired in the same change". Radios on 1.7.0 and earlier answer this advert
+*without* the new tags, so a tags-only client would hide display control on a Heltec V4 that works
+fine. The bit is the compatibility answer for firmware predating #2068. The rule is the same shape as
+the merged CHAN_NOTIFY precedence:
+
+| radio answers | client behavior |
+|---|---|
+| advert carries `0x04` and/or `0x05` | tags are authoritative, caps2 bit `0x04` ignored, each control gated on its own tag |
+| advert answered, neither tag present | pre-#2068 firmware — caps2 bit `0x04` answers, both controls shown as today |
+| `[0xC5][0x7F][0x05]` to a zero-payload `0x1C` | predates the advert — the bit answers |
+
+#2068 regates the bit itself: set when at least one of the two capabilities is present, decided at
+runtime rather than from a macro.
+
+A client must never discover either capability by sending `0x07` and reading the refusal. §3 forbids
+it, and such a probe was already written and deleted once.
 
 ---
 

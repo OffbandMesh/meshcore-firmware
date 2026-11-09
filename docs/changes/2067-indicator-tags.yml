@@ -1,0 +1,19 @@
+schema_version: 1
+issue: 2067
+impact: none
+reason: >-
+  A reservation, not a feature. Two constants enter the advert tag registry --
+  TAG_DISPLAY_CONTROL 0x04 and TAG_LED_CONTROL 0x05 -- plus comments recording
+  how they are to be emitted and how a client resolves them against the existing
+  capability bit. Nothing emits them, nothing reads them, no board behaves
+  differently and no byte changes on the wire. The next-free-tag marker moves from
+  0x04 to 0x06 so a parallel session cannot claim the same numbers.
+  It lands on its own because the epic's own rule says a tag is not claimed until
+  a merged header carries it, and that merge happens before any firmware or client
+  work starts. Claiming at merge is worthless if the build happens first, which is
+  how three features independently took device-info offset 87.
+  There is nothing for a user guide to say yet. The user-visible change is #2068,
+  where firmware stops advertising indicator control it cannot honor, and #2069,
+  where the client stops drawing a switch that errors; the guides are updated
+  under #2071 once a board's behavior actually differs. Writing them now would
+  document a capability no firmware emits.

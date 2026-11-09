@@ -396,8 +396,36 @@ constexpr uint8_t OFFBAND_UI_INFO_GET     = 0x1C;   // #1994: the capability adv
 constexpr uint8_t OFFBAND_INFO_TAG_CHAN_NOTIFY      = 0x01;  // #606,  len 0; value via 0x18/0x19
 constexpr uint8_t OFFBAND_INFO_TAG_DISPLAY_ROTATION = 0x02;  // #1990, len 0; value via 0x1A/0x1B
 constexpr uint8_t OFFBAND_INFO_TAG_ACK_CAPACITY     = 0x03;  // #1001, len 1; no sub-code of its own
+// #2067: display control and LED control are SEPARATE capabilities, because they are
+// separate hardware and a board can have one without the other. OFFBAND_CAP2_INDICATORS
+// below answers both with one bit, which is why a Heltec T096 -- real display, no
+// controllable LED -- advertised LED control and then refused the write with
+// [0xC5][0x7F][0x06]. Owner-verified on a T096, a SenseCAP T1000-E and a QCC badge.
+//
+// There is no room to fix this with bits: caps byte 2 is full (bits 0-7 all allocated)
+// and byte 3 does not exist and will not (see the BYTE 3 block below). So the per-
+// indicator answer lives here, as tags.
+constexpr uint8_t OFFBAND_INFO_TAG_DISPLAY_CONTROL  = 0x04;  // #2067, len 0; value via 0x05/0x06
+constexpr uint8_t OFFBAND_INFO_TAG_LED_CONTROL      = 0x05;  // #2067, len 0; value via 0x07/0x08
 constexpr uint8_t OFFBAND_INFO_TAG_CONTINUE         = 0xFF;  // #1994, len 1; resume cursor
-// Next free tag: 0x04. 0x00 is not a valid tag.
+// Next free tag: 0x06. 0x00 is not a valid tag.
+//
+// EMITTING 0x04 AND 0x05 (#2068, not implemented by this change):
+//   0x04 only when the LIVE DISPLAY DRIVER reports a usable display. NOT #ifdef
+//        DISPLAY_CLASS -- NullDisplayDriver::begin() returns false and is marked "not
+//        present", yet satisfies that macro on 15 variants. Ask the driver, the way
+//        displaySupportsRotation() asks _display->supportsRotation().
+//   0x05 only when board.canControlLed() is true AND the write is actually honored. A
+//        board that reports the capability and ignores the setting is the #1992 defect.
+//
+// PRECEDENCE, for the client (#2069). Same shape as the merged CHAN_NOTIFY rule: the
+// advert wins when it speaks, the bit answers when it does not.
+//   advert carries 0x04 and/or 0x05 -> tags are authoritative, caps2 bit 0x04 IGNORED,
+//                                      each control gated on its own tag
+//   advert answered, neither tag    -> pre-#2068 firmware; caps2 bit 0x04 answers and
+//                                      both controls show, as today
+//   [0xC5][0x7F][0x05] to a zero-payload 0x1C -> predates the advert; the bit answers
+// A client must NEVER discover support by sending 0x07 and reading the refusal (§3).
 
 // === 0xC6 PACKET-HASH QUERY -- CANONICAL WIRE CONTRACT (#611) =================
 // FIRMWARE OWNS THIS CONTRACT (same discipline as 0xC5). Agreed with the client
@@ -636,9 +664,26 @@ constexpr uint8_t OFFBAND_CAP2_NOTIFY_SCOPE = 0x01;
 // speaker. A board with a button and no buzzer can still map "send advert" to double
 // press, so gating this on the buzzer would refuse a feature the hardware can do.
 constexpr uint8_t OFFBAND_CAP2_BUTTON_MATRIX = 0x02;
-// bit 2 (0x04): led/display indicator control is supported and settable. Gated on
-// canControlLed() || DISPLAY_CLASS, independent of NOTIFY_SCOPE -- a buzzer-less display
-// board (e.g. Heltec V4) advertises THIS but not scope. #542 B1.
+// bit 2 (0x04): led/display indicator control is supported and settable. Independent of
+// NOTIFY_SCOPE -- a buzzer-less display board (e.g. Heltec V4) advertises THIS but not
+// scope. #542 B1.
+//
+// #2067: THIS BIT ANSWERS TWO QUESTIONS WITH ONE ANSWER, and that is the #2065 defect.
+// It was gated on `canControlLed() || DISPLAY_CLASS`, so a board with a working display
+// and no controllable LED set it, the client offered both controls, and the LED write was
+// refused. Per-indicator capability now lives in the 0x1C advert as TAG_DISPLAY_CONTROL
+// and TAG_LED_CONTROL.
+//
+// The bit is KEPT rather than retired, deliberately. Retiring it is what §4 of the
+// contract says to do when a capability migrates to tags, but radios running 1.7.0 and
+// earlier answer the advert WITHOUT the new tags, so a tags-only client would hide
+// display control on a Heltec V4 that is working fine. The bit is the compatibility
+// answer for firmware that predates #2068, and the precedence rule at the tag registry
+// says the tags win wherever they are present.
+//
+// #2068 regates it: set when AT LEAST ONE of the two capabilities is present, decided at
+// runtime. It must not be gated on `#ifdef DISPLAY_CLASS` -- NullDisplayDriver satisfies
+// that macro on 15 variants while reporting no display.
 constexpr uint8_t OFFBAND_CAP2_INDICATORS = 0x04;
 // bit 3 (0x08): the device can report the on-air packet hash of an outgoing channel
 // message, queried via 0xC6 (#611). Unconditional on Offband companion builds -- it
