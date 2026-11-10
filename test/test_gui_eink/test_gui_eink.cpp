@@ -57,6 +57,37 @@ TEST(EinkInk, CutoffHasMarginBothSides) {
   EXPECT_GE(lvBrightness(t.line2), kEinkInkCutoff + 16);
 }
 
+// LVGL 8.3's lv_color_mix() per channel: (fg * opa + bg * (255 - opa) + 128) / 255,
+// near enough at 8 bits for a cutoff test.
+static uint32_t mix(uint32_t fg, uint32_t bg, uint8_t opa) {
+  uint32_t out = 0;
+  for (int s = 0; s <= 16; s += 8) {
+    const uint32_t f = (fg >> s) & 0xFF, b = (bg >> s) & 0xFF;
+    out |= ((f * opa + b * (255 - opa) + 128) / 255) << s;
+  }
+  return out;
+}
+
+TEST(EinkInk, OpacityCuesAreLostOnThePanel) {
+  // A known cost of one cutoff (owner's call, 2026-11-09: crisp over grey). In
+  // the high-contrast theme, ink at 50% (a disabled row) or 60% (a message
+  // still sending) over the background prints as full ink, the same as an
+  // enabled row. If this starts failing, the e-paper cue for those states has
+  // changed: check the screens that rely on it.
+  const ThemeTokens t = themeTokens(kEinkTheme, 0xF2C14E);
+  EXPECT_TRUE(ink(mix(t.ink, t.bg, 128)));   // LV_OPA_50
+  EXPECT_TRUE(ink(mix(t.ink, t.bg, 153)));   // LV_OPA_60
+  EXPECT_TRUE(ink(mix(t.dim, t.bg, 128)));   // dim text, disabled
+}
+
+TEST(EinkInk, FaintBlendsStayPaper) {
+  // The other side: a blend under about 31% of white stays paper, so a faint
+  // wash or the outer edge of an anti-aliased corner doesn't speckle.
+  const ThemeTokens t = themeTokens(kEinkTheme, 0xF2C14E);
+  EXPECT_FALSE(ink(mix(t.ink, t.bg, 64)));   // LV_OPA_20, about 25%
+  EXPECT_TRUE(ink(mix(t.ink, t.bg, 102)));   // LV_OPA_40
+}
+
 TEST(EinkInk, ColorThemesWouldLoseLines) {
   // Why the panel doesn't show the stored theme: at this cutoff the default
   // theme's dividers vanish into the paper. If this ever passes as ink, the
