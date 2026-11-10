@@ -4,10 +4,12 @@
 // LVGL and the panel so it runs in the native tests.
 //
 // Two jobs:
-// - Each pixel LVGL draws becomes black or white. The GUI's themes are light
-//   ink on a dark background, so a bright pixel becomes black ink and a dark
-//   one stays white paper: every theme reads as black on white. Greys between
-//   are ordered-dithered, so a hairline or a selected row's wash still shows.
+// - Each pixel LVGL draws becomes black or white, at one cutoff and with no
+//   dithering, so text and lines stay crisp (owner, 2026-11-09). The GUI's
+//   themes are light ink on a dark background, so a bright pixel becomes
+//   black ink and a dark one stays white paper. The panel always shows the
+//   high-contrast theme, which is black and white by design; the cutoff is
+//   set for its colors.
 // - When to refresh. A refresh blocks for most of a second (772 ms partial,
 //   measured on tdeck-pro-1, #2037), so frames are gathered and pushed
 //   together, and every so often as a full refresh to clear ghosting. The gap
@@ -16,17 +18,23 @@
 
 #include <stdint.h>
 
+#include "GuiTheme.h"
+
 namespace offband {
 namespace gui {
 
-// Brightness at or below this stays white; at or above kEinkInkLuma it is
-// black. The themes' backgrounds (0x0F1412, 0x1D2D3D, 0x000000) all sit at
-// or below the first, so a background never speckles.
-constexpr uint8_t kEinkPaperLuma = 48;
-constexpr uint8_t kEinkInkLuma = 208;
+// The theme the panel shows, whatever theme is stored.
+constexpr ThemeId kEinkTheme = ThemeId::MonoHC;
 
-// Whether the pixel at (x, y), with brightness `luma` (0-255), is black ink.
-bool einkInk(uint8_t luma, int16_t x, int16_t y);
+// Brightness above this is black ink; at or below it, white paper. Set
+// between the high-contrast theme's backgrounds (26 at most, bg3 0x1A1A1A)
+// and its secondary hairline (106 after RGB565 rounding, line2 0x6B6B6B),
+// with room on both sides. Anti-aliased glyph edges ink from about 31%
+// coverage, which keeps small text from thinning out.
+constexpr uint8_t kEinkInkCutoff = 80;
+
+// Whether a pixel with brightness `luma` (0-255) is black ink.
+inline bool einkInk(uint8_t luma) { return luma > kEinkInkCutoff; }
 
 // A rectangle of the screen, inclusive, in the coordinates LVGL draws in.
 struct EinkArea {

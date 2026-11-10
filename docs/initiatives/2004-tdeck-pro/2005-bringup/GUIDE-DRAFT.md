@@ -48,7 +48,9 @@ starts, unless you have set a fixed one from the client.
 
 ### 2. Read the home screen
 
-The GUI image shows the Offband home screen in black and white. Each e-paper update takes
+The GUI image shows the Offband home screen in black and white, with no grey, so text and
+lines stay sharp. It always uses the high-contrast theme: picking another theme on this
+radio changes nothing on screen. Each e-paper update takes
 most of a second, and the screen waits at least a second after one before the next, so
 changes show up a moment late. Now and then
 the whole screen flashes once to clear faint traces of earlier images. The BOOT button is

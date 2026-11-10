@@ -35,7 +35,7 @@ static void ackFlush(lv_disp_drv_t* drv) { (void)drv; }
 static void flushCb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* px) {
   for (lv_coord_t y = area->y1; y <= area->y2; y++) {
     for (lv_coord_t x = area->x1; x <= area->x2; x++) {
-      s_panel->setInk(x, y, einkInk(lv_color_brightness(*px++), x, y));
+      s_panel->setInk(x, y, einkInk(lv_color_brightness(*px++)));
     }
   }
   s_pacer.mark(area->x1, area->y1, area->x2, area->y2);
