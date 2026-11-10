@@ -3,6 +3,7 @@
 // missing glitch check turns bus noise into phantom taps.
 
 #include <gtest/gtest.h>
+#include <string.h>
 
 #include "helpers/gui/GuiLayout.h"
 #include "helpers/gui/TouchFrame.h"
@@ -334,6 +335,302 @@ TEST(TouchMapping, ALandscapeControllerOnAPortraitPanelSwaps) {
   mapTouch(m, &x, &y);
   EXPECT_EQ(10, x);
   EXPECT_EQ(300, y);
+}
+
+// ---- cst66xx (#2109) ----
+
+struct HynEntry {
+  uint16_t x, y;
+  uint8_t id, event;
+};
+
+// Builds a cst66xx report as the chip lays it out, keys first, with a good
+// checksum. Returns its length.
+static size_t hynReport(uint8_t* b, uint8_t type, const HynEntry* keys, uint8_t nkeys, const HynEntry* fingers,
+                        uint8_t nfingers) {
+  memset(b, 0, kCst66xxMaxReportLen);
+  b[2] = type;
+  b[3] = uint8_t((nkeys << 4) | nfingers);
+  uint8_t* e = b + kCst66xxHeadLen;
+  auto put = [&](const HynEntry& h) {
+    e[0] = uint8_t(h.x);
+    e[1] = uint8_t(h.y);
+    e[2] = 0x20;   // pressure
+    e[3] = uint8_t(((h.x >> 8) & 0x0F) | (((h.y >> 8) & 0x0F) << 4));
+    e[4] = uint8_t((h.event << 4) | (h.id & 0x0F));
+    e += kCst66xxEntryLen;
+  };
+  for (uint8_t i = 0; i < nkeys; i++) put(keys[i]);
+  for (uint8_t i = 0; i < nfingers; i++) put(fingers[i]);
+  const size_t len = kCst66xxHeadLen + kCst66xxEntryLen * (nkeys + nfingers);
+  uint16_t sum = 0x55;
+  for (size_t i = kCst66xxHeadLen; i < len; i++) sum = uint16_t(sum + b[i]);
+  b[0] = uint8_t(sum);
+  b[1] = uint8_t(sum >> 8);
+  return len;
+}
+
+TEST(Cst66xx, OneFingerDecodesTwelveBitCoordinates) {
+  uint8_t b[kCst66xxMaxReportLen];
+  const HynEntry f{0x1EF, 0x13F, 0, 6};   // 495, 319: both high nibbles in use
+  const size_t n = hynReport(b, 0xFF, nullptr, 0, &f, 1);
+  EXPECT_EQ(kCst66xxFirstReadLen, n);
+  TouchPoint p{};
+  ASSERT_EQ(Cst66xxFrame::Pressed, parseCst66xx(b, n, &p));
+  EXPECT_TRUE(p.pressed);
+  EXPECT_EQ(0x1EF, p.x);
+  EXPECT_EQ(0x13F, p.y);
+}
+
+TEST(Cst66xx, AFingerWithEventZeroIsALift) {
+  uint8_t b[kCst66xxMaxReportLen];
+  const HynEntry f{100, 200, 0, 0};
+  const size_t n = hynReport(b, 0xFF, nullptr, 0, &f, 1);
+  TouchPoint p{true, 1, 1};
+  ASSERT_EQ(Cst66xxFrame::Released, parseCst66xx(b, n, &p));
+  EXPECT_FALSE(p.pressed);
+}
+
+TEST(Cst66xx, AReportWithNoEntriesIsARelease) {
+  uint8_t b[kCst66xxMaxReportLen];
+  const size_t n = hynReport(b, 0xFF, nullptr, 0, nullptr, 0);
+  EXPECT_EQ(kCst66xxHeadLen, n);
+  EXPECT_EQ(0x55, b[0]);   // the checksum of nothing is its seed
+  TouchPoint p{true, 1, 1};
+  // The driver always reads the head and one entry; the spare entry is ignored.
+  ASSERT_EQ(Cst66xxFrame::Released, parseCst66xx(b, kCst66xxFirstReadLen, &p));
+  EXPECT_FALSE(p.pressed);
+}
+
+TEST(Cst66xx, TheFirstFingerDownIsUsed) {
+  uint8_t b[kCst66xxMaxReportLen];
+  const HynEntry f[3] = {{10, 20, 0, 0}, {30, 40, 1, 6}, {50, 60, 2, 6}};
+  const size_t n = hynReport(b, 0xFF, nullptr, 0, f, 3);
+  TouchPoint p{};
+  ASSERT_EQ(Cst66xxFrame::Pressed, parseCst66xx(b, n, &p));
+  EXPECT_EQ(30, p.x);
+  EXPECT_EQ(40, p.y);
+}
+
+TEST(Cst66xx, KeyEntriesComeBeforeTheFingers) {
+  uint8_t b[kCst66xxMaxReportLen];
+  const HynEntry k{999, 999, 3, 1};
+  const HynEntry f{77, 88, 0, 6};
+  const size_t n = hynReport(b, 0xFF, &k, 1, &f, 1);
+  TouchPoint p{};
+  ASSERT_EQ(Cst66xxFrame::Pressed, parseCst66xx(b, n, &p));
+  EXPECT_EQ(77, p.x);   // not the key entry's bytes
+  EXPECT_EQ(88, p.y);
+}
+
+TEST(Cst66xx, OnlyAKeyIsNotATouch) {
+  uint8_t b[kCst66xxMaxReportLen];
+  const HynEntry k{0, 0, 1, 1};
+  const size_t n = hynReport(b, 0xFF, &k, 1, nullptr, 0);
+  TouchPoint p{true, 1, 1};
+  EXPECT_EQ(Cst66xxFrame::Released, parseCst66xx(b, n, &p));
+  EXPECT_FALSE(p.pressed);
+}
+
+TEST(Cst66xx, AKeyWithEveryFingerUpIsARelease) {
+  uint8_t b[kCst66xxMaxReportLen];
+  const HynEntry k{0, 0, 1, 1};
+  const HynEntry f{100, 200, 0, 0};
+  const size_t n = hynReport(b, 0xFF, &k, 1, &f, 1);
+  TouchPoint p{true, 1, 1};
+  EXPECT_EQ(Cst66xxFrame::Released, parseCst66xx(b, n, &p));
+  EXPECT_FALSE(p.pressed);
+}
+
+TEST(Cst66xx, TheFarCornerPassesThroughForTheMappingToClamp) {
+  // 12 bits reach 4095; mapTouch clamps it into the panel, the parser doesn't.
+  uint8_t b[kCst66xxMaxReportLen];
+  const HynEntry f{0xFFF, 0xFFF, 0, 6};
+  const size_t n = hynReport(b, 0xFF, nullptr, 0, &f, 1);
+  TouchPoint p{};
+  ASSERT_EQ(Cst66xxFrame::Pressed, parseCst66xx(b, n, &p));
+  EXPECT_EQ(0xFFF, p.x);
+  EXPECT_EQ(0xFFF, p.y);
+}
+
+TEST(Cst66xx, ABadChecksumIsAGlitch) {
+  uint8_t b[kCst66xxMaxReportLen];
+  const HynEntry f{100, 200, 0, 6};
+  const size_t n = hynReport(b, 0xFF, nullptr, 0, &f, 1);
+  b[4] ^= 0x01;   // one bit flipped on the wire
+  TouchPoint p{false, 5, 5};
+  EXPECT_EQ(Cst66xxFrame::Invalid, parseCst66xx(b, n, &p));
+  EXPECT_FALSE(p.pressed);   // untouched
+  EXPECT_EQ(5, p.x);
+}
+
+TEST(Cst66xx, TheChecksumIsSixteenBits) {
+  // Five entries of 0xFF-heavy bytes carry the sum past 0xFF.
+  uint8_t b[kCst66xxMaxReportLen];
+  const HynEntry f[5] = {{0xFFF, 0xFFF, 15, 15}, {0xFFF, 0xFFF, 15, 15}, {0xFFF, 0xFFF, 15, 15},
+                         {0xFFF, 0xFFF, 15, 15}, {0xFFF, 0xFFF, 15, 15}};
+  const size_t n = hynReport(b, 0xFF, nullptr, 0, f, 5);
+  EXPECT_NE(0, b[1]);
+  TouchPoint p{};
+  EXPECT_EQ(Cst66xxFrame::Pressed, parseCst66xx(b, n, &p));
+}
+
+TEST(Cst66xx, TooManyEntriesIsAGlitch) {
+  uint8_t b[kCst66xxMaxReportLen] = {};
+  b[0] = 0x55;
+  b[2] = 0xFF;
+  b[3] = 0x33;   // 3 keys + 3 fingers > 5
+  TouchPoint p{};
+  EXPECT_EQ(Cst66xxFrame::Invalid, parseCst66xx(b, sizeof b, &p));
+  EXPECT_EQ(0u, cst66xxReportLen(0x33));
+  EXPECT_EQ(0u, cst66xxReportLen(0x06));
+  EXPECT_EQ(kCst66xxMaxReportLen, cst66xxReportLen(0x05));
+  EXPECT_EQ(kCst66xxMaxReportLen, cst66xxReportLen(0x23));
+}
+
+TEST(Cst66xx, AShortReadIsAGlitch) {
+  uint8_t b[kCst66xxMaxReportLen];
+  const HynEntry f[2] = {{1, 2, 0, 6}, {3, 4, 1, 6}};
+  const size_t n = hynReport(b, 0xFF, nullptr, 0, f, 2);
+  TouchPoint p{};
+  EXPECT_EQ(Cst66xxFrame::Invalid, parseCst66xx(b, n - 1, &p));
+  EXPECT_EQ(Cst66xxFrame::Invalid, parseCst66xx(b, kCst66xxHeadLen - 1, &p));
+  EXPECT_EQ(Cst66xxFrame::Invalid, parseCst66xx(nullptr, n, &p));
+  EXPECT_EQ(Cst66xxFrame::Invalid, parseCst66xx(b, n, nullptr));
+}
+
+TEST(Cst66xx, AnIdleBusIsAGlitch) {
+  uint8_t ones[kCst66xxFirstReadLen];
+  memset(ones, 0xFF, sizeof ones);   // nothing driving SDA
+  uint8_t zeros[kCst66xxFirstReadLen] = {};
+  TouchPoint p{};
+  EXPECT_EQ(Cst66xxFrame::Invalid, parseCst66xx(ones, sizeof ones, &p));
+  EXPECT_EQ(Cst66xxFrame::Invalid, parseCst66xx(zeros, sizeof zeros, &p));
+}
+
+TEST(Cst66xx, GestureAndProximityReportsAreNotTouches) {
+  uint8_t b[kCst66xxMaxReportLen];
+  const HynEntry f{100, 200, 0, 6};
+  for (uint8_t type : {uint8_t(0xF0), uint8_t(0xE0)}) {
+    const size_t n = hynReport(b, type, nullptr, 0, &f, 1);
+    TouchPoint p{false, 9, 9};
+    EXPECT_EQ(Cst66xxFrame::Other, parseCst66xx(b, n, &p));
+    EXPECT_FALSE(p.pressed);
+    EXPECT_EQ(9, p.x);
+  }
+}
+
+TEST(Cst66xxTracker, AHeldFingerStaysHeldBetweenReports) {
+  Cst66xxTracker t;
+  uint8_t b[kCst66xxMaxReportLen];
+  const HynEntry f{70, 80, 0, 6};
+  const size_t n = hynReport(b, 0xFF, nullptr, 0, &f, 1);
+  TouchPoint p{};
+  ASSERT_TRUE(t.report(b, n, &p));
+  for (uint8_t i = 0; i + 1 < kCst66xxStaleReads; i++) {
+    t.idle(&p);
+    EXPECT_TRUE(p.pressed);
+    EXPECT_EQ(70, p.x);
+  }
+  ASSERT_TRUE(t.report(b, n, &p));   // a new report restarts the count
+  for (uint8_t i = 0; i + 1 < kCst66xxStaleReads; i++) t.idle(&p);
+  EXPECT_TRUE(p.pressed);
+}
+
+TEST(Cst66xxTracker, ALostReleaseReportDoesNotLeaveThePressStuck) {
+  Cst66xxTracker t;
+  uint8_t b[kCst66xxMaxReportLen];
+  const HynEntry f{70, 80, 0, 6};
+  const size_t n = hynReport(b, 0xFF, nullptr, 0, &f, 1);
+  TouchPoint p{};
+  ASSERT_TRUE(t.report(b, n, &p));
+  for (uint8_t i = 0; i < kCst66xxStaleReads; i++) t.idle(&p);
+  EXPECT_FALSE(p.pressed);
+  EXPECT_EQ(70, p.x);   // released where the finger was
+}
+
+TEST(Cst66xxTracker, AReleaseReportReleasesAtOnce) {
+  Cst66xxTracker t;
+  uint8_t b[kCst66xxMaxReportLen];
+  HynEntry f{70, 80, 0, 6};
+  TouchPoint p{};
+  ASSERT_TRUE(t.report(b, hynReport(b, 0xFF, nullptr, 0, &f, 1), &p));
+  f.event = 0;
+  ASSERT_TRUE(t.report(b, hynReport(b, 0xFF, nullptr, 0, &f, 1), &p));
+  EXPECT_FALSE(p.pressed);
+}
+
+TEST(Cst66xxTracker, AnInvalidReportKeepsTheStateAndIsAFailedRead) {
+  Cst66xxTracker t;
+  uint8_t b[kCst66xxMaxReportLen];
+  const HynEntry f{70, 80, 0, 6};
+  const size_t n = hynReport(b, 0xFF, nullptr, 0, &f, 1);
+  TouchPoint p{};
+  ASSERT_TRUE(t.report(b, n, &p));
+  b[0] ^= 0xFF;
+  TouchPoint q{};
+  EXPECT_FALSE(t.report(b, n, &q));
+  t.idle(&p);
+  EXPECT_TRUE(p.pressed);
+  EXPECT_FALSE(t.report(b, n, nullptr));
+}
+
+TEST(Cst66xxTracker, GestureAndProximityReportsKeepThePressAlive) {
+  for (uint8_t type : {uint8_t(0xF0), uint8_t(0xE0)}) {
+    Cst66xxTracker t;
+    uint8_t b[kCst66xxMaxReportLen];
+    const HynEntry f{70, 80, 0, 6};
+    TouchPoint p{};
+    ASSERT_TRUE(t.report(b, hynReport(b, 0xFF, nullptr, 0, &f, 1), &p));
+    for (uint8_t i = 0; i + 1 < kCst66xxStaleReads; i++) t.idle(&p);
+    ASSERT_TRUE(t.report(b, hynReport(b, type, nullptr, 0, &f, 1), &p));   // the chip is still reporting
+    t.idle(&p);
+    EXPECT_TRUE(p.pressed) << int(type);
+    EXPECT_EQ(70, p.x);
+  }
+}
+
+TEST(Cst66xxTracker, AResetDropsTheHeldPress) {
+  Cst66xxTracker t;
+  uint8_t b[kCst66xxMaxReportLen];
+  const HynEntry f{70, 80, 0, 6};
+  TouchPoint p{};
+  ASSERT_TRUE(t.report(b, hynReport(b, 0xFF, nullptr, 0, &f, 1), &p));
+  t.reset();
+  t.idle(&p);
+  EXPECT_FALSE(p.pressed);
+}
+
+// ---- the stuck-press rule shared by every driver (#2109) ----
+
+TEST(FailedReadGuard, OneGlitchDoesNotDropADrag) {
+  FailedReadGuard g;
+  EXPECT_TRUE(g.update(true, true));
+  for (uint8_t i = 0; i + 1 < kReleaseAfterFailedReads; i++) EXPECT_TRUE(g.update(false, false));
+  EXPECT_TRUE(g.update(true, true));   // a good read resets the count
+  for (uint8_t i = 0; i + 1 < kReleaseAfterFailedReads; i++) EXPECT_TRUE(g.update(false, false));
+}
+
+TEST(FailedReadGuard, ABusThatStaysDownReleasesThePress) {
+  FailedReadGuard g;
+  g.update(true, true);
+  for (uint8_t i = 0; i < kReleaseAfterFailedReads; i++) g.update(false, true);   // `pressed` is ignored
+  EXPECT_FALSE(g.pressed());
+  for (int i = 0; i < 300; i++) EXPECT_FALSE(g.update(false, true));   // and stays released
+}
+
+TEST(FailedReadGuard, AGoodReadIsTakenAsIs) {
+  FailedReadGuard g;
+  EXPECT_TRUE(g.update(true, true));
+  EXPECT_FALSE(g.update(true, false));
+  EXPECT_FALSE(g.update(false, true));   // a failed read never presses
+}
+
+TEST(FailedReadGuard, ReleaseDropsAHeldPress) {
+  FailedReadGuard g;
+  g.update(true, true);
+  g.release();
+  EXPECT_FALSE(g.pressed());
 }
 
 int main(int argc, char** argv) {
