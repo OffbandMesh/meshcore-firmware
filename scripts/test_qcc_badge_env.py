@@ -208,14 +208,21 @@ TRIGGER_TWIN_SUFFIXES = ("_diag", "_hangtest")
 
 
 def tracked_env_names():
-    """Every env defined in a TRACKED platformio.ini, the badge's included.
+    """Every env defined in a git-TRACKED .ini file, whatever it is named.
 
     `pio project config` also loads per-host `extra_configs` (the gitignored local ini),
     whose bench envs extend tracked ones. Those never ship and CI never sees them, so a
     resolved check that counted them would pass in CI and fail on a bench host.
+
+    Tracked means what git says, not a filename pattern: a tracked include named anything
+    other than platformio.ini must still count (fourth Gemini pass, #2084).
     """
-    texts = list(read_other_inis().values()) + [INI.read_text()]
-    return {sec[4:] for t in texts for sec in ini_sections(t) if sec.startswith("env:")}
+    import subprocess
+    out = subprocess.check_output(["git", "ls-files", "*.ini"], cwd=ROOT, text=True)
+    paths = [ROOT / p for p in out.splitlines() if p.strip()]
+    assert paths, "git ls-files found no tracked .ini -- this filter would ignore everything"
+    return {sec[4:] for p in paths for sec in ini_sections(p.read_text())
+            if sec.startswith("env:")}
 
 
 def resolved_trigger_failures(config, tracked=None):
