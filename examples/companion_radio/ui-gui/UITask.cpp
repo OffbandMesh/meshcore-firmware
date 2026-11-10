@@ -158,6 +158,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
                 display ? display->height() : 0, (unsigned)lvglDrawBufBytes(),
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+#ifdef GUI_PANEL_EINK
+  if (panel) panel->replayInitTiming();   // its first log line went to UART0 only
+#endif
   if (!_gui_ok) return;
 
 #if defined(PIN_TOUCH_SDA) && defined(PIN_TOUCH_SCL)

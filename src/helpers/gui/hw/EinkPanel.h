@@ -53,6 +53,10 @@ public:
   void push(bool full, int16_t x1, int16_t y1, int16_t x2, int16_t y2);
   // 0, 90 or 270, as the GUI's Rotation setting gives it.
   void setRotation(uint16_t rotation);
+  // The panel starts in display.begin(), before the companion turns log
+  // capture on (DataStore, at the prefs load), so its init line reaches only
+  // UART0. This logs the measured init time again once capture is on.
+  void replayInitTiming();
   // True once after a wake: the next refresh has to be full.
   bool takeNeedFull() {
     const bool n = _need_full;
@@ -79,4 +83,5 @@ private:
   bool _ready = false;
   bool _on = false;
   bool _need_full = false;
+  uint32_t _init_ms = 0;
 };

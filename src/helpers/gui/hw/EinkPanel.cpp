@@ -63,11 +63,16 @@ bool GuiPanel::begin() {
   s_epd.setFullWindow();
   s_epd.fillScreen(GxEPD_WHITE);
   s_epd.display(false);   // a full refresh clears whatever was on the glass
-  noteRefresh("init + full refresh", millis() - t0);
+  _init_ms = millis() - t0;
+  noteRefresh("init + full refresh", _init_ms);
 
   _ready = true;
   _on = true;
   return true;
+}
+
+void GuiPanel::replayInitTiming() {
+  if (_ready) noteRefresh("init + full refresh", _init_ms);
 }
 
 void GuiPanel::setBrightness(uint8_t pct) {
