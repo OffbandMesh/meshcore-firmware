@@ -32,6 +32,7 @@ TARGET = VARIANT / "target.cpp"
 BOARD = VARIANT / "TDeckProBoard.cpp"
 DISPLAY = ROOT / "src" / "helpers" / "ui" / "GxEPDDisplay.cpp"
 EINK_PANEL = ROOT / "src" / "helpers" / "gui" / "hw" / "EinkPanel.cpp"
+UITASK = ROOT / "examples" / "companion_radio" / "ui-gui" / "UITask.cpp"
 FONTS = ROOT / "src" / "helpers" / "gui" / "fonts"
 FONTS_EINK = ROOT / "src" / "helpers" / "gui" / "fonts_eink"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
@@ -154,7 +155,19 @@ def eink_panel_failures(panel):
     for what in ("init + full refresh", "full refresh", "partial refresh"):
         if not re.search(r'noteRefresh\(\s*"%s"' % re.escape(what), code):
             out.append("EinkPanel.cpp must time the %s" % what)
+    if not (re.search(r"_init_ms\s*=\s*millis\(\)\s*-\s*t0\s*;", code)
+            and re.search(r'noteRefresh\(\s*"init \+ full refresh"\s*,\s*_init_ms\s*\)', code)):
+        out.append("EinkPanel.cpp must keep the init time in _init_ms for replayInitTiming()")
     return out
+
+
+def init_replay_failures(uitask):
+    """The panel's init line is logged in display.begin(), before log capture is on, so
+    it reaches UART0 only; the GUI repeats it once capture is on (#2037)."""
+    if not re.search(r"panel->replayInitTiming\(\)", strip_comments(uitask, "//")):
+        return ["UITask.cpp must call panel->replayInitTiming() after LVGL starts: the panel's "
+                "init line is written before log capture is on"]
+    return []
 
 
 def board_failures(board):
@@ -202,8 +215,9 @@ def eink_font_failures(gui_env, color, eink):
     return out
 
 
-def failures(ini, target, board, ci, display=None, panel=None, fonts=None):
+def failures(ini, target, board, ci, display=None, panel=None, fonts=None, uitask=None):
     out = target_failures(target) + board_failures(board)
+    out += init_replay_failures(uitask if uitask is not None else UITASK.read_text())
     display = display if display is not None else DISPLAY.read_text()
     panel = panel if panel is not None else EINK_PANEL.read_text()
     out += hw_cs_failures(target, board, display, panel) + eink_log_failures(display)
@@ -377,6 +391,18 @@ def test_negative_the_gui_panel_busy_timeout_left_to_serial_is_caught():
 def test_negative_the_gui_panel_untimed_partial_is_caught():
     _panel_fails_with("time the partial refresh",
                       _sub(EINK_PANEL.read_text(), 'noteRefresh("partial refresh"', 'noteRefresh("refresh"'))
+
+
+def test_negative_the_init_time_not_kept_is_caught():
+    _panel_fails_with("keep the init time in _init_ms",
+                      _sub(EINK_PANEL.read_text(), "  _init_ms = millis() - t0;\n", ""))
+
+
+def test_negative_the_init_line_not_replayed_is_caught():
+    r = _real()
+    uit = _sub(UITASK.read_text(), "panel->replayInitTiming();", "")
+    got = failures(r[0], r[1], r[2], r[3], uitask=uit)
+    assert any("replayInitTiming() after LVGL starts" in f for f in got), got
 
 
 def test_negative_hardware_cs_in_the_gui_panel_is_caught():

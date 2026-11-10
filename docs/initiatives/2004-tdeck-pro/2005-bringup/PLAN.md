@@ -158,7 +158,7 @@ No branch proceeds without its condition, so no fail-open grant is needed.
 
 - **Named command:** `pio run -e LilyGo_TDeck_Pro_companion_radio_ble_diag`, plus the native suite and the full config-lint job from `.github/workflows/ci.yml` (including `scripts/test_tdeck_pro_env.py`).
 - **Named command, GUI:** `pio run -e LilyGo_TDeck_Pro_companion_radio_ble_gui_diag`, plus the native `test_gui_eink`.
-- **Acceptance bar:** the bench unit's panel shows the GUI's home screen; the USB capture shows the display init line and the measured refresh times; the backup hashes match. Two lines the bar first named can't come from this build: the boot beacon writes to UART0 (GPIO43, P6), not USB, and the companion role never marks its boot valid (only the repeater calls `markBootValid()`), so it prints no SafeBoot validation line [read from source, #2037].
+- **Acceptance bar:** the bench unit's panel shows the GUI's home screen; the USB capture shows the display init line and the measured refresh times; the backup hashes match. Two lines the bar first named can't come from this build: the boot beacon writes to UART0 (GPIO43, P6), not USB, and the companion role never marks its boot valid (only the repeater calls `markBootValid()`), so it prints no SafeBoot validation line [read from source, #2037]. The panel's own init line is written in `display.begin()`, before the companion turns log capture on at the prefs load, so it too reached UART0 only; the GUI image now repeats the measured init time right after LVGL starts.
 
 ## 8. Done when
 
