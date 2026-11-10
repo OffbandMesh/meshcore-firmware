@@ -164,6 +164,8 @@ TRIGGER_TARGETS = frozenset({
     ("variants/wio-tracker-l1", "env:WioTrackerL1_companion_radio_usb"),
     ("variants/wio-tracker-l1", "env:WioTrackerL1_companion_radio_ble"),
     ("variants/heltec_v4", "env:heltec_v4_tft_companion_radio_ble_gui"),
+    # Added 2026-11-09, owner-directed: the WR8 runs this build.
+    ("variants/heltec_v4_r8", "env:heltec_v4_r8_tft_companion_radio_ble_gui"),
 })
 
 
@@ -205,7 +207,18 @@ def trigger_stray_failures(others):
 TRIGGER_TWIN_SUFFIXES = ("_diag", "_hangtest")
 
 
-def resolved_trigger_failures(config):
+def tracked_env_names():
+    """Every env defined in a TRACKED platformio.ini, the badge's included.
+
+    `pio project config` also loads per-host `extra_configs` (the gitignored local ini),
+    whose bench envs extend tracked ones. Those never ship and CI never sees them, so a
+    resolved check that counted them would pass in CI and fail on a bench host.
+    """
+    texts = list(read_other_inis().values()) + [INI.read_text()]
+    return {sec[4:] for t in texts for sec in ini_sections(t) if sec.startswith("env:")}
+
+
+def resolved_trigger_failures(config, tracked=None):
     """The same rule over the RESOLVED config, where `extends` and interpolation are applied.
 
     The textual check above sees only where the flag is written, so an env that extends a
@@ -217,6 +230,8 @@ def resolved_trigger_failures(config):
     carrying = set()
     for section, options in config:
         if not section.startswith("env:"):
+            continue
+        if tracked is not None and section[4:] not in tracked:
             continue
         flags = dict(options).get("build_flags") or ""
         if isinstance(flags, (list, tuple)):
@@ -590,7 +605,7 @@ def test_negative_the_trigger_leaking_to_the_fleet_is_caught():
 
 
 def test_trigger_targets_all_set_today():
-    # Positive: exactly the five #2084 envs outside the badge, no more and no fewer.
+    # Positive: exactly the #2084 envs outside the badge, no more and no fewer.
     others = read_other_inis()
     assert not trigger_target_failures(others), trigger_target_failures(others)
     assert _trigger_sections(others) == TRIGGER_TARGETS, sorted(_trigger_sections(others))
@@ -610,8 +625,18 @@ def _synthetic(*envs):
 
 
 def test_resolved_trigger_set_is_exactly_the_badge_targets_and_twins():
-    bad = resolved_trigger_failures(_resolved_config())
+    bad = resolved_trigger_failures(_resolved_config(), tracked_env_names())
     assert not bad, bad
+
+
+def test_negative_an_untracked_bench_env_is_ignored_but_a_tracked_one_is_not():
+    T = "-D OFFBAND_TUNE_TRIGGER=1"
+    ok = [(sec[4:], T) for _, sec in TRIGGER_TARGETS] + [("QCC_Badge_companion_radio_ble", T)]
+    names = {e for e, _ in ok}
+    local = _synthetic(*ok, ("wr8_local_probe", T))
+    assert not resolved_trigger_failures(local, names), "a host-local env must not count"
+    bad = resolved_trigger_failures(local, names | {"wr8_local_probe"})
+    assert bad and "wr8_local_probe" in bad[0], bad
 
 
 def test_negative_an_env_inheriting_the_trigger_is_caught():
