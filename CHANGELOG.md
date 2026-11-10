@@ -16,6 +16,39 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-11-10
+
+A patch release for indicator control. Boards reported display and LED control they could not
+honor, and the transmit LED could not be switched off on any board but two. Both are fixed. No
+new image is published in this release and no default changed.
+
+### Fixed
+
+- **A radio no longer claims indicator control it cannot honor** (bug [#2065](https://github.com/OffbandMesh/meshcore-firmware/issues/2065), landed as [#2067](https://github.com/OffbandMesh/meshcore-firmware/issues/2067) and [#2068](https://github.com/OffbandMesh/meshcore-firmware/issues/2068)). One capability bit answered two independent questions — display control and LED control — and it was set from `#ifdef DISPLAY_CLASS`, which 15 variants satisfy with `NullDisplayDriver`, a stub whose `begin()` returns `false` and whose header says "not present". So a board with no screen and an uncontrollable LED advertised both controls, the client offered both, and the write came back refused. Reproduced on a Heltec T096, a SenseCAP T1000-E and a QCC badge — three families, one gate.
+  - The two capabilities are now **separate advert records** — `0x04` display control and `0x05` LED control — claimed in a merged header before any code was written ([#2067](https://github.com/OffbandMesh/meshcore-firmware/issues/2067)) and emitted independently, so a board can report one without the other.
+  - Each is decided at **runtime**: display control follows whether a display actually came up, LED control follows whether the board can drive its LED. The signal was already being computed and thrown away — `the_mesh.begin(disp != NULL)` has always meant "a display came up" rather than "a display class was compiled in".
+  - **Nothing breaks on an older radio.** The original capability bit is kept, not retired, as the coarse answer for firmware that predates this release; where the new records are present they win. A client that trusted only the records would otherwise have hidden display control on a Heltec V4 where it works.
+  - The decision moved into `src/helpers/IndicatorCaps.h`, pure and host-tested, because the old gate was a preprocessor branch no test could enter — which is how it survived from [#542](https://github.com/OffbandMesh/meshcore-firmware/issues/542) through every release since.
+- **A display-mode change on a screenless board is now refused instead of silently accepted** ([#2068](https://github.com/OffbandMesh/meshcore-firmware/issues/2068)). It was range-checked, written to flash and echoed back as the stored value — indistinguishable from success for a setting nothing could apply.
+
+### Added
+
+- **The transmit and heartbeat LED can now be switched off on boards where it could not** (epic [#2073](https://github.com/OffbandMesh/meshcore-firmware/issues/2073), [#2074](https://github.com/OffbandMesh/meshcore-firmware/issues/2074)). 63 variants define a transmit LED; exactly two board classes ever honored the setting, so on every other board the LED blinked on each transmit and nothing could stop it.
+  - The enable state and the rule that reads it now live in the **shared board base classes** — `ESP32Board`, `STM32Board`, `TBeamBoard`, and `NRF52Board`'s heartbeat — so every variant that does not override those hooks gains the capability with no per-variant change. That includes **16 nRF52 boards with a heartbeat LED**: the SenseCAP T1000-E, RAK4631, the ThinkNode family and `xiao_nrf52` among them.
+  - **"Off" is not one action in this tree**, and each family darkens its LED through exactly the code path its own transmit hook already used — active-high GPIO, active-low GPIO, a neopixel write, or the variant's own `LED_STATE_ON` macro. Copying a single "go dark" would have lit the LED on STM32 and T-Beam boards while reporting it off.
+  - **A board that cannot control its LED reports the LED enabled**, whatever was asked, because the LED is behaving normally. "Not controllable" is not "off".
+  - Hardware-verified on a SenseCAP T1000-E.
+- **The QCC badge is deliberately excluded** and keeps its LED behavior, declared as `OFFBAND_LED_NOT_DISABLEABLE=1` where the board is configured rather than as a special case buried in shared code.
+
+### Known limitation
+
+- Board classes that **override** their own transmit hooks still bypass the shared gate, so their LED is not yet switchable. Follow-up: [#2075](https://github.com/OffbandMesh/meshcore-firmware/issues/2075).
+
+### Internal
+
+- **T-Deck Pro V1.1 e-paper bring-up**, diagnostic builds only (feature [#2005](https://github.com/OffbandMesh/meshcore-firmware/issues/2005), epic [#2009](https://github.com/OffbandMesh/meshcore-firmware/issues/2009), [#2033](https://github.com/OffbandMesh/meshcore-firmware/issues/2033)–[#2036](https://github.com/OffbandMesh/meshcore-firmware/issues/2036)). The Offband GUI drives the e-paper panel in pure black and white with 1-bit hinted fonts, panel init and refresh times are timed into the diagnostic log, a BUSY timeout is logged, and the environments are in CI with their own configuration tests. **No T-Deck Pro image is published in this release** — the environments are diagnostic and are not in the release set.
+- **Plan of record for T-Deck Pro input** — touch first, then the keyboard ([#2095](https://github.com/OffbandMesh/meshcore-firmware/issues/2095)), with the owner's rulings recorded in it. Planning only; no code and no build changes.
+
 ## [1.7.0] - 2026-11-08
 
 Supersedes the `1.5.0-beta1`–`beta7` and `1.6.0-beta1` pre-release lines, neither of which
