@@ -4,7 +4,9 @@ The same seven fonts as `../fonts/`, with the same faces, sizes, glyph sets and 
 
 Why: a black-and-white panel has no grey. The 4-bit fonts draw thin strokes as grey edges, so any cutoff drops some of them. On `tdeck-pro-1` the 9 px labels lost strokes, MAP read as "NAP" and the I in COMPANION vanished, while the 14 px values came out heavy (#2037). At 1 bit the hinter snaps each stroke to whole pixels, so a stroke is either drawn or not, and every glyph pixel is drawn in full.
 
-Sources, licenses and glyph ranges are as in `../fonts/README.md`; the notices are in `OFL.txt`, which must ship with these files. Converter: `lv_font_conv@1.5.3`. The emoji face is `NotoEmoji[wght].ttf`, renamed `NotoEmoji.ttf` because the shell skips path conversion on a name with brackets.
+**One face differs: the caps label.** `ob_font_label_9` here is Barlow Semi Condensed Medium at **10 px**, not Barlow Condensed Regular at 9. It keeps its LVGL name, so no screen code changes. At 1 bit the 9 px condensed face drew M only 4 px wide and dropped the diagonal of N, so NODES read "HODES" (#2037). The owner picked this face from a 1-bit specimen of ten candidates (2026-11-10). It is about 25% wider; the line height is unchanged at 12 px.
+
+Sources, licenses and glyph ranges are as in `../fonts/README.md`, plus `BarlowSemiCondensed-Medium.ttf` from the same Barlow repository; the notices are in `OFL.txt`, which must ship with these files. Converter: `lv_font_conv@1.5.3`. The emoji face is `NotoEmoji[wght].ttf`, renamed `NotoEmoji.ttf` because the shell skips path conversion on a name with brackets.
 
 Regenerate, from a folder holding the TTFs in `ttf/`:
 
@@ -19,7 +21,8 @@ $C --font ttf/BarlowCondensed-SemiBold.ttf --autohint-strong --range $TXT \
    --font ttf/JetBrainsMono-SemiBold.ttf --autohint-strong --range $SYM \
    --font ttf/NotoEmoji.ttf --autohint-strong --range $EMO \
    --size 18 -o ob_font_title_18.c --lv-font-name ob_font_title_18
-# ob_font_body_14 / body_12 / label_9: BarlowCondensed-Regular + JetBrainsMono-Regular, sizes 14 / 12 / 9
+# ob_font_body_14 / body_12: BarlowCondensed-Regular + JetBrainsMono-Regular, sizes 14 / 12
+# ob_font_label_9: BarlowSemiCondensed-Medium + JetBrainsMono-Regular, size 10 (name kept)
 
 # JetBrains Mono files
 $C --font ttf/JetBrainsMono-SemiBold.ttf --autohint-strong --range $TXT,$SYM --size 14 -o ob_font_data_14.c --lv-font-name ob_font_data_14
