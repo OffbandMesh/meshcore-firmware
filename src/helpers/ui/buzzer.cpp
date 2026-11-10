@@ -53,6 +53,9 @@ void genericBuzzer::startup() {
 }
 
 void genericBuzzer::shutdown() {
+    // #2089: the chime is an Event, so a higher-priority tune still sounding would refuse
+    // it and the board would go off silently. Powering off outranks any tune.
+    stop();
     play(shutdown_song);
 }
 
