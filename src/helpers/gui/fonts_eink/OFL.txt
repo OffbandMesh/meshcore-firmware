@@ -2,8 +2,8 @@ The font files in this directory are Modified Versions (converted to 1-bit
 LVGL bitmap fonts) of the following Font Software, each licensed under the
 SIL Open Font License, Version 1.1, reproduced below.
 
-Barlow Condensed (ob_font_title_18, ob_font_body_14, ob_font_body_12,
-ob_font_label_9):
+Barlow Condensed (ob_font_title_18, ob_font_body_14, ob_font_body_12) and
+Barlow Semi Condensed (ob_font_label_9):
 Copyright 2017 The Barlow Project Authors (https://github.com/jpt/barlow)
 
 JetBrains Mono (ob_font_data_14, ob_font_meta_10, ob_font_clock_46, and the

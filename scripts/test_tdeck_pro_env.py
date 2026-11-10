@@ -194,6 +194,11 @@ def eink_font_failures(gui_env, color, eink):
     for name, head in sorted(eink.items()):
         if not re.search(r"^ \* Bpp: 1$", head, re.M):
             out.append("fonts_eink/%s is not 1 bpp" % name)
+    # The caps label: at 1 bit the 9 px condensed face drops N's diagonal (owner's pick, #2037).
+    label = eink.get("ob_font_label_9.c", "")
+    if label and not ("BarlowSemiCondensed-Medium.ttf" in label and re.search(r"^ \* Size: 10 px$", label, re.M)):
+        out.append("fonts_eink/ob_font_label_9.c must be Barlow Semi Condensed Medium at 10 px: the 9 px "
+                   "condensed face reads N as H at 1 bit")
     return out
 
 
@@ -416,6 +421,15 @@ def test_negative_a_4bpp_font_in_the_eink_set_is_caught():
     eink = dict(eink)
     eink["ob_font_label_9.c"] = eink["ob_font_label_9.c"].replace(" * Bpp: 1", " * Bpp: 4")
     _fonts_fail_with("ob_font_label_9.c is not 1 bpp", fonts=(color, eink))
+
+
+def test_negative_the_condensed_9px_label_is_caught():
+    color, eink = _real_fonts()
+    eink = dict(eink)
+    eink["ob_font_label_9.c"] = (eink["ob_font_label_9.c"].replace("BarlowSemiCondensed-Medium.ttf",
+                                                                  "BarlowCondensed-Regular.ttf")
+                                 .replace(" * Size: 10 px", " * Size: 9 px"))
+    _fonts_fail_with("must be Barlow Semi Condensed Medium at 10 px", fonts=(color, eink))
 
 
 def test_negative_a_font_missing_from_the_eink_set_is_caught():
