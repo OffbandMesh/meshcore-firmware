@@ -1,0 +1,18 @@
+schema_version: 1
+issue: 2084
+impact: none
+reason: >-
+  Carries a badge-only buzzer behavior to five more companion builds: the
+  T1000-E (BLE and USB), the Wio Tracker L1 (BLE and USB) and the Heltec V4
+  TFT GUI build. The T1000-E and the V4 TFT GUI each gain a small override in
+  their UI code; the Wio Tracker L1 already had one. Every other build is
+  unchanged, which a CI check now asserts per env, both as written and after
+  PlatformIO resolves `extends`. By the owner's standing decision this
+  behavior is not described in the user documentation, so no guide is
+  updated. On these five builds a message or event tone that arrives while
+  this behavior is sounding is not played, as on the badge; at any other
+  time those tones are unchanged. Separately (#2089), the shutdown chime on
+  every buzzer board now stops whatever is sounding before it plays, where
+  before a higher-priority tune refused it and the board went off silently.
+  The chime could already cut off any tune at normal priority, so nothing
+  else changes, and no guide describes the old behavior.

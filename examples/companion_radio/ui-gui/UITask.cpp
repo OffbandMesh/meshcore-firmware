@@ -1864,6 +1864,17 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
   _unread = msgcount;
 }
 
+#ifdef PIN_BUZZER
+// #2086: reports whether the buzzer took the request. The buzzer itself refuses while
+// quiet, and refuses a request below whatever is playing, so nothing here repeats that.
+bool UITask::playTriggerTune() {
+  const char* melody = offband::tuneRtttl(offband::kTuneTrigger);
+  if (melody == nullptr) return false;
+  const offband::TonePlay r = _buzzer.play(melody, offband::TonePriority::Trigger);
+  return r == offband::TonePlay::Played;
+}
+#endif
+
 // The stock ui-new sounds, so a GUI companion sounds like any other.
 void UITask::notify(UIEventType t) {
 #ifdef PIN_BUZZER

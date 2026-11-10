@@ -430,6 +430,48 @@ def test_negative_the_exact_1590_regression_shape_is_caught():
                    for b in bad), "the message must name the consequence; got %s" % bad
 
 
+# --- #2084: the same priority guard over the two other UIs that now override the seam ---
+# ui-orig (the T1000-E) plays through its tune engine; ui-gui (the V4 TFT GUI) has no
+# engine and plays the builtin straight from the table. Both must ask for Trigger, and
+# only Trigger, for the same reason ui-new must.
+
+OTHER_UITASKS = {
+    "ui-orig": ROOT / "examples" / "companion_radio" / "ui-orig" / "UITask.cpp",
+    "ui-gui": ROOT / "examples" / "companion_radio" / "ui-gui" / "UITask.cpp",
+}
+
+
+def test_the_other_uis_ask_for_trigger_priority():
+    for ui, path in OTHER_UITASKS.items():
+        bad = trigger_priority_failures(path.read_text())
+        assert not bad, "%s: %s" % (ui, bad)
+
+
+def test_negative_the_other_uis_dropped_to_event_priority_are_caught():
+    for ui, path in OTHER_UITASKS.items():
+        src = path.read_text()
+        assert "offband::TonePriority::Trigger" in src, "sanity: %s names Trigger" % ui
+        bad = trigger_priority_failures(
+            src.replace("offband::TonePriority::Trigger", "offband::TonePriority::Event"))
+        assert any("truncates it" in b for b in bad), "%s: got %s" % (ui, bad)
+
+
+def test_negative_the_other_uis_playing_some_other_tune_are_caught():
+    for ui, path in OTHER_UITASKS.items():
+        src = path.read_text()
+        assert "offband::kTuneTrigger" in src, "sanity: %s names kTuneTrigger" % ui
+        bad = trigger_priority_failures(
+            src.replace("offband::kTuneTrigger", "offband::kTuneTick"))
+        assert any("some other tune" in b for b in bad), "%s: got %s" % (ui, bad)
+
+
+def test_negative_the_other_uis_losing_the_override_is_caught():
+    for ui, path in OTHER_UITASKS.items():
+        src = path.read_text().replace("UITask::playTriggerTune", "UITask::playTriggerTuneX")
+        bad = trigger_priority_failures(src)
+        assert any("not found" in b for b in bad), "%s: got %s" % (ui, bad)
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
