@@ -125,6 +125,7 @@ private:
   void attachTouch();
   void logTouchProbe();
   void logTouchChipProbe();   // the T-Deck Pro's Hynitron chip (#2108)
+  void logTouchInfo();        // its info block, once the driver is up (#2110)
   void handle(offband::gui::InputEvent ev, uint32_t now);
   void applyScreen(offband::gui::ScreenState s);
   void toggleBuzzer();

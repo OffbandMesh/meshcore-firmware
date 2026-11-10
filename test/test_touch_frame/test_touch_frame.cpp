@@ -547,6 +547,20 @@ TEST(Cst66xxTracker, ALostReleaseReportDoesNotLeaveThePressStuck) {
   for (uint8_t i = 0; i < kCst66xxStaleReads; i++) t.idle(&p);
   EXPECT_FALSE(p.pressed);
   EXPECT_EQ(70, p.x);   // released where the finger was
+  EXPECT_EQ(1u, t.staleReleases());
+}
+
+TEST(Cst66xxTracker, AFingerUpReportIsNotCountedAsAStaleRelease) {
+  Cst66xxTracker t;
+  uint8_t b[kCst66xxMaxReportLen];
+  HynEntry f{70, 80, 0, 6};
+  TouchPoint p{};
+  ASSERT_TRUE(t.report(b, hynReport(b, 0xFF, nullptr, 0, &f, 1), &p));
+  f.event = 0;
+  ASSERT_TRUE(t.report(b, hynReport(b, 0xFF, nullptr, 0, &f, 1), &p));
+  for (uint8_t i = 0; i < 2 * kCst66xxStaleReads; i++) t.idle(&p);   // idle with no finger
+  EXPECT_FALSE(p.pressed);
+  EXPECT_EQ(0u, t.staleReleases());
 }
 
 TEST(Cst66xxTracker, AReleaseReportReleasesAtOnce) {
@@ -631,6 +645,304 @@ TEST(FailedReadGuard, ReleaseDropsAHeldPress) {
   g.update(true, true);
   g.release();
   EXPECT_FALSE(g.pressed());
+}
+
+// ---- reads queued during an e-paper refresh (#2110) ----
+
+static TouchPoint up(uint16_t x = 0, uint16_t y = 0) { return TouchPoint{false, x, y}; }
+static TouchPoint down(uint16_t x, uint16_t y) { return TouchPoint{true, x, y}; }
+
+TEST(TouchQueue, ATapInsideARefreshIsKeptAsAPressAndARelease) {
+  TouchQueue q;
+  q.start(false);
+  EXPECT_TRUE(q.offer(up(), 10));
+  EXPECT_TRUE(q.offer(down(40, 50), 20));
+  EXPECT_TRUE(q.offer(up(40, 50), 50));
+  EXPECT_TRUE(q.offer(up(40, 50), 80));
+  ASSERT_EQ(2, q.size());
+  TouchPoint p{};
+  uint32_t ms = 0;
+  ASSERT_TRUE(q.take(&p, &ms));
+  EXPECT_TRUE(p.pressed);
+  EXPECT_EQ(40, p.x);
+  EXPECT_EQ(50, p.y);
+  EXPECT_EQ(20u, ms);
+  ASSERT_TRUE(q.take(&p, &ms));
+  EXPECT_FALSE(p.pressed);
+  EXPECT_EQ(50u, ms);
+  EXPECT_FALSE(q.take(&p, &ms));
+}
+
+TEST(TouchQueue, NothingTouchedQueuesNothing) {
+  TouchQueue q;
+  q.start(false);
+  for (uint32_t i = 0; i < 100; i++) EXPECT_TRUE(q.offer(up(), i));
+  EXPECT_TRUE(q.empty());
+}
+
+TEST(TouchQueue, ADragKeepsWhereItStartedAndWhereItGot) {
+  TouchQueue q;
+  q.start(false);
+  q.offer(down(10, 10), 1);
+  for (uint16_t i = 1; i <= 50; i++) q.offer(down(10, uint16_t(10 + i)), 1 + i);
+  q.offer(up(10, 60), 99);
+  ASSERT_EQ(3, q.size());
+  TouchPoint p{};
+  q.take(&p, nullptr);
+  EXPECT_EQ(10, p.y);   // the press, where it started
+  q.take(&p, nullptr);
+  EXPECT_TRUE(p.pressed);
+  EXPECT_EQ(60, p.y);   // the newest held point
+  q.take(&p, nullptr);
+  EXPECT_FALSE(p.pressed);
+}
+
+TEST(TouchQueue, AFingerAlreadyDownIsNotANewPress) {
+  TouchQueue q;
+  q.start(true);
+  q.offer(down(30, 30), 1);
+  q.offer(down(31, 30), 2);
+  ASSERT_EQ(1, q.size());   // one held point, overwritten in place
+  TouchPoint p{};
+  q.take(&p, nullptr);
+  EXPECT_TRUE(p.pressed);
+  EXPECT_EQ(31, p.x);
+}
+
+TEST(TouchQueue, ALongHoldDoesNotFillTheQueue) {
+  TouchQueue q;
+  q.start(false);
+  for (uint32_t i = 0; i < 1000; i++) EXPECT_TRUE(q.offer(down(5, 5), i));
+  EXPECT_EQ(2, q.size());
+  EXPECT_EQ(0u, q.dropped());
+}
+
+TEST(TouchQueue, TwoTapsStayTwoTaps) {
+  TouchQueue q;
+  q.start(false);
+  q.offer(down(1, 1), 1);
+  q.offer(up(1, 1), 2);
+  q.offer(down(2, 2), 3);
+  q.offer(up(2, 2), 4);
+  ASSERT_EQ(4, q.size());
+  bool want = true;
+  TouchPoint p{};
+  while (q.take(&p, nullptr)) {
+    EXPECT_EQ(want, p.pressed);
+    want = !want;
+  }
+}
+
+TEST(TouchQueue, AFullQueueDropsAndCountsTheRest) {
+  TouchQueue q;
+  q.start(false);
+  for (uint8_t i = 0; i < kTouchQueueLen; i++) EXPECT_TRUE(q.offer(i % 2 ? up() : down(1, 1), i));
+  EXPECT_FALSE(q.offer(down(9, 9), 100));
+  EXPECT_EQ(1u, q.dropped());
+  EXPECT_EQ(kTouchQueueLen, q.size());
+  // The oldest taps are the ones kept, in order.
+  TouchPoint p{};
+  q.take(&p, nullptr);
+  EXPECT_TRUE(p.pressed);
+  EXPECT_EQ(1, p.x);
+}
+
+TEST(TouchQueue, AHeldPointStillMovesWhenTheQueueIsFull) {
+  TouchQueue q;
+  q.start(false);
+  for (uint8_t i = 0; i < kTouchQueueLen - 1; i++) q.offer(i % 2 ? up() : down(1, 1), i);
+  q.offer(down(1, 1), 50);   // the first held point after the last press: the 16th entry
+  ASSERT_EQ(kTouchQueueLen, q.size());
+  EXPECT_TRUE(q.offer(down(7, 7), 51));   // moves it, drops nothing
+  EXPECT_EQ(0u, q.dropped());
+}
+
+TEST(TouchQueue, AfterADroppedReleaseANewTapIsNotFoldedIntoTheOldPress) {
+  TouchQueue q;
+  q.start(false);
+  // Fill it, ending on a press and its first held point.
+  for (uint8_t i = 0; i < kTouchQueueLen - 2; i++) q.offer(i % 2 ? up() : down(1, 1), i);
+  q.offer(down(1, 1), 20);
+  q.offer(down(2, 2), 21);
+  ASSERT_EQ(kTouchQueueLen, q.size());
+  EXPECT_FALSE(q.offer(up(2, 2), 22));   // the lift is dropped
+  // Room again (the oldest two taken), then a new tap somewhere else.
+  TouchPoint p{};
+  q.take(&p, nullptr);
+  q.take(&p, nullptr);
+  EXPECT_TRUE(q.offer(down(90, 90), 23));
+  EXPECT_TRUE(q.offer(up(90, 90), 24));
+  // The old press's held point is still its own, and the new tap is a press
+  // of its own after it, not a move of the old one.
+  for (uint8_t i = 0; i < kTouchQueueLen - 2; i++) q.take(&p, nullptr);
+  EXPECT_TRUE(p.pressed);
+  EXPECT_EQ(2, p.x);
+  ASSERT_TRUE(q.take(&p, nullptr));
+  EXPECT_TRUE(p.pressed);
+  EXPECT_EQ(90, p.x);
+  ASSERT_TRUE(q.take(&p, nullptr));
+  EXPECT_FALSE(p.pressed);
+  EXPECT_FALSE(q.take(&p, nullptr));
+}
+
+TEST(TouchQueue, AReleaseCarriesHowLongItsPressWasDown) {
+  TouchQueue q;
+  q.start(false);
+  q.offer(down(5, 5), 100);
+  q.offer(down(5, 6), 130);
+  q.offer(up(5, 6), 700);
+  TouchPoint p{};
+  EXPECT_EQ(0u, q.nextReleaseHeldMs());   // the press is first
+  q.take(&p, nullptr);
+  q.take(&p, nullptr);
+  EXPECT_EQ(600u, q.nextReleaseHeldMs());
+}
+
+TEST(TouchQueue, AFingerDownBeforeTheRefreshHasNoHoldTime) {
+  // LVGL saw that press itself and is timing it already.
+  TouchQueue q;
+  q.start(true);
+  q.offer(down(5, 5), 100);
+  q.offer(up(5, 5), 900);
+  TouchPoint p{};
+  q.take(&p, nullptr);
+  EXPECT_EQ(0u, q.nextReleaseHeldMs());
+}
+
+// ---- replaying what a refresh caught (#2110) ----
+
+TEST(TouchReplay, ATapIsHandedOverInOnePass) {
+  TouchQueue q;
+  TouchReplay r(q, 400);
+  q.start(false);
+  q.offer(down(4, 4), 10);
+  q.offer(up(4, 4), 60);
+  TouchPoint p{};
+  uint32_t ms = 0;
+  bool more = false;
+  ASSERT_TRUE(r.next(1000, &p, &ms, &more));
+  EXPECT_TRUE(p.pressed);
+  EXPECT_TRUE(more);
+  ASSERT_TRUE(r.next(1000, &p, &ms, &more));
+  EXPECT_FALSE(p.pressed);
+  EXPECT_FALSE(more);
+  EXPECT_FALSE(r.next(1000, &p, &ms, &more));   // read the chip
+}
+
+TEST(TouchReplay, ALongHoldIsHeldForTheLongPressTime) {
+  TouchQueue q;
+  TouchReplay r(q, 400);
+  q.start(false);
+  q.offer(down(4, 4), 10);
+  q.offer(down(4, 5), 40);
+  q.offer(up(4, 5), 900);
+  TouchPoint p{};
+  bool more = false;
+  ASSERT_TRUE(r.next(1000, &p, nullptr, &more));   // the press
+  EXPECT_TRUE(more);
+  ASSERT_TRUE(r.next(1000, &p, nullptr, &more));   // its newest point: the hold begins
+  EXPECT_TRUE(p.pressed);
+  EXPECT_FALSE(more);
+  EXPECT_TRUE(r.holding());
+  const uint32_t past = 1000 + 400 + TouchReplay::kHoldMarginMs;
+  for (uint32_t t = 1030; t <= past; t += 30) {
+    ASSERT_TRUE(r.next(t, &p, nullptr, &more));
+    EXPECT_TRUE(p.pressed) << t;
+    EXPECT_EQ(5, p.y);
+  }
+  ASSERT_TRUE(r.next(past + 30, &p, nullptr, &more));
+  EXPECT_FALSE(p.pressed);   // then the release
+  EXPECT_FALSE(r.holding());
+}
+
+TEST(TouchReplay, ASlowLoopStillHandsOverAReadPastTheHoldTime) {
+  // A read late enough to skip the hold time is still pressed, so LVGL's
+  // long-press check sees it; the release comes on the read after.
+  TouchQueue q;
+  TouchReplay r(q, 400);
+  q.start(false);
+  q.offer(down(4, 4), 10);
+  q.offer(up(4, 4), 900);
+  TouchPoint p{};
+  r.next(1000, &p, nullptr, nullptr);
+  ASSERT_TRUE(r.holding());
+  ASSERT_TRUE(r.next(1700, &p, nullptr, nullptr));
+  EXPECT_TRUE(p.pressed);
+  ASSERT_TRUE(r.next(1701, &p, nullptr, nullptr));
+  EXPECT_FALSE(p.pressed);
+}
+
+TEST(TouchReplay, AShortPressIsNotHeld) {
+  TouchQueue q;
+  TouchReplay r(q, 400);
+  q.start(false);
+  q.offer(down(4, 4), 10);
+  q.offer(up(4, 4), 390);   // just under the long-press time
+  TouchPoint p{};
+  bool more = false;
+  r.next(1000, &p, nullptr, &more);
+  EXPECT_TRUE(more);
+  EXPECT_FALSE(r.holding());
+}
+
+TEST(TouchReplay, ReadsAfterTheHoldFollowIt) {
+  TouchQueue q;
+  TouchReplay r(q, 400);
+  q.start(false);
+  q.offer(down(1, 1), 0);
+  q.offer(up(1, 1), 500);
+  q.offer(down(2, 2), 600);
+  q.offer(up(2, 2), 650);
+  TouchPoint p{};
+  bool more = false;
+  r.next(1000, &p, nullptr, &more);   // held from here
+  r.next(1500, &p, nullptr, &more);   // the read past the hold time
+  EXPECT_TRUE(p.pressed);
+  r.next(1530, &p, nullptr, &more);   // the release
+  EXPECT_FALSE(p.pressed);
+  EXPECT_TRUE(more);                  // the second tap, in the same pass
+  r.next(1530, &p, nullptr, &more);
+  EXPECT_TRUE(p.pressed);
+  EXPECT_EQ(2, p.x);
+}
+
+TEST(TouchReplay, ClearEndsAHold) {
+  TouchQueue q;
+  TouchReplay r(q, 400);
+  q.start(false);
+  q.offer(down(1, 1), 0);
+  q.offer(up(1, 1), 500);
+  TouchPoint p{};
+  r.next(1000, &p, nullptr, nullptr);
+  ASSERT_TRUE(r.holding());
+  r.clear();
+  EXPECT_FALSE(r.holding());
+  EXPECT_FALSE(r.next(1001, &p, nullptr, nullptr));
+}
+
+TEST(TouchQueue, AnEmptyQueueTakesNothing) {
+  TouchQueue q;
+  TouchPoint p{true, 9, 9};
+  uint32_t ms = 7;
+  EXPECT_FALSE(q.take(&p, &ms));
+  EXPECT_TRUE(p.pressed);   // left alone
+  EXPECT_EQ(7u, ms);
+}
+
+TEST(TouchQueue, ClearEmptiesItButKeepsTheDropCount) {
+  TouchQueue q;
+  q.start(false);
+  for (uint8_t i = 0; i <= kTouchQueueLen; i++) q.offer(i % 2 ? up() : down(1, 1), i);
+  q.clear();
+  EXPECT_TRUE(q.empty());
+  EXPECT_EQ(1u, q.dropped());   // a running count: the log takes differences
+  TouchPoint p{};
+  EXPECT_FALSE(q.take(&p, nullptr));
+  // After a clear a press is a press again.
+  q.start(false);
+  q.offer(down(3, 3), 1);
+  ASSERT_TRUE(q.take(&p, nullptr));
+  EXPECT_TRUE(p.pressed);
 }
 
 int main(int argc, char** argv) {

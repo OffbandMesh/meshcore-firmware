@@ -9,6 +9,7 @@
 #include "../GuiLayout.h"
 #ifdef GUI_PANEL_EINK
   #include "../EinkFrame.h"
+  #include "../EinkScroll.h"
 #endif
 #include "Chsc6xTouch.h"
 #include "GuiPanel.h"
@@ -32,6 +33,21 @@ static EinkPacer s_pacer;
 
 static void ackFlush(lv_disp_drv_t* drv) { (void)drv; }
 
+// Touch read during a refresh (#2110, plan row 5). The busy hook below is
+// called from push(), in the UI loop's task like every other read of the
+// board bus, so touch never contends with the keyboard or fuel gauge.
+static TouchQueue s_queue;
+static TouchReplay s_replay(s_queue, LV_INDEV_DEF_LONG_PRESS_TIME);
+static bool s_pushing = false;
+static void busyHook(const void* arg);
+static bool pushTouchPressed();
+#ifdef OFFBAND_GUI_PERF
+// Diag builds: when the last press was taken, so each refresh after it can
+// say how long the press waited for the glass.
+static uint32_t s_press_ms = 0;
+static uint32_t s_busy_reads = 0;
+#endif
+
 static void flushCb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* px) {
   for (lv_coord_t y = area->y1; y <= area->y2; y++) {
     for (lv_coord_t x = area->x1; x <= area->x2; x++) {
@@ -51,8 +67,29 @@ static void pushIfDue() {
   const EinkPush kind = s_pacer.due(now);
   if (kind == EinkPush::None) return;
   const EinkArea& a = s_pacer.dirty();
+  s_queue.start(pushTouchPressed());
+  s_pushing = true;
   s_panel->push(kind == EinkPush::Full, a.x1, a.y1, a.x2, a.y2);
+  s_pushing = false;
   s_pacer.pushed(kind, millis());   // after the push: the gap is free loop time
+#ifdef OFFBAND_GUI_PERF
+  // The bench measure (B3): what the refresh caught, and how long after the
+  // last press the glass was done. A press's own screen is the first
+  // refresh that follows it, or the second when the press drew first.
+  const uint32_t done = millis();
+  static uint32_t s_dropped_seen = 0;
+  const uint32_t dropped = s_queue.dropped() - s_dropped_seen;
+  s_dropped_seen = s_queue.dropped();
+  if (!s_queue.empty() || dropped) {
+    mesh_log_line(MLOG_BOOT, "[gui] touch in refresh: reads=%lu queued=%u dropped=%lu\n", (unsigned long)s_busy_reads,
+                  unsigned(s_queue.size()), (unsigned long)dropped);
+  }
+  s_busy_reads = 0;
+  if (s_press_ms && done - s_press_ms < 5000) {
+    mesh_log_line(MLOG_BOOT, "[gui] eink: %s refresh done %lu ms after the press\n",
+                  kind == EinkPush::Full ? "full" : "partial", (unsigned long)(done - s_press_ms));
+  }
+#endif
 }
 #else
 // A flush is finished when the SPI driver says the pixel write is done. It's
@@ -162,6 +199,9 @@ bool lvglBegin(GuiPanel& panel) {
   s_disp_drv.monitor_cb = monitorCb;
   s_disp_drv.draw_buf = &s_draw_buf;
   lv_disp_drv_register(&s_disp_drv);
+#ifdef GUI_PANEL_EINK
+  panel.setBusyHook(busyHook);
+#endif
   return true;
 }
 
@@ -174,12 +214,53 @@ static bool s_any_touch = false;
 // (TouchFrame.h, kReleaseAfterFailedReads).
 static FailedReadGuard s_guard;
 
+#ifdef GUI_PANEL_EINK
+static bool pushTouchPressed() { return s_guard.pressed(); }
+
+// Reads touch at LVGL's own input period while the panel is busy, and keeps
+// what it read for touchReadCb. A failed read keeps nothing: the reads after
+// the refresh decide, as they would have without it.
+static void busyHook(const void* arg) {
+  (void)arg;
+  static uint32_t s_last = 0;
+  const uint32_t now = millis();
+  if (s_pushing && s_touch && now - s_last >= LV_INDEV_DEF_READ_PERIOD) {
+    s_last = now;
+    TouchPoint p{};
+    if (s_touch->read(&p)) s_queue.offer(p, now);
+  #ifdef OFFBAND_GUI_PERF
+    s_busy_reads++;
+  #endif
+  }
+  delay(1);   // GxEPD2's own pace between BUSY checks when no hook is set
+}
+#endif
+
 static void touchReadCb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
   (void)drv;
   TouchPoint p{};
-  const bool ok = s_touch && s_touch->read(&p);
+  bool ok;
+  bool queued = false;
+  uint32_t taken_ms = 0;
+#ifdef GUI_PANEL_EINK
+  // What a refresh caught goes first, oldest first, in this one pass: LVGL
+  // calls again at once while continue_reading is set. A long hold is
+  // replayed over the reads that follow instead (TouchReplay).
+  bool more = false;
+  queued = s_replay.next(millis(), &p, &taken_ms, &more);
+  data->continue_reading = queued && more;
+#endif
+  if (queued) {
+    ok = true;
+  } else {
+    ok = s_touch && s_touch->read(&p);
+  }
+  (void)taken_ms;
 #ifdef OFFBAND_GUI_PERF
   const bool press_edge = ok && p.pressed && !s_guard.pressed();
+  #ifdef GUI_PANEL_EINK
+  if (press_edge) s_press_ms = queued ? taken_ms : millis();
+  #endif
 #endif
   s_guard.update(ok, p.pressed);
   if (ok) {
@@ -193,8 +274,8 @@ static void touchReadCb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
       static uint8_t s_logged = 0;
       if (press_edge && s_logged < 30) {
         s_logged++;
-        mesh_log_line(MLOG_BOOT, "[gui] touch raw=%u,%u -> %u,%u rot=%u\n", unsigned(p.x), unsigned(p.y), unsigned(x),
-                      unsigned(y), unsigned(s_rotation));
+        mesh_log_line(MLOG_BOOT, "[gui] touch raw=%u,%u -> %u,%u rot=%u%s\n", unsigned(p.x), unsigned(p.y), unsigned(x),
+                      unsigned(y), unsigned(s_rotation), queued ? " (caught in a refresh)" : "");
       }
 #endif
       s_last.x = lv_coord_t(x);
@@ -212,6 +293,9 @@ void lvglAttachTouch(TouchSource& touch, const TouchMapping& mapping) {
   lv_indev_drv_init(&s_indev_drv);
   s_indev_drv.type = LV_INDEV_TYPE_POINTER;
   s_indev_drv.read_cb = touchReadCb;
+#ifdef GUI_PANEL_EINK
+  einkScrollAttach(&s_indev_drv);   // a drag stops where the finger does
+#endif
   lv_indev_drv_register(&s_indev_drv);
 }
 
@@ -252,6 +336,9 @@ void lvglSetRotation(uint16_t rotation, uint8_t portrait_madctl) {
   s_rotation = l.rotation;
   // A touch held across the turn is in the old coordinates: drop it.
   s_guard.release();
+#ifdef GUI_PANEL_EINK
+  s_replay.clear();
+#endif
   s_last = {0, 0};
   s_disp_drv.hor_res = l.w;
   s_disp_drv.ver_res = l.h;

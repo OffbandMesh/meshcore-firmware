@@ -97,7 +97,10 @@ bool Cst66xxTracker::report(const uint8_t* buf, size_t len, TouchPoint* out) {
 }
 
 void Cst66xxTracker::idle(TouchPoint* out) {
-  if (_last.pressed && _stale < kCst66xxStaleReads && ++_stale == kCst66xxStaleReads) _last.pressed = false;
+  if (_last.pressed && _stale < kCst66xxStaleReads && ++_stale == kCst66xxStaleReads) {
+    _last.pressed = false;
+    _stale_releases++;
+  }
   if (out) *out = _last;
 }
 
@@ -114,6 +117,116 @@ bool FailedReadGuard::update(bool ok, bool pressed) {
     _pressed = false;
   }
   return _pressed;
+}
+
+void TouchQueue::start(bool pressed) {
+  _last_pressed = pressed;
+  _tail_is_held = false;
+  _press_caught = false;   // a finger already down was pressed before this
+}
+
+void TouchQueue::append(const TouchPoint& p, uint32_t ms, uint32_t held_ms) {
+  const uint8_t i = uint8_t((_head + _count) % kTouchQueueLen);
+  _q[i] = p;
+  _ms[i] = ms;
+  _held_ms[i] = held_ms;
+  _count++;
+}
+
+bool TouchQueue::offer(const TouchPoint& p, uint32_t ms) {
+  if (p.pressed == _last_pressed) {
+    if (!p.pressed) return true;   // nothing touched, nothing to keep
+    if (_tail_is_held) {           // still down: move the newest point
+      const uint8_t i = uint8_t((_head + _count - 1) % kTouchQueueLen);
+      _q[i] = p;
+      _ms[i] = ms;
+      return true;
+    }
+  }
+  // A press, a release, or the first point after a press.
+  const bool edge = p.pressed != _last_pressed;
+  if (_count == kTouchQueueLen) {
+    _dropped++;
+    // Still follow the finger, so a later gesture is never folded into the
+    // last one kept: after a dropped edge nothing moves the tail again.
+    _last_pressed = p.pressed;
+    _tail_is_held = false;
+    _press_caught = false;
+    return false;
+  }
+  uint32_t held_ms = 0;
+  if (edge && p.pressed) {
+    _press_caught = true;
+    _press_ms = ms;
+  } else if (edge) {
+    if (_press_caught) held_ms = ms - _press_ms;
+    _press_caught = false;
+  }
+  // The first held point after a press is its own entry, so the press keeps
+  // where it started.
+  _tail_is_held = p.pressed && !edge;
+  append(p, ms, held_ms);
+  _last_pressed = p.pressed;
+  return true;
+}
+
+bool TouchQueue::take(TouchPoint* p, uint32_t* ms) {
+  if (_count == 0) return false;
+  if (p) *p = _q[_head];
+  if (ms) *ms = _ms[_head];
+  _head = uint8_t((_head + 1) % kTouchQueueLen);
+  if (--_count == 0) _tail_is_held = false;
+  return true;
+}
+
+uint32_t TouchQueue::nextReleaseHeldMs() const {
+  if (_count == 0 || _q[_head].pressed) return 0;
+  return _held_ms[_head];
+}
+
+void TouchQueue::clear() {
+  _head = _count = 0;
+  _tail_is_held = false;
+  _last_pressed = false;
+  _press_caught = false;
+}
+
+bool TouchReplay::next(uint32_t now, TouchPoint* p, uint32_t* taken_ms, bool* more) {
+  if (_holding) {
+    if (!_hold_done) {
+      // Pressed on this read too; once this one is past the hold time, the
+      // next read ends the hold.
+      _hold_done = now - _hold_from >= _long_ms + kHoldMarginMs;
+      if (p) *p = _held;
+      if (taken_ms) *taken_ms = _held_taken_ms;
+      if (more) *more = false;   // the next read, a period on, holds again
+      return true;
+    }
+    _holding = false;
+  }
+  TouchPoint t{};
+  uint32_t ms = 0;
+  if (!_q.take(&t, &ms)) return false;
+  bool again = !_q.empty();
+  if (t.pressed && _q.nextReleaseHeldMs() >= _long_ms) {
+    // The release that follows ends a long hold: keep this point down until
+    // LVGL, which saw the press in this pass, has counted the hold itself.
+    _holding = true;
+    _hold_done = false;
+    _held = t;
+    _held_taken_ms = ms;
+    _hold_from = now;
+    again = false;
+  }
+  if (p) *p = t;
+  if (taken_ms) *taken_ms = ms;
+  if (more) *more = again;
+  return true;
+}
+
+void TouchReplay::clear() {
+  _holding = false;
+  _q.clear();
 }
 
 void mapTouch(const TouchMapping& m, uint16_t* x, uint16_t* y) {
