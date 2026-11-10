@@ -124,6 +124,7 @@ private:
   void pollTouchLate(uint32_t now);
   void attachTouch();
   void logTouchProbe();
+  void logTouchChipProbe();   // the T-Deck Pro's Hynitron chip (#2108)
   void handle(offband::gui::InputEvent ev, uint32_t now);
   void applyScreen(offband::gui::ScreenState s);
   void toggleBuzzer();
