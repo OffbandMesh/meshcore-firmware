@@ -12,7 +12,7 @@ Deleting any of them leaves CI green, the matrix green and the badge wrong.
                                          including the solar car companion it was sized for
     OFFBAND_NAME_FROM_BLE_MAC == "QCC-"  fresh badges fall back to pubkey-hex names
     ..._CHARS == 4 (= the header)        the name stops matching the badge labels (#1807)
-    OFFBAND_TUNE_TRIGGER badge-only      sixty other variants compile the trigger
+    OFFBAND_TUNE_TRIGGER badge + #2084   sixty other variants compile the trigger
     OFFBAND_NAME_MAC_VERIFY diag-only    the SHIPPING image prints the BLE address (#1635)
     BATTERY_LPCOMP_* on AIN7, 11/16 VDD  a refused badge cannot wake by itself (#1688)
 
@@ -154,19 +154,100 @@ def read_other_inis():
     return out
 
 
+# #2084: the boards besides the badge that carry the trigger, by owner direction
+# (2026-11-09). Named per ENV, not per file: each of these ini files also holds repeater,
+# room-server and other companion envs that must stay without it. A diag twin that
+# `extends` one of these inherits it and is not listed, because it does not write the flag.
+TRIGGER_TARGETS = frozenset({
+    ("variants/t1000-e", "env:t1000e_companion_radio_usb"),
+    ("variants/t1000-e", "env:t1000e_companion_radio_ble"),
+    ("variants/wio-tracker-l1", "env:WioTrackerL1_companion_radio_usb"),
+    ("variants/wio-tracker-l1", "env:WioTrackerL1_companion_radio_ble"),
+    ("variants/heltec_v4", "env:heltec_v4_tft_companion_radio_ble_gui"),
+})
+
+
+def _trigger_sections(others):
+    """Every (file label, section) that sets OFFBAND_TUNE_TRIGGER.
+
+    Text above the first section header is reported as "(no section)" rather than dropped:
+    ini_sections() ignores it, and a check that cannot see a line cannot fail on it.
+    """
+    found = set()
+    for label, text in others.items():
+        head = re.split(r"(?m)^\s*\[[^\]]+\]\s*$", text, maxsplit=1)[0]
+        if flag(head, "OFFBAND_TUNE_TRIGGER") is not None:
+            found.add((label, "(no section)"))
+        for sec, body in ini_sections(text).items():
+            if flag(body, "OFFBAND_TUNE_TRIGGER") is not None:
+                found.add((label, sec))
+    return found
+
+
 def trigger_stray_failures(others):
-    """OFFBAND_TUNE_TRIGGER must reach the badge env and nothing else.
+    """OFFBAND_TUNE_TRIGGER must reach the badge env and the named targets, nothing else.
 
     Sixty-odd other variants build this same companion role. If the flag reaches them they
     compile the arriving-message rule and still link, so the matrix stays green and nothing
-    anywhere reports it.
+    anywhere reports it. A flag in a shared base section counts as a stray even in a target
+    file, because every env that extends that section would inherit it.
     """
-    strays = sorted(label for label, text in others.items()
-                    if flag(text, "OFFBAND_TUNE_TRIGGER") is not None)
+    strays = sorted("%s [%s]" % ls for ls in _trigger_sections(others) - TRIGGER_TARGETS)
     if not strays:
         return []
-    return ["OFFBAND_TUNE_TRIGGER is set outside the badge env: %s. Those builds compile "
-            "the trigger and stay green, so nothing would report it." % ", ".join(strays)]
+    return ["OFFBAND_TUNE_TRIGGER is set outside the badge env and the #2084 targets: %s. "
+            "Those builds compile the trigger and stay green, so nothing would report it."
+            % ", ".join(strays)]
+
+
+# The diag and bench images that extend a target. `_hangtest` extends `_diag`, so a target
+# can carry both, e.g. t1000e_companion_radio_ble_diag and t1000e_companion_radio_ble_hangtest.
+TRIGGER_TWIN_SUFFIXES = ("_diag", "_hangtest")
+
+
+def resolved_trigger_failures(config):
+    """The same rule over the RESOLVED config, where `extends` and interpolation are applied.
+
+    The textual check above sees only where the flag is written, so an env that extends a
+    target would inherit the trigger unseen (Gemini review, #2084). Here an env may carry it
+    only if it is a badge env, a target, or a twin named `<target>_...` (the diag and bench
+    images). `config` is `pio project config --json-output`: [(section, options), ...].
+    """
+    targets = {sec[4:] for _, sec in TRIGGER_TARGETS}
+    carrying = set()
+    for section, options in config:
+        if not section.startswith("env:"):
+            continue
+        flags = dict(options).get("build_flags") or ""
+        if isinstance(flags, (list, tuple)):
+            flags = "\n".join(str(f) for f in flags)
+        if re.search(r"(?<![A-Za-z0-9_])OFFBAND_TUNE_TRIGGER(?![A-Za-z0-9_])", str(flags)):
+            carrying.add(section[4:])
+    # Twins by named suffix only, so a new FEATURE env extending a target fails loudly here
+    # instead of inheriting the trigger unremarked (third Gemini pass, #2084).
+    allowed = lambda e: (e.startswith("QCC_Badge_") or e in targets
+                         or any(e == t + s for t in targets for s in TRIGGER_TWIN_SUFFIXES))
+    bad = []
+    strays = sorted(e for e in carrying if not allowed(e))
+    if strays:
+        bad.append("after `extends` and interpolation, OFFBAND_TUNE_TRIGGER reaches %s, which "
+                   "is neither the badge, a #2084 target nor a twin named after one."
+                   % ", ".join(strays))
+    missing = sorted((targets | {SHIPPING_ENV[4:]}) - carrying)
+    if missing:
+        bad.append("after resolution, OFFBAND_TUNE_TRIGGER is missing from %s."
+                   % ", ".join(missing))
+    return bad
+
+
+def trigger_target_failures(others):
+    """Every #2084 target must still set the flag; a dropped one is a silent no-op board."""
+    missing = sorted("%s [%s]" % ls for ls in TRIGGER_TARGETS - _trigger_sections(others))
+    if not missing:
+        return []
+    return ["OFFBAND_TUNE_TRIGGER is missing from a #2084 target: %s. That board builds, "
+            "links and plays every other tune, and the trigger does nothing."
+            % ", ".join(missing)]
 
 
 # --- the invariants, as a pure function so the negatives can mutate the inputs ----------
@@ -255,6 +336,7 @@ def env_failures(ini_text, variant_text, nrf52_text, hb_test_text):
         bad.append("the badge env must set -D OFFBAND_TUNE_TRIGGER=1; without it the "
                    "arriving-message rule is compiled out and no badge can be triggered.")
     bad.extend(trigger_stray_failures(read_other_inis()))
+    bad.extend(trigger_target_failures(read_other_inis()))
 
     # 6. #1635: the BLE-address print is diagnostic-only. Asserting "absent everywhere"
     #    would just delete a useful check; asserting "diag yes, shipping no" is what makes
@@ -496,7 +578,7 @@ def test_negative_the_trigger_leaking_to_the_fleet_is_caught():
     # anyway. Both directions: the root ini, which reaches all 92 variants, and one
     # sibling variant.
     assert not trigger_stray_failures(read_other_inis()), \
-        "sanity: no non-badge platformio.ini may set OFFBAND_TUNE_TRIGGER today"
+        "sanity: only the badge and the #2084 targets may set OFFBAND_TUNE_TRIGGER today"
     for label in ("platformio.ini (root -- reaches EVERY variant)", "variants/promicro"):
         bad = trigger_stray_failures({label: "build_flags =\n  -D OFFBAND_TUNE_TRIGGER=1\n"})
         assert bad and label in bad[0], \
@@ -505,6 +587,78 @@ def test_negative_the_trigger_leaking_to_the_fleet_is_caught():
     assert not trigger_stray_failures(
         {"variants/promicro": "build_flags =\n  ; not -D OFFBAND_TUNE_TRIGGER=1 here\n"}), \
         "a commented-out flag must not count as set"
+
+
+def test_trigger_targets_all_set_today():
+    # Positive: exactly the five #2084 envs outside the badge, no more and no fewer.
+    others = read_other_inis()
+    assert not trigger_target_failures(others), trigger_target_failures(others)
+    assert _trigger_sections(others) == TRIGGER_TARGETS, sorted(_trigger_sections(others))
+
+
+def _resolved_config():
+    # The shared reader: it withholds the config on failure, because the resolved config
+    # carries interpolated secrets (#638). No pio is a FAIL, not a skip -- CI has it.
+    from check_env_capability_claims import read_config
+    cfg = read_config()
+    assert cfg is not None, "could not read the resolved PlatformIO config"
+    return cfg
+
+
+def _synthetic(*envs):
+    return [("env:%s" % e, [("build_flags", f)]) for e, f in envs]
+
+
+def test_resolved_trigger_set_is_exactly_the_badge_targets_and_twins():
+    bad = resolved_trigger_failures(_resolved_config())
+    assert not bad, bad
+
+
+def test_negative_an_env_inheriting_the_trigger_is_caught():
+    T = "-D OFFBAND_TUNE_TRIGGER=1"
+    ok = [(sec[4:], T) for _, sec in TRIGGER_TARGETS] + [("QCC_Badge_companion_radio_ble", T)]
+    assert not resolved_trigger_failures(_synthetic(*ok)), "sanity: the allowed set passes"
+    bad = resolved_trigger_failures(_synthetic(*ok, ("heltec_v4_companion_radio_ble", T)))
+    assert bad and "heltec_v4_companion_radio_ble" in bad[0], bad
+    # A named twin passes; a feature env built on a target, with any other suffix, does not.
+    assert not resolved_trigger_failures(_synthetic(*ok, ("t1000e_companion_radio_ble_diag", T)))
+    bad = resolved_trigger_failures(_synthetic(*ok, ("t1000e_companion_radio_usb_feature_x", T)))
+    assert bad and "t1000e_companion_radio_usb_feature_x" in bad[0], bad
+
+
+def test_negative_a_target_losing_it_after_resolution_is_caught():
+    T = "-D OFFBAND_TUNE_TRIGGER=1"
+    envs = [(sec[4:], T) for _, sec in TRIGGER_TARGETS if "usb" not in sec]
+    bad = resolved_trigger_failures(_synthetic(*envs, ("QCC_Badge_companion_radio_ble", T)))
+    assert bad and "t1000e_companion_radio_usb" in bad[-1], bad
+
+
+def test_negative_a_target_that_lost_the_flag_is_caught():
+    others = read_other_inis()
+    label = "variants/wio-tracker-l1"
+    line = "  -D OFFBAND_TUNE_TRIGGER=1"
+    assert others[label].count(line) == 2, "sanity: both Wio companion envs set it"
+    others[label] = others[label].replace(line, "  ; dropped", 1)
+    bad = trigger_target_failures(others)
+    assert bad and "WioTrackerL1_companion_radio_usb" in bad[0], bad
+
+
+def test_negative_the_trigger_in_a_sibling_env_of_a_target_file_is_caught():
+    # Same FILE as a target, wrong ENV: the repeater must not compile it.
+    others = read_other_inis()
+    label = "variants/wio-tracker-l1"
+    hdr = "[env:WioTrackerL1_repeater]\n"
+    assert hdr in others[label], "sanity: the repeater env exists"
+    others[label] = others[label].replace(hdr, hdr + "  -D OFFBAND_TUNE_TRIGGER=1\n", 1)
+    bad = trigger_stray_failures(others)
+    assert bad and "WioTrackerL1_repeater" in bad[0], bad
+
+
+def test_negative_the_trigger_in_a_targets_shared_base_section_is_caught():
+    # [t1000-e] reaches every T1000-E env, so it is a stray even though the file is a target.
+    bad = trigger_stray_failures(
+        {"variants/t1000-e": "[t1000-e]\nbuild_flags =\n  -D OFFBAND_TUNE_TRIGGER=1\n"})
+    assert bad and "[t1000-e]" in bad[0], bad
 
 
 def test_negative_the_ble_address_print_returning_to_the_shipping_env_is_caught():

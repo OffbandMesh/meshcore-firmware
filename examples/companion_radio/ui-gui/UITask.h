@@ -24,6 +24,7 @@
 
 #ifdef PIN_BUZZER
   #include <helpers/ui/buzzer.h>
+  #include <helpers/ui/Tunes.h>   // #2086: the trigger plays a builtin by id
 #endif
 
 class UITask : public AbstractUITask, public ShellModel {
@@ -40,6 +41,12 @@ public:
   void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) override;
   void notify(UIEventType t = UIEventType::none) override;
   void applyBuzzerMute(bool quiet) override;
+#ifdef PIN_BUZZER
+  // #2086: the trigger seam. This UI has no tune engine, so it plays the builtin straight
+  // from the table, at Trigger priority so the next arriving message cannot cut it off.
+  // Whether a board ever calls it is MyMesh's OFFBAND_TUNE_TRIGGER, not this.
+  bool playTriggerTune() override;
+#endif
   void loop() override;
 
   // ShellModel: what the screens read and do.
