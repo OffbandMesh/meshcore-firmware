@@ -4,7 +4,7 @@
 |---|---|
 | **Feature** | [#2093](https://github.com/OffbandMesh/meshcore-firmware/issues/2093) · Citadel `Crosswire-njb` |
 | **Serves** | Initiative [#2004](https://github.com/OffbandMesh/meshcore-firmware/issues/2004), LilyGo T-Deck Pro e-paper (H693) device support. It builds on bring-up, Feature [#2005](https://github.com/OffbandMesh/meshcore-firmware/issues/2005). |
-| **Status** | Draft for the owner's review. Owner's call, 2026-11-10: one Feature, touch first. |
+| **Status** | For the owner's approval by merge. Owner's calls, 2026-11-10: one Feature, touch first; the four §9 rulings. |
 | **Owner** | @Strycher |
 | **Last updated** | 2026-11-10 |
 
@@ -154,12 +154,14 @@ No branch proceeds without its condition, so no fail-open grant is needed. `"fla
 
 ## 9. Your choices
 
-| # | Question | Options | Recommendation |
-|---|---|---|---|
-| 1 | Which touch chip to support. Units ship with either, and the bench unit has one (row 2). | (a) The bench unit's chip now; the other when a unit with it is on hand. (b) Both now, one of them unverified. | **(a).** A driver nobody has run on a panel is a guess. |
-| 2 | Key navigation, with no trackball (row 7). | (a) When no text field is open, Enter opens the focused item and Backspace goes back; touch does the moving. (b) As (a), plus four keys that move focus (for example W, A, S, D). | **(a)** first, then revisit after bench use. Fewer keys with hidden meanings. |
-| 3 | Scrolling on e-paper. LVGL's momentum and elastic scrolling (on by default; the GUI doesn't turn them off) draw many frames, each a refresh. | (a) Turn momentum and elastic off on e-paper, so a drag lands in one refresh. (b) Leave them. | **(a).** |
-| 4 | Key repeat. The TCA8418 reports press and release only, with no repeat. | (a) Backspace repeats while held (after 0.5 s, about 10 a second); no other key does. (b) No repeat. (c) Every key repeats. | **(a).** Deleting a word is the case that needs it, and a screen that refreshes once a second gains nothing from repeated letters. |
+Owner's rulings, 2026-11-10: "Yes, all four" (each recommendation below, as offered).
+
+| # | Question | Ruling |
+|---|---|---|
+| 1 | Which touch chip to support. Units ship with either, and the bench unit has one (row 2). | The bench unit's chip now; the other when a unit with it is on hand. A driver nobody has run on a panel is a guess. |
+| 2 | Key navigation, with no trackball (row 7). | When no text field is open, Enter opens the focused item and Backspace goes back; touch does the moving. Revisit after bench use. (Not taken: four keys that move focus.) |
+| 3 | Scrolling on e-paper. LVGL's momentum and elastic scrolling (on by default; the GUI doesn't turn them off) draw many frames, each a refresh. | Momentum and elastic off on e-paper, so a drag lands in one refresh. |
+| 4 | Key repeat. The TCA8418 reports press and release only, with no repeat. | Backspace repeats while held (after 0.5 s, about 10 a second); no other key does. |
 
 ## 10. Carried-in work
 
