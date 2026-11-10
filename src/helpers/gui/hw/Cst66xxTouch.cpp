@@ -49,8 +49,28 @@ bool Cst66xxTouch::readReport(TouchPoint* p) {
       len = need;
     }
   }
-  _reports++;
+  _stats.reports++;
   return ok && _tracker.report(buf, len, p);
+}
+
+void Cst66xxTouch::noteState(const TouchPoint& p, bool reported) {
+  const uint32_t now = millis();
+  if (reported && _held && p.pressed) {
+    const uint32_t gap = now - _last_report_ms;
+    if (gap > _stats.max_held_gap_ms) _stats.max_held_gap_ms = gap;
+  }
+  if (reported) _last_report_ms = now;
+  if (p.pressed && !_held) _stats.presses++;
+  _held = p.pressed;
+}
+
+Cst66xxTouch::Stats Cst66xxTouch::takeStats() {
+  const uint32_t stale = _tracker.staleReleases();
+  Stats s = _stats;
+  s.stale_releases = stale - _stale_seen;
+  _stale_seen = stale;
+  _stats = Stats{};
+  return s;
 }
 
 bool Cst66xxTouch::read(TouchPoint* p) {
@@ -60,14 +80,21 @@ bool Cst66xxTouch::read(TouchPoint* p) {
     // ack, a lost ack would otherwise mean no edge, and no touch, ever again.
     if (!s_report_ready && digitalRead(_irq) != LOW) {
       _tracker.idle(p);
+      noteState(*p, false);
       return true;
     }
     // Cleared before the read, so an edge that lands during it isn't lost.
     s_report_ready = false;
   }
+  _stats.reads++;
   bool good = readReport(p) || readReport(p);
   // Tell the chip the report was taken, whether or not it read cleanly. A
   // failed ack is a bus error like any other.
   if (!hynSendReg(_wire, kCst66xxReportAck, 4)) good = false;
+  if (good) {
+    noteState(*p, true);
+  } else {
+    _stats.bus_errors++;
+  }
   return good;
 }

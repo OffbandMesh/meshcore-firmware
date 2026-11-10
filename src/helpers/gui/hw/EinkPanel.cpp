@@ -112,6 +112,8 @@ void GuiPanel::push(bool full, int16_t x1, int16_t y1, int16_t x2, int16_t y2) {
   }
 }
 
+void GuiPanel::setBusyHook(void (*hook)(const void*)) { s_epd.epd2.setBusyCallback(hook); }
+
 void GuiPanel::setRotation(uint16_t rotation) {
   // GxEPD2 counts quarter turns. 180 isn't offered (GuiLayout.h).
   s_epd.setRotation(rotation == 90 ? 1 : rotation == 270 ? 3 : 0);

@@ -16,6 +16,7 @@
 #include <helpers/gui/GuiViews.h>
 #include <helpers/gui/SignalLevel.h>
 #include <helpers/gui/hw/Chsc6xTouch.h>
+#include <helpers/gui/hw/Cst66xxTouch.h>
 #include <helpers/gui/hw/Gt911Touch.h>
 #include <helpers/gui/hw/GuiPanel.h>
 #include <helpers/gui/hw/HynProbe.h>
@@ -54,6 +55,11 @@ using namespace offband::gui;
 #endif
 #ifndef PIN_TOUCH_RST
   #define PIN_TOUCH_RST -1
+#endif
+// The touch chip's INT line, for a driver that reads on it (cst66xx); -1
+// reads on every poll.
+#ifndef PIN_TOUCH_INT
+  #define PIN_TOUCH_INT -1
 #endif
 
 // Screen timing until Display settings land (B6, G3): dim after 30 s; off
@@ -98,12 +104,31 @@ const char* screenName(ScreenState s) {
 // bus with the sensors (schematic V2.03, TP_SDA/TP_SCL = I2C_SDA/I2C_SCL), so
 // it must share that controller: a second one driving the same pins breaks both.
 // The T-Deck's GT911 (Epic J #1434) is on the board bus too, with the keyboard.
+// The T-Deck Pro's cst66xx (#2110) shares the board bus with the keyboard,
+// fuel gauge and charger.
 #if defined(TOUCH_GT911)
 Gt911Touch s_touch(Wire);
+constexpr const char* kTouchChip = "gt911";
+#elif defined(TOUCH_CST66XX)
+Cst66xxTouch s_touch(Wire);
+constexpr const char* kTouchChip = "cst66xx";
 #elif defined(PIN_BOARD_SDA) && defined(PIN_TOUCH_SDA) && PIN_TOUCH_SDA == PIN_BOARD_SDA
 Chsc6xTouch s_touch(Wire);
+constexpr const char* kTouchChip = "chsc6x";
 #else
 Chsc6xTouch s_touch;
+constexpr const char* kTouchChip = "chsc6x";
+#endif
+
+#if defined(PIN_TOUCH_SDA) && defined(PIN_TOUCH_SCL)
+bool startTouch() {
+  #if defined(TOUCH_CST66XX)
+  // The board has started the bus already, and this driver never starts it.
+  return s_touch.begin(PIN_TOUCH_RST, PIN_TOUCH_INT);
+  #else
+  return s_touch.begin(PIN_TOUCH_SDA, PIN_TOUCH_SCL, PIN_TOUCH_RST);
+  #endif
+}
 #endif
 
 // The T-Deck's keyboard is on the same board bus; its trackball is four
@@ -168,14 +193,16 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   if (!_gui_ok) return;
 
 #if defined(PIN_TOUCH_SDA) && defined(PIN_TOUCH_SCL)
-  _touch_ok = s_touch.begin(PIN_TOUCH_SDA, PIN_TOUCH_SCL, PIN_TOUCH_RST);
+  _touch_ok = startTouch();
   if (_touch_ok) attachTouch();
   // No answer from the controller: the GUI runs on buttons only (PLAN.md §6).
+  mesh_log_line(MLOG_BOOT, "[gui] touch %s%s\n", _touch_ok ? kTouchChip : "none (buttons only)",
+                _touch_ok ? " ok" : "");
 #ifdef TOUCH_GT911
-  mesh_log_line(MLOG_BOOT, "[gui] touch %s\n", _touch_ok ? "gt911 ok" : "none (buttons only)");
   logTouchProbe();
-#else
-  mesh_log_line(MLOG_BOOT, "[gui] touch %s\n", _touch_ok ? "chsc6x ok" : "none (buttons only)");
+#endif
+#ifdef TOUCH_CST66XX
+  if (_touch_ok) logTouchInfo();
 #endif
 #endif
 
@@ -314,6 +341,17 @@ void UITask::logTouchProbe() {
 }
 #endif
 
+#ifdef TOUCH_CST66XX
+// The chip's info block, as begin() read it (#2110): which firmware the
+// panel runs and the resolution it reports in.
+void UITask::logTouchInfo() {
+  const offband::gui::HynInfo& i = s_touch.info();
+  mesh_log_line(MLOG_BOOT, "[gui] cst66xx type=%08lx fw=%08lx proj=%08lx res=%ux%u int=%d rst=%d\n",
+                (unsigned long)i.chip_type, (unsigned long)i.fw_ver, (unsigned long)i.project_id, unsigned(i.res_x),
+                unsigned(i.res_y), int(PIN_TOUCH_INT), int(PIN_TOUCH_RST));
+}
+#endif
+
 #ifdef TOUCH_HYN_PROBE
 // Which Hynitron chip is at 0x1A (#2108, plan B1): each family's info read,
 // in LilyGo's order, a reset before each. Logged once capture is on.
@@ -341,14 +379,18 @@ void UITask::logTouchChipProbe() {
 // A touch chip that didn't answer at boot may still be starting: look again
 // every 2 s for the first minute, as for the keyboard.
 void UITask::pollTouchLate(uint32_t now) {
-#if defined(TOUCH_GT911)
-  if (_touch_ok || now > 60000 || now - _touch_probed < 2000) return;
+#if defined(TOUCH_GT911) || defined(TOUCH_CST66XX)
+  if (!_gui_ok || _touch_ok || now > 60000 || now - _touch_probed < 2000) return;
   _touch_probed = now;
-  if (!s_touch.begin(PIN_TOUCH_SDA, PIN_TOUCH_SCL, PIN_TOUCH_RST)) return;
+  if (!startTouch()) return;
   _touch_ok = true;
   attachTouch();
-  mesh_log_line(MLOG_BOOT, "[gui] touch gt911 ok (late)\n");
+  mesh_log_line(MLOG_BOOT, "[gui] touch %s ok (late)\n", kTouchChip);
+  #ifdef TOUCH_GT911
   logTouchProbe();
+  #else
+  logTouchInfo();
+  #endif
 #else
   (void)now;
 #endif
@@ -2056,6 +2098,15 @@ void UITask::loop() {
                   int(s_touch.present()), (unsigned long)ts.reads, (unsigned long)ts.bus_errors,
                   (unsigned long)ts.reports, (unsigned long)ts.presses, (unsigned long)ts.invalid,
                   unsigned(ts.last_x), unsigned(ts.last_y));
+  #elif defined(TOUCH_CST66XX)
+    // The T-Deck Pro bench (#2110). max_held_gap and stale say whether the
+    // chip keeps reporting while a finger rests (Cst66xxTouch::Stats).
+    const Cst66xxTouch::Stats ts = s_touch.takeStats();
+    mesh_log_line(MLOG_BOOT,
+                  "[gui] cst66xx present=%d reads=%lu bus_err=%lu reports=%lu presses=%lu stale=%lu max_held_gap=%lums\n",
+                  int(s_touch.present()), (unsigned long)ts.reads, (unsigned long)ts.bus_errors,
+                  (unsigned long)ts.reports, (unsigned long)ts.presses, (unsigned long)ts.stale_releases,
+                  (unsigned long)ts.max_held_gap_ms);
   #endif
   }
 #endif

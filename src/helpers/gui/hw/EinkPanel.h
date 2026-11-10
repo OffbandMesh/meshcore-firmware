@@ -51,6 +51,10 @@ public:
   // Sends the frame buffer to the glass: the whole panel, or the rectangle
   // given (inclusive). Blocks until the panel is done.
   void push(bool full, int16_t x1, int16_t y1, int16_t x2, int16_t y2);
+  // Called over and over while push() waits for the panel, in the caller's
+  // task (#2110: touch is read here during a refresh). The hook must pace
+  // itself: GxEPD2 waits 1 ms between passes only when no hook is set.
+  void setBusyHook(void (*hook)(const void*));
   // 0, 90 or 270, as the GUI's Rotation setting gives it.
   void setRotation(uint16_t rotation);
   // The panel starts in display.begin(), before the companion turns log

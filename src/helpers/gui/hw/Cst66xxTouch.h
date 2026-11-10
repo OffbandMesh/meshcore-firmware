@@ -34,17 +34,31 @@ public:
   // False on a bus error or a report that fails its checks, after one retry.
   bool read(offband::gui::TouchPoint* p) override;
 
-  // Reports read since begin(), valid or not: the diag log uses it to show
-  // how often the chip reports while a finger is down (B3).
-  uint32_t reportsRead() const { return _reports; }
+  // What the driver saw since the last takeStats(), for the diag log (B3,
+  // #2110). max_held_gap_ms is the longest wait between two reports while a
+  // finger was down: it settles whether the chip keeps reporting a resting
+  // finger, which the stale rule (kCst66xxStaleReads) depends on.
+  struct Stats {
+    uint32_t reads = 0;        // polls that read the chip
+    uint32_t bus_errors = 0;   // reads that failed after the retry
+    uint32_t reports = 0;      // reports read, valid or not
+    uint32_t presses = 0;
+    uint32_t stale_releases = 0;
+    uint32_t max_held_gap_ms = 0;
+  };
+  Stats takeStats();
 
 private:
   bool readReport(offband::gui::TouchPoint* p);
+  void noteState(const offband::gui::TouchPoint& p, bool reported);
 
   TwoWire& _wire;
   int _irq = -1;
   bool _present = false;
-  uint32_t _reports = 0;
+  Stats _stats;
+  uint32_t _stale_seen = 0;
+  bool _held = false;
+  uint32_t _last_report_ms = 0;
   offband::gui::HynInfo _info;
   offband::gui::Cst66xxTracker _tracker;
 };

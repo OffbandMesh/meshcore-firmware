@@ -132,10 +132,15 @@ public:
   void idle(TouchPoint* out);
   // Drops a held press (the chip was reset).
   void reset();
+  // Presses let go by the stale rule rather than by a finger-up report. The
+  // diag log counts them: a long hold that ends this way means the chip
+  // doesn't keep reporting while a finger rests (B3, #2110).
+  uint32_t staleReleases() const { return _stale_releases; }
 
 private:
   TouchPoint _last{false, 0, 0};
   uint8_t _stale = 0;
+  uint32_t _stale_releases = 0;
 };
 
 // Failed reads in a row before a held press is let go (moved here from
@@ -156,6 +161,84 @@ public:
 private:
   bool _pressed = false;
   uint8_t _failed = 0;
+};
+
+// Touch read while an e-paper refresh blocks the UI loop (#2110, plan row 5),
+// for LVGL to take once the refresh is done. A tap that starts and ends
+// inside one refresh would otherwise never be seen.
+//
+// Each press and each release is kept, so a tap stays a tap. While a finger
+// stays down only its newest point is kept after the press, so a drag keeps
+// where it started and where it got to, and a long hold doesn't fill the
+// queue.
+constexpr uint8_t kTouchQueueLen = 16;
+
+class TouchQueue {
+public:
+  // A refresh begins. `pressed` is the state LVGL last saw, so a finger
+  // already down isn't taken for a new press.
+  void start(bool pressed);
+  // One read taken during the refresh, at `ms`. False when the queue is
+  // full and the read was dropped.
+  bool offer(const TouchPoint& p, uint32_t ms);
+  // The oldest read, and when it was taken. False when empty.
+  bool take(TouchPoint* p, uint32_t* ms);
+  bool empty() const { return _count == 0; }
+  uint8_t size() const { return _count; }
+  // When the oldest read is a release whose press was also caught, how long
+  // the finger was down; otherwise 0. TouchReplay uses it to keep a long
+  // hold long.
+  uint32_t nextReleaseHeldMs() const;
+  // Empties it (the screen turned under the reads it holds).
+  void clear();
+  // Reads dropped because the queue was full, ever: a running count the
+  // diag log takes differences of, so clear() leaves it.
+  uint32_t dropped() const { return _dropped; }
+
+private:
+  void append(const TouchPoint& p, uint32_t ms, uint32_t held_ms);
+
+  TouchPoint _q[kTouchQueueLen] = {};
+  uint32_t _ms[kTouchQueueLen] = {};
+  uint32_t _held_ms[kTouchQueueLen] = {};   // set on a release entry
+  uint8_t _head = 0;
+  uint8_t _count = 0;
+  bool _last_pressed = false;
+  bool _tail_is_held = false;   // the newest entry is a held point to overwrite
+  bool _press_caught = false;   // the current press's edge is in the queue
+  uint32_t _press_ms = 0;
+  uint32_t _dropped = 0;
+};
+
+// Hands LVGL what a refresh caught, one read per call. LVGL takes the whole
+// queue in one pass, at one tick, so a hold that began and ended inside the
+// refresh would arrive as a click. A hold at least `long_press_ms` long is
+// replayed as a hold instead: its press, then pressed on every read until
+// LVGL has been handed one read past that long, then its release. Ending on
+// a read rather than on the clock means a slow UI loop can't skip LVGL's
+// long-press check.
+class TouchReplay {
+public:
+  // Past LVGL's long-press time, so its timer has fired by that read.
+  static constexpr uint32_t kHoldMarginMs = 50;
+
+  TouchReplay(TouchQueue& q, uint32_t long_press_ms) : _q(q), _long_ms(long_press_ms) {}
+
+  // One LVGL read at `now`. True when the replay supplies it: *p, when it was
+  // taken (*taken_ms), and whether LVGL should read again in this pass
+  // (*more). False when there is nothing to replay: read the chip.
+  bool next(uint32_t now, TouchPoint* p, uint32_t* taken_ms, bool* more);
+  bool holding() const { return _holding; }
+  void clear();
+
+private:
+  TouchQueue& _q;
+  uint32_t _long_ms;
+  bool _holding = false;
+  bool _hold_done = false;   // a read past the hold time has been handed over
+  uint32_t _hold_from = 0;
+  TouchPoint _held{false, 0, 0};
+  uint32_t _held_taken_ms = 0;
 };
 
 // How raw touch coordinates map onto the panel: optionally swap the axes,
