@@ -179,6 +179,11 @@ def failures(ini, target, board, ci, display=None, panel=None):
         if s not in secs:
             return ["[%s] is missing: this check cannot see what it is protecting" % s]
     hw, diag = secs[HW], secs[DIAG]
+    # Octal PSRAM needs GPIO33-37, which carry this board's SPI bus and panel.
+    m = re.search(r"^\s*board_build\.arduino\.memory_type\s*=\s*(\S+)", strip_comments(hw, ";"), re.M)
+    if not m or m.group(1) != "qio_qspi":
+        out.append("[%s] must set board_build.arduino.memory_type = qio_qspi: the PSRAM is quad, and "
+                   "GPIO33-37 are the SPI bus; got %r" % (HW, m.group(1) if m else None))
     for s, want in ENV_FLAGS.items():
         for name, value in want.items():
             if flag(secs[s], name) != value:
@@ -288,6 +293,15 @@ def test_negative_radio_init_on_another_bus_is_caught():
 
 def test_negative_the_sd_cs_left_floating_is_caught():
     _fails_with("must drive TDECK_PRO_SD_CS high", board=_sub(_real()[2], ", TDECK_PRO_SD_CS}", "}"))
+
+
+def test_negative_octal_psram_is_caught():
+    _fails_with("memory_type = qio_qspi", ini=_sub(_real()[0], "board_build.arduino.memory_type = qio_qspi",
+                                                    "board_build.arduino.memory_type = qio_opi"))
+
+
+def test_negative_the_board_default_psram_mode_is_caught():
+    _fails_with("memory_type = qio_qspi", ini=_sub(_real()[0], "board_build.arduino.memory_type = qio_qspi\n", ""))
 
 
 def test_negative_the_gui_card_driver_turned_on_is_caught():
