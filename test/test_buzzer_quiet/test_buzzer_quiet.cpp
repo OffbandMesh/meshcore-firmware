@@ -6,6 +6,7 @@
 // until the tune ends or until the next request cuts it off.
 
 #include <gtest/gtest.h>
+#include <string>
 
 #define PIN_BUZZER 7
 #include "helpers/ui/buzzer.cpp"
@@ -99,6 +100,29 @@ TEST_F(BuzzerQuiet, UnquietPreviewStillDoesNotTakeAnEvent) {
 
   EXPECT_TRUE(buzzer.isPlaying());
   EXPECT_STREQ(rtttl::g_mock_melody, kTune);
+}
+
+// #2089: the shutdown chime is an Event, so without a stop first it was refused while a
+// Trigger tune sounded and the board went off silently. Fails on the old shutdown().
+TEST_F(BuzzerQuiet, ShutdownChimeTakesOverATriggerTune) {
+  buzzer.play(kTune, offband::TonePriority::Trigger);
+
+  buzzer.shutdown();
+
+  EXPECT_TRUE(buzzer.isPlaying());
+  ASSERT_NE(rtttl::g_mock_melody, nullptr);
+  EXPECT_EQ(std::string(rtttl::g_mock_melody).rfind("Shutdown:", 0), 0u);
+}
+
+// The stop must not bypass quiet: a quiet board still shuts down without a chime.
+TEST_F(BuzzerQuiet, ShutdownWhileQuietStartsNothing) {
+  buzzer.quiet(true);
+  const int begins = rtttl::g_mock_begin_calls;
+
+  buzzer.shutdown();
+
+  EXPECT_FALSE(buzzer.isPlaying());
+  EXPECT_EQ(rtttl::g_mock_begin_calls, begins);
 }
 
 }  // namespace
