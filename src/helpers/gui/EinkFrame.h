@@ -29,8 +29,12 @@ constexpr ThemeId kEinkTheme = ThemeId::MonoHC;
 // Brightness above this is black ink; at or below it, white paper. Set
 // between the high-contrast theme's backgrounds (26 at most, bg3 0x1A1A1A)
 // and its secondary hairline (106 after RGB565 rounding, line2 0x6B6B6B),
-// with room on both sides. Anti-aliased glyph edges ink from about 31%
-// coverage, which keeps small text from thinning out.
+// with room on both sides. Text needs none of this: the e-paper image builds
+// 1-bit fonts (fonts_eink/). The cutoff decides what LVGL still blends: the
+// edges of rounded corners, arcs and images, and anything drawn below full
+// opacity. A blend reads as ink once it is past about 31% of white, so a
+// half-opacity disabled row, a scrim or a "sending" bubble prints the same
+// as full ink: those cues are lost on this panel (test_gui_eink pins it).
 constexpr uint8_t kEinkInkCutoff = 80;
 
 // Whether a pixel with brightness `luma` (0-255) is black ink.
