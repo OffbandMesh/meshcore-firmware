@@ -12,6 +12,7 @@
 #include <helpers/diagnostics/PanicRecord.h>
 #include <helpers/TimeZones.h>
 #include <helpers/gui/ClockPolicy.h>
+#include <helpers/gui/EinkFrame.h>   // kEinkTheme
 #include <helpers/gui/GuiViews.h>
 #include <helpers/gui/SignalLevel.h>
 #include <helpers/gui/hw/Chsc6xTouch.h>
@@ -71,6 +72,17 @@ namespace {
 // The Accent theme's signal color until Display settings let the user pick
 // one (the prototype's default, ObScreen.dc.html:330).
 constexpr uint32_t kDefaultAccent = 0xF2C14E;
+
+// The theme on screen. A black-and-white e-paper panel always shows the
+// high-contrast theme, and the stored theme is kept for a color panel.
+ThemeId shownTheme(uint8_t stored) {
+#ifdef GUI_PANEL_EINK
+  (void)stored;
+  return kEinkTheme;
+#else
+  return ThemeId(stored);
+#endif
+}
 
 const char* screenName(ScreenState s) {
   switch (s) {
@@ -146,6 +158,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
                 display ? display->height() : 0, (unsigned)lvglDrawBufBytes(),
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+#ifdef GUI_PANEL_EINK
+  if (panel) panel->replayInitTiming();   // its first log line went to UART0 only
+#endif
   if (!_gui_ok) return;
 
 #if defined(PIN_TOUCH_SDA) && defined(PIN_TOUCH_SCL)
@@ -190,7 +205,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 
   // Display › Theme and Look, as stored (Epic G, G3).
   if (_prefs) {
-    _theme = ThemeId(_prefs->gui.theme);
+    _theme = shownTheme(_prefs->gui.theme);
     _look = Look(_prefs->gui.look);
     _accent_shown = _prefs->gui.accent;
   }
@@ -1033,7 +1048,7 @@ void UITask::prefsChanged() {
     _shell.setLayout(layoutFor(_rotation));
     mesh_log_line(MLOG_BOOT, "[gui] rotation %u\n", (unsigned)_rotation);
   }
-  const ThemeId theme = ThemeId(_prefs->gui.theme);
+  const ThemeId theme = shownTheme(_prefs->gui.theme);
   const Look look = Look(_prefs->gui.look);
   if (theme != _theme || look != _look || _prefs->gui.accent != _accent_shown) {
     _theme = theme;

@@ -7,6 +7,9 @@
 #include <lvgl.h>
 
 #include "../GuiLayout.h"
+#ifdef GUI_PANEL_EINK
+  #include "../EinkFrame.h"
+#endif
 #include "Chsc6xTouch.h"
 #include "GuiPanel.h"
 
@@ -21,6 +24,37 @@ static size_t s_buf_bytes = 0;
 
 static bool s_flush_inflight = false;
 
+#ifdef GUI_PANEL_EINK
+// E-paper (#2009): LVGL draws into the panel's frame buffer, which takes no
+// time, and the pacer decides when the glass refreshes, which takes most of
+// a second.
+static EinkPacer s_pacer;
+
+static void ackFlush(lv_disp_drv_t* drv) { (void)drv; }
+
+static void flushCb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* px) {
+  for (lv_coord_t y = area->y1; y <= area->y2; y++) {
+    for (lv_coord_t x = area->x1; x <= area->x2; x++) {
+      s_panel->setInk(x, y, einkInk(lv_color_brightness(*px++)));
+    }
+  }
+  s_pacer.mark(area->x1, area->y1, area->x2, area->y2);
+  lv_disp_flush_ready(drv);
+}
+
+// Sends what LVGL has drawn when the pacer says it's time. Nothing goes out
+// while the panel sleeps; it's kept for the wake.
+static void pushIfDue() {
+  if (!s_panel->isOn()) return;
+  if (s_panel->takeNeedFull()) s_pacer.requestFull();
+  const uint32_t now = millis();
+  const EinkPush kind = s_pacer.due(now);
+  if (kind == EinkPush::None) return;
+  const EinkArea& a = s_pacer.dirty();
+  s_panel->push(kind == EinkPush::Full, a.x1, a.y1, a.x2, a.y2);
+  s_pacer.pushed(kind, millis());   // after the push: the gap is free loop time
+}
+#else
 // A flush is finished when the SPI driver says the pixel write is done. It's
 // asked from task context (LVGL's wait callback and the UI loop), never from
 // the SPI interrupt: LVGL lives in flash, and the interrupt can fire while a
@@ -43,6 +77,7 @@ static void flushCb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* px) {
     lv_disp_flush_ready(drv);  // nothing went out; don't stall LVGL on it
   }
 }
+#endif  // GUI_PANEL_EINK
 
 #ifdef OFFBAND_GUI_PERF
 // Diag builds: a pixel write that never finishes hangs the refresh until the
@@ -196,6 +231,9 @@ bool lvglLastTouch(uint16_t* x, uint16_t* y) {
 void lvglLoop() {
   ackFlush(&s_disp_drv);
   lv_timer_handler();
+#ifdef GUI_PANEL_EINK
+  if (s_panel) pushIfDue();
+#endif
 }
 
 // Epic H: the panel turned by MADCTL, LVGL told the new resolution, and
@@ -204,11 +242,19 @@ void lvglLoop() {
 void lvglSetRotation(uint16_t rotation, uint8_t portrait_madctl) {
   if (!s_panel) return;
   const Layout l = layoutFor(rotation);
+#ifdef GUI_PANEL_EINK
+  // No MADCTL: GxEPD2 turns the frame buffer. The whole screen is redrawn
+  // in the new orientation, so it goes out as one full refresh.
+  (void)portrait_madctl;
+  s_panel->setRotation(l.rotation);
+  s_pacer.requestFull();
+#else
   // Let the last frame finish first; a frame takes tens of ms, so 200 ms
   // means the transfer is stuck, and turning anyway beats hanging the loop.
   const uint32_t t0 = millis();
   while (s_flush_inflight && millis() - t0 < 200) ackFlush(&s_disp_drv);
   s_panel->panel().setMadctl(madctlFor(l.rotation, portrait_madctl));
+#endif
   s_rotation = l.rotation;
   // A touch held across the turn is in the old coordinates: drop it.
   s_pressed = false;

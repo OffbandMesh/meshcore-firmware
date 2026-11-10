@@ -1,0 +1,14 @@
+schema_version: 1
+issue: 2033
+impact: none
+reason: >-
+  Adds the first LilyGo T-Deck Pro images for the V1.1 e-paper unit:
+  LilyGo_TDeck_Pro_companion_radio_ble_gui_diag, the Offband GUI in black and white
+  on the e-paper panel, and LilyGo_TDeck_Pro_companion_radio_ble_diag, the text
+  screens, kept as the fallback. Both share the panel's SPI bus with the radio and
+  carry the fleet diag surface. They are bring-up diagnostic images, not in any
+  release, so no published guide changes.
+  It is written up as an unpublished draft guide,
+  docs/initiatives/2004-tdeck-pro/2005-bringup/GUIDE-DRAFT.md, and catalogued as
+  the planned feature tdeck-pro; the guide is published when a release carries a
+  non-diagnostic T-Deck Pro image.
