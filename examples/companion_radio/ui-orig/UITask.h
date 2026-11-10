@@ -86,6 +86,10 @@ public:
 #if defined(PIN_BUZZER) && defined(OFFBAND_UI_ORIG_TUNE_ENGINE)
   void notifyChannel(uint8_t channel_idx) override;
   offband::ToneEngine* toneEngine() override { return &_tones; }
+  // #2085: the trigger seam, through the same engine and at the same priority as ui-new's
+  // override, so the payload is not cut off by the next arriving message. Whether a board
+  // ever calls it is MyMesh's OFFBAND_TUNE_TRIGGER, not this.
+  bool playTriggerTune() override;
 #endif
   void applyBuzzerMute(bool quiet) override;
   // #509: button-action dispatch. Every press sequence resolves through
