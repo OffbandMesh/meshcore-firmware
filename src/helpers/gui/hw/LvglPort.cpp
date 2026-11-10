@@ -169,24 +169,20 @@ static lv_indev_drv_t s_indev_drv;
 static TouchSource* s_touch = nullptr;
 static TouchMapping s_mapping = {};
 static lv_point_t s_last = {0, 0};
-static bool s_pressed = false;
 static bool s_any_touch = false;
-
-// Consecutive failed reads before a held press is reported released: one
-// glitch frame must not drop a drag, but a bus that stays down must not leave
-// a press stuck. 3 reads at LVGL's 30 ms input period is about 90 ms.
-static constexpr uint8_t kReleaseAfterFailedReads = 3;
-static uint8_t s_failed_reads = 0;
+// A failed read keeps a held press for a few polls, then lets it go
+// (TouchFrame.h, kReleaseAfterFailedReads).
+static FailedReadGuard s_guard;
 
 static void touchReadCb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
   (void)drv;
   TouchPoint p{};
-  if (s_touch && s_touch->read(&p)) {
-    s_failed_reads = 0;
+  const bool ok = s_touch && s_touch->read(&p);
 #ifdef OFFBAND_GUI_PERF
-    const bool press_edge = p.pressed && !s_pressed;
+  const bool press_edge = ok && p.pressed && !s_guard.pressed();
 #endif
-    s_pressed = p.pressed;
+  s_guard.update(ok, p.pressed);
+  if (ok) {
     if (p.pressed) {
       uint16_t x = p.x, y = p.y;
       mapTouch(s_mapping, &x, &y);   // to portrait panel coordinates
@@ -205,11 +201,9 @@ static void touchReadCb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
       s_last.y = lv_coord_t(y);
       s_any_touch = true;
     }
-  } else if (s_failed_reads < kReleaseAfterFailedReads && ++s_failed_reads == kReleaseAfterFailedReads) {
-    s_pressed = false;
   }
   data->point = s_last;
-  data->state = s_pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+  data->state = s_guard.pressed() ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
 }
 
 void lvglAttachTouch(TouchSource& touch, const TouchMapping& mapping) {
@@ -257,7 +251,7 @@ void lvglSetRotation(uint16_t rotation, uint8_t portrait_madctl) {
 #endif
   s_rotation = l.rotation;
   // A touch held across the turn is in the old coordinates: drop it.
-  s_pressed = false;
+  s_guard.release();
   s_last = {0, 0};
   s_disp_drv.hor_res = l.w;
   s_disp_drv.ver_res = l.h;

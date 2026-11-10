@@ -24,8 +24,9 @@ struct TouchPoint {
 // keeps its previous state). A valid frame with no points is "released".
 bool parseChsc6xFrame(const uint8_t* buf, size_t len, TouchPoint* out);
 
-// A touch controller the GUI polls: the CHSC6x (Heltec) or the GT911 (T-Deck,
-// Epic J #1434). read() is false on a bus error; a controller with nothing new
+// A touch controller the GUI polls: the CHSC6x (Heltec), the GT911 (T-Deck,
+// Epic J #1434) or the cst66xx (T-Deck Pro, #2109). read() is false on a bus
+// error; a controller with nothing new
 // to report returns its last state.
 class TouchSource {
 public:
@@ -78,6 +79,83 @@ public:
 private:
   TouchPoint _last{false, 0, 0};
   uint8_t _stale = 0;
+};
+
+// Hynitron cst66xx point reports (#2109): the T-Deck Pro's touch chip (B1,
+// #2108). 4-byte big-endian register addresses. A report is read from
+// 0xD0070000, and a write of 0xD00002AB after each read tells the chip it was
+// taken. The report is a 4-byte head, then 5 bytes per key and per finger,
+// keys first:
+//   [0..1] checksum, little-endian: 0x55 plus every entry byte, 16-bit
+//   [2]    report type: 0xFF points, 0xF0 a gesture, 0xE0 proximity
+//   [3]    low nibble fingers, high nibble keys; at most 5 in all
+//   entry  x low, y low, pressure, x high (low nibble) | y high (high nibble),
+//          id (low nibble) | event (high nibble; 0 means the finger is up)
+// The chip pulls its INT line low when a report is ready. The layout is the
+// chip's, read from LilyGo's V1.1 sources; nothing is taken from them.
+constexpr uint32_t kCst66xxReportReg = 0xD0070000;
+constexpr uint32_t kCst66xxReportAck = 0xD00002AB;
+constexpr size_t kCst66xxHeadLen = 4;
+constexpr size_t kCst66xxEntryLen = 5;
+constexpr uint8_t kCst66xxMaxEntries = 5;
+// The first read: the head and one entry. More entries are read after it.
+constexpr size_t kCst66xxFirstReadLen = kCst66xxHeadLen + kCst66xxEntryLen;
+constexpr size_t kCst66xxMaxReportLen = kCst66xxHeadLen + kCst66xxEntryLen * kCst66xxMaxEntries;
+
+// The whole report's length from its count byte ([3]); 0 when the counts
+// can't be a report.
+size_t cst66xxReportLen(uint8_t counts);
+
+enum class Cst66xxFrame : uint8_t {
+  Released,   // a point report with no finger down
+  Pressed,    // the first finger down is in *out
+  Other,      // a valid gesture or proximity report: no change to touch
+  Invalid,    // too many entries, short, or a bad checksum
+};
+
+Cst66xxFrame parseCst66xx(const uint8_t* buf, size_t len, TouchPoint* out);
+
+// Polls in a row with no report before a held press is let go, so a lost
+// release report can't leave the GUI pressed. At LVGL's 30 ms input period
+// this is about 300 ms. [hypothesis] the chip reports at least that often
+// while a finger is down, as LilyGo's V1.1 UI needs: it takes any poll with
+// no report as a release. B3 measures the rate on the bench.
+constexpr uint8_t kCst66xxStaleReads = 10;
+
+// The cst66xx's touch state across polls, the same rule as Gt911Tracker.
+class Cst66xxTracker {
+public:
+  // A poll that read a report: folds it in and writes the state to *out.
+  // False for an invalid report, which leaves the state alone.
+  bool report(const uint8_t* buf, size_t len, TouchPoint* out);
+  // A poll with no report ready: keeps the state, or lets a stale press go.
+  void idle(TouchPoint* out);
+  // Drops a held press (the chip was reset).
+  void reset();
+
+private:
+  TouchPoint _last{false, 0, 0};
+  uint8_t _stale = 0;
+};
+
+// Failed reads in a row before a held press is let go (moved here from
+// LvglPort.cpp, #2109): one glitch frame must not drop a drag, but a bus that
+// stays down must not leave a press stuck. 3 reads at LVGL's 30 ms input
+// period is about 90 ms.
+constexpr uint8_t kReleaseAfterFailedReads = 3;
+
+class FailedReadGuard {
+public:
+  // One poll. `ok` is whether the driver's read succeeded; `pressed` is its
+  // state then, ignored when !ok. Returns the press state to report.
+  bool update(bool ok, bool pressed);
+  bool pressed() const { return _pressed; }
+  // Drops a held press (the screen turned under it).
+  void release() { _pressed = false; }
+
+private:
+  bool _pressed = false;
+  uint8_t _failed = 0;
 };
 
 // How raw touch coordinates map onto the panel: optionally swap the axes,
