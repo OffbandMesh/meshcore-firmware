@@ -3,27 +3,6 @@
 namespace offband {
 namespace gui {
 
-namespace {
-
-// 4x4 Bayer order: a grey's black dots spread evenly instead of clumping.
-constexpr uint8_t kBayer4[4][4] = {
-    {0, 8, 2, 10},
-    {12, 4, 14, 6},
-    {3, 11, 1, 9},
-    {15, 7, 13, 5},
-};
-
-}  // namespace
-
-bool einkInk(uint8_t luma, int16_t x, int16_t y) {
-  if (luma <= kEinkPaperLuma) return false;
-  if (luma >= kEinkInkLuma) return true;
-  // How much ink, 0-255, across the band between the two ends.
-  const uint16_t level = uint16_t(luma - kEinkPaperLuma) * 255u / uint16_t(kEinkInkLuma - kEinkPaperLuma);
-  const uint8_t threshold = uint8_t(kBayer4[y & 3][x & 3] * 16 + 8);   // 8..248
-  return level > threshold;
-}
-
 void EinkArea::add(int16_t ax1, int16_t ay1, int16_t ax2, int16_t ay2) {
   if (ax2 < ax1 || ay2 < ay1) return;
   if (empty()) {
