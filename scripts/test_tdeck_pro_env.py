@@ -11,6 +11,8 @@ SPI bus, SCK 36 / MOSI 33 / MISO 47. A pin routes to one SPI peripheral at a tim
         directive 2026-08-22), and each one is in the CI build matrix
     the GUI env (#2009) draws through the e-paper GuiPanel, and no env turns on the
         GUI's card driver (PIN_SD_CS), which would run the radio's bus through the IDF
+    the GUI env builds the 1-bit font set (fonts_eink/), which holds the same fonts as
+        fonts/, every one at 1 bpp
 
 Source assertions: the bench unit (C5, #2037) is what shows the panel and radio work.
 
@@ -30,6 +32,8 @@ TARGET = VARIANT / "target.cpp"
 BOARD = VARIANT / "TDeckProBoard.cpp"
 DISPLAY = ROOT / "src" / "helpers" / "ui" / "GxEPDDisplay.cpp"
 EINK_PANEL = ROOT / "src" / "helpers" / "gui" / "hw" / "EinkPanel.cpp"
+FONTS = ROOT / "src" / "helpers" / "gui" / "fonts"
+FONTS_EINK = ROOT / "src" / "helpers" / "gui" / "fonts_eink"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 
 HW = "LilyGo_TDeck_Pro_hw"
@@ -168,7 +172,32 @@ def board_failures(board):
     return out
 
 
-def failures(ini, target, board, ci, display=None, panel=None):
+def _real_fonts():
+    color = {p.name for p in FONTS.glob("*.c")}
+    eink = {p.name: p.read_text(errors="replace")[:4096] for p in FONTS_EINK.glob("*.c")}
+    return color, eink
+
+
+def eink_font_failures(gui_env, color, eink):
+    """The e-paper GUI builds the 1-bit font set, and that set matches the color one (#2009).
+    `color` is the set of file names in fonts/; `eink` maps each fonts_eink/ file name to its head."""
+    out = []
+    body = strip_comments(gui_env, ";")
+    if "+<helpers/gui/fonts_eink/*.c>" not in body:
+        out.append("[%s] must build +<helpers/gui/fonts_eink/*.c>: the 1-bit fonts" % GUI_ENV)
+    if "+<helpers/gui/fonts/*.c>" in body:
+        out.append("[%s] builds +<helpers/gui/fonts/*.c>: the anti-aliased fonts lose strokes on a "
+                   "panel with no grey" % GUI_ENV)
+    if set(eink) != color:
+        out.append("fonts_eink/ must hold the same fonts as fonts/: missing %s, extra %s"
+                   % (sorted(color - set(eink)), sorted(set(eink) - color)))
+    for name, head in sorted(eink.items()):
+        if not re.search(r"^ \* Bpp: 1$", head, re.M):
+            out.append("fonts_eink/%s is not 1 bpp" % name)
+    return out
+
+
+def failures(ini, target, board, ci, display=None, panel=None, fonts=None):
     out = target_failures(target) + board_failures(board)
     display = display if display is not None else DISPLAY.read_text()
     panel = panel if panel is not None else EINK_PANEL.read_text()
@@ -179,6 +208,7 @@ def failures(ini, target, board, ci, display=None, panel=None):
         if s not in secs:
             return ["[%s] is missing: this check cannot see what it is protecting" % s]
     hw, diag = secs[HW], secs[DIAG]
+    out += eink_font_failures(secs[GUI_ENV], *(fonts if fonts is not None else _real_fonts()))
     # Octal PSRAM needs GPIO33-37, which carry this board's SPI bus and panel.
     m = re.search(r"^\s*board_build\.arduino\.memory_type\s*=\s*(\S+)", strip_comments(hw, ";"), re.M)
     if not m or m.group(1) != "qio_qspi":
@@ -367,6 +397,31 @@ def test_negative_a_busy_timeout_left_to_serial_is_caught():
     r = _real()
     got = failures(r[0], r[1], r[2], r[3], display=disp)
     assert any("a BUSY timeout" in f for f in got), got
+
+
+def _fonts_fail_with(fragment, ini=None, fonts=None):
+    r = _real()
+    got = failures(ini if ini is not None else r[0], r[1], r[2], r[3], fonts=fonts)
+    assert any(fragment in f for f in got), "expected a failure naming %r, got %s" % (fragment, got)
+
+
+def test_negative_the_gui_env_on_the_color_fonts_is_caught():
+    ini = _sub(_real()[0], "+<helpers/gui/fonts_eink/*.c>", "+<helpers/gui/fonts/*.c>")
+    _fonts_fail_with("must build +<helpers/gui/fonts_eink/*.c>", ini=ini)
+    _fonts_fail_with("anti-aliased fonts lose strokes", ini=ini)
+
+
+def test_negative_a_4bpp_font_in_the_eink_set_is_caught():
+    color, eink = _real_fonts()
+    eink = dict(eink)
+    eink["ob_font_label_9.c"] = eink["ob_font_label_9.c"].replace(" * Bpp: 1", " * Bpp: 4")
+    _fonts_fail_with("ob_font_label_9.c is not 1 bpp", fonts=(color, eink))
+
+
+def test_negative_a_font_missing_from_the_eink_set_is_caught():
+    color, eink = _real_fonts()
+    eink = {k: v for k, v in eink.items() if k != "ob_font_clock_46.c"}
+    _fonts_fail_with("missing ['ob_font_clock_46.c']", fonts=(color, eink))
 
 
 def test_negative_a_renamed_section_is_not_a_silent_pass():
