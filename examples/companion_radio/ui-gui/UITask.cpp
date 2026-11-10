@@ -18,6 +18,7 @@
 #include <helpers/gui/hw/Chsc6xTouch.h>
 #include <helpers/gui/hw/Gt911Touch.h>
 #include <helpers/gui/hw/GuiPanel.h>
+#include <helpers/gui/hw/HynProbe.h>
 #include <helpers/gui/hw/LvglPort.h>
 #include <helpers/gui/hw/TDeckInput.h>
 #include <helpers/ui/OffbandSplash.h>   // offbandShortVersion
@@ -160,6 +161,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 #ifdef GUI_PANEL_EINK
   if (panel) panel->replayInitTiming();   // its first log line went to UART0 only
+#endif
+#ifdef TOUCH_HYN_PROBE
+  logTouchChipProbe();
 #endif
   if (!_gui_ok) return;
 
@@ -307,6 +311,30 @@ void UITask::logTouchProbe() {
     mesh_log_line(MLOG_BOOT, "[gui] gt911 0x%02X ack=%d id_read=%d id=%02x %02x %02x %02x\n", i ? 0x14 : 0x5D,
                   int(p.acked), int(p.id_read), p.id[0], p.id[1], p.id[2], p.id[3]);
   }
+}
+#endif
+
+#ifdef TOUCH_HYN_PROBE
+// Which Hynitron chip is at 0x1A (#2108, plan B1): each family's info read,
+// in LilyGo's order, a reset before each. Logged once capture is on.
+void UITask::logTouchChipProbe() {
+  using offband::gui::HynFamily;
+  for (HynFamily f : {HynFamily::Cst66xx, HynFamily::Cst3xx}) {
+    HynProbeResult r;
+    hynProbe(Wire, PIN_TOUCH_RST, f, &r);
+    mesh_log_line(MLOG_BOOT,
+                  "[gui] touch probe %s: ack=%d read=%d valid=%d type=%08lx fw=%08lx proj=%08lx res=%ux%u\n",
+                  offband::gui::hynFamilyName(f), int(r.acked), int(r.read_ok), int(r.valid),
+                  (unsigned long)r.info.chip_type, (unsigned long)r.info.fw_ver, (unsigned long)r.info.project_id,
+                  unsigned(r.info.res_x), unsigned(r.info.res_y));
+    char hex[3 * sizeof(r.raw) + 1];
+    for (size_t i = 0; i < sizeof(r.raw); i++) snprintf(hex + 3 * i, 4, " %02x", r.raw[i]);
+    mesh_log_line(MLOG_BOOT, "[gui] touch probe %s raw:%s\n", offband::gui::hynFamilyName(f), hex);
+  }
+  // The keyboard (TCA8418, 0x34) shares the bus: if it no longer answers, a
+  // probe left the touch chip holding the bus.
+  mesh_log_line(MLOG_BOOT, "[gui] touch probe bus after: keyboard 0x34 %s\n",
+                hynBusAnswers(Wire, 0x34) ? "answers" : "SILENT");
 }
 #endif
 
