@@ -105,6 +105,14 @@ void UITask::notifyChannel(uint8_t channel_idx) {
   _tones.playChannel(the_mesh.getChannel(channel_idx, ch) ? ch.tune
                                                           : offband::kChannelTuneUnset);
 }
+
+// #2085: reports whether the buzzer took the request. The engine already honors quiet and
+// refuses a busy higher-priority tune, so nothing here repeats that.
+bool UITask::playTriggerTune() {
+  const offband::TonePlay r =
+      _tones.playId(offband::kTuneTrigger, offband::TonePriority::Trigger);
+  return r == offband::TonePlay::Played;
+}
 #else
 void UITask::notify(UIEventType t) {
 #if defined(PIN_BUZZER)
