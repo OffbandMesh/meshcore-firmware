@@ -10,8 +10,9 @@
 // SafeBoot's sleep, which owns the recovery: "runtime shutdown decides when to stop;
 // SafeBoot decides when to start" (#1007).
 //
-// The decision is lowBattShouldShutdown(), the same debounced rule the UI cutoff uses and
-// test_low_batt_cutoff drives. Opt-in per variant with OFFBAND_LOW_BATT_HANDOFF.
+// The decision is lowBattHandoffShouldFire(): the same debounced rule the UI cutoff uses,
+// plus SafeBoot's floor for what counts as a reading (#2118), so the two never disagree and
+// loop. test_low_batt_cutoff drives both. Opt-in per variant with OFFBAND_LOW_BATT_HANDOFF.
 
 #if defined(OFFBAND_LOW_BATT_HANDOFF)
 
@@ -50,9 +51,9 @@ inline void lowBattHandoffTick(Board& board) {
   average.feed(raw_mv);
   const uint16_t smoothed_mv = average.seeded() ? average.value() : raw_mv;
   const bool external = board.isExternalPowered();
-  const bool fire = lowBattShouldShutdown(state, now_ms, raw_mv, smoothed_mv,
-                                          (uint16_t)AUTO_SHUTDOWN_MILLIVOLTS,
-                                          OFFBAND_LOW_BATT_SUSTAIN_MS, external);
+  const bool fire = lowBattHandoffShouldFire(state, now_ms, raw_mv, smoothed_mv,
+                                             (uint16_t)AUTO_SHUTDOWN_MILLIVOLTS,
+                                             OFFBAND_LOW_BATT_SUSTAIN_MS, external);
 
   mesh_log_line(MLOG_DEBUG, "[batt] raw=%u sm=%u thr=%u ext=%d low_ms=%lu fire=%d\r\n",
                 (unsigned)raw_mv, (unsigned)smoothed_mv, (unsigned)AUTO_SHUTDOWN_MILLIVOLTS,
