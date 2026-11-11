@@ -5,6 +5,7 @@
 #include <MeshLog.h>
 #include <helpers/ChannelKeys.h>
 #include <helpers/TimeZones.h>
+#include <helpers/gui/BottomStack.h>
 #include <helpers/gui/LabelWrap.h>
 #include <helpers/gui/LvRestyle.h>
 #include <helpers/gui/SignalLevel.h>
@@ -1166,7 +1167,10 @@ void GuiShell::buildConversation(lv_obj_t* content) {
     userText(txt, m->text, m->text_len);
     wrapAt(txt, max_w - 16);   // max_width alone clips a long message to one line (LabelWrap.h)
   }
-  lv_obj_update_layout(_msg_list);
+  // Resting on the compose bar while it fits, and the whole history in reach
+  // once it doesn't (BottomStack.h: bottom alignment alone left an
+  // overflowing thread unscrollable, #2113 bench).
+  bottomStack(_msg_list);
   // The newest message shows, unless a redraw found the reader scrolled up
   // into history (Epic D gate): then they stay where they were.
   if (_keep_scroll >= 0) lv_obj_scroll_to_y(_msg_list, _keep_scroll, LV_ANIM_OFF);
