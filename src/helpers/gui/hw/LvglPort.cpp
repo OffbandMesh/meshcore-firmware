@@ -24,6 +24,7 @@ static GuiPanel* s_panel = nullptr;
 static size_t s_buf_bytes = 0;
 
 static bool s_flush_inflight = false;
+static lv_indev_t* s_indev = nullptr;   // the touch input, once attached
 
 #ifdef GUI_PANEL_EINK
 // E-paper (#2009): LVGL draws into the panel's frame buffer, which takes no
@@ -46,6 +47,10 @@ static bool pushTouchPressed();
 // say how long the press waited for the glass.
 static uint32_t s_press_ms = 0;
 static uint32_t s_busy_reads = 0;
+// Where the finger was at the first and last pressed read of a refresh, raw:
+// a drag that moved but didn't scroll is settled by comparing the two
+// (#2113 B6 bench, swipes that moved a few pixels).
+static TouchPoint s_busy_first{}, s_busy_last{};
 #endif
 
 static void flushCb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* px) {
@@ -64,6 +69,8 @@ static void pushIfDue() {
   if (!s_panel->isOn()) return;
   if (s_panel->takeNeedFull()) s_pacer.requestFull();
   const uint32_t now = millis();
+  // A finger down on something LVGL is scrolling: draw where the swipe ends.
+  s_pacer.dragging(pushTouchPressed() && s_indev && lv_indev_get_scroll_obj(s_indev), now);
   const EinkPush kind = s_pacer.due(now);
   if (kind == EinkPush::None) return;
   const EinkArea& a = s_pacer.dirty();
@@ -81,10 +88,13 @@ static void pushIfDue() {
   const uint32_t dropped = s_queue.dropped() - s_dropped_seen;
   s_dropped_seen = s_queue.dropped();
   if (!s_queue.empty() || dropped) {
-    mesh_log_line(MLOG_BOOT, "[gui] touch in refresh: reads=%lu queued=%u dropped=%lu\n", (unsigned long)s_busy_reads,
-                  unsigned(s_queue.size()), (unsigned long)dropped);
+    mesh_log_line(MLOG_BOOT, "[gui] touch in refresh: reads=%lu queued=%u dropped=%lu down %u,%u -> %u,%u\n",
+                  (unsigned long)s_busy_reads, unsigned(s_queue.size()), (unsigned long)dropped,
+                  unsigned(s_busy_first.x), unsigned(s_busy_first.y), unsigned(s_busy_last.x),
+                  unsigned(s_busy_last.y));
   }
   s_busy_reads = 0;
+  s_busy_first = s_busy_last = TouchPoint{};
   if (s_press_ms && done - s_press_ms < 5000) {
     mesh_log_line(MLOG_BOOT, "[gui] eink: %s refresh done %lu ms after the press\n",
                   kind == EinkPush::Full ? "full" : "partial", (unsigned long)(done - s_press_ms));
@@ -227,9 +237,14 @@ static void busyHook(const void* arg) {
   if (s_pushing && s_touch && now - s_last >= LV_INDEV_DEF_READ_PERIOD) {
     s_last = now;
     TouchPoint p{};
-    if (s_touch->read(&p)) s_queue.offer(p, now);
+    const bool ok = s_touch->read(&p);
+    if (ok) s_queue.offer(p, now);
   #ifdef OFFBAND_GUI_PERF
     s_busy_reads++;
+    if (ok && p.pressed) {
+      if (!s_busy_first.pressed) s_busy_first = p;
+      s_busy_last = p;
+    }
   #endif
   }
   delay(1);   // GxEPD2's own pace between BUSY checks when no hook is set
@@ -296,7 +311,7 @@ void lvglAttachTouch(TouchSource& touch, const TouchMapping& mapping) {
 #ifdef GUI_PANEL_EINK
   einkScrollAttach(&s_indev_drv);   // a drag stops where the finger does
 #endif
-  lv_indev_drv_register(&s_indev_drv);
+  s_indev = lv_indev_drv_register(&s_indev_drv);
 }
 
 bool lvglLastTouch(uint16_t* x, uint16_t* y) {

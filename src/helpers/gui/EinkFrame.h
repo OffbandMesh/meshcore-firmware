@@ -65,10 +65,23 @@ constexpr uint8_t kEinkFullNever = 0xFF;
   #define EINK_FULL_EVERY ::offband::gui::kEinkFullNever
 #endif
 
+// While a drag scrolls, the refresh waits for the lift, up to this long
+// since the drag began or the last refresh in it. The B6 bench (#2113): a
+// refresh at the start of each swipe drew the first few pixels of it, then
+// the min gap and a second refresh drew the rest, close to 3 s per swipe.
+// The cap keeps a long slow drag showing where it is. A bench value to tune.
+#ifndef EINK_DRAG_HOLD_MS
+  #define EINK_DRAG_HOLD_MS 1500
+#endif
+
 class EinkPacer {
 public:
-  explicit EinkPacer(uint32_t min_gap_ms = EINK_MIN_PUSH_GAP_MS, uint8_t full_every = EINK_FULL_EVERY)
-      : _min_gap_ms(min_gap_ms), _full_every(full_every ? full_every : 1) {}
+  explicit EinkPacer(uint32_t min_gap_ms = EINK_MIN_PUSH_GAP_MS, uint8_t full_every = EINK_FULL_EVERY,
+                     uint32_t drag_hold_ms = EINK_DRAG_HOLD_MS)
+      : _min_gap_ms(min_gap_ms), _full_every(full_every ? full_every : 1), _drag_hold_ms(drag_hold_ms) {}
+  // Whether a finger is down and dragging something that scrolls. Called
+  // before each due(); the refresh is held while it is (EINK_DRAG_HOLD_MS).
+  void dragging(bool on, uint32_t now_ms);
 
   // LVGL drew this rectangle into the frame buffer.
   void mark(int16_t x1, int16_t y1, int16_t x2, int16_t y2) { _dirty.add(x1, y1, x2, y2); }
@@ -87,6 +100,9 @@ public:
 private:
   uint32_t _min_gap_ms;
   uint8_t _full_every;
+  uint32_t _drag_hold_ms;
+  bool _dragging = false;
+  uint32_t _hold_from_ms = 0;   // the drag's start, or its last refresh
   EinkArea _dirty;
   uint32_t _last_push_ms = 0;
   uint8_t _partials = 0;   // partial refreshes since the last full one

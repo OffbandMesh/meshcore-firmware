@@ -340,6 +340,29 @@ TEST_F(Eink, ADragCaughtInARefreshScrollsAsTheSameDragLive) {
   EXPECT_EQ(0, s_clicks);
 }
 
+TEST_F(Eink, ADragBegunLiveAndFinishedInARefreshScrollsTheWholeWay) {
+  // The B6 bench (#2113): the first frame of a swipe starts the refresh, and
+  // the rest of the swipe is read while the panel is busy.
+  lv_obj_t* l = list();
+  g_x = 120;
+  g_y = 180;
+  g_pressed = true;
+  pump(2);
+  for (int i = 0; i < 3; i++) {
+    g_y -= 10;
+    pump();
+  }
+  const lv_coord_t before = lv_obj_get_scroll_y(l);
+  EXPECT_GT(before, 0);   // the scroll began live
+  g_queue.start(true);
+  for (int i = 0; i < 10; i++) g_queue.offer(TouchPoint{true, 120, uint16_t(150 - 10 * (i + 1))}, 100 + 30 * i);
+  g_queue.offer(TouchPoint{false, 120, 50}, 500);
+  g_pressed = false;   // up by the time the refresh ends
+  g_y = 50;
+  pump(3);
+  EXPECT_EQ(before + 100, lv_obj_get_scroll_y(l));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

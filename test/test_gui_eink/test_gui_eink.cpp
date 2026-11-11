@@ -254,6 +254,64 @@ TEST(EinkPacer, ZeroFullEveryMeansEveryRefreshIsFull) {
   EXPECT_EQ(p.due(1000), EinkPush::Full);
 }
 
+// #2113 B6 bench: a swipe drew a refresh at its start and another after the
+// gap. A drag that scrolls now holds the refresh until the lift.
+namespace {
+EinkPacer pacedAfterFirst() {
+  EinkPacer p(1000, kEinkFullNever, 1500);
+  p.mark(0, 0, 239, 319);
+  p.pushed(EinkPush::Full, 0);
+  return p;
+}
+}  // namespace
+
+TEST(EinkPacer, ADragHoldsTheRefreshUntilTheLift) {
+  EinkPacer p = pacedAfterFirst();
+  p.dragging(true, 2000);
+  p.mark(0, 40, 239, 280);
+  EXPECT_EQ(p.due(2000), EinkPush::None);
+  EXPECT_EQ(p.due(3000), EinkPush::None);
+  p.dragging(false, 3100);
+  EXPECT_EQ(p.due(3100), EinkPush::Partial);   // at once: the gap ran out long ago
+}
+
+TEST(EinkPacer, WithoutADragTheSameFrameGoesAtOnce) {
+  EinkPacer p = pacedAfterFirst();
+  p.mark(0, 40, 239, 280);
+  EXPECT_EQ(p.due(2000), EinkPush::Partial);
+}
+
+TEST(EinkPacer, ALongDragStillShowsWhereItIs) {
+  EinkPacer p = pacedAfterFirst();
+  p.dragging(true, 2000);
+  p.mark(0, 40, 239, 280);
+  EXPECT_EQ(p.due(3499), EinkPush::None);
+  ASSERT_EQ(p.due(3500), EinkPush::Partial);
+  p.pushed(EinkPush::Partial, 4250);   // a refresh's 750 ms later
+  p.dragging(true, 4250);              // still down: the hold starts again
+  p.mark(0, 40, 239, 280);
+  EXPECT_EQ(p.due(5749), EinkPush::None);
+  EXPECT_EQ(p.due(5750), EinkPush::Partial);
+}
+
+TEST(EinkPacer, ADragDoesNotShortenTheGap) {
+  EinkPacer p = pacedAfterFirst();
+  p.mark(0, 0, 1, 1);
+  p.pushed(EinkPush::Partial, 2000);
+  p.dragging(true, 2100);
+  p.dragging(false, 2200);
+  p.mark(0, 0, 1, 1);
+  EXPECT_EQ(p.due(2999), EinkPush::None);
+  EXPECT_EQ(p.due(3000), EinkPush::Partial);
+}
+
+TEST(EinkPacer, TheFirstRefreshIsNeverHeld) {
+  EinkPacer p(1000, kEinkFullNever, 1500);
+  p.dragging(true, 0);
+  p.mark(0, 0, 239, 319);
+  EXPECT_EQ(p.due(10), EinkPush::Full);
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

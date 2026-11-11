@@ -62,8 +62,11 @@ when the screen wakes, to set a clean image; after that it only redraws what cha
   the e-paper has to redraw first.
 - **Taps are not lost while the screen is redrawing.** A tap made during an update counts,
   and acts as soon as the update finishes.
-- **Drag** a list to scroll it. It stops where your finger lifts: it does not keep gliding,
-  so each drag costs one or two screen updates.
+- **Drag** a list to scroll it. The screen redraws once your finger lifts, where the drag
+  ended, and does not keep gliding. A drag held longer than about a second and a half
+  also redraws partway, so you can see where you are.
+- **Newest** appears at the bottom of a conversation while you are scrolled up into its
+  history. Tap it to go back to the latest message.
 - **Hold** for about half a second where the GUI has a hold action. Holding a message that
   wasn't delivered sends it again, and holding the signal bars at the top shows the LoRa
   details.

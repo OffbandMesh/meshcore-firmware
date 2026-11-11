@@ -71,5 +71,14 @@ inline bool setTextColorIfNew(lv_obj_t* obj, lv_color_t c, lv_style_selector_t s
   return restyle_detail::setIfNew(obj, LV_STYLE_TEXT_COLOR, v, selector);
 }
 
+// The same for showing and hiding: lv_obj_clear_flag(HIDDEN) invalidates the
+// object even when it was already shown. True when it changed.
+inline bool setHiddenIfNew(lv_obj_t* obj, bool hidden) {
+  if (!obj || lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN) == hidden) return false;
+  if (hidden) lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_clear_flag(obj, LV_OBJ_FLAG_HIDDEN);
+  return true;
+}
+
 }  // namespace gui
 }  // namespace offband
