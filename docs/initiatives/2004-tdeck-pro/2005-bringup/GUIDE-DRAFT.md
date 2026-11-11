@@ -53,8 +53,8 @@ The GUI image shows the Offband home screen in black and white, with no grey, so
 lines stay sharp. It always uses the high-contrast theme: picking another theme on this
 radio changes nothing on screen. Each e-paper update takes
 most of a second, and the screen waits at least a second after one before the next, so
-changes show up a moment late. Now and then
-the whole screen flashes once to clear faint traces of earlier images.
+changes show up a moment late. The whole screen flashes once when the radio starts and
+when the screen wakes, to set a clean image; after that it only redraws what changed.
 
 ### 3. Use touch
 

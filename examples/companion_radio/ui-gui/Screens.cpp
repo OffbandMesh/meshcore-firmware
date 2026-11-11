@@ -5,6 +5,7 @@
 #include <MeshLog.h>
 #include <helpers/ChannelKeys.h>
 #include <helpers/TimeZones.h>
+#include <helpers/gui/LabelWrap.h>
 #include <helpers/gui/LvRestyle.h>
 #include <helpers/gui/SignalLevel.h>
 #include <helpers/gui/hw/GuiFonts.h>
@@ -1066,7 +1067,10 @@ void GuiShell::buildConversation(lv_obj_t* content) {
   // Messages, oldest at the top, the newest resting on the compose bar.
   _msg_list = box(content, LV_PCT(100), 0);
   lv_obj_set_flex_grow(_msg_list, 1);
-  lv_obj_add_flag(_msg_list, LV_OBJ_FLAG_SCROLLABLE);
+  // Clickable as well as scrollable: the bubbles aren't clickable, and LVGL
+  // starts a drag only on an object its hit test finds (ScrollBody.h, #1671).
+  // Without it the history never scrolled by touch (#2113 bench).
+  lv_obj_add_flag(_msg_list, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_scrollbar_mode(_msg_list, LV_SCROLLBAR_MODE_OFF);
   lv_obj_set_style_pad_hor(_msg_list, 8, 0);
   lv_obj_set_style_pad_ver(_msg_list, 6, 0);
@@ -1160,8 +1164,7 @@ void GuiShell::buildConversation(lv_obj_t* content) {
     }
     lv_obj_t* txt = label(bub, FontRole::BodySmall, ink);
     userText(txt, m->text, m->text_len);
-    lv_obj_set_style_max_width(txt, max_w - 16, 0);
-    lv_label_set_long_mode(txt, LV_LABEL_LONG_WRAP);
+    wrapAt(txt, max_w - 16);   // max_width alone clips a long message to one line (LabelWrap.h)
   }
   lv_obj_update_layout(_msg_list);
   // The newest message shows, unless a redraw found the reader scrolled up
@@ -2652,7 +2655,9 @@ void GuiShell::buildDetail(lv_obj_t* content) {
   lv_obj_set_style_pad_ver(b, 3, 0);
   lv_obj_set_style_pad_row(b, 2, 0);
   lv_obj_set_flex_flow(b, LV_FLEX_FLOW_COLUMN);
-  lv_obj_add_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+  // Clickable too, or a drag on its read-only lines finds nothing to scroll
+  // (ScrollBody.h, #1671).
+  lv_obj_add_flag(b, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_scrollbar_mode(b, LV_SCROLLBAR_MODE_OFF);
 
   char buf[96];
