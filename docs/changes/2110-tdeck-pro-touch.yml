@@ -1,0 +1,14 @@
+schema_version: 1
+issue: 2110
+impact: none
+reason: >-
+  Turns on touch in LilyGo_TDeck_Pro_companion_radio_ble_gui_diag (Epic B, #2097):
+  our own driver for the touch chip found on the V1.1 bench unit, read during e-paper
+  refreshes so a tap is not lost, with scroll momentum and elastic off. Also stops the
+  GUI's timed screen updates (Nodes, node detail, login status) from redrawing an
+  object whose style did not change, which on e-paper cost a refresh every second.
+  That last change touches every GUI image, but nothing a user reads about changes:
+  on the color screens it removes redraws that showed nothing. The T-Deck Pro image is
+  a bring-up diagnostic image in no release, so no published guide changes; the
+  unpublished draft, docs/initiatives/2004-tdeck-pro/2005-bringup/GUIDE-DRAFT.md,
+  now says what touch does on e-paper and which units it works on.
