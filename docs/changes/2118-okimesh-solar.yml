@@ -1,0 +1,12 @@
+schema_version: 1
+issue: 2118
+impact: none
+reason: >-
+  Adds a new board, the OKIMesh Solar node, with repeater and Bluetooth
+  companion images and their diagnostic twins. No release carries these
+  images, and no published guide covers this board, so no public guide
+  changes. The board is written up as an unpublished draft guide,
+  docs/initiatives/1626-okimesh-solar/2118-build/GUIDE-DRAFT.md, and
+  catalogued as the planned feature okimesh-solar. The running cutoff it adds,
+  src/helpers/LowBattHandoff.h, is opt-in and set only by this board, so no
+  other board's behavior or guide changes.
