@@ -176,8 +176,9 @@ constexpr uint8_t kTouchQueueLen = 16;
 class TouchQueue {
 public:
   // A refresh begins. `pressed` is the state LVGL last saw, so a finger
-  // already down isn't taken for a new press.
-  void start(bool pressed);
+  // already down isn't taken for a new press. `press_ms` is when LVGL took
+  // that press, on its own clock (millis()).
+  void start(bool pressed, uint32_t press_ms = 0);
   // One read taken during the refresh, at `ms`. False when the queue is
   // full and the read was dropped.
   bool offer(const TouchPoint& p, uint32_t ms);
@@ -189,6 +190,12 @@ public:
   // the finger was down; otherwise 0. TouchReplay uses it to keep a long
   // hold long.
   uint32_t nextReleaseHeldMs() const;
+  // True when the oldest read is the finger that was already down when the
+  // refresh began, before it lifted: LVGL is timing that press itself, from
+  // continuedPressMs(). Replay runs after the whole refresh is queued, so this
+  // stamp is kept apart from a later press caught in the same refresh.
+  bool nextContinuesPress() const;
+  uint32_t continuedPressMs() const { return _continued_press_ms; }
   // Empties it (the screen turned under the reads it holds).
   void clear();
   // Reads dropped because the queue was full, ever: a running count the
@@ -196,11 +203,14 @@ public:
   uint32_t dropped() const { return _dropped; }
 
 private:
-  void append(const TouchPoint& p, uint32_t ms, uint32_t held_ms);
+  void append(const TouchPoint& p, uint32_t ms, uint32_t held_ms, bool continues);
 
   TouchPoint _q[kTouchQueueLen] = {};
   uint32_t _ms[kTouchQueueLen] = {};
   uint32_t _held_ms[kTouchQueueLen] = {};   // set on a release entry
+  bool _continues[kTouchQueueLen] = {};     // a held read of the press LVGL already has
+  bool _continuing = false;                 // that press hasn't lifted yet
+  uint32_t _continued_press_ms = 0;         // when LVGL took it
   uint8_t _head = 0;
   uint8_t _count = 0;
   bool _last_pressed = false;
@@ -227,7 +237,16 @@ public:
   // One LVGL read at `now`. True when the replay supplies it: *p, when it was
   // taken (*taken_ms), and whether LVGL should read again in this pass
   // (*more). False when there is nothing to replay: read the chip.
-  bool next(uint32_t now, TouchPoint* p, uint32_t* taken_ms, bool* more);
+  //
+  // *restamp says whether LVGL's press time stamp must become *press_stamp
+  // before LVGL takes this read. LVGL times a long press as now minus that
+  // stamp, and its clock ran on through the refresh. A finger already down
+  // when the refresh began, and lifted inside it, would otherwise have the
+  // whole refresh counted as holding: a tap whose press started the refresh
+  // would become a long press. The new stamp makes LVGL's count the time the
+  // finger was really down when this read was taken.
+  bool next(uint32_t now, TouchPoint* p, uint32_t* taken_ms, bool* more, bool* restamp = nullptr,
+            uint32_t* press_stamp = nullptr);
   bool holding() const { return _holding; }
   void clear();
 
