@@ -5,6 +5,7 @@
 #include <MeshLog.h>
 #include <helpers/ChannelKeys.h>
 #include <helpers/TimeZones.h>
+#include <helpers/gui/LvRestyle.h>
 #include <helpers/gui/SignalLevel.h>
 #include <helpers/gui/hw/GuiFonts.h>
 
@@ -1972,11 +1973,13 @@ void rowBars(lv_obj_t* parent, lv_obj_t** out) {
 }
 
 // Bars by margin over the radio's demodulation floor, as the status bar.
+// updateNodes calls this every second: a bar is touched only when its color
+// changes, or e-paper refreshes every second (LvRestyle.h).
 void colorBars(lv_obj_t** bar, bool known, float snr, uint8_t sf, const ThemeTokens& t) {
   const uint8_t n = known ? signalBars(snr, sf) : 0;
   const SignalRole role = signalRole(n);
   const uint32_t lit = role == SignalRole::Ok ? t.ok : role == SignalRole::Warn ? t.warn : t.bad;
-  for (int i = 0; i < 4; i++) lv_obj_set_style_bg_color(bar[i], c(i < n ? lit : t.line), 0);
+  for (int i = 0; i < 4; i++) setBgColorIfNew(bar[i], c(i < n ? lit : t.line));
 }
 
 }  // namespace
@@ -2826,11 +2829,12 @@ void GuiShell::refreshActs(uint32_t now_ms) {
     } else if (busy) {
       ink = _t.dim;
     }
-    lv_obj_set_style_bg_opa(btn, fill ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
-    lv_obj_set_style_bg_color(btn, c(_t.sig), 0);
-    lv_obj_set_style_border_color(btn, c(border), 0);
+    // Every 250 ms: only what changed, so e-paper doesn't refresh on each pass.
+    setBgOpaIfNew(btn, fill ? LV_OPA_COVER : LV_OPA_TRANSP);
+    setBgColorIfNew(btn, c(_t.sig));
+    setBorderColorIfNew(btn, c(border));
     lv_obj_t* l = lv_obj_get_child(btn, 0);
-    lv_obj_set_style_text_color(l, c(ink), 0);
+    setTextColorIfNew(l, c(ink));
     if (strcmp(lv_label_get_text(l), text) != 0) lv_label_set_text(l, text);
   }
 }
@@ -2978,10 +2982,10 @@ void GuiShell::updateDetail(uint32_t now_ms) {
     } else if (v.state == ActView::Failed) {
       textf(s, sizeof s, "%s", v.login_refused ? "Wrong password" : "No reply");
     }
-    lv_obj_set_style_text_color(_login_status, c(v.state == ActView::Failed ? _t.bad
-                                                 : v.state == ActView::Ok   ? _t.sig
-                                                                            : _t.dim),
-                                0);
+    // On every loop pass while the login is out: only a change of state.
+    setTextColorIfNew(_login_status, c(v.state == ActView::Failed ? _t.bad
+                                       : v.state == ActView::Ok   ? _t.sig
+                                                                  : _t.dim));
     if (strcmp(lv_label_get_text(_login_status), s) != 0) lv_label_set_text(_login_status, s);
     return;
   }
