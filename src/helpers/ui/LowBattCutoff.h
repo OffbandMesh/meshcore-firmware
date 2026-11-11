@@ -31,6 +31,8 @@
 
 #include <stdint.h>
 
+#include <helpers/SafeBootWake.h>
+
 // How long the low condition must hold continuously before the board powers off.
 // The owner's figure, 2026-10-19: "at least 300s consistent below minimum."
 //
@@ -105,6 +107,20 @@ inline bool lowBattShouldShutdown(LowBattCutoffState& st, uint32_t now_ms,
   if (sustain_ms == 0) return false;
 
   return (uint32_t)(now_ms - st.below_since_ms) >= sustain_ms;
+}
+
+// #2118: the rule for the running cutoff that restarts into SafeBoot's sleep
+// (helpers/LowBattHandoff.h). It must agree with SafeBoot about what a reading is: SafeBoot
+// boots straight through anything under its plausible floor, so a cutoff that acted on such
+// a reading would restart the board every window, for good. A reading under the floor is
+// treated like external power -- no cell to protect -- which also clears the history.
+inline bool lowBattHandoffShouldFire(LowBattCutoffState& st, uint32_t now_ms,
+                                     uint16_t raw_mv, uint16_t smoothed_mv,
+                                     uint16_t threshold_mv, uint32_t sustain_ms,
+                                     bool external_powered) {
+  const bool no_reading = !offband::safeBootReadingIsPlausible(raw_mv);
+  return lowBattShouldShutdown(st, now_ms, raw_mv, smoothed_mv, threshold_mv, sustain_ms,
+                               external_powered || no_reading);
 }
 
 // How long the low condition has held, for a log line. Zero when it is not holding.
