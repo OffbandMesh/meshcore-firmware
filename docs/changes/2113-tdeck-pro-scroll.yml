@@ -1,0 +1,12 @@
+schema_version: 1
+issue: 2113
+impact: none
+reason: >-
+  B6 bench fixes (Epic B, #2097). In every GUI image a long message wraps instead of
+  being clipped to one line, a conversation longer than the screen scrolls back through
+  its whole history, and a "Newest" button shows while a conversation is scrolled up and
+  returns to the latest message. On e-paper a drag redraws once when the finger lifts
+  instead of at its start and again after it. No published guide describes the GUI
+  conversation view, so none changes; the unpublished T-Deck Pro draft,
+  docs/initiatives/2004-tdeck-pro/2005-bringup/GUIDE-DRAFT.md, now describes dragging
+  and Newest.

@@ -159,6 +159,39 @@ TEST_F(Stack, AnEmptyListIsLeftAlone) {
   EXPECT_FALSE(bottomStack(nullptr));
 }
 
+// The rule for keeping a reader's place and for showing "Newest".
+TEST_F(Stack, AtTheNewestIsNotReadingHistory) {
+  lv_obj_t* l = thread(20);
+  bottomStack(l);
+  lv_obj_scroll_to_y(l, LV_COORD_MAX, LV_ANIM_OFF);
+  EXPECT_FALSE(offband::gui::readingHistory(l));
+}
+
+TEST_F(Stack, ADragUpIntoTheHistoryIsReadingIt) {
+  lv_obj_t* l = thread(20);
+  bottomStack(l);
+  lv_obj_scroll_to_y(l, LV_COORD_MAX, LV_ANIM_OFF);
+  dragDown();
+  EXPECT_TRUE(offband::gui::readingHistory(l));
+}
+
+TEST_F(Stack, AFewPixelsShortIsStillTheNewest) {
+  lv_obj_t* l = thread(20);
+  bottomStack(l);
+  lv_obj_scroll_to_y(l, LV_COORD_MAX, LV_ANIM_OFF);
+  lv_obj_scroll_by(l, 0, offband::gui::kReadingHistoryPx, LV_ANIM_OFF);
+  EXPECT_FALSE(offband::gui::readingHistory(l));
+  lv_obj_scroll_by(l, 0, 1, LV_ANIM_OFF);
+  EXPECT_TRUE(offband::gui::readingHistory(l));
+}
+
+TEST_F(Stack, AThreadThatFitsIsNeverReadingHistory) {
+  lv_obj_t* l = thread(2);
+  bottomStack(l);
+  EXPECT_FALSE(offband::gui::readingHistory(l));
+  EXPECT_FALSE(offband::gui::readingHistory(nullptr));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

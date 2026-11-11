@@ -345,7 +345,7 @@ void GuiShell::rebuild() {
     if (landscape()) buildTabs(scr);
     return;
   }
-  _msg_list = nullptr;
+  _msg_list = _jump_newest = nullptr;
   _focus_row = nullptr;
   _node_count = nullptr;
   _node_list = _node_clear = nullptr;
@@ -1211,6 +1211,38 @@ void GuiShell::buildConversation(lv_obj_t* content) {
         },
         LV_EVENT_CLICKED, this);
   }
+
+  // Scrolled up into the history: one tap back to the newest message (owner,
+  // #2113 B6 bench). It floats over the list's foot, out of the column.
+  _jump_newest = box(content, LV_SIZE_CONTENT, 28);
+  lv_obj_add_flag(_jump_newest, LV_OBJ_FLAG_FLOATING | LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_pad_hor(_jump_newest, 10, 0);
+  lv_obj_set_style_radius(_jump_newest, _look.radius, 0);
+  lv_obj_set_style_bg_opa(_jump_newest, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(_jump_newest, c(_t.sig), 0);
+  lv_obj_set_ext_click_area(_jump_newest, 6);
+  lv_obj_center(label(_jump_newest, FontRole::BodySmall, _t.sigInk, "Newest"));
+  lv_obj_update_layout(content);
+  lv_obj_align_to(_jump_newest, _msg_list, LV_ALIGN_BOTTOM_RIGHT, -8, -8);
+  lv_obj_add_event_cb(
+      _jump_newest,
+      [](lv_event_t* e) {
+        GuiShell* g = static_cast<GuiShell*>(lv_event_get_user_data(e));
+        if (!g->_msg_list) return;
+        lv_obj_scroll_to_y(g->_msg_list, LV_COORD_MAX, LV_ANIM_OFF);   // one refresh, not an animation
+        g->showJumpNewest();
+      },
+      LV_EVENT_CLICKED, this);
+  lv_obj_add_event_cb(
+      _msg_list, [](lv_event_t* e) { static_cast<GuiShell*>(lv_event_get_user_data(e))->showJumpNewest(); },
+      LV_EVENT_SCROLL_END, this);
+  showJumpNewest();
+}
+
+// Shown only while the thread is scrolled up; set only on a change, since
+// each redraw is a panel refresh on e-paper (LvRestyle.h).
+void GuiShell::showJumpNewest() {
+  if (_jump_newest) setHiddenIfNew(_jump_newest, !readingHistory(_msg_list));
 }
 
 // ---------------------------------------------------------------- Compose
@@ -1684,7 +1716,7 @@ void GuiShell::updateChats() {
     const Thread* th = s.threadAt(_thread);
     if (th && th->unread) _model->threadOpened(_thread);
     // More than a few pixels above the bottom means reading history.
-    if (_msg_list && lv_obj_get_scroll_bottom(_msg_list) > 8) _keep_scroll = lv_obj_get_scroll_y(_msg_list);
+    if (readingHistory(_msg_list)) _keep_scroll = lv_obj_get_scroll_y(_msg_list);
   } else if (lv_obj_t* f = lv_group_get_focused(_group)) {
     // Keep the focused row focused across the redraw. Rows carry thread + 1,
     // so 0 (tabs, "+") means "not a row".

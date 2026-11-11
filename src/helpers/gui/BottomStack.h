@@ -36,5 +36,14 @@ inline bool bottomStack(lv_obj_t* list) {
   return true;
 }
 
+// More than this above the end is reading history: a redraw keeps the
+// reader's place (Epic D), and the thread offers a way back to the newest
+// (#2113 B6 bench).
+constexpr lv_coord_t kReadingHistoryPx = 8;
+
+inline bool readingHistory(lv_obj_t* list) {
+  return list && lv_obj_get_scroll_bottom(list) > kReadingHistoryPx;
+}
+
 }  // namespace gui
 }  // namespace offband

@@ -109,6 +109,34 @@ TEST_F(Restyle, ANullObjectIsIgnored) {
   EXPECT_FALSE(setBgColorIfNew(nullptr, lv_color_hex(0x123456)));
 }
 
+// #2113: the thread's "Newest" is shown or hidden after every scroll.
+TEST_F(Restyle, LvglRedrawsOnShowingAnObjectAlreadyShown) {
+  lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+  EXPECT_TRUE(redrawPending());
+}
+
+TEST_F(Restyle, HidingWhatIsHiddenDoesNothing) {
+  EXPECT_TRUE(setHiddenIfNew(o, true));
+  settle();
+  EXPECT_FALSE(setHiddenIfNew(o, true));
+  EXPECT_FALSE(redrawPending());
+  EXPECT_TRUE(lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN));
+}
+
+TEST_F(Restyle, ShowingWhatIsShownDoesNothing) {
+  EXPECT_FALSE(setHiddenIfNew(o, false));
+  EXPECT_FALSE(redrawPending());
+}
+
+TEST_F(Restyle, ShowingWhatIsHiddenShowsIt) {
+  setHiddenIfNew(o, true);
+  settle();
+  EXPECT_TRUE(setHiddenIfNew(o, false));
+  EXPECT_FALSE(lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN));
+  EXPECT_TRUE(redrawPending());
+  EXPECT_FALSE(setHiddenIfNew(nullptr, true));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

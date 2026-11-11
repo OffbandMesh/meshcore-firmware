@@ -23,15 +23,22 @@ EinkPush EinkPacer::due(uint32_t now_ms) const {
   if (!_pushed_once) return EinkPush::Full;
   // Unsigned subtraction, so millis() wrapping doesn't stall the panel.
   if (now_ms - _last_push_ms < _min_gap_ms) return EinkPush::None;
+  if (_dragging && now_ms - _hold_from_ms < _drag_hold_ms) return EinkPush::None;
   if (_force_full) return EinkPush::Full;
   if (_full_every != kEinkFullNever && _partials >= _full_every - 1) return EinkPush::Full;
   return EinkPush::Partial;
+}
+
+void EinkPacer::dragging(bool on, uint32_t now_ms) {
+  if (on && !_dragging) _hold_from_ms = now_ms;
+  _dragging = on;
 }
 
 void EinkPacer::pushed(EinkPush kind, uint32_t now_ms) {
   if (kind == EinkPush::None) return;
   _dirty = EinkArea();
   _last_push_ms = now_ms;
+  _hold_from_ms = now_ms;   // a long drag holds again from here
   _pushed_once = true;
   if (kind == EinkPush::Full) {
     _partials = 0;
