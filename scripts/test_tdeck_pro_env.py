@@ -13,6 +13,10 @@ SPI bus, SCK 36 / MOSI 33 / MISO 47. A pin routes to one SPI peripheral at a tim
         GUI's card driver (PIN_SD_CS), which would run the radio's bus through the IDF
     the GUI env builds the 1-bit font set (fonts_eink/), which holds the same fonts as
         fonts/, every one at 1 bpp
+    the GUI env selects the cst66xx touch driver (#2110, #2111) with INT 12 and RST 38,
+        on the board's own I2C pins, and no second touch driver; UITask builds it on the
+        board's Wire, and the driver never starts a bus (a second begin on the same pins
+        breaks every device on them)
 
 Source assertions: the bench unit (C5, #2037) is what shows the panel and radio work.
 
@@ -33,6 +37,7 @@ BOARD = VARIANT / "TDeckProBoard.cpp"
 DISPLAY = ROOT / "src" / "helpers" / "ui" / "GxEPDDisplay.cpp"
 EINK_PANEL = ROOT / "src" / "helpers" / "gui" / "hw" / "EinkPanel.cpp"
 UITASK = ROOT / "examples" / "companion_radio" / "ui-gui" / "UITask.cpp"
+TOUCH_DRIVER = ROOT / "src" / "helpers" / "gui" / "hw" / "Cst66xxTouch.cpp"
 FONTS = ROOT / "src" / "helpers" / "gui" / "fonts"
 FONTS_EINK = ROOT / "src" / "helpers" / "gui" / "fonts_eink"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
@@ -63,6 +68,11 @@ HW_FLAGS = {
     "SX126X_DIO3_TCXO_VOLTAGE": "2.4f", "SX126X_DIO2_AS_RF_SWITCH": "true",
     "SX126X_CURRENT_LIMIT": "140",
 }
+# Touch (#2110): LilyGo examples/factory2/utilities.h, plan row 4. The chip found on
+# tdeck-pro-1 (#2108) is the cst66xx family, and only that driver is supported.
+TOUCH_PINS = {"PIN_TOUCH_INT": "12", "PIN_TOUCH_RST": "38"}
+TOUCH_ON_BOARD_BUS = (("PIN_TOUCH_SDA", "PIN_BOARD_SDA"), ("PIN_TOUCH_SCL", "PIN_BOARD_SCL"))
+OTHER_TOUCH_DRIVERS = ("TOUCH_GT911",)
 SHARED_BUS = (("PIN_DISPLAY_SCLK", "P_LORA_SCLK"), ("PIN_DISPLAY_MOSI", "P_LORA_MOSI"),
               ("PIN_DISPLAY_MISO", "P_LORA_MISO"))
 # The fleet diag surface, plus the panel's refresh timing that C5 (#2037) reads.
@@ -215,9 +225,40 @@ def eink_font_failures(gui_env, color, eink):
     return out
 
 
-def failures(ini, target, board, ci, display=None, panel=None, fonts=None, uitask=None):
+def touch_failures(gui_env, hw, uitask, driver):
+    """The GUI env's touch (#2110): the cst66xx driver, its pins, the board's bus and Wire.
+
+    The chip shares the board bus with the keyboard, fuel gauge and charger, so it must
+    use the board's SDA/SCL and its Wire, and the driver must never start the bus again.
+    """
+    out = []
+    if not has_flag(gui_env, "TOUCH_CST66XX"):
+        out.append("[%s] must set TOUCH_CST66XX: tdeck-pro-1's chip is the cst66xx family (#2108)" % GUI_ENV)
+    for name in OTHER_TOUCH_DRIVERS:
+        if has_flag(gui_env, name):
+            out.append("[%s] sets %s as well as TOUCH_CST66XX: one chip, one driver" % (GUI_ENV, name))
+    for name, want in TOUCH_PINS.items():
+        if flag(gui_env, name) != want:
+            out.append("[%s] must set %s=%s (LilyGo utilities.h); got %r" % (GUI_ENV, name, want, flag(gui_env, name)))
+    for touch, board in TOUCH_ON_BOARD_BUS:
+        if flag(gui_env, touch) is None or flag(gui_env, touch) != flag(hw, board):
+            out.append("[%s] must set %s to %s (%r): touch is on the board bus; got %r"
+                       % (GUI_ENV, touch, board, flag(hw, board), flag(gui_env, touch)))
+    code = strip_comments(uitask, "//")
+    if not re.search(r"defined\(\s*TOUCH_CST66XX\s*\)\s*\n\s*Cst66xxTouch\s+s_touch\(\s*Wire\s*\)\s*;", code):
+        out.append("UITask.cpp must build the cst66xx driver on the board's Wire "
+                   "(Cst66xxTouch s_touch(Wire) under TOUCH_CST66XX)")
+    if re.search(r"\b(?:_wire|Wire)\s*\.\s*begin\s*\(", strip_comments(driver, "//")):
+        out.append("Cst66xxTouch.cpp starts the I2C bus: the board has started it, and a second "
+                   "begin on the same pins breaks every device on them")
+    return out
+
+
+def failures(ini, target, board, ci, display=None, panel=None, fonts=None, uitask=None, driver=None):
     out = target_failures(target) + board_failures(board)
-    out += init_replay_failures(uitask if uitask is not None else UITASK.read_text())
+    uitask = uitask if uitask is not None else UITASK.read_text()
+    driver = driver if driver is not None else TOUCH_DRIVER.read_text()
+    out += init_replay_failures(uitask)
     display = display if display is not None else DISPLAY.read_text()
     panel = panel if panel is not None else EINK_PANEL.read_text()
     out += hw_cs_failures(target, board, display, panel) + eink_log_failures(display)
@@ -228,6 +269,7 @@ def failures(ini, target, board, ci, display=None, panel=None, fonts=None, uitas
             return ["[%s] is missing: this check cannot see what it is protecting" % s]
     hw, diag = secs[HW], secs[DIAG]
     out += eink_font_failures(secs[GUI_ENV], *(fonts if fonts is not None else _real_fonts()))
+    out += touch_failures(secs[GUI_ENV], hw, uitask, driver)
     # Octal PSRAM needs GPIO33-37, which carry this board's SPI bus and panel.
     m = re.search(r"^\s*board_build\.arduino\.memory_type\s*=\s*(\S+)", strip_comments(hw, ";"), re.M)
     if not m or m.group(1) != "qio_qspi":
@@ -462,6 +504,48 @@ def test_negative_a_font_missing_from_the_eink_set_is_caught():
     color, eink = _real_fonts()
     eink = {k: v for k, v in eink.items() if k != "ob_font_clock_46.c"}
     _fonts_fail_with("missing ['ob_font_clock_46.c']", fonts=(color, eink))
+
+
+def _touch_fails_with(fragment, ini=None, uitask=None, driver=None):
+    r = _real()
+    got = failures(ini if ini is not None else r[0], r[1], r[2], r[3], uitask=uitask, driver=driver)
+    assert any(fragment in f for f in got), "expected a failure naming %r, got %s" % (fragment, got)
+
+
+def test_negative_the_touch_driver_not_selected_is_caught():
+    _touch_fails_with("must set TOUCH_CST66XX", ini=_sub(_real()[0], "  -D TOUCH_CST66XX\n", ""))
+
+
+def test_negative_a_second_touch_driver_is_caught():
+    _touch_fails_with("sets TOUCH_GT911 as well",
+                      ini=_sub(_real()[0], "  -D TOUCH_CST66XX\n", "  -D TOUCH_CST66XX\n  -D TOUCH_GT911\n"))
+
+
+def test_negative_the_wrong_touch_int_pin_is_caught():
+    _touch_fails_with("must set PIN_TOUCH_INT=12", ini=_sub(_real()[0], "-D PIN_TOUCH_INT=12", "-D PIN_TOUCH_INT=15"))
+
+
+def test_negative_the_touch_reset_missing_is_caught():
+    _touch_fails_with("must set PIN_TOUCH_RST=38", ini=_sub(_real()[0], "  -D PIN_TOUCH_RST=38\n", ""))
+
+
+def test_negative_touch_off_the_board_bus_is_caught():
+    _touch_fails_with("must set PIN_TOUCH_SDA to PIN_BOARD_SDA",
+                      ini=_sub(_real()[0], "-D PIN_TOUCH_SDA=13", "-D PIN_TOUCH_SDA=18"))
+
+
+def test_negative_touch_bus_pins_missing_is_caught():
+    _touch_fails_with("must set PIN_TOUCH_SCL to PIN_BOARD_SCL", ini=_sub(_real()[0], "  -D PIN_TOUCH_SCL=14\n", ""))
+
+
+def test_negative_the_driver_on_a_second_wire_is_caught():
+    _touch_fails_with("on the board's Wire",
+                      uitask=_sub(UITASK.read_text(), "Cst66xxTouch s_touch(Wire);", "Cst66xxTouch s_touch(Wire1);"))
+
+
+def test_negative_the_driver_starting_the_bus_is_caught():
+    _touch_fails_with("starts the I2C bus", driver=_sub(TOUCH_DRIVER.read_text(), "  _present = false;\n",
+                                                        "  _present = false;\n  _wire.begin(13, 14);\n"))
 
 
 def test_negative_a_renamed_section_is_not_a_silent_pass():
