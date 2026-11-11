@@ -12,9 +12,11 @@
 //   set for its colors.
 // - When to refresh. A refresh blocks for most of a second (772 ms partial,
 //   measured on tdeck-pro-1, #2037), so frames are gathered and pushed
-//   together, and every so often as a full refresh to clear ghosting. The gap
-//   runs from the END of one refresh, so the main loop always gets that long
-//   free between two of them.
+//   together. A refresh is full at start-up, after a wake and after a turn,
+//   and never on a timer: the owner's ruling on the B6 bench (#2113), as
+//   LilyGo's own firmware does it, after a full refresh every 20th flashed the
+//   screen black for no visible gain. The gap runs from the END of one
+//   refresh, so the main loop always gets that long free between two of them.
 
 #include <stdint.h>
 
@@ -50,13 +52,17 @@ struct EinkArea {
 
 enum class EinkPush : uint8_t { None, Partial, Full };
 
-// Defaults: a second free after each refresh, and every 20th refresh full.
-// Both are bench values to tune, not measurements.
+// full_every: every Nth refresh is full; 0 means every one; this means none
+// (only the full refreshes requestFull() and the first push ask for).
+constexpr uint8_t kEinkFullNever = 0xFF;
+
+// Defaults: a second free after each refresh, and no full refresh on a timer.
+// The gap is a bench value to tune, not a measurement.
 #ifndef EINK_MIN_PUSH_GAP_MS
   #define EINK_MIN_PUSH_GAP_MS 1000
 #endif
 #ifndef EINK_FULL_EVERY
-  #define EINK_FULL_EVERY 20
+  #define EINK_FULL_EVERY ::offband::gui::kEinkFullNever
 #endif
 
 class EinkPacer {

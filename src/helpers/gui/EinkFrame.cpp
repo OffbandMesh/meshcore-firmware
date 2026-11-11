@@ -23,7 +23,8 @@ EinkPush EinkPacer::due(uint32_t now_ms) const {
   if (!_pushed_once) return EinkPush::Full;
   // Unsigned subtraction, so millis() wrapping doesn't stall the panel.
   if (now_ms - _last_push_ms < _min_gap_ms) return EinkPush::None;
-  if (_force_full || _partials >= _full_every - 1) return EinkPush::Full;
+  if (_force_full) return EinkPush::Full;
+  if (_full_every != kEinkFullNever && _partials >= _full_every - 1) return EinkPush::Full;
   return EinkPush::Partial;
 }
 
@@ -35,8 +36,8 @@ void EinkPacer::pushed(EinkPush kind, uint32_t now_ms) {
   if (kind == EinkPush::Full) {
     _partials = 0;
     _force_full = false;
-  } else {
-    _partials++;
+  } else if (_partials < 0xFF) {
+    _partials++;   // held at 255: with no timed full it would otherwise wrap
   }
 }
 

@@ -200,6 +200,52 @@ TEST(EinkPacer, NoneIsNotCountedAsAPush) {
   EXPECT_EQ(p.due(0), EinkPush::Full);   // still the first refresh
 }
 
+TEST(EinkPacer, NeverMeansNoFullRefreshOnATimer) {
+  // The default since the B6 bench (#2113): partial after partial, past any
+  // count the old every-20th rule would have used.
+  EinkPacer p(1000, kEinkFullNever);
+  uint32_t t = 0;
+  p.mark(0, 0, 1, 1);
+  EXPECT_EQ(p.due(t), EinkPush::Full);   // start-up is still full
+  p.pushed(EinkPush::Full, t);
+  for (int i = 0; i < 600; i++) {
+    t += 1000;
+    p.mark(0, 0, 1, 1);
+    ASSERT_EQ(p.due(t), EinkPush::Partial) << i;
+    p.pushed(EinkPush::Partial, t);
+  }
+}
+
+TEST(EinkPacer, NeverStillHonorsARequestedFull) {
+  // A wake or a turn still asks for one, and gets it.
+  EinkPacer p(1000, kEinkFullNever);
+  p.mark(0, 0, 1, 1);
+  p.pushed(EinkPush::Full, 0);
+  for (uint32_t t = 1000; t <= 300000; t += 1000) {
+    p.mark(0, 0, 1, 1);
+    p.pushed(p.due(t), t);
+  }
+  p.requestFull();
+  p.mark(0, 0, 1, 1);
+  EXPECT_EQ(p.due(301000), EinkPush::Full);
+  p.pushed(EinkPush::Full, 301000);
+  p.mark(0, 0, 1, 1);
+  EXPECT_EQ(p.due(302000), EinkPush::Partial);
+}
+
+TEST(EinkPacer, TheDefaultIsNoTimedFull) {
+  EinkPacer p;
+  uint32_t t = 0;
+  p.mark(0, 0, 1, 1);
+  p.pushed(p.due(t), t);
+  for (int i = 0; i < 60; i++) {
+    t += EINK_MIN_PUSH_GAP_MS;
+    p.mark(0, 0, 1, 1);
+    ASSERT_EQ(p.due(t), EinkPush::Partial) << i;
+    p.pushed(EinkPush::Partial, t);
+  }
+}
+
 TEST(EinkPacer, ZeroFullEveryMeansEveryRefreshIsFull) {
   EinkPacer p(1000, 0);
   p.mark(0, 0, 1, 1);
