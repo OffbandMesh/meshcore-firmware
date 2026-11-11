@@ -119,17 +119,20 @@ bool FailedReadGuard::update(bool ok, bool pressed) {
   return _pressed;
 }
 
-void TouchQueue::start(bool pressed) {
+void TouchQueue::start(bool pressed, uint32_t press_ms) {
   _last_pressed = pressed;
   _tail_is_held = false;
   _press_caught = false;   // a finger already down was pressed before this
+  _continuing = pressed;
+  if (pressed) _continued_press_ms = press_ms;
 }
 
-void TouchQueue::append(const TouchPoint& p, uint32_t ms, uint32_t held_ms) {
+void TouchQueue::append(const TouchPoint& p, uint32_t ms, uint32_t held_ms, bool continues) {
   const uint8_t i = uint8_t((_head + _count) % kTouchQueueLen);
   _q[i] = p;
   _ms[i] = ms;
   _held_ms[i] = held_ms;
+  _continues[i] = continues;
   _count++;
 }
 
@@ -152,6 +155,7 @@ bool TouchQueue::offer(const TouchPoint& p, uint32_t ms) {
     _last_pressed = p.pressed;
     _tail_is_held = false;
     _press_caught = false;
+    _continuing = false;
     return false;
   }
   uint32_t held_ms = 0;
@@ -164,8 +168,9 @@ bool TouchQueue::offer(const TouchPoint& p, uint32_t ms) {
   }
   // The first held point after a press is its own entry, so the press keeps
   // where it started.
+  if (edge) _continuing = false;
   _tail_is_held = p.pressed && !edge;
-  append(p, ms, held_ms);
+  append(p, ms, held_ms, _continuing);
   _last_pressed = p.pressed;
   return true;
 }
@@ -184,14 +189,19 @@ uint32_t TouchQueue::nextReleaseHeldMs() const {
   return _held_ms[_head];
 }
 
+bool TouchQueue::nextContinuesPress() const { return _count != 0 && _continues[_head]; }
+
 void TouchQueue::clear() {
   _head = _count = 0;
   _tail_is_held = false;
   _last_pressed = false;
   _press_caught = false;
+  _continuing = false;
 }
 
-bool TouchReplay::next(uint32_t now, TouchPoint* p, uint32_t* taken_ms, bool* more) {
+bool TouchReplay::next(uint32_t now, TouchPoint* p, uint32_t* taken_ms, bool* more, bool* restamp,
+                       uint32_t* press_stamp) {
+  if (restamp) *restamp = false;
   if (_holding) {
     if (!_hold_done) {
       // Pressed on this read too; once this one is past the hold time, the
@@ -206,7 +216,16 @@ bool TouchReplay::next(uint32_t now, TouchPoint* p, uint32_t* taken_ms, bool* mo
   }
   TouchPoint t{};
   uint32_t ms = 0;
+  const bool continues = _q.nextContinuesPress();
   if (!_q.take(&t, &ms)) return false;
+  if (continues && restamp && press_stamp) {
+    // Down from LVGL's own press stamp until this read; never less than 0
+    // when the clocks disagree.
+    const uint32_t from = _q.continuedPressMs();
+    const uint32_t down = int32_t(ms - from) > 0 ? ms - from : 0;
+    *restamp = true;
+    *press_stamp = now - down;
+  }
   bool again = !_q.empty();
   if (t.pressed && _q.nextReleaseHeldMs() >= _long_ms) {
     // The release that follows ends a long hold: keep this point down until

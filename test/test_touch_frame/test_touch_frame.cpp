@@ -829,6 +829,74 @@ TEST(TouchReplay, ATapIsHandedOverInOnePass) {
   EXPECT_FALSE(r.next(1000, &p, &ms, &more));   // read the chip
 }
 
+// A finger LVGL took before the refresh: its press stamp follows the reads,
+// so LVGL's long-press clock counts the time the finger was down (#2114).
+TEST(TouchReplay, AFingerDownBeforeTheRefreshMovesLvglsPressStamp) {
+  TouchQueue q;
+  TouchReplay r(q, 400);
+  q.start(true, 1000);
+  q.offer(down(4, 4), 1060);
+  q.offer(down(4, 4), 1090);   // the held point moves on
+  q.offer(up(4, 4), 1120);
+  TouchPoint p{};
+  bool more = false, restamp = false;
+  uint32_t stamp = 0;
+  ASSERT_TRUE(r.next(1800, &p, nullptr, &more, &restamp, &stamp));
+  EXPECT_TRUE(p.pressed);
+  EXPECT_TRUE(restamp);
+  EXPECT_EQ(1800u - 90u, stamp);   // down 90 ms when that read was taken
+  ASSERT_TRUE(r.next(1800, &p, nullptr, &more, &restamp, &stamp));
+  EXPECT_FALSE(p.pressed);
+  EXPECT_FALSE(restamp);   // a release isn't timed
+}
+
+TEST(TouchReplay, APressCaughtInTheRefreshLeavesTheStampAlone) {
+  TouchQueue q;
+  TouchReplay r(q, 400);
+  q.start(false, 1000);
+  q.offer(down(4, 4), 1060);
+  q.offer(down(4, 4), 1090);
+  q.offer(up(4, 4), 1120);
+  TouchPoint p{};
+  bool more = false, restamp = true;
+  uint32_t stamp = 0;
+  while (r.next(1800, &p, nullptr, &more, &restamp, &stamp)) EXPECT_FALSE(restamp);
+}
+
+TEST(TouchReplay, ASecondPressInTheSameRefreshIsNotTakenForTheFirst) {
+  // The second press's stamp is LVGL's own, and the first keeps its time.
+  TouchQueue q;
+  TouchReplay r(q, 400);
+  q.start(true, 1000);
+  q.offer(down(4, 4), 1050);
+  q.offer(up(4, 4), 1100);
+  q.offer(down(9, 9), 1300);
+  q.offer(down(9, 9), 1330);
+  q.offer(up(9, 9), 1400);
+  TouchPoint p{};
+  bool more = false, restamp = false;
+  uint32_t stamp = 0;
+  ASSERT_TRUE(r.next(1800, &p, nullptr, &more, &restamp, &stamp));
+  EXPECT_TRUE(restamp);
+  EXPECT_EQ(1800u - 50u, stamp);
+  int restamps = 0;
+  while (r.next(1800, &p, nullptr, &more, &restamp, &stamp)) restamps += restamp;
+  EXPECT_EQ(0, restamps);
+}
+
+TEST(TouchReplay, AReadBeforeLvglsStampIsTimedAsZero) {
+  TouchQueue q;
+  TouchReplay r(q, 400);
+  q.start(true, 1000);
+  q.offer(down(4, 4), 990);
+  TouchPoint p{};
+  bool more = false, restamp = false;
+  uint32_t stamp = 0;
+  ASSERT_TRUE(r.next(1800, &p, nullptr, &more, &restamp, &stamp));
+  EXPECT_TRUE(restamp);
+  EXPECT_EQ(1800u, stamp);
+}
+
 TEST(TouchReplay, ALongHoldIsHeldForTheLongPressTime) {
   TouchQueue q;
   TouchReplay r(q, 400);

@@ -31,6 +31,8 @@ void flushCb(lv_disp_drv_t* drv, const lv_area_t*, lv_color_t*) { lv_disp_flush_
 
 TouchReplay g_replay(g_queue, LV_INDEV_DEF_LONG_PRESS_TIME);
 bool g_raw_drain = false;   // the negative case: the queue taken as is
+bool g_restamp = true;      // the negative case: LVGL's press stamp left alone
+lv_indev_t* g_dev = nullptr;
 
 // As LvglPort's touchReadCb: what the refresh caught first, then the live
 // state.
@@ -41,7 +43,10 @@ void readCb(lv_indev_drv_t*, lv_indev_data_t* data) {
     got = g_queue.take(&p, nullptr);
     more = !g_queue.empty();
   } else {
-    got = g_replay.next(lv_tick_get(), &p, nullptr, &more);
+    bool restamp = false;
+    uint32_t stamp = 0;
+    got = g_replay.next(lv_tick_get(), &p, nullptr, &more, &restamp, &stamp);
+    if (restamp && g_restamp && g_dev) g_dev->proc.pr_timestamp = stamp;
   }
   if (got) {
     data->continue_reading = more;
@@ -83,13 +88,14 @@ protected:
     g_indev.read_cb = readCb;
     einkScrollAttach(&g_indev);
     g_hook = g_indev.feedback_cb;
-    lv_indev_drv_register(&g_indev);
+    g_dev = lv_indev_drv_register(&g_indev);
   }
 
   void SetUp() override {
     lv_obj_clean(lv_scr_act());
     g_replay.clear();
     g_raw_drain = false;
+    g_restamp = true;
     g_pressed = false;
     hook(true);
     pump(2);
@@ -361,6 +367,45 @@ TEST_F(Eink, ADragBegunLiveAndFinishedInARefreshScrollsTheWholeWay) {
   g_y = 50;
   pump(3);
   EXPECT_EQ(before + 100, lv_obj_get_scroll_y(l));
+}
+
+// A press LVGL saw live, then a refresh that blocks the loop for `refresh_ms`
+// while the finger stays down until `up_after_ms` into it. LVGL's tick runs on
+// through the refresh, as millis() does on the device.
+static void pressedThenRefresh(uint32_t up_after_ms, uint32_t refresh_ms) {
+  g_x = 50;
+  g_y = 40;
+  g_pressed = true;
+  pump();   // LVGL takes the press
+  const uint32_t t0 = lv_tick_get();
+  g_queue.start(true, g_dev->proc.pr_timestamp);
+  for (uint32_t t = 30; t < up_after_ms; t += 30) g_queue.offer(TouchPoint{true, 50, 40}, t0 + t);
+  g_queue.offer(TouchPoint{false, 50, 40}, t0 + up_after_ms);
+  g_pressed = false;
+  lv_tick_inc(refresh_ms);
+  pump(16);
+}
+
+TEST_F(Eink, ATapThatStartsARefreshIsNotALongPress) {
+  // A press that redraws its button starts a refresh at once, and the finger
+  // lifts while the panel is busy: down 120 ms, but LVGL's clock says 750.
+  button();
+  pressedThenRefresh(120, 750);
+  EXPECT_EQ(0, s_long);
+  EXPECT_EQ(1, s_clicks);
+}
+
+TEST_F(Eink, WithoutTheRestampThatTapIsALongPress) {
+  g_restamp = false;
+  button();
+  pressedThenRefresh(120, 750);
+  EXPECT_EQ(1, s_long);
+}
+
+TEST_F(Eink, AHoldThatStartsARefreshIsStillALongPress) {
+  button();
+  pressedThenRefresh(600, 750);
+  EXPECT_EQ(1, s_long);
 }
 
 int main(int argc, char** argv) {

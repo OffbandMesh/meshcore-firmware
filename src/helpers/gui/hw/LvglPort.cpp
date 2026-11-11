@@ -74,7 +74,7 @@ static void pushIfDue() {
   const EinkPush kind = s_pacer.due(now);
   if (kind == EinkPush::None) return;
   const EinkArea& a = s_pacer.dirty();
-  s_queue.start(pushTouchPressed());
+  s_queue.start(pushTouchPressed(), s_indev ? s_indev->proc.pr_timestamp : 0);
   s_pushing = true;
   s_panel->push(kind == EinkPush::Full, a.x1, a.y1, a.x2, a.y2);
   s_pushing = false;
@@ -262,7 +262,12 @@ static void touchReadCb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
   // calls again at once while continue_reading is set. A long hold is
   // replayed over the reads that follow instead (TouchReplay).
   bool more = false;
-  queued = s_replay.next(millis(), &p, &taken_ms, &more);
+  bool restamp = false;
+  uint32_t press_stamp = 0;
+  queued = s_replay.next(millis(), &p, &taken_ms, &more, &restamp, &press_stamp);
+  // A press LVGL took before the refresh: its long-press clock counts only
+  // the time the finger was down (TouchReplay::next).
+  if (restamp && s_indev) s_indev->proc.pr_timestamp = press_stamp;
   data->continue_reading = queued && more;
 #endif
   if (queued) {
