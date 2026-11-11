@@ -164,6 +164,18 @@ features:
         contains: ['[env:LilyGo_TDeck_Pro_companion_radio_ble_gui_diag]', '[env:LilyGo_TDeck_Pro_companion_radio_ble_diag]', '-D GUI_PANEL_EINK=1', '-D EINK_DISPLAY_MODEL=GxEPD2_310_GDEQ031T10', '-D P_LORA_EN=46']
       - path: variants/lilygo_tdeck_pro/target.cpp
         contains: ['return radio.std_init(&SPI1);']
+  - id: okimesh-solar
+    title: Use your OKIMesh Solar node
+    coverage: planned
+    roles: [companion, repeater]
+    boards: [okimesh_solar]
+    availability: {channel: development, verified_releases: []}
+    verification: Build-verified only. Repeater and Bluetooth companion images, each with a diagnostic twin, for the OKI Mesh Alliance solar node. GPS and battery-divider wiring traced from the board layout; all four envs build, the two non-diagnostic envs build in CI, and a source test checks their pins, divider ratio, low-voltage line and wake source. No OKIMesh board has run any image. The running cutoff that restarts into SafeBoot's sleep is untested on any hardware. The guide is published when a release carries the non-diagnostic images and a hardware test is recorded. Its draft is docs/initiatives/1626-okimesh-solar/2118-build/GUIDE-DRAFT.md.
+    evidence:
+      - path: variants/okimesh_solar/platformio.ini
+        contains: ['[env:OKIMesh_Solar_repeater]', '[env:OKIMesh_Solar_companion_radio_ble]', '-D SAFEBOOT_ADC_MULTIPLIER=1.68f', '-D AUTO_SHUTDOWN_MILLIVOLTS=3100', '-D OFFBAND_LOW_BATT_HANDOFF=1', '-D BATTERY_LPCOMP_INPUT=NRF_LPCOMP_INPUT_7']
+      - path: src/helpers/LowBattHandoff.h
+        contains: ['SafeBoot::restartIntoSleep();']
   - id: t1000e
     title: Use your SenseCAP T1000-E
     coverage: documented
