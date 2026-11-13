@@ -22,6 +22,7 @@
 #include <helpers/gui/hw/HynProbe.h>
 #include <helpers/gui/hw/LvglPort.h>
 #include <helpers/gui/hw/TDeckInput.h>
+#include <helpers/gui/hw/Tca8418Keyboard.h>
 #include <helpers/ui/OffbandSplash.h>   // offbandShortVersion
 #include <helpers/ui/ScreenOff.h>
 
@@ -136,6 +137,23 @@ bool startTouch() {
 #ifdef TDECK_KEYBOARD
 TDeckKeyboard s_keyboard(Wire);
 #endif
+// The T-Deck Pro's keyboard is a TCA8418 on the board bus (Epic C #2098). It
+// takes the same path as the T-Deck's from here on.
+#ifdef TDECK_PRO_KEYBOARD
+  #ifndef PIN_KEYBOARD_INT
+    #define PIN_KEYBOARD_INT -1
+  #endif
+  #ifndef PIN_KEYBOARD_LED
+    #define PIN_KEYBOARD_LED -1
+  #endif
+Tca8418Keyboard s_keyboard(Wire, PIN_KEYBOARD_INT, PIN_KEYBOARD_LED);
+#endif
+#if defined(TDECK_KEYBOARD) && defined(TDECK_PRO_KEYBOARD)
+  #error "TDECK_KEYBOARD and TDECK_PRO_KEYBOARD are two boards' keyboards; set one"
+#endif
+#if defined(TDECK_KEYBOARD) || defined(TDECK_PRO_KEYBOARD)
+  #define GUI_HW_KEYBOARD 1
+#endif
 #ifdef PIN_TRACKBALL_UP
 TDeckTrackball s_trackball;
   #ifndef TRACKBALL_PULSES_PER_STEP
@@ -206,9 +224,15 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #endif
 #endif
 
-#ifdef TDECK_KEYBOARD
+#ifdef GUI_HW_KEYBOARD
   _kb_ok = s_keyboard.begin();
   mesh_log_line(MLOG_BOOT, "[gui] keyboard %s\n", _kb_ok ? "ok" : "none");
+  #ifdef TDECK_PRO_KEYBOARD
+  // Keys typed while an e-paper refresh holds the loop are taken from the
+  // chip during the panel's BUSY wait, so its 10-event FIFO can't overflow
+  // (plan row 5). Harmless before the chip answers: service() needs it.
+  lvglSetBusyClient([]() { s_keyboard.service(); });
+  #endif
   _shell.setHardwareKeyboard(_kb_ok);   // only a flag before the shell is built
   if (_kb_ok) s_keyboard.setBacklight(keyboardBacklightFor(_screen == ScreenState::On));
 #endif
@@ -398,8 +422,8 @@ void UITask::pollTouchLate(uint32_t now) {
 
 void UITask::pollKeys(uint32_t now) {
   (void)now;
-#ifdef TDECK_KEYBOARD
-  // The keyboard holds one key until it's read, so a key typed before the
+#ifdef GUI_HW_KEYBOARD
+  // The T-Deck keyboard holds one key until it's read, so a key typed before the
   // last one is read can be lost: poll every 10 ms (a one-byte read is about
   // 0.3 ms of the bus). A few per pass, so a stuck bus can't hold the loop.
   if (!_kb_ok) {
@@ -416,7 +440,8 @@ void UITask::pollKeys(uint32_t now) {
   } else if (now - _kb_polled >= 10) {
     _kb_polled = now;
     for (uint8_t i = 0; i < 4; i++) {
-      const uint8_t b = s_keyboard.read();
+      bool repeat = false;
+      const uint8_t b = s_keyboard.read(&repeat);
       if (!b) break;
       const KeyKind k = classifyKey(b);
       if (k == KeyKind::None) continue;
@@ -427,6 +452,9 @@ void UITask::pollKeys(uint32_t now) {
         _next_screen = 0;
         continue;
       }
+      // A held Backspace that has emptied the field stops there: its repeats
+      // are never Back, or holding it would walk out of the screen (#2150).
+      if (repeat) continue;
       handle(k == KeyKind::Enter       ? InputEvent::KeyEnter
              : k == KeyKind::Backspace ? InputEvent::KeyBackspace
                                        : InputEvent::KeyOther,
@@ -544,7 +572,7 @@ void UITask::applyScreen(ScreenState s) {
   const bool lit = s != ScreenState::Off;
   if ((_screen == ScreenState::Off) != !lit) setCpuFrequencyMhz(cpuMhzFor(lit));
   _screen = s;
-#ifdef TDECK_KEYBOARD
+#ifdef GUI_HW_KEYBOARD
   // The keys light with the screen and go dark when it dims (tester bench, #1730).
   if (_kb_ok) s_keyboard.setBacklight(keyboardBacklightFor(s == ScreenState::On));
 #endif
@@ -2118,6 +2146,15 @@ void UITask::loop() {
                   int(s_touch.present()), (unsigned long)ts.reads, (unsigned long)ts.bus_errors,
                   (unsigned long)ts.reports, (unsigned long)ts.presses, (unsigned long)ts.stale_releases,
                   (unsigned long)ts.max_held_gap_ms);
+  #endif
+  #ifdef TDECK_PRO_KEYBOARD
+    // The keyboard (#2149): int_missed counts events the 100 ms safety poll
+    // found with the interrupt line idle, so a nonzero value says INT isn't
+    // reaching us; overflow and dropped say keys were lost.
+    const Tca8418Keyboard::Stats ks = s_keyboard.takeStats();
+    mesh_log_line(MLOG_BOOT, "[gui] keyboard present=%d events=%lu overflow=%lu dropped=%lu bus_err=%lu int_missed=%lu\n",
+                  int(s_keyboard.present()), (unsigned long)ks.events, (unsigned long)ks.overflows,
+                  (unsigned long)ks.dropped, (unsigned long)ks.bus_errors, (unsigned long)ks.int_missed);
   #endif
   }
 #endif
