@@ -70,4 +70,14 @@ bool lastResetWasUnclean();
  */
 uint16_t bootBattMilliVolts();
 
+#if defined(NRF52_PLATFORM)
+/**
+ * #1626: restart, and have the next boot count as a wake from SafeBoot's own
+ * sleep. It then proceeds only at or above the wake threshold. Below that it
+ * sleeps, rather than booting again on a cell that bounced back at rest.
+ * Does not return.
+ */
+[[noreturn]] void restartIntoSleep();
+#endif
+
 } // namespace SafeBoot

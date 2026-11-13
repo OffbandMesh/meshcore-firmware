@@ -1,6 +1,7 @@
 #include <Arduino.h>   // needed for PlatformIO
 #include <Mesh.h>
 #include <SafeBoot.h>
+#include <helpers/LowBattHandoff.h>
 
 #include "MyMesh.h"
 #include "helpers/diagnostics/CrashLogStandard.h"   // #472: uniform boot-survival CrashLog
@@ -1309,6 +1310,9 @@ void loop() {
   offband::crashLogStandardTick(millis());  // #472: deferred previous-boot re-dump for late serial connect
   board.feedWatchdog();  // #266/#1083: feed from the MAIN LOOP only -> a hung loop trips the WDT
   mesh::wdtTestHangTick();  // bench-only (WDT_TEST_HANG_AFTER_MS); compiles to nothing otherwise
+#if defined(OFFBAND_LOW_BATT_HANDOFF)
+  offband::lowBattHandoffTick(board);  // #1626: the running cutoff, handing off to SafeBoot
+#endif
 #if defined(NRF52_PLATFORM)
   board.heartbeatTick(); // #275: loop-driven, ungated green-LED heartbeat (freezes on hang)
 #endif
