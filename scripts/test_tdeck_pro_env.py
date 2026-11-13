@@ -17,6 +17,11 @@ SPI bus, SCK 36 / MOSI 33 / MISO 47. A pin routes to one SPI peripheral at a tim
         on the board's own I2C pins, and no second touch driver; UITask builds it on the
         board's Wire, and the driver never starts a bus (a second begin on the same pins
         breaks every device on them)
+    the GUI env selects the TCA8418 keyboard (#2149, #2152), never the T-Deck's (its
+        address, 0x55, is this board's fuel gauge); UITask builds it on the board's Wire
+        with INT 15 and the key backlight, drains it in the panel's BUSY wait, and never
+        lets a Backspace repeat become Back; the driver never starts a bus; and the
+        native suite runs the key-map tests
 
 Source assertions: the bench unit (C5, #2037) is what shows the panel and radio work.
 
@@ -38,6 +43,9 @@ DISPLAY = ROOT / "src" / "helpers" / "ui" / "GxEPDDisplay.cpp"
 EINK_PANEL = ROOT / "src" / "helpers" / "gui" / "hw" / "EinkPanel.cpp"
 UITASK = ROOT / "examples" / "companion_radio" / "ui-gui" / "UITask.cpp"
 TOUCH_DRIVER = ROOT / "src" / "helpers" / "gui" / "hw" / "Cst66xxTouch.cpp"
+KB_DRIVER = ROOT / "src" / "helpers" / "gui" / "hw" / "Tca8418Keyboard.cpp"
+ROOT_INI = ROOT / "platformio.ini"
+KEYS_TEST = "test_tdeck_pro_keys"
 FONTS = ROOT / "src" / "helpers" / "gui" / "fonts"
 FONTS_EINK = ROOT / "src" / "helpers" / "gui" / "fonts_eink"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
@@ -59,7 +67,7 @@ HW_PINS = {
     "PIN_DISPLAY_SCLK": "36", "PIN_DISPLAY_MISO": "47", "PIN_DISPLAY_MOSI": "33",
     "PIN_DISPLAY_CS": "34", "PIN_DISPLAY_DC": "35", "PIN_DISPLAY_BUSY": "37",
     "PIN_DISPLAY_RST": "16", "PIN_DISPLAY_FRONTLIGHT": "45", "TDECK_PRO_SD_CS": "48",
-    "PIN_GPS_EN": "39", "PIN_MODEM_EN": "41", "PIN_KEYBOARD_LED": "42",
+    "PIN_GPS_EN": "39", "PIN_MODEM_EN": "41", "PIN_KEYBOARD_LED": "42", "PIN_KEYBOARD_INT": "15",
     "PIN_BOARD_SDA": "13", "PIN_BOARD_SCL": "14", "PIN_USER_BTN": "0",
 }
 HW_FLAGS = {
@@ -254,10 +262,59 @@ def touch_failures(gui_env, hw, uitask, driver):
     return out
 
 
-def failures(ini, target, board, ci, display=None, panel=None, fonts=None, uitask=None, driver=None):
+def native_ignored(root_ini):
+    """The tests [env:native]'s test_ignore names: its value runs over continuation lines."""
+    m = re.search(r"^\[env:native\]\s*\n(.*?)(?=^\[)", root_ini, re.M | re.S)
+    if not m:
+        return None
+    t = re.search(r"^test_ignore\s*=\s*(.*?)(?=^\S)", strip_comments(m.group(1), ";") + "\nend", re.M | re.S)
+    return {n.strip() for n in re.split(r"[,\s]+", t.group(1)) if n.strip()} if t else set()
+
+
+def keyboard_failures(gui_env, uitask, kb_driver, root_ini):
+    """The GUI env's keyboard (#2149-#2152): the TCA8418 driver on the board's Wire.
+
+    TDECK_KEYBOARD is the T-Deck's own keyboard, an ESP32-C3 polled at 0x55. On this board
+    0x55 is the BQ27220 fuel gauge, so that driver must never be selected here.
+    """
+    out = []
+    if not has_flag(gui_env, "TDECK_PRO_KEYBOARD"):
+        out.append("[%s] must set TDECK_PRO_KEYBOARD: the keyboard is a TCA8418 (#2149)" % GUI_ENV)
+    if has_flag(gui_env, "TDECK_KEYBOARD"):
+        out.append("[%s] sets TDECK_KEYBOARD: that is the T-Deck's keyboard, and its address 0x55 is "
+                   "this board's fuel gauge" % GUI_ENV)
+    code = strip_comments(uitask, "//")
+    if not re.search(r"Tca8418Keyboard\s+s_keyboard\(\s*Wire\s*,\s*PIN_KEYBOARD_INT\s*,\s*PIN_KEYBOARD_LED\s*\)\s*;",
+                     code):
+        out.append("UITask.cpp must build the keyboard on the board's Wire with its INT and backlight pins "
+                   "(Tca8418Keyboard s_keyboard(Wire, PIN_KEYBOARD_INT, PIN_KEYBOARD_LED))")
+    if not re.search(r"lvglSetBusyClient\(\s*\[\]\s*\(\s*\)\s*\{\s*s_keyboard\.service\(\)\s*;\s*\}\s*\)", code):
+        out.append("UITask.cpp must drain the keyboard in the panel's BUSY wait (lvglSetBusyClient): its "
+                   "FIFO holds 10 events, and a refresh holds the loop for up to 2.3 s")
+    if not re.search(r"s_keyboard\.read\(\s*&repeat\s*\)", code) or not re.search(r"if\s*\(\s*repeat\s*\)\s*continue\s*;",
+                                                                             code):
+        out.append("UITask.cpp must drop a Backspace repeat the field didn't take: as Back, holding "
+                   "Backspace would walk out of the screen")
+    if re.search(r"\b(?:_wire|Wire)\s*\.\s*begin\s*\(", strip_comments(kb_driver, "//")):
+        out.append("Tca8418Keyboard.cpp starts the I2C bus: the board has started it, and a second begin "
+                   "on the same pins breaks every device on them")
+    ignored = native_ignored(root_ini)
+    if ignored is None:
+        out.append("platformio.ini has no [env:native]: the key-map tests can't run")
+    elif KEYS_TEST in ignored:
+        out.append("[env:native] ignores %s: CI would never run the key-map tests" % KEYS_TEST)
+    if not (ROOT / "test" / KEYS_TEST).is_dir():
+        out.append("test/%s is missing" % KEYS_TEST)
+    return out
+
+
+def failures(ini, target, board, ci, display=None, panel=None, fonts=None, uitask=None, driver=None,
+             kb_driver=None, root_ini=None):
     out = target_failures(target) + board_failures(board)
     uitask = uitask if uitask is not None else UITASK.read_text()
     driver = driver if driver is not None else TOUCH_DRIVER.read_text()
+    kb_driver = kb_driver if kb_driver is not None else KB_DRIVER.read_text()
+    root_ini = root_ini if root_ini is not None else ROOT_INI.read_text()
     out += init_replay_failures(uitask)
     display = display if display is not None else DISPLAY.read_text()
     panel = panel if panel is not None else EINK_PANEL.read_text()
@@ -270,6 +327,7 @@ def failures(ini, target, board, ci, display=None, panel=None, fonts=None, uitas
     hw, diag = secs[HW], secs[DIAG]
     out += eink_font_failures(secs[GUI_ENV], *(fonts if fonts is not None else _real_fonts()))
     out += touch_failures(secs[GUI_ENV], hw, uitask, driver)
+    out += keyboard_failures(secs[GUI_ENV], uitask, kb_driver, root_ini)
     # Octal PSRAM needs GPIO33-37, which carry this board's SPI bus and panel.
     m = re.search(r"^\s*board_build\.arduino\.memory_type\s*=\s*(\S+)", strip_comments(hw, ";"), re.M)
     if not m or m.group(1) != "qio_qspi":
@@ -546,6 +604,57 @@ def test_negative_the_driver_on_a_second_wire_is_caught():
 def test_negative_the_driver_starting_the_bus_is_caught():
     _touch_fails_with("starts the I2C bus", driver=_sub(TOUCH_DRIVER.read_text(), "  _present = false;\n",
                                                         "  _present = false;\n  _wire.begin(13, 14);\n"))
+
+
+def _kb_fails_with(fragment, ini=None, uitask=None, kb_driver=None, root_ini=None):
+    r = _real()
+    got = failures(ini if ini is not None else r[0], r[1], r[2], r[3], uitask=uitask, kb_driver=kb_driver,
+                   root_ini=root_ini)
+    assert any(fragment in f for f in got), "expected a failure naming %r, got %s" % (fragment, got)
+
+
+def test_negative_the_keyboard_not_selected_is_caught():
+    _kb_fails_with("must set TDECK_PRO_KEYBOARD", ini=_sub(_real()[0], "  -D TDECK_PRO_KEYBOARD\n", ""))
+
+
+def test_negative_the_tdeck_keyboard_on_the_fuel_gauge_address_is_caught():
+    _kb_fails_with("this board's fuel gauge",
+                   ini=_sub(_real()[0], "  -D TDECK_PRO_KEYBOARD\n", "  -D TDECK_PRO_KEYBOARD\n  -D TDECK_KEYBOARD=1\n"))
+
+
+def test_negative_the_wrong_keyboard_int_pin_is_caught():
+    _fails_with("PIN_KEYBOARD_INT must be 15", ini=_sub(_real()[0], "-D PIN_KEYBOARD_INT=15", "-D PIN_KEYBOARD_INT=12"))
+
+
+def test_negative_the_keyboard_on_a_second_wire_is_caught():
+    _kb_fails_with("on the board's Wire with its INT", uitask=_sub(
+        UITASK.read_text(), "Tca8418Keyboard s_keyboard(Wire, PIN_KEYBOARD_INT, PIN_KEYBOARD_LED);",
+        "Tca8418Keyboard s_keyboard(Wire1, PIN_KEYBOARD_INT, PIN_KEYBOARD_LED);"))
+
+
+def test_negative_the_keyboard_not_drained_in_a_refresh_is_caught():
+    _kb_fails_with("BUSY wait", uitask=_sub(UITASK.read_text(), "lvglSetBusyClient([]() { s_keyboard.service(); });", ""))
+
+
+def test_negative_a_repeat_that_becomes_back_is_caught():
+    _kb_fails_with("drop a Backspace repeat", uitask=_sub(UITASK.read_text(), "      if (repeat) continue;\n", ""))
+
+
+def test_negative_the_keyboard_driver_starting_the_bus_is_caught():
+    _kb_fails_with("Tca8418Keyboard.cpp starts the I2C bus", kb_driver=_sub(
+        KB_DRIVER.read_text(), "  _present = false;\n", "  _present = false;\n  _wire.begin(13, 14);\n"))
+
+
+def test_negative_the_key_map_tests_ignored_is_caught():
+    root = ROOT_INI.read_text()
+    _kb_fails_with("never run the key-map tests",
+                   root_ini=_sub(root, "test_ignore = test_kiss_modem,", "test_ignore = test_kiss_modem, test_tdeck_pro_keys,"))
+
+
+def test_negative_the_key_map_tests_ignored_on_a_continuation_line_is_caught():
+    root = ROOT_INI.read_text()
+    _kb_fails_with("never run the key-map tests",
+                   root_ini=_sub(root, "test_ignore = test_kiss_modem,", "test_ignore =\n  test_tdeck_pro_keys\n  test_kiss_modem,"))
 
 
 def test_negative_a_renamed_section_is_not_a_silent_pass():
