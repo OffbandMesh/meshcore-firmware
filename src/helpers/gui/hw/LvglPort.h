@@ -21,6 +21,12 @@ void lvglAttachTouch(TouchSource& touch, const TouchMapping& mapping);
 // The last mapped touch point, for the test screen's calibration readout.
 bool lvglLastTouch(uint16_t* x, uint16_t* y);
 
+// Something else on the board bus to read while an e-paper refresh holds the
+// loop (the T-Deck Pro keyboard, #2149). Called on every pass of the panel's
+// BUSY wait, in the UI loop's task like every other bus read, so it never
+// contends with touch. It must return quickly. Nothing on a TFT panel.
+void lvglSetBusyClient(void (*client)());
+
 // 1/10 of the 320-row portrait screen per buffer (PLAN.md A3).
 constexpr uint16_t kDrawBufLines = 32;
 
