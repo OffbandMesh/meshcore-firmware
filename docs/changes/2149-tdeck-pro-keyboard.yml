@@ -1,0 +1,13 @@
+schema_version: 1
+issue: 2149
+impact: none
+reason: >-
+  Turns on the keyboard in LilyGo_TDeck_Pro_companion_radio_ble_gui_diag (Epic C, #2098):
+  our own driver for its TCA8418 key chip, read during e-paper refreshes so keys are not
+  lost, with Shift, Alt and Sym, and Backspace repeat. The GUI's shared key path and its
+  e-paper refresh wait gain a hook each, which every GUI image compiles, but no other
+  board's behavior changes: the T-Deck's keyboard never repeats, and only the T-Deck Pro
+  image registers anything in the refresh wait. The T-Deck Pro image is a bring-up
+  diagnostic image in no release, so no published guide changes; the unpublished draft,
+  docs/initiatives/2004-tdeck-pro/2005-bringup/GUIDE-DRAFT.md, now says what each key
+  and modifier does.
