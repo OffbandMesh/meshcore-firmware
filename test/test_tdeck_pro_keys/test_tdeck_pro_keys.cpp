@@ -271,12 +271,15 @@ TEST(ProKeyState, AltAndSymHeldTogetherReleaseCleanly) {
 
 TEST(ProKeyState, BothShiftsHeldAndReleasedWithoutTypingLatchOnce) {
   // Gemini review (#2149): with one flag for both keys, letting go of the
-  // first ended the hold and latched while the second was still down.
+  // first ended the hold and latched while the second was still down. The
+  // first letter then came out capital through the latch, by luck; the
+  // second came out lowercase with Shift held.
   ProKeyState s;
   press(s, 3, kLShiftCol);
   press(s, 3, kRShiftCol);
   release(s, 3, kLShiftCol);
   EXPECT_EQ(tap(s, 0, 0), 'Q') << "the right Shift is still down";
+  EXPECT_EQ(tap(s, 0, 1), 'W') << "and still down for the second letter";
   release(s, 3, kRShiftCol);
   EXPECT_FALSE(s.shiftActive()) << "Shift was used while held: nothing latches";
   EXPECT_EQ(tap(s, 0, 0), 'q');
