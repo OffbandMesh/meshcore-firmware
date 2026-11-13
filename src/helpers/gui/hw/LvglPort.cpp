@@ -25,6 +25,7 @@ static size_t s_buf_bytes = 0;
 
 static bool s_flush_inflight = false;
 static lv_indev_t* s_indev = nullptr;   // the touch input, once attached
+static void (*s_busy_client)() = nullptr;   // lvglSetBusyClient()
 
 #ifdef GUI_PANEL_EINK
 // E-paper (#2009): LVGL draws into the panel's frame buffer, which takes no
@@ -247,9 +248,12 @@ static void busyHook(const void* arg) {
     }
   #endif
   }
+  if (s_pushing && s_busy_client) s_busy_client();
   delay(1);   // GxEPD2's own pace between BUSY checks when no hook is set
 }
 #endif
+
+void lvglSetBusyClient(void (*client)()) { s_busy_client = client; }
 
 static void touchReadCb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
   (void)drv;
