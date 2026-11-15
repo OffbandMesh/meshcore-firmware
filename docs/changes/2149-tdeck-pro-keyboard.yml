@@ -10,4 +10,6 @@ reason: >-
   image registers anything in the refresh wait. The T-Deck Pro image is a bring-up
   diagnostic image in no release, so no published guide changes; the unpublished draft,
   docs/initiatives/2004-tdeck-pro/2005-bringup/GUIDE-DRAFT.md, now says what each key
-  and modifier does.
+  and modifier does. A key press also lets the next e-paper refresh go sooner (#2164);
+  only the e-paper image's pacer acts on it, and it changes when the screen refreshes,
+  not what any guide describes.
