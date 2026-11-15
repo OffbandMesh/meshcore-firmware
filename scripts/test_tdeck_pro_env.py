@@ -291,10 +291,17 @@ def keyboard_failures(gui_env, uitask, kb_driver, root_ini):
     if not re.search(r"lvglSetBusyClient\(\s*\[\]\s*\(\s*\)\s*\{\s*s_keyboard\.service\(\)\s*;\s*\}\s*\)", code):
         out.append("UITask.cpp must drain the keyboard in the panel's BUSY wait (lvglSetBusyClient): its "
                    "FIFO holds 10 events, and a refresh holds the loop for up to 2.3 s")
-    if not re.search(r"s_keyboard\.read\(\s*&repeat\s*\)", code) or not re.search(r"if\s*\(\s*repeat\s*\)\s*continue\s*;",
-                                                                             code):
+    if not re.search(r"s_keyboard\.read\(\s*&repeat\b", code) or not re.search(r"if\s*\(\s*repeat\s*\)\s*continue\s*;",
+                                                                           code):
         out.append("UITask.cpp must drop a Backspace repeat the field didn't take: as Back, holding "
                    "Backspace would walk out of the screen")
+    # #2167: sentence capitals need the keyboard's tapped Shift, or a sentence
+    # can never start lowercase.
+    if (not re.search(r"s_keyboard\.read\(\s*&repeat\s*,\s*&tapped_shift\s*\)", code)
+            or not re.search(r"_shell\.typeKey\(\s*k\s*,\s*char\(b\)\s*,\s*tapped_shift\s*\)", code)
+            or not re.search(r"_shell\.setKeyboardSentenceCaps\(\s*true\s*\)", code)):
+        out.append("UITask.cpp must turn on sentence capitals and pass the keyboard's tapped Shift to "
+                   "typeKey: without it a sentence can never start lowercase (#2167)")
     if re.search(r"\b(?:_wire|Wire)\s*\.\s*begin\s*\(", strip_comments(kb_driver, "//")):
         out.append("Tca8418Keyboard.cpp starts the I2C bus: the board has started it, and a second begin "
                    "on the same pins breaks every device on them")
@@ -638,6 +645,16 @@ def test_negative_the_keyboard_not_drained_in_a_refresh_is_caught():
 
 def test_negative_a_repeat_that_becomes_back_is_caught():
     _kb_fails_with("drop a Backspace repeat", uitask=_sub(UITASK.read_text(), "      if (repeat) continue;\n", ""))
+
+
+def test_negative_the_tapped_shift_not_passed_is_caught():
+    _kb_fails_with("tapped Shift to typeKey", uitask=_sub(UITASK.read_text(), "_shell.typeKey(k, char(b), tapped_shift)",
+                                                          "_shell.typeKey(k, char(b))"))
+
+
+def test_negative_sentence_caps_not_turned_on_is_caught():
+    _kb_fails_with("turn on sentence capitals", uitask=_sub(UITASK.read_text(),
+                                                            "  _shell.setKeyboardSentenceCaps(true);\n", ""))
 
 
 def test_negative_the_keyboard_driver_starting_the_bus_is_caught():

@@ -244,9 +244,15 @@ public:
   void openCompose(int thread);
 
   // A physical keyboard's key (the T-Deck, J4 #1727). True when an open text
-  // field took it; false leaves it to the caller as an action. Backspace in
-  // an empty field is not taken, so it goes back.
-  bool typeKey(offband::gui::KeyKind k, char ch);
+  // field took it; false leaves it to the caller as an action. A message
+  // draft takes Backspace even when empty, so it never leaves the message;
+  // any other empty field leaves it to the caller as Back (#2166).
+  // `tapped_shift`: a tapped Shift came with the key (sentenceCase()).
+  bool typeKey(offband::gui::KeyKind k, char ch, bool tapped_shift = false);
+  // The keyboard reports its Shift (the T-Deck Pro): a letter typed at a
+  // sentence start is a capital, in the fields the on-screen keyboard
+  // capitalizes (#2167).
+  void setKeyboardSentenceCaps(bool on) { _kb_sentence_caps = on; }
   // A physical keyboard is present (the T-Deck): text fields drop the
   // on-screen keys and take the room, and Compose shows a one-line key hint
   // instead (owner, 2026-10-21: mockup 2). Rebuilds an open text field.
@@ -388,6 +394,7 @@ private:
   bool _chan_already = false;               // Hashtag: the name is a channel already held
   int _chan_pick = 0;                       // the row a tap picked, for the deferred handler
   bool chanAccepts(char ch) const;          // what the typing step will take
+  bool plainField() const;                  // the open field gets no capitals of its own
   lv_obj_t* _chan_field = nullptr;
   lv_obj_t* _chan_note = nullptr;
   lv_obj_t* _chan_count = nullptr;
@@ -484,6 +491,7 @@ private:
   int16_t kbTop() const;
   bool keyHinted() const;   // a hardware keyboard's field that keeps the key hint
   bool _hw_kb = false;                        // see setHardwareKeyboard()
+  bool _kb_sentence_caps = false;             // see setKeyboardSentenceCaps()
   static constexpr int16_t kKeyHintH = 20;    // Compose's key hint, with a hardware keyboard
   static constexpr int16_t kWheelH = 70;   // the letter wheel's strip
   // A sheet's backdrop on the top layer (below the status strip) and the

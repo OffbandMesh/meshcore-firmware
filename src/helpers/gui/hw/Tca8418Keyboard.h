@@ -29,8 +29,9 @@ public:
   void service();
 
   // The next key byte, or 0 when none is waiting. *repeat says it is a held
-  // Backspace's repeat rather than a press.
-  uint8_t read(bool* repeat = nullptr);
+  // Backspace's repeat rather than a press; *tapped_shift that a tapped
+  // Shift applied to it (ProKeyOut).
+  uint8_t read(bool* repeat = nullptr, bool* tapped_shift = nullptr);
 
   // The keys' backlight: lit for any duty above 0. The LED is on a plain
   // GPIO, so there's no brightness.
