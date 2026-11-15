@@ -207,6 +207,58 @@ TEST(ProKeyState, TappedShiftAppliesToTheNextKeyOnly) {
   EXPECT_EQ(tap(s, 1, 1), 's');
 }
 
+// #2167: whether a tapped Shift came with a key, for sentence-start case.
+namespace {
+ProKeyOut typed(ProKeyState& s, uint8_t row, uint8_t phys_col) {
+  ProKeyOut out{0, false, false};
+  EXPECT_TRUE(s.event(row, chipCol(phys_col), true, 0, &out));
+  ProKeyOut ignored;
+  s.event(row, chipCol(phys_col), false, 1, &ignored);
+  return out;
+}
+}  // namespace
+
+TEST(ProKeyState, ATappedShiftIsReportedWithTheKeyItApplies) {
+  ProKeyState s;
+  tap(s, 3, kLShiftCol);
+  const ProKeyOut out = typed(s, 0, 5);
+  EXPECT_EQ(out.byte, 'Y');
+  EXPECT_TRUE(out.tapped_shift);
+  EXPECT_FALSE(typed(s, 0, 5).tapped_shift) << "spent on one key";
+}
+
+TEST(ProKeyState, AHeldShiftIsNotATappedShift) {
+  ProKeyState s;
+  press(s, 3, kRShiftCol);
+  const ProKeyOut out = typed(s, 0, 5);
+  EXPECT_EQ(out.byte, 'Y');
+  EXPECT_FALSE(out.tapped_shift) << "OK typed with Shift held stays OK";
+  release(s, 3, kRShiftCol);
+}
+
+TEST(ProKeyState, ALatchUnderAHeldShiftIsNotATappedShift) {
+  ProKeyState s;
+  tap(s, 3, kLShiftCol);     // latched
+  press(s, 3, kRShiftCol);   // and now held too
+  EXPECT_FALSE(typed(s, 0, 5).tapped_shift);
+  release(s, 3, kRShiftCol);
+}
+
+TEST(ProKeyState, NoShiftReportsNoTappedShift) {
+  ProKeyState s;
+  EXPECT_FALSE(typed(s, 0, 5).tapped_shift);
+  tap(s, kAltRow, kAltCol);
+  EXPECT_FALSE(typed(s, 0, 5).tapped_shift) << "a tapped Alt is not a Shift";
+}
+
+TEST(ProKeyRepeat, ARepeatNeverReportsATappedShift) {
+  ProKeyState s;
+  ProKeyOut out{0, false, true};
+  s.event(kBspRow, chipCol(kBspCol), true, 0, &out);
+  ASSERT_TRUE(s.repeat(500, &out));
+  EXPECT_FALSE(out.tapped_shift);
+}
+
 TEST(ProKeyState, SecondShiftTapCancels) {
   ProKeyState s;
   tap(s, 3, kLShiftCol);

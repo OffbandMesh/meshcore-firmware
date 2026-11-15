@@ -6,6 +6,7 @@
 
 #include "../TimeZones.h"
 #include "InputMap.h"
+#include "KeyInput.h"
 #include "SignalLevel.h"
 
 // D4 and D5 replace the remaining stubs (D1, #1495).
@@ -505,9 +506,7 @@ void ShiftState::typedLetter() {
 
 void ShiftState::autoCap(const char* text, size_t len) {
   if (_s == Shift::Lock) return;
-  const bool start = len == 0 || (len >= 2 && text[len - 1] == ' ' &&
-                                  (text[len - 2] == '.' || text[len - 2] == '!' || text[len - 2] == '?'));
-  _s = start ? Shift::Once : Shift::Off;
+  _s = sentenceStart(text, len) ? Shift::Once : Shift::Off;
 }
 
 void PageState::typed(char c) {

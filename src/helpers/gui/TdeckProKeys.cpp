@@ -118,17 +118,18 @@ bool ProKeyState::event(uint8_t row, uint8_t col, bool pressed, uint32_t now, Pr
     default:
       return false;
   }
+  const bool tapped_shift = _shift_latched && !_shift_keys_held;
   if (_shift_keys_held) _shift_used = true;
   if (_alt_keys_held) _alt_used = true;
   _shift_latched = _alt_latched = false;   // a tapped modifier applies to one key
-  if (out) *out = ProKeyOut{b, false};
+  if (out) *out = ProKeyOut{b, false, tapped_shift};
   return true;
 }
 
 bool ProKeyState::repeat(uint32_t now, ProKeyOut* out) {
   if (!_bsp_held || !due(now, _bsp_next)) return false;
   _bsp_next = now + kProRepeatEveryMs;
-  if (out) *out = ProKeyOut{0x08, true};
+  if (out) *out = ProKeyOut{0x08, true, false};
   return true;
 }
 

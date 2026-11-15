@@ -80,14 +80,18 @@ The BOOT button works as well.
 
 - **Type** wherever the screen shows a text field: a message, a node name, a channel
   name, a search. Letters are lowercase unless you add Shift.
+- **A message starts each sentence with a capital** by itself: the first letter, and the
+  first letter after `.`, `!` or `?` and a space. To start one in lowercase, tap Shift
+  first. Names, searches, passwords, hashtags and channel keys get no automatic capitals.
 - **Shift** gives a capital. Hold it while you press the letter, or tap it once and the
   next letter you type is a capital. Tap it a second time to change your mind.
 - **Alt** or **Sym** gives the symbol printed on the key: Alt then Q types `#`, Alt then
   M types `.`. Like Shift, hold it or tap it once for the next key. The microphone key
   types `0` with Alt, and nothing on its own.
 - **Backspace** deletes one character. Hold it to keep deleting: after half a second it
-  repeats about ten times a second. It stops when the field is empty, and doesn't take
-  you out of the screen you were typing in.
+  repeats about ten times a second. It stops when the field is empty. In a message it
+  never takes you out, however many times you press it: to leave, use touch. In any other
+  field, such as a name or a search, one more press on the empty field goes back.
 - **Enter** sends the message or saves the field.
 - When no text field is open, **Enter** opens the highlighted item and **Backspace** goes
   back. Use touch to move between items.
