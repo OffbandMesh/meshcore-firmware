@@ -12,6 +12,33 @@ KeyKind classifyKey(uint8_t b) {
 
 uint8_t keyboardBacklightFor(bool screen_on) { return screen_on ? kKeyboardBacklightOn : 0; }
 
+bool fieldTakesKey(KeyKind k, FieldKind field, bool empty) {
+  if (field == FieldKind::None) return false;
+  switch (k) {
+    case KeyKind::Char:
+    case KeyKind::Enter:
+      return true;
+    case KeyKind::Backspace:
+      return !empty || field == FieldKind::Message;
+    default:
+      return false;
+  }
+}
+
+bool sentenceStart(const char* text, size_t len) {
+  if (len == 0) return true;
+  if (!text || len < 2 || text[len - 1] != ' ') return false;
+  const char end = text[len - 2];
+  return end == '.' || end == '!' || end == '?';
+}
+
+char sentenceCase(char ch, bool tapped_shift, const char* text, size_t len) {
+  if (!sentenceStart(text, len)) return ch;
+  if (ch >= 'a' && ch <= 'z') return tapped_shift ? ch : char(ch - 'a' + 'A');
+  if (ch >= 'A' && ch <= 'Z') return tapped_shift ? char(ch - 'A' + 'a') : ch;
+  return ch;
+}
+
 void keyboardBacklightCommand(uint8_t duty, uint8_t out[kKeyboardBacklightCmdLen]) {
   out[0] = 0x01;
   out[1] = duty;

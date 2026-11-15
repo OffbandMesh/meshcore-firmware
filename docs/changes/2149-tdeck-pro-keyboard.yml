@@ -12,4 +12,7 @@ reason: >-
   docs/initiatives/2004-tdeck-pro/2005-bringup/GUIDE-DRAFT.md, now says what each key
   and modifier does. A key press also lets the next e-paper refresh go sooner (#2164);
   only the e-paper image's pacer acts on it, and it changes when the screen refreshes,
-  not what any guide describes.
+  not what any guide describes. Backspace no longer leaves an empty message on either
+  T-Deck keyboard (#2166), and T-Deck Pro messages get sentence-start capitals (#2167).
+  Neither the T-Deck GUI image nor the T-Deck Pro images are in a release, so no published
+  guide describes the old behavior; the T-Deck Pro draft guide is updated.

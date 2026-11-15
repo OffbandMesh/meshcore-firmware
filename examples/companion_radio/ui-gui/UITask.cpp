@@ -232,6 +232,9 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   // chip during the panel's BUSY wait, so its 10-event FIFO can't overflow
   // (plan row 5). Harmless before the chip answers: service() needs it.
   lvglSetBusyClient([]() { s_keyboard.service(); });
+  // It reports its Shift, so a tapped Shift can undo a sentence-start
+  // capital: it gets them (#2167). The T-Deck's keyboard can't, so doesn't.
+  _shell.setKeyboardSentenceCaps(true);
   #endif
   _shell.setHardwareKeyboard(_kb_ok);   // only a flag before the shell is built
   if (_kb_ok) s_keyboard.setBacklight(keyboardBacklightFor(_screen == ScreenState::On));
@@ -440,21 +443,22 @@ void UITask::pollKeys(uint32_t now) {
   } else if (now - _kb_polled >= 10) {
     _kb_polled = now;
     for (uint8_t i = 0; i < 4; i++) {
-      bool repeat = false;
-      const uint8_t b = s_keyboard.read(&repeat);
+      bool repeat = false, tapped_shift = false;
+      const uint8_t b = s_keyboard.read(&repeat, &tapped_shift);
       if (!b) break;
       const KeyKind k = classifyKey(b);
       if (k == KeyKind::None) continue;
       lvglNoteKey();   // the refresh that shows it waits the short gap (#2164)
       // An open text field takes the key; on a dark screen, Lock or the boot
       // screen it is ordinary input (it wakes, or Enter opens).
-      if (_screen != ScreenState::Off && !_boot.open() && _shell.typeKey(k, char(b))) {
+      if (_screen != ScreenState::Off && !_boot.open() && _shell.typeKey(k, char(b), tapped_shift)) {
         _last_input = now;
         _next_screen = 0;
         continue;
       }
-      // A held Backspace that has emptied the field stops there: its repeats
-      // are never Back, or holding it would walk out of the screen (#2150).
+      // A Backspace repeat is never Back, or holding it past an empty field's
+      // start would walk out of the screen (#2150). An empty message draft
+      // takes even a single press (#2166).
       if (repeat) continue;
       handle(k == KeyKind::Enter       ? InputEvent::KeyEnter
              : k == KeyKind::Backspace ? InputEvent::KeyBackspace

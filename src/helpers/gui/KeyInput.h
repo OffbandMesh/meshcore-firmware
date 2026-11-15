@@ -44,6 +44,32 @@ void keyboardBacklightCommand(uint8_t duty, uint8_t out[kKeyboardBacklightCmdLen
 constexpr int kCannedReplies = 4;
 int cannedSlotForKey(uint8_t b);
 
+// The text field a keyboard key would go to.
+enum class FieldKind : uint8_t {
+  None,      // no field open: keys are navigation
+  Message,   // a message draft
+  Other,     // a name, a search, a log-in, a channel step
+};
+
+// Whether the open field takes a keyboard key: Enter and characters always.
+// Backspace too, except on an empty field other than a message, where it is
+// left to navigation as Back. A message never gives it up, so a quick delete
+// that runs past the start stays in the draft (owner, #2166). Other fields
+// keep Back: on a unit without touch it is their only way out.
+bool fieldTakesKey(KeyKind k, FieldKind field, bool empty);
+
+// The start of a sentence: an empty text, or "." "!" "?" then a space. The
+// on-screen keyboard's automatic capital and the keyboard's sentenceCase()
+// share it.
+bool sentenceStart(const char* text, size_t len);
+
+// The case of a typed character for a keyboard that reports its Shift
+// (the T-Deck Pro, #2167). At a sentence start in `text` a letter becomes
+// a capital, or lowercase when a tapped Shift came with it, as a tap cancels
+// a phone's automatic capital. Elsewhere, and for anything not a letter, it
+// comes back as typed.
+char sentenceCase(char ch, bool tapped_shift, const char* text, size_t len);
+
 // The most steps one direction moves per poll, so a hard spin moves focus a
 // few rows rather than racing to the end of a list.
 constexpr uint8_t kTrackballMaxSteps = 3;

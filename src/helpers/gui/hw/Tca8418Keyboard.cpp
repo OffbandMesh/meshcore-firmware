@@ -102,8 +102,9 @@ void Tca8418Keyboard::service() {
   if (stat & tca8418::kIntAll) writeReg(tca8418::kRegIntStat, stat & tca8418::kIntAll);
 }
 
-uint8_t Tca8418Keyboard::read(bool* repeat) {
+uint8_t Tca8418Keyboard::read(bool* repeat, bool* tapped_shift) {
   if (repeat) *repeat = false;
+  if (tapped_shift) *tapped_shift = false;
   if (!_present) return 0;
   if (!_queue.size()) service();
   if (_overflow_pending) {
@@ -132,7 +133,10 @@ uint8_t Tca8418Keyboard::read(bool* repeat) {
     }
 #endif
     ProKeyOut out;
-    if (_state.event(row, col, pressed, now, &out)) return out.byte;
+    if (_state.event(row, col, pressed, now, &out)) {
+      if (tapped_shift) *tapped_shift = out.tapped_shift;
+      return out.byte;
+    }
   }
   ProKeyOut out;
   if (_state.repeat(now, &out)) {

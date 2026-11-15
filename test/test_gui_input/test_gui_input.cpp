@@ -236,6 +236,86 @@ TEST(Trackball, BadArgumentsMoveNothingOrActAsOne) {
   EXPECT_EQ(2, trackballSteps(2, 0, &carry));   // 0 pulses a step reads as 1
 }
 
+// ------------------------------- Backspace in a field (#2166), capitals (#2167)
+
+TEST(FieldKeys, AnEmptyMessageKeepsBackspace) {
+  // A quick delete that runs past the start stays in the draft (owner, #2166).
+  EXPECT_TRUE(fieldTakesKey(KeyKind::Backspace, FieldKind::Message, true));
+  EXPECT_TRUE(fieldTakesKey(KeyKind::Backspace, FieldKind::Message, false));
+}
+
+TEST(FieldKeys, AnyOtherEmptyFieldGivesBackspaceToBack) {
+  // A name, search, log-in or channel step keeps Back on an empty field: on
+  // a unit without touch it is the only way out.
+  EXPECT_FALSE(fieldTakesKey(KeyKind::Backspace, FieldKind::Other, true));
+  EXPECT_TRUE(fieldTakesKey(KeyKind::Backspace, FieldKind::Other, false)) << "it still deletes";
+}
+
+TEST(FieldKeys, EnterAndCharactersAreAnOpenFieldsOwn) {
+  for (FieldKind f : {FieldKind::Message, FieldKind::Other}) {
+    for (bool empty : {true, false}) {
+      EXPECT_TRUE(fieldTakesKey(KeyKind::Enter, f, empty));
+      EXPECT_TRUE(fieldTakesKey(KeyKind::Char, f, empty));
+    }
+  }
+}
+
+TEST(FieldKeys, WithNoFieldOpenNothingIsTaken) {
+  // Navigation keeps Backspace as Back and Enter as open (§9 ruling 2).
+  for (bool empty : {true, false}) {
+    EXPECT_FALSE(fieldTakesKey(KeyKind::Backspace, FieldKind::None, empty));
+    EXPECT_FALSE(fieldTakesKey(KeyKind::Enter, FieldKind::None, empty));
+    EXPECT_FALSE(fieldTakesKey(KeyKind::Char, FieldKind::None, empty));
+  }
+}
+
+TEST(FieldKeys, NoneIsNeverTaken) {
+  for (FieldKind f : {FieldKind::None, FieldKind::Message, FieldKind::Other}) {
+    EXPECT_FALSE(fieldTakesKey(KeyKind::None, f, true));
+  }
+}
+
+TEST(SentenceCase, StartsAreEmptyOrAfterEndPunctuationAndASpace) {
+  EXPECT_TRUE(sentenceStart("", 0));
+  EXPECT_TRUE(sentenceStart(nullptr, 0));
+  EXPECT_TRUE(sentenceStart("Hi. ", 4));
+  EXPECT_TRUE(sentenceStart("Ok? ", 4));
+  EXPECT_TRUE(sentenceStart("Go! ", 4));
+  EXPECT_FALSE(sentenceStart("Hi", 2));
+  EXPECT_FALSE(sentenceStart("Hi.", 3)) << "no space yet";
+  EXPECT_FALSE(sentenceStart("Hi ", 3));
+  EXPECT_FALSE(sentenceStart("Hi, ", 4));
+  EXPECT_FALSE(sentenceStart(" ", 1));
+  EXPECT_FALSE(sentenceStart(nullptr, 4));
+}
+
+TEST(SentenceCase, ALetterAtAStartIsACapital) {
+  EXPECT_EQ(sentenceCase('h', false, "", 0), 'H');
+  EXPECT_EQ(sentenceCase('h', false, "Hi. ", 4), 'H');
+  EXPECT_EQ(sentenceCase('H', false, "", 0), 'H') << "a held Shift's capital stays";
+}
+
+TEST(SentenceCase, ATappedShiftAtAStartGivesLowercase) {
+  // The keyboard sends 'H' for a tapped Shift then h; at a start it undoes
+  // the automatic capital, as a tap does on a phone.
+  EXPECT_EQ(sentenceCase('H', true, "", 0), 'h');
+  EXPECT_EQ(sentenceCase('H', true, "Hi. ", 4), 'h');
+  EXPECT_EQ(sentenceCase('h', true, "", 0), 'h');
+}
+
+TEST(SentenceCase, MidSentenceLettersComeBackAsTyped) {
+  EXPECT_EQ(sentenceCase('h', false, "Hi ", 3), 'h');
+  EXPECT_EQ(sentenceCase('H', true, "Hi ", 3), 'H') << "a tapped Shift mid-sentence still capitalizes";
+  EXPECT_EQ(sentenceCase('h', false, "Hi.", 3), 'h');
+}
+
+TEST(SentenceCase, NonLettersAreNeverChanged) {
+  for (char c : {'1', '$', '@', ' ', '.', '[', '#'}) {
+    EXPECT_EQ(sentenceCase(c, false, "", 0), c) << c;
+    EXPECT_EQ(sentenceCase(c, true, "", 0), c) << c;
+  }
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

@@ -92,10 +92,13 @@ constexpr uint32_t kProRepeatEveryMs = 100;
 
 // One byte for the GUI, as classifyKey() takes it: printable ASCII, 0x0D
 // for Enter, 0x08 for Backspace. `repeat` marks a held Backspace's repeat,
-// which must never become a Back once the field is empty.
+// which must never become a Back once the field is empty. `tapped_shift`
+// says a tapped Shift, with no Shift key held, applied to this key: at a
+// sentence start it asks for a lowercase letter (sentenceCase(), #2167).
 struct ProKeyOut {
   uint8_t byte;
   bool repeat;
+  bool tapped_shift;
 };
 
 // Shift, Alt and Sym, and Backspace repeat. Each modifier works two ways:

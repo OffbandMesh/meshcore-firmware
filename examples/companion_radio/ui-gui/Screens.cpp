@@ -1525,6 +1525,13 @@ void GuiShell::setHotKey(int i, bool preview) {
   lv_obj_center(label(_key_preview, FontRole::Title, _t.ink, text));
 }
 
+// No capitals of their own: a log-in, a search (matching ignores case) and a
+// name. A hashtag keeps the case it's typed in, and a channel key is hex, so
+// they get none either (Epic R #1747).
+bool GuiShell::plainField() const {
+  return _login || _searching || _set_text || _chan == ChanStep::Hashtag || _chan == ChanStep::KeyEntry;
+}
+
 void GuiShell::pressKey(int i) {
   if (i < 0 || i >= int(_nkeys)) return;
   SlowStep slow("key", i);
@@ -1534,9 +1541,7 @@ void GuiShell::pressKey(int i) {
   // Search types into the query: no capitals of its own (matching ignores
   // case), and Done puts the keyboard away, keeping the results.
   ComposeBuffer& buf = chanTyping() ? _chan_buf : _set_text ? _set_buf : _login ? _login_pw : _searching ? _query : _draft;
-  // No capitals of their own. A hashtag keeps the case it's typed in, so it
-  // gets none either (Epic R #1747).
-  const bool plain = _login || _searching || _set_text || _chan == ChanStep::Hashtag || _chan == ChanStep::KeyEntry;
+  const bool plain = plainField();
 
   if (strcmp(l, "Send") == 0) {
     submitText();
@@ -1610,9 +1615,10 @@ void GuiShell::refreshText() {
   else refreshDraft();
 }
 
-// The keyboard applies its own Shift, so a typed key goes in as it came:
-// no auto-capital and no change to the on-screen keys' shift.
-bool GuiShell::typeKey(KeyKind k, char ch) {
+// The keyboard applies its own Shift, so a typed key goes in as it came and
+// the on-screen keys' shift is left alone. A keyboard that reports its Shift
+// also gets sentence-start capitals (#2167).
+bool GuiShell::typeKey(KeyKind k, char ch, bool tapped_shift) {
   if (_locked || _sheet != Sheet::None) return false;
   // In an open conversation, 1-4 start a reply with that canned text in the
   // draft; Enter sends it, or it can be edited first (owner, 2026-10-21).
@@ -1627,14 +1633,20 @@ bool GuiShell::typeKey(KeyKind k, char ch) {
   const bool search_typing = _searching && _tab == Tab::Nodes && (_search_kb || _search_wheel);
   if (!(_set_text || _login || search_typing || _composing || chanTyping())) return false;
   ComposeBuffer& buf = chanTyping() ? _chan_buf : _set_text ? _set_buf : _login ? _login_pw : _searching ? _query : _draft;
+  // Only the message draft keeps an empty field's Backspace (#2166).
+  const FieldKind field = &buf == &_draft ? FieldKind::Message : FieldKind::Other;
+  if (!fieldTakesKey(k, field, buf.length() == 0)) return false;   // empty, not a message: Back
   switch (k) {
     case KeyKind::Enter:
       submitText();
       return true;
     case KeyKind::Backspace:
-      if (!buf.backspace()) return false;   // empty: Back, as the caller maps it
+      // An empty draft: taken, and nothing changes, so a quick delete that
+      // ran past the start stays in the message (owner, #2166).
+      if (!buf.backspace()) return true;
       break;
     case KeyKind::Char:
+      if (_kb_sentence_caps && !plainField()) ch = sentenceCase(ch, tapped_shift, buf.text(), buf.length());
       if (chanTyping() && !chanAccepts(ch)) return true;   // spent: not a key this field takes
       if (!buf.insert(&ch, 1)) return true;   // full: the key is spent, nothing changes
       break;
