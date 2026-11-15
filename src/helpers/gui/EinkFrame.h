@@ -74,14 +74,29 @@ constexpr uint8_t kEinkFullNever = 0xFF;
   #define EINK_DRAG_HOLD_MS 1500
 #endif
 
+// The gap before a refresh that shows a key press (#2164). With the full gap
+// a key pressed just after a refresh took about 1.7 s to show: the gap, then
+// the refresh. Only the refresh after a key takes it, so the loop keeps the
+// full gap at every other time. A bench value to tune.
+#ifndef EINK_KEY_GAP_MS
+  #define EINK_KEY_GAP_MS 200
+#endif
+
 class EinkPacer {
 public:
   explicit EinkPacer(uint32_t min_gap_ms = EINK_MIN_PUSH_GAP_MS, uint8_t full_every = EINK_FULL_EVERY,
-                     uint32_t drag_hold_ms = EINK_DRAG_HOLD_MS)
-      : _min_gap_ms(min_gap_ms), _full_every(full_every ? full_every : 1), _drag_hold_ms(drag_hold_ms) {}
+                     uint32_t drag_hold_ms = EINK_DRAG_HOLD_MS, uint32_t key_gap_ms = EINK_KEY_GAP_MS)
+      : _min_gap_ms(min_gap_ms),
+        _full_every(full_every ? full_every : 1),
+        _drag_hold_ms(drag_hold_ms),
+        _key_gap_ms(key_gap_ms < min_gap_ms ? key_gap_ms : min_gap_ms) {}
   // Whether a finger is down and dragging something that scrolls. Called
   // before each due(); the refresh is held while it is (EINK_DRAG_HOLD_MS).
   void dragging(bool on, uint32_t now_ms);
+
+  // A key was pressed: the next refresh waits only the key gap. Cleared by
+  // that refresh, so a key never shortens more than one gap.
+  void keyed() { _keyed = true; }
 
   // LVGL drew this rectangle into the frame buffer.
   void mark(int16_t x1, int16_t y1, int16_t x2, int16_t y2) { _dirty.add(x1, y1, x2, y2); }
@@ -101,6 +116,8 @@ private:
   uint32_t _min_gap_ms;
   uint8_t _full_every;
   uint32_t _drag_hold_ms;
+  uint32_t _key_gap_ms;   // never longer than _min_gap_ms
+  bool _keyed = false;    // a key since the last refresh
   bool _dragging = false;
   uint32_t _hold_from_ms = 0;   // the drag's start, or its last refresh
   EinkArea _dirty;

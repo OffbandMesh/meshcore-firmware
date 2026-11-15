@@ -445,6 +445,7 @@ void UITask::pollKeys(uint32_t now) {
       if (!b) break;
       const KeyKind k = classifyKey(b);
       if (k == KeyKind::None) continue;
+      lvglNoteKey();   // the refresh that shows it waits the short gap (#2164)
       // An open text field takes the key; on a dark screen, Lock or the boot
       // screen it is ordinary input (it wakes, or Enter opens).
       if (_screen != ScreenState::Off && !_boot.open() && _shell.typeKey(k, char(b))) {

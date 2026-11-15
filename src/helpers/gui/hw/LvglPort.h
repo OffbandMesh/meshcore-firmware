@@ -27,6 +27,10 @@ bool lvglLastTouch(uint16_t* x, uint16_t* y);
 // contends with touch. It must return quickly. Nothing on a TFT panel.
 void lvglSetBusyClient(void (*client)());
 
+// A key was pressed, so the e-paper refresh that shows it waits the short key
+// gap rather than the full one (#2164). Nothing on a TFT panel.
+void lvglNoteKey();
+
 // 1/10 of the 320-row portrait screen per buffer (PLAN.md A3).
 constexpr uint16_t kDrawBufLines = 32;
 
