@@ -4,9 +4,10 @@ title: QCC badge parts list
 
 # QCC badge parts list
 
-Every part on the Queen City Con 0x4 badge, taken from the badge schematic (EasyEDA,
-"QCC 0x4 Badges" V1.0). Use it to repair a badge, or to fit a part that yours came
-without. For what each part does in use, see [Use your QCC badge](qcc-badge.md).
+The circuit boards of the Queen City Con 0x4 badge, and every part on the badge
+schematic (EasyEDA, "QCC 0x4 Badges" V1.0). Use it to repair a badge, or to
+fit a part that yours came without. For what each part does in use, see
+[Use your QCC badge](qcc-badge.md).
 
 ## Applies to
 
@@ -14,15 +15,27 @@ Supporter and pyramid badges. Both follow this schematic, but they differ in sha
 which parts are fitted, so not every part below is on every badge. A pyramid badge's
 front corner LEDs are not on the schematic, so they are not listed here.
 
+## Circuit boards
+
+The badges are built on custom circuit boards designed for the con: purple, with white
+artwork. The schematic gives the boards themselves no reference, so they are listed by
+name.
+
+| Board | Notes |
+|---|---|
+| Supporter badge board | The main board of a supporter badge, a rectangle with rounded corners and a lanyard slot. |
+| Keyboard board | The supporter badge's keyboard, a second custom board that mounts on standoffs over the battery and the ProMicro. It has its own microcontroller and a tactile switch for each key, and it works as a CardKB-compatible I2C keyboard through the main board's KEYBOARD connector. Its indicator LEDs are marked **FN_ON**, **SYM_ON**, **SHIFT_ON** and **POWER**, and it has its own headers marked **SAOV2**, **ICSP** and **TTL_SERIAL**. Its parts are not on the badge schematic, so they are not listed here. |
+| Pyramid badge board | A triangle about 156 mm along the base and 101 mm tall, with a lanyard slot near the top point. It follows the same schematic as the supporter badge board, with fewer parts fitted. |
+
 ## Main modules
 
 | Ref | Part | Notes |
 |---|---|---|
 | U1 | ProMicro nRF52840 board, sold as nice!nano compatible | The main controller, with the USB-C port. |
 | U2 | Ai-Thinker Ra-01SH LoRa module (SX1262) | |
-| RF1 | Antenna connector | The LoRa antenna attaches here. |
+| RF1 | Antenna connector | The LoRa antenna attaches here. On a supporter badge it is a right-angle SMA jack at the board's edge. |
 | OLED | 128×64 OLED, I2C | Pins GND, VCC, SCL, SDA. On supporter badges; added to some pyramid badges. |
-| KEYBOARD | CardKB-compatible I2C keyboard | On supporter badges. Plugs into the KEYBOARD connector. |
+| KEYBOARD | Custom keyboard board, CardKB-compatible over I2C | The keyboard board, under [Circuit boards](#circuit-boards). On supporter badges. |
 | GPS | GPS module with patch antenna | Not on every badge. The supporter badge carries a NEO-7M. |
 
 ## Transistors, diodes and LED
