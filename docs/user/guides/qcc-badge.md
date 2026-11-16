@@ -25,8 +25,8 @@ was added, and some badges have no buzzer or GPS.
 
 Part positions are approximate, and parts fitted to your badge may differ: the pyramid
 shown has a screen added. The button this guide refers to is marked **USR** on a pyramid
-badge and **SW1** on a supporter badge. For every part on the badge, with its value or
-part number, see the [QCC badge parts list](qcc-badge-parts.md).
+badge and **SW1** on a supporter badge. For the circuit boards and every part on the
+badge, with its value or part number, see the [QCC badge parts list](qcc-badge-parts.md).
 
 | Part | If it is fitted | If it is not |
 |---|---|---|
