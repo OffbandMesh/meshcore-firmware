@@ -407,8 +407,16 @@ constexpr uint8_t OFFBAND_INFO_TAG_ACK_CAPACITY     = 0x03;  // #1001, len 1; no
 // indicator answer lives here, as tags.
 constexpr uint8_t OFFBAND_INFO_TAG_DISPLAY_CONTROL  = 0x04;  // #2067, len 0; value via 0x05/0x06
 constexpr uint8_t OFFBAND_INFO_TAG_LED_CONTROL      = 0x05;  // #2067, len 0; value via 0x07/0x08
+// #2211: RESERVED for the companion CLI (Epic #2186). Two surfaces, two tags: a radio
+// with one and not the other must not be offered the other. Not emitted yet.
+//   0x06 CLI_LOCAL:  CMD_RUN_CLI_COMMAND (66) -> RESP_CODE_CLI_REPLY (29) from the
+//                    companion's own client.
+//   0x07 CLI_REMOTE: TXT_TYPE_CLI_COMMAND (3) -- sent for the client, and run when it
+//                    arrives from a contact granted remote CLI (ContactInfo flag 0x10).
+constexpr uint8_t OFFBAND_INFO_TAG_CLI_LOCAL        = 0x06;  // #2211, len 0; RESERVED, not emitted yet
+constexpr uint8_t OFFBAND_INFO_TAG_CLI_REMOTE       = 0x07;  // #2211, len 0; RESERVED, not emitted yet
 constexpr uint8_t OFFBAND_INFO_TAG_CONTINUE         = 0xFF;  // #1994, len 1; resume cursor
-// Next free tag: 0x06. 0x00 is not a valid tag.
+// Next free tag: 0x08. 0x00 is not a valid tag.
 //
 // EMITTING 0x04 AND 0x05 (#2068, not implemented by this change):
 //   0x04 only when the LIVE DISPLAY DRIVER reports a usable display. NOT #ifdef
