@@ -1,0 +1,11 @@
+schema_version: 1
+issue: 2211
+impact: none
+reason: >-
+  Reservation only. Two capability advert tags, 0x06 TAG_CLI_LOCAL and 0x07
+  TAG_CLI_REMOTE, are recorded in the registry in
+  examples/companion_radio/OffbandConfigProtocol.h and in the contract table,
+  so no other change can take those values. Nothing emits either tag yet, no
+  frame changes and no client sees anything different, so there is nothing for
+  a user guide to say. The firmware that emits them, and the user-facing CLI
+  they unlock, land with Epic 2186 and carry their own docs record there.
