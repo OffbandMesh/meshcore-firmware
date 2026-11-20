@@ -1,0 +1,11 @@
+schema_version: 1
+issue: 2215
+impact: none
+reason: >-
+  Reservation only. The 0xC5 sub-code 0x1D CLI_REPLY_CONT and the capability
+  advert tag 0x08 TAG_CLI_REPLY_CONT are recorded in the registry in
+  examples/companion_radio/OffbandConfigProtocol.h and in the contract table,
+  so no other change can take those values. Nothing sends the sub-code or
+  emits the tag yet, no frame changes and no client sees anything different,
+  so there is nothing for a user guide to say. The multi-frame CLI replies
+  they enable land with Epic 2186 and carry their own docs record there.

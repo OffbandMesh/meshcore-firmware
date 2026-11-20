@@ -380,7 +380,11 @@ constexpr uint8_t OFFBAND_UI_CHNOTIFY_SET = 0x19;   // #606: per-channel notify 
 constexpr uint8_t OFFBAND_UI_ROTATION_GET = 0x1A;   // #1990: display rotation, read
 constexpr uint8_t OFFBAND_UI_ROTATION_SET = 0x1B;   // #1990: display rotation, write
 constexpr uint8_t OFFBAND_UI_INFO_GET     = 0x1C;   // #1994: the capability advert
-// Next free sub-code: 0x1D. 0x7F is OFFBAND_UI_ERR and is not available.
+// #2215: RESERVED for multi-frame local CLI replies (Epic #2186). Radio to client only:
+// continues a local CLI reply that a RESP_CODE_CLI_REPLY (29) frame started. A request
+// carrying this sub-code is answered [0xC5][0x7F][0x05]. Not sent yet.
+constexpr uint8_t OFFBAND_UI_CLI_REPLY_CONT = 0x1D; // #2215: RESERVED, not sent yet
+// Next free sub-code: 0x1E. 0x7F is OFFBAND_UI_ERR and is not available.
 
 // === 0xC5 0x1C CAPABILITY ADVERT TAGS (#1994) ================================
 //
@@ -415,8 +419,11 @@ constexpr uint8_t OFFBAND_INFO_TAG_LED_CONTROL      = 0x05;  // #2067, len 0; va
 //                    arrives from a contact granted remote CLI (ContactInfo flag 0x10).
 constexpr uint8_t OFFBAND_INFO_TAG_CLI_LOCAL        = 0x06;  // #2211, len 0; RESERVED, not emitted yet
 constexpr uint8_t OFFBAND_INFO_TAG_CLI_REMOTE       = 0x07;  // #2211, len 0; RESERVED, not emitted yet
+// #2215: RESERVED. This radio continues a long local CLI reply in 0xC5 0x1D frames, on a
+// connection whose client requested this advert. Not emitted yet.
+constexpr uint8_t OFFBAND_INFO_TAG_CLI_REPLY_CONT   = 0x08;  // #2215, len 0; RESERVED, not emitted yet
 constexpr uint8_t OFFBAND_INFO_TAG_CONTINUE         = 0xFF;  // #1994, len 1; resume cursor
-// Next free tag: 0x08. 0x00 is not a valid tag.
+// Next free tag: 0x09. 0x00 is not a valid tag.
 //
 // EMITTING 0x04 AND 0x05 (#2068, not implemented by this change):
 //   0x04 only when the LIVE DISPLAY DRIVER reports a usable display. NOT #ifdef
