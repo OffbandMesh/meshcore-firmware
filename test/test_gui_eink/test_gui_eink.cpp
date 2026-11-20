@@ -312,6 +312,58 @@ TEST(EinkPacer, TheFirstRefreshIsNeverHeld) {
   EXPECT_EQ(p.due(10), EinkPush::Full);
 }
 
+// #2218: before the panel sleeps, the lock screen goes out at once, whole.
+
+TEST(EinkPacer, BeforeSleepSendsAtOnceInsideTheGap) {
+  EinkPacer p(1000, kEinkFullNever);
+  p.mark(0, 0, 239, 319);
+  p.pushed(EinkPush::Full, 0);
+  p.mark(0, 0, 239, 319);   // the lock screen, drawn 10 ms after a refresh
+  EXPECT_EQ(p.due(10), EinkPush::None);          // the loop would wait out the gap
+  EXPECT_EQ(p.beforeSleep(), EinkPush::Full);    // sleeping can't
+}
+
+TEST(EinkPacer, BeforeSleepIsFullEvenForAPartialChange) {
+  EinkPacer p(1000, kEinkFullNever);
+  p.mark(0, 0, 239, 319);
+  p.pushed(EinkPush::Full, 0);
+  p.mark(10, 10, 20, 20);
+  EXPECT_EQ(p.due(5000), EinkPush::Partial);
+  EXPECT_EQ(p.beforeSleep(), EinkPush::Full);
+}
+
+TEST(EinkPacer, BeforeSleepIgnoresADragHold) {
+  EinkPacer p(1000, kEinkFullNever, 1500);
+  p.mark(0, 0, 239, 319);
+  p.pushed(EinkPush::Full, 0);
+  p.dragging(true, 2000);
+  p.mark(0, 0, 239, 319);
+  EXPECT_EQ(p.due(2100), EinkPush::None);
+  EXPECT_EQ(p.beforeSleep(), EinkPush::Full);
+}
+
+TEST(EinkPacer, BeforeSleepSendsNothingWhenTheGlassIsCurrent) {
+  EinkPacer p(1000, kEinkFullNever);
+  EXPECT_EQ(p.beforeSleep(), EinkPush::None);   // nothing drawn yet
+  p.mark(0, 0, 239, 319);
+  p.pushed(p.beforeSleep(), 0);
+  EXPECT_TRUE(p.dirty().empty());
+  EXPECT_EQ(p.beforeSleep(), EinkPush::None);   // locked again with Lock already up
+}
+
+// The wake: the panel asks for a full refresh, and with the lock screen
+// already on the glass nothing is drawn, so nothing is sent until the screen
+// changes, and that first change goes out full.
+TEST(EinkPacer, AWakeWithNothingDrawnSendsNothing) {
+  EinkPacer p(1000, kEinkFullNever);
+  p.mark(0, 0, 239, 319);
+  p.pushed(p.beforeSleep(), 0);
+  p.requestFull();
+  EXPECT_EQ(p.due(60000), EinkPush::None);
+  p.mark(0, 0, 239, 319);   // unlocked
+  EXPECT_EQ(p.due(60010), EinkPush::Full);
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

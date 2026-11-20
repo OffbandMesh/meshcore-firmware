@@ -75,6 +75,16 @@ when the screen wakes, to set a clean image; after that it only redraws what cha
 
 The BOOT button works as well. The keyboard is not used yet.
 
+E-paper keeps its last image with no power, so when the screen times out it changes to the
+lock screen first, then sleeps. This takes about a second. The lock screen shows the
+radio's name and how to unlock it, and nothing else: no messages, and no clock, since
+nothing would update it while the screen sleeps. Holding BOOT for 3 seconds locks it the
+same way, and then only BOOT wakes it.
+
+Tap the screen or press BOOT to wake it, then press BOOT or swipe up to unlock. You return
+to the screen you were on, and a message you were writing is kept. The front-light follows
+the GUI's brightness setting.
+
 ### 4. Add a channel
 
 In **Chats**, tap **+**. Add Channel offers the same four choices as the Offband client:
@@ -82,9 +92,6 @@ In **Chats**, tap **+**. Add Channel offers the same four choices as the Offband
 **Join a Hashtag Channel**. Creating a private channel makes its key and shows it, for you
 to share. Joining one asks for its name, then its key. To message a node, open it in
 **Nodes**.
-
-E-paper keeps its last image with no power, so the screen does not go blank when the
-radio sleeps or turns off. The front-light follows the GUI's brightness setting.
 
 ## Not yet supported
 

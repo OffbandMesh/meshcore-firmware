@@ -92,6 +92,11 @@ public:
   // What to refresh now, if anything. The first refresh is always full.
   EinkPush due(uint32_t now_ms) const;
 
+  // What to send before the panel sleeps (#2218): anything drawn and not yet
+  // on the glass, as a full refresh, whatever the gap or a drag hold says.
+  // The image stays up for as long as the panel sleeps, so it's a clean one.
+  EinkPush beforeSleep() const { return _dirty.empty() ? EinkPush::None : EinkPush::Full; }
+
   // The refresh `due()` returned has been sent.
   void pushed(EinkPush kind, uint32_t now_ms);
 

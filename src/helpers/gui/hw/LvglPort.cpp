@@ -334,6 +334,24 @@ void lvglLoop() {
 #endif
 }
 
+uint32_t lvglPaintBeforeSleep() {
+#ifdef GUI_PANEL_EINK
+  if (!s_panel || !s_panel->isOn()) return 0;
+  const uint32_t t0 = millis();
+  lv_refr_now(nullptr);   // what changed, into the frame buffer
+  const EinkPush kind = s_pacer.beforeSleep();
+  if (kind == EinkPush::None) return 0;
+  const EinkArea& a = s_pacer.dirty();
+  // Not s_pushing: a touch now is the one that wakes the panel after it
+  // sleeps, read there; LVGL must not also replay it on the lock screen.
+  s_panel->push(kind == EinkPush::Full, a.x1, a.y1, a.x2, a.y2);
+  s_pacer.pushed(kind, millis());
+  return millis() - t0;
+#else
+  return 0;
+#endif
+}
+
 // Epic H: the panel turned by MADCTL, LVGL told the new resolution, and
 // touches mapped the same way. The draw buffers are sized in pixels, so they
 // serve either orientation.
