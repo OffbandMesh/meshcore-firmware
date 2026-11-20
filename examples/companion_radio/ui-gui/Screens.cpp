@@ -20,6 +20,15 @@ namespace {
 
 const char* const kByButton = byButton();
 
+// E-paper keeps the lock screen on the glass while the panel sleeps, and
+// nothing refreshes it there: it draws nothing that changes, so no clock,
+// date, zone or battery (owner, #2218). A lit panel ticks its clock.
+#ifdef GUI_PANEL_EINK
+constexpr bool kLockStatic = true;
+#else
+constexpr bool kLockStatic = false;
+#endif
+
 // Tab icons, 16 px, after the design's stroke icons. lv_line keeps the
 // pointer, so the point lists live for the program.
 const lv_point_t kHome[] = {{2, 7}, {8, 2}, {14, 7}, {14, 14}, {2, 14}, {2, 7}};
@@ -251,6 +260,11 @@ void GuiShell::sdNotice(bool show, uint16_t done, uint16_t total) {
 void GuiShell::showLock() {
   if (_locked) return;
   _locked = true;
+  // A switch still waiting to run (a tap just before the lock) would undo it.
+  _pending_fn = nullptr;
+  // rebuild() closes the sheets, the popover and the key preview; the SD
+  // notice is the one thing left on the top layer.
+  sdNotice(false, 0, 0);
   rebuild();
 }
 
@@ -303,12 +317,10 @@ void GuiShell::rebuild() {
   lv_obj_set_style_bg_color(scr, c(_t.bg), 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
   _name = _key = _advert = _advert_label = nullptr;
-  _lock_clock = _lock_sub = _lock_zone = _lock_list = _lock_ampm = nullptr;
+  _lock_clock = _lock_sub = _lock_zone = _lock_ampm = nullptr;
   for (auto& v : _value) v = nullptr;
   for (auto& v : _cell_name) v = nullptr;
   for (auto& s : _sub) s = nullptr;
-  _lock_count = 0xFF;
-  _lock_more = 0xFFFFFFFF;
 
   _kb = _draft_box = _draft_label = _caret = _counter = nullptr;
   _query_label = _match_label = _search_list = _wheel_strip = nullptr;
@@ -518,38 +530,35 @@ void GuiShell::buildTabs(lv_obj_t* parent) {
   if (active && !(_composing || _set_text || _login || _searching)) lv_group_focus_obj(active);
 }
 
+// Lock (#2218, owner 2026-11-20): nothing private on it, so no message
+// text, sender or unread count, on any panel. A lit panel shows the clock,
+// the date line and the zone; e-paper shows the node's name (kLockStatic).
 void GuiShell::buildLock(lv_obj_t* scr) {
-  // Class B (mockup 10): the clock and its lines on the left, the unread
-  // items on the right.
-  lv_obj_t* pair = nullptr;
-  if (landscape()) {
-    pair = box(scr, _lay.w - 24, LV_SIZE_CONTENT);
-    lv_obj_align(pair, LV_ALIGN_LEFT_MID, 12, -10);
-    lv_obj_set_flex_flow(pair, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(pair, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(pair, 14, 0);
-  }
-  lv_obj_t* col = box(pair ? pair : scr, pair ? 140 : 210, LV_SIZE_CONTENT);
-  if (!pair) lv_obj_align(col, LV_ALIGN_TOP_MID, 0, 40);
+  lv_obj_t* col = box(scr, _lay.w - 24, LV_SIZE_CONTENT);
+  lv_obj_align(col, LV_ALIGN_CENTER, 0, -14);
   lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_row(col, 4, 0);
-  lv_obj_t* clock_row = box(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-  lv_obj_set_flex_flow(clock_row, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(clock_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
-  lv_obj_set_style_pad_column(clock_row, 4, 0);
-  _lock_clock = label(clock_row, FontRole::Clock, _t.ink, "--:--");
-  _lock_ampm = label(clock_row, FontRole::Title, _t.ink2, "");
-  lv_obj_set_style_pad_bottom(_lock_ampm, 8, 0);
-  _lock_sub = label(col, FontRole::BodySmall, _t.ink2);
-  _lock_zone = label(col, FontRole::Label, _t.dim);   // the zone, or "UTC · set a time zone" (#1610)
-  _lock_list = pair ? box(pair, _lay.w - 24 - 140 - 14, LV_SIZE_CONTENT) : box(col, LV_PCT(100), LV_SIZE_CONTENT);
-  lv_obj_set_style_pad_top(_lock_list, pair ? 0 : 10, 0);
-  lv_obj_set_flex_flow(_lock_list, LV_FLEX_FLOW_COLUMN);
+  if (kLockStatic) {
+    lv_obj_t* name = label(col, FontRole::Title, _t.ink);
+    userText(name, _model->nodeName());
+    lv_obj_set_width(name, LV_PCT(100));
+    lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
+    oneLine(name, FontRole::Title);
+  } else {
+    lv_obj_t* clock_row = box(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(clock_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(clock_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    lv_obj_set_style_pad_column(clock_row, 4, 0);
+    _lock_clock = label(clock_row, FontRole::Clock, _t.ink, "--:--");
+    _lock_ampm = label(clock_row, FontRole::Title, _t.ink2, "");
+    lv_obj_set_style_pad_bottom(_lock_ampm, 8, 0);
+    _lock_sub = label(col, FontRole::BodySmall, _t.ink2);
+    _lock_zone = label(col, FontRole::Label, _t.dim);   // the zone, or "UTC · set a time zone" (#1610)
+  }
 
   lv_obj_t* hint = label(scr, FontRole::BodySmall, _t.dim, "Press USR or swipe up to unlock");
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -14);
-
 }
 
 bool GuiShell::action(Action a) {
@@ -792,57 +801,6 @@ void GuiShell::updateLock(const LockData& d) {
   if (_lock_zone && strcmp(lv_label_get_text(_lock_zone), d.zone) != 0) {
     lv_label_set_text(_lock_zone, d.zone);
     lv_obj_set_style_text_color(_lock_zone, c(d.zone_unset ? _t.warn : _t.dim), 0);
-  }
-
-  // The list rebuilds only when what it shows changes.
-  bool same = d.count == _lock_count && d.more == _lock_more;
-  for (uint8_t i = 0; same && i < d.count; i++) {
-    lv_obj_t* row = lv_obj_get_child(_lock_list, i);
-    lv_obj_t* top = lv_obj_get_child(row, 0);
-    same = strcmp(lv_label_get_text(lv_obj_get_child(top, 0)), d.items[i].label) == 0 &&
-           strcmp(lv_label_get_text(lv_obj_get_child(top, 1)), d.items[i].time) == 0 &&
-           strcmp(lv_label_get_text(lv_obj_get_child(row, 1)), d.items[i].text) == 0;
-  }
-  if (same) return;
-  _lock_count = d.count;
-  _lock_more = d.more;
-  lv_obj_clean(_lock_list);
-
-  if (d.count == 0) {
-    lv_obj_t* none = box(_lock_list, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_top(none, 16, 0);
-    lv_obj_set_flex_flow(none, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(none, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(none, 6, 0);
-    lv_obj_t* bell = box(none, 14, 14);
-    line(bell, kBell, 9, _t.dim);
-    line(bell, kBellClapper, 2, _t.dim);
-    label(none, FontRole::Body, _t.dim, "No new messages");
-    return;
-  }
-
-  for (uint8_t i = 0; i < d.count; i++) {
-    lv_obj_t* row = box(_lock_list, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_ver(row, 6, 0);
-    lv_obj_set_style_pad_hor(row, 2, 0);
-    lv_obj_set_style_border_side(row, i == 0 ? LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_BOTTOM : LV_BORDER_SIDE_BOTTOM,
-                                 0);
-    lv_obj_set_style_border_width(row, 1, 0);
-    lv_obj_set_style_border_color(row, c(_t.line), 0);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
-    lv_obj_t* top = box(row, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_t* who = label(top, FontRole::Label, _t.sig, d.items[i].label);
-    lv_obj_align(who, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_t* when = label(top, FontRole::Meta, _t.dim, d.items[i].time);
-    lv_obj_align(when, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_t* text = label(row, FontRole::BodySmall, _t.ink, d.items[i].text);
-    lv_obj_set_width(text, LV_PCT(100));
-    oneLine(text, FontRole::BodySmall);
-  }
-  if (d.more) {
-    lv_obj_t* more = label(_lock_list, FontRole::BodySmall, _t.dim);
-    lv_label_set_text_fmt(more, "+%lu more", (unsigned long)d.more);
-    lv_obj_set_style_pad_top(more, 4, 0);
   }
 }
 

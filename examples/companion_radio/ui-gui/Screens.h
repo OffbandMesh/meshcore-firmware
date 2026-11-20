@@ -41,20 +41,14 @@ struct HomeData {
   bool sensors;
 };
 
-struct LockItem {
-  char label[48];
-  char time[12];   // "12:05 PM"
-  char text[96];
-};
-
+// What a lit lock screen updates each second. Nothing from a message: the
+// lock screen shows no text, sender or count (#2218). An e-paper lock screen
+// draws none of this either (kLockStatic, Screens.cpp).
 struct LockData {
   char clock[12];   // "21:07", or "9:07 PM" (12-hour)
   char sub[64];
   char zone[40];    // "UTC · set a time zone in Display", or the zone's name (#1610)
   bool zone_unset;  // drawn in amber
-  uint8_t count;   // items, 0..2
-  LockItem items[2];
-  uint32_t more;   // unread in threads not shown
 };
 
 // A node as its detail screen shows it (E4).
@@ -222,6 +216,8 @@ public:
   void setLayout(const offband::gui::Layout& l);
   const offband::gui::Layout& layout() const { return _lay; }
 
+  // Lock, over whatever is open; unlocking returns to it. Anything on the top
+  // layer goes too, so nothing of the screen below shows through (#2218).
   void showLock();
   void showTab(Tab tab);
   bool locked() const { return _locked; }
@@ -634,7 +630,4 @@ private:
   lv_obj_t* _lock_ampm = nullptr;   // 12-hour: the clock font has digits and a colon only
   lv_obj_t* _lock_sub = nullptr;
   lv_obj_t* _lock_zone = nullptr;
-  lv_obj_t* _lock_list = nullptr;
-  uint8_t _lock_count = 0xFF;
-  uint32_t _lock_more = 0xFFFFFFFF;
 };

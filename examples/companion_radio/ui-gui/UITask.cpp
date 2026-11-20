@@ -530,6 +530,17 @@ void UITask::applyScreen(ScreenState s) {
   if (s == _screen) return;
   GuiPanel* panel = static_cast<GuiPanel*>(_display);
   if (s == ScreenState::Off) {
+#ifdef GUI_PANEL_EINK
+    // E-paper keeps its image with no power, so "off" would leave the last
+    // screen readable: the lock screen goes on the glass first (#2218).
+    if (_gui_ok) {
+      const bool was_locked = _shell.locked();
+      _shell.showLock();
+      const uint32_t ms = lvglPaintBeforeSleep();
+      mesh_log_line(MLOG_BOOT, "[gui] lock on the glass before sleep: %s, %lu ms\n",
+                    was_locked ? "already locked" : "locked now", (unsigned long)ms);
+    }
+#endif
     panel->turnOff();
   } else {
     if (_screen == ScreenState::Off) {
@@ -537,7 +548,11 @@ void UITask::applyScreen(ScreenState s) {
       _shell.showLock();
       _next_screen = 0;
       panel->turnOn();
+#ifndef GUI_PANEL_EINK
       lv_obj_invalidate(lv_scr_act());  // redraw what the sleeping panel lost
+#endif
+      // E-paper: the glass already shows Lock, painted before it slept. The
+      // panel's next refresh is full anyway (it forgot its image asleep).
     }
     panel->setBrightness(s == ScreenState::Dim ? GUI_DIM_PERCENT : litPercent());
   }
@@ -785,21 +800,6 @@ void UITask::lockData(LockData* d) {
   }
   zoneLockText(zone, d->zone, sizeof d->zone);
   d->zone_unset = !offband::tz::isSet(zone);
-
-  MsgStore& store = the_mesh.guiStore();
-  uint32_t seqs[2];
-  d->count = uint8_t(lockItems(store, seqs, 2, &d->more));
-  for (uint8_t i = 0; i < d->count; i++) {
-    const MsgRecord* msg = store.msg(seqs[i]);
-    const Thread* th = msg ? store.threadAt(msg->thread) : nullptr;
-    if (!msg || !th) continue;
-    char raw[sizeof d->items[i].text];
-    lockLabel(*th, raw, sizeof d->items[i].label);
-    displayText(raw, strlen(raw), d->items[i].label, sizeof d->items[i].label);
-    formatClock(zone, msg->time, d->items[i].time, sizeof d->items[i].time, clock12h());
-    lockText(*msg, ThreadKind(th->kind), raw, sizeof raw);
-    displayText(raw, strlen(raw), d->items[i].text, sizeof d->items[i].text);
-  }
 }
 
 void UITask::openLoraPopover() {
