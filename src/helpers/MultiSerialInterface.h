@@ -182,6 +182,14 @@ public:
     return smallest;
   }
 
+  // #2222: a new PIN goes to every Bluetooth interface, enabled or not, so it
+  // is the one asked for when Bluetooth next pairs.
+  void setPin(uint32_t pin) override {
+    for (const auto& iface : _interfaces) {
+      if (iface.instance && iface.type == InterfaceType::Bluetooth) iface.instance->setPin(pin);
+    }
+  }
+
   size_t writeFrame(const uint8_t src[], size_t len) override {
     // don't write when disabled or nothing provided
     if(!_enabled || len == 0){

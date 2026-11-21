@@ -1409,7 +1409,7 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
       const char* range = "150.000 – 2500.000 MHz";
       if (pin) {
         _ss_pad.start("", 0, 6);
-        title("PIN", "Used from the next boot");
+        title("PIN", nullptr);   // used from the next pairing, no reboot (#2222)
         unit = "";
         range = "6 digits · empty: new each boot";   // turns red on a refusal
       } else if (pos) {

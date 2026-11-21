@@ -25,6 +25,7 @@
 #include <helpers/IndicatorCaps.h>      // #2068: what this radio may claim about its indicators
 #include <helpers/ChannelSlotGuard.h>   // #1865: no channel written over another
 #include <helpers/ChannelKeys.h>        // #1896: Public's key, for the slot guard
+#include <helpers/BlePin.h>             // #2222: a PIN set while running is used at once
 #ifdef PIN_BUZZER
   #include "ToneEngine.h"   // #1788: the tune sub-codes reach the UI's engine
 #endif
@@ -2332,20 +2333,7 @@ void MyMesh::begin(bool has_display) {
   }
 
 #ifdef BLE_PIN_CODE // 123456 by default
-  if (_prefs.ble_pin == 0) {
-#ifdef DISPLAY_CLASS
-    if (has_display && BLE_PIN_CODE == 123456) {
-      StdRNG rng;
-      _active_ble_pin = rng.nextInt(100000, 999999); // random pin each session
-    } else {
-      _active_ble_pin = BLE_PIN_CODE; // otherwise static pin
-    }
-#else
-    _active_ble_pin = BLE_PIN_CODE; // otherwise static pin
-#endif
-  } else {
-    _active_ble_pin = _prefs.ble_pin;
-  }
+  _active_ble_pin = _prefs.ble_pin != 0 ? _prefs.ble_pin : unsetBlePin();
 #else
   _active_ble_pin = 0;
 #endif
@@ -2523,6 +2511,38 @@ bool offband::observerCaplogSetCapture(bool on, uint8_t level) {
 #endif
 uint32_t MyMesh::getBLEPin() {
   return _active_ble_pin;
+}
+
+// The PIN with none set: a random one each boot on a display board left at
+// the default 123456 (the display shows it), otherwise the build's.
+uint32_t MyMesh::unsetBlePin() {
+#ifdef BLE_PIN_CODE
+#ifdef DISPLAY_CLASS
+  if (_has_display && BLE_PIN_CODE == 123456) {
+    StdRNG rng;
+    return rng.nextInt(100000, 999999);
+  }
+#endif
+  return BLE_PIN_CODE;
+#else
+  return 0;
+#endif
+}
+
+// #2222: a new PIN is used by the next pairing, with no reboot. The caller
+// saves the prefs.
+bool MyMesh::setBlePin(uint32_t pin) {
+  if (!offband::blePinValid(pin)) return false;
+#ifdef BLE_PIN_CODE
+  const uint32_t stored = _prefs.ble_pin;
+  // Only clearing a set PIN (or none in use yet) needs a new one, and a draw from the RNG.
+  const uint32_t unset = (pin == 0 && (stored != 0 || _active_ble_pin == 0)) ? unsetBlePin() : 0;
+  _active_ble_pin = offband::blePinAfterSet(stored, _active_ble_pin, pin, unset);
+  if (_serial) _serial->setPin(_active_ble_pin);
+#endif
+  _prefs.ble_pin = pin;
+  MESH_DEBUG_PRINTLN("ble pin set (%s): the next pairing uses it", pin ? "fixed" : "new each boot");
+  return true;
 }
 
 struct FreqRange {
@@ -4715,9 +4735,8 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint32_t pin;
     memcpy(&pin, &cmd_frame[1], 4);
 
-    // ensure pin is zero, or a valid 6 digit pin
-    if (pin == 0 || (pin >= 100000 && pin <= 999999)) {
-      _prefs.ble_pin = pin;
+    // ensure pin is zero, or a valid 6 digit pin; used from the next pairing (#2222)
+    if (setBlePin(pin)) {
       savePrefs();
       writeOKFrame();
     } else {
@@ -5104,9 +5123,12 @@ void MyMesh::checkCLIRescueCmd() {
     if (memcmp(cli_command, "set ", 4) == 0) {
       const char* config = &cli_command[4];
       if (memcmp(config, "pin ", 4) == 0) {
-        _prefs.ble_pin = atoi(&config[4]);
-        savePrefs();
-        Serial.printf("  > pin is now %06d\n", _prefs.ble_pin);
+        if (setBlePin(uint32_t(atol(&config[4])))) {   // #2222: used from the next pairing
+          savePrefs();
+          Serial.printf("  > pin is now %06lu\n", (unsigned long)_prefs.ble_pin);
+        } else {
+          Serial.printf("  Error: a pin is 0, or six digits\n");
+        }
       } else {
         Serial.printf("  Error: unknown config: %s\n", config);
       }

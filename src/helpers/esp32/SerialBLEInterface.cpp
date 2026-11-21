@@ -464,6 +464,15 @@ void SerialBLEInterface::onWrite(NimBLECharacteristic* pCharacteristic, NimBLECo
 
 // ---------- public methods
 
+// #2222: the PIN the next pairing asks for, with no reboot. onPassKeyDisplay()
+// hands NimBLE _pin_code when a phone pairs; the static passkey is kept in step
+// with it. A phone already bonded keeps its bond.
+void SerialBLEInterface::setPin(uint32_t pin) {
+  _pin_code = pin;
+  NimBLEDevice::setSecurityPasskey(pin);
+  BLE_DEBUG_PRINTLN("setPin(): the next pairing uses the new PIN");
+}
+
 void SerialBLEInterface::enable() {
   if (_isEnabled) return;
 

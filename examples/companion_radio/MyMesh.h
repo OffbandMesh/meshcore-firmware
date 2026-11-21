@@ -175,6 +175,9 @@ public:
   // Returns false when the setting could not be saved (it still holds until reboot).
   bool setCaplogCapture(bool on, uint8_t level);
   uint32_t getBLEPin();
+  // #2222: 0 (new each boot) or six digits; the next pairing uses it, no reboot.
+  // False, and nothing changed, for anything else. The caller saves the prefs.
+  bool setBlePin(uint32_t pin);
 
   void loop();
   void handleCmdFrame(size_t len);
@@ -647,6 +650,7 @@ private:
   uint32_t _iter_filter_since;
   uint32_t _most_recent_lastmod;
   uint32_t _active_ble_pin;
+  uint32_t unsetBlePin();
   bool _iter_started;
 
   // #1283 (D1): a refused contact must be re-offered, not skipped. The iterator
