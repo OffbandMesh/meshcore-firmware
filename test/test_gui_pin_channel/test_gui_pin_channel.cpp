@@ -29,6 +29,7 @@
 #include <helpers/ChannelKeys.h>
 #include <helpers/gui/EinkFrame.h>
 #include <helpers/gui/GuiLayout.h>
+#include <helpers/gui/hw/GuiFonts.h>
 #include <helpers/gui/GuiTheme.h>
 #include <helpers/gui/MsgStore.h>
 
@@ -309,6 +310,63 @@ TEST_F(Gui, ASetPinIsHandedOnAndShownAtOnce) {
   EXPECT_EQ(shell->_ss, GuiShell::SetSheet::None) << "the pad stayed open after Set";
   EXPECT_TRUE(shows("482913")) << "the PIN row still shows the PIN from boot";
   EXPECT_FALSE(shows("731554"));
+}
+
+// The PIN is drawn once, in the clock's 46 px digits, and fits the screen.
+// At 12 px the owner couldn't read it on the T-Deck Pro without magnifying it.
+TEST_F(Gui, ThePinIsDrawnLargeOnce) {
+  shell->showTab(Tab::Setup);
+  shell->setOpen(SetPage::Conn);
+  pump();
+  int found = 0;
+  lv_obj_t* big = nullptr;
+  for (lv_obj_t* l : labels()) {
+    if (strcmp(lv_label_get_text(l), "731554") == 0) {
+      found++;
+      big = l;
+    }
+  }
+  ASSERT_EQ(found, 1) << "the PIN is drawn small as well as large, or not at all";
+  EXPECT_EQ(lv_obj_get_style_text_font(big, 0), font(FontRole::Clock));
+  // How tall a digit is drawn, against the 12 px row value it replaces.
+  lv_font_glyph_dsc_t g, small;
+  ASSERT_TRUE(lv_font_get_glyph_dsc(lv_obj_get_style_text_font(big, 0), &g, '8', 0));
+  ASSERT_TRUE(lv_font_get_glyph_dsc(font(FontRole::BodySmall), &small, '8', 0));
+  RecordProperty("digit_px", g.box_h);
+  RecordProperty("old_digit_px", small.box_h);
+  EXPECT_GE(g.box_h, 3 * small.box_h) << "digits " << g.box_h << " px, against " << small.box_h << " px before";
+  EXPECT_TRUE(fits(big)) << "six large digits don't fit a 240 px screen";
+}
+
+// Landscape (Heltec V4 TFT, R8, T-Deck): the large PIN still leaves the
+// Phone row on screen without scrolling.
+TEST_F(Gui, ThePhoneRowStaysOnScreenInLandscape) {
+  for (uint16_t rot : {uint16_t(90), uint16_t(270)}) {
+    shell->setLayout(layoutFor(rot));
+    lv_disp_set_rotation(nullptr, rot == 90 ? LV_DISP_ROT_90 : LV_DISP_ROT_270);
+    shell->showTab(Tab::Setup);
+    shell->setOpen(SetPage::Conn);
+    pump();
+    lv_obj_update_layout(lv_scr_act());
+    ASSERT_EQ(lv_disp_get_ver_res(nullptr), 240) << "not landscape: the check below would pass trivially";
+    lv_obj_t* phone = labelOf("Phone");
+    ASSERT_NE(phone, nullptr);
+    lv_area_t a;
+    lv_obj_get_coords(phone, &a);
+    EXPECT_LE(a.y2, lv_disp_get_ver_res(nullptr)) << "rotation " << rot << ": the Phone row is pushed off screen";
+    EXPECT_NE(labelOf("731554"), nullptr);
+  }
+  lv_disp_set_rotation(nullptr, LV_DISP_ROT_NONE);
+}
+
+// Negative: with no PIN in use, nothing is drawn large; the row says None.
+TEST_F(Gui, NoPinIsNotDrawnLarge) {
+  model->pin_stored = model->pin_active = 0;
+  shell->showTab(Tab::Setup);
+  shell->setOpen(SetPage::Conn);
+  pump();
+  for (lv_obj_t* l : labels()) EXPECT_NE(lv_obj_get_style_text_font(l, 0), font(FontRole::Clock));
+  EXPECT_TRUE(shows("None"));
 }
 
 // The pad said "Used from the next boot". With the PIN in use at once, it
