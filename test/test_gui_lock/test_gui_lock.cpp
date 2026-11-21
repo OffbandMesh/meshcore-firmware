@@ -362,6 +362,43 @@ TEST_F(Lock, EpaperIgnoresTheClockUpdate) {
   EXPECT_FALSE(shows("80%"));
   EXPECT_FALSE(shows("Eastern"));
 }
+
+// E-paper in landscape: the mark is drawn at its own size (a scaled mark goes
+// ragged through the 1-bit threshold), and the lockup and name still clear
+// the unlock hint.
+TEST_F(Lock, EpaperLandscapeKeepsTheMarkUnscaled) {
+  for (uint16_t rot : {uint16_t(90), uint16_t(270)}) {
+    shell->setLayout(layoutFor(rot));
+    lv_disp_set_rotation(nullptr, rot == 90 ? LV_DISP_ROT_90 : LV_DISP_ROT_270);
+    shell->_locked = false;
+    shell->showLock();
+    pump();
+    lv_obj_update_layout(lv_scr_act());
+    ASSERT_EQ(lv_disp_get_ver_res(nullptr), 240) << "not landscape";
+    lv_obj_t* hint = nullptr;
+    lv_obj_t* col = nullptr;
+    lv_obj_t* mark = nullptr;
+    for (uint32_t i = 0; i < lv_obj_get_child_cnt(lv_scr_act()); i++) {
+      lv_obj_t* o = lv_obj_get_child(lv_scr_act(), int32_t(i));
+      if (lv_obj_check_type(o, &lv_label_class) && strcmp(lv_label_get_text(o), kHint) == 0) hint = o;
+      else if (lv_obj_get_child_cnt(o) > 2) col = o;
+    }
+    ASSERT_NE(hint, nullptr);
+    ASSERT_NE(col, nullptr);
+    for (uint32_t i = 0; i < lv_obj_get_child_cnt(col); i++) {
+      lv_obj_t* o = lv_obj_get_child(col, int32_t(i));
+      if (lv_obj_check_type(o, &lv_img_class)) mark = o;
+    }
+    ASSERT_NE(mark, nullptr);
+    EXPECT_EQ(lv_img_get_zoom(mark), LV_IMG_ZOOM_NONE) << "rotation " << rot << ": the mark was scaled on e-paper";
+    lv_area_t h, c;
+    lv_obj_get_coords(hint, &h);
+    lv_obj_get_coords(col, &c);
+    EXPECT_GE(c.y1, 0) << "rotation " << rot;
+    EXPECT_LT(c.y2, h.y1) << "rotation " << rot << ": the lockup and name run into the unlock hint";
+  }
+  lv_disp_set_rotation(nullptr, LV_DISP_ROT_NONE);
+}
 #else
 // A lit panel keeps its clock: it ticks while the screen is lit.
 TEST_F(Lock, ALitPanelKeepsTheClock) {

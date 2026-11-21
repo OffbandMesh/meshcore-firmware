@@ -4,8 +4,9 @@ impact: none
 reason: >-
   The GUI lock screen (Feature #2218, Epic #2219). On e-paper, when the screen times out or
   is pocket-locked, the lock screen is drawn on the glass before the panel sleeps, so the
-  last screen no longer stays readable. It shows the node's name and the unlock hint, with
-  no clock, date, zone or battery. On every GUI panel the lock screen no longer shows
-  unread messages, their senders or their text. No published guide describes the GUI lock
+  last screen no longer stays readable. It shows the Offband lockup, the node's name and
+  the unlock hint, with no clock, date, zone or battery. On every GUI panel the lock screen
+  carries the Offband lockup and no longer shows unread messages, their senders or their
+  text. No published guide describes the GUI lock
   screen, so none changes; the unpublished T-Deck Pro draft,
   docs/initiatives/2004-tdeck-pro/2005-bringup/GUIDE-DRAFT.md, now describes it.

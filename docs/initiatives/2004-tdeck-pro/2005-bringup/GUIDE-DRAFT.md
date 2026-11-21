@@ -77,7 +77,7 @@ The BOOT button works as well. The keyboard is not used yet.
 
 E-paper keeps its last image with no power, so when the screen times out it changes to the
 lock screen first, then sleeps. This takes about a second. The lock screen shows the
-radio's name and how to unlock it, and nothing else: no messages, and no clock, since
+Offband logo, the radio's name and how to unlock it, and nothing else: no messages, and no clock, since
 nothing would update it while the screen sleeps. Holding BOOT for 3 seconds locks it the
 same way, and then only BOOT wakes it.
 
