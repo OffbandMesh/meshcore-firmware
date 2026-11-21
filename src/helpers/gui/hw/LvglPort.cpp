@@ -25,6 +25,7 @@ static size_t s_buf_bytes = 0;
 
 static bool s_flush_inflight = false;
 static lv_indev_t* s_indev = nullptr;   // the touch input, once attached
+static void (*s_busy_client)() = nullptr;   // lvglSetBusyClient()
 
 #ifdef GUI_PANEL_EINK
 // E-paper (#2009): LVGL draws into the panel's frame buffer, which takes no
@@ -46,6 +47,10 @@ static bool pushTouchPressed();
 // Diag builds: when the last press was taken, so each refresh after it can
 // say how long the press waited for the glass.
 static uint32_t s_press_ms = 0;
+// The oldest key not yet on the glass, when the GUI took it (#2164). A key
+// pressed during a refresh is taken after it, so for that key this counts
+// short by up to one refresh.
+static uint32_t s_key_ms = 0;
 static uint32_t s_busy_reads = 0;
 // Where the finger was at the first and last pressed read of a refresh, raw:
 // a drag that moved but didn't scroll is settled by comparing the two
@@ -66,7 +71,12 @@ static void flushCb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* px) {
 // Sends what LVGL has drawn when the pacer says it's time. Nothing goes out
 // while the panel sleeps; it's kept for the wake.
 static void pushIfDue() {
-  if (!s_panel->isOn()) return;
+  if (!s_panel->isOn()) {
+#ifdef OFFBAND_GUI_PERF
+    s_key_ms = 0;   // a key the screen went dark on never reaches the glass
+#endif
+    return;
+  }
   if (s_panel->takeNeedFull()) s_pacer.requestFull();
   const uint32_t now = millis();
   // A finger down on something LVGL is scrolling: draw where the swipe ends.
@@ -98,6 +108,13 @@ static void pushIfDue() {
   if (s_press_ms && done - s_press_ms < 5000) {
     mesh_log_line(MLOG_BOOT, "[gui] eink: %s refresh done %lu ms after the press\n",
                   kind == EinkPush::Full ? "full" : "partial", (unsigned long)(done - s_press_ms));
+  }
+  if (s_key_ms) {
+    if (done - s_key_ms < 5000) {
+      mesh_log_line(MLOG_BOOT, "[gui] eink: key on the glass %lu ms after the GUI took it (%s)\n",
+                    (unsigned long)(done - s_key_ms), kind == EinkPush::Full ? "full" : "partial");
+    }
+    s_key_ms = 0;
   }
 #endif
 }
@@ -247,9 +264,21 @@ static void busyHook(const void* arg) {
     }
   #endif
   }
+  if (s_pushing && s_busy_client) s_busy_client();
   delay(1);   // GxEPD2's own pace between BUSY checks when no hook is set
 }
 #endif
+
+void lvglSetBusyClient(void (*client)()) { s_busy_client = client; }
+
+void lvglNoteKey() {
+#ifdef GUI_PANEL_EINK
+  s_pacer.keyed();
+  #ifdef OFFBAND_GUI_PERF
+  if (!s_key_ms) s_key_ms = millis() | 1u;   // never 0, which means none
+  #endif
+#endif
+}
 
 static void touchReadCb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
   (void)drv;

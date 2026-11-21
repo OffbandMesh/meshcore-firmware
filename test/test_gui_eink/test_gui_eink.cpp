@@ -312,6 +312,97 @@ TEST(EinkPacer, TheFirstRefreshIsNeverHeld) {
   EXPECT_EQ(p.due(10), EinkPush::Full);
 }
 
+// #2164: a key press takes the short gap, for the one refresh that shows it.
+namespace {
+EinkPacer keyPacerAfterFirst() {
+  EinkPacer p(1000, kEinkFullNever, 1500, 200);
+  p.mark(0, 0, 239, 319);
+  p.pushed(EinkPush::Full, 0);
+  return p;
+}
+}  // namespace
+
+TEST(EinkPacer, AKeyTakesTheShortGap) {
+  EinkPacer p = keyPacerAfterFirst();
+  p.keyed();
+  p.mark(10, 10, 20, 20);
+  EXPECT_EQ(p.due(199), EinkPush::None);
+  EXPECT_EQ(p.due(200), EinkPush::Partial);
+}
+
+TEST(EinkPacer, WithoutAKeyTheFullGapStands) {
+  EinkPacer p = keyPacerAfterFirst();
+  p.mark(10, 10, 20, 20);
+  EXPECT_EQ(p.due(200), EinkPush::None);
+  EXPECT_EQ(p.due(999), EinkPush::None);
+  EXPECT_EQ(p.due(1000), EinkPush::Partial);
+}
+
+TEST(EinkPacer, AKeyShortensOnlyTheNextGap) {
+  EinkPacer p = keyPacerAfterFirst();
+  p.keyed();
+  p.mark(10, 10, 20, 20);
+  p.pushed(p.due(200), 200);
+  p.mark(10, 10, 20, 20);   // the next frame, with no key behind it
+  EXPECT_EQ(p.due(400), EinkPush::None);
+  EXPECT_EQ(p.due(1199), EinkPush::None);
+  EXPECT_EQ(p.due(1200), EinkPush::Partial);
+}
+
+TEST(EinkPacer, AKeyWithNothingDrawnPushesNothing) {
+  EinkPacer p = keyPacerAfterFirst();
+  p.keyed();
+  EXPECT_EQ(p.due(5000), EinkPush::None);
+}
+
+TEST(EinkPacer, AKeyInsideTheGapStillMergesFrames) {
+  EinkPacer p = keyPacerAfterFirst();
+  p.mark(10, 10, 20, 20);
+  p.keyed();
+  p.mark(100, 200, 110, 210);
+  ASSERT_EQ(p.due(250), EinkPush::Partial);
+  EXPECT_EQ(p.dirty().x1, 10);
+  EXPECT_EQ(p.dirty().y2, 210);
+}
+
+TEST(EinkPacer, TheKeyGapSurvivesMillisWrap) {
+  EinkPacer p(1000, kEinkFullNever, 1500, 200);
+  p.mark(0, 0, 1, 1);
+  p.pushed(EinkPush::Full, 0xFFFFFF80u);
+  p.keyed();
+  p.mark(0, 0, 1, 1);
+  EXPECT_EQ(p.due(0x00000047u), EinkPush::None);      // 199 ms later, across the wrap
+  EXPECT_EQ(p.due(0x00000048u), EinkPush::Partial);   // 200 ms
+}
+
+TEST(EinkPacer, AKeyGapIsNeverLongerThanTheFullGap) {
+  EinkPacer p(1000, kEinkFullNever, 1500, 5000);
+  p.mark(0, 0, 1, 1);
+  p.pushed(EinkPush::Full, 0);
+  p.keyed();
+  p.mark(0, 0, 1, 1);
+  EXPECT_EQ(p.due(1000), EinkPush::Partial);
+}
+
+TEST(EinkPacer, AKeyDoesNotCutADragHoldShort) {
+  EinkPacer p = keyPacerAfterFirst();
+  p.dragging(true, 2000);
+  p.keyed();
+  p.mark(0, 40, 239, 280);
+  EXPECT_EQ(p.due(2200), EinkPush::None);
+  EXPECT_EQ(p.due(3500), EinkPush::Partial);
+}
+
+TEST(EinkPacer, TheDefaultKeyGapIsShorterThanTheFullGap) {
+  static_assert(EINK_KEY_GAP_MS < EINK_MIN_PUSH_GAP_MS, "a key must not wait the full gap");
+  EinkPacer p;
+  p.mark(0, 0, 1, 1);
+  p.pushed(EinkPush::Full, 0);
+  p.keyed();
+  p.mark(0, 0, 1, 1);
+  EXPECT_EQ(p.due(EINK_KEY_GAP_MS), EinkPush::Partial);
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

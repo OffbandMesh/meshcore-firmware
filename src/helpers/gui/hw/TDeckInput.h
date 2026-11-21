@@ -17,6 +17,14 @@ public:
   bool present() const { return _present; }
   // The next key byte, or 0 when none is waiting or the read failed.
   uint8_t read();
+  // The same, in the T-Deck Pro keyboard's shape (Tca8418Keyboard.h): this
+  // keyboard never repeats a key, and sends only the final character, so it
+  // can't say whether Shift applied.
+  uint8_t read(bool* repeat, bool* tapped_shift = nullptr) {
+    if (repeat) *repeat = false;
+    if (tapped_shift) *tapped_shift = false;
+    return read();
+  }
   // The keys' backlight, 0 (off) to 255. False if the keyboard didn't take it.
   bool setBacklight(uint8_t duty);
 
