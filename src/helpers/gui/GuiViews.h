@@ -166,6 +166,9 @@ public:
   void start(size_t budget);
   // Appends one UTF-8 character; false (and nothing changes) if it doesn't fit.
   bool insert(const char* utf8, size_t len);
+  // Appends a string, a whole character at a time, up to the first one that
+  // doesn't fit or is malformed; returns the bytes taken.
+  size_t insertText(const char* utf8);
   // Removes the last whole character; false when empty.
   bool backspace();
   const char* text() const { return _buf; }

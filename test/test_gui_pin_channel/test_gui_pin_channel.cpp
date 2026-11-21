@@ -1,0 +1,489 @@
+// #2222: two bench findings on the T-Deck Pro GUI, run against the real
+// GuiShell (Screens.cpp and friends), LVGL 8.3.11 and the device's lv_conf.h,
+// on a 240x320 portrait display.
+//
+// 1. A Bluetooth PIN set in Settings › Connectivity is handed on at once, and
+//    the PIN row shows it. (That it then reaches the Bluetooth stack is
+//    test_multiserial and test_ble_pin; that a phone pairs with it is the
+//    bench check on tdeck-pro-1.)
+// 2. "+" in Chats opens Add Channel, with the Offband client's four choices in
+//    its words and order, each leading to its step.
+//
+// env:native_gui_shell builds it as the T-Deck Pro's e-paper GUI, with its
+// fonts; env:native_gui_shell_lit as a lit panel's (Heltec V4 TFT, R8).
+
+#include <gtest/gtest.h>
+
+#include <cstring>
+#include <string>
+#include <vector>
+
+#include <lvgl.h>
+
+#define private public
+#define protected public
+#include "Screens.h"
+#undef private
+#undef protected
+
+#include <helpers/ChannelKeys.h>
+#include <helpers/gui/EinkFrame.h>
+#include <helpers/gui/GuiLayout.h>
+#include <helpers/gui/GuiTheme.h>
+#include <helpers/gui/MsgStore.h>
+
+using namespace offband::gui;
+
+namespace {
+
+const char* const kChoices[4] = {"Create a Private Channel", "Join a Private Channel", "Join the Public Channel",
+                                 "Join a Hashtag Channel"};
+
+// --------------------------------------------------------------- the panel
+
+void flushCb(lv_disp_drv_t* drv, const lv_area_t*, lv_color_t*) { lv_disp_flush_ready(drv); }
+
+void readCb(lv_indev_drv_t*, lv_indev_data_t* data) {
+  data->point.x = 0;
+  data->point.y = 0;
+  data->state = LV_INDEV_STATE_RELEASED;
+}
+
+// --------------------------------------------------------------- the model
+
+class FakeModel : public ShellModel {
+public:
+  MsgStore msgs;
+  GuiPrefs prefs;
+  // Bluetooth: the PIN set, and the one in use (as MyMesh::setBlePin).
+  uint32_t pin_stored = 0, pin_active = 731554;
+  std::vector<uint32_t> pins_set;
+  // Channels: eight slots, Public in slot 0 unless a test clears it.
+  ChannelSlot slots[8] = {};
+  struct Added {
+    int slot;
+    std::string name;
+    uint8_t key[kChannelKeyLen];
+  };
+  std::vector<Added> added;
+  int new_keys = 0;
+
+  FakeModel() {
+    msgs.begin(200, 16);
+    slots[0].used = true;
+    memcpy(slots[0].key, offband::kPublicChannelKey, kChannelKeyLen);
+  }
+
+  const MsgStore& store() override { return msgs; }
+  NotifyMode threadMode(int) override { return NotifyMode::All; }
+  void threadOpened(int) override {}
+  void routeMeta(int, char* out, size_t n) override { snprintf(out, n, "1 hop"); }
+  int zone() override { return 0; }
+  void setZone(int) override {}
+  int gpsZone() override { return 0; }
+  bool gpsLiveFix() override { return false; }
+  uint32_t utcNow() override { return 1763400000; }
+  void sendAdvert() override {}
+  void loraPopover() override {}
+  size_t composeBudget(int) override { return 140; }
+  const char* cannedText(int) override { return ""; }
+  bool sendText(int, const char*, size_t) override { return true; }
+  uint8_t dmAttempt(uint32_t) override { return 0; }
+  void resend(uint32_t) override {}
+  void setThreadMode(int, NotifyMode) override {}
+  const char* nodeName() override { return "Bench-7"; }
+  const NodeRow* nodeRows(size_t* total) override {
+    *total = 0;
+    return nullptr;
+  }
+  uint8_t radioSf() override { return 10; }
+  bool nodeDetail(const uint8_t*, NodeDetail*) override { return false; }
+  void detailOpened(const uint8_t*) override {}
+  bool startNodeAct(const uint8_t*, NodeAct, const char*) override { return false; }
+  void nodeActState(NodeAct, ActView* out) override { *out = ActView{}; }
+  const char* savedPassword(const uint8_t*) override { return nullptr; }
+  int openDm(const uint8_t*) override { return -1; }
+  bool ownPos(GeoPos*) override { return false; }
+  RadioValues radioValues() override { return RadioValues{}; }
+  int8_t txMax() override { return 22; }
+  bool saveRadio(const RadioValues&) override { return true; }
+  void setupSummary(SetPage, char* out, size_t n) override { snprintf(out, n, "On"); }
+  GuiPrefs& guiPrefs() override { return prefs; }
+  void prefsChanged() override {}
+  void savePrefsNow() override {}
+  uint16_t screenOffSecs() override { return 60; }
+  void setScreenOffSecs(uint16_t) override {}
+  bool buzzerOn() override { return false; }
+  void setBuzzerOn(bool) override {}
+  NodeSettings nodeSettings() override { return NodeSettings{}; }
+  void setNodeSettings(const NodeSettings&) override {}
+  void radioStats(RadioStats* out) override { *out = RadioStats{}; }
+  size_t sensorReadings(SensorReading*, size_t) override { return 0; }
+  int sensorCount() override { return 0; }
+  const char* sensorName(uint8_t) override { return ""; }
+  bool gpsLines(char*, size_t, char*, size_t) override { return false; }
+  const uint8_t* selfKey() override {
+    static uint8_t k[32] = {1, 2, 3};
+    return k;
+  }
+  void deviceInfo(DeviceInfo* out) override {
+    *out = DeviceInfo{};
+    out->ble_on = true;
+    out->pin_stored = pin_stored;
+    out->pin_active = pin_active;
+  }
+  void setBleOn(bool) override {}
+  bool setBlePin(uint32_t pin) override {
+    pins_set.push_back(pin);
+    pin_stored = pin;
+    if (pin) pin_active = pin;   // in use at once (#2222)
+    return true;
+  }
+  bool setFullMv(uint16_t) override { return true; }
+  void learnFullAgain() override {}
+  bool setLogLevel(int) override { return true; }
+  bool advertNow() override { return true; }
+  bool syncTimeFromGps() override { return false; }
+  void reboot() override {}
+  uint16_t deleteAllPaths() override { return 0; }
+  int channelSlots(ChannelSlot* out, int max) override {
+    const int n = max < 8 ? max : 8;
+    for (int i = 0; i < n; i++) out[i] = slots[i];
+    return n;
+  }
+  int addChannel(int slot, const char* name, const uint8_t* key) override {
+    Added a{slot, name, {}};
+    memcpy(a.key, key, kChannelKeyLen);
+    added.push_back(a);
+    slots[slot].used = true;
+    memcpy(slots[slot].key, key, kChannelKeyLen);
+    return msgs.thread(ThreadKind::Channel, key, kChannelKeyLen, name);
+  }
+  void newChannelKey(uint8_t* out) override {
+    new_keys++;
+    memset(out, 0xAB, kChannelKeyLen);
+  }
+  bool channelOf(int, uint8_t* key, bool* p) override {
+    memset(key, 0, kChannelKeyLen);
+    *p = false;
+    return true;
+  }
+  bool leaveChannel(int) override { return false; }
+  bool channelHeld(const uint8_t*) override { return true; }
+};
+
+// --------------------------------------------------------------- the rig
+
+void pump(int passes = 4) {
+  for (int i = 0; i < passes; i++) {
+    lv_tick_inc(5);
+    lv_timer_handler();
+  }
+}
+
+void setupRig() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  lv_init();
+  static lv_disp_draw_buf_t buf;
+  static lv_color_t b1[240 * 32], b2[240 * 32];
+  lv_disp_draw_buf_init(&buf, b1, b2, 240 * 32);
+  static lv_disp_drv_t disp;
+  lv_disp_drv_init(&disp);
+  disp.hor_res = 240;
+  disp.ver_res = 320;
+  disp.flush_cb = flushCb;
+  disp.draw_buf = &buf;
+  lv_disp_drv_register(&disp);
+  static lv_indev_drv_t indev;
+  lv_indev_drv_init(&indev);
+  indev.type = LV_INDEV_TYPE_POINTER;
+  indev.read_cb = readCb;
+  lv_indev_drv_register(&indev);
+}
+
+void collectLabels(lv_obj_t* o, std::vector<lv_obj_t*>* out) {
+  if (lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN)) return;
+  if (lv_obj_check_type(o, &lv_label_class)) out->push_back(o);
+  for (uint32_t i = 0; i < lv_obj_get_child_cnt(o); i++) collectLabels(lv_obj_get_child(o, int32_t(i)), out);
+}
+
+std::vector<lv_obj_t*> labels() {
+  std::vector<lv_obj_t*> out;
+  collectLabels(lv_scr_act(), &out);
+  collectLabels(lv_layer_top(), &out);
+  return out;
+}
+
+// The shown label whose text is exactly `text`, or null.
+lv_obj_t* labelOf(const char* text) {
+  for (lv_obj_t* l : labels())
+    if (strcmp(lv_label_get_text(l), text) == 0) return l;
+  return nullptr;
+}
+
+bool shows(const char* what) {
+  for (lv_obj_t* l : labels())
+    if (strstr(lv_label_get_text(l), what)) return true;
+  return false;
+}
+
+// Whether a one-line label's text fits its width, so it isn't cut to "...".
+bool fits(lv_obj_t* l) {
+  lv_obj_update_layout(lv_scr_act());
+  lv_point_t size;
+  lv_txt_get_size(&size, lv_label_get_text(l), lv_obj_get_style_text_font(l, 0),
+                  lv_obj_get_style_text_letter_space(l, 0), 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+  return size.x <= lv_obj_get_content_width(l);
+}
+
+// A tap on what holds `text`: the nearest clickable object above its label.
+bool tap(const char* text) {
+  lv_obj_t* o = labelOf(text);
+  while (o && !lv_obj_has_flag(o, LV_OBJ_FLAG_CLICKABLE)) o = lv_obj_get_parent(o);
+  if (!o) return false;
+  lv_event_send(o, LV_EVENT_CLICKED, nullptr);
+  pump();
+  return true;
+}
+
+}  // namespace
+
+class Gui : public ::testing::Test {
+protected:
+  FakeModel* model = nullptr;
+  GuiShell* shell = nullptr;
+
+  void SetUp() override {
+    setupRig();
+    lv_obj_clean(lv_scr_act());
+    lv_obj_clean(lv_layer_top());
+    model = new FakeModel();
+    shell = new GuiShell();
+    shell->setLayout(layoutFor(0));
+    shell->begin(themeTokens(kEinkTheme, kDefaultAccentRgb), Look(model->prefs.look), model);
+    pump();
+  }
+  void TearDown() override {
+    lv_obj_clean(lv_scr_act());
+    lv_obj_clean(lv_layer_top());
+    delete shell;
+    delete model;
+  }
+
+  // Settings › Connectivity › PIN, its pad open.
+  void openPinPad() {
+    shell->showTab(Tab::Setup);
+    shell->setOpen(SetPage::Conn);
+    pump();
+    ASSERT_TRUE(tap("PIN"));
+    ASSERT_EQ(shell->_ss, GuiShell::SetSheet::Pad);
+  }
+  // The pad's digits, then Set: key i is kPadKeys[i] ("1".."9", ".", "0").
+  void typePin(const char* digits) {
+    for (const char* d = digits; *d; d++) shell->setSheetPress(*d == '0' ? 10 : *d - '1');
+    shell->setSheetPress(14);   // Set
+    pump();
+  }
+
+  void openAddChannel() {
+    shell->showTab(Tab::Chat);
+    pump();
+    ASSERT_TRUE(tap("+")) << "Chats has no \"+\"";
+  }
+  void typeName(const char* name) {
+    for (const char* p = name; *p; p++) shell->_chan_buf.insert(p, 1);   // one character a call
+    shell->chanSubmit();
+    pump();
+  }
+};
+
+// ------------------------------------------------------------ Bluetooth PIN
+
+TEST_F(Gui, ASetPinIsHandedOnAndShownAtOnce) {
+  openPinPad();
+  typePin("482913");
+  ASSERT_EQ(model->pins_set.size(), 1u);
+  EXPECT_EQ(model->pins_set[0], 482913u);
+  EXPECT_EQ(shell->_ss, GuiShell::SetSheet::None) << "the pad stayed open after Set";
+  EXPECT_TRUE(shows("482913")) << "the PIN row still shows the PIN from boot";
+  EXPECT_FALSE(shows("731554"));
+}
+
+// The pad said "Used from the next boot". With the PIN in use at once, it
+// says nothing of a reboot.
+TEST_F(Gui, ThePinPadDoesNotTalkOfAReboot) {
+  openPinPad();
+  EXPECT_FALSE(shows("next boot"));
+  EXPECT_FALSE(shows("reboot"));
+}
+
+// Negative: five digits are refused; nothing is handed on and the pad stays.
+TEST_F(Gui, AShortPinIsRefused) {
+  openPinPad();
+  typePin("48291");
+  EXPECT_TRUE(model->pins_set.empty());
+  EXPECT_EQ(shell->_ss, GuiShell::SetSheet::Pad) << "a refused PIN closed the pad as if set";
+  EXPECT_EQ(model->pin_active, 731554u);
+}
+
+// An empty pad is "new each boot": 0, handed on.
+TEST_F(Gui, AnEmptyPinIsNewEachBoot) {
+  model->pin_stored = model->pin_active = 482913;
+  openPinPad();
+  typePin("");
+  ASSERT_EQ(model->pins_set.size(), 1u);
+  EXPECT_EQ(model->pins_set[0], 0u);
+  EXPECT_TRUE(shows("New each boot"));
+}
+
+// ------------------------------------------------------------ Add Channel
+
+TEST_F(Gui, PlusOpensAddChannelWithTheClientsChoicesInOrder) {
+  model->slots[0].used = false;   // Public not held: all four are listed
+  openAddChannel();
+  EXPECT_EQ(shell->_chan, GuiShell::ChanStep::Kinds);
+  EXPECT_TRUE(shows("Add Channel"));
+  lv_coord_t last_y = -1;
+  for (const char* c : kChoices) {
+    lv_obj_t* l = labelOf(c);
+    ASSERT_NE(l, nullptr) << "missing: " << c;
+    lv_obj_update_layout(lv_scr_act());
+    lv_area_t a;
+    lv_obj_get_coords(l, &a);
+    EXPECT_GT(a.y1, last_y) << c << " is out of the client's order";
+    last_y = a.y1;
+    EXPECT_TRUE(fits(l)) << c << " is cut short on a 240 px screen";
+  }
+}
+
+// Negative: the old in-between sheet is gone.
+TEST_F(Gui, PlusNoLongerAsksWhatToStart) {
+  openAddChannel();
+  EXPECT_EQ(shell->_sheet, GuiShell::Sheet::None);
+  EXPECT_FALSE(shows("Start a chat"));
+  EXPECT_FALSE(shows("Message a node"));
+}
+
+// With no chats, the empty Chats button opens it too.
+TEST_F(Gui, TheEmptyChatsButtonOpensAddChannel) {
+  shell->showTab(Tab::Chat);
+  pump();
+  ASSERT_TRUE(tap("+ Add Channel"));
+  EXPECT_EQ(shell->_chan, GuiShell::ChanStep::Kinds);
+}
+
+TEST_F(Gui, CreateAPrivateChannelMakesAKeyAndShowsIt) {
+  openAddChannel();
+  ASSERT_TRUE(tap("Create a Private Channel"));
+  EXPECT_EQ(shell->_chan, GuiShell::ChanStep::PrivName);
+  EXPECT_TRUE(shows("Create a Private Channel"));
+  typeName("Ops");
+  EXPECT_EQ(model->new_keys, 1);
+  ASSERT_EQ(model->added.size(), 1u);
+  EXPECT_EQ(model->added[0].name, "Ops");
+  EXPECT_EQ(model->added[0].key[0], 0xAB);
+  EXPECT_EQ(shell->_chan, GuiShell::ChanStep::ShowKey);
+}
+
+// Negative: the last slot goes while the name is typed (a phone added a
+// channel). No key is shown for a channel that wasn't saved; the choices say
+// the slots are full.
+TEST_F(Gui, CreateWithNoSlotLeftShowsNoKey) {
+  openAddChannel();
+  ASSERT_TRUE(tap("Create a Private Channel"));
+  for (auto& s : model->slots) s.used = true;
+  typeName("Ops");
+  EXPECT_TRUE(model->added.empty());
+  EXPECT_NE(shell->_chan, GuiShell::ChanStep::ShowKey);
+  EXPECT_EQ(shell->_chan, GuiShell::ChanStep::Kinds);
+  EXPECT_TRUE(shows("slots are in use"));
+}
+
+TEST_F(Gui, JoinAPrivateChannelAsksForItsKey) {
+  openAddChannel();
+  ASSERT_TRUE(tap("Join a Private Channel"));
+  EXPECT_TRUE(shows("Join a Private Channel"));
+  typeName("Ops");
+  EXPECT_EQ(shell->_chan, GuiShell::ChanStep::KeyEntry);
+  EXPECT_EQ(model->new_keys, 0) << "Join made a key instead of asking for one";
+  EXPECT_TRUE(model->added.empty());
+  for (const char* p = "00112233445566778899aabbccddeeff"; *p; p++) shell->_chan_buf.insert(p, 1);
+  shell->chanSubmit();
+  pump();
+  ASSERT_EQ(model->added.size(), 1u);
+  EXPECT_EQ(model->added[0].name, "Ops");
+  EXPECT_EQ(model->added[0].key[15], 0xFF);
+}
+
+// Back from the key returns to the name, as typed.
+TEST_F(Gui, BackFromTheKeyKeepsTheName) {
+  openAddChannel();
+  ASSERT_TRUE(tap("Join a Private Channel"));
+  typeName("Ops");
+  shell->chanBack();
+  pump();
+  EXPECT_EQ(shell->_chan, GuiShell::ChanStep::PrivName);
+  EXPECT_STREQ(shell->_chan_buf.text(), "Ops");
+}
+
+// The same with a name that isn't all ASCII.
+TEST_F(Gui, BackFromTheKeyKeepsANameWithAccents) {
+  openAddChannel();
+  ASSERT_TRUE(tap("Join a Private Channel"));
+  const char* name = "Caf\xC3\xA9 \xE2\x9C\xA8";   // "Café ✨"
+  for (const char* p = name; *p;) {
+    const uint8_t b = uint8_t(*p);
+    const size_t k = b < 0x80 ? 1 : b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : 2;
+    ASSERT_TRUE(shell->_chan_buf.insert(p, k));
+    p += k;
+  }
+  shell->chanSubmit();
+  pump();
+  shell->chanBack();
+  pump();
+  EXPECT_STREQ(shell->_chan_buf.text(), name);
+}
+
+TEST_F(Gui, JoinThePublicChannelJoinsIt) {
+  model->slots[0].used = false;
+  openAddChannel();
+  ASSERT_TRUE(tap("Join the Public Channel"));
+  ASSERT_EQ(model->added.size(), 1u);
+  EXPECT_EQ(memcmp(model->added[0].key, offband::kPublicChannelKey, kChannelKeyLen), 0);
+  EXPECT_EQ(shell->_chan, GuiShell::ChanStep::None);
+}
+
+// Public already held: not offered again (mockup 3), the other three are.
+TEST_F(Gui, PublicHeldIsNotOfferedAgain) {
+  openAddChannel();
+  EXPECT_EQ(labelOf("Join the Public Channel"), nullptr);
+  EXPECT_NE(labelOf("Join a Hashtag Channel"), nullptr);
+}
+
+TEST_F(Gui, JoinAHashtagChannelAsksForTheName) {
+  openAddChannel();
+  ASSERT_TRUE(tap("Join a Hashtag Channel"));
+  EXPECT_EQ(shell->_chan, GuiShell::ChanStep::Hashtag);
+}
+
+// Negative: with every slot used, the three that take a slot do nothing.
+TEST_F(Gui, AFullTableRefusesTheChoicesThatNeedASlot) {
+  for (auto& s : model->slots) s.used = true;
+  openAddChannel();
+  for (int i = 0; i < 4; i++) {
+    if (i == 2) continue;   // Public: held here, so not listed
+    shell->_chan = GuiShell::ChanStep::Kinds;
+    shell->rebuild();
+    pump();
+    tap(kChoices[i]);
+    EXPECT_EQ(shell->_chan, GuiShell::ChanStep::Kinds) << kChoices[i] << " opened with no free slot";
+  }
+  EXPECT_TRUE(model->added.empty());
+}
+
+int main(int argc, char** argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}

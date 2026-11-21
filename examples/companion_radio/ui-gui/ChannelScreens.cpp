@@ -2,10 +2,15 @@
 // epic-r-channels-mockups.html, owner-approved 2026-10-21. The radio is a
 // standalone device; joining a channel must not need a phone.
 //
-// One step at a time under the Chat tab. The list steps (the kinds, a private
-// channel's key choice, a key shown to share) take the focus group like any
-// list; the typing steps share the keyboard and its button cursor with
-// Compose. Back steps back; from the kinds it returns to Chats.
+// "+" in Chats opens it, with the Offband client's four choices in its words
+// and order (owner, 2026-11-20, #2222): Create a Private Channel (a name, then
+// a new key to share), Join a Private Channel (a name, then its key), Join
+// the Public Channel, Join a Hashtag Channel.
+//
+// One step at a time under the Chat tab. The list steps (the choices, a key
+// shown to share) take the focus group like any list; the typing steps share
+// the keyboard and its button cursor with Compose. Back steps back; from the
+// choices it returns to Chats.
 
 #include <string.h>
 
@@ -26,64 +31,13 @@ constexpr int kMaxSlots = 64;   // more than any board's MAX_GROUP_CHANNELS
 // Glyphs the subset fonts carry (fonts/README.md): the mockups' shapes,
 // drawn from what's in the build.
 const char* const kGlyphPublic = "\xF0\x9F\x8C\x90";    // 🌐
-const char* const kGlyphPrivate = "\xF0\x9F\x94\x92";   // 🔒
 const char* const kGlyphNewKey = "\xE2\x9C\xA8";        // ✨
 const char* const kGlyphEnterKey = "\xE2\x9C\x8F";      // ✏
 
-enum ChanRow : int { RowPublic = 0, RowHashtag = 1, RowPrivate = 2, RowNewKey = 3, RowEnterKey = 4 };
+// The Offband client's Add Channel choices, in its order (#2222).
+enum ChanRow : int { RowCreatePrivate = 0, RowJoinPrivate = 1, RowPublic = 2, RowHashtag = 3 };
 
 }  // namespace
-
-// "+" in Chats (R1 #1748, mockup 1): what to start. A sheet like a channel's
-// menu, with no thread behind it.
-void GuiShell::openStartSheet() {
-  closeSheet();
-  _sheet = Sheet::Start;
-  _sheet_obj = sheetBackdrop();
-  lv_obj_add_event_cb(
-      _sheet_obj,
-      [](lv_event_t* e) {
-        if (lv_event_get_target(e) == lv_event_get_current_target(e)) {
-          static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->closeSheet(); });
-        }
-      },
-      LV_EVENT_CLICKED, this);
-  lv_obj_t* sheet = sheetPanel(_sheet_obj);
-  lv_obj_t* tl = label(sheet, FontRole::Body, _t.ink, "Start a chat");
-  lv_obj_set_style_pad_left(tl, 12, 0);
-  lv_obj_set_style_pad_top(tl, 10, 0);
-  lv_obj_set_style_pad_bottom(tl, 6, 0);
-
-  static const char* const kName[2] = {"Message a node", "Add a channel"};
-  static const char* const kSub[2] = {"Pick someone in Nodes", "Public, hashtag or private"};
-  _sheet_count = 2;
-  for (uint8_t i = 0; i < _sheet_count; i++) {
-    lv_obj_t* row = box(sheet, LV_PCT(100), landscape() ? 30 : 38);
-    lv_obj_set_style_pad_hor(row, 12, 0);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_t* nl = label(row, FontRole::Body, _t.ink, kName[i]);
-    lv_obj_set_width(nl, LV_PCT(100));
-    oneLine(nl, FontRole::Body);
-    if (_lay.hints) {
-      lv_obj_t* sl = label(row, FontRole::Label, _t.dim, kSub[i]);
-      lv_obj_set_width(sl, LV_PCT(100));
-      oneLine(sl, FontRole::Label);
-    }
-    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_user_data(row, reinterpret_cast<void*>(intptr_t(i)));
-    lv_obj_add_event_cb(
-        row,
-        [](lv_event_t* e) {
-          GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
-          self->_sheet_hot = int(intptr_t(lv_obj_get_user_data(lv_event_get_current_target(e))));
-          self->later([](GuiShell* g) { g->sheetPick(g->_sheet_hot); });
-        },
-        LV_EVENT_CLICKED, this);
-    _sheet_rows[i] = row;
-  }
-  sheetHot(0);
-}
 
 // A private channel's key, from its menu (R3 #1750, mockup 7): the same
 // screen a new key is shown on; Done or Back returns to the chat.
@@ -206,13 +160,12 @@ void GuiShell::chanBack() {
     case ChanStep::PrivName:
       chanGo(ChanStep::Kinds);
       break;
-    case ChanStep::PrivKey:
-      chanGo(ChanStep::PrivName);
-      _chan_buf.insert(_chan_name, strlen(_chan_name));   // the name, as typed
-      refreshChanField();
-      break;
     case ChanStep::KeyEntry:
-      chanGo(ChanStep::PrivKey);
+      chanGo(ChanStep::PrivName);
+      // The name, as typed. insert() takes one character a call: handed the
+      // whole name it took none, and Back lost the name (#2222's test).
+      _chan_buf.insertText(_chan_name);
+      refreshChanField();
       break;
     case ChanStep::ShowKey:
       chanOpenThread(_chan_thread);   // the channel exists: Back is Done
@@ -270,7 +223,19 @@ void GuiShell::chanSubmit() {
   if (_chan == ChanStep::PrivName) {
     if (_chan_buf.length() == 0) return;
     textf(_chan_name, sizeof _chan_name, "%s", _chan_buf.text());
-    later([](GuiShell* g) { g->chanGo(ChanStep::PrivKey); });
+    if (_chan_create) {
+      // Create: a new key, joined now, then shown to share (mockup 7).
+      // If the join fails (the last slot went while the name was typed), the
+      // key was never saved: back to the choices, whose note says the slots
+      // are full, rather than a key to share for a channel that isn't there.
+      later([](GuiShell* g) {
+        g->_model->newChannelKey(g->_chan_key);
+        g->_chan_thread = g->chanJoin(g->_chan_name, g->_chan_key);
+        g->chanGo(g->_chan_thread >= 0 ? ChanStep::ShowKey : ChanStep::Kinds);
+      });
+    } else {
+      later([](GuiShell* g) { g->chanGo(ChanStep::KeyEntry); });   // Join: its key, typed
+    }
     return;
   }
   if (_chan == ChanStep::KeyEntry) {
@@ -294,16 +259,11 @@ void GuiShell::chanPick(int row) {
     case RowHashtag:
       if (!full) chanGo(ChanStep::Hashtag);
       return;
-    case RowPrivate:
-      if (!full) chanGo(ChanStep::PrivName);
-      return;
-    case RowNewKey:
-      _model->newChannelKey(_chan_key);
-      _chan_thread = chanJoin(_chan_name, _chan_key);
-      chanGo(ChanStep::ShowKey);
-      return;
-    case RowEnterKey:
-      chanGo(ChanStep::KeyEntry);
+    case RowCreatePrivate:
+    case RowJoinPrivate:
+      if (full) return;
+      _chan_create = row == RowCreatePrivate;
+      chanGo(ChanStep::PrivName);
       return;
     default:
       return;
@@ -511,19 +471,21 @@ void GuiShell::buildAddChannel(lv_obj_t* scr) {
 
   switch (_chan) {
     case ChanStep::Kinds: {
-      chanHeader(this, scr, _t, w, kStatusH, "Add a channel", back);
+      chanHeader(this, scr, _t, w, kStatusH, "Add Channel", back);
       ChannelSlot slots[kMaxSlots];
       const int n = _model->channelSlots(slots, kMaxSlots);
       const int used = usedChannelSlots(slots, n);
       const bool full = firstFreeChannelSlot(slots, n) < 0;
       lv_obj_t* l = list(top);
+      // The Offband client's choices, in its words and order (#2222).
+      row(l, kGlyphNewKey, "Create a Private Channel", "Secured with a secret key.", RowCreatePrivate, full);
+      row(l, kGlyphEnterKey, "Join a Private Channel", "Manually enter a secret key.", RowJoinPrivate, full);
       // Public only when this radio doesn't hold it (mockup 3).
       if (findChannelByKey(slots, n, offband::kPublicChannelKey) < 0) {
         // #1896: never dimmed for a full table; Public takes its own slot.
-        row(l, kGlyphPublic, "Public", "The channel every MeshCore radio shares", RowPublic, false);
+        row(l, kGlyphPublic, "Join the Public Channel", "Anyone can join this channel.", RowPublic, false);
       }
-      row(l, "#", "Hashtag channel", "Anyone who knows the name can read it", RowHashtag, full);
-      row(l, kGlyphPrivate, "Private channel", "Only people with its key can read it", RowPrivate, full);
+      row(l, "#", "Join a Hashtag Channel", "Anyone can join hashtag channels.", RowHashtag, full);
       char msg[64];
       if (full) textf(msg, sizeof msg, "All %d channel slots are in use. Leave one first.", n);
       else textf(msg, sizeof msg, "%d of %d channel slots used", used, n);
@@ -541,23 +503,12 @@ void GuiShell::buildAddChannel(lv_obj_t* scr) {
       return;
     }
     case ChanStep::PrivName: {
-      chanHeader(this, scr, _t, w, kStatusH, "Private channel", back);
+      chanHeader(this, scr, _t, w, kStatusH, _chan_create ? "Create a Private Channel" : "Join a Private Channel",
+                 back);
       sectionLabel(scr, _t, 10, int16_t(top + 6), "Name");
       field(int16_t(top + 18), nullptr, false);
       buildKeyboard(scr);
       refreshChanField();
-      return;
-    }
-    case ChanStep::PrivKey: {
-      chanHeader(this, scr, _t, w, kStatusH, "Private channel", back);
-      sectionLabel(scr, _t, 10, int16_t(top + 6), "Name");
-      field(int16_t(top + 18), nullptr, false);
-      userText(_chan_field, _chan_name);
-      _chan_field = nullptr;   // shown, not typed
-      sectionLabel(scr, _t, 10, int16_t(top + 54), "Key");
-      lv_obj_t* l = list(int16_t(top + 66));
-      row(l, kGlyphNewKey, "Make a new key", "Then share it with the others", RowNewKey, false);
-      row(l, kGlyphEnterKey, "Enter a key", "32 characters, 0\xE2\x80\x93" "9 and a\xE2\x80\x93" "f", RowEnterKey, false);
       return;
     }
     case ChanStep::KeyEntry: {

@@ -920,11 +920,10 @@ void GuiShell::buildChats(lv_obj_t* content) {
   label(h, FontRole::Title, _t.ink, "Chats");
   lv_obj_t* grow = box(h, 1, 1);
   lv_obj_set_flex_grow(grow, 1);
-  // "+" asks what to start (Epic R mockup 1): a message to a node, or a
-  // channel. It used to go straight to Nodes, which suits a DM but not a
-  // channel (tester bench, #1730).
+  // "+" adds a channel, as "+" on the Offband client's Channels does (#2222).
+  // A message to a node starts from Nodes, as it does from the client's Contacts.
   auto start = [](lv_event_t* e) {
-    static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->openStartSheet(); });
+    static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->openAddChannel(); });
   };
   lv_obj_t* plus = box(h, 24, 24);
   label(plus, FontRole::Title, _t.sig, "+");
@@ -951,7 +950,7 @@ void GuiShell::buildChats(lv_obj_t* content) {
     // The box looked like a button and did nothing (tester bench, #1730); it
     // is one now, the same as "+" (mockup 2).
     lv_obj_t* go = emptyState(list, _t, EmptyIcon::Bubbles, "No chats yet",
-                              "Channels you join and people who message you show up here.", "+ Start a chat");
+                              "Channels you join and people who message you show up here.", "+ Add Channel");
     if (go) {
       focusable(go);
       lv_obj_add_event_cb(go, start, LV_EVENT_CLICKED, this);
@@ -1673,12 +1672,7 @@ bool GuiShell::typeKey(KeyKind k, char ch) {
 void GuiShell::insertText(const char* text) {
   if (!text) return;
   if (_draft.length() && _draft.text()[_draft.length() - 1] != ' ') _draft.insert(" ", 1);
-  for (const char* p = text; *p;) {
-    const uint8_t b = uint8_t(*p);
-    const size_t k = b < 0x80 ? 1 : b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : 2;
-    if (!_draft.insert(p, k)) break;
-    p += k;
-  }
+  _draft.insertText(text);
   const Shift before = _shift.state();
   _shift.autoCap(_draft.text(), _draft.length());
   if (_shift.state() != before) buildKeys();
@@ -1956,10 +1950,6 @@ void GuiShell::sheetPick(int i) {
   } else if (kind == Sheet::Menu) {
     if (i == 0) openCompose(_thread);   // rebuild closes the sheet
     else openSheet(Sheet::Notify);
-  } else if (kind == Sheet::Start) {
-    closeSheet();
-    if (i == 0) showTab(Tab::Nodes);   // a message to a node: pick one in Nodes, as "+" did
-    else openAddChannel();
   } else if (kind == Sheet::Zone) {
     if (i == 1) {
       _model->setZone(_sheet_zone);
