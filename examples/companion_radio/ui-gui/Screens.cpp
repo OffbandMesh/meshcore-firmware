@@ -548,8 +548,12 @@ void GuiShell::buildLock(lv_obj_t* scr) {
   lv_img_set_src(mark, &ob_logo_64);
   lv_obj_set_style_img_recolor(mark, c(_t.sig), 0);
   lv_obj_set_style_img_recolor_opa(mark, LV_OPA_COVER, 0);
-  if (_lay.logo < 64) {   // landscape: the 64 px mark scaled to the layout's size
-    lv_img_set_zoom(mark, uint16_t(256 * _lay.logo / 64));
+  // Landscape: scaled to the layout's mark size on a lit panel. Not on
+  // e-paper: a scaled mark's grey edges come out ragged through the 1-bit
+  // threshold, and with no clock the full mark fits in landscape anyway.
+  const int16_t native = int16_t(ob_logo_64.header.w);
+  if (!kLockStatic && _lay.logo < native) {
+    lv_img_set_zoom(mark, uint16_t(256 * _lay.logo / native));
     lv_img_set_size_mode(mark, LV_IMG_SIZE_MODE_REAL);
   }
   lv_obj_t* word = label(col, FontRole::Title, _t.ink, "offband");
