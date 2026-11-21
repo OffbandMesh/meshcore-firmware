@@ -31,6 +31,8 @@
 
 using namespace offband::gui;
 
+extern "C" const lv_img_dsc_t ob_logo_64;
+
 namespace {
 
 const char* const kNode = "Bench-7";
@@ -335,11 +337,11 @@ TEST_F(Lock, TheLockFrameIsTheSameFromEveryScreen) {
 #ifdef GUI_PANEL_EINK
 // E-paper: the lock sits on the glass while the panel sleeps, so it draws
 // only what doesn't change: the node's name and how to unlock.
-TEST_F(Lock, EpaperShowsOnlyTheNameAndTheHint) {
+TEST_F(Lock, EpaperShowsOnlyTheLockupTheNameAndTheHint) {
   open(Start::Conversation);
   shell->showLock();
   pump();
-  const std::vector<std::string> want = {kNode, kHint};
+  const std::vector<std::string> want = {"offband", kNode, kHint};
   EXPECT_EQ(shownText(), want);
   EXPECT_EQ(shell->_lock_clock, nullptr);
   EXPECT_EQ(shell->_lock_sub, nullptr);
@@ -377,7 +379,60 @@ TEST_F(Lock, ALitPanelKeepsTheClock) {
   EXPECT_TRUE(shows("Eastern"));
   EXPECT_FALSE(shows(kSecretText));
 }
+
+// Landscape (Heltec V4 TFT, R8, T-Deck): the lockup over the clock still
+// clears the unlock hint and stays on screen.
+TEST_F(Lock, TheLockupAndClockFitInLandscape) {
+  for (uint16_t rot : {uint16_t(90), uint16_t(270)}) {
+    shell->setLayout(layoutFor(rot));
+    lv_disp_set_rotation(nullptr, rot == 90 ? LV_DISP_ROT_90 : LV_DISP_ROT_270);
+    shell->_locked = false;
+    shell->showLock();
+    pump();
+    lv_obj_update_layout(lv_scr_act());
+    ASSERT_EQ(lv_disp_get_ver_res(nullptr), 240) << "not landscape";
+    lv_obj_t* hint = nullptr;
+    lv_obj_t* col = nullptr;
+    for (uint32_t i = 0; i < lv_obj_get_child_cnt(lv_scr_act()); i++) {
+      lv_obj_t* o = lv_obj_get_child(lv_scr_act(), int32_t(i));
+      if (lv_obj_check_type(o, &lv_label_class) && strcmp(lv_label_get_text(o), kHint) == 0) hint = o;
+      else if (lv_obj_get_child_cnt(o) > 2) col = o;   // the centered column
+    }
+    ASSERT_NE(hint, nullptr);
+    ASSERT_NE(col, nullptr);
+    lv_area_t h, c;
+    lv_obj_get_coords(hint, &h);
+    lv_obj_get_coords(col, &c);
+    EXPECT_GE(c.y1, 0) << "rotation " << rot << ": the lockup runs off the top";
+    EXPECT_LT(c.y2, h.y1) << "rotation " << rot << ": the clock column runs into the unlock hint";
+  }
+  lv_disp_set_rotation(nullptr, LV_DISP_ROT_NONE);
+}
 #endif
+
+// The Offband lockup is on the lock screen, on every panel: the mark over the
+// wordmark, as at boot (owner, 2026-11-21).
+TEST_F(Lock, TheLockShowsTheOffbandLockup) {
+  open(Start::Home);
+  shell->showLock();
+  pump();
+  EXPECT_TRUE(shows("offband"));
+  int marks = 0;
+  std::vector<lv_obj_t*> stack = {lv_scr_act()};
+  while (!stack.empty()) {
+    lv_obj_t* o = stack.back();
+    stack.pop_back();
+    if (lv_obj_check_type(o, &lv_img_class) && lv_img_get_src(o) == &ob_logo_64) marks++;
+    for (uint32_t i = 0; i < lv_obj_get_child_cnt(o); i++) stack.push_back(lv_obj_get_child(o, int32_t(i)));
+  }
+  EXPECT_EQ(marks, 1) << "the Offband mark is missing from the lock screen, or drawn twice";
+}
+
+// Negative control: the lockup belongs to the lock screen, not the screen it covers.
+TEST_F(Lock, TheScreenBelowHasNoLockup) {
+  open(Start::Conversation);
+  EXPECT_FALSE(shows("offband"));
+}
 
 TEST_F(Lock, UnlockingReturnsToComposeWithTheDraft) {
   open(Start::Compose);
