@@ -45,7 +45,9 @@ What has been checked, and how:
 
 Both images are Bluetooth companions. Pair from the Offband client as you would any other
 companion radio, with the PIN the screen shows. It is a new random PIN each time the radio
-starts, unless you have set a fixed one from the client.
+starts, unless you have set a fixed one, from the client or on the radio in
+**Settings › Connectivity › PIN**. A PIN you set is used the next time a phone pairs, with no
+restart. A phone that is already paired stays paired.
 
 ### 2. Read the home screen
 
@@ -72,6 +74,14 @@ when the screen wakes, to set a clean image; after that it only redraws what cha
   details.
 
 The BOOT button works as well. The keyboard is not used yet.
+
+### 4. Add a channel
+
+In **Chats**, tap **+**. Add Channel offers the same four choices as the Offband client:
+**Create a Private Channel**, **Join a Private Channel**, **Join the Public Channel** and
+**Join a Hashtag Channel**. Creating a private channel makes its key and shows it, for you
+to share. Joining one asks for its name, then its key. To message a node, open it in
+**Nodes**.
 
 E-paper keeps its last image with no power, so the screen does not go blank when the
 radio sleeps or turns off. The front-light follows the GUI's brightness setting.

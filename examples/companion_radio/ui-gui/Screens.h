@@ -181,7 +181,7 @@ public:
   // Connectivity, Power, Debug, About (G5).
   virtual void deviceInfo(DeviceInfo* out) = 0;
   virtual void setBleOn(bool on) = 0;            // until the next boot
-  virtual bool setBlePin(uint32_t pin) = 0;      // 0: a new one each boot; from the next boot
+  virtual bool setBlePin(uint32_t pin) = 0;      // 0: a new one each boot; used from the next pairing
   virtual bool setFullMv(uint16_t mv) = 0;       // pins it; false outside the learner's band
   virtual void learnFullAgain() = 0;             // drops it; the next full charge teaches it
   virtual bool setLogLevel(int index) = 0;       // logName(); false if not saved
@@ -373,14 +373,14 @@ private:
   // under the Chat tab; the typing steps share the keyboard with Compose.
   enum class ChanStep : uint8_t {
     None,
-    Kinds,      // mockup 3: Public, hashtag, private
+    Kinds,      // the Offband client's four choices (#2222)
     Hashtag,    // mockup 4: the name, typed
     PrivName,   // mockup 5: a private channel's name, typed
-    PrivKey,    // mockup 5: make a new key, or enter one
-    KeyEntry,   // mockup 6: the key, on the hex keypad
-    ShowKey,    // mockup 7: a new key, to share
+    KeyEntry,   // mockup 6: the key, on the hex keypad (Join a Private Channel)
+    ShowKey,    // mockup 7: a new key, to share (Create a Private Channel)
   };
   ChanStep _chan = ChanStep::None;
+  bool _chan_create = false;                // PrivName: Create (a new key) rather than Join (type one)
   offband::gui::ComposeBuffer _chan_buf;    // the name or key being typed
   char _chan_name[offband::gui::kChannelNameMax + 1] = {};   // a private channel's name
   uint8_t _chan_key[offband::gui::kChannelKeyLen] = {};      // the key ShowKey shows
@@ -458,8 +458,7 @@ private:
   // Bottom sheets (D6): the channel notification sheet, and the menu USR
   // hold opens in a channel (owner pick a, 2026-10-16). Zone: the one-time
   // "Use <zone> time?" prompt (Epic L, owner pick 5a).
-  enum class Sheet : uint8_t { None, Notify, Menu, Zone, Start, Leave };
-  void openStartSheet();   // "+" in Chats: message a node, or add a channel (Epic R)
+  enum class Sheet : uint8_t { None, Notify, Menu, Zone, Leave };
   void openLeaveSheet();   // a channel's Leave, confirmed (Epic R mockup 9)
   void showChannelKey();   // a private channel's key, to share (Epic R mockup 7)
   void openSheet(Sheet kind);
