@@ -16,6 +16,8 @@
 using namespace offband::gui;
 using namespace shell;
 
+extern "C" const lv_img_dsc_t ob_logo_64;   // the Offband mark (boot and lock)
+
 namespace {
 
 const char* const kByButton = byButton();
@@ -539,6 +541,19 @@ void GuiShell::buildLock(lv_obj_t* scr) {
   lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_row(col, 4, 0);
+  // The Offband lockup, as the boot screen draws it: the mark in the signal
+  // color over the wordmark (owner, 2026-11-21). Static, so it sits on e-paper
+  // while the panel sleeps as well as the name does.
+  lv_obj_t* mark = lv_img_create(col);
+  lv_img_set_src(mark, &ob_logo_64);
+  lv_obj_set_style_img_recolor(mark, c(_t.sig), 0);
+  lv_obj_set_style_img_recolor_opa(mark, LV_OPA_COVER, 0);
+  if (_lay.logo < 64) {   // landscape: the 64 px mark scaled to the layout's size
+    lv_img_set_zoom(mark, uint16_t(256 * _lay.logo / 64));
+    lv_img_set_size_mode(mark, LV_IMG_SIZE_MODE_REAL);
+  }
+  lv_obj_t* word = label(col, FontRole::Title, _t.ink, "offband");
+  lv_obj_set_style_pad_bottom(word, 10, 0);   // the lockup apart from what's below it
   if (kLockStatic) {
     lv_obj_t* name = label(col, FontRole::Title, _t.ink);
     userText(name, _model->nodeName());
