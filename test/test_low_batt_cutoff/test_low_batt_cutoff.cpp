@@ -195,6 +195,62 @@ TEST(LowBatt, TheCompiledDefaultIsTheOwnersFigure) {
   EXPECT_GE((uint32_t)OFFBAND_LOW_BATT_SUSTAIN_MS, 4 * kLowBattCheckIntervalMs);
 }
 
+// ---- the running cutoff that hands off to SafeBoot (#2118) -----------------------------
+//
+// It restarts the board into SafeBoot's sleep, so it has to agree with SafeBoot about what
+// a reading is. SafeBoot boots straight through anything under 1000 mV as "no reading". A
+// cutoff that acted on such a reading would restart the board every five minutes, for good:
+// a board with no cell fitted, powered some way the USB check doesn't see, does exactly that.
+
+namespace {
+
+constexpr uint16_t kHandoffThreshold = 3100;   // the OKIMesh Solar line
+
+uint32_t handoffFireTime(uint16_t raw, uint16_t smoothed, bool external = false) {
+  LowBattCutoffState st{};
+  for (uint32_t t = 0; t <= 600000; t += kTick) {
+    if (lowBattHandoffShouldFire(st, t, raw, smoothed, kHandoffThreshold, kSustain, external))
+      return t;
+  }
+  return 0;
+}
+
+}  // namespace
+
+TEST(LowBattHandoff, AFloatingReadingNeverFires) {
+  EXPECT_EQ(0u, handoffFireTime(300, 300));
+  EXPECT_EQ(0u, handoffFireTime(7, 7));
+  EXPECT_EQ(0u, handoffFireTime(999, 999));
+}
+
+TEST(LowBattHandoff, ARealLowCellStillFiresAfterTheWindow) {
+  // The guard must not swallow a cell that really is low, including one right at SafeBoot's
+  // floor, which SafeBoot itself treats as a reading.
+  const uint32_t t = handoffFireTime(3050, 3050);
+  EXPECT_GE(t, kSustain);
+  EXPECT_LT(t, kSustain + kTick + 1);
+  EXPECT_GE(handoffFireTime(1000, 1000), kSustain);
+}
+
+TEST(LowBattHandoff, AFloatingReadingRestartsTheClock) {
+  // Low for most of the window, then the reading drops out: the history must not carry
+  // over, or the next real low reading would fire early.
+  LowBattCutoffState st{};
+  uint32_t t = 0;
+  for (; t < 280000; t += kTick)
+    EXPECT_FALSE(lowBattHandoffShouldFire(st, t, 3050, 3050, kHandoffThreshold, kSustain, false));
+  EXPECT_FALSE(lowBattHandoffShouldFire(st, t, 300, 300, kHandoffThreshold, kSustain, false));
+  t += kTick;
+  const uint32_t restart = t;
+  for (; t < restart + kSustain; t += kTick)
+    EXPECT_FALSE(lowBattHandoffShouldFire(st, t, 3050, 3050, kHandoffThreshold, kSustain, false))
+        << "fired at t=" << t << ", only " << (t - restart) << " ms into a fresh window";
+}
+
+TEST(LowBattHandoff, ExternalPowerStillNeverFires) {
+  EXPECT_EQ(0u, handoffFireTime(3050, 3050, true));
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

@@ -1026,6 +1026,26 @@ void SafeBoot::checkAndMaybeSleep()
     enterSafeBootSleep(sleep_secs, wake);
 }
 
+#if defined(NRF52_PLATFORM)
+void SafeBoot::restartIntoSleep()
+{
+    // attempts > 0 is what checkAndMaybeSleep() reads as a wake from its own sleep, and
+    // GPREGRET2 survives the reset. A cell bounces back at rest once the load is gone, so
+    // without this the next boot could land between the two lines, count as a clean fresh
+    // boot, and run until the cutoff tripped again.
+    PersistedState next = {};
+    next.magic = SAFE_BOOT_MAGIC;
+    next.backoff_secs = DEFAULT_SAFE_BOOT_RECHECK_SECS;
+    next.attempts = 1;
+    storePersisted(next);
+    Serial.flush();
+    meshLogDrainUart();
+    NVIC_SystemReset();
+    while (1)
+        ;
+}
+#endif
+
 #else // !SAFE_BOOT_ENABLED
 
 void SafeBoot::checkAndMaybeSleep()

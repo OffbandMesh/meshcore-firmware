@@ -2,6 +2,7 @@
 #include <Mesh.h>
 #include <SafeBoot.h>
 #include <helpers/diagnostics/StallWatch.h>
+#include <helpers/LowBattHandoff.h>
 #include "MyMesh.h"
 
 // #740: raw-UART0 boot beacon. This translation unit owns the single
@@ -1084,6 +1085,9 @@ void loop() {
   offband::stallWatchFeed();   // #1966
   board.feedWatchdog();  // #257/#1083: feed from the MAIN LOOP only -> a hung loop trips the WDT
   mesh::wdtTestHangTick();  // bench-only (WDT_TEST_HANG_AFTER_MS); compiles to nothing otherwise
+#if defined(OFFBAND_LOW_BATT_HANDOFF)
+  offband::lowBattHandoffTick(board);  // #1626: the running cutoff, handing off to SafeBoot
+#endif
 #if defined(NRF52_PLATFORM)
   #if defined(OFFBAND_BLE_MORSE) && defined(PIN_STATUS_LED)
   // #1597: what the badge's three front LEDs say, now that the pin is ours (LED_BLUE = -1
