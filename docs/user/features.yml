@@ -151,7 +151,7 @@ features:
       - path: src/SafeBoot.cpp
         contains: ['static const char kSos[] = "SOS";']
       - path: examples/companion_radio/MyMesh.cpp
-        contains: ['if (has_display && BLE_PIN_CODE == 123456) {', '_active_ble_pin = BLE_PIN_CODE; // otherwise static pin']
+        contains: ['if (_has_display && BLE_PIN_CODE == 123456) {', 'return rng.nextInt(100000, 999999);', '_active_ble_pin = _prefs.ble_pin != 0 ? _prefs.ble_pin : unsetBlePin();']
   - id: tdeck-pro
     title: Use your LilyGo T-Deck Pro
     coverage: planned

@@ -1322,11 +1322,15 @@ void UITask::setBleOn(bool on) {
   mesh_log_line(MLOG_BOOT, "[gui] bluetooth %s\n", on ? "on" : "off");
 }
 
-// As the phone's CMD_SET_DEVICE_PIN: 0, or six digits; used from the next boot.
+// As the phone's CMD_SET_DEVICE_PIN: 0, or six digits. The next pairing uses
+// it, with no reboot, and it is saved now rather than when idle: a PIN that a
+// restart a moment later took back is one a phone can't pair with (#2222).
 bool UITask::setBlePin(uint32_t pin) {
   if (!_prefs || (pin != 0 && !pinOk(pin))) return false;
-  _prefs->ble_pin = pin;
+  if (!the_mesh.setBlePin(pin)) return false;
   _prefs_dirty = true;
+  savePrefsNow();
+  mesh_log_line(MLOG_BOOT, "[gui] ble pin set (%s), in use now\n", pin ? "fixed" : "new each boot");
   return true;
 }
 

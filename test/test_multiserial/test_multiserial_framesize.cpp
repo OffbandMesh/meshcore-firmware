@@ -26,6 +26,8 @@
 
 #include <gtest/gtest.h>
 
+#include <vector>
+
 #include "helpers/MultiSerialInterface.h"
 
 namespace {
@@ -44,6 +46,9 @@ public:
   size_t writeFrame(const uint8_t*, size_t len) override { return len; }
   size_t checkRecvFrame(uint8_t*) override { return 0; }
   size_t maxFrameSize() const override { return _max; }
+  void setPin(uint32_t pin) override { pins.push_back(pin); }
+
+  std::vector<uint32_t> pins;   // every PIN handed to this interface (#2222)
 
 private:
   size_t _max;
@@ -120,6 +125,54 @@ TEST(MultiSerialFrameSize, GenerousInterfaceCannotExceedTheFrameBuffer) {
   multi.enable();
 
   EXPECT_EQ(multi.maxFrameSize(), kMaxFrame);
+}
+
+// #2222: a PIN set while running reaches the Bluetooth interface at once, so
+// the next pairing asks for it with no reboot. companion_radio sets it through
+// its `_serial`, which is this wrapper.
+TEST(MultiSerialPin, ANewPinReachesTheBluetoothInterface) {
+  FakeInterface ble(173), usb(kMaxFrame);
+  MultiSerialInterface multi;
+  multi.addInterface(InterfaceType::USB, &usb);
+  multi.addInterface(InterfaceType::Bluetooth, &ble);
+  multi.enable();
+
+  multi.setPin(482913);
+
+  ASSERT_EQ(ble.pins.size(), 1u) << "the wrapper kept the PIN to itself: pairing would ask for the old one";
+  EXPECT_EQ(ble.pins[0], 482913u);
+}
+
+// Negative: only Bluetooth has a PIN. A USB or WiFi interface handed one could
+// read it as something else.
+TEST(MultiSerialPin, OtherInterfacesAreNotHandedThePin) {
+  FakeInterface ble(173), usb(kMaxFrame), wifi(120);
+  MultiSerialInterface multi;
+  multi.addInterface(InterfaceType::USB, &usb);
+  multi.addInterface(InterfaceType::WiFi, &wifi);
+  multi.addInterface(InterfaceType::Bluetooth, &ble);
+  multi.enable();
+
+  multi.setPin(482913);
+
+  EXPECT_TRUE(usb.pins.empty());
+  EXPECT_TRUE(wifi.pins.empty());
+  EXPECT_EQ(ble.pins.size(), 1u);
+}
+
+// Bluetooth turned off (Settings, until the next boot) still takes the PIN, so
+// turning it back on pairs with the one just set.
+TEST(MultiSerialPin, ABluetoothInterfaceThatIsOffStillTakesThePin) {
+  FakeInterface ble(173);
+  MultiSerialInterface multi;
+  multi.addInterface(InterfaceType::Bluetooth, &ble);
+  multi.enable();
+  multi.disableBluetooth();
+
+  multi.setPin(482913);
+
+  ASSERT_EQ(ble.pins.size(), 1u);
+  EXPECT_EQ(ble.pins[0], 482913u);
 }
 
 int main(int argc, char **argv) {

@@ -170,11 +170,17 @@ void SerialBLEInterface::onBLEEvent(ble_evt_t* evt) {
   }
 }
 
+// The static passkey's ASCII, for the life of the program. Bluefruit hands the
+// SoftDevice a pointer to it (sd_ble_opt_set, BLE_GAP_OPT_PASSKEY) and copies
+// nothing itself, so it isn't left on a stack that is gone by pairing time
+// (#2222 review).
+static char s_pin_ascii[20];
+
 void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code) {
   instance = this;
 
-  char charpin[20];
-  snprintf(charpin, sizeof(charpin), "%lu", (unsigned long)pin_code);
+  char* charpin = s_pin_ascii;
+  snprintf(charpin, sizeof(s_pin_ascii), "%lu", (unsigned long)pin_code);
   
   // If we want to control BLE LED ourselves, uncomment this:
   // Bluefruit.autoConnLed(false);
@@ -291,6 +297,17 @@ bool SerialBLEInterface::isAdvertising() const {
   ble_gap_addr_t adv_addr;
   uint32_t err_code = sd_ble_gap_adv_addr_get(0, &adv_addr);
   return (err_code == NRF_SUCCESS);
+}
+
+// #2222: the PIN the next pairing asks for, with no reboot. Bluefruit hands
+// the SoftDevice a new static passkey, in the same legacy display-only mode
+// begin() sets. Bonds are kept in Bluefruit's bond store, which this doesn't
+// touch, so a phone already bonded stays bonded.
+void SerialBLEInterface::setPin(uint32_t pin_code) {
+  snprintf(s_pin_ascii, sizeof(s_pin_ascii), "%lu", (unsigned long)pin_code);
+  const bool ok = Bluefruit.Security.setPIN(s_pin_ascii);
+  Bluefruit.Security.setIOCaps(true, false, false);   // as begin(): display only
+  BLE_DEBUG_PRINTLN("SerialBLEInterface: setPin() %s", ok ? "ok" : "REFUSED");
 }
 
 void SerialBLEInterface::enable() {

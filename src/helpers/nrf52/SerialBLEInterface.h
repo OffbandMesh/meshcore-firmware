@@ -72,6 +72,7 @@ public:
    * @param pin_code   the BLE security pin
    */
   void begin(const char* prefix, char* name, uint32_t pin_code);
+  void setPin(uint32_t pin) override;   // #2222: the next pairing's PIN
 
   void disconnect();
   void enable() override;
