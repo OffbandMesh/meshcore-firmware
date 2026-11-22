@@ -576,7 +576,9 @@ void GuiShell::buildLock(lv_obj_t* scr) {
     _lock_zone = label(col, FontRole::Label, _t.dim);   // the zone, or "UTC · set a time zone" (#1610)
   }
 
-  lv_obj_t* hint = label(scr, FontRole::BodySmall, _t.dim, "Press USR or swipe up to unlock");
+  // Every way to unlock (#2218): with a keyboard, Enter does too.
+  lv_obj_t* hint = label(scr, FontRole::BodySmall, _t.dim,
+                         _hw_kb ? "USR, Enter or swipe up to unlock" : "Press USR or swipe up to unlock");
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -14);
 }
 
