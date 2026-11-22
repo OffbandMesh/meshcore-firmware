@@ -4,7 +4,7 @@
 |---|---|
 | **Feature** | [#2198](https://github.com/OffbandMesh/meshcore-firmware/issues/2198) · Citadel `Crosswire-uyd` |
 | **Serves** | Standalone. The yardstick is the owner's: performance, quality, efficiency, battery life, recovery, stability and capability. The only hard constraints are MeshCore protocol interoperability and stock-client interoperability. |
-| **Status** | For the owner's approval by merge. §9 decision 2 is ruled; the other §9 choices are open. |
+| **Status** | For the owner's approval by merge. §9 decisions 2, 8, 9 and 10 are ruled; choices 1, 3, 4, 5, 6 and 7 are open. |
 | **Owner** | @Strycher |
 | **Last updated** | 2026-11-21 |
 
@@ -86,9 +86,11 @@ Tasks are 4 points or smaller. Each Epic ends with a verification task and gets 
 | **A2 · Pinned PlatformIO:** pin one version, chosen in §9 choice 1, in `ci.yml` (both sites), the setup action and the host setup notes. A config-lint check fails on any unpinned `pip install ... platformio`, with a negative case. | 2 |
 | **A3 · MSYS-safe builds:** `scripts/pio-flash.py` and any other script of ours that starts PlatformIO drops `MSYSTEM` for the child (row 6). A host test covers it: the child environment has no `MSYSTEM`, and the rest of the environment is passed through. | 2 |
 | **A4 · C3 and classic in CI** (only if §9 choice 5 rules it in): add the four Xiao C3 envs and one Heltec V2 repeater to the CI matrix. | 1 |
-| **A5 · Docs:** the developer setup note for the store and the pinned PlatformIO; the `docs/changes/` record. | 1 |
-| **A6 · Epic verification:** the full CI matrix is green on the PR, and the two-project build from A1 runs again from a clean store. | 1 |
-| **A7 · Push, PR, merge.** | 1 |
+| **A5 · Size gate on the real image** (§9 decision 9): every CI and release build checks `firmware.bin` against its app slot, because PlatformIO's own check leaves out `.eh_frame` (row 18). The budget is per chip and stated in one config file.<br>• It fails the build when `firmware.bin` exceeds the slot, and reports any env above 90%.<br>• The fail line moves to 95% once Epic C has landed. Today's C3 repeater is 97.4% on the old platform, so a 95% line before then would fail every build of it.<br>• Positive and negative host tests: an image under the line passes, one over it fails, and one that fits PlatformIO's figure but not the real image fails. | 2 |
+| **A6 · The size matrix as a tool** (§9 decision 10): the scripts that produced `SIZE-ANALYSIS.md` move into `scripts/`. They build one board per chip in every shipped role on two platforms, measure the real image and static RAM, attribute growth by library from the linker maps, trace what pulls a library in, and pack the worst-case SPIFFS set. Every platform bump runs it and attaches the grid to its PR; the developer notes say so. Host tests cover the parsing. | 3 |
+| **A7 · Docs:** the developer setup note for the store and the pinned PlatformIO; the `docs/changes/` record. | 1 |
+| **A8 · Epic verification:** the full CI matrix is green on the PR, the two-project build from A1 runs again from a clean store, and A6's matrix reproduces the analysis grid. | 1 |
+| **A9 · Push, PR, merge.** | 1 |
 
 ### Epic B: CODE PORT ([#2204](https://github.com/OffbandMesh/meshcore-firmware/issues/2204))
 
@@ -99,10 +101,12 @@ Every change builds on **both** frameworks behind `ESP_IDF_VERSION` guards, so B
 | **B1 · ESP-NOW:** `ESPNOWRadio.cpp` and `ESPNowBridge.cpp` take the IDF 5.x callback signatures: `wifi_tx_info_t` on send from IDF 5.5, and `esp_now_recv_info_t` on receive from IDF 5.0. They include `<esp_mac.h>` on IDF 5 (row 7). Both build on both platforms. | 2 |
 | **B2 · The rest of the port:** every other failure wave 2 classified (row 8), guarded the same way. Known so far: LEDC in `GuiPanel.cpp:16-17` and `EinkPanel.cpp:51-52` (`ledcAttach` on Arduino 3), and `f_mkfs` in `SdCard.cpp:162` (the `MKFS_PARM` form on FatFs R0.14). A format that changes between the two frameworks is a §6 stop: the SD card format has to stay readable on both. | 3 |
 | **B3 · Bootloader rollback** (only if §9 choice 4 rules it in): override `verifyRollbackLater()` to return true, so an OTA'd image stays `PENDING_VERIFY` until `markBootValid()` confirms it after 60 s (row 12). Host-test the decision. Bench-test it in E5. | 2 |
-| **B4 · Dual-build check:** a scratch run builds every shipped and CI ESP32 env on both platforms in isolated stores. The result table goes on the Epic issue. | 2 |
-| **B5 · Docs:** the `docs/changes/` record (no user-visible change). | 1 |
-| **B6 · Epic verification:** the CI matrix is green on the old platform, and B4's table shows zero compile failures on the new one. | 1 |
-| **B7 · Push, PR, merge.** | 1 |
+| **B4 · No exception tables** (§9 decision 8): ESP32 builds drop `-fexceptions` and compile with `-fno-exceptions`. Nothing in `src/`, `examples/` or `arch/` throws or catches. Measured on 55.x: 28–59 KB off each companion and 40–78 KB off each repeater. It shrinks today's builds too. Config-lint fails if an ESP32 env compiles with `-fexceptions`, with a negative case. | 1 |
+| **B5 · Companions list their ESP32 helper files** (§9 decision 8): BLE and USB companion envs name the files from `src/helpers/esp32/` they use, in place of the `*.cpp` wildcard. Through the wildcard they compile `ESPNOWRadio.cpp` and `SerialWifiInterface.cpp`, which on 55.x link the whole Wi-Fi and TCP/IP stack: 67–80 KB per S3, C3 and classic ESP32 companion (the C6 variants already exclude ESP-NOW). Wi-Fi companions and ESP-NOW bridges keep the files they use. Config-lint fails if a companion env uses the wildcard, with a negative case. | 2 |
+| **B6 · Dual-build check:** a scratch run builds every shipped and CI ESP32 env on both platforms in isolated stores. The result table goes on the Epic issue. | 2 |
+| **B7 · Docs:** the `docs/changes/` record (no user-visible change). | 1 |
+| **B8 · Epic verification:** the CI matrix is green on the old platform, and B6's table shows zero compile failures on the new one. | 1 |
+| **B9 · Push, PR, merge.** | 1 |
 
 ### Epic C: 4 MB BOARDS, C3 AND C6 ([#2205](https://github.com/OffbandMesh/meshcore-firmware/issues/2205))
 
@@ -121,7 +125,7 @@ Owner's ruling, §9 decision 2: every shipped 4 MB ESP32 build moves to one part
 
 | Task | Pts |
 |---|---|
-| **D1 · Switch:** `esp32_base` and `esp32c6_base` take the one pioarduino version chosen in §9 choice 1. `platformio/espressif32@6.11.0` and pioarduino 53 leave the tree. The store tag moves with the pin. `esp32_base` sets `lib_archive = yes` (row 17). The weak-override check runs on every ESP32 env: for each symbol bound to a weak definition, no library object holds a strong one. | 2 |
+| **D1 · Switch:** `esp32_base` and `esp32c6_base` take the one pioarduino version chosen in §9 choice 1. `platformio/espressif32@6.11.0` and pioarduino 53 leave the tree. The store tag moves with the pin. `esp32_base` sets `lib_archive = yes` (row 17, §9 decision 8). The weak-override check runs on every ESP32 env: for each symbol bound to a weak definition, no library object holds a strong one. | 2 |
 | **D2 · Release images:** make `merge-bin.py` take its flash mode from the platform's `_get_board_flash_mode`, so a merged bootloader keeps today's DIO (row 11). Its test fails on a merged image whose bootloader header says QIO. Then run `mergebin` on one env per chip, and check that each merged image holds a bootloader, partition table and app at the offsets the chip expects (row 11). Compare the app image header from both frameworks for each chip: chip ID, minimum chip revision, and flash mode, frequency and size. Any difference is reported before E flashes anything. | 2 |
 | **D3 · One-platform invariant:** config-lint fails if any ESP32 env resolves to a different `platform`. A negative case uses an env that sets its own. It also fails if an ESP32 env doesn't resolve `lib_archive` to `yes`, with its own negative case. | 2 |
 | **D4 · Size table:** flash and RAM, before and after, for every shipped ESP32 env. Flash is `firmware.bin` against the app slot, because PlatformIO's figure leaves out `.eh_frame` (row 18). Any env over 90% of its slot gets a row in §10 or a fix. | 2 |
@@ -180,7 +184,7 @@ P → A → B → C → D → E → F → G.
 
 | Term | Proposed | Why |
 |---|---|---|
-| **What merging this plan authorizes** | Epics A through G as written, end to end, with merges held to each Epic's PR. A4, B3 and the C2 option run only as §9 rules. | The plan is the master layout. |
+| **What merging this plan authorizes** | Epics A through G as written, end to end, with merges held to each Epic's PR. A4 and B3 run only as §9 rules. | The plan is the master layout. |
 | **Merges** | 7 | One PR each for A, B, C, D, E, F and G. This plan's own merge is the approval, not a grant use. |
 | **Epic verification** | The owner approves each Epic's PR. | D, E and F end on bench results only the owner can see, and A changes every developer's build setup. |
 | **Owner steps during the run** | A go for each flash in E and F, naming the unit. | One flash, one explicit go. |
@@ -205,7 +209,10 @@ P → A → B → C → D → E → F → G.
 | Where | Can't tell what | Does |
 |---|---|---|
 | A1 | Another project's build still changes our store, or ours changes theirs | **stop**: report the store paths on the Epic issue. Nothing else in A merges. |
-| B2 / B4 | A failure that a version guard can't fix (a library with no build for both frameworks) | **stop**: report it with the library and version. Whether to upgrade, replace or patch the library is the owner's. |
+| B2 / B6 | A failure that a version guard can't fix (a library with no build for both frameworks) | **stop**: report it with the library and version. Whether to upgrade, replace or patch the library is the owner's. |
+| A5 | The gate can't find the env's `firmware.bin` or read its slot size from the partition table | **stop**: the build fails and says which it couldn't read. A missing measurement is never a pass. |
+| B4 | A library we build fails to compile, or misbehaves in a test, without exceptions | **stop**: report the library and file. Whether to patch, replace or exempt it is the owner's. |
+| B5 | A companion env loses a helper file it uses, so a feature disappears without a build error | **stop**: B6 compares each companion's compiled file list before and after, and any file dropped that the env's features need is reported. |
 | B2 | The SD card format call can't produce a card that the current release also reads (`SdCard.cpp:162`) | **stop**: report it. A card formatted by one build must mount on the other. |
 | D1 | The weak-override check finds a library's strong definition that archiving leaves out | **stop**: report the symbol and library. Whether to keep archiving for that env, or force the object in, is the owner's. |
 | C2 | A 4 MB env doesn't fit the 1,728 KB slot, or its worst-case SPIFFS set doesn't fit 512 KB | **stop**: report the env and both figures. The table isn't changed without the owner. |
@@ -225,7 +232,7 @@ No branch proceeds without its condition, so no fail-open grant is needed.
 
 ## 7. Verification
 
-- **Named command:** the full CI matrix (`ci-green`: config-lint, the native suite and every build env), plus each Epic's own check: A1's two-project build, B4's dual-build table, C2's size and SPIFFS results, and D2's and D4's results.
+- **Named command:** the full CI matrix (`ci-green`: config-lint, the native suite and every build env), plus each Epic's own check: A1's two-project build, B6's dual-build table, A5's size gate, C2's size and SPIFFS results, and D2's and D4's results.
 - **Acceptance bar:**
   - Every ESP32 env resolves to one platform, and config-lint enforces it.
   - Every shipped ESP32 env builds under its slot.
@@ -246,6 +253,10 @@ No branch proceeds without its condition, so no fail-open grant is needed.
 | # | Decision | By |
 |---|---|---|
 | 2 | Every shipped 4 MB ESP32 build, C3 and C6, moves to `offband_4MB.csv` (Epic C). Moving needs a USB flash that wipes SPIFFS; users get a prominent warning, and nothing is backed up. Staying on old platforms and tables only postpones this, and 4 MB boards will reach the end of their room eventually. | Owner, 2026-11-19 (C3 wipe) and 2026-11-21 (C3 and C6, the table) |
+| 8 | Fix our three build defects that inflate every ESP32 image ([`SIZE-ANALYSIS.md`](SIZE-ANALYSIS.md)): library archiving back on (D1), no C++ exception tables (B4), and companions listing their ESP32 helper files instead of the wildcard (B5). | Owner, 2026-11-21 |
+| 9 | Gate size on the real `firmware.bin` against its slot, per chip, in CI and release builds (A5). | Owner, 2026-11-21 |
+| 10 | Re-run the size matrix on every platform bump, as a tool in the repo (A6). | Owner, 2026-11-21 |
+| — | Rebuilding the framework from our own `custom_sdkconfig` is not pursued: measured at about 1 KB saved on the C3 repeater. | Measured 2026-11-20 |
 
 ### Open
 
