@@ -109,7 +109,8 @@ Offband logo, the radio's name and how to unlock it, and nothing else: no messag
 nothing would update it while the screen sleeps. Holding BOOT for 3 seconds locks it the
 same way, and then only BOOT wakes it.
 
-Tap the screen or press BOOT to wake it, then press BOOT or swipe up to unlock. You return
+Tap the screen, press BOOT or press a key to wake it, then press BOOT or Enter, or swipe
+up, to unlock. Typing on the lock screen does nothing. You return
 to the screen you were on, and a message you were writing is kept. The front-light follows
 the GUI's brightness setting.
 

@@ -523,6 +523,62 @@ TEST_F(Lock, BackAndPrevDoNotUnlock) {
   EXPECT_TRUE(shell->locked());
 }
 
+// With a keyboard (T-Deck Pro, T-Deck), Enter unlocks too, so the hint names
+// it (#2218: every way to unlock), on one line that fits.
+TEST_F(Lock, WithAKeyboardTheHintNamesEnter) {
+  const char* kKbHint = "USR, Enter or swipe up to unlock";
+  shell->setHardwareKeyboard(true);
+  shell->showLock();
+  pump();
+  EXPECT_TRUE(shows(kKbHint));
+  EXPECT_FALSE(shows(kHint));
+  lv_obj_t* hint = nullptr;
+  for (uint32_t i = 0; i < lv_obj_get_child_cnt(lv_scr_act()); i++) {
+    lv_obj_t* o = lv_obj_get_child(lv_scr_act(), int32_t(i));
+    if (lv_obj_check_type(o, &lv_label_class) && strcmp(lv_label_get_text(o), kKbHint) == 0) hint = o;
+  }
+  ASSERT_NE(hint, nullptr);
+  lv_obj_update_layout(lv_scr_act());
+  lv_area_t a;
+  lv_obj_get_coords(hint, &a);
+  EXPECT_LE(lv_area_get_height(&a), lv_font_get_line_height(lv_obj_get_style_text_font(hint, 0)) + 1)
+      << "the hint wraps to a second line";
+  EXPECT_GE(a.x1, 0);
+  EXPECT_LE(a.x2, 239) << "the hint runs off the screen";
+}
+
+// Negative control: with no keyboard, the hint doesn't promise an Enter key.
+TEST_F(Lock, WithoutAKeyboardTheHintHasNoEnter) {
+  shell->showLock();
+  pump();
+  EXPECT_TRUE(shows(kHint));
+  EXPECT_FALSE(shows("Enter"));
+}
+
+// Enter (Open) unlocks, back to the screen that was open.
+TEST_F(Lock, EnterUnlocks) {
+  shell->setHardwareKeyboard(true);
+  open(Start::Conversation);
+  shell->showLock();
+  pump();
+  EXPECT_TRUE(shell->action(Action::Open));
+  pump();
+  EXPECT_FALSE(shell->locked());
+  EXPECT_TRUE(shows(kSecretText)) << "unlocking didn't return to the conversation";
+}
+
+// Negative: a key typed on the lock screen never reaches the hidden draft.
+TEST_F(Lock, TypingOnTheLockScreenDoesNotReachTheDraft) {
+  shell->setHardwareKeyboard(true);
+  open(Start::Compose);
+  shell->showLock();
+  pump();
+  EXPECT_FALSE(shell->typeKey(KeyKind::Char, 'x'));
+  EXPECT_FALSE(shell->typeKey(KeyKind::Backspace, 0));
+  EXPECT_STREQ(shell->_draft.text(), kDraft);
+  EXPECT_TRUE(shell->locked());
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
