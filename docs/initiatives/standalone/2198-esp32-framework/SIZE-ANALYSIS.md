@@ -19,7 +19,7 @@ Part of the ESP32 framework Feature ([#2198](https://github.com/OffbandMesh/mesh
 
 ## The grid
 
-Sizes in KB. "55.x" is with the three fixes below applied. "Left" is what remains in the app slot.
+Sizes in KB. "55.x" is with the three fixes below applied. "Left" is what remains in the app slot. **Figures marked `~` are estimates**: those builds overflow, so no `firmware.bin` exists, and the figure is the sum of the loaded sections in the linker map.
 
 | Chip | Role | Today | 55.x | Growth | Slot | Fill | Left | Static RAM, today → 55.x |
 |---|---|---|---|---|---|---|---|---|
