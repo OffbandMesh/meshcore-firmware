@@ -1148,14 +1148,11 @@ void GuiShell::buildConversation(lv_obj_t* content) {
   // Resting on the compose bar while it fits, and the whole history in reach
   // once it doesn't (BottomStack.h: bottom alignment alone left an
   // overflowing thread unscrollable, #2113 bench).
-  bottomStack(_msg_list);
-  // The newest message shows, unless a redraw found the reader scrolled up
-  // into history (Epic D gate): then they stay where they were.
-  if (_keep_scroll >= 0) lv_obj_scroll_to_y(_msg_list, _keep_scroll, LV_ANIM_OFF);
-  else if (jump_to) lv_obj_scroll_to_y(_msg_list, lv_obj_get_y(jump_to) - 6, LV_ANIM_OFF);
-  else lv_obj_scroll_to_y(_msg_list, LV_COORD_MAX, LV_ANIM_OFF);
-  _keep_scroll = -1;
-  _jump_unread = 0;   // only on opening
+  // The list is laid out and scrolled below, once the compose bar under it
+  // has taken its 42 px: done here, the scroll reached a bottom that the bar
+  // then moved, so a new message landed 42 px below the view, and from then
+  // on the thread read as scrolled up and stopped following (bench,
+  // 2026-11-22).
 
   // The compose bar (Compose itself is D5).
   lv_obj_t* bar = box(content, LV_PCT(100), 42);
@@ -1189,6 +1186,16 @@ void GuiShell::buildConversation(lv_obj_t* content) {
         },
         LV_EVENT_CLICKED, this);
   }
+
+  // At the newest, it follows: the newest message shows. Scrolled up into
+  // history, a redraw keeps the reader where they were (Epic D gate). On
+  // opening, Jump to oldest unread places that message at the top.
+  bottomStack(_msg_list);   // lays out the whole screen, the bar included
+  if (_keep_scroll >= 0) lv_obj_scroll_to_y(_msg_list, _keep_scroll, LV_ANIM_OFF);
+  else if (jump_to) lv_obj_scroll_to_y(_msg_list, lv_obj_get_y(jump_to) - 6, LV_ANIM_OFF);
+  else lv_obj_scroll_to_y(_msg_list, LV_COORD_MAX, LV_ANIM_OFF);
+  _keep_scroll = -1;
+  _jump_unread = 0;   // only on opening
 
   // Scrolled up into the history: one tap back to the newest message (owner,
   // #2113 B6 bench). It floats over the list's foot, out of the column.
