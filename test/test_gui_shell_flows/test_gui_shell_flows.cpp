@@ -8,6 +8,8 @@
 //    bench check on tdeck-pro-1.)
 // 2. "+" in Chats opens Add Channel, with the Offband client's four choices in
 //    its words and order, each leading to its step.
+// 3. An open conversation follows new messages while it's at the newest, and
+//    holds its place while the reader is scrolled up (bench, 2026-11-22).
 //
 // env:native_gui_shell builds it as the T-Deck Pro's e-paper GUI, with its
 // fonts; env:native_gui_shell_lit as a lit panel's (Heltec V4 TFT, R8).
@@ -298,6 +300,37 @@ protected:
     shell->chanSubmit();
     pump();
   }
+
+  // A channel with enough history to scroll, open in Chats. Every third
+  // message is long enough to wrap to several lines.
+  int openBusyChannel(int n = 14) {
+    const uint8_t key[16] = {9, 9, 9};
+    const int t = model->msgs.thread(ThreadKind::Channel, key, sizeof key, "#busy");
+    for (int i = 0; i < n; i++) arrive(t, i);
+    shell->showTab(Tab::Chat);
+    shell->openThread(t);
+    pump();
+    return t;
+  }
+  void arrive(int t, int i) {
+    char text[160];
+    if (i % 3 == 2)
+      snprintf(text, sizeof text, "msg %d: a longer one that wraps across several lines of the bubble, as a real "
+               "channel's chatter does", i);
+    else
+      snprintf(text, sizeof text, "msg %d", i);
+    model->msgs.addIncoming(t, 1763400000u + uint32_t(i), "Wren", text, strlen(text), 1, 20);
+  }
+  // As UITask does each pass: the shell sees the store changed.
+  void newMessage(int t, int i) {
+    arrive(t, i);
+    shell->updateChats();
+    pump();
+  }
+  lv_coord_t belowView() {
+    lv_obj_update_layout(lv_scr_act());
+    return lv_obj_get_scroll_bottom(shell->_msg_list);
+  }
 };
 
 // ------------------------------------------------------------ Bluetooth PIN
@@ -539,6 +572,55 @@ TEST_F(Gui, AFullTableRefusesTheChoicesThatNeedASlot) {
     EXPECT_EQ(shell->_chan, GuiShell::ChanStep::Kinds) << kChoices[i] << " opened with no free slot";
   }
   EXPECT_TRUE(model->added.empty());
+}
+
+// ------------------------------------------------------------ a conversation
+
+// At the newest, each new message is shown as it arrives, short or long,
+// message after message (owner, bench: "if I'm at newest, it should advance").
+TEST_F(Gui, AtTheNewestEachNewMessageIsShown) {
+  const int t = openBusyChannel();
+  ASSERT_GT(lv_obj_get_scroll_top(shell->_msg_list), 0) << "the history doesn't scroll: the test proves nothing";
+  ASSERT_LE(belowView(), 0) << "opening didn't start at the newest";
+  for (int i = 14; i < 22; i++) {
+    newMessage(t, i);
+    EXPECT_LE(belowView(), 0) << "message " << i << " arrived below the view";
+    char want[16];
+    snprintf(want, sizeof want, "msg %d", i);
+    EXPECT_TRUE(shows(want));
+  }
+}
+
+// Scrolled up, the reader keeps their place as messages come in, and Newest
+// offers the way back (owner: "it should stay where I've scrolled to").
+TEST_F(Gui, ScrolledUpTheViewHoldsItsPlace) {
+  const int t = openBusyChannel();
+  lv_obj_scroll_to_y(shell->_msg_list, 0, LV_ANIM_OFF);
+  pump();
+  const lv_coord_t at = lv_obj_get_scroll_y(shell->_msg_list);
+  for (int i = 14; i < 18; i++) {
+    newMessage(t, i);
+    EXPECT_EQ(lv_obj_get_scroll_y(shell->_msg_list), at) << "message " << i << " moved the reader";
+  }
+  EXPECT_GT(belowView(), 0);
+  ASSERT_NE(shell->_jump_newest, nullptr);
+  EXPECT_FALSE(lv_obj_has_flag(shell->_jump_newest, LV_OBJ_FLAG_HIDDEN)) << "no way back to the newest";
+}
+
+// Back at the newest (the Newest button), it follows again.
+TEST_F(Gui, BackAtTheNewestItFollowsAgain) {
+  const int t = openBusyChannel();
+  lv_obj_scroll_to_y(shell->_msg_list, 0, LV_ANIM_OFF);
+  pump();
+  newMessage(t, 14);
+  ASSERT_GT(belowView(), 0);
+  lv_event_send(shell->_jump_newest, LV_EVENT_CLICKED, nullptr);
+  pump();
+  ASSERT_LE(belowView(), 0) << "Newest didn't reach the newest";
+  for (int i = 15; i < 19; i++) {
+    newMessage(t, i);
+    EXPECT_LE(belowView(), 0) << "message " << i << " arrived below the view after Newest";
+  }
 }
 
 int main(int argc, char** argv) {
