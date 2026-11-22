@@ -4,9 +4,9 @@
 |---|---|
 | **Feature** | [#2198](https://github.com/OffbandMesh/meshcore-firmware/issues/2198) · Citadel `Crosswire-uyd` |
 | **Serves** | Standalone. The yardstick is the owner's: performance, quality, efficiency, battery life, recovery, stability and capability. The only hard constraints are MeshCore protocol interoperability and stock-client interoperability. |
-| **Status** | For the owner's approval by merge. The §9 choices are open. |
+| **Status** | For the owner's approval by merge. §9 decision 2 is ruled; the other §9 choices are open. |
 | **Owner** | @Strycher |
-| **Last updated** | 2026-11-18 |
+| **Last updated** | 2026-11-21 |
 
 ## At a glance
 
@@ -17,7 +17,7 @@
   - Another project's build on the same machine can swap our framework libraries out mid-build.
 - **How:**
   - First, give this project its own store, and pin the build tools.
-  - Then port the code so it builds on both frameworks, fit the C3 builds back under their flash limit, and switch every ESP32 build to one platform in one change.
+  - Then port the code so it builds on both frameworks, move every shipped 4 MB build (C3 and C6) to one partition table that fits them and a full contact list, and switch every ESP32 build to one platform in one change.
   - Then check every bench board family on it, including OTA from today's release and stock-client use.
   - Last, re-test the Photon I2C hang on the new framework.
 - **Done when:** every ESP32 env builds on one pinned platform, CI enforces that, every bench board family has passed its hardware check, an OTA from the current release keeps each unit's identity and contacts, and `OUTCOMES.md` is approved.
@@ -46,7 +46,7 @@ Tags: [verified] means observed in a build, on a unit, or by a search. [read] me
 | 16 | **Libraries mostly float** on caret ranges (NimBLE resolves to 2.5.2). The same commit has given different memory footprints across CI runs. | `lib_deps` across `variants/`; [#686](https://github.com/OffbandMesh/meshcore-firmware/issues/686) [verified]. | Carried in (§10). A pinned platform with floating libraries is still not a reproducible build. |
 | 17 | **pioarduino turns library archiving off on every env, and that is most of the C6 growth.** `builder/main.py:950-954` sets `lib_archive = False` unless the project sets `lib_archive` anywhere ("This makes weak defs in framework and libs possible"). The 6.11.0 platform and pioarduino 53 leave libraries archived; the linker maps show `libRadioLib.a` today and loose objects on 55.x. A loose object is always linked. So in the Xiao C6 repeater, `AsyncTCP.cpp.o` and `WiFi/STA.cpp.o` come in although nothing calls them, and they pull lwIP (53.5 KB), the supplicant, `net80211` and even the Wi-Fi mesh library after them. Today that repeater has 0 bytes of any of those. With `lib_archive = yes`, the repeater's binary goes from 702,560 to 621,048 bytes: growth over today drops from +20.9% to +6.9%. The C3 and S3 repeaters don't change (−242 and +660 bytes), because they really use Wi-Fi for OTA. No library override of a weak framework function is lost: for every symbol bound to a weak definition, a search of the 207 library objects and archives in each build found no strong definition, on the C3, C6 and S3 repeaters. | Platform source [read]. Linker maps and `nm`, `Xiao_C6_repeater_`, `Xiao_C3_repeater`, `Xiao_S3_repeater`, 2026-11-18 [verified]. Weak-override check: 3 envs, not yet all [verified for those 3]. | D1 sets `lib_archive = yes` in `esp32_base`. D3's lint requires it. D1 runs the weak-override check on every ESP32 env, and any hit is a §6 stop. |
 | 18 | **PlatformIO's size check doesn't count `.eh_frame`, and the binary does.** `.eh_frame` is the C++ exception-unwinding table. Every framework here is precompiled with `CONFIG_COMPILER_CXX_EXCEPTIONS=y`. The C3 repeater's real `firmware.bin` today is 1,276,720 bytes, 97.4% of its slot, while PlatformIO reports 1,188,218 (90.7%). The C3 carries 87 KB of `.eh_frame` today and 80 KB on 55.x. On 55.x the S3 gains a 36 KB `.eh_frame` it didn't have: its real binary grows +186.9 KB, where PlatformIO reported +150 KB. Section sums match the `.bin` files to within a few hundred bytes. | `firmware.bin` sizes and map section totals, both platforms, 2026-11-18 [verified]. | Every size figure in C and D4 is taken from `firmware.bin` against the partition, not from PlatformIO's report. C1 measures what dropping exception tables from our own code saves; the framework's own tables are precompiled and stay. |
-| 19 | **SPIFFS holds every per-node file, and 128 KB doesn't hold a full companion.** On ESP32, SPIFFS holds the identity, `/contacts3` (152 B × contacts), one `/bl/<key>` advert file per contact (≤166 B each), `/channels2` (68 B × channels), `/blocks`, the prefs files, and, on repeaters and room servers, `/s_contacts`, `/regions2` and an uncapped `/packet_log`. NVS (SafeBoot counters, `cw_boot`, the observer's Wi-Fi credentials, BLE bonds) sits at 0x9000 in every 4 MB table, so a repartition leaves it alone. Packed with `mkspiffs` at ESP32 Arduino's geometry (4 KB blocks, 256 B pages), the companion worst case at the C3 and C6 limits (350 contacts, 40 channels) needs 0x60000 (384 KB), keeping room to rewrite `/contacts3`. **128 KB (`min_spiffs.csv`) holds 107 contacts with that room, and 137 with none.** The repeater worst case fits 128 KB with about 70 KB to spare. | Record sizes from the write code (`DataStore.cpp`, `ClientACL.cpp`, `RegionMap.cpp`, `IdentityStore.cpp`, `MyMesh.cpp`) [read]; capacity with `mkspiffs` 0.2.3 (arduino-esp32 build) on a fresh image [verified]. A fresh image is the best case: fragmentation and garbage collection on a live unit need more. Prefs files sized at a 4 KB allowance each, not computed. | §9 choice 2. The shipped C6 companions already run 128 KB with a 350-contact limit; that is outside this Feature (§10). |
+| 19 | **SPIFFS holds every per-node file, and 128 KB doesn't hold a full companion.** On ESP32, SPIFFS holds the identity, `/contacts3` (152 B × contacts), one `/bl/<key>` advert file per contact (≤166 B each), `/channels2` (68 B × channels), `/blocks`, the prefs files, and, on repeaters and room servers, `/s_contacts`, `/regions2` and an uncapped `/packet_log`. NVS (SafeBoot counters, `cw_boot`, the observer's Wi-Fi credentials, BLE bonds) sits at 0x9000 in every 4 MB table, so a repartition leaves it alone. Packed with `mkspiffs` at ESP32 Arduino's geometry (4 KB blocks, 256 B pages), the companion worst case at the C3 and C6 limits (350 contacts, 40 channels) needs 0x60000 (384 KB), keeping room to rewrite `/contacts3`. **128 KB (`min_spiffs.csv`) holds 107 contacts with that room, and 137 with none.** The repeater worst case fits 128 KB with about 70 KB to spare. | Record sizes from the write code (`DataStore.cpp`, `ClientACL.cpp`, `RegionMap.cpp`, `IdentityStore.cpp`, `MyMesh.cpp`) [read]; capacity with `mkspiffs` 0.2.3 (arduino-esp32 build) on a fresh image [verified]. A fresh image is the best case: fragmentation and garbage collection on a live unit need more. Prefs files sized at a 4 KB allowance each, not computed. | §9 decision 2 and Epic C: the shipped 4 MB builds, C3 and C6, move to a table with 512 KB of SPIFFS. That also fixes the shipped C6 companions, which run 128 KB with a 350-contact limit today. |
 | 20 | **Bench coverage by chip:** S3 has the Heltec V4 fleet, the V4 TFT, RC32, XIAO S3 and T-Deck Pro; C6 has the Photon-1W and RCC6; P4 has the EtherMesh-1W (on loan) and the desk unit. There is **no C3 unit and no classic-ESP32 LoRa unit** (only radio-less WROOM DevKits). | `HARDWARE.local.md` device list [verified]. | §9 choice 6: what "checked" means for C3 and Heltec V2. |
 
 ## 2. Scope
@@ -104,15 +104,18 @@ Every change builds on **both** frameworks behind `ESP_IDF_VERSION` guards, so B
 | **B6 · Epic verification:** the CI matrix is green on the old platform, and B4's table shows zero compile failures on the new one. | 1 |
 | **B7 · Push, PR, merge.** | 1 |
 
-### Epic C: C3 FLASH SIZE ([#2205](https://github.com/OffbandMesh/meshcore-firmware/issues/2205))
+### Epic C: 4 MB BOARDS, C3 AND C6 ([#2205](https://github.com/OffbandMesh/meshcore-firmware/issues/2205))
+
+Owner's ruling, §9 decision 2: every shipped 4 MB ESP32 build moves to one partition table. Its sizes come from [`SIZE-ANALYSIS.md`](SIZE-ANALYSIS.md): two 0x1B0000 (1,728 KB) app slots and 0x80000 (512 KB) of SPIFFS, with nvs, otadata and coredump at today's offsets. The move needs one USB flash, which wipes SPIFFS. Users are warned, and nothing is backed up.
 
 | Task | Pts |
 |---|---|
-| **C1 · Measure:** the linker-map breakdown is already done for the C3 repeater (rows 17 and 18). About 160 KB of its 188 KB code growth is the Wi-Fi and TLS stack the OTA path really uses: `wpa_supplicant` +40 KB, `mbedcrypto` +33 KB, lwIP +31 KB, `net80211` +28 KB, `pp` +14 KB, Arduino's Network library +9 KB. Archiving doesn't remove it. C1 repeats the breakdown for the room server, and measures `firmware.bin` against the slot, not PlatformIO's figure (row 18). It also measures what each removable part saves: Wi-Fi OTA, sensors, and exception tables in our own code. The table goes on the Epic issue. | 2 |
-| **C2 · Fit:** apply §9 choice 2. Whichever option, every C3 env builds under its app slot with the margin the ruling sets. | 3 |
-| **C3 · CI:** config-lint checks the C3 partition and the ruled configuration, with a negative case. If choice 5 put the C3s in CI, the matrix catches an overflow. | 1 |
-| **C4 · Docs:** if the ruling changes what a C3 user can do (OTA, sensors, or a USB reflash to move partitions), the user guide says so; the `docs/changes/` record. | 1 |
-| **C5 · Epic verification and PR.** | 1 |
+| **C1 · The table:** add `offband_4MB.csv` with the layout above, and point every shipped 4 MB ESP32 env at it. The set is decided from the inventory, not from memory: today it is the four Xiao C3 envs, the two Xiao C6 envs (`Xiao_C6_companion_radio_ble_`, `Xiao_C6_repeater_`) and the four Photon C6 envs. Each env's own `MAX_CONTACTS` and `MAX_GROUP_CHANNELS` stay as they are. | 2 |
+| **C2 · Fit:** every env from C1 builds with its real `firmware.bin` under the 1,728 KB slot, and its worst-case SPIFFS data set fits 512 KB with room to rewrite `/contacts3`. Both are measured: the size by build, the SPIFFS by packing the worst case with `mkspiffs` at that env's limits, as in the analysis. Results go on the Epic issue. | 2 |
+| **C3 · A unit on the old table says so:** an OTA writes only the app, so a 4 MB unit updated over the air keeps its old partition table. At boot the firmware reads the running table. If SPIFFS is smaller than this build expects, it logs a warning and the CLI shows "old partition table: a USB flash is needed, which erases this node's identity and contacts". It never repartitions or formats by itself. Host tests cover the old-table and new-table cases. | 3 |
+| **C4 · CI:** config-lint fails if a shipped 4 MB ESP32 env uses any other partition table, with a negative case. | 1 |
+| **C5 · The warning:** the release notes open with it, each affected board's guide page carries it, and the `docs/changes/` record names it. It says which boards are affected, that the update needs a USB flash, that the flash erases the node's identity, contacts, channels, access list and settings, and what to write down first. Copy is the owner's to approve. | 1 |
+| **C6 · Epic verification and PR.** | 1 |
 
 ### Epic D: ONE PLATFORM ([#2206](https://github.com/OffbandMesh/meshcore-firmware/issues/2206))
 
@@ -134,7 +137,7 @@ Runs on D's branch before D merges. Each flash gets the owner's go naming the un
 |---|---|
 | **E1 · S3 bench unit (`hv4-bench-1`):**<br>• Start on the current release, and take a full flash backup through `pio-flash` before the first OTA. If the identity check below fails, the unit can be restored byte for byte.<br>• OTA to the new build. The identity, contacts and settings survive (row 13).<br>• A phone already bonded on the old build reconnects without re-pairing. The BLE bond keys live in NVS, so this is the NVS check.<br>• Boot, radio, BLE pairing with the **stock MeshCore client** and the Offband client, and messages both ways with a unit still on the old build.<br>• `SafeBoot` boot count clean.<br>• Then the downgrade check from row 14, per §9 choice 3. | 4 |
 | **E2 · S3 families:** V4 TFT GUI, RC32, XIAO S3 and T-Deck Pro. Each gets boot, radio, the UI or client path it ships with, and the OTA-keeps-identity check. | 4 |
-| **E3 · C6 families:** Photon-1W repeater and RCC6 companion: the same checks. | 3 |
+| **E3 · C6 families:** the RCC6 companion (16 MB, so OTA as in E1) gets the same checks. The Photon-1W is a 4 MB board (Epic C):<br>• First, OTA the new build onto its old table: it boots, and C3's old-table warning appears.<br>• Then a USB flash with `offband_4MB.csv`, which wipes its SPIFFS. That flash needs the owner's wipe go naming the unit, separate from the flash go.<br>• After it: a clean first boot, then a stored contact list filled past the old 107-contact ceiling that survives a reboot. | 4 |
 | **E4 · Roles:** one repeater and one room server: remote admin from the stock client; an observer: after the OTA, it rejoins its configured WiFi and MQTT broker with nothing re-entered (the credentials live in NVS). | 3 |
 | **E5 · Rollback:** if choice 4 ruled B3 in, a deliberately broken OTA image on the bench unit rolls back through the bootloader. Either way, the app-level counter still rolls back an image that runs but fails to validate. | 2 |
 | **E6 · C3 and classic:** per §9 choice 6. | 1 |
@@ -190,7 +193,7 @@ P → A → B → C → D → E → F → G.
   "epic_chain": [2203, 2204, 2205, 2206, 2207, 2208, 2209],
   "chain": true,
   "verification": { "mode": "owner" },
-  "merge": { "budget": 7, "basis": "One PR each for Epic A (#2203, build foundation), B (#2204, code port), C (#2205, C3 flash size), D (#2206, one platform), E (#2207, hardware checks, merged after D per §4), F (#2208, Photon C6 I2C) and G (#2209, integration and OUTCOMES.md). This plan's own PR merges as the approval and uses no budget." },
+  "merge": { "budget": 7, "basis": "One PR each for Epic A (#2203, build foundation), B (#2204, code port), C (#2205, 4 MB boards), D (#2206, one platform), E (#2207, hardware checks, merged after D per §4), F (#2208, Photon C6 I2C) and G (#2209, integration and OUTCOMES.md). This plan's own PR merges as the approval and uses no budget." },
   "flash": null,
   "reset": null,
   "expires_after_hours": 336
@@ -205,10 +208,12 @@ P → A → B → C → D → E → F → G.
 | B2 / B4 | A failure that a version guard can't fix (a library with no build for both frameworks) | **stop**: report it with the library and version. Whether to upgrade, replace or patch the library is the owner's. |
 | B2 | The SD card format call can't produce a card that the current release also reads (`SdCard.cpp:162`) | **stop**: report it. A card formatted by one build must mount on the other. |
 | D1 | The weak-override check finds a library's strong definition that archiving leaves out | **stop**: report the symbol and library. Whether to keep archiving for that env, or force the object in, is the owner's. |
-| C2 | No ruled option fits a C3 env under its slot with the ruled margin | **stop**: report C1's table. |
+| C2 | A 4 MB env doesn't fit the 1,728 KB slot, or its worst-case SPIFFS set doesn't fit 512 KB | **stop**: report the env and both figures. The table isn't changed without the owner. |
+| C3 | The firmware can't read the running partition table at boot | **stop** the check and log that it couldn't tell. It never formats, repartitions or assumes either table. |
 | D2 | A merged image doesn't hold the parts at the expected offsets, or `mergebin` fails | **stop**. No release image ships from D until it's fixed. |
 | D4 | A shipped non-C3 env goes over its slot | **stop**: it gets the same treatment as C, ruled by the owner. |
-| E (any) | After the OTA, the identity, contacts or settings aren't the ones from before | **stop all OTA tests**: report it. No further unit is updated. This is the wipe the plan exists to prevent (row 13). |
+| E (any) | After an OTA, the identity, contacts or settings aren't the ones from before | **stop all OTA tests**: report it. No further unit is updated. This is the wipe the plan exists to prevent (row 13). The USB move to `offband_4MB.csv` wipes by design and is not this case. |
+| E3 | The Photon's USB flash to the new table would run without a wipe go from the owner naming the unit | **stop**. A flash go is not a wipe go. |
 | E (any) | The unit doesn't boot the new image, or SafeBoot rolls it back | **stop**: hold the capture, report it. No other unit of that family is flashed. |
 | E1 | The new bootloader doesn't boot the previous Offband release | **stop**: report it. §9 choice 3 is settled on that result before D5's copy is written. |
 | E (any) | The stock client can't pair, list contacts or exchange messages, where it could on the current release | **stop**. Stock-client interoperability is a hard constraint. |
@@ -220,7 +225,7 @@ No branch proceeds without its condition, so no fail-open grant is needed.
 
 ## 7. Verification
 
-- **Named command:** the full CI matrix (`ci-green`: config-lint, the native suite and every build env), plus each Epic's own check: A1's two-project build, B4's dual-build table, C1's size table, and D2's and D4's results.
+- **Named command:** the full CI matrix (`ci-green`: config-lint, the native suite and every build env), plus each Epic's own check: A1's two-project build, B4's dual-build table, C2's size and SPIFFS results, and D2's and D4's results.
 - **Acceptance bar:**
   - Every ESP32 env resolves to one platform, and config-lint enforces it.
   - Every shipped ESP32 env builds under its slot.
@@ -236,12 +241,19 @@ No branch proceeds without its condition, so no fail-open grant is needed.
 
 ## 9. Your choices
 
+### Decided
+
+| # | Decision | By |
+|---|---|---|
+| 2 | Every shipped 4 MB ESP32 build, C3 and C6, moves to `offband_4MB.csv` (Epic C). Moving needs a USB flash that wipes SPIFFS; users get a prominent warning, and nothing is backed up. Staying on old platforms and tables only postpones this, and 4 MB boards will reach the end of their room eventually. | Owner, 2026-11-19 (C3 wipe) and 2026-11-21 (C3 and C6, the table) |
+
+### Open
+
 Each needs a ruling before the task it names starts.
 
 | # | Question | Options | Recommendation |
 |---|---|---|---|
 | 1 | Which framework version (A2, D1). | (a) 55.03.313: Arduino 3.3.13, IDF 5.5.6, released 2026-11-17, needs PlatformIO 6.2. (b) 55.03.311: Arduino 3.3.11, IDF 5.5.5, needs PlatformIO 6.1.19, built here. (c) 55.03.38-1, MeshSmith's choice for the Photon. | (b) 55.03.311. Every build, size and failure in §1 was measured on it, and it runs on the PlatformIO this host has. 55.03.313 came out the day before this plan and is untested here; it also needs PlatformIO 6.2, which A2 would have to pin first. Moving from 311 to 313 later is a patch-level step that changes one line, and the D3 lint and the CI matrix cover it. |
-| 2 | How the C3 repeater and room server fit (C2). **Owner, 2026-11-19: users are warned that the C3 change wipes SPIFFS; no backup and restore is built.** | (a) A C3-specific partition table: two 0x1B0000 (1.69 MB) app slots and 0x80000 (512 KB) of SPIFFS, with NVS, otadata and coredump where they are today. Deployed C3 units need one USB flash, which wipes SPIFFS (identity, contacts, channels, ACL, settings; row 19). (b) The C6 builds' `min_spiffs.csv`: 1.875 MB slots but 128 KB of SPIFFS, which holds about 107 contacts with rewrite room instead of 350 (row 19). (c) Keep today's table and leave out Wi-Fi OTA, which is the ~190 KB that has to go (C1); C3 repeaters could then be updated only over USB. | (a). It keeps every shipped role, the 350-contact limit and Wi-Fi OTA. The C3 repeater's real 55.x binary (1,496,073 bytes by section sum, row 18) fills 85% of a 0x1B0000 slot. The companion BLE build fills about 61% (~1.08 MB, estimated as PlatformIO's figure plus `.eh_frame`). 512 KB of SPIFFS is a third more than the 384 KB that 350 contacts measure at. C1 confirms the room server's size, and E6 proves the table on a unit. |
 | 3 | Downgrades after the switch (D5, E1). | (a) Supported: E1 must show the new bootloader boots the previous release, and D5 says so. (b) Not supported by OTA: D5 tells users that going back needs a USB flash of the older merged image. | (a) if E1 shows it works, and (b) otherwise. E1 settles it on the unit, not on documentation. |
 | 4 | Fix the disarmed bootloader rollback (row 12) here (B3, E5). | (a) In this Feature. (b) Its own issue, after this Feature. | (a). E has to test OTA recovery on the new framework anyway. With the layer disarmed, E5 would be testing a path that never runs. The fix is small, and it adds recovery, which is part of the yardstick. |
 | 5 | Put the C3 and one classic build in the CI matrix (A4). | (a) Yes: four Xiao C3 envs and `Heltec_v2_repeater`. (b) No: they're checked at release time only, as today. | (a). The C3s are the builds closest to their limit, and today their first build after a change is a release build (row 10). That's five more matrix jobs. |
@@ -258,7 +270,8 @@ Each needs a ruling before the task it names starts.
 | [#1050](https://github.com/OffbandMesh/meshcore-firmware/issues/1050), [#2196](https://github.com/OffbandMesh/meshcore-firmware/issues/2196): the Photon I2C hang | F1's result is recorded on both. |
 | [#294](https://github.com/OffbandMesh/meshcore-firmware/issues/294): Photon-1W USB companion handshake | E3 runs the Photon USB companion and records whether the new framework changes it. The fix stays in #294. |
 | Envs over 90% of their slot after D4 | One row each, here or in their own issue. |
-| The shipped C6 companions (`Xiao_C6_companion_radio_ble_`, both Photon C6 companions) run 128 KB of SPIFFS with a 350-contact limit, which holds about 107 (row 19). The repeater's `/packet_log` has no size cap. | Their own issue, outside this Feature: both exist on today's framework. Not filed yet; the owner decides. |
+| The repeater's `/packet_log` has no size cap. | Its own issue, outside this Feature: it exists on today's framework. Not filed yet. (The C6 companions' 128 KB SPIFFS defect, row 19, is now fixed inside this Feature by Epic C.) |
+| `Meshimi_*` envs use `max_app_4MB.csv`, which has no SPIFFS partition at all. Not shipped. | Its own issue if Meshimi is ever released. Epic C covers shipped envs only. |
 
 When this plan merges, each Task gets a GitHub issue and a Citadel task, per canon.
 
