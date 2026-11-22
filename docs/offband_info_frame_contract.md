@@ -169,11 +169,15 @@ present here with no merged constant means the number is still unclaimed and nob
 | `0x03` | `TAG_ACK_CAPACITY` | 1 | outstanding-ACK capacity. Carries its value by the §3 exception: one byte, fixed for the build, no sub-code of its own | — | #994/#1001 |
 | `0x04` | `TAG_DISPLAY_CONTROL` | 0 | the display can be switched on/off/auto | `0xC5 0x05`/`0x06` | #2067 |
 | `0x05` | `TAG_LED_CONTROL` | 0 | the LED can be switched on/off | `0xC5 0x07`/`0x08` | #2067 |
-| `0x06`–`0xFE` | free | | | | |
+| `0x06` | `TAG_CLI_LOCAL` | 0 | RESERVED, not emitted yet: the companion's own client can run CLI lines (`CMD_RUN_CLI_COMMAND` 66 → `RESP_CODE_CLI_REPLY` 29) | none | #2211 |
+| `0x07` | `TAG_CLI_REMOTE` | 0 | RESERVED, not emitted yet: remote CLI (`TXT_TYPE_CLI_COMMAND` 3) is sent for the client and run from a contact granted it (`ContactInfo` flag `0x10`) | none | #2211 |
+| `0x08` | `TAG_CLI_REPLY_CONT` | 0 | RESERVED, not emitted yet: this radio continues a long local CLI reply in `0xC5 0x1D` frames, on a connection whose client requested this advert | none | #2215 |
+| `0x09`–`0xFE` | free | | | | |
 | `0xFF` | `TAG_CONTINUE` | 1 | resume cursor | — | #1994 |
 
 `0x00` is not a valid tag. `0xC5` sub-codes `0x01`–`0x1B` are allocated; `0x1C` is this advert;
-`0x1D` is next free; `0x7F` is ERR with reasons 1–10 taken.
+`0x1D` is reserved for CLI reply continuation (#2215, radio to client only, not sent yet); `0x1E`
+is next free; `0x7F` is ERR with reasons 1–10 taken.
 
 ### `0x04` / `0x05` — why two tags and not one bit (#2065, #2067)
 

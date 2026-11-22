@@ -1,0 +1,15 @@
+schema_version: 1
+issue: 2222
+impact: none
+reason: >-
+  The on-device GUI (Heltec V4 TFT, R8, T-Deck and T-Deck Pro) has no guide in
+  the public manual yet, so no published guide describes the Bluetooth PIN
+  setting or adding a channel on the radio. The T-Deck Pro's unpublished draft
+  guide, docs/initiatives/2004-tdeck-pro/2005-bringup/GUIDE-DRAFT.md, now says
+  that a PIN set in the client or in Settings is used for the next pairing
+  with no restart, and how Add Channel works from "+" in Chats. That the
+  phone's set-PIN command also takes effect at once changes no documented
+  step: the manual never said a restart was needed. The badge's PIN rule (a
+  random PIN each start with a screen, 123456 without) is unchanged; its
+  source moved into MyMesh::unsetBlePin(), so the catalog's source evidence
+  for the qcc-badge entry in features.yml now quotes the new lines.

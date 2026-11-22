@@ -114,6 +114,7 @@ public:
   void begin(const char* prefix, char* name, uint32_t pin_code);
 
   // BaseSerialInterface methods
+  void setPin(uint32_t pin) override;   // #2222: the next pairing's PIN
   void enable() override;
   void disable() override;
   bool isEnabled() const override { return _isEnabled; }

@@ -460,6 +460,20 @@ bool ComposeBuffer::insert(const char* utf8, size_t len) {
   return true;
 }
 
+// A truncated sequence stops it too: insert() refuses a NUL where a
+// continuation byte belongs, so nothing reads past the string's end.
+size_t ComposeBuffer::insertText(const char* utf8) {
+  if (!utf8) return 0;
+  size_t taken = 0;
+  for (const char* p = utf8; *p;) {
+    const size_t k = seqLen(uint8_t(*p));
+    if (!insert(p, k)) break;
+    p += k;
+    taken += k;
+  }
+  return taken;
+}
+
 bool ComposeBuffer::backspace() {
   if (_len == 0) return false;
   do {

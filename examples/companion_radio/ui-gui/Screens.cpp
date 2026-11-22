@@ -16,9 +16,20 @@
 using namespace offband::gui;
 using namespace shell;
 
+extern "C" const lv_img_dsc_t ob_logo_64;   // the Offband mark (boot and lock)
+
 namespace {
 
 const char* const kByButton = byButton();
+
+// E-paper keeps the lock screen on the glass while the panel sleeps, and
+// nothing refreshes it there: it draws nothing that changes, so no clock,
+// date, zone or battery (owner, #2218). A lit panel ticks its clock.
+#ifdef GUI_PANEL_EINK
+constexpr bool kLockStatic = true;
+#else
+constexpr bool kLockStatic = false;
+#endif
 
 // Tab icons, 16 px, after the design's stroke icons. lv_line keeps the
 // pointer, so the point lists live for the program.
@@ -251,6 +262,11 @@ void GuiShell::sdNotice(bool show, uint16_t done, uint16_t total) {
 void GuiShell::showLock() {
   if (_locked) return;
   _locked = true;
+  // A switch still waiting to run (a tap just before the lock) would undo it.
+  _pending_fn = nullptr;
+  // rebuild() closes the sheets, the popover and the key preview; the SD
+  // notice is the one thing left on the top layer.
+  sdNotice(false, 0, 0);
   rebuild();
 }
 
@@ -303,12 +319,10 @@ void GuiShell::rebuild() {
   lv_obj_set_style_bg_color(scr, c(_t.bg), 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
   _name = _key = _advert = _advert_label = nullptr;
-  _lock_clock = _lock_sub = _lock_zone = _lock_list = _lock_ampm = nullptr;
+  _lock_clock = _lock_sub = _lock_zone = _lock_ampm = nullptr;
   for (auto& v : _value) v = nullptr;
   for (auto& v : _cell_name) v = nullptr;
   for (auto& s : _sub) s = nullptr;
-  _lock_count = 0xFF;
-  _lock_more = 0xFFFFFFFF;
 
   _kb = _draft_box = _draft_label = _caret = _counter = nullptr;
   _query_label = _match_label = _search_list = _wheel_strip = nullptr;
@@ -518,38 +532,52 @@ void GuiShell::buildTabs(lv_obj_t* parent) {
   if (active && !(_composing || _set_text || _login || _searching)) lv_group_focus_obj(active);
 }
 
+// Lock (#2218, owner 2026-11-20): nothing private on it, so no message
+// text, sender or unread count, on any panel. A lit panel shows the clock,
+// the date line and the zone; e-paper shows the node's name (kLockStatic).
 void GuiShell::buildLock(lv_obj_t* scr) {
-  // Class B (mockup 10): the clock and its lines on the left, the unread
-  // items on the right.
-  lv_obj_t* pair = nullptr;
-  if (landscape()) {
-    pair = box(scr, _lay.w - 24, LV_SIZE_CONTENT);
-    lv_obj_align(pair, LV_ALIGN_LEFT_MID, 12, -10);
-    lv_obj_set_flex_flow(pair, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(pair, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(pair, 14, 0);
-  }
-  lv_obj_t* col = box(pair ? pair : scr, pair ? 140 : 210, LV_SIZE_CONTENT);
-  if (!pair) lv_obj_align(col, LV_ALIGN_TOP_MID, 0, 40);
+  lv_obj_t* col = box(scr, _lay.w - 24, LV_SIZE_CONTENT);
+  lv_obj_align(col, LV_ALIGN_CENTER, 0, -14);
   lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_row(col, 4, 0);
-  lv_obj_t* clock_row = box(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-  lv_obj_set_flex_flow(clock_row, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(clock_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
-  lv_obj_set_style_pad_column(clock_row, 4, 0);
-  _lock_clock = label(clock_row, FontRole::Clock, _t.ink, "--:--");
-  _lock_ampm = label(clock_row, FontRole::Title, _t.ink2, "");
-  lv_obj_set_style_pad_bottom(_lock_ampm, 8, 0);
-  _lock_sub = label(col, FontRole::BodySmall, _t.ink2);
-  _lock_zone = label(col, FontRole::Label, _t.dim);   // the zone, or "UTC · set a time zone" (#1610)
-  _lock_list = pair ? box(pair, _lay.w - 24 - 140 - 14, LV_SIZE_CONTENT) : box(col, LV_PCT(100), LV_SIZE_CONTENT);
-  lv_obj_set_style_pad_top(_lock_list, pair ? 0 : 10, 0);
-  lv_obj_set_flex_flow(_lock_list, LV_FLEX_FLOW_COLUMN);
+  // The Offband lockup, as the boot screen draws it: the mark in the signal
+  // color over the wordmark (owner, 2026-11-21). Static, so it sits on e-paper
+  // while the panel sleeps as well as the name does.
+  lv_obj_t* mark = lv_img_create(col);
+  lv_img_set_src(mark, &ob_logo_64);
+  lv_obj_set_style_img_recolor(mark, c(_t.sig), 0);
+  lv_obj_set_style_img_recolor_opa(mark, LV_OPA_COVER, 0);
+  // Landscape: scaled to the layout's mark size on a lit panel. Not on
+  // e-paper: a scaled mark's grey edges come out ragged through the 1-bit
+  // threshold, and with no clock the full mark fits in landscape anyway.
+  const int16_t native = int16_t(ob_logo_64.header.w);
+  if (!kLockStatic && _lay.logo < native) {
+    lv_img_set_zoom(mark, uint16_t(256 * _lay.logo / native));
+    lv_img_set_size_mode(mark, LV_IMG_SIZE_MODE_REAL);
+  }
+  lv_obj_t* word = label(col, FontRole::Title, _t.ink, "offband");
+  lv_obj_set_style_pad_bottom(word, 10, 0);   // the lockup apart from what's below it
+  if (kLockStatic) {
+    lv_obj_t* name = label(col, FontRole::Title, _t.ink);
+    userText(name, _model->nodeName());
+    lv_obj_set_width(name, LV_PCT(100));
+    lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
+    oneLine(name, FontRole::Title);
+  } else {
+    lv_obj_t* clock_row = box(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(clock_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(clock_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    lv_obj_set_style_pad_column(clock_row, 4, 0);
+    _lock_clock = label(clock_row, FontRole::Clock, _t.ink, "--:--");
+    _lock_ampm = label(clock_row, FontRole::Title, _t.ink2, "");
+    lv_obj_set_style_pad_bottom(_lock_ampm, 8, 0);
+    _lock_sub = label(col, FontRole::BodySmall, _t.ink2);
+    _lock_zone = label(col, FontRole::Label, _t.dim);   // the zone, or "UTC · set a time zone" (#1610)
+  }
 
   lv_obj_t* hint = label(scr, FontRole::BodySmall, _t.dim, "Press USR or swipe up to unlock");
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -14);
-
 }
 
 bool GuiShell::action(Action a) {
@@ -793,57 +821,6 @@ void GuiShell::updateLock(const LockData& d) {
     lv_label_set_text(_lock_zone, d.zone);
     lv_obj_set_style_text_color(_lock_zone, c(d.zone_unset ? _t.warn : _t.dim), 0);
   }
-
-  // The list rebuilds only when what it shows changes.
-  bool same = d.count == _lock_count && d.more == _lock_more;
-  for (uint8_t i = 0; same && i < d.count; i++) {
-    lv_obj_t* row = lv_obj_get_child(_lock_list, i);
-    lv_obj_t* top = lv_obj_get_child(row, 0);
-    same = strcmp(lv_label_get_text(lv_obj_get_child(top, 0)), d.items[i].label) == 0 &&
-           strcmp(lv_label_get_text(lv_obj_get_child(top, 1)), d.items[i].time) == 0 &&
-           strcmp(lv_label_get_text(lv_obj_get_child(row, 1)), d.items[i].text) == 0;
-  }
-  if (same) return;
-  _lock_count = d.count;
-  _lock_more = d.more;
-  lv_obj_clean(_lock_list);
-
-  if (d.count == 0) {
-    lv_obj_t* none = box(_lock_list, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_top(none, 16, 0);
-    lv_obj_set_flex_flow(none, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(none, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(none, 6, 0);
-    lv_obj_t* bell = box(none, 14, 14);
-    line(bell, kBell, 9, _t.dim);
-    line(bell, kBellClapper, 2, _t.dim);
-    label(none, FontRole::Body, _t.dim, "No new messages");
-    return;
-  }
-
-  for (uint8_t i = 0; i < d.count; i++) {
-    lv_obj_t* row = box(_lock_list, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_ver(row, 6, 0);
-    lv_obj_set_style_pad_hor(row, 2, 0);
-    lv_obj_set_style_border_side(row, i == 0 ? LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_BOTTOM : LV_BORDER_SIDE_BOTTOM,
-                                 0);
-    lv_obj_set_style_border_width(row, 1, 0);
-    lv_obj_set_style_border_color(row, c(_t.line), 0);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
-    lv_obj_t* top = box(row, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_t* who = label(top, FontRole::Label, _t.sig, d.items[i].label);
-    lv_obj_align(who, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_t* when = label(top, FontRole::Meta, _t.dim, d.items[i].time);
-    lv_obj_align(when, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_t* text = label(row, FontRole::BodySmall, _t.ink, d.items[i].text);
-    lv_obj_set_width(text, LV_PCT(100));
-    oneLine(text, FontRole::BodySmall);
-  }
-  if (d.more) {
-    lv_obj_t* more = label(_lock_list, FontRole::BodySmall, _t.dim);
-    lv_label_set_text_fmt(more, "+%lu more", (unsigned long)d.more);
-    lv_obj_set_style_pad_top(more, 4, 0);
-  }
 }
 
 // ------------------------------------------------- Chats and Conversation
@@ -920,11 +897,10 @@ void GuiShell::buildChats(lv_obj_t* content) {
   label(h, FontRole::Title, _t.ink, "Chats");
   lv_obj_t* grow = box(h, 1, 1);
   lv_obj_set_flex_grow(grow, 1);
-  // "+" asks what to start (Epic R mockup 1): a message to a node, or a
-  // channel. It used to go straight to Nodes, which suits a DM but not a
-  // channel (tester bench, #1730).
+  // "+" adds a channel, as "+" on the Offband client's Channels does (#2222).
+  // A message to a node starts from Nodes, as it does from the client's Contacts.
   auto start = [](lv_event_t* e) {
-    static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->openStartSheet(); });
+    static_cast<GuiShell*>(lv_event_get_user_data(e))->later([](GuiShell* g) { g->openAddChannel(); });
   };
   lv_obj_t* plus = box(h, 24, 24);
   label(plus, FontRole::Title, _t.sig, "+");
@@ -951,7 +927,7 @@ void GuiShell::buildChats(lv_obj_t* content) {
     // The box looked like a button and did nothing (tester bench, #1730); it
     // is one now, the same as "+" (mockup 2).
     lv_obj_t* go = emptyState(list, _t, EmptyIcon::Bubbles, "No chats yet",
-                              "Channels you join and people who message you show up here.", "+ Start a chat");
+                              "Channels you join and people who message you show up here.", "+ Add Channel");
     if (go) {
       focusable(go);
       lv_obj_add_event_cb(go, start, LV_EVENT_CLICKED, this);
@@ -1685,12 +1661,7 @@ bool GuiShell::typeKey(KeyKind k, char ch, bool tapped_shift) {
 void GuiShell::insertText(const char* text) {
   if (!text) return;
   if (_draft.length() && _draft.text()[_draft.length() - 1] != ' ') _draft.insert(" ", 1);
-  for (const char* p = text; *p;) {
-    const uint8_t b = uint8_t(*p);
-    const size_t k = b < 0x80 ? 1 : b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : 2;
-    if (!_draft.insert(p, k)) break;
-    p += k;
-  }
+  _draft.insertText(text);
   const Shift before = _shift.state();
   _shift.autoCap(_draft.text(), _draft.length());
   if (_shift.state() != before) buildKeys();
@@ -1968,10 +1939,6 @@ void GuiShell::sheetPick(int i) {
   } else if (kind == Sheet::Menu) {
     if (i == 0) openCompose(_thread);   // rebuild closes the sheet
     else openSheet(Sheet::Notify);
-  } else if (kind == Sheet::Start) {
-    closeSheet();
-    if (i == 0) showTab(Tab::Nodes);   // a message to a node: pick one in Nodes, as "+" did
-    else openAddChannel();
   } else if (kind == Sheet::Zone) {
     if (i == 1) {
       _model->setZone(_sheet_zone);

@@ -35,6 +35,10 @@ public:
   // Default: the full frame; BLE interfaces override with the live MTU.
   virtual size_t maxFrameSize() const { return MAX_FRAME_SIZE; }
 
+  // #2222: the PIN the next pairing uses, set while running. Only a Bluetooth
+  // interface has one; the rest ignore it.
+  virtual void setPin(uint32_t pin) { (void)pin; }
+
   // #453: payload bytes a builder may emit given `header_bytes` of fixed frame
   // prefix, i.e. maxFrameSize() - header, FLOORED AT 0 so it can never underflow
   // (a pathologically small MTU yields 0, not a wrapped-huge size_t). Builders that

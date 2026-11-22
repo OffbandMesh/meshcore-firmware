@@ -569,6 +569,36 @@ TEST(Compose, RejectsMalformedCharacters) {
   EXPECT_EQ(c.length(), 0u);
 }
 
+// #2222: a whole string goes in a character at a time. Back from a private
+// channel's key handed insert() the whole name and lost it.
+TEST(Compose, InsertTextTakesAWholeString) {
+  ComposeBuffer c;
+  c.start(160);
+  EXPECT_EQ(c.insertText("Caf\xC3\xA9 \xE2\x9C\xA8"), 9u);   // "Café ✨"
+  EXPECT_STREQ(c.text(), "Caf\xC3\xA9 \xE2\x9C\xA8");
+}
+
+TEST(Compose, InsertTextStopsAtTheBudgetOnAWholeCharacter) {
+  ComposeBuffer c;
+  c.start(4);
+  EXPECT_EQ(c.insertText("ab\xE2\x82\xAC" "c"), 2u);   // € would need 3 of the 2 left
+  EXPECT_STREQ(c.text(), "ab");
+}
+
+// Negative: a malformed or cut-short character stops it, and what came
+// before stays.
+TEST(Compose, InsertTextStopsAtAMalformedCharacter) {
+  ComposeBuffer c;
+  c.start(160);
+  EXPECT_EQ(c.insertText("ok\x80zz"), 2u);
+  EXPECT_STREQ(c.text(), "ok");
+  ComposeBuffer d;
+  d.start(160);
+  EXPECT_EQ(d.insertText("x\xE2\x82"), 1u);   // cut short at the string's end
+  EXPECT_STREQ(d.text(), "x");
+  EXPECT_EQ(d.insertText(nullptr), 0u);
+}
+
 TEST(Compose, CounterAndTone) {
   ComposeBuffer c;
   c.start(160);

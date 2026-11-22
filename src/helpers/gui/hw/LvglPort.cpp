@@ -41,6 +41,7 @@ static void ackFlush(lv_disp_drv_t* drv) { (void)drv; }
 static TouchQueue s_queue;
 static TouchReplay s_replay(s_queue, LV_INDEV_DEF_LONG_PRESS_TIME);
 static bool s_pushing = false;
+static bool s_sleep_paint = false;   // lvglPaintBeforeSleep(): the keyboard is read, touch isn't
 static void busyHook(const void* arg);
 static bool pushTouchPressed();
 #ifdef OFFBAND_GUI_PERF
@@ -264,7 +265,9 @@ static void busyHook(const void* arg) {
     }
   #endif
   }
-  if (s_pushing && s_busy_client) s_busy_client();
+  // The keyboard is read through every refresh, the pre-sleep lock paint
+  // included, so its 10-event FIFO can't overflow; only touch is held off there.
+  if ((s_pushing || s_sleep_paint) && s_busy_client) s_busy_client();
   delay(1);   // GxEPD2's own pace between BUSY checks when no hook is set
 }
 #endif
@@ -360,6 +363,28 @@ void lvglLoop() {
   lv_timer_handler();
 #ifdef GUI_PANEL_EINK
   if (s_panel) pushIfDue();
+#endif
+}
+
+uint32_t lvglPaintBeforeSleep() {
+#ifdef GUI_PANEL_EINK
+  if (!s_panel || !s_panel->isOn()) return 0;
+  const uint32_t t0 = millis();
+  lv_refr_now(nullptr);   // what changed, into the frame buffer
+  const EinkPush kind = s_pacer.beforeSleep();
+  if (kind == EinkPush::None) return 0;
+  const EinkArea& a = s_pacer.dirty();
+  // Not s_pushing: a touch now is the one that wakes the panel after it
+  // sleeps, read there; LVGL must not also replay it on the lock screen.
+  // The keyboard is still serviced (s_sleep_paint): a key read here wakes the
+  // screen once it is off, and Enter on a dark screen only wakes it.
+  s_sleep_paint = true;
+  s_panel->push(kind == EinkPush::Full, a.x1, a.y1, a.x2, a.y2);
+  s_sleep_paint = false;
+  s_pacer.pushed(kind, millis());
+  return millis() - t0;
+#else
+  return 0;
 #endif
 }
 

@@ -41,6 +41,12 @@ bool lvglBegin(GuiPanel& panel);
 // Runs LVGL's timers and rendering. Call from the main loop.
 void lvglLoop();
 
+// E-paper keeps its image with no power (#2218): before the panel sleeps,
+// draws what changed and sends it to the glass at once, as a full refresh,
+// ignoring the gap between refreshes. Blocks for the refresh. Returns the ms
+// it took, 0 when nothing was waiting or the panel isn't e-paper.
+uint32_t lvglPaintBeforeSleep();
+
 // Epic H: turns the panel (MADCTL from the board's portrait value), sets
 // LVGL's resolution, and maps touches to match. 90 and 270 are landscape;
 // anything else is portrait.

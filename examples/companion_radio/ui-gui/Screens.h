@@ -41,20 +41,14 @@ struct HomeData {
   bool sensors;
 };
 
-struct LockItem {
-  char label[48];
-  char time[12];   // "12:05 PM"
-  char text[96];
-};
-
+// What a lit lock screen updates each second. Nothing from a message: the
+// lock screen shows no text, sender or count (#2218). An e-paper lock screen
+// draws none of this either (kLockStatic, Screens.cpp).
 struct LockData {
   char clock[12];   // "21:07", or "9:07 PM" (12-hour)
   char sub[64];
   char zone[40];    // "UTC · set a time zone in Display", or the zone's name (#1610)
   bool zone_unset;  // drawn in amber
-  uint8_t count;   // items, 0..2
-  LockItem items[2];
-  uint32_t more;   // unread in threads not shown
 };
 
 // A node as its detail screen shows it (E4).
@@ -181,7 +175,7 @@ public:
   // Connectivity, Power, Debug, About (G5).
   virtual void deviceInfo(DeviceInfo* out) = 0;
   virtual void setBleOn(bool on) = 0;            // until the next boot
-  virtual bool setBlePin(uint32_t pin) = 0;      // 0: a new one each boot; from the next boot
+  virtual bool setBlePin(uint32_t pin) = 0;      // 0: a new one each boot; used from the next pairing
   virtual bool setFullMv(uint16_t mv) = 0;       // pins it; false outside the learner's band
   virtual void learnFullAgain() = 0;             // drops it; the next full charge teaches it
   virtual bool setLogLevel(int index) = 0;       // logName(); false if not saved
@@ -222,6 +216,8 @@ public:
   void setLayout(const offband::gui::Layout& l);
   const offband::gui::Layout& layout() const { return _lay; }
 
+  // Lock, over whatever is open; unlocking returns to it. Anything on the top
+  // layer goes too, so nothing of the screen below shows through (#2218).
   void showLock();
   void showTab(Tab tab);
   bool locked() const { return _locked; }
@@ -379,14 +375,14 @@ private:
   // under the Chat tab; the typing steps share the keyboard with Compose.
   enum class ChanStep : uint8_t {
     None,
-    Kinds,      // mockup 3: Public, hashtag, private
+    Kinds,      // the Offband client's four choices (#2222)
     Hashtag,    // mockup 4: the name, typed
     PrivName,   // mockup 5: a private channel's name, typed
-    PrivKey,    // mockup 5: make a new key, or enter one
-    KeyEntry,   // mockup 6: the key, on the hex keypad
-    ShowKey,    // mockup 7: a new key, to share
+    KeyEntry,   // mockup 6: the key, on the hex keypad (Join a Private Channel)
+    ShowKey,    // mockup 7: a new key, to share (Create a Private Channel)
   };
   ChanStep _chan = ChanStep::None;
+  bool _chan_create = false;                // PrivName: Create (a new key) rather than Join (type one)
   offband::gui::ComposeBuffer _chan_buf;    // the name or key being typed
   char _chan_name[offband::gui::kChannelNameMax + 1] = {};   // a private channel's name
   uint8_t _chan_key[offband::gui::kChannelKeyLen] = {};      // the key ShowKey shows
@@ -465,8 +461,7 @@ private:
   // Bottom sheets (D6): the channel notification sheet, and the menu USR
   // hold opens in a channel (owner pick a, 2026-10-16). Zone: the one-time
   // "Use <zone> time?" prompt (Epic L, owner pick 5a).
-  enum class Sheet : uint8_t { None, Notify, Menu, Zone, Start, Leave };
-  void openStartSheet();   // "+" in Chats: message a node, or add a channel (Epic R)
+  enum class Sheet : uint8_t { None, Notify, Menu, Zone, Leave };
   void openLeaveSheet();   // a channel's Leave, confirmed (Epic R mockup 9)
   void showChannelKey();   // a private channel's key, to share (Epic R mockup 7)
   void openSheet(Sheet kind);
@@ -643,7 +638,4 @@ private:
   lv_obj_t* _lock_ampm = nullptr;   // 12-hour: the clock font has digits and a colon only
   lv_obj_t* _lock_sub = nullptr;
   lv_obj_t* _lock_zone = nullptr;
-  lv_obj_t* _lock_list = nullptr;
-  uint8_t _lock_count = 0xFF;
-  uint32_t _lock_more = 0xFFFFFFFF;
 };

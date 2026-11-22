@@ -862,7 +862,18 @@ void GuiShell::buildConnPage(lv_obj_t* content) {
   // The PIN in use is shown in full, set or random: it's the one a phone or
   // PC has to type (owner, 2026-10-22).
   pinText(d.pin_stored, d.pin_active, v, sizeof v);
-  setRow(body, bPin, "PIN", d.pin_stored ? "Asked when pairing" : "New each boot", v, kNav, false, false, false);
+  const bool has_pin = d.pin_active || d.pin_stored;
+  // With a PIN, the row is how to change it; the PIN itself is drawn large
+  // below it, in the clock's digits. At 12 px the owner couldn't read it on
+  // the T-Deck Pro without magnifying it (2026-11-21, #2222).
+  setRow(body, bPin, "PIN", d.pin_stored ? "Asked when pairing" : "New each boot", has_pin ? nullptr : v, kNav,
+         false, false, false);
+  if (has_pin) {
+    lv_obj_t* big = label(body, FontRole::Clock, _t.ink, v);
+    lv_obj_set_width(big, LV_PCT(100));
+    lv_obj_set_style_text_align(big, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_pad_ver(big, 4, 0);
+  }
   setRow(body, bPhone, "Phone", nullptr, d.phone ? "Connected" : "Not connected", kRo, false, false, false);
 }
 
@@ -1409,7 +1420,7 @@ void GuiShell::openSetSheet(SetSheet kind, uint8_t row) {
       const char* range = "150.000 – 2500.000 MHz";
       if (pin) {
         _ss_pad.start("", 0, 6);
-        title("PIN", "Used from the next boot");
+        title("PIN", nullptr);   // used from the next pairing, no reboot (#2222)
         unit = "";
         range = "6 digits · empty: new each boot";   // turns red on a refusal
       } else if (pos) {

@@ -100,25 +100,35 @@ def add_failures(uitask, screens):
 SCREENS = ROOT / "examples" / "companion_radio" / "ui-gui" / "Screens.cpp"
 
 
-def start_failures(screens):
-    """"+" and the empty Chats button both open Start a chat (Epic R #1743, R1 #1748).
+# The Offband client's Add Channel choices, in its order (#2222).
+CLIENT_CHOICES = ["Create a Private Channel", "Join a Private Channel", "Join the Public Channel",
+                  "Join a Hashtag Channel"]
 
-    A tester found "+" went only to Nodes (a DM, not a channel), and the boxed
-    "+ to start one" looked like a button and did nothing.
+
+def start_failures(screens, chanscreens=None):
+    """"+" and the empty Chats button both open Add Channel (#2222).
+
+    As "+" on the Offband client's Channels: Add Channel, with the client's four
+    choices in its words and order. Before #2222 "+" opened a "Start a chat" sheet
+    with Add a channel behind it, which the owner couldn't find (bench, 2026-11-20).
+    Earlier still, "+" went only to Nodes, and the boxed "+ to start one" looked
+    like a button and did nothing (#1730).
     """
     out = []
     code = strip_comments(screens)
     chats = body_of(code, r"void\s+GuiShell::buildChats\s*\(")
     if chats is None:
         return ["GuiShell::buildChats() not found: this check cannot see what it protects"]
-    if "openStartSheet()" not in chats:
-        out.append("Chats' \"+\" must open the Start a chat sheet (openStartSheet)")
-    if '"+ Start a chat"' not in chats or not re.search(r"lv_obj_add_event_cb\(\s*go\s*,", chats):
-        out.append("the empty Chats box must be a button, \"+ Start a chat\", that opens the sheet")
-    pick = body_of(code, r"void\s+GuiShell::sheetPick\s*\(")
-    m = re.search(r"kind\s*==\s*Sheet::Start\s*\)\s*\{(.*?)\}\s*else", pick or "", re.S)
-    if not m or "showTab(Tab::Nodes)" not in m.group(1) or "openAddChannel()" not in m.group(1):
-        out.append("Start a chat must lead to Nodes (a message) and to Add a channel")
+    if "openAddChannel()" not in chats:
+        out.append("Chats' \"+\" must open Add Channel (openAddChannel)")
+    if '"+ Add Channel"' not in chats or not re.search(r"lv_obj_add_event_cb\(\s*go\s*,", chats):
+        out.append("the empty Chats box must be a button, \"+ Add Channel\", that opens Add Channel")
+    ch = strip_comments(chanscreens if chanscreens is not None else CHANSCREENS.read_text(encoding="utf-8"))
+    build = body_of(ch, r"void\s+GuiShell::buildAddChannel\s*\(") or ""
+    kinds = re.search(r"case\s+ChanStep::Kinds\s*:(.*?)case\s+ChanStep::", build, re.S)
+    at = [kinds.group(1).find('"%s"' % c) if kinds else -1 for c in CLIENT_CHOICES]
+    if min(at) < 0 or at != sorted(at):
+        out.append("Add Channel must list the client's four choices, in its order: " + ", ".join(CLIENT_CHOICES))
     return out
 
 
@@ -186,9 +196,9 @@ def test_negative_leave_defaulting_to_leave_is_caught():
 
 def test_negative_plus_straight_to_nodes_is_caught():
     real = SCREENS.read_text(encoding="utf-8")
-    broken = real.replace("g->openStartSheet();", "g->showTab(Tab::Nodes);", 1)
+    broken = real.replace("g->openAddChannel();", "g->showTab(Tab::Nodes);", 1)
     assert broken != real
-    assert any("must open the Start a chat sheet" in f for f in start_failures(broken))
+    assert any("must open Add Channel" in f for f in start_failures(broken))
 
 
 def test_negative_a_dead_empty_chats_box_is_caught():
@@ -198,11 +208,19 @@ def test_negative_a_dead_empty_chats_box_is_caught():
     assert any("must be a button" in f for f in start_failures(broken))
 
 
-def test_negative_a_sheet_without_add_a_channel_is_caught():
-    real = SCREENS.read_text(encoding="utf-8")
-    broken = real.replace("else openAddChannel();", "else showTab(Tab::Nodes);")
+def test_negative_a_missing_client_choice_is_caught():
+    real = CHANSCREENS.read_text(encoding="utf-8")
+    broken = real.replace('"Join a Private Channel"', '"Enter a key"', 1)
     assert broken != real
-    assert any("Add a channel" in f for f in start_failures(broken))
+    assert any("four choices" in f for f in start_failures(SCREENS.read_text(encoding="utf-8"), broken))
+
+
+def test_negative_choices_out_of_the_clients_order_are_caught():
+    real = CHANSCREENS.read_text(encoding="utf-8")
+    a, b = '"Create a Private Channel"', '"Join a Hashtag Channel"'
+    broken = real.replace(a, "\0").replace(b, a).replace("\0", b)
+    assert broken != real
+    assert any("in its order" in f for f in start_failures(SCREENS.read_text(encoding="utf-8"), broken))
 
 
 def test_negative_adding_around_the_apps_path_is_caught():
