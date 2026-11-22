@@ -197,10 +197,10 @@ P → A → B → C → D → E → F → G.
   "epic_chain": [2203, 2204, 2205, 2206, 2207, 2208, 2209],
   "chain": true,
   "verification": { "mode": "owner" },
-  "merge": { "budget": 7, "basis": "One PR each for Epic A (#2203, build foundation), B (#2204, code port), C (#2205, 4 MB boards), D (#2206, one platform), E (#2207, hardware checks, merged after D per §4), F (#2208, Photon C6 I2C) and G (#2209, integration and OUTCOMES.md). This plan's own PR merges as the approval and uses no budget." },
+  "merge": { "budget": 7, "basis": "One PR per Epic: A #2203 build foundation, B #2204 code port, C #2205 4 MB boards, D #2206 one platform, E #2207 hardware checks (after D), F #2208 Photon I2C, G #2209 integration. The plan's own merge uses none." },
   "flash": null,
   "reset": null,
-  "expires_after_hours": 336
+  "expires_after_hours": 168
 }
 ```
 
