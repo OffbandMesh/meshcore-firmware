@@ -170,6 +170,7 @@ void MqttBroker::populateBaseConfig(esp_mqtt_client_config_t& mqcfg) const {
 #if ESP_IDF_VERSION_MAJOR >= 5
     mqcfg.broker.address.uri = cfg_.url;
     mqcfg.session.keepalive  = keepalive_sec;
+    mqcfg.network.timeout_ms = OFFBAND_MQTT_NETWORK_TIMEOUT_MS;  // #2232: bounds a stop
     if (cfg_.transport == BrokerTransport::Tls ||
         cfg_.transport == BrokerTransport::Wss) {
         const char* pem = lookupCaCertPem(cfg_.ca_cert_name);
@@ -178,6 +179,7 @@ void MqttBroker::populateBaseConfig(esp_mqtt_client_config_t& mqcfg) const {
 #else
     mqcfg.uri       = cfg_.url;
     mqcfg.keepalive = keepalive_sec;
+    mqcfg.network_timeout_ms = OFFBAND_MQTT_NETWORK_TIMEOUT_MS;  // #2232: bounds a stop
     if (cfg_.transport == BrokerTransport::Tls ||
         cfg_.transport == BrokerTransport::Wss) {
         const char* pem = lookupCaCertPem(cfg_.ca_cert_name);

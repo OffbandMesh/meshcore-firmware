@@ -166,9 +166,15 @@ void MqttBrokerPool::begin(const mesh::LocalIdentity& identity,
 // ---------------------------------------------------------------------------
 // pauseAll (#2232)
 // ---------------------------------------------------------------------------
-void MqttBrokerPool::pauseAll() {
+void MqttBrokerPool::pauseAll(void (*between)()) {
     for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
-        if (!reconciling_[s] && brokers_[s].isConfigured()) brokers_[s].pauseClient();
+        if (!reconciling_[s] && brokers_[s].isConfigured()) {
+            brokers_[s].pauseClient();
+            // Each stop can block up to OFFBAND_MQTT_NETWORK_TIMEOUT_MS on a
+            // client caught mid-connect. Let the caller feed its watchdog
+            // between stops, so the bound is per slot, not the sum of slots.
+            if (between != nullptr) between();
+        }
     }
 }
 

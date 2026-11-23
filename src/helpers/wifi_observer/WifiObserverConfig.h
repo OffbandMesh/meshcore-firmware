@@ -80,6 +80,17 @@
   #define OFFBAND_MAX_LIVE_TLS 1
 #endif
 
+// #2232: esp-mqtt's network timeout, set explicitly rather than inherited from
+// the library default (10 s, the same value). It bounds the TCP connect and
+// the TLS / websocket handshake I/O of a client caught mid-connect, which is
+// what one esp_mqtt_client_stop() waits on. It does NOT bound the DNS lookup
+// before them: lwIP's resolver retries on its own timer. The repeater stops
+// clients on its loop task, under the task watchdog, so it static_asserts this
+// stays below WDT_TIMEOUT_SECS and feeds the watchdog between stops.
+#ifndef OFFBAND_MQTT_NETWORK_TIMEOUT_MS
+  #define OFFBAND_MQTT_NETWORK_TIMEOUT_MS 10000
+#endif
+
 // Free-heap floor (bytes): the actual safety guarantee. Bringing up a wss broker
 // transiently peaks at ~72KB consumed (MEASURED on HV3: free 124KB -> heap_min
 // ~52KB during the handshake, settling to ~63KB). We refuse to START a TLS

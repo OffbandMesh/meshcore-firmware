@@ -316,8 +316,15 @@ static void wifi_telemetry_setup() {
                                       FIRMWARE_VERSION, FIRMWARE_HW_MODEL);
     // #2232: every burst end tears WiFi down in the transport's end(). Pause the
     // pool first, while WiFi is still up, or each burst counts as a broker failure
-    // and walks the slot to terminal Failed.
-    g_tel_transport->setBeforeTeardown([]() { offband::repeaterMqttPool().linkGoingDown(); });
+    // and walks the slot to terminal Failed. This runs on the loop task, which
+    // the task watchdog guards: the watchdog is fed between stops, and each
+    // stop's connect and handshake are bounded by the network timeout (asserted
+    // below the watchdog). A DNS lookup in flight is not covered by that bound.
+    static_assert(OFFBAND_MQTT_NETWORK_TIMEOUT_MS < WDT_TIMEOUT_SECS * 1000u,
+                  "#2232: one broker stop must finish inside the task watchdog");
+    g_tel_transport->setBeforeTeardown([]() {
+      offband::repeaterMqttPool().linkGoingDown([]() { board.feedWatchdog(); });
+    });
 #endif
 #if defined(OFFBAND_NEIGHBORS_REPORT)
     // #1907: the CoreScope /neighbors report's settings, applied from NVS (off by default).
