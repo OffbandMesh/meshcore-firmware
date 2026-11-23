@@ -68,6 +68,13 @@ public:
     // Call once per main loop iteration.
     void loop(uint32_t now_ms);
 
+    // #2232: the owner of the network link reports whether it is up, every
+    // loop. The worker starts no client while it is down, and pauses running
+    // clients when it drops. Defaults to down, so an owner that never sets it
+    // never connects instead of crashing (scripts/check_pool_link_gate.py
+    // fails the build check for an owner that drives the pool without it).
+    void setLinkUp(bool up) { link_up_.store(up); }
+
     // Caller supplies a populated MqttStatusSnapshot. Pool tracks
     // status_interval_sec internally and publishes when due.
     void setStatusSnapshot(const MqttStatusSnapshot& snap);
@@ -238,6 +245,10 @@ private:
     TaskHandle_t  worker_task_ = nullptr;
     QueueHandle_t reconcile_q_ = nullptr;
     volatile bool worker_run_  = false;
+    // #2232: link state set by the owner (any task), read by the worker; and the
+    // worker's own record of the previous pass, for the falling edge.
+    std::atomic<bool> link_up_{false};
+    bool link_was_up_ = false;
     static void   workerTrampoline(void* arg);
     void          workerLoop();
     void          reconcileSlot(uint8_t slot);  // worker-only; blocking begin/shutdown

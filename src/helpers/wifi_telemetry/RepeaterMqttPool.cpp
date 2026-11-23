@@ -40,6 +40,10 @@ void RepeaterMqttPool::loop(uint32_t now_ms) {
     if (started_) thePool().loop(now_ms);
 }
 
+void RepeaterMqttPool::setLinkUp(bool up) {
+    if (started_) thePool().setLinkUp(up);
+}
+
 uint8_t RepeaterMqttPool::publish(const uint8_t* payload, size_t len) {
     return started_ ? thePool().publishPacket(payload, len) : 0;
 }
@@ -107,6 +111,7 @@ __attribute__((used)) static void _repeaterMqttPoolLinkProof() {
     static offband::RepeaterMqttPool pool;
     static mesh::LocalIdentity identity;
     pool.begin(identity, "", "", "", "");
+    pool.setLinkUp(false);
     pool.loop(0);
     (void)pool.publish(nullptr, 0);
 #if defined(OFFBAND_NEIGHBORS_REPORT)

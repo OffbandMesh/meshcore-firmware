@@ -214,6 +214,16 @@ jobs:
       - name: Size-matrix tool self-test
         run: python scripts/test_size_matrix.py
 
+      # #2232: the broker pool's worker connects on its own timer, so every owner that
+      # drives a pool must report its link with setLinkUp(). A repeater that did not
+      # crash-looped at boot with a wss slot enabled; one that never sets it now never
+      # connects. The self-test proves the checker fails a missing call.
+      - name: Broker-pool link gate self-test
+        run: python scripts/test_check_pool_link_gate.py
+
+      - name: Every broker-pool owner reports its link
+        run: python scripts/check_pool_link_gate.py
+
       # #1792 (Epic #1788). Every setting the Offband screens can write must be writable
       # from a client too -- a board with no keyboard, or no screen, is configured from
       # the app, and three such gaps were found by hand, late. The guard checks the

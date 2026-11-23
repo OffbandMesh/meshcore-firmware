@@ -12,6 +12,7 @@
 #include "BudgetHoldClock.h"      // #720: reconnect-proof TLS-budget hold clock
 #include "BrokerEventLog.h"
 #include "MqttPayload.h"
+#include <atomic>   // #2232: paused_ crosses the worker and esp-mqtt tasks
 
 #ifdef ARDUINO
   #include <Identity.h>
@@ -126,6 +127,11 @@ public:
     // the pool's Failed-reaper passes true; rotation (default false) still resets.
     void releaseClient(bool keep_failed = false);
 
+    // #2232: the pool's link went down. Stop a running client but keep it
+    // allocated and keep its health: the disconnect this causes is not a
+    // failure. The next tryConnect() after the link returns starts it again.
+    void pauseClient();
+
     // Create the per-broker client mutex. Call ONCE from the pool on
     // loopTask, before the lifecycle worker task starts (#53),
     // so worker create/destroy and loopTask publish/connect serialize on the
@@ -235,6 +241,9 @@ private:
     // esp-mqtt expects start() once; re-calling it on an already-started client
     // (after a dropped/failed connection) leaks transport + mbedTLS allocations.
     bool started_ = false;
+    // #2232: set by pauseClient() on the worker, read by onDisconnected() on the
+    // esp-mqtt task, so the pool's own stop is not escalated as a failure.
+    std::atomic<bool> paused_{false};
 
     // #838/#906: collapses the up-to-three esp-mqtt events of one failed attempt
     // into a single penalty escalation, while separate attempts each escalate.

@@ -47,6 +47,11 @@ public:
     // rotation, periodic status). No-op until begin() has run.
     void loop(uint32_t now_ms);
 
+    // #2232: report the WiFi link every main-loop iteration, up or down. The
+    // pool's worker connects on its own timer, so gating only loop() is not
+    // enough: this is what keeps it from connecting before or between bursts.
+    void setLinkUp(bool up);
+
     // Fan a pre-built payload out to every enabled + live broker. Returns the
     // number of brokers published to (0 if not started).
     uint8_t publish(const uint8_t* payload, size_t len);
