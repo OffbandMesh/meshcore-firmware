@@ -93,6 +93,12 @@ The BOOT button works as well.
   never takes you out, however many times you press it: to leave, use touch. In any other
   field, such as a name or a search, one more press on the empty field goes back.
 - **Enter** sends the message or saves the field.
+- **To mention someone in a channel**, type `@` (Alt then P) at the start of a word. The
+  row under the message shows names: people who have posted in this channel since the
+  radio started, newest first, then your contacts. Each letter you type after the `@`
+  narrows them. Tap a name, or press Enter for the first one, which has the heavier
+  border. It goes in as `@[Name]`, the form that alerts that person, and Enter then sends
+  as usual. The hint at the foot reads "Enter mention" while names are showing.
 - When no text field is open, **Enter** opens the highlighted item and **Backspace** goes
   back. Use touch to move between items.
 - In an open conversation, the digits 1 to 4 (Alt then W, E, R or S) start one of the four

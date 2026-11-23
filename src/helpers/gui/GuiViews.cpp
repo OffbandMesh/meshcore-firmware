@@ -483,6 +483,13 @@ bool ComposeBuffer::backspace() {
   return true;
 }
 
+void ComposeBuffer::truncate(size_t len) {
+  if (len >= _len) return;
+  while (len > 0 && (uint8_t(_buf[len]) & 0xC0) == 0x80) len--;
+  _len = len;
+  _buf[_len] = '\0';
+}
+
 void ComposeBuffer::counter(char* out, size_t n) const {
   put(out, n, "%u/%u", unsigned(_len), unsigned(_budget));
 }

@@ -943,6 +943,10 @@ const char* UITask::cannedText(int i) {
   return (_prefs && i >= 0 && i < int(kCannedCount)) ? _prefs->gui.canned[i] : "";
 }
 
+size_t UITask::recentSenders(int thread, const char** out, size_t max) {
+  return the_mesh.guiSenders().list(thread, out, max);
+}
+
 bool UITask::sendDirect(int thread, const char* text, uint32_t timestamp, uint8_t attempt, uint32_t* timeout_ms) {
   const Thread* th = the_mesh.guiStore().threadAt(thread);
   if (!th) return false;

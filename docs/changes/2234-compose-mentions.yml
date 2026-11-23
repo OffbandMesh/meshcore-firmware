@@ -1,0 +1,13 @@
+schema_version: 1
+issue: 2234
+impact: none
+reason: >-
+  Compose on the on-device GUI (Heltec V4 TFT, R8, T-Deck and T-Deck Pro)
+  now offers names when "@" starts a word in a channel's message, and puts
+  the chosen one in as "@[Name]", the form a receiver's mention alert
+  matches. The on-device GUI has no guide in the public manual yet, so no
+  published guide describes Compose; the T-Deck Pro's unpublished draft
+  guide, docs/initiatives/2004-tdeck-pro/2005-bringup/GUIDE-DRAFT.md, now
+  says how to mention someone. Nothing changes on the air or for a phone
+  client: the token is the one the Offband client already sends, and the
+  receiver's match is untouched.
