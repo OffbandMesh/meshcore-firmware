@@ -189,6 +189,8 @@ void wifiObserverLoop() {
 
     // Drive pool every iteration once it's started.
     if (s_pool_started) {
+        // #2232: the pool's worker starts no client without a link.
+        s_pool.setLinkUp(wifiBootstrap().isStaConnected());
         s_pool.loop(now);
     }
 

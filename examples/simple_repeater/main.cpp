@@ -551,14 +551,20 @@ static void wifi_telemetry_loop() {
 #ifdef OFFBAND_MQTT_POOL
     // #537: drive the multi-broker pool (per-broker connects, dwell rotation,
     // ring-log drain) ONLY while WiFi is up. The repeater duty-cycles WiFi
-    // (burst mode); the pool engine has no WiFi.status() gate of its own (the
-    // observer's WiFi is persistent, so it never needed one), and running its
+    // (burst mode); the pool engine does not read WiFi.status() itself (its
+    // link gate is set below, #2232), and running its
     // connect/rotation logic with WiFi down would churn esp-mqtt reconnects and
     // risk heap fragmentation (Gemini review MAJOR). RX packets still enqueue to
     // the ring-log via the logRx hooks regardless of WiFi; the pool drains them
     // once WiFi returns. (Sustaining wss brokers realistically needs persistent
     // WiFi mode -- a #539 verification point.)
-    if (WiFi.status() == WL_CONNECTED) offband::repeaterMqttPool().loop(millis());
+    // #2232: that gate covers loop() only. The pool's worker task connects on
+    // its own timer, so the link state goes to the pool every iteration, up or
+    // down: without it a slot enabled at boot connected before WiFi existed and
+    // asserted in lwIP, a crash loop.
+    const bool wifi_up = (WiFi.status() == WL_CONNECTED);
+    offband::repeaterMqttPool().setLinkUp(wifi_up);
+    if (wifi_up) offband::repeaterMqttPool().loop(millis());
 #endif
 
     // Issue #86: deferred reboot check. Set by PatioRemoteCallbacks::rebootAfter

@@ -4,6 +4,7 @@
 
 #include "MqttBroker.h"
 #include "BrokerEventLog.h"
+#include "PoolLinkGate.h"        // #2232: a paused client's disconnect is not a failure
 #include "WifiObserverConfig.h"  // #171: OFFBAND_TLS_HEAP_FLOOR_BYTES
 #include <cstring>
 #include <cstdio>
@@ -240,6 +241,25 @@ void MqttBroker::releaseClient(bool keep_failed) {
     // slot_ and cfg_ deliberately RETAINED -- that is the whole difference from
     // shutdown(). A rotated-out broker must stay configured so the pool can see
     // it, honor its cooldown, and promote it back via reconcileSlot->tryConnect.
+}
+
+void MqttBroker::pauseClient() {
+#if defined(ARDUINO) && defined(ESP_PLATFORM)
+    ClientLockGuard _g(client_lock_);
+    if (client_ != nullptr && started_) {
+        // Set before stop(): stop() can deliver the DISCONNECTED event on the
+        // esp-mqtt task before it returns, and that must see the pause.
+        paused_.store(true);
+        esp_mqtt_client_stop(client_);
+        started_ = false;
+    }
+#endif
+    // Down, not Backoff: nothing failed, so the next pass with a link connects
+    // without waiting out a backoff. Failed stays Failed.
+    if (rt_.state == BrokerState::Up || rt_.state == BrokerState::Connecting ||
+        rt_.state == BrokerState::Backoff) {
+        rt_.state = BrokerState::Down;
+    }
 }
 
 void MqttBroker::shutdown() {
@@ -490,6 +510,7 @@ bool MqttBroker::tryConnect(uint32_t now_ms, bool tls_budget_ok) {
         rt_.state = BrokerState::Connecting;
     }
     brokerEventQueue().push(makeMqttConnectingEvent(slot_, eventNowMs(), /*auto_reconnect=*/false));
+    paused_.store(false);   // #2232: a start ends any pause; later drops count again
     pool_start_recorded_ = true;
     esp_err_t err = esp_mqtt_client_start(client_);
     if (err != ESP_OK) {
@@ -735,6 +756,13 @@ void MqttBroker::onDisconnected(uint32_t now_ms, BrokerErrorClass err) {
         session_up_, now_ms - rt_.went_up_ms));
     session_up_ = false;
     error_before_disconnect_ = BrokerErrorClass::None;
+    // #2232: the pool stopped this client because the link went down. That is
+    // not a failure; escalating it would fail a repeater's slot after a few
+    // WiFi bursts.
+    if (!offband::disconnectCountsAsFailure(paused_.load())) {
+        rt_.state = BrokerState::Down;
+        return;
+    }
     // Move to Backoff. esp-mqtt also keeps auto-reconnecting on its own timer
     // (see onBeforeConnect); the pool's tryConnect restarts the client on the
     // backoff schedule.

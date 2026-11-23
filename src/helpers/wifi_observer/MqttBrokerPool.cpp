@@ -13,6 +13,7 @@ static_assert(sizeof(offband::PacketRecord) <= MQTT_RING_MSG_MAX,
               "MQTT_RING_MSG_MAX must be >= sizeof(PacketRecord)");
 #include "MqttPayload.h"
 #include "BrokerEventLog.h"
+#include "PoolLinkGate.h"   // #2232: the worker's link gate
 #include <helpers/diagnostics/CrashLog.h>   // #181: crashLogf() -- worker has no user ACK channel
 #include <cstring>
 #include <cstdio>
@@ -909,6 +910,22 @@ void MqttBrokerPool::workerLoop() {
             recordOperatorReload(brokers_[slot], slot);
             reconcileSlot(slot);
             reconciling_[slot] = false;  // hand the slot back to loopTask
+        }
+
+        // #2232: no client starts or runs without a link. The owner reports it
+        // every loop; a repeater's pool exists before WiFi does and loses WiFi
+        // between bursts. A connect with no tcpip thread yet asserts in lwIP
+        // ("tcpip_send_msg_wait_sem ... Invalid mbox", a boot crash loop).
+        {
+            const bool up = link_up_.load();
+            const LinkAction act = linkAction(up, link_was_up_);
+            link_was_up_ = up;
+            if (act == LinkAction::PauseAll) {
+                for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
+                    if (!reconciling_[s] && brokers_[s].isConfigured()) brokers_[s].pauseClient();
+                }
+            }
+            if (act != LinkAction::Drive) continue;
         }
 
         // Periodic drive for all configured, non-reconciling slots. tryConnect
