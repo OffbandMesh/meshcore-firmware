@@ -8,6 +8,7 @@
 #define MAX_TEXT_LEN    (10*CIPHER_BLOCK_SIZE)  // must be LESS than (MAX_PACKET_PAYLOAD - 4 - CIPHER_MAC_SIZE - 1)
 
 #include "ContactInfo.h"
+#include "ContactSlotPolicy.h"   // #2242: who asked for a contact slot, and what that permits
 
 #define MAX_SEARCH_RESULTS   8
 
@@ -84,6 +85,11 @@ class BaseChatMesh : public mesh::Mesh {
   int num_channels;  // only for addChannel()
 #endif
   mesh::Packet* _pendingLoopback;
+  // #2242: the ONE loop-back packet whose advert carries the operator's intent --
+  // an imported contact card. Armed only across the single onRecvPacket() call that
+  // dispatches it, in loop(), while that packet is held by this object. Outside that
+  // window it is NULL, so nothing arriving from the radio can match it.
+  mesh::Packet* _loopbackOperatorPkt;
   uint8_t temp_buf[MAX_TRANS_UNIT];
   ConnectionInfo connections[MAX_CONNECTIONS];
 
@@ -102,6 +108,7 @@ protected:
   #endif
     txt_send_timeout = 0;
     _pendingLoopback = NULL;
+    _loopbackOperatorPkt = NULL;
     memset(connections, 0, sizeof(connections));
   }
 
@@ -115,7 +122,11 @@ protected:
     num_contacts = MAX_ANON_CONTACTS;  // seed the first contacts for anon requests
   }
   void populateContactFromAdvert(ContactInfo& ci, const mesh::Identity& id, const AdvertDataParser& parser, uint32_t timestamp);
-  ContactInfo* allocateContactSlot(bool transient_only=false); // helper to find slot for new contact
+  // Offband #2242: `intent` says WHO asked. It defaults to Automatic -- the
+  // restrictive value -- so every existing caller behaves exactly as before and a
+  // future one cannot gain eviction power by forgetting to pass it.
+  ContactInfo* allocateContactSlot(bool transient_only=false,
+                                   offband::contacts::AddIntent intent=offband::contacts::AddIntent::Automatic); // helper to find slot for new contact
 
   // 'UI' concepts, for sub-classes to implement
   virtual bool isAutoAddEnabled() const { return true; }
@@ -195,7 +206,11 @@ public:
   ContactInfo* searchContactsByPrefix(const char* name_prefix);
   ContactInfo* lookupContactByPubKey(const uint8_t* pub_key, int prefix_len);
   bool  removeContact(ContactInfo& contact);
-  bool  addContact(const ContactInfo& contact);
+  // Offband #2242: pass AddIntent::Operator for an add the operator explicitly
+  // asked for. On a full table that evicts the oldest non-favourite instead of
+  // failing, and a genuine refusal (every slot a favourite) calls onContactsFull().
+  bool  addContact(const ContactInfo& contact,
+                   offband::contacts::AddIntent intent=offband::contacts::AddIntent::Automatic);
   int getTotalContactSlots() const { return num_contacts; }
   int getNumContacts() const { return num_contacts - MAX_ANON_CONTACTS; }  // don't include the reserved slots at start
   bool getContactByIdx(uint32_t idx, ContactInfo& contact);

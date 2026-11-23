@@ -855,6 +855,15 @@ Bytes 1-6: ACK Code (6 bytes, hex)
 
 **Note**: Error codes may vary by firmware version. Always check byte 1 of `PACKET_ERROR` response, and treat unknown codes as generic errors.
 
+**Note**: "retry later" applies to the send queue, not to the contact table. A
+`CMD_ADD_UPDATE_CONTACT` answered `ERR_CODE_TABLE_FULL` has not been stored, and
+retrying the same frame will not store it — the host must treat the add as failed and
+not record the contact, or every subsequent send to it is answered
+`ERR_CODE_NOT_FOUND`. Since Offband #2242 the firmware refuses an
+operator-initiated add only when it genuinely cannot make room (every contact above
+the anonymous-request pool is a favourite), and it also emits
+`PUSH_CODE_CONTACTS_FULL` (0x90) in that case.
+
 ### Frame Handling
 
 BLE implementations enqueue and deliver one protocol frame per BLE write/notification at the firmware layer.

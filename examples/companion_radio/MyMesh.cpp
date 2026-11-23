@@ -4252,7 +4252,11 @@ void MyMesh::handleCmdFrame(size_t len) {
       updateContactFromFrame(contact, last_mod, cmd_frame, len);
       contact.lastmod = last_mod;
       contact.sync_since = 0;
-      if (addContact(contact)) {
+      // #2242: the client asked for THIS contact -- a typed public key, a pick from
+      // discovered contacts, a scanned card. A full table gives up its oldest
+      // non-favourite rather than refusing the operator, and an eviction is reported
+      // to the client as PUSH_CODE_CONTACT_DELETED by onContactOverwrite().
+      if (addContact(contact, offband::contacts::AddIntent::Operator)) {
         dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
         writeOKFrame();
       } else {

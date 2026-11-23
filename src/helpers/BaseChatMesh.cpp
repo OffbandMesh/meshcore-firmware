@@ -87,7 +87,7 @@ void BaseChatMesh::shiftContactTimes(uint32_t from, uint32_t to, int64_t by) {
   }
 }
 
-ContactInfo* BaseChatMesh::allocateContactSlot(bool transient_only) {
+ContactInfo* BaseChatMesh::allocateContactSlot(bool transient_only, offband::contacts::AddIntent intent) {
   int oldest_idx = -1;
   uint32_t oldest_lastmod = 0xFFFFFFFF;
   if (transient_only) {
@@ -103,21 +103,33 @@ ContactInfo* BaseChatMesh::allocateContactSlot(bool transient_only) {
       return &contacts[oldest_idx];
     }
   } else {
-    if (num_contacts < MAX_ANON_CONTACTS+MAX_CONTACTS) {
-      return &contacts[num_contacts++];
-    } else if (shouldOverwriteWhenFull()) {
-      // Find oldest non-favourite contact by oldest lastmod timestamp
-      for (int i = MAX_ANON_CONTACTS; i < num_contacts; i++) {
-        bool is_favourite = (contacts[i].flags & 0x01) != 0;
-        if (!is_favourite && contacts[i].lastmod < oldest_lastmod) {
-          oldest_lastmod = contacts[i].lastmod;
-          oldest_idx = i;
-        }
-      }
-      if (oldest_idx >= 0) {
-        onContactOverwrite(contacts[oldest_idx].id.pub_key);
-        return &contacts[oldest_idx];
-      }
+    // Offband #2242: the rules are in ContactSlotPolicy.h and host-tested in
+    // test/test_contact_slot_policy. This function does the plumbing only -- grow the
+    // table, tell the client what it lost, hand back a pointer -- so the policy can
+    // be read and tested without a radio. AUTO_ADD_OVERWRITE_OLDEST is an AUTO-ADD
+    // policy bit, so it decides this only for an automatic add; an add the operator
+    // asked for proceeds either way, but never over a favourite.
+    const ContactInfo* table = contacts;
+    const offband::contacts::SlotDecision d = offband::contacts::chooseContactSlot(
+        intent, shouldOverwriteWhenFull(), num_contacts, MAX_ANON_CONTACTS,
+        MAX_ANON_CONTACTS + MAX_CONTACTS,
+        // Explicit return type: C++11 only deduces a lambda's return type from a
+        // single-statement body, and the oldest toolchains in the matrix are gnu++11.
+        [table](int i) -> offband::contacts::SlotView {
+          offband::contacts::SlotView v;
+          v.flags = table[i].flags;
+          v.lastmod = table[i].lastmod;
+          return v;
+        });
+    switch (d.outcome) {
+      case offband::contacts::SlotOutcome::Append:
+        num_contacts++;
+        return &contacts[d.index];
+      case offband::contacts::SlotOutcome::Evict:
+        onContactOverwrite(contacts[d.index].id.pub_key);
+        return &contacts[d.index];
+      case offband::contacts::SlotOutcome::Refuse:
+        break;
     }
   }
   return NULL; // no space, no overwrite or all contacts are all favourites
@@ -171,9 +183,21 @@ void BaseChatMesh::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, 
     from = NULL;  // do normal 'add' flow
   }
 
+  // Offband #2242: an imported contact card arrives here, not through addContact().
+  // importContact() queues the card's advert for loop-back and this handler adopts
+  // it, so a card the OPERATOR chose was being judged by the auto-add gates below --
+  // the contact type they allow, the hop limit, and the overwrite policy -- and on a
+  // full table it was dropped while CMD_IMPORT_CONTACT had already answered OK.
+  // The marker is a PACKET POINTER armed for one dispatch, not a flag: a flag would
+  // stay set across the Mesh::loop() call that dispatches radio traffic, letting an
+  // advert from the air borrow operator intent. _loopbackOperatorPkt is non-NULL only
+  // inside the single onRecvPacket() call for the card, and that packet is held by us
+  // throughout, so nothing else can be at that address while the marker is armed.
+  const bool operator_import = (packet != NULL && packet == _loopbackOperatorPkt);
+
   bool is_new = false; // true = not in contacts[], false = exists in contacts[]
   if (from == NULL) {
-    if (!shouldAutoAddContactType(parser.getType())) {
+    if (!operator_import && !shouldAutoAddContactType(parser.getType())) {
       ContactInfo ci;
       populateContactFromAdvert(ci, id, parser, timestamp);
       onDiscoveredContact(ci, true, packet->path_len, packet->path);       // let UI know
@@ -182,14 +206,15 @@ void BaseChatMesh::onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, 
 
     // check hop limit for new contacts (0 = no limit, 1 = direct (0 hops), N = up to N-1 hops)
     uint8_t max_hops = getAutoAddMaxHops();
-    if (max_hops > 0 && packet->getPathHashCount() >= max_hops) {
+    if (!operator_import && max_hops > 0 && packet->getPathHashCount() >= max_hops) {
       ContactInfo ci;
       populateContactFromAdvert(ci, id, parser, timestamp);
       onDiscoveredContact(ci, true, packet->path_len, packet->path);       // let UI know
       return;
     }
 
-    from = allocateContactSlot();
+    from = allocateContactSlot(false, operator_import ? offband::contacts::AddIntent::Operator
+                                                      : offband::contacts::AddIntent::Automatic);
     if (from == NULL) {
       ContactInfo ci;
       populateContactFromAdvert(ci, id, parser, timestamp);
@@ -877,13 +902,18 @@ ContactInfo* BaseChatMesh::lookupContactByPubKey(const uint8_t* pub_key, int pre
   return NULL;  // not found
 }
 
-bool BaseChatMesh::addContact(const ContactInfo& contact) {
-  ContactInfo* dest = allocateContactSlot(contact.type == ADV_TYPE_NONE);
+bool BaseChatMesh::addContact(const ContactInfo& contact, offband::contacts::AddIntent intent) {
+  ContactInfo* dest = allocateContactSlot(contact.type == ADV_TYPE_NONE, intent);
   if (dest) {
     *dest = contact;
     dest->shared_secret_valid = false; // mark shared_secret as needing calculation
     return true;  // success
   }
+  // Offband #2242/#2241: an operator add that cannot be satisfied -- every slot a
+  // favourite -- is a full radio, and the client should hear that as such instead of
+  // inferring it from one command's error code. The advert path has its own
+  // onContactsFull() call (see onAdvertRecv), so this does not double-notify.
+  if (intent == offband::contacts::AddIntent::Operator) onContactsFull();
   return false;
 }
 
@@ -991,8 +1021,15 @@ void BaseChatMesh::loop() {
   }
 
   if (_pendingLoopback) {
-    onRecvPacket(_pendingLoopback);  // loop-back, as if received over radio
-    releasePacket(_pendingLoopback);   // undo the obtainNewPacket()
+    mesh::Packet* pkt = _pendingLoopback;
+    // #2242: arm the operator marker for exactly this one dispatch. The packet is
+    // held by us for the whole window -- allocNew() cannot hand it out again, and the
+    // marker is NULL before and after -- so no packet from the radio can be mistaken
+    // for the operator's imported contact card, whatever the pool does with addresses.
+    _loopbackOperatorPkt = pkt;
+    onRecvPacket(pkt);  // loop-back, as if received over radio
+    _loopbackOperatorPkt = NULL;
+    releasePacket(pkt);   // undo the obtainNewPacket()
     _pendingLoopback = NULL;
   }
 }

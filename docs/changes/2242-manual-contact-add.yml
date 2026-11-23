@@ -1,0 +1,23 @@
+schema_version: 1
+issue: 2242
+impact: none
+reason: >-
+  No published guide describes the contact table at all -- not its capacity, not
+  the favourite flag, and not what the radio does when it is full. The two
+  guides in docs/user/guides (qcc-badge.md, t1000e.md) mention contacts only as
+  a screen to scroll and a per-event tone; the badge guide's one capacity-ish
+  line is about a contact being marked stale after three days, which this change
+  does not touch. So the behaviour that changes here -- a contact the operator
+  adds by hand, or imports as a card, now lands on a full radio by giving up its
+  oldest non-favourite instead of being refused, while automatic adoption of
+  adverts keeps obeying the auto-add overwrite setting exactly as before -- has
+  no documented step to correct. Favourites were already protected from
+  overwriting and still are. The user-visible outcome is one the manual never
+  promised either way: before this change a full radio answered a manual add
+  with ERR_CODE_TABLE_FULL and then refused every message to that contact with
+  ERR_CODE_NOT_FOUND. When the radio genuinely cannot make room, because every
+  contact above the anonymous pool is a favourite, it now also sends
+  PUSH_CODE_CONTACTS_FULL rather than leaving the client to infer a full table
+  from one command's error code; that notification is part of the companion
+  protocol, which docs/companion_protocol.md already documents as existing, and
+  this change adds no frame, field or code to it.
