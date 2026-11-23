@@ -163,6 +163,15 @@ void MqttBrokerPool::begin(const mesh::LocalIdentity& identity,
 // ---------------------------------------------------------------------------
 // shutdown
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// pauseAll (#2232)
+// ---------------------------------------------------------------------------
+void MqttBrokerPool::pauseAll() {
+    for (uint8_t s = 0; s < OFFBAND_MAX_BROKERS; ++s) {
+        if (!reconciling_[s] && brokers_[s].isConfigured()) brokers_[s].pauseClient();
+    }
+}
+
 void MqttBrokerPool::shutdown() {
 #if defined(ARDUINO) && defined(ESP_PLATFORM)
     // Stop the worker first so it is not mid-reconcile during teardown.
@@ -912,7 +921,8 @@ void MqttBrokerPool::workerLoop() {
             reconciling_[slot] = false;  // hand the slot back to loopTask
         }
 
-        // #2232: no client starts or runs without a link. The owner reports it
+        // #2232: no client starts or runs without a link (pauseAll() is the same
+        // pause, called by an owner before it drops the link). The owner reports it
         // every loop; a repeater's pool exists before WiFi does and loses WiFi
         // between bursts. A connect with no tcpip thread yet asserts in lwIP
         // ("tcpip_send_msg_wait_sem ... Invalid mbox", a boot crash loop).

@@ -83,7 +83,15 @@ public:
     // dispatch. Pass nullptr to clear.
     void setMessageCallback(MessageCallback cb, void* user_data);
 
+    // #2232: called at the top of end(), while WiFi is still up, so anything
+    // else using the link (the broker pool) can stop cleanly first. Without it
+    // the teardown fails the pool's live connections and each burst counts as
+    // a broker failure. Pass nullptr to clear.
+    typedef void (*TeardownHook)();
+    void setBeforeTeardown(TeardownHook hook) { _before_teardown = hook; }
+
 private:
+    TeardownHook _before_teardown = nullptr;
     // PubSubClient takes a C function pointer for incoming messages. We use a
     // static trampoline that dispatches via _instance back to the registered
     // user callback. Single-instance assumption (only one WifiMqttTransport

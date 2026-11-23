@@ -114,6 +114,7 @@ bool WifiMqttTransport::begin() {
 }
 
 void WifiMqttTransport::end() {
+    if (_before_teardown != nullptr) _before_teardown();   // #2232: WiFi still up here
     if (_mqtt.connected()) {
         // Let PubSubClient flush any pending writes before we tear down TCP.
         _mqtt.loop();
