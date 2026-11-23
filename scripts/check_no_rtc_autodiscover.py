@@ -45,14 +45,23 @@ NO_RTC_CHIP_VARIANTS = {
         "its only I2C device is the MAX17048 fuel gauge at 0x36 (#1050)",
 }
 
-_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
+# String and character literals are matched first and kept as they are, so a `//`
+# or `/*` inside one is never taken for the start of a comment. Without that, the
+# rest of a line after "http://..." would be dropped, and a use there missed.
+_COMMENT = re.compile(r'"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|//[^\n]*|/\*.*?\*/', re.S)
 _USE = re.compile(r"\bAutoDiscoverRTCClock\b")
 _SOURCE_SUFFIXES = (".cpp", ".c", ".h", ".hpp")
 
 
 def strip_comments(text):
-    """Blank out comments, keeping every newline so line numbers stay true."""
-    return _COMMENT.sub(lambda m: "\n" * m.group(0).count("\n") or " ", text)
+    """Blank out comments, keeping every newline so line numbers stay true.
+    String and character literals pass through unchanged."""
+    def blank(m):
+        s = m.group(0)
+        if s[0] in "\"'":
+            return s
+        return "\n" * s.count("\n") or " "
+    return _COMMENT.sub(blank, text)
 
 
 def check_tree(repo_root, variants=NO_RTC_CHIP_VARIANTS):

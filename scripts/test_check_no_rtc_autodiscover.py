@@ -90,6 +90,16 @@ def main():
     expect(len(found) == 1 and "target.cpp:5:" in found[0],
            "a block comment above does not shift the reported line (got %r)" % found)
 
+    found = run({"variants/board_x/target.cpp":
+                 DECLARED + 'const char* url = "http://x"; AutoDiscoverRTCClock rtc_clock(fallback_clock);\n'})
+    expect(len(found) == 1 and "target.cpp:3:" in found[0],
+           "a // inside a string does not hide a use later on the line (got %r)" % found)
+
+    found = run({"variants/board_x/target.cpp":
+                 DECLARED + 'const char* name = "AutoDiscoverRTCClock";\n'})
+    expect(len(found) == 1 and "target.cpp:3:" in found[0],
+           "the name inside a string literal is caught (got %r)" % found)
+
     found = run({"variants/board_y/target.cpp": DECLARED})
     expect(len(found) == 1 and "directory not found" in found[0],
            "a listed variant missing from the tree fails closed (got %r)" % found)
