@@ -1,0 +1,23 @@
+schema_version: 1
+issue: 2214
+impact: none
+reason: >-
+  The change is on the firmware-to-client wire and inside the firmware's own
+  assembly of it, and it has no surface in the public manual: no setting, screen,
+  menu, CLI command or published guide mentions the 0xC5 0x1C capability advert or
+  the outstanding-ACK capacity record it carries. Searched docs/user/ for all of
+  them before writing this -- zero hits.
+  What changes on the wire is a correction, not a new capability. Since 1.7.1 every
+  board with a display or a controllable LED has emitted its advert with tag 0x03
+  ACK_CAPACITY dropped and no CONTINUE record announcing the loss, because the
+  emission order ran 0x01, 0x02, 0x04, 0x05, 0x03 and InfoAdvert::add() refuses a
+  non-ascending tag by writing nothing and returning false, which the call site
+  discarded. After this commit the advert carries what the contract already said it
+  carried, so the thing a guide would describe is unchanged -- it is the device that
+  stops disagreeing with it.
+  docs/offband_info_frame_contract.md is the document of record for the frame and
+  needs no edit: the required order is already stated there, and this commit is the
+  firmware being made to obey it. The contract is internal delivery documentation
+  and is not staged into the public manual.
+  The user-facing surface for the capacity report itself belongs to #1001 and is
+  that issue's to carry; this record does not discharge it.
