@@ -44,6 +44,12 @@ void RepeaterMqttPool::setLinkUp(bool up) {
     if (started_) thePool().setLinkUp(up);
 }
 
+void RepeaterMqttPool::linkGoingDown() {
+    if (!started_) return;
+    thePool().setLinkUp(false);
+    thePool().pauseAll();
+}
+
 uint8_t RepeaterMqttPool::publish(const uint8_t* payload, size_t len) {
     return started_ ? thePool().publishPacket(payload, len) : 0;
 }

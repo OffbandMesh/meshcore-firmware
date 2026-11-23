@@ -40,6 +40,21 @@ class CheckPoolLinkGate(unittest.TestCase):
                      "MqttBrokerPool s_pool;\nvoid f(){ s_pool.setLinkUp(true); s_pool.loop(1); }\n"})
         self.assertEqual([], chk.owners_missing_gate(root))
 
+    def test_real_tree_sets_the_teardown_hook(self):
+        self.assertEqual([], chk.transport_owners_missing_hook(os.path.join(HERE, "..")))
+
+    def test_transport_owner_without_hook_fails(self):
+        root = tree({"examples/r/main.cpp":
+                     "t = new WifiMqttTransport(a);\n"
+                     "void f(){ offband::repeaterMqttPool().setLinkUp(1); offband::repeaterMqttPool().loop(1); }\n"})
+        self.assertEqual([os.path.join("examples", "r", "main.cpp")], chk.transport_owners_missing_hook(root))
+
+    def test_transport_owner_with_hook_passes(self):
+        root = tree({"examples/r/main.cpp":
+                     "t = new WifiMqttTransport(a);\nt->setBeforeTeardown(h);\n"
+                     "void f(){ offband::repeaterMqttPool().loop(1); }\n"})
+        self.assertEqual([], chk.transport_owners_missing_hook(root))
+
     def test_unrelated_pool_loop_is_ignored(self):
         root = tree({"src/x/Thread.cpp": "ThreadPool pool;\nvoid f(){ pool.loop(1); }\n"})
         self.assertEqual([], chk.owners_missing_gate(root))

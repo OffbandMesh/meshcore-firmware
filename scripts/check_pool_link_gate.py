@@ -25,6 +25,24 @@ EXTS = (".cpp", ".h", ".ino")
 EXEMPT = ("MqttBrokerPool.cpp", "MqttBrokerPool.h", "RepeaterMqttPool.cpp", "RepeaterMqttPool.h")
 
 
+def transport_owners_missing_hook(root):
+    """A repeater that owns both a WifiMqttTransport and a broker pool must
+    pause the pool before the transport tears WiFi down (setBeforeTeardown)."""
+    missing = []
+    for d in SCAN_DIRS:
+        for base, _, files in os.walk(os.path.join(root, d)):
+            for name in files:
+                if not name.endswith(EXTS) or name in EXEMPT:
+                    continue
+                path = os.path.join(base, name)
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+                if ("new WifiMqttTransport" in text and "repeaterMqttPool()" in text
+                        and not re.search(r"setBeforeTeardown\s*\(", text)):
+                    missing.append(os.path.relpath(path, root))
+    return sorted(missing)
+
+
 def owners_missing_gate(root):
     missing = []
     for d in SCAN_DIRS:
@@ -49,9 +67,13 @@ def main():
     ap.add_argument("--root", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
     args = ap.parse_args()
     missing = owners_missing_gate(args.root)
-    if missing:
-        for m in missing:
-            print(f"FAIL: {m} drives a broker pool's loop() but never calls setLinkUp() (#2232)")
+    no_hook = transport_owners_missing_hook(args.root)
+    for m in missing:
+        print(f"FAIL: {m} drives a broker pool's loop() but never calls setLinkUp() (#2232)")
+    for m in no_hook:
+        print(f"FAIL: {m} owns a WifiMqttTransport and a broker pool but never calls "
+              f"setBeforeTeardown() to pause the pool before WiFi goes down (#2232)")
+    if missing or no_hook:
         return 1
     print("OK: every broker-pool owner reports its link (#2232)")
     return 0

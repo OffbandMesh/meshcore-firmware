@@ -52,6 +52,11 @@ public:
     // enough: this is what keeps it from connecting before or between bursts.
     void setLinkUp(bool up);
 
+    // #2232: the link is about to go down (a telemetry burst is ending). Marks
+    // it down and pauses every client NOW, on the caller's task, while WiFi is
+    // still up -- so the teardown is not counted as a broker failure.
+    void linkGoingDown();
+
     // Fan a pre-built payload out to every enabled + live broker. Returns the
     // number of brokers published to (0 if not started).
     uint8_t publish(const uint8_t* payload, size_t len);

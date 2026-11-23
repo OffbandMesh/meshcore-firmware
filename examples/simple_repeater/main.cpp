@@ -314,6 +314,10 @@ static void wifi_telemetry_setup() {
     offband::repeaterMqttPool().begin(the_mesh.self_id, WIFI_TELEMETRY_NODE_ID,
                                       WIFI_TELEMETRY_FRIENDLY_NAME,
                                       FIRMWARE_VERSION, FIRMWARE_HW_MODEL);
+    // #2232: every burst end tears WiFi down in the transport's end(). Pause the
+    // pool first, while WiFi is still up, or each burst counts as a broker failure
+    // and walks the slot to terminal Failed.
+    g_tel_transport->setBeforeTeardown([]() { offband::repeaterMqttPool().linkGoingDown(); });
 #endif
 #if defined(OFFBAND_NEIGHBORS_REPORT)
     // #1907: the CoreScope /neighbors report's settings, applied from NVS (off by default).

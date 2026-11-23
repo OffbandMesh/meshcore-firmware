@@ -75,6 +75,12 @@ public:
     // fails the build check for an owner that drives the pool without it).
     void setLinkUp(bool up) { link_up_.store(up); }
 
+    // #2232: pause every configured, non-reconciling client now, on the
+    // caller's task. For an owner that knows the link is about to drop and
+    // must stop clients while it is still up; the worker's falling-edge pause
+    // then finds nothing left running.
+    void pauseAll();
+
     // Caller supplies a populated MqttStatusSnapshot. Pool tracks
     // status_interval_sec internally and publishes when due.
     void setStatusSnapshot(const MqttStatusSnapshot& snap);
