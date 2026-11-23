@@ -90,14 +90,27 @@ public:
   void loraPopover() override {}
   size_t composeBudget(int) override { return 140; }
   const char* cannedText(int) override { return ""; }
-  bool sendText(int, const char*, size_t) override { return true; }
+  bool sendText(int, const char*, size_t) override {
+    sends++;
+    return true;
+  }
   uint8_t dmAttempt(uint32_t) override { return 0; }
   void resend(uint32_t) override {}
   void setThreadMode(int, NotifyMode) override {}
   const char* nodeName() override { return "Bench-7"; }
+  // Contacts, and the channel senders heard since boot (#2234).
+  std::vector<NodeRow> rows;
+  std::vector<std::string> senders;   // newest first, every channel
+  int sends = 0;
   const NodeRow* nodeRows(size_t* total) override {
-    *total = 0;
-    return nullptr;
+    *total = rows.size();
+    return rows.empty() ? nullptr : rows.data();
+  }
+  size_t recentSenders(int, const char** out, size_t max) override {
+    size_t n = 0;
+    for (const std::string& s : senders)
+      if (n < max) out[n++] = s.c_str();
+    return n;
   }
   uint8_t radioSf() override { return 10; }
   bool nodeDetail(const uint8_t*, NodeDetail*) override { return false; }
@@ -621,6 +634,139 @@ TEST_F(Gui, BackAtTheNewestItFollowsAgain) {
     newMessage(t, i);
     EXPECT_LE(belowView(), 0) << "message " << i << " arrived below the view after Newest";
   }
+}
+
+// ------------------------------------------------------------------ mentions
+//
+// #2234 (bench, 2026-11-22): the T-Deck Pro keyboard has no "[" or "]", so a
+// mention, "@[Name]", could not be typed. "@" in a channel's draft now offers
+// names, as the Offband client does.
+
+class Mention : public Gui {
+protected:
+  int openCompose(ThreadKind kind = ThreadKind::Channel) {
+    const uint8_t key[32] = {4, 4, 4};
+    const int t = model->msgs.thread(kind, key, kind == ThreadKind::Channel ? 16 : 32,
+                                     kind == ThreadKind::Channel ? "#hikers" : "Wren");
+    shell->showTab(Tab::Chat);
+    shell->openThread(t);
+    pump();
+    shell->openCompose(t);
+    pump();
+    return t;
+  }
+  void type(const char* s) {
+    for (const char* p = s; *p; p++) shell->typeKey(KeyKind::Char, *p);
+    pump();
+  }
+  // The suggestion chips on screen, as their labels read.
+  std::vector<std::string> chips() {
+    std::vector<std::string> out;
+    if (!shell->_chips) return out;
+    std::vector<lv_obj_t*> ls;
+    collectLabels(shell->_chips, &ls);
+    for (lv_obj_t* l : ls) out.push_back(lv_label_get_text(l));
+    return out;
+  }
+  void SetUp() override {
+    Gui::SetUp();
+    model->senders = {"Wren", "River"};
+    NodeRow ash{};
+    snprintf(ash.name, sizeof ash.name, "Ash");
+    ash.kind = NodeKind::Chat;
+    ash.heard = true;
+    ash.heard_age_s = 60;
+    model->rows.push_back(ash);
+  }
+};
+
+TEST_F(Mention, AnAtOffersRecentSendersThenContacts) {
+  openCompose();
+  type("hi @");
+  EXPECT_EQ(chips(), (std::vector<std::string>{"@Wren", "@River", "@Ash"}));
+}
+
+TEST_F(Mention, EachLetterNarrowsThem) {
+  openCompose();
+  type("@r");
+  EXPECT_EQ(chips(), (std::vector<std::string>{"@River"}));
+}
+
+TEST_F(Mention, TappingOneInsertsTheMentionAsTheReceiverMatchesIt) {
+  openCompose();
+  type("hi @wr");
+  ASSERT_TRUE(tap("@Wren"));
+  pump();
+  EXPECT_STREQ(shell->_draft.text(), "hi @[Wren] ");
+  EXPECT_EQ(shell->_nmention, 0u) << "the suggestions stayed after one was taken";
+  EXPECT_EQ(model->sends, 0);
+}
+
+TEST_F(Mention, WithAKeyboardEnterTakesTheFirstThenSends) {
+  shell->setHardwareKeyboard(true);
+  openCompose();
+  type("@");
+  ASSERT_NE(shell->_hint_send, nullptr);
+  EXPECT_STREQ(lv_label_get_text(shell->_hint_send), "mention");
+  EXPECT_TRUE(shell->typeKey(KeyKind::Enter, 0));
+  pump();
+  EXPECT_STREQ(shell->_draft.text(), "@[Wren] ");
+  EXPECT_EQ(model->sends, 0) << "Enter sent instead of taking the mention";
+  EXPECT_STREQ(lv_label_get_text(shell->_hint_send), "send");
+  type("hello");
+  EXPECT_TRUE(shell->typeKey(KeyKind::Enter, 0));
+  pump();
+  EXPECT_EQ(model->sends, 1);
+}
+
+// Negative: no open "@", no suggestions, and Enter sends as it always has.
+TEST_F(Mention, AnAtInsideAWordOrAfterASpaceOffersNothing) {
+  shell->setHardwareKeyboard(true);
+  openCompose();
+  type("me@home");
+  EXPECT_EQ(shell->_nmention, 0u);
+  type(" @Wren ");
+  EXPECT_EQ(shell->_nmention, 0u);
+  EXPECT_TRUE(shell->typeKey(KeyKind::Enter, 0));
+  pump();
+  EXPECT_EQ(model->sends, 1);
+}
+
+TEST_F(Mention, NoMatchOffersNothing) {
+  openCompose();
+  type("@zz");
+  EXPECT_EQ(shell->_nmention, 0u);
+}
+
+// Negative: a DM has no mentions; the chip row keeps the canned replies.
+TEST_F(Mention, ADirectMessageOffersNone) {
+  openCompose(ThreadKind::Direct);
+  type("@");
+  EXPECT_EQ(shell->_nmention, 0u);
+  for (const std::string& c : chips()) EXPECT_NE(c, "@Wren");
+}
+
+// A long name is cut, so a second suggestion still fits the row.
+TEST_F(Mention, ALongNameLeavesRoomForTheNext) {
+  model->senders = {"Offband-TDeck-Ink-Long-Name", "Wren"};
+  openCompose();
+  type("@");
+  ASSERT_GE(lv_obj_get_child_cnt(shell->_chips), 2u);
+  lv_obj_update_layout(lv_scr_act());
+  lv_obj_t* second = lv_obj_get_child(shell->_chips, 1);
+  EXPECT_LE(lv_obj_get_x(second) + lv_obj_get_width(second), lv_obj_get_content_width(shell->_chips))
+      << "the second suggestion is pushed off the row";
+}
+
+// Negative: a mention that doesn't fit the budget leaves the draft alone.
+TEST_F(Mention, ATokenPastTheBudgetChangesNothing) {
+  openCompose();
+  shell->_draft.start(8);
+  type("1234 @W");   // "@[Wren]" would end at byte 12
+  ASSERT_GT(shell->_nmention, 0u) << "draft \"" << shell->_draft.text() << "\"";
+  ASSERT_TRUE(tap("@Wren"));
+  pump();
+  EXPECT_STREQ(shell->_draft.text(), "1234 @W");
 }
 
 int main(int argc, char** argv) {

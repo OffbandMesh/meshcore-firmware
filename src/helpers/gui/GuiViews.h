@@ -171,6 +171,9 @@ public:
   size_t insertText(const char* utf8);
   // Removes the last whole character; false when empty.
   bool backspace();
+  // Shortens the draft to at most `len` bytes, backing up to the start of a
+  // character so it never ends mid-sequence. Never lengthens it.
+  void truncate(size_t len);
   const char* text() const { return _buf; }
   size_t length() const { return _len; }
   size_t budget() const { return _budget; }
