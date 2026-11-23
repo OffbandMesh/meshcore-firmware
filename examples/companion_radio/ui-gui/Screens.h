@@ -18,6 +18,7 @@
 #include <helpers/gui/GuiViews.h>
 #include <helpers/gui/InputMap.h>
 #include <helpers/gui/KeyInput.h>
+#include <helpers/gui/Mention.h>
 #include <helpers/gui/NodeViews.h>
 #include <helpers/gui/RadarViews.h>
 #include <helpers/gui/SensorViews.h>
@@ -123,6 +124,14 @@ public:
   // Compose (D5)
   virtual size_t composeBudget(int thread) = 0;              // bytes a message may carry
   virtual const char* cannedText(int i) = 0;                 // chip i (0..3), "" if none
+  // A channel's senders heard since boot, by full name, newest first: the
+  // mentions Compose offers (#2234). Valid until the next message arrives.
+  virtual size_t recentSenders(int thread, const char** out, size_t max) {
+    (void)thread;
+    (void)out;
+    (void)max;
+    return 0;
+  }
   virtual bool sendText(int thread, const char* text, size_t len) = 0;
   virtual uint8_t dmAttempt(uint32_t seq) = 0;               // the try in flight, 0 if none
   virtual void resend(uint32_t seq) = 0;                     // a failed DM, again
@@ -528,6 +537,18 @@ private:
   lv_obj_t* _caret = nullptr;
   lv_obj_t* _counter = nullptr;
   lv_obj_t* _key_preview = nullptr; // on the top layer while a finger is down
+  // Mentions (#2234): an open "@" in a channel's draft turns the chip row
+  // into suggestions; a hardware keyboard's Enter takes the first.
+  lv_obj_t* _chips = nullptr;       // the chip row: canned replies, or suggestions
+  lv_obj_t* _hint_send = nullptr;   // the key hint's "send"; "mention" while suggestions show
+  char _mention[offband::gui::kMentionShown][offband::gui::kMentionNameLen] = {};
+  size_t _nmention = 0;             // suggestions shown; 0: the canned replies are
+  size_t _mention_at = 0;           // the open "@"'s offset in the draft
+  int _mention_take = -1;           // a tapped suggestion, taken after the tap's event
+  const char* _chip_text = nullptr; // a tapped canned reply, likewise
+  void fillChips();
+  void refreshMentions();           // from refreshDraft: suggestions for the draft as it is
+  void takeMention(int i);
   uint32_t _not_sent_at = 0;        // "Not sent" shows in the counter for 2 s
 
   // Bottom sheet

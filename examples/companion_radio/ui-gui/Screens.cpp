@@ -325,6 +325,8 @@ void GuiShell::rebuild() {
   for (auto& s : _sub) s = nullptr;
 
   _kb = _draft_box = _draft_label = _caret = _counter = nullptr;
+  _chips = _hint_send = nullptr;
+  _nmention = 0;
   _query_label = _match_label = _search_list = _wheel_strip = nullptr;
   _login_field = _login_status = nullptr;
   _set_text_label = nullptr;
@@ -1341,33 +1343,118 @@ void GuiShell::buildCompose(lv_obj_t* scr) {
   lv_obj_set_style_bg_opa(_caret, LV_OPA_COVER, 0);
   lv_obj_set_style_bg_color(_caret, c(_t.sig), 0);
 
-  // Canned chips (the "Can" list; the design's four until Setup edits them).
-  lv_obj_t* chips = box(scr, _lay.content_w - 16, chip_h);
-  lv_obj_set_pos(chips, 8, kStatusH + 28 + gap + draft_h + gap);
-  lv_obj_set_flex_flow(chips, LV_FLEX_FLOW_ROW);
-  lv_obj_set_style_pad_column(chips, 4, 0);
-  for (int i = 0; i < kCannedReplies; i++) {
-    const char* text = cannedFor(i);
-    lv_obj_t* chip = box(chips, LV_SIZE_CONTENT, chip_h);
-    lv_obj_set_style_border_width(chip, 1, 0);
-    lv_obj_set_style_border_color(chip, c(_t.line), 0);
-    lv_obj_set_style_radius(chip, _look.pill_chips ? 12 : 0, 0);
-    lv_obj_set_style_pad_hor(chip, 6, 0);
-    lv_obj_t* cl = label(chip, FontRole::BodySmall, _t.ink2);
-    userText(cl, text);
+  // The chip row: the canned replies (the "Can" list; the design's four
+  // until Setup edits them), or the mention suggestions while an "@" is open.
+  _chips = box(scr, _lay.content_w - 16, chip_h);
+  lv_obj_set_pos(_chips, 8, kStatusH + 28 + gap + draft_h + gap);
+  lv_obj_set_flex_flow(_chips, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_column(_chips, 4, 0);
+  _nmention = 0;
+  fillChips();
+
+  buildKeyboard(scr);
+  refreshDraft();
+}
+
+// One chip in the row; `first` marks the one a hardware keyboard's Enter takes.
+static lv_obj_t* chipBox(lv_obj_t* row, int16_t h, const ThemeTokens& t, const LookTokens& look, bool first) {
+  lv_obj_t* chip = box(row, LV_SIZE_CONTENT, h);
+  lv_obj_set_style_border_width(chip, first ? 2 : 1, 0);
+  lv_obj_set_style_border_color(chip, c(first ? t.sig : t.line), 0);
+  lv_obj_set_style_radius(chip, look.pill_chips ? 12 : 0, 0);
+  lv_obj_set_style_pad_hor(chip, 6, 0);
+  lv_obj_add_flag(chip, LV_OBJ_FLAG_CLICKABLE);
+  return chip;
+}
+
+// Both kinds of chip act after the tap's event: what they do redraws this
+// row, and the chip taking the tap must not be deleted inside it.
+void GuiShell::fillChips() {
+  if (!_chips) return;
+  lv_obj_clean(_chips);
+  const int16_t h = lv_obj_get_height(_chips);
+  if (_nmention == 0) {
+    for (int i = 0; i < kCannedReplies; i++) {
+      const char* text = cannedFor(i);
+      lv_obj_t* chip = chipBox(_chips, h, _t, _look, false);
+      lv_obj_t* cl = label(chip, FontRole::BodySmall, _t.ink2);
+      userText(cl, text);
+      lv_obj_center(cl);
+      lv_obj_set_user_data(chip, const_cast<char*>(text));
+      lv_obj_add_event_cb(
+          chip,
+          [](lv_event_t* e) {
+            GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
+            self->_chip_text = static_cast<const char*>(lv_obj_get_user_data(lv_event_get_target(e)));
+            self->later([](GuiShell* g) { g->insertText(g->_chip_text); });
+          },
+          LV_EVENT_CLICKED, this);
+    }
+    return;
+  }
+  // A suggestion: "@" and the name, cut with "…" past half the row so a long
+  // name leaves room for another.
+  const lv_coord_t cap = (lv_obj_get_width(_chips) - 4) / 2 - 12;
+  const lv_font_t* f = font(FontRole::BodySmall);
+  for (size_t i = 0; i < _nmention; i++) {
+    lv_obj_t* chip = chipBox(_chips, h, _t, _look, _hw_kb && i == 0);
+    lv_obj_t* cl = label(chip, FontRole::BodySmall, _t.ink);
+    char shown[kMentionNameLen + 2];
+    snprintf(shown, sizeof shown, "@%s", _mention[i]);
+    userText(cl, shown);
+    lv_point_t size;
+    lv_txt_get_size(&size, lv_label_get_text(cl), f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    if (size.x > cap) {
+      lv_obj_set_width(cl, cap);
+      oneLine(cl, FontRole::BodySmall);
+    }
     lv_obj_center(cl);
-    lv_obj_add_flag(chip, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_user_data(chip, const_cast<char*>(text));
+    lv_obj_set_user_data(chip, reinterpret_cast<void*>(intptr_t(i)));
     lv_obj_add_event_cb(
         chip,
         [](lv_event_t* e) {
           GuiShell* self = static_cast<GuiShell*>(lv_event_get_user_data(e));
-          self->insertText(static_cast<const char*>(lv_obj_get_user_data(lv_event_get_target(e))));
+          self->_mention_take = int(reinterpret_cast<intptr_t>(lv_obj_get_user_data(lv_event_get_target(e))));
+          self->later([](GuiShell* g) { g->takeMention(g->_mention_take); });
         },
         LV_EVENT_CLICKED, this);
   }
+}
 
-  buildKeyboard(scr);
+// What the draft's open "@" matches: this channel's recent senders, then
+// chat contacts. A DM or a room has no mentions; neither does a draft with
+// no open "@". The row is redrawn only when the suggestions change.
+void GuiShell::refreshMentions() {
+  if (!_chips) return;
+  const Thread* th = _model->store().threadAt(_thread);
+  const char* picks[kMentionShown] = {};
+  size_t n = 0, at = 0;
+  if (th && th->kind == uint8_t(ThreadKind::Channel) && openMention(_draft.text(), _draft.length(), &at)) {
+    const char* recent[RecentSenders::kCap];
+    const size_t nrecent = _model->recentSenders(_thread, recent, RecentSenders::kCap);
+    size_t nrows = 0;
+    const NodeRow* rows = _model->nodeRows(&nrows);
+    if (!rows) nrows = 0;
+    n = mentionPicks(_draft.text() + at + 1, _draft.length() - at - 1, recent, nrecent, rows, nrows,
+                     _model->nodeName(), picks, kMentionShown);
+  }
+  bool same = n == _nmention && (n == 0 || at == _mention_at);
+  for (size_t i = 0; same && i < n; i++) same = strcmp(picks[i], _mention[i]) == 0;
+  if (same) return;
+  for (size_t i = 0; i < n; i++) snprintf(_mention[i], sizeof _mention[i], "%s", picks[i]);
+  _nmention = n;
+  _mention_at = at;
+  fillChips();
+  if (_hint_send) lv_label_set_text(_hint_send, n ? "mention" : "send");
+}
+
+// Suggestion i goes in as "@[Name] " in place of what was typed after "@".
+void GuiShell::takeMention(int i) {
+  if (!_composing || i < 0 || size_t(i) >= _nmention) return;
+  if (!applyMention(_draft, _mention_at, _mention[i])) return;   // doesn't fit: the draft stays as it is
+  const Shift before = _shift.state();
+  _shift.autoCap(_draft.text(), _draft.length());
+  if (_shift.state() != before) buildKeys();
   refreshDraft();
 }
 
@@ -1429,8 +1516,8 @@ void GuiShell::buildKeyHint(lv_obj_t* scr) {
     return;
   }
   label(h, FontRole::BodySmall, _t.ink2, "Enter");
-  lv_obj_t* send = label(h, FontRole::BodySmall, _t.dim, "send");
-  lv_obj_set_style_pad_right(send, 8, 0);
+  _hint_send = label(h, FontRole::BodySmall, _t.dim, "send");   // "mention" while suggestions show (#2234)
+  lv_obj_set_style_pad_right(_hint_send, 8, 0);
   label(h, FontRole::BodySmall, _t.ink2, "⌫");
   label(h, FontRole::BodySmall, _t.dim, "on empty: back");
 }
@@ -1647,7 +1734,10 @@ bool GuiShell::typeKey(KeyKind k, char ch, bool tapped_shift) {
   if (!fieldTakesKey(k, field, buf.length() == 0)) return false;   // empty, not a message: Back
   switch (k) {
     case KeyKind::Enter:
-      submitText();
+      // With suggestions showing, Enter takes the first and doesn't send, as
+      // a chat app's autocomplete does (#2234); Enter again sends.
+      if (&buf == &_draft && _nmention > 0) takeMention(0);
+      else submitText();
       return true;
     case KeyKind::Backspace:
       // An empty draft: taken, and nothing changes, so a quick delete that
@@ -1679,6 +1769,7 @@ void GuiShell::insertText(const char* text) {
 
 void GuiShell::refreshDraft() {
   if (!_draft_label) return;
+  refreshMentions();
   userText(_draft_label, _draft.text());
   char buf[24];
   const bool not_sent = _not_sent_at && lv_tick_elaps(_not_sent_at) < 2000;

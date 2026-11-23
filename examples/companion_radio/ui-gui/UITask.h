@@ -67,6 +67,7 @@ public:
   void loraPopover() override { openLoraPopover(); }
   size_t composeBudget(int thread) override;
   const char* cannedText(int i) override;
+  size_t recentSenders(int thread, const char** out, size_t max) override;
   bool sendText(int thread, const char* text, size_t len) override;
   uint8_t dmAttempt(uint32_t seq) override;
   void resend(uint32_t seq) override;

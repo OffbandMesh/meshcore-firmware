@@ -7,6 +7,7 @@
   #include <helpers/gui/hw/StoreFlash.h>
   #include <helpers/gui/hw/GuiSd.h>
   #include <helpers/gui/MsgStore.h>
+  #include <helpers/gui/Mention.h>
   #include <helpers/gui/ChunkedSave.h>
   #include <helpers/gui/GuiGps.h>
   #include <helpers/gui/GuiMetrics.h>
@@ -223,6 +224,8 @@ public:
   // The on-device message store (#1427) and its flash backend (#1463).
   offband::gui::MsgStore& guiStore() { return _gui_store; }
   StoreFlash& guiStoreFlash() { return _gui_store_flash; }
+  // Channel senders by full name, for Compose's mentions (#2234).
+  const offband::gui::RecentSenders& guiSenders() const { return _gui_senders; }
 #ifdef PIN_SD_CS
   // The SD card and its archive of the store (Epic I #1433).
   GuiSd& guiSd() { return _gui_sd; }
@@ -579,6 +582,7 @@ private:
   offband::gui::FixTracker _gui_fix;
 
   offband::gui::MsgStore _gui_store;
+  offband::gui::RecentSenders _gui_senders;   // the store cuts a sender to 13 bytes; a mention needs it whole
   StoreFlash _gui_store_flash;
 #ifdef PIN_SD_CS
   GuiSd _gui_sd;

@@ -1577,6 +1577,10 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
                              pkt->isRouteFlood() ? pkt->getPathHashCount() : 0xFF,
                              (int8_t)(pkt->getSNR() * 4));
       _gui_store_flash.ringChanged(_ms->getMillis());
+      // #2234: and the sender's whole name, for a mention from Compose.
+      char whole[offband::gui::kMentionNameLen];
+      offband::splitSender(text, whole, sizeof(whole));
+      _gui_senders.heard(t, whole);
     }
   }
 #endif
