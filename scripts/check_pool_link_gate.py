@@ -27,7 +27,8 @@ EXEMPT = ("MqttBrokerPool.cpp", "MqttBrokerPool.h", "RepeaterMqttPool.cpp", "Rep
 
 def transport_owners_missing_hook(root):
     """A repeater that owns both a WifiMqttTransport and a broker pool must
-    pause the pool before the transport tears WiFi down (setBeforeTeardown)."""
+    pause the pool before the transport tears WiFi down (setBeforeTeardown),
+    passing linkGoingDown() a callback that runs between slot stops."""
     missing = []
     for d in SCAN_DIRS:
         for base, _, files in os.walk(os.path.join(root, d)):
@@ -37,8 +38,13 @@ def transport_owners_missing_hook(root):
                 path = os.path.join(base, name)
                 with open(path, encoding="utf-8", errors="replace") as f:
                     text = f.read()
+                # The hook must also pass a between-stops callback: the pause
+                # runs on the loop task under the task watchdog, and only a
+                # feed between stops keeps several slow stops from summing
+                # past it (Gemini review of #2239).
                 if ("new WifiMqttTransport" in text and "repeaterMqttPool()" in text
-                        and not re.search(r"setBeforeTeardown\s*\(", text)):
+                        and not (re.search(r"setBeforeTeardown\s*\(", text)
+                                 and re.search(r"linkGoingDown\s*\(\s*[^)\s]", text))):
                     missing.append(os.path.relpath(path, root))
     return sorted(missing)
 
@@ -72,7 +78,8 @@ def main():
         print(f"FAIL: {m} drives a broker pool's loop() but never calls setLinkUp() (#2232)")
     for m in no_hook:
         print(f"FAIL: {m} owns a WifiMqttTransport and a broker pool but never calls "
-              f"setBeforeTeardown() to pause the pool before WiFi goes down (#2232)")
+              f"setBeforeTeardown() with linkGoingDown(<feed>) to pause the pool before "
+              f"WiFi goes down, feeding the watchdog between stops (#2232)")
     if missing or no_hook:
         return 1
     print("OK: every broker-pool owner reports its link (#2232)")

@@ -51,9 +51,17 @@ class CheckPoolLinkGate(unittest.TestCase):
 
     def test_transport_owner_with_hook_passes(self):
         root = tree({"examples/r/main.cpp":
-                     "t = new WifiMqttTransport(a);\nt->setBeforeTeardown(h);\n"
+                     "t = new WifiMqttTransport(a);\n"
+                     "t->setBeforeTeardown([](){ offband::repeaterMqttPool().linkGoingDown(feed); });\n"
                      "void f(){ offband::repeaterMqttPool().loop(1); }\n"})
         self.assertEqual([], chk.transport_owners_missing_hook(root))
+
+    def test_hook_without_watchdog_feed_fails(self):
+        root = tree({"examples/r/main.cpp":
+                     "t = new WifiMqttTransport(a);\n"
+                     "t->setBeforeTeardown([](){ offband::repeaterMqttPool().linkGoingDown(); });\n"
+                     "void f(){ offband::repeaterMqttPool().loop(1); }\n"})
+        self.assertEqual([os.path.join("examples", "r", "main.cpp")], chk.transport_owners_missing_hook(root))
 
     def test_unrelated_pool_loop_is_ignored(self):
         root = tree({"src/x/Thread.cpp": "ThreadPool pool;\nvoid f(){ pool.loop(1); }\n"})

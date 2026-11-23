@@ -79,7 +79,9 @@ public:
     // caller's task. For an owner that knows the link is about to drop and
     // must stop clients while it is still up; the worker's falling-edge pause
     // then finds nothing left running.
-    void pauseAll();
+    // `between`, when set, runs after each slot's stop (the repeater feeds its
+    // task watchdog there: each stop is bounded, the sum of them is not).
+    void pauseAll(void (*between)() = nullptr);
 
     // Caller supplies a populated MqttStatusSnapshot. Pool tracks
     // status_interval_sec internally and publishes when due.
