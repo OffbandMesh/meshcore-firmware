@@ -129,6 +129,15 @@ jobs:
       - name: Frame sizing goes through maxFramePayload(), not MAX_FRAME_SIZE arithmetic
         run: python scripts/check_frame_cap.py
 
+      # #1054. A board with no RTC chip must not auto-discover one at boot: the probe
+      # can only fail, or adopt a part that is not a clock as the time source. Putting
+      # it back compiles and boots, so nothing else would catch it. Both steps BLOCK.
+      - name: No-RTC-chip guard self-test
+        run: python scripts/test_check_no_rtc_autodiscover.py
+
+      - name: Boards with no RTC chip declare their clock instead of probing for one
+        run: python scripts/check_no_rtc_autodiscover.py
+
       # #1792 (Epic #1788). Every setting the Offband screens can write must be writable
       # from a client too -- a board with no keyboard, or no screen, is configured from
       # the app, and three such gaps were found by hand, late. The guard checks the
