@@ -1,0 +1,12 @@
+schema_version: 1
+issue: 1054
+impact: none
+reason: >-
+  Nothing a user sees or sets changes. The Photon-1W ESP32-C6 has no RTC chip,
+  so its boot-time RTC probe never found one and the node was already keeping
+  time from the ESP32 system clock. This declares that clock directly and drops
+  the probe. Time readings, the commands that set and read the clock, GPS time,
+  defaults and stored settings all behave exactly as before.
+  What it removes is a risk, not a feature: a probe that could adopt some other
+  I2C part as the clock if one ever answered at an RTC address. The new CI check
+  (scripts/check_no_rtc_autodiscover.py) keeps the probe from coming back.
