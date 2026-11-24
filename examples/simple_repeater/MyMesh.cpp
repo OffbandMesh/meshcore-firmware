@@ -805,8 +805,45 @@ uint32_t MyMesh::getRetransmitDelay(const mesh::Packet *packet) {
 // ---------------------------------------------------------------------------
 // #2246 flood delivery
 // ---------------------------------------------------------------------------
-bool MyMesh::floodQuietEnabled() const { return true; }   // #2251 moves these to prefs
-bool MyMesh::floodRetryEnabled() const { return true; }
+bool MyMesh::floodQuietEnabled() const { return _prefs.flood_quiet != 0; }   // #2251
+bool MyMesh::floodRetryEnabled() const { return _prefs.flood_retry != 0; }   // #2251
+
+offband::FloodStats MyMesh::floodStats() const {
+  offband::FloodStats st;
+  st.echo = flood_echo.counters();
+  st.quiet_holds = getNumQuietHolds();
+  st.quiet_caps = getNumQuietCaps();
+  return st;
+}
+
+// #2251: `get flood` / `set flood.quiet|retry on|off`. Returns true when handled.
+bool MyMesh::handleFloodCommand(const char* command, char* reply) {
+  offband::FloodSettings s;
+  s.quiet = _prefs.flood_quiet;
+  s.retry = _prefs.flood_retry;
+  auto r = offband::handleFloodCommand(command, s, floodStats(), reply, 160);
+  if (r == offband::FloodCliResult::NotMine) return false;
+  if (r == offband::FloodCliResult::Changed) {
+    _prefs.flood_quiet = s.quiet;
+    _prefs.flood_retry = s.retry;
+    savePrefs();
+  }
+  return true;
+}
+
+// #2251: the same status line into MeshLog every 15 min, so a field repeater's
+// numbers reach the caplog host without anyone polling it.
+void MyMesh::floodStatusTick() {
+  const uint32_t now = _ms->getMillis();
+  if ((int32_t)(now - next_flood_status_ms) < 0) return;
+  next_flood_status_ms = now + 15UL * 60UL * 1000UL;
+  offband::FloodSettings s;
+  s.quiet = _prefs.flood_quiet;
+  s.retry = _prefs.flood_retry;
+  char line[160];
+  offband::formatFloodStatus(line, sizeof line, s, floodStats());
+  mesh_log_line(MLOG_DEBUG, "[flood] %s\n", line);
+}
 
 // #2250: the channel counts as quiet one airtime of the packet just heard after
 // it ends, plus 0-120 ms jitter so neighbours waiting on the same packet don't
@@ -1264,6 +1301,9 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   // External FEM LNA enabled by default (boards without controllable FEM ignore this).
   _prefs.radio_fem_rxgain = 1;
   _prefs.ui_led_enabled = 1;   // #542 default: LED on (set before loadPrefs so old blobs default on)
+  _prefs.flood_quiet = 1;      // #2251 defaults ON, set before loadPrefs so old files come up on
+  _prefs.flood_retry = 1;
+  next_flood_status_ms = 0;
   _prefs.ui_display_mode = DISPLAY_MODE_AUTO;   // #542 A2 default: today's on-with-timeout
 
   pending_discover_tag = 0;
@@ -1610,6 +1650,8 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       Serial.printf("\n");
     }
     reply[0] = 0;
+  } else if (handleFloodCommand(command, reply)) {
+    // #2251: get flood / set flood.quiet|retry -- handled, reply written
   } else if (memcmp(command, "discover.neighbors", 18) == 0) {
     const char* sub = command + 18;
     while (*sub == ' ') sub++;
@@ -1657,6 +1699,7 @@ void MyMesh::loop() {
 
   mesh::Mesh::loop();
   floodRetryTick();       // #2249: one retry for a forward nobody passed on
+  floodStatusTick();      // #2251: periodic [flood] counters line
 
 #if defined(OFFBAND_NEIGHBORS_REPORT)
   scopeQueryTick();       // #1911: the walk, one request at a time

@@ -58,6 +58,9 @@ reads the response for ~5s, prints it.)
 | `neighbors` | List recent neighbors | text table | CommonCLI.cpp:278 |
 | `neighbor.remove <hex-pubkey>` | Forget a neighbor | `OK` or `ERR: bad pubkey` | CommonCLI.cpp:280 |
 | `tempradio <freq> <bw> <sf> <cr> <timeout_min>` | Temporary radio params | varies | CommonCLI.cpp:291+ |
+| `get flood` | Repeater only. Flood-delivery settings and counters (#2246) | `quiet=on retry=on \| fwd=N echo=N rtx=N rtx_echo=N no_nbr=N evict=N hold=N cap=N` | FloodCli.h, MyMesh::handleFloodCommand |
+| `set flood.quiet on\|off` | Repeater only. Wait for quiet air before passing on a flood packet (at most 3 s). Saved | `OK`, `Err - expected on or off` | FloodCli.h |
+| `set flood.retry on\|off` | Repeater only. One retry when no downstream repeater passes the packet on. Saved | `OK`, `Err - expected on or off` | FloodCli.h |
 
 ### WiFi / telemetry (D2/D3 / issue #57)
 

@@ -321,18 +321,29 @@ TEST(FloodCli, BadValue_RejectedWithoutChange) {
     EXPECT_EQ(s.retry, 1);
 }
 
-TEST(FloodCli, UnknownFloodKey_Err) {
-    FloodSettings s; FloodStats st; char r[200];
-    EXPECT_EQ(handleFloodCommand("set flood.max 3", s, st, r, sizeof r), FloodCliResult::Handled);
-    EXPECT_EQ(strncmp(r, "Err", 3), 0);
+// Gemini review of #2251: the common CLI's own flood.* keys must pass through,
+// both set and get, untouched. These are the real keys in CommonCLI.cpp.
+TEST(FloodCli, CommonCliFloodKeys_PassThrough) {
+    const char* keys[] = {
+        "set flood.max 5", "set flood.max.unscoped 3", "set flood.max.advert 4",
+        "set flood.advert.interval 12", "get flood.max", "get flood.max.unscoped",
+        "get flood.max.advert", "get flood.advert.interval",
+    };
+    for (const char* k : keys) {
+        FloodSettings s; FloodStats st; char r[200] = "untouched";
+        EXPECT_EQ(handleFloodCommand(k, s, st, r, sizeof r), FloodCliResult::NotMine) << k;
+        EXPECT_STREQ(r, "untouched") << k;
+        EXPECT_EQ(s.quiet, 1);
+        EXPECT_EQ(s.retry, 1);
+    }
 }
 
 TEST(FloodCli, OtherCommands_NotMine) {
     FloodSettings s; FloodStats st; char r[200] = "untouched";
-    EXPECT_EQ(handleFloodCommand("get flood.max", s, st, r, sizeof r), FloodCliResult::NotMine);
-    EXPECT_EQ(handleFloodCommand("set flood.max", s, st, r, sizeof r), FloodCliResult::Handled); // own prefix
     EXPECT_EQ(handleFloodCommand("get floodx", s, st, r, sizeof r), FloodCliResult::NotMine);
+    EXPECT_EQ(handleFloodCommand("set flood.quietx on", s, st, r, sizeof r), FloodCliResult::NotMine);
     EXPECT_EQ(handleFloodCommand("set af 1", s, st, r, sizeof r), FloodCliResult::NotMine);
+    EXPECT_STREQ(r, "untouched");
 }
 
 TEST(FloodCli, StatusFitsOneReply) {
