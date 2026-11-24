@@ -98,6 +98,11 @@ public:
   // #1060: 1 = `caplog forward on` (until off) is armed and re-arms at boot. A
   // bounded window never persists.
   uint8_t  caplog_fwd = 0;
+  // #2251 (Feature #2246): flood delivery on repeaters. 1 = on (default).
+  // flood_quiet: idle wait before forwarding a flood packet (#2250).
+  // flood_retry: one retry when no downstream echo is heard (#2249).
+  uint8_t  flood_quiet = 1;
+  uint8_t  flood_retry = 1;
 
 private:
   class RadioPrefs : public ConfigSerializer {
@@ -179,6 +184,8 @@ private:
       def("f_max_uns", _parent->flood_max_unscoped);
       def("f_max_adv", _parent->flood_max_advert);
       def("loop", _parent->loop_detect);
+      def("f_quiet", _parent->flood_quiet);   // #2251, Offband-only
+      def("f_retry", _parent->flood_retry);   // #2251, Offband-only
     }
   public:
     RepeatPrefs(NodePrefs* parent) : _parent(parent) { }

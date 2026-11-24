@@ -410,6 +410,8 @@ void CommonCLI::loadPrefsInt(FILESYSTEM* fs, const char* filename) {  // Legacy 
     _prefs->caplog_enabled = constrain(_prefs->caplog_enabled, 0, 1);       // #562 boolean
     _prefs->caplog_level = constrain(_prefs->caplog_level, 0, MLOG_PACKET); // #562 level bound
     _prefs->syslog_host[sizeof(_prefs->syslog_host) - 1] = '\0';            // #566 NUL-terminate
+    _prefs->flood_quiet = constrain(_prefs->flood_quiet, 0, 1);             // #2251 boolean
+    _prefs->flood_retry = constrain(_prefs->flood_retry, 0, 1);             // #2251 boolean
     if (_prefs->syslog_port == 0) _prefs->syslog_port = 514;                // #566 sane default
 
     // #562: apply persisted caplog state at boot (common across roles). Capture
@@ -518,6 +520,8 @@ void CommonCLI::loadPrefsUpstreamInt(FILESYSTEM* fs, const char* filename) {
     _prefs->caplog_enabled = constrain(_prefs->caplog_enabled, 0, 1);       // #562 boolean
     _prefs->caplog_level = constrain(_prefs->caplog_level, 0, MLOG_PACKET); // #562 level bound
     _prefs->syslog_host[sizeof(_prefs->syslog_host) - 1] = '\0';            // #566 NUL-terminate
+    _prefs->flood_quiet = constrain(_prefs->flood_quiet, 0, 1);             // #2251 boolean
+    _prefs->flood_retry = constrain(_prefs->flood_retry, 0, 1);             // #2251 boolean
     if (_prefs->syslog_port == 0) _prefs->syslog_port = 514;                // #566 sane default
 
     // #562: apply persisted caplog state at boot (common across roles). Capture

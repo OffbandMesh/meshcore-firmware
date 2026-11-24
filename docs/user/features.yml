@@ -212,3 +212,20 @@ features:
         contains: ['constexpr int kRegionsPeerIdx = -2;']
       - path: variants/heltec_v4/platformio.ini
         contains: ['-D OFFBAND_NEIGHBORS_REPORT=1', '+<helpers/wifi_observer/NeighborsCli.cpp>']
+  - id: repeater-flood-delivery
+    title: Get more messages past a busy repeater
+    coverage: documented
+    guide: guides/repeater-flood-delivery.md
+    roles: [repeater]
+    boards: [heltec_v4, rak4631]
+    availability: {channel: development, verified_releases: []}
+    verification: The wait for quiet air, the single retry, get flood, set flood.quiet and set flood.retry checked against source and native tests (test_flood_echo), with heltec_v4_repeater and RAK_4631_repeater builds; not in any release, no on-air or hardware trial yet.
+    evidence:
+      - path: src/helpers/FloodCli.h
+        contains: ['"quiet=%s retry=%s | fwd=%lu echo=%lu rtx=%lu rtx_echo=%lu "', '"Err - expected on or off"', 'if (strncmp(cmd, "set flood.quiet ", 16) == 0)']
+      - path: src/helpers/FloodQuietWait.h
+        contains: ['static constexpr uint32_t kFloodQuietCapMs = 3000;']
+      - path: src/helpers/FloodEchoTracker.h
+        contains: ['static constexpr uint32_t kNeighbourStaleMs = 30UL * 60UL * 1000UL;', 'p.getPayloadType() != PAYLOAD_TYPE_ADVERT']
+      - path: examples/simple_repeater/MyMesh.cpp
+        contains: ['mesh_log_line(MLOG_DEBUG, "[flood] %s\n", line);', '_prefs.flood_quiet = 1;']

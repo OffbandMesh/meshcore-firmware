@@ -17,6 +17,7 @@ Use this manual to configure your radio and check whether a feature is working.
 - [Collect useful support evidence](guides/support-logs.md).
 - [Report the repeaters an observer hears and their regions](guides/observer-neighbors.md).
 - [Report a repeater's own regions to CoreScope](guides/repeater-neighbors.md).
+- [Get more messages past a busy repeater](guides/repeater-flood-delivery.md).
 - [Use your QCC badge](guides/qcc-badge.md).
 - [Use your SenseCAP T1000-E](guides/t1000e.md).
 - [Download firmware](https://github.com/OffbandMesh/meshcore-firmware/releases).

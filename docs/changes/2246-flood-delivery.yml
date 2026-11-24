@@ -1,0 +1,12 @@
+schema_version: 1
+issue: 2246
+impact: updated
+guides:
+  - docs/user/guides/repeater-flood-delivery.md
+reason: >-
+  Repeaters gain two new behaviors, both on by default: they wait for quiet air
+  before passing on a flood message, and they retry once when no repeater further
+  out passes it on. There are three new admin commands (get flood, set flood.quiet,
+  set flood.retry) and two new saved settings. A repeater owner needs to know what
+  the behaviors do, how to read the counters and how to turn either one off, so a
+  new guide covers the journey. Nothing changes on the wire.

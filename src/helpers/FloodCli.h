@@ -78,12 +78,11 @@ inline FloodCliResult handleFloodCommand(const char* cmd, FloodSettings& s, cons
     }
     uint8_t* field = nullptr;
     const char* rest = nullptr;
+    // ONLY these two exact keys. The common CLI owns other `set flood.*` keys
+    // (flood.max, flood.max.unscoped, flood.max.advert, flood.advert.interval);
+    // a catch-all here would steal them (Gemini review of #2251).
     if (strncmp(cmd, "set flood.quiet ", 16) == 0)      { field = &s.quiet; rest = cmd + 16; }
     else if (strncmp(cmd, "set flood.retry ", 16) == 0) { field = &s.retry; rest = cmd + 16; }
-    else if (strncmp(cmd, "set flood.", 10) == 0) {
-        snprintf(reply, cap, "Err - usage: set flood.quiet on|off, set flood.retry on|off");
-        return FloodCliResult::Handled;
-    }
     else return FloodCliResult::NotMine;
 
     int v = detail::parseOnOff(rest);
