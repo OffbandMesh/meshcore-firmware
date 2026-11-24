@@ -119,6 +119,7 @@ void Dispatcher::loop() {
       } else {
         n_sent_direct++;
       }
+      onPacketSent(outbound);   // #2249: the echo tracker records forwards here
       releasePacket(outbound);  // return to pool
       outbound = NULL;
     } else if (millisHasNowPassed(outbound_expiry)) {
@@ -259,8 +260,20 @@ void Dispatcher::checkRecv() {
     }
     logRx(pkt, pkt->getRawLength(), score);   // hook for custom logging
 
+    // #2250: every decoded reception arms the flood idle wait. Downstream
+    // repeaters that heard this same packet are about to relay it; a forward
+    // sent into that window collides at the very nodes it needs to reach.
+    {
+      uint32_t q = getFloodQuietMs(air_time);
+      if (q > 0) {
+        quiet_until = futureMillis(q);
+        quiet_rx_seen = true;
+      }
+    }
+
     if (pkt->isRouteFlood()) {
       n_recv_flood++;
+      onFloodHeard(pkt);   // #2249: before any duplicate filter can drop it
 
       int _delay = calcRxDelay(score, air_time);
       if (_delay < 50) {
@@ -326,7 +339,20 @@ void Dispatcher::checkSend() {
   }
   cad_busy_start = 0;  // reset busy state
 
+  // #2250: a forwarded flood packet waits for quiet air, at most kFloodQuietCapMs.
+  // Only the head of the queue is examined, and next_tx_time is NOT pushed out,
+  // so this re-evaluates every loop and nothing else is delayed by a timer.
+  {
+    unsigned long now = _ms->getMillis();
+    Packet* next = _mgr->peekNextOutbound(now);
+    if (quiet_gate.mustWait(next, next != NULL && offband::floodQuietEligible(*next),
+                            now, quiet_until, quiet_rx_seen)) {
+      return;
+    }
+  }
+
   outbound = _mgr->getNextOutbound(_ms->getMillis());
+  quiet_gate.onPopped(outbound);
   if (outbound) {
     int len = 0;
     uint8_t raw[MAX_TRANS_UNIT];

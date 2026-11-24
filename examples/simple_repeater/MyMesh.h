@@ -35,6 +35,7 @@
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/RegionMap.h>
 #include "RateLimiter.h"
+#include <helpers/FloodEchoTracker.h>   // #2249: one retry when no downstream echo
 #if defined(OFFBAND_NEIGHBORS_REPORT)
 #include "helpers/wifi_observer/NeighborsSchedule.h"   // #1907: the /neighbors cycle
 #include "helpers/wifi_observer/NeighborsCli.h"        // #1907: NeighborsScheduleStatus
@@ -93,6 +94,7 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   unsigned long next_local_advert, next_flood_advert;
   bool _logging;
   NodePrefs _prefs;
+  offband::FloodEchoTracker flood_echo;   // #2249
   ClientACL  acl;
   CommonCLI _cli;
   uint8_t reply_data[MAX_PACKET_PAYLOAD];
@@ -183,6 +185,14 @@ protected:
 
   uint32_t getRetransmitDelay(const mesh::Packet* packet) override;
   uint32_t getDirectRetransmitDelay(const mesh::Packet* packet) override;
+
+  // #2246 flood delivery: idle wait (#2250) and echo-confirmed retry (#2249).
+  uint32_t getFloodQuietMs(uint32_t rx_air_time) override;
+  void onFloodHeard(const mesh::Packet* packet) override;
+  void onPacketSent(const mesh::Packet* packet) override;
+  void floodRetryTick();
+  bool floodQuietEnabled() const;
+  bool floodRetryEnabled() const;
 
   int getInterferenceThreshold() const override {
     return _prefs.interference_threshold;
