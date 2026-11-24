@@ -802,6 +802,49 @@ uint32_t MyMesh::getRetransmitDelay(const mesh::Packet *packet) {
   uint32_t t = (_radio->getEstAirtimeFor(packet->getPathByteLen() + packet->payload_len + 2) * _prefs.tx_delay_factor);
   return getRNG()->nextInt(0, 5*t + 1);
 }
+// ---------------------------------------------------------------------------
+// #2246 flood delivery
+// ---------------------------------------------------------------------------
+bool MyMesh::floodQuietEnabled() const { return true; }   // #2251 moves these to prefs
+bool MyMesh::floodRetryEnabled() const { return true; }
+
+// #2250: the channel counts as quiet one airtime of the packet just heard after
+// it ends, plus 0-120 ms jitter so neighbours waiting on the same packet don't
+// all fire together the moment the window closes.
+uint32_t MyMesh::getFloodQuietMs(uint32_t rx_air_time) {
+  if (!floodQuietEnabled()) return 0;
+  return rx_air_time + getRNG()->nextInt(0, 121);
+}
+
+void MyMesh::onFloodHeard(const mesh::Packet* packet) {
+  if (!floodRetryEnabled()) return;
+  uint8_t hash[MAX_HASH_SIZE];
+  packet->calculatePacketHash(hash);
+  flood_echo.onHeard(hash, packet->getPathHashCount(), _ms->getMillis());
+}
+
+void MyMesh::onPacketSent(const mesh::Packet* packet) {
+  if (!floodRetryEnabled() || !offband::floodEchoEligible(*packet)) return;
+  uint8_t hash[MAX_HASH_SIZE];
+  packet->calculatePacketHash(hash);
+  uint32_t air = _radio->getEstAirtimeFor(packet->getRawLength());
+  flood_echo.onForwardSent(hash, packet->getPathHashCount(), *packet, _ms->getMillis(),
+                           offband::FloodEchoTracker::echoWindowMs(air, _prefs.tx_delay_factor));
+}
+
+// #2249: at most one retry per loop. The copy is the forwarded packet byte for
+// byte, queued at the same priority routeRecvPacket() gives a forward, so it
+// goes through the same duty-cycle budget and the #2250 idle wait.
+void MyMesh::floodRetryTick() {
+  if (!floodRetryEnabled()) return;
+  const mesh::Packet* due = flood_echo.takeDue(_ms->getMillis());
+  if (due == nullptr) return;
+  mesh::Packet* pkt = obtainNewPacket();
+  if (pkt == nullptr) return;   // pool exhausted: the retry is lost, nothing else is
+  *pkt = *due;
+  sendPacket(pkt, pkt->getPathHashCount(), getRNG()->nextInt(0, 201));
+}
+
 uint32_t MyMesh::getDirectRetransmitDelay(const mesh::Packet *packet) {
   uint32_t t = (_radio->getEstAirtimeFor(packet->getPathByteLen() + packet->payload_len + 2) * _prefs.direct_tx_delay_factor);
   return getRNG()->nextInt(0, 5*t + 1);
@@ -1613,6 +1656,7 @@ void MyMesh::loop() {
 #endif
 
   mesh::Mesh::loop();
+  floodRetryTick();       // #2249: one retry for a forward nobody passed on
 
 #if defined(OFFBAND_NEIGHBORS_REPORT)
   scopeQueryTick();       // #1911: the walk, one request at a time

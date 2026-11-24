@@ -5,6 +5,7 @@
 #include <Packet.h>
 #include <Utils.h>
 #include <string.h>
+#include "helpers/FloodQuietWait.h"   // #2250: the flood idle-wait gate
 
 namespace mesh {
 
@@ -91,6 +92,9 @@ public:
 
   virtual void queueOutbound(Packet* packet, uint8_t priority, uint32_t scheduled_for) = 0;
   virtual Packet* getNextOutbound(uint32_t now) = 0;    // by priority
+  // #2250: the packet getNextOutbound(now) would return, left in the queue. A
+  // manager without it returns NULL, which simply disables the flood idle wait.
+  virtual Packet* peekNextOutbound(uint32_t now) { return NULL; }
   virtual int getOutboundCount(uint32_t now) const = 0;
   virtual int getOutboundTotal() const = 0;
   virtual int getFreeCount() const = 0;
@@ -128,6 +132,11 @@ class Dispatcher {
   unsigned long tx_budget_ms;
   unsigned long last_budget_update;
   unsigned long duty_cycle_window_ms;
+  // #2250: flood idle wait. quiet_until is armed by each reception; the gate holds
+  // the per-packet state so the 3 s cap is measured per packet.
+  unsigned long quiet_until;
+  bool quiet_rx_seen;
+  offband::FloodQuietGate quiet_gate;
 
   void processRecvPacket(Packet* pkt);
   void updateTxBudget();
@@ -152,6 +161,8 @@ protected:
     tx_budget_ms = 0;
     last_budget_update = 0;
     duty_cycle_window_ms = 3600000;
+    quiet_until = 0;
+    quiet_rx_seen = false;
   }
 
   virtual DispatcherAction onRecvPacket(Packet* pkt) = 0;
@@ -172,6 +183,15 @@ protected:
   virtual int getAGCResetInterval() const { return 0; }    // disabled by default
   virtual unsigned long getDutyCycleWindowMs() const { return 3600000; }
 
+  // #2250/#2246 flood delivery hooks. All default to stock behaviour.
+  // How long the channel should stay quiet after a reception of this airtime
+  // before a forwarded flood packet goes out. 0 disables the idle wait.
+  virtual uint32_t getFloodQuietMs(uint32_t rx_air_time) { return 0; }
+  // Every parsed flood packet as it is heard, BEFORE any duplicate filtering.
+  virtual void onFloodHeard(const Packet* packet) { }
+  // A packet whose transmission just completed, before it returns to the pool.
+  virtual void onPacketSent(const Packet* packet) { }
+
 public:
   void begin();
   void loop();
@@ -187,6 +207,8 @@ public:
   uint32_t getNumSentDirect() const { return n_sent_direct; }
   uint32_t getNumRecvFlood() const { return n_recv_flood; }
   uint32_t getNumRecvDirect() const { return n_recv_direct; }
+  uint32_t getNumQuietHolds() const { return quiet_gate.holds(); }   // #2250: forwards held for quiet air
+  uint32_t getNumQuietCaps() const { return quiet_gate.caps(); }     // #2250: holds that hit the 3 s cap
   void resetStats() {
     n_sent_flood = n_sent_direct = n_recv_flood = n_recv_direct = 0;
     _err_flags = 0;

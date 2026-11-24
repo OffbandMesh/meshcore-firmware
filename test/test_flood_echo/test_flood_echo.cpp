@@ -1,6 +1,8 @@
 // #2249: FloodEchoTracker -- echo-confirmed retry decisions, positive and negative.
 #include <gtest/gtest.h>
 #include "helpers/FloodEchoTracker.h"
+#include "helpers/FloodQuietWait.h"
+#include "helpers/FloodCli.h"
 
 using offband::FloodEchoTracker;
 using offband::floodEchoEligible;
@@ -187,6 +189,158 @@ TEST(FloodEcho, EchoWindow) {
     EXPECT_EQ(FloodEchoTracker::echoWindowMs(582, 0.5f), (uint32_t)(3.5f * 582) + 500);
     EXPECT_EQ(FloodEchoTracker::echoWindowMs(582, 0.0f), 582u + 500u);
     EXPECT_EQ(FloodEchoTracker::echoWindowMs(582, -1.0f), 582u + 500u);  // nonsense factor clamps
+}
+
+// ============================================================================
+// #2250: idle wait before a forwarded flood packet
+// ============================================================================
+using offband::floodQuietHoldMs;
+using offband::floodQuietEligible;
+using offband::kFloodQuietCapMs;
+
+TEST(FloodQuiet, NoReceptionYet_SendNow) {
+    EXPECT_EQ(floodQuietHoldMs(5000, 9000, false, false, 0), 0u);
+}
+
+TEST(FloodQuiet, QuietLongEnough_SendNow) {
+    EXPECT_EQ(floodQuietHoldMs(5000, 5000, true, false, 0), 0u);
+    EXPECT_EQ(floodQuietHoldMs(5001, 5000, true, false, 0), 0u);
+}
+
+TEST(FloodQuiet, RecentlyBusy_HoldsForRemainder) {
+    EXPECT_EQ(floodQuietHoldMs(5000, 5600, true, false, 0), 600u);
+}
+
+TEST(FloodQuiet, CapReached_SendAnyway) {
+    // Held since 2000, channel kept busy until 9000: at 5000 the cap is spent.
+    EXPECT_EQ(floodQuietHoldMs(2000 + kFloodQuietCapMs, 9000, true, true, 2000), 0u);
+}
+
+TEST(FloodQuiet, HoldNeverExceedsRemainingCap) {
+    // Held for 2.5 s already; the channel would stay busy 4 s more. Only 0.5 s left.
+    EXPECT_EQ(floodQuietHoldMs(4500, 8500, true, true, 2000), kFloodQuietCapMs - 2500);
+}
+
+TEST(FloodQuiet, FirstHoldIsCappedToo) {
+    EXPECT_EQ(floodQuietHoldMs(1000, 1000 + 60000, true, false, 0), kFloodQuietCapMs);
+}
+
+TEST(FloodQuiet, AcrossMillisWrap) {
+    uint32_t now = 0xFFFFFF80u;
+    EXPECT_EQ(floodQuietHoldMs(now, now + 300, true, false, 0), 300u);     // quiet_until wrapped
+    EXPECT_EQ(floodQuietHoldMs(now + 400, now + 300, true, false, 0), 0u);
+}
+
+TEST(FloodQuiet, Eligibility_ForwardedFloodOnly) {
+    EXPECT_TRUE(floodQuietEligible(floodPkt(PAYLOAD_TYPE_GRP_TXT, 1)));
+    EXPECT_TRUE(floodQuietEligible(floodPkt(PAYLOAD_TYPE_ADVERT, 2)));     // a forwarded advert waits too
+    EXPECT_FALSE(floodQuietEligible(floodPkt(PAYLOAD_TYPE_GRP_TXT, 0)));   // own origination
+    mesh::Packet d = floodPkt(PAYLOAD_TYPE_ACK, 1);
+    d.header = ROUTE_TYPE_DIRECT | (PAYLOAD_TYPE_ACK << PH_TYPE_SHIFT);
+    EXPECT_FALSE(floodQuietEligible(d));                                   // direct: never held
+}
+
+// --- the stateful gate Dispatcher::checkSend() uses --------------------------
+using offband::FloodQuietGate;
+
+TEST(FloodQuietGate, HoldsThenReleasesWhenQuiet) {
+    FloodQuietGate g; int a;
+    EXPECT_TRUE(g.mustWait(&a, true, 1000, 1500, true));
+    EXPECT_TRUE(g.mustWait(&a, true, 1400, 1500, true));
+    EXPECT_FALSE(g.mustWait(&a, true, 1500, 1500, true));
+    EXPECT_EQ(g.holds(), 1u);
+    EXPECT_EQ(g.caps(), 0u);
+}
+
+TEST(FloodQuietGate, DirectHeadIsNeverHeld) {
+    FloodQuietGate g; int d;
+    EXPECT_FALSE(g.mustWait(&d, false, 1000, 9000, true));
+    EXPECT_FALSE(g.mustWait(nullptr, false, 1000, 9000, true));
+    EXPECT_EQ(g.holds(), 0u);
+}
+
+// Gemini review of #2250: a direct packet passing a held forward must NOT reset
+// the forward's cap.
+TEST(FloodQuietGate, InterruptionDoesNotResetCap) {
+    FloodQuietGate g; int a, b;
+    EXPECT_TRUE(g.mustWait(&a, true, 1000, 99999, true));     // A held from 1000
+    EXPECT_FALSE(g.mustWait(&b, false, 2500, 99999, true));   // direct B goes first
+    g.onPopped(&b);
+    EXPECT_TRUE(g.mustWait(&a, true, 3000, 99999, true));     // A back, still capped from 1000
+    EXPECT_FALSE(g.mustWait(&a, true, 1000 + offband::kFloodQuietCapMs, 99999, true));
+    EXPECT_EQ(g.holds(), 1u);
+    EXPECT_EQ(g.caps(), 1u);
+}
+
+TEST(FloodQuietGate, PoppedPacketEndsItsHold) {
+    FloodQuietGate g; int a;
+    EXPECT_TRUE(g.mustWait(&a, true, 1000, 99999, true));
+    g.onPopped(&a);                                            // sent (e.g. CAD path forced it)
+    EXPECT_TRUE(g.mustWait(&a, true, 5000, 99999, true));     // a reused pool slot starts fresh
+    EXPECT_EQ(g.holds(), 2u);
+}
+
+// ============================================================================
+// #2251: the flood commands
+// ============================================================================
+using offband::FloodCliResult;
+using offband::FloodSettings;
+using offband::FloodStats;
+using offband::handleFloodCommand;
+
+TEST(FloodCli, GetFlood_ReportsSettingsAndCounters) {
+    FloodSettings s; FloodStats st; char r[200];
+    st.echo.retries = 3; st.quiet_holds = 7;
+    EXPECT_EQ(handleFloodCommand("get flood", s, st, r, sizeof r), FloodCliResult::Handled);
+    EXPECT_NE(strstr(r, "quiet=on retry=on"), nullptr);
+    EXPECT_NE(strstr(r, "rtx=3"), nullptr);
+    EXPECT_NE(strstr(r, "hold=7"), nullptr);
+}
+
+TEST(FloodCli, SetOff_ChangesAndReportsChanged) {
+    FloodSettings s; FloodStats st; char r[200];
+    EXPECT_EQ(handleFloodCommand("set flood.retry off", s, st, r, sizeof r), FloodCliResult::Changed);
+    EXPECT_EQ(s.retry, 0);
+    EXPECT_EQ(s.quiet, 1);
+    EXPECT_STREQ(r, "OK");
+    EXPECT_EQ(handleFloodCommand("set flood.quiet off", s, st, r, sizeof r), FloodCliResult::Changed);
+    EXPECT_EQ(s.quiet, 0);
+}
+
+TEST(FloodCli, SetSameValue_HandledNotChanged) {
+    FloodSettings s; FloodStats st; char r[200];
+    EXPECT_EQ(handleFloodCommand("set flood.quiet on", s, st, r, sizeof r), FloodCliResult::Handled);
+}
+
+TEST(FloodCli, BadValue_RejectedWithoutChange) {
+    FloodSettings s; FloodStats st; char r[200];
+    EXPECT_EQ(handleFloodCommand("set flood.retry maybe", s, st, r, sizeof r), FloodCliResult::Handled);
+    EXPECT_EQ(s.retry, 1);
+    EXPECT_EQ(strncmp(r, "Err", 3), 0);
+    EXPECT_EQ(handleFloodCommand("set flood.retry onn", s, st, r, sizeof r), FloodCliResult::Handled);
+    EXPECT_EQ(s.retry, 1);
+}
+
+TEST(FloodCli, UnknownFloodKey_Err) {
+    FloodSettings s; FloodStats st; char r[200];
+    EXPECT_EQ(handleFloodCommand("set flood.max 3", s, st, r, sizeof r), FloodCliResult::Handled);
+    EXPECT_EQ(strncmp(r, "Err", 3), 0);
+}
+
+TEST(FloodCli, OtherCommands_NotMine) {
+    FloodSettings s; FloodStats st; char r[200] = "untouched";
+    EXPECT_EQ(handleFloodCommand("get flood.max", s, st, r, sizeof r), FloodCliResult::NotMine);
+    EXPECT_EQ(handleFloodCommand("set flood.max", s, st, r, sizeof r), FloodCliResult::Handled); // own prefix
+    EXPECT_EQ(handleFloodCommand("get floodx", s, st, r, sizeof r), FloodCliResult::NotMine);
+    EXPECT_EQ(handleFloodCommand("set af 1", s, st, r, sizeof r), FloodCliResult::NotMine);
+}
+
+TEST(FloodCli, StatusFitsOneReply) {
+    FloodSettings s; FloodStats st; char r[200];
+    st.echo.tracked = st.echo.echoed = st.echo.retries = st.echo.retry_echoed = 4294967295u;
+    st.echo.suppressed = st.echo.evicted = st.quiet_holds = st.quiet_caps = 4294967295u;
+    int n = offband::formatFloodStatus(r, sizeof r, s, st);
+    EXPECT_LT(n, 160);   // the remote CLI reply buffer is 160 bytes
 }
 
 int main(int argc, char** argv) {
