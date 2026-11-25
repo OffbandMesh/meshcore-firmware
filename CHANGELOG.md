@@ -16,6 +16,27 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 
 ## [Unreleased]
 
+> **XIAO ESP32-C3, XIAO ESP32-C6 and MeshSmith Photon C6 owners: this update needs one USB
+> flash that erases your node.** These boards move to a new flash layout, and an
+> over-the-air update can't change a layout. Flash the full `-merged.bin` image over USB
+> with full erase turned on. That erases the node's identity (others see it as a new
+> node), its contacts, channels and keys, access list and admin password, every changed
+> setting, Bluetooth pairings and saved Wi-Fi. Nothing is backed up. **Write those down
+> before you flash.** See
+> [Choose, install and update firmware](docs/user/guides/install-update.md). A unit
+> updated over the air instead keeps working on its old layout, says so in its log and in
+> `safety table`, and a repeater or room server refuses an image too big for the old
+> layout without writing it.
+
+### Changed
+
+- **The 4 MB ESP32 boards share one partition table, `offband_4MB.csv`** ([#2205](https://github.com/OffbandMesh/meshcore-firmware/issues/2205), [#2295](https://github.com/OffbandMesh/meshcore-firmware/issues/2295)): two 1,728 KB app slots and 512 KB of storage. The XIAO C3's 1,280 KB slot couldn't hold the repeater and room server on the newer ESP32 framework, and the C6's 128 KB of storage held about 107 of its 350 contacts. On the new table the C3 repeater uses 80% of its slot on that framework, and 490 contacts fit ([#2296](https://github.com/OffbandMesh/meshcore-firmware/issues/2296)).
+
+### Added
+
+- **A unit on its old partition table says so** ([#2297](https://github.com/OffbandMesh/meshcore-firmware/issues/2297)): a line in the log at startup, at 15 s and every 60 s, and a new `safety table` command on repeaters, room servers and sensors. Nothing repartitions or erases by itself.
+- **An over-the-air image too big for the unit's app slot is refused before anything is written** ([#2297](https://github.com/OffbandMesh/meshcore-firmware/issues/2297)), on every ESP32 repeater and room server. The upload gets HTTP 413 with both sizes and the unit keeps running; before, the slot was erased first, and on a repeater that slot holds the image a rollback returns to.
+
 ## [1.7.1] - 2026-11-10
 
 A patch release for indicator control. Boards reported display and LED control they could not

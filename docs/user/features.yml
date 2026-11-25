@@ -5,7 +5,7 @@ features:
     coverage: documented
     guide: guides/install-update.md
     roles: [companion-observer, companion, repeater]
-    boards: [heltec_v3, heltec_v4, xiao_s3_wio]
+    boards: [heltec_v3, heltec_v4, xiao_s3_wio, xiao_c3, xiao_c6, meshsmith_photon_esp32c6]
     availability: {channel: beta, verified_releases: [offband-v1.6.0-beta1]}
     verification: Current release-format and flashing implementation checked; no hardware flash performed and no blanket older-release compatibility claim. The boot-screen lines, hold times and per-board color/monochrome arrangement are read from current source, not from a device photograph.
     evidence:
@@ -21,6 +21,23 @@ features:
         contains: ['#define BOOT_SCREEN_MILLIS   4000', '"< Repeater >"']
       - path: variants/heltec_v4/platformio.ini
         contains: ['-D DISPLAY_CLASS=ST7789LCDDisplay', '-D DISPLAY_CLASS=SSD1306Display']
+      # #2205: the 4 MB boards' one-time move to offband_4MB.csv.
+      - path: variants/xiao_c3/platformio.ini
+        contains: ['board_build.partitions = offband_4MB.csv', '-D OFFBAND_4MB_TABLE']
+      - path: variants/xiao_c6/platformio.ini
+        contains: ['board_build.partitions = offband_4MB.csv', '-D OFFBAND_4MB_TABLE']
+      - path: variants/meshsmith_photon_esp32c6/platformio.ini
+        contains: ['board_build.partitions = offband_4MB.csv', '-D OFFBAND_4MB_TABLE']
+      - path: src/helpers/ESP32Board.cpp
+        contains: ["old partition table: a USB flash is needed, which erases this node's identity and contacts"]
+      - path: src/helpers/CommonCLI.cpp
+        contains: ['memcmp(command, "safety table", 12) == 0']
+      - path: arch/esp32/AsyncElegantOTA/src/AsyncElegantOTA.cpp
+        contains: ['a USB flash is needed. ', 'Nothing was written.']
+      - path: scripts/pio-flash.py
+        contains: ['factory-flash the -merged.bin (this WIPES NVS).']
+      - path: examples/companion_radio/main.cpp
+        contains: ['SPIFFS.begin(true);']
   - id: observer-wifi
     title: Connect an observer to WiFi
     coverage: documented
