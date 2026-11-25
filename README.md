@@ -38,7 +38,7 @@ The firmware lives here: **`firmware-base`** is the canonical Offband tree (the 
 
 Each release's notes repeat this guidance.
 
-**Build from source** — install [PlatformIO](https://platformio.org/) Core **6.1.19**, the version CI builds with (`pip install platformio==6.1.19`), then build the env that matches your board + role:
+**Build from source** — install [PlatformIO](https://platformio.org/) Core **6.1.19**, the version CI builds with (`pip install platformio==6.1.19`), then build the env that matches your board + role. The first build downloads its toolchains into this project's own package store; [developer-build.md](docs/developer-build.md) explains that, building from Git Bash, and the image-size check:
 
 ```bash
 pio run -e heltec_v4_companion_observer_wifi     # observer — Heltec V4
