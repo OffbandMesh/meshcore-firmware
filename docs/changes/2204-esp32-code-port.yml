@@ -1,0 +1,22 @@
+schema_version: 1
+issue: 2204
+impact: updated
+guides:
+  - docs/user/guides/power-and-recovery.md
+reason: >-
+  One change in this Epic is visible to a user: on an ESP32 repeater, a new image
+  installed by OTA is now rolled back by the bootloader if it crashes, hangs, is
+  reset or loses power before it has run for 60 seconds (#2286). Both Arduino cores
+  confirmed every image as soon as it started, so that rollback could never happen,
+  though the guide already described it in general terms. The power-and-recovery
+  guide now says which builds have it, when it fires, and that room server and
+  sensor builds still confirm a new image at startup.
+  Nothing else changes for a user. The rest of the Epic ports code to the newer
+  ESP32 framework while keeping today's behavior on today's framework:
+  - ESP-NOW callbacks (#2284);
+  - the backlight, front light and SD-card format calls (#2285);
+  - the panic record on diagnostic builds (#2293).
+  The remaining two changes make images smaller without changing what runs:
+  - dropping unused C++ exception tables (#2287);
+  - companions no longer compiling Wi-Fi and ESP-NOW code they never start (#2288).
+  Settings, defaults, commands, the wire protocol and stored data are unchanged.

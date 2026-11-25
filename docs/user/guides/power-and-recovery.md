@@ -62,6 +62,13 @@ partition layout support it. It is not a backup of all identity/configuration,
 does not guarantee recovery from an erased device, and does not prove radio,
 broker or every application function is healthy.
 
+On an ESP32 **repeater**, in builds after `offband-v1.7.1`, a new image installed
+by OTA counts as unconfirmed until it has run for 60 seconds. If it crashes, hangs,
+is reset or loses power before then, the bootloader starts the previous image at the
+next boot. Earlier builds confirmed every image as soon as it started, so the
+bootloader never rolled one back. Room server and sensor builds still confirm a new
+image at startup, and a USB flash is never rolled back.
+
 If the radio seems to return to an older version after an OTA update, record the
 before/after versions and `[SAFETY]` evidence before trying again. Do not assume
 repeated resets or a full erase are the correct next step. This guide does not
