@@ -159,7 +159,16 @@ bool SdCard::format() {
     char drv[3] = {char('0' + pdrv), ':', 0};
     const size_t work_len = 4096;
     void* work = malloc(work_len);
+    // #2285: FatFs R0.14 moved the options into MKFS_PARM. {FM_ANY, 0, 0, 0, 16 KB}
+    // is the same format: n_fat 0 means one FAT, which R0.13c hard-codes, and the
+    // alignment and root-entry defaults are unchanged. R0.13c is revision 86604;
+    // any other revision takes the new call, and a wrong guess fails to compile.
+#if FF_DEFINED == 86604
     ok = work && f_mkfs(drv, FM_ANY, 16 * 1024, work, work_len) == FR_OK;
+#else
+    const MKFS_PARM mkfs_opt = {FM_ANY, 0, 0, 0, 16 * 1024};
+    ok = work && f_mkfs(drv, &mkfs_opt, work, work_len) == FR_OK;
+#endif
     free(work);
     ff_diskio_unregister(pdrv);
   }

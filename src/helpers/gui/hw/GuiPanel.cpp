@@ -11,19 +11,35 @@ static constexpr uint8_t kBacklightChannel = 3;
 static constexpr uint32_t kBacklightHz = 5000;
 static constexpr uint8_t kBacklightBits = 8;
 
+// #2285: Arduino 3 attaches LEDC by pin and writes by pin. ledcAttachChannel
+// keeps the explicit channel, so the channel-3 choice above still holds.
+#if defined(PIN_TFT_LEDA_CTL) && PIN_TFT_LEDA_CTL >= 0
+static void backlightWrite(uint32_t duty) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcWrite(PIN_TFT_LEDA_CTL, duty);
+#else
+  ledcWrite(kBacklightChannel, duty);
+#endif
+}
+#endif
+
 static void backlightBegin() {
 #if defined(PIN_TFT_LEDA_CTL) && PIN_TFT_LEDA_CTL >= 0
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcAttachChannel(PIN_TFT_LEDA_CTL, kBacklightHz, kBacklightBits, kBacklightChannel);
+#else
   ledcSetup(kBacklightChannel, kBacklightHz, kBacklightBits);
   ledcAttachPin(PIN_TFT_LEDA_CTL, kBacklightChannel);
+#endif
   // Dark until the first frame is drawn: the panel's RAM powers up as noise.
-  ledcWrite(kBacklightChannel, 0);
+  backlightWrite(0);
 #endif
 }
 
 void GuiPanel::setBrightness(uint8_t pct) {
 #if defined(PIN_TFT_LEDA_CTL) && PIN_TFT_LEDA_CTL >= 0
   if (pct > 100) pct = 100;
-  ledcWrite(kBacklightChannel, uint32_t(pct) * 255 / 100);
+  backlightWrite(uint32_t(pct) * 255 / 100);
 #else
   (void)pct;
 #endif
