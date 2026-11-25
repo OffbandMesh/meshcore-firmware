@@ -87,6 +87,8 @@ features:
         contains: ['#define DEFAULT_SAFE_BOOT_WAKE_MV 3700', 'SAFE_BOOT_DISABLED', 'below safe threshold']
       - path: src/helpers/ESP32Board.cpp
         contains: ['esp_ota_mark_app_valid_cancel_rollback', 'ROLLBACK_THRESHOLD']
+      - path: examples/simple_repeater/main.cpp
+        contains: ['extern "C" bool verifyRollbackLater() { return true; }', 'board.markBootValid();']
       - path: src/helpers/SafeBootWake.h
         contains: ['constexpr uint16_t kSafeBootMinPlausibleMv = 1000;']
       - path: src/SafeBoot.cpp
