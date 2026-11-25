@@ -5,12 +5,16 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <esp_arduino_version.h>
 #include <esp_attr.h>
 #include <esp_debug_helpers.h>
 #include <esp_private/panic_internal.h>
 #include <xtensa/xtensa_context.h>
 
 #include <MeshLog.h>
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  #include <esp32-hal.h>   // set_arduino_panic_handler(), arduino_panic_info_t
+#endif
 
 namespace {
 
@@ -30,6 +34,51 @@ struct Record {
 RTC_NOINIT_ATTR Record s_rec;
 
 }  // namespace
+
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+
+// #2293: Arduino 3 defines __wrap_esp_panic_handler itself, so a second one is a
+// link error. Our -Wl,--wrap=esp_panic_handler is what switches the core's
+// wrapper on (nothing in the framework passes it), and the wrapper calls the
+// handler registered here, inside the panic and before ESP-IDF's own handler
+// prints and resets, with the backtrace already walked.
+//
+// The core's struct carries no exception frame, so the cause and address come
+// from the EXCCAUSE and EXCVADDR special registers, which the fault set and the
+// panic path does not overwrite. As with the frame before, they mean something
+// only for a CPU exception; an abort or a watchdog leaves stale values there,
+// and its reason string says which it was.
+static void IRAM_ATTR recordPanic(arduino_panic_info_t* info, void*) {
+  if (!info) return;
+  s_rec.core = info->core;
+  s_rec.pc = uint32_t(info->pc);
+  uint32_t cause = 0, vaddr = 0;
+  __asm__ volatile("rsr.exccause %0" : "=a"(cause));
+  __asm__ volatile("rsr.excvaddr %0" : "=a"(vaddr));
+  s_rec.cause = cause;
+  s_rec.vaddr = vaddr;
+  s_rec.reason[0] = 0;
+  if (info->reason) {
+    size_t i = 0;
+    for (; i + 1 < sizeof s_rec.reason && info->reason[i]; i++) s_rec.reason[i] = info->reason[i];
+    s_rec.reason[i] = 0;
+  }
+  s_rec.frames = 0;
+  for (unsigned i = 0; i < info->backtrace_len && s_rec.frames < uint32_t(kFrames); i++) {
+    s_rec.bt[s_rec.frames++] = info->backtrace[i];
+  }
+  if (s_rec.frames == 0) s_rec.bt[s_rec.frames++] = s_rec.pc;   // no frame: the fault address alone
+  s_rec.magic = kMagic;
+}
+
+// Registered before setup() runs, so a crash during boot is recorded as the
+// linker wrap records it on Arduino 2. The slot holds one handler; nothing
+// else in the firmware sets it.
+__attribute__((constructor)) static void registerPanicRecord() {
+  set_arduino_panic_handler(recordPanic, nullptr);
+}
+
+#else  // Arduino 2: no wrapper in the core, so the wrap is ours.
 
 extern "C" void __real_esp_panic_handler(panic_info_t* info);
 
@@ -68,6 +117,8 @@ extern "C" void IRAM_ATTR __wrap_esp_panic_handler(panic_info_t* info) {
   }
   __real_esp_panic_handler(info);
 }
+
+#endif  // ESP_ARDUINO_VERSION_MAJOR
 
 namespace offband {
 
