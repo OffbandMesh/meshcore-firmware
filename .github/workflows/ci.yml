@@ -78,6 +78,16 @@ jobs:
       - name: Every ESP32 env compiling SerialBLEInterface.cpp declares NimBLE
         run: python scripts/check_esp32_ble_deps.py
 
+      # #2287. esp32_base drops the framework's -fexceptions (28-87 KB of unwind
+      # tables per image). An env's own build_unflags REPLACES the inherited one, so
+      # one that forgets ${esp32_base.build_unflags} silently gets the tables back;
+      # the image just grows. Checked on the resolved config. Both steps BLOCK.
+      - name: No-exceptions guard self-test
+        run: python scripts/test_check_no_exceptions.py
+
+      - name: Every ESP32 env compiles with -fno-exceptions
+        run: python scripts/check_no_exceptions.py
+
       # #649. Distinct question from the check above: that one asks whether an
       # env is internally coherent (can it LINK); this one asks whether the
       # config matches what the env NAME says it is. An env can pass the first
