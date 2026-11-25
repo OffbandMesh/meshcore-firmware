@@ -1,0 +1,17 @@
+# Offband partition table for every shipped 4 MB ESP32 board (#2205, #2295).
+# Xiao ESP32-C3, Xiao ESP32-C6, MeshSmith Photon C6.
+#
+# nvs, otadata and coredump keep the offsets of both tables these boards used
+# before (the board default and min_spiffs.csv), so NVS survives the move.
+# The app slots and SPIFFS move, so changing to this table needs one USB flash,
+# and that flash erases SPIFFS: the node's identity, contacts, channels and
+# settings. An OTA can't change the table. Sizes and measurements:
+# docs/initiatives/standalone/2198-esp32-framework/SIZE-ANALYSIS.md
+#
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x5000,
+otadata,    data, ota,      0xE000,   0x2000,
+app0,       app,  ota_0,    0x10000,  0x1B0000,
+app1,       app,  ota_1,    0x1C0000, 0x1B0000,
+spiffs,     data, spiffs,   0x370000, 0x80000,
+coredump,   data, coredump, 0x3F0000, 0x10000,
