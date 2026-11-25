@@ -15,7 +15,9 @@ Heltec V4 and XIAO S3 WIO images. The conventions and example image families wer
 checked against the published `offband-v1.6.0-beta1` prerelease and current source.
 This is not a hardware flashing trial or a recommendation to install a beta.
 Use the instructions accompanying your selected release if its format differs.
-Other chips and bootloaders need their own flashing procedure.
+Other chips and bootloaders need their own flashing procedure. The XIAO
+ESP32-C3, XIAO ESP32-C6 and MeshSmith Photon C6 have one extra step, in the
+next section but one.
 
 ## Before you start
 
@@ -30,6 +32,36 @@ the selected release's asset names and notes determine what you install.
 A version tag does not by itself mean that a tested downloadable release exists.
 Read the release's known issues and the applicability section of the feature
 guide you intend to use.
+
+## XIAO ESP32-C3, XIAO ESP32-C6 and MeshSmith Photon C6: one USB flash that erases the node
+
+These three 4 MB boards move to a new flash layout in builds after
+`offband-v1.7.1`. It gives the firmware room to grow and the C6 room for its full
+350-contact list, where the old layout held about 107. An over-the-air update
+can't change the layout, so the move takes **one USB flash of the full
+`-merged.bin` image with full erase turned on**. This is the one update where
+step 4's advice to leave full erase off doesn't apply: it clears the old layout's
+data, which the new layout would otherwise find in the wrong place. The flash
+**erases everything the node stores**:
+
+- its identity: other nodes see it as a new node, and anyone who had it as a
+  contact has to add it again;
+- its contacts, channels and their keys;
+- its access list and admin password, on a repeater or room server;
+- every setting you changed from the default;
+- its Bluetooth pairings and saved Wi-Fi credentials: pair your phone again, and
+  re-enter Wi-Fi on an observer.
+
+Before you flash, write down the node name, each channel's name and key, the
+admin password, the Wi-Fi network, every setting you changed, and the contacts
+you want to add again. Nothing is backed up for you.
+
+Until you do the USB flash, a unit updated over the air keeps working on its old
+layout, with its old limits. It says so: a repeater, room server or sensor
+answers `safety table` with `old partition table: a USB flash is needed, which
+erases this node's identity and contacts`, and every board writes the same line
+to its log. A repeater or room server also refuses, before writing anything, an
+over-the-air image too big for its old layout, and keeps running the one it has.
 
 ## Steps
 
@@ -73,7 +105,8 @@ For these ESP32 images the repository documents the
 [MeshCore web flasher](https://flasher.meshcore.io/), **Custom Firmware**, with
 the downloaded file. Use a compatible Chromium browser with Web Serial, choose
 the exact board and review the selected file and erase setting before starting.
-For an ordinary update, do not enable full erase. For first installation, follow
+For an ordinary update, do not enable full erase; the one exception is the move
+to the new layout on the three 4 MB boards above. For first installation, follow
 the release's merged-image instructions and understand that erase is destructive.
 
 Keep the device connected until the tool reports completion.

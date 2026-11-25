@@ -1,0 +1,19 @@
+schema_version: 1
+issue: 2205
+impact: updated
+guides:
+  - docs/user/guides/install-update.md
+reason: >-
+  The XIAO ESP32-C3, XIAO ESP32-C6 and MeshSmith Photon C6 move to one new flash
+  layout, offband_4MB.csv (#2295). An over-the-air update can't change a layout,
+  so each owner does one USB flash of the full -merged.bin image with full erase,
+  and that flash erases everything the node stores: its identity, contacts,
+  channels and keys, access list, settings, Bluetooth pairings and saved Wi-Fi.
+  Nothing is backed up. Owners need to know before they flash, and what to write
+  down first, so the install-and-update guide gains a section for these boards,
+  and step 4's "don't enable full erase" names this one exception. A unit still
+  on its old layout now says so, in its log and on the new `safety table` command
+  (#2297), and a repeater or room server refuses an over-the-air image too big for
+  its old layout; the guide says both. None of the three boards has a guide page
+  of its own, so the warning lives in the install guide the owner reads before
+  updating. The wire protocol and the client are unchanged.
