@@ -68,7 +68,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install PlatformIO
-        run: pip install --upgrade platformio
+        run: pip install platformio==6.1.19
 
       - name: Generate dummy secrets stub (config interpolation only)
         run: |
@@ -147,6 +147,14 @@ jobs:
 
       - name: The package store is tagged with the pioarduino version every env pins
         run: python scripts/check_pio_store_tag.py
+
+      # #2274. Every PlatformIO install names one exact version, so a PlatformIO
+      # release can't change every build without a commit here. Both steps BLOCK.
+      - name: PlatformIO pin guard self-test
+        run: python scripts/test_check_pio_pinned.py
+
+      - name: Every PlatformIO install is pinned to one version
+        run: python scripts/check_pio_pinned.py
 
       # #1792 (Epic #1788). Every setting the Offband screens can write must be writable
       # from a client too -- a board with no keyboard, or no screen, is configured from
@@ -610,7 +618,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install PlatformIO
-        run: pip install --upgrade platformio
+        run: pip install platformio==6.1.19
 
       # Required even though nothing here is flashed: PlatformIO parses the WHOLE
       # platformio.ini (including the ${node_secrets...} interpolations used by the
@@ -908,7 +916,7 @@ jobs:
       # failure class this project has already been bitten by, and saving a few
       # minutes is worthless at a release. config-lint guards that.
       - name: Install PlatformIO
-        run: pip install --upgrade platformio
+        run: pip install platformio==6.1.19
 
       - name: Generate dummy secrets stub (build-only; never flashed)
         run: |

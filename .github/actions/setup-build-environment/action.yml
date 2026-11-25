@@ -19,7 +19,7 @@ runs:
     - name: Install PlatformIO
       shell: bash
       run: |
-        pip install --upgrade platformio
+        pip install platformio==6.1.19
 
     # Extract version from git tag. Supports both upstream's single-hyphen
     # format ("room-server-v1.2.3" -> "v1.2.3") AND multi-hyphen formats
