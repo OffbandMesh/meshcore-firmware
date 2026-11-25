@@ -66,6 +66,16 @@ def main():
     f, v = run({".github/workflows/ci.yml": wf("pip install platformio==6.1.19"),
                 "README.md": "pip install platformio==6.1.18\n"})
     expect(any("README.md names PlatformIO 6.1.18" in x for x in f), "a README on a different version (got %r)" % f)
+    f, v = run({".github/workflows/ci.yml": wf("pip install platformio==6.1.19"),
+                "tools/requirements-build.txt": "pyserial==3.5\nplatformio>=6.1\n", "README.md": README_OK})
+    expect(any("requirements-build.txt:2" in x and "without an exact version" in x for x in f),
+           "an unpinned platformio in a requirements file (got %r)" % f)
+    f, v = run({".github/workflows/ci.yml": wf("pip install platformio==6.1.19"),
+                "requirements.txt": "platformio==6.2.0\n", "README.md": README_OK})
+    expect(any("more than one version" in x for x in f), "a requirements file on a different pin (got %r)" % f)
+    f, v = run({".github/workflows/ci.yml": wf("pip install platformio==6.1.19"),
+                "requirements.txt": "platformio==6.1.19  # matches CI\nmkdocs\n", "README.md": README_OK})
+    expect(f == [], "a requirements file on the same pin passes (got %r)" % f)
     f, v = run({".github/workflows/ci.yml": wf("echo hi"), "README.md": README_OK})
     expect(any("no PlatformIO install found" in x for x in f), "no install anywhere fails closed (got %r)" % f)
 

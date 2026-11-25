@@ -54,6 +54,21 @@ def check_tree(root):
                                     % (rel, n, line.strip()))
                 else:
                     versions.setdefault(m.group(1), []).append("%s:%d" % (rel, n))
+    # A requirements file is the other way PlatformIO could arrive (pip install -r).
+    for path in sorted(glob.glob(os.path.join(root, "**", "requirements*.txt"), recursive=True)):
+        rel = os.path.relpath(path, root).replace("\\", "/")
+        if rel.startswith((".pio/", "node_modules/")):
+            continue
+        with open(path, encoding="utf-8") as fh:
+            for n, line in enumerate(fh, 1):
+                spec = line.split("#", 1)[0].strip()
+                if not re.match(r"(?i)platformio\b", spec):
+                    continue
+                m = re.fullmatch(r"(?i)platformio\s*==\s*(\d+\.\d+\.\d+)", spec)
+                if not m:
+                    findings.append("%s:%d: PlatformIO required without an exact version: %s" % (rel, n, spec))
+                else:
+                    versions.setdefault(m.group(1), []).append("%s:%d" % (rel, n))
     if not versions and not findings:
         findings.append("no PlatformIO install found in .github/, so nothing is pinned")
     if len(versions) > 1:
