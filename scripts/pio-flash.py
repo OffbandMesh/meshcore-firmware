@@ -2987,8 +2987,27 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def drop_msys_marker(environ) -> bool:
+    """#2275: remove MSYSTEM so PlatformIO can install ESP-IDF tools.
+
+    pioarduino installs its tools by running ESP-IDF's idf_tools.py, which refuses
+    to start while MSYSTEM is in its environment ("MSys/Mingw is not supported",
+    idf_tools.py's __main__ guard). Git Bash sets MSYSTEM, and `unset MSYSTEM` in
+    the shell does not help: the MSYS runtime puts it back for every Windows
+    program it starts. Removing it here, in the Python parent, does reach every
+    child: measured 2026-11-25, idf_tools.py refused when started from Git Bash
+    and from Git Bash after `unset`, and ran from a parent that popped it.
+
+    The refusal only bites when a store gets its tools installed, the first build
+    into a fresh store. Every other variable is left as it is. Returns whether
+    MSYSTEM was present."""
+    return environ.pop("MSYSTEM", None) is not None
+
+
 def main() -> int:
     global FIRMWARE_DIR, CLASS_MATCH_APPROVED
+    # #2275: before anything can start PlatformIO; every child inherits this.
+    drop_msys_marker(os.environ)
     args = build_parser().parse_args()
     if getattr(args, "approve_class_match", False):
         # #503: loud by design -- every class-decided match is a human-approved
