@@ -8,18 +8,37 @@
 // Static member to handle callbacks
 ESPNowBridge *ESPNowBridge::_instance = nullptr;
 
-// Static callback wrappers
+// Static callback wrappers. #2284: on IDF 5 the receive side gets the sender's
+// address from esp_now_recv_info_t::src_addr, and on IDF 5.5 the send side gets
+// the destination from wifi_tx_info_t::des_addr -- the same addresses the old
+// signatures passed directly.
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+void ESPNowBridge::recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (_instance && info) {
+    _instance->onDataRecv(info->src_addr, data, (int32_t)len);
+  }
+}
+#else
 void ESPNowBridge::recv_cb(const uint8_t *mac, const uint8_t *data, int32_t len) {
   if (_instance) {
     _instance->onDataRecv(mac, data, len);
   }
 }
+#endif
 
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
+void ESPNowBridge::send_cb(const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {
+  if (_instance) {
+    _instance->onDataSent(tx_info ? tx_info->des_addr : nullptr, status);
+  }
+}
+#else
 void ESPNowBridge::send_cb(const uint8_t *mac, esp_now_send_status_t status) {
   if (_instance) {
     _instance->onDataSent(mac, status);
   }
 }
+#endif
 
 ESPNowBridge::ESPNowBridge(NodePrefs *prefs, mesh::PacketManager *mgr, mesh::RTCClock *rtc)
     : BridgeBase(prefs, mgr, rtc), _rx_buffer_pos(0) {

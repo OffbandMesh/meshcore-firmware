@@ -2,6 +2,7 @@
 
 #include "MeshCore.h"
 #include "esp_now.h"
+#include <esp_idf_version.h>
 #include "helpers/bridges/BridgeBase.h"
 
 #ifdef WITH_ESPNOW_BRIDGE
@@ -42,8 +43,19 @@
 class ESPNowBridge : public BridgeBase {
 private:
   static ESPNowBridge *_instance;
+  // #2284: the ESP-NOW callback signatures changed in IDF 5.0 (receive) and 5.5
+  // (send). These static wrappers take whichever the framework passes and hand the
+  // peer address to onDataRecv/onDataSent unchanged.
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+  static void recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, int len);
+#else
   static void recv_cb(const uint8_t *mac, const uint8_t *data, int32_t len);
+#endif
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
+  static void send_cb(const wifi_tx_info_t *tx_info, esp_now_send_status_t status);
+#else
   static void send_cb(const uint8_t *mac, esp_now_send_status_t status);
+#endif
 
   /**
    * ESP-NOW Protocol Structure:
