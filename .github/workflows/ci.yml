@@ -138,6 +138,17 @@ jobs:
       - name: Boards with no RTC chip declare their clock instead of probing for one
         run: python scripts/check_no_rtc_autodiscover.py
 
+      # #2286. The repeater defers the core's boot-time image confirmation so the
+      # bootloader can still roll back a bad OTA image. Losing the override, or a C++
+      # override the linker never matches, builds clean and silently disarms the
+      # rollback; deferring in a role that never confirms reverts its OTA'd image at
+      # the next reboot. Neither shows up anywhere else. Both steps BLOCK.
+      - name: Rollback-deferral guard self-test
+        run: python scripts/test_check_rollback_deferral.py
+
+      - name: Bootloader verification is deferred only where the image is confirmed
+        run: python scripts/check_rollback_deferral.py
+
       # #2273. The package store is named for the pioarduino version it holds, so a
       # build on one version can't replace another's libraries. A pin that moves
       # without the tag puts the new libraries into the old store, which builds fine

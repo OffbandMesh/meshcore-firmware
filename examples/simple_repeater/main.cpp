@@ -22,6 +22,20 @@
 #include "helpers/CdcConsoleFlush.h"   // #1035: right-flush (ZLP) for the USB-Serial-JTAG console
 #include "helpers/ArduinoSerialInterface.h"   // #1093: emitw drives the real writeFrame()+loop() path for the v4.1 A/B
 
+#ifdef ESP_PLATFORM
+// #2286: keep the bootloader's rollback armed. Both Arduino cores mark a
+// PENDING_VERIFY image valid inside initArduino(), before setup() runs, unless
+// the sketch overrides this weak hook; with the default, a bad OTA image could
+// never be rolled back. Returning true leaves the image pending until loop()
+// calls board.markBootValid() after ROLLBACK_VALIDATION_MS of healthy uptime.
+//
+// It lives here, not in ESP32Board.cpp, because it is only safe in a role that
+// confirms the image. A role that defers and never confirms reverts its OTA'd
+// image at its next reboot. scripts/check_rollback_deferral.py enforces that.
+// extern "C": the core's weak default is a C symbol, and a C++-mangled
+// override would not replace it.
+extern "C" bool verifyRollbackLater() { return true; }
+#endif
 
 #ifdef PIN_STATUS_LED
   // Repeater heartbeat status LED (#9). Active-high default;
