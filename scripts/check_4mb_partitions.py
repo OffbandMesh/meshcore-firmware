@@ -73,6 +73,22 @@ def option(value):
     return flatten(value).split(";", 1)[0].strip()
 
 
+def size_bytes(text):
+    """A size as PlatformIO or a partition CSV writes it: 4MB, 4M, 1728K, 0x1B0000, 4194304."""
+    if text is None:
+        return None
+    t = str(text).strip().upper()
+    if not t:
+        return None
+    for suffix, mult in (("MB", 1 << 20), ("M", 1 << 20), ("KB", 1 << 10), ("K", 1 << 10)):
+        if t.endswith(suffix) and not t.startswith("0X"):
+            return int(t[: -len(suffix)], 0) * mult
+    return int(t, 0)
+
+
+FOUR_MB_BYTES = 4 << 20
+
+
 def is_esp32(platform):
     p = option(platform)
     return "espressif32" in p or "pioarduino" in p
@@ -128,7 +144,12 @@ def evaluate(config, wanted, boards_dir, platform_map=None):
                 "in this script, from the platform's boards/%s.json." % (
                     name, option(opts.get("board")), option(opts.get("board"))))
             continue
-        if size != FOUR_MB:
+        try:
+            nbytes = size_bytes(size)
+        except ValueError:
+            findings.append("%s: flash size '%s' could not be read." % (name, size))
+            continue
+        if nbytes != FOUR_MB_BYTES:
             continue
         checked += 1
         table = os.path.basename(option(opts.get("board_build.partitions")) or "(board default)")
@@ -136,7 +157,8 @@ def evaluate(config, wanted, boards_dir, platform_map=None):
             findings.append(
                 "%s: a 4 MB board on %s. Shipped 4 MB ESP32 boards use %s (#2295)." % (
                     name, table, TABLE))
-        if MACRO not in build_flag_tokens(opts.get("build_flags")):
+        if MACRO not in build_flag_tokens([flatten(opts.get("build_flags")),
+                                           flatten(opts.get("build_src_flags"))]):
             findings.append(
                 "%s: build_flags lacks -D %s, so the firmware can't tell it is on the old "
                 "table after an OTA (#2297)." % (name, MACRO))
@@ -170,7 +192,7 @@ def csv_layout(csv_text):
             continue
         cols = [c.strip() for c in line.split(",")]
         if len(cols) >= 5:
-            rows[cols[0]] = (int(cols[3], 0), int(cols[4], 0))
+            rows[cols[0]] = (size_bytes(cols[3]), size_bytes(cols[4]))
     return rows["app0"][1], rows["spiffs"][0], rows["spiffs"][1]
 
 
@@ -196,6 +218,11 @@ def compare_layouts(csv_text, header_text):
         n, TABLE, a, b) for n, a, b in zip(names, c, h) if a != b]
 
 
+def read_text(*parts):
+    with open(os.path.join(ROOT, *parts), encoding="utf-8") as fh:
+        return fh.read()
+
+
 def load_config():
     raw = subprocess.check_output(["pio", "project", "config", "--json-output"],
                                   stderr=subprocess.STDOUT, cwd=ROOT)
@@ -211,18 +238,18 @@ def main():
             out = out.decode("utf-8", "replace")
         print("ERROR: could not read PlatformIO config:\n%s" % (out or exc))
         return 2
-    with open(os.path.join(ROOT, ".github", "release-envs.txt"), encoding="utf-8") as fh:
-        shipped = shipped_envs(fh.read())
-    with open(os.path.join(ROOT, ".github", "workflows", "ci.yml"), encoding="utf-8") as fh:
-        ci_text = fh.read()
+    try:
+        release_text = read_text(".github", "release-envs.txt")
+        ci_text = read_text(".github", "workflows", "ci.yml")
+        csv_text = read_text(TABLE)
+        header_text = read_text("src", "helpers", "esp32", "Offband4MBTable.h")
+    except OSError as exc:
+        print("ERROR: %s" % exc)
+        return 2
     names = {s[4:] for s, _ in config if s.startswith("env:")}
-    wanted = shipped | ci_envs(ci_text, names)
+    wanted = shipped_envs(release_text) | ci_envs(ci_text, names)
     checked, findings = evaluate(config, wanted, os.path.join(ROOT, "boards"))
-    with open(os.path.join(ROOT, TABLE), encoding="utf-8") as fh:
-        csv_text = fh.read()
-    with open(os.path.join(ROOT, "src", "helpers", "esp32", "Offband4MBTable.h"),
-              encoding="utf-8") as fh:
-        findings += compare_layouts(csv_text, fh.read())
+    findings += compare_layouts(csv_text, header_text)
     if findings:
         for f in findings:
             print("FAIL  " + f)

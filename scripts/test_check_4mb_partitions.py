@@ -90,7 +90,21 @@ def main():
     n, f = run([env("c3", flags=["-D OFFBAND_4MB_TABLE_X"])], ["c3"], boards)
     expect(len(f) == 1, "a macro that merely starts with the name doesn't count")
 
+    for spelled in ("4M", "4194304", "4mb", "0x400000"):
+        n, f = run([env("y", board="esp32-s3-devkitc-1", table="default_8MB.csv", flash=spelled)], ["y"], boards)
+        expect(n == 1 and len(f) == 1, "flash size spelled %s is read as 4 MB" % spelled)
+    n, f = run([env("y", board="esp32-s3-devkitc-1", flash="lots")], ["y"], boards)
+    expect(n == 0 and len(f) == 1 and "could not be read" in f[0], "an unreadable flash size fails, not skips")
+    src_only = env("c3", flags=["-w"])
+    src_only[1].append(["build_src_flags", "-D OFFBAND_4MB_TABLE"])
+    n, f = run([src_only], ["c3"], boards)
+    expect(n == 1 and f == [], "the macro in build_src_flags counts")
+
     print("layout: the firmware's copy against the CSV")
+    suffixed = ("app0, app, ota_0, 64K, 1728K,\nspiffs, data, spiffs, 3520K, 512K,\n")
+    hdr_k = ("kOffband4MBAppSize = 0x1B0000; kOffband4MBSpiffsOffset = 0x370000; "
+             "kOffband4MBSpiffsSize = 0x80000;")
+    expect(chk.compare_layouts(suffixed, hdr_k) == [], "K suffixes in the CSV are read")
     csv_text = ("# c\nnvs, data, nvs, 0x9000, 0x5000,\n"
                 "app0, app, ota_0, 0x10000, 0x1B0000,\n"
                 "spiffs, data, spiffs, 0x370000, 0x80000,\n")
