@@ -40,8 +40,9 @@ These three 4 MB boards move to a new flash layout in builds after
 350-contact list, where the old layout held about 107. An over-the-air update
 can't change the layout, so the move takes **one USB flash of the full
 `-merged.bin` image with full erase turned on**. This is the one update where
-step 4's advice to leave full erase off doesn't apply: it clears the old layout's
-data, which the new layout would otherwise find in the wrong place. The flash
+step 4's advice to leave full erase off doesn't apply: the new layout puts the
+node's storage where the old layout kept other data, and full erase makes sure
+that storage starts empty. The flash
 **erases everything the node stores**:
 
 - its identity: other nodes see it as a new node, and anyone who had it as a

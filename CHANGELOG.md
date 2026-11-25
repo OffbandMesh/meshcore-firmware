@@ -24,9 +24,9 @@ Plan-3 web UI, v0.10.x observer multi-broker pipeline, v0.5.0 initial backfill).
 > setting, Bluetooth pairings and saved Wi-Fi. Nothing is backed up. **Write those down
 > before you flash.** See
 > [Choose, install and update firmware](docs/user/guides/install-update.md). A unit
-> updated over the air instead keeps working on its old layout, says so in its log and in
-> `safety table`, and a repeater or room server refuses an image too big for the old
-> layout without writing it.
+> updated over the air instead keeps working on its old layout and says so in its log;
+> a repeater, room server or sensor also says so in the new `safety table` command, and a
+> repeater or room server refuses an image too big for the old layout without writing it.
 
 ### Changed
 

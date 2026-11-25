@@ -12,8 +12,8 @@ reason: >-
   Nothing is backed up. Owners need to know before they flash, and what to write
   down first, so the install-and-update guide gains a section for these boards,
   and step 4's "don't enable full erase" names this one exception. A unit still
-  on its old layout now says so, in its log and on the new `safety table` command
-  (#2297), and a repeater or room server refuses an over-the-air image too big for
-  its old layout; the guide says both. None of the three boards has a guide page
+  on its old layout now says so in its log; a repeater, room server or sensor also
+  says so on the new `safety table` command (#2297). A repeater or room server
+  refuses an over-the-air image too big for its old layout. The guide says both. None of the three boards has a guide page
   of its own, so the warning lives in the install guide the owner reads before
   updating. The wire protocol and the client are unchanged.
