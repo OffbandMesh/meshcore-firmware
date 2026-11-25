@@ -50,6 +50,8 @@ def main():
     t = sm.section_totals(MAP)
     expect(t.get(".flash.text") == 0x300 and t.get(".dram0.bss") == 0x1000, "output sections are read (got %r)" % t)
     expect(sm.loaded_bytes(MAP) == 0x300 + 0x200 + 0x40, "the image sum counts loaded sections, not .bss")
+    nrf = ".text           0x00026000    0x5a000\n.data           0x20006000      0x400\n"
+    expect(sm.loaded_bytes(nrf) is None, "a map with no ESP32 sections is no measurement, not 0")
 
     print("attribution")
     code = sm.attribute(MAP, sm.CODE)
