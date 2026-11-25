@@ -1,0 +1,11 @@
+schema_version: 1
+issue: 2203
+impact: none
+reason: >-
+  Nothing a user sees, sets or flashes changes. This Epic changes how the firmware is
+  built, not what it does: the project keeps its own PlatformIO package store per
+  platform version, PlatformIO is pinned to one version, pio-flash works from Git
+  Bash, five more envs build in CI, and every ESP32 build checks its real image
+  against its slot. Released images are the same code built the same way. The
+  developer-facing notes are in docs/developer-build.md, which is not part of the
+  published manual.
