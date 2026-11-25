@@ -88,6 +88,16 @@ jobs:
       - name: Every ESP32 env compiles with -fno-exceptions
         run: python scripts/check_no_exceptions.py
 
+      # #2288. Companions used to compile src/helpers/esp32/ through a wildcard,
+      # which links the Wi-Fi and TCP/IP stack (ESPNOWRadio.cpp, SerialWifiInterface.cpp)
+      # into BLE and USB companions that never start it: 67-80 KB per image, no error.
+      # Envs name their files; Wi-Fi and ESP-NOW code only where it is used. Both BLOCK.
+      - name: ESP32 helper-file guard self-test
+        run: python scripts/test_check_esp32_helper_files.py
+
+      - name: ESP32 envs name their helpers/esp32 files
+        run: python scripts/check_esp32_helper_files.py
+
       # #649. Distinct question from the check above: that one asks whether an
       # env is internally coherent (can it LINK); this one asks whether the
       # config matches what the env NAME says it is. An env can pass the first
