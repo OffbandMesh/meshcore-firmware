@@ -2,6 +2,19 @@
 
 AsyncElegantOtaClass AsyncElegantOTA;
 
+// Offband #2297: a refused upload's state lives on ITS request
+// (AsyncWebServerRequest::_tempObject, freed with the request), never on this
+// singleton: a second upload in flight must neither clear nor inherit it. Its
+// presence also tells the completion handler to answer 413 and NOT restart.
+// Without it that handler sees no Update error (the update never began) and
+// replies "OK" and reboots.
+namespace {
+struct OtaRefusal {
+    size_t size;
+    size_t slot;
+};
+}
+
 void AsyncElegantOtaClass::setID(const char* id){
     _id = id;
 }
@@ -49,8 +62,22 @@ void AsyncElegantOtaClass::begin(AsyncWebServer *server, const char* username, c
                 return request->requestAuthentication();
             }
         }
-        // the request handler is triggered after the upload has finished... 
+        // the request handler is triggered after the upload has finished...
         // create the response, add header, and send response
+        if (request->_tempObject != nullptr) {
+            // Offband #2297: refused before Update.begin(); nothing was written,
+            // so the current image keeps running. No restart.
+            const OtaRefusal* r = static_cast<const OtaRefusal*>(request->_tempObject);
+            char msg[176];
+            snprintf(msg, sizeof msg,
+                     "Image too big for this unit's app slot (%u > %u bytes): a USB flash is needed. "
+                     "Nothing was written.",
+                     (unsigned)r->size, (unsigned)r->slot);
+            AsyncWebServerResponse *refused = request->beginResponse(413, "text/plain", msg);
+            refused->addHeader("Connection", "close");
+            refused->addHeader("Access-Control-Allow-Origin", "*");
+            return request->send(refused);
+        }
         AsyncWebServerResponse *response = request->beginResponse((Update.hasError())?500:200, "text/plain", (Update.hasError())?"FAIL":"OK");
         response->addHeader("Connection", "close");
         response->addHeader("Access-Control-Allow-Origin", "*");
@@ -64,7 +91,34 @@ void AsyncElegantOtaClass::begin(AsyncWebServer *server, const char* username, c
             }
         }
 
+        if (request->_tempObject != nullptr) {
+            return;   // Offband #2297: this request was refused at its first chunk; swallow the rest unwritten
+        }
+
         if (!index) {
+            #if defined(ESP32)
+            // Offband #2297: refuse an app image that can't fit, BEFORE Update.begin()
+            // erases the target slot. On a repeater that slot holds the previous
+            // image, the one a rollback returns to.
+            if (_refuseOversize != nullptr && filename != "filesystem") {
+                const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
+                const size_t length = request->contentLength();
+                if (next != nullptr && _refuseOversize(length, next->size)) {
+                    OtaRefusal* r = static_cast<OtaRefusal*>(malloc(sizeof(OtaRefusal)));
+                    if (r == nullptr) {
+                        // Can't record the refusal: answer now rather than fall
+                        // through to Update.begin() and erase the slot.
+                        return request->send(413, "text/plain", "Image too big for this unit's app slot: a USB flash is needed. Nothing was written.");
+                    }
+                    r->size = length;
+                    r->slot = next->size;
+                    request->_tempObject = r;
+                    Serial.printf("[ota] refused: request %u bytes, slot %u bytes; nothing written\n",
+                                  (unsigned)length, (unsigned)next->size);
+                    return;
+                }
+            }
+            #endif
             if(!request->hasParam("MD5", true)) {
                 return request->send(400, "text/plain", "MD5 parameter missing");
             }

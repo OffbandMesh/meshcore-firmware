@@ -15,6 +15,7 @@
     #include "WiFi.h"
     #include "AsyncTCP.h"
     #include "Update.h"
+    #include <esp_ota_ops.h>   // Offband #2297: the target slot's size
 #endif
 
 #include "Hash.h"
@@ -33,8 +34,18 @@ class AsyncElegantOtaClass{
             loop(),
             restart();
 
+        // Offband #2297: decides, before anything is written, whether an app
+        // upload is too big for the slot it would go into. Gets the request's
+        // Content-Length and the target slot's size; returns true to refuse.
+        // The project supplies it (src/helpers/PartitionFit.h holds the rule):
+        // this library can't include project headers. Unset, uploads behave as
+        // they always did.
+        typedef bool (*RefuseOversizeFn)(size_t content_length, size_t slot_size);
+        void setRefuseOversize(RefuseOversizeFn fn) { _refuseOversize = fn; }
+
     private:
         AsyncWebServer *_server;
+        RefuseOversizeFn _refuseOversize = nullptr;
 
         String getID();
 

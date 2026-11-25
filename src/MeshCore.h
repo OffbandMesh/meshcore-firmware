@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>   // snprintf in getPartitionTableState's default (#2297)
 #include <math.h>
 
 #define MAX_HASH_SIZE        8
@@ -255,6 +256,13 @@ public:
   // support. Default no-op for boards without partition support.
   virtual void getPartitionsInfo(char* buf, size_t buflen) {
     if (buf && buflen > 0) buf[0] = 0;
+  }
+
+  // #2297: whether the running partition table is the one this build was made
+  // for. Only the 4 MB ESP32 boards set an expectation (offband_4MB.csv); every
+  // other board answers that it has none.
+  virtual void getPartitionTableState(char* buf, size_t buflen) {
+    if (buf && buflen > 0) snprintf(buf, buflen, "table: not available on this board");
   }
 
   // Epic E / E10 #74: dump the N newest safety events, newest-first.

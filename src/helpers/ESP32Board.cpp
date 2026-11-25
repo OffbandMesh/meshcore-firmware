@@ -4,6 +4,9 @@
 #include "diagnostics/CrashLog.h"     // #1270: record the uptime before sleeping
 #include "diagnostics/ResetReason.h"  // #1075: the shared reset-reason table
 #include <esp_ota_ops.h>
+#include <esp_partition.h>
+#include <MeshLog.h>
+#include "esp32/Offband4MBTable.h"   // #2297: the layout a 4 MB build expects
 #include <nvs.h>
 #include <nvs_flash.h>
 #include <target.h>
@@ -22,6 +25,14 @@
 static AsyncWebServer* g_ota_server = nullptr;
 static char g_ota_url[80] = {0};       // last known OTA URL ("http://x.x.x.x/update")
 static bool g_ota_is_sta_mode = false; // true if STA-mode, false if AP-mode (or not running)
+
+// #2297: refuse an app upload that can't fit the slot it would be written to,
+// before anything is written. The rule is partition_fit::otaImageFits(), host-
+// tested in test_partition_fit; only a provable overflow is refused, and the last
+// kMultipartOverhead bytes are left to Update's own size check.
+static bool refuseOversizeOta(size_t content_length, size_t slot_size) {
+  return partition_fit::otaImageFits(content_length, slot_size) == partition_fit::OtaVerdict::TooBig;
+}
 
 bool ESP32Board::startOTAUpdate(const char* id, char reply[]) {
   // Existing AP-mode OTA path. Spins up a softAP "MeshCore-OTA" — used as
@@ -56,6 +67,7 @@ bool ESP32Board::startOTAUpdate(const char* id, char reply[]) {
   });
 
   AsyncElegantOTA.setID(id_buf);
+  AsyncElegantOTA.setRefuseOversize(refuseOversizeOta);   // #2297
   AsyncElegantOTA.begin(g_ota_server);    // Start ElegantOTA (no auth in AP mode — fallback path)
   g_ota_server->begin();
 
@@ -109,6 +121,7 @@ bool ESP32Board::startOTAUpdateOverSTA(const char* id, const char* password, cha
   AsyncElegantOTA.setID(id_buf);
   // HTTP Basic Auth — username fixed "admin", password from caller (admin password).
   // Note: AsyncElegantOTA.begin() supports (server, user, pass) overload.
+  AsyncElegantOTA.setRefuseOversize(refuseOversizeOta);   // #2297
   AsyncElegantOTA.begin(g_ota_server, "admin", password);
   g_ota_server->begin();
 
@@ -755,5 +768,80 @@ void ESP32Board::enterDeepSleep(uint32_t secs) {
 
   // Finally set ESP32 into deepsleep
   esp_deep_sleep_start(); // CPU halts here and never returns!
+}
+
+// ---------------------------------------------------------------------------
+// #2297: a 4 MB unit still on its old partition table says so.
+//
+// An OTA writes only the app, so a unit updated over the air keeps the table it
+// was last USB-flashed with. The new image runs on the old layout: a C6 keeps its
+// 128 KB SPIFFS, a C3 its 1,280 KB app slot. Nothing here repartitions, erases or
+// formats: that wipes the node, and only a USB flash the owner chooses may do it.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+partition_fit::Layout runningLayout() {
+  partition_fit::Layout l = {0, 0, 0};
+  const esp_partition_t* app = esp_ota_get_running_partition();
+  if (app != nullptr) l.app_size = app->size;
+  const esp_partition_t* fs =
+      esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, nullptr);
+  if (fs != nullptr) {
+    l.spiffs_offset = fs->address;
+    l.spiffs_size = fs->size;
+  }
+  return l;
+}
+
+const char* const kOldTableText =
+    "old partition table: a USB flash is needed, which erases this node's identity and contacts";
+
+void logOldTable() {
+  const partition_fit::Layout r = runningLayout();
+  mesh_log_line(MLOG_BOOT, "[partition] %s (app %luK, spiffs %luK at 0x%06lx; build expects offband_4MB)\n",
+                kOldTableText, (unsigned long)(r.app_size / 1024), (unsigned long)(r.spiffs_size / 1024),
+                (unsigned long)r.spiffs_offset);
+}
+
+// A boot line on a native-USB board goes out before the host reopens the port,
+// so the warning is restated at 15 s and every 60 s for as long as the unit runs.
+// Its own small task, not an esp_timer callback: the shared esp_timer task's
+// stack is small, and mesh_log_line formats and fans out to every log sink.
+void oldTableTask(void*) {
+  vTaskDelay(pdMS_TO_TICKS(15 * 1000));
+  for (;;) {
+    logOldTable();
+    vTaskDelay(pdMS_TO_TICKS(60 * 1000));
+  }
+}
+
+}  // namespace
+
+void ESP32Board::armOldTableWatch() {
+  static bool armed = false;
+  if (armed) return;
+  armed = true;
+  if (!partition_fit::isOldTable(runningLayout(), partition_fit::expectedLayout())) return;
+  logOldTable();   // once now, for a console that's already open
+  if (xTaskCreate(oldTableTask, "oldtbl", 4096, nullptr, tskIDLE_PRIORITY + 1, nullptr) != pdPASS) {
+    mesh_log_line(MLOG_BOOT, "[partition] could not start the old-table reminder task\n");
+  }
+}
+
+void ESP32Board::getPartitionTableState(char* buf, size_t buflen) {
+  if (!buf || buflen == 0) return;
+  const partition_fit::Layout expected = partition_fit::expectedLayout();
+  const partition_fit::Layout r = runningLayout();
+  if (expected.app_size == 0) {
+    snprintf(buf, buflen, "table: not a 4 MB build, no table expected (app %luK, spiffs %luK)",
+             (unsigned long)(r.app_size / 1024), (unsigned long)(r.spiffs_size / 1024));
+  } else if (partition_fit::isOldTable(r, expected)) {
+    snprintf(buf, buflen, "%s (app %luK, spiffs %luK)", kOldTableText,
+             (unsigned long)(r.app_size / 1024), (unsigned long)(r.spiffs_size / 1024));
+  } else {
+    snprintf(buf, buflen, "table: offband_4MB, as this build expects (app %luK, spiffs %luK)",
+             (unsigned long)(r.app_size / 1024), (unsigned long)(r.spiffs_size / 1024));
+  }
 }
 #endif

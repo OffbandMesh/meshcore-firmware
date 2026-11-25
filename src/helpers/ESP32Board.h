@@ -102,6 +102,10 @@ public:
   // The Arduino core pre-inits the TWDT (panic on) but only watches the idle
   // task(s); we (re)apply our timeout and subscribe the loop task.
   void startWatchdog(uint32_t timeout_secs) override {
+    // #2297: start the old-partition-table watch here, not in begin(). Every role
+    // calls startWatchdog() from setup() (check_wdt_guard.py enforces it), while
+    // board subclasses don't all call ESP32Board::begin(). It runs once.
+    armOldTableWatch();
     if (_wdt_started) return;
     esp_err_t err;
 #if ESP_IDF_VERSION_MAJOR >= 5
@@ -344,6 +348,11 @@ public:
   // OTA boot-state mysteries that safety state (which only reports the running
   // partition) cannot answer.
   void getPartitionsInfo(char* buf, size_t buflen) override;
+  // #2297: whether the running partition table is the one this build expects.
+  void getPartitionTableState(char* buf, size_t buflen) override;
+  // #2297: on a 4 MB unit still on its old table, start a small task that logs
+  // the warning at 15 s and every 60 s. Once per boot; a no-op otherwise.
+  static void armOldTableWatch();
   // E10 #74: dump N newest events, newest-first. Needed when the reply buffer
   // is too small to show the full oldest-first log AND we care about the
   // newest events (e.g., current boot's state-value detail from E9).
