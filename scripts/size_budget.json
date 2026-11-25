@@ -1,0 +1,5 @@
+{
+  "_comment": "#2277: the real-image size gate (scripts/size_gate.py). A build fails when firmware.bin is above fail_percent of its app slot, and reports above report_percent. fail_percent moves from 100 to 95 once Epic C (#2205) has moved the 4 MB boards to offband_4MB.csv: before that, the Xiao C3 repeater's real image is 97.4% of its slot and would fail every build.",
+  "default": { "fail_percent": 100, "report_percent": 90 },
+  "mcu": {}
+}

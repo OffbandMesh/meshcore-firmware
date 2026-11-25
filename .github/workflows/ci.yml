@@ -162,6 +162,12 @@ jobs:
       - name: pio-flash drops MSYSTEM for its PlatformIO children
         run: python -m pip install --quiet PyYAML && python scripts/test_pio_flash_msystem.py
 
+      # #2277. Every ESP32 build runs scripts/size_gate.py, which fails it when the
+      # real firmware.bin is above its slot budget; PlatformIO's own check leaves out
+      # .eh_frame. This is the gate's decision logic. BLOCKS.
+      - name: Real-image size gate self-test
+        run: python scripts/test_size_gate.py
+
       # #1792 (Epic #1788). Every setting the Offband screens can write must be writable
       # from a client too -- a board with no keyboard, or no screen, is configured from
       # the app, and three such gaps were found by hand, late. The guard checks the
