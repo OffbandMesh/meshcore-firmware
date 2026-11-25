@@ -804,6 +804,16 @@ jobs:
           - Xiao_S3_WIO_companion_radio_usb
           - Xiao_S3_WIO_companion_radio_wifi
           - Xiao_C6_repeater_
+          # #2276 (Feature #2198, owner decision 5, 2026-11-21): all four Xiao C3 envs ship in
+          # every release but none was built here, so a C3 that stopped building would
+          # first show up as a red release. They are also the builds closest to their
+          # flash limit (the repeater's real image is 97.4% of its slot today).
+          # Heltec_v2_repeater adds a classic-ESP32 role beyond the usb companion above.
+          - Xiao_C3_companion_radio_ble
+          - Xiao_C3_companion_radio_usb
+          - Xiao_C3_repeater
+          - Xiao_C3_room_server
+          - Heltec_v2_repeater
           # #854 (epic #879): Heltec RadioCore RC52 (nRF52840 + HT-RA62A/SX1262).
           # (No observer env exists: observer is ESP32/WiFi-only, and nRF52840 has
           # no WiFi -- same reason Heltec_t096 has none above.)
