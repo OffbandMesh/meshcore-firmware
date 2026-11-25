@@ -16,6 +16,36 @@
   #define WIFI_TEL_DBG(fmt, ...) do {} while (0)
 #endif
 
+// #2232: one line per station Wi-Fi event, with its reason and timing, always on
+// (it is printed regardless of WIFI_TELEMETRY_DEBUG). Written from the Arduino
+// WiFi event task; the track is a diagnostic, so a field read one event stale
+// from the loop task is harmless.
+#include "WifiEventLog.h"
+static offband::WifiEventTrack s_wtrack;
+
+static void wifiEventLine(offband::WifiEv ev, uint8_t reason, int rssi) {
+    const uint32_t now = millis();
+    offband::wifiEventApply(s_wtrack, ev, now);
+    char line[200];
+    offband::formatWifiEvent(line, sizeof(line), ev, now, s_wtrack, reason, rssi);
+    Serial.printf("[%lu] %s\n", (unsigned long)now, line);
+}
+
+static void onWifiEvent(arduino_event_id_t id, arduino_event_info_t info) {
+    switch (id) {
+        case ARDUINO_EVENT_WIFI_STA_START:     wifiEventLine(offband::WifiEv::StaStart, 0, 0); break;
+        case ARDUINO_EVENT_WIFI_STA_CONNECTED: wifiEventLine(offband::WifiEv::StaConnected, 0, WiFi.RSSI()); break;
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:    wifiEventLine(offband::WifiEv::GotIp, 0, 0); break;
+        case ARDUINO_EVENT_WIFI_STA_LOST_IP:   wifiEventLine(offband::WifiEv::LostIp, 0, 0); break;
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+            wifiEventLine(offband::WifiEv::Disconnected,
+                          (uint8_t)info.wifi_sta_disconnected.reason, 0);
+            break;
+        case ARDUINO_EVENT_WIFI_STA_STOP:      wifiEventLine(offband::WifiEv::StaStop, 0, 0); break;
+        default: break;
+    }
+}
+
 // Singleton-instance pointer for the PubSubClient C-callback trampoline.
 // Only one WifiMqttTransport exists per device; this is a safe assumption
 // for the embedded use case and avoids the complexity of std::function or
@@ -81,6 +111,11 @@ bool WifiMqttTransport::begin() {
 
     switch (t.action) {
         case offband::LinkAction::StartWifi:
+            // #2232: the caller's return address, decodable with addr2line
+            // against the image's ELF, says which trigger started this join.
+            Serial.printf("[%lu] [WIFI] begin from=%p link_was=%d status=%d\n",
+                          (unsigned long)millis(), __builtin_return_address(0),
+                          (int)_link, (int)WiFi.status());
             WIFI_TEL_DBG("begin: connecting WiFi...");
             startWifi();
             break;
@@ -114,6 +149,12 @@ bool WifiMqttTransport::begin() {
 }
 
 void WifiMqttTransport::end() {
+    // #2232: every teardown is on the record with its caller, so a station leave
+    // can be matched to the end() that caused it, or shown to have none.
+    s_wtrack.end_ms = millis();
+    Serial.printf("[%lu] [WIFI] end from=%p link=%d status=%d mqtt=%d\n",
+                  (unsigned long)s_wtrack.end_ms, __builtin_return_address(0),
+                  (int)_link, (int)WiFi.status(), (int)_mqtt.connected());
     if (_before_teardown != nullptr) _before_teardown();   // #2232: WiFi still up here
     if (_mqtt.connected()) {
         // Let PubSubClient flush any pending writes before we tear down TCP.
@@ -169,6 +210,12 @@ void WifiMqttTransport::loop() {
 // used to sit on the loop task is now ZERO blocking.
 void WifiMqttTransport::startWifi() {
     if (WiFi.status() == WL_CONNECTED) return;
+    static bool events_registered = false;
+    if (!events_registered) {
+        WiFi.onEvent(onWifiEvent);   // #2232: before the first join, so none is missed
+        events_registered = true;
+    }
+    s_wtrack.begin_ms = millis();
     WiFi.mode(WIFI_STA);
     WiFi.begin(_ssid, _password);
 }
