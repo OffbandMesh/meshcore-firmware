@@ -84,8 +84,10 @@ def section_totals(map_text):
 
 
 def loaded_bytes(map_text):
-    """The image size as the sum of the loaded sections."""
-    return sum(v for k, v in section_totals(map_text).items() if k in LOADED)
+    """The image size as the sum of the loaded ESP32 sections, or None when the map
+    has none of them (an nRF52 or other non-ESP32 map): no measurement, never 0."""
+    found = [v for k, v in section_totals(map_text).items() if k in LOADED]
+    return sum(found) if found else None
 
 
 def owner(path):
@@ -184,7 +186,8 @@ def build_one(tree, out, env):
     if os.path.isfile(mp):
         shutil.copyfile(mp, os.path.join(out, env + ".map"))
         if image is None:
-            image, estimated = loaded_bytes(open(mp, encoding="utf-8", errors="replace").read()), True
+            image = loaded_bytes(open(mp, encoding="utf-8", errors="replace").read())
+            estimated = image is not None
     ram = re.findall(r"RAM:\s+\[.*?\]\s+[\d.]+% \(used (\d+) bytes from (\d+) bytes\)", text)
     flash = re.findall(r"Flash:\s+\[.*?\]\s+[\d.]+% \(used (\d+) bytes from (\d+) bytes\)", text)
     errors = []
