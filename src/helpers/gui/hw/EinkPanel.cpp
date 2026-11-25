@@ -23,6 +23,27 @@ constexpr uint8_t kFrontlightChannel = 3;
 constexpr uint32_t kFrontlightHz = 5000;
 constexpr uint8_t kFrontlightBits = 8;
 
+#if defined(PIN_DISPLAY_FRONTLIGHT) && PIN_DISPLAY_FRONTLIGHT >= 0
+// #2285: Arduino 3 attaches LEDC by pin and writes by pin; ledcAttachChannel
+// keeps channel 3.
+void frontlightBegin() {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcAttachChannel(PIN_DISPLAY_FRONTLIGHT, kFrontlightHz, kFrontlightBits, kFrontlightChannel);
+#else
+  ledcSetup(kFrontlightChannel, kFrontlightHz, kFrontlightBits);
+  ledcAttachPin(PIN_DISPLAY_FRONTLIGHT, kFrontlightChannel);
+#endif
+}
+
+void frontlightWrite(uint32_t duty) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcWrite(PIN_DISPLAY_FRONTLIGHT, duty);
+#else
+  ledcWrite(kFrontlightChannel, duty);
+#endif
+}
+#endif
+
 // GxEPD2 gives up on a BUSY wait after this long and says so only on Serial,
 // which the capture never records. A refresh is about a second, so one that
 // reaches this had a wait time out or stall (10 s is GxEPD2's value for
@@ -48,9 +69,8 @@ bool GuiPanel::begin() {
   if (_peripher_power) _peripher_power->claim();
 
 #if defined(PIN_DISPLAY_FRONTLIGHT) && PIN_DISPLAY_FRONTLIGHT >= 0
-  ledcSetup(kFrontlightChannel, kFrontlightHz, kFrontlightBits);
-  ledcAttachPin(PIN_DISPLAY_FRONTLIGHT, kFrontlightChannel);
-  ledcWrite(kFrontlightChannel, 0);
+  frontlightBegin();
+  frontlightWrite(0);
 #endif
 
   const uint32_t t0 = millis();
@@ -78,7 +98,7 @@ void GuiPanel::replayInitTiming() {
 void GuiPanel::setBrightness(uint8_t pct) {
 #if defined(PIN_DISPLAY_FRONTLIGHT) && PIN_DISPLAY_FRONTLIGHT >= 0
   if (pct > 100) pct = 100;
-  ledcWrite(kFrontlightChannel, uint32_t(pct) * 255 / 100);
+  frontlightWrite(uint32_t(pct) * 255 / 100);
 #else
   (void)pct;
 #endif
