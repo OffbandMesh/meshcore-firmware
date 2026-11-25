@@ -98,6 +98,16 @@ jobs:
       - name: ESP32 envs name their helpers/esp32 files
         run: python scripts/check_esp32_helper_files.py
 
+      # #2298. Shipped 4 MB ESP32 boards (Xiao C3, Xiao C6, Photon C6) share one
+      # partition table. The board default overflows the C3's app slot on 55.x, and
+      # min_spiffs.csv's 128 KB SPIFFS silently stops saving contacts past about 107.
+      # A board of unknown flash size fails closed. Both BLOCK.
+      - name: 4 MB partition-table guard self-test
+        run: python scripts/test_check_4mb_partitions.py
+
+      - name: Shipped 4 MB ESP32 envs use offband_4MB.csv
+        run: python scripts/check_4mb_partitions.py
+
       # #649. Distinct question from the check above: that one asks whether an
       # env is internally coherent (can it LINK); this one asks whether the
       # config matches what the env NAME says it is. An env can pass the first
