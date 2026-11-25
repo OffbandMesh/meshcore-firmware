@@ -116,6 +116,7 @@ on next query, persistent window lost.
 | `safety log clear` | Erase safety log | CommonCLI.cpp |
 | `safety partitions` | Show OTA partition state (`run=<slot>`, `app0/app1` states) | CommonCLI.cpp (#72, E8) |
 | `safety state` | Show pending-verify / valid / aborted / etc. | CommonCLI.cpp (#68) |
+| `safety table` | Whether the unit runs on the partition table its firmware was built for. On a Xiao C3, Xiao C6 or Photon C6 still on its old table after an OTA: `old partition table: a USB flash is needed, which erases this node's identity and contacts`. Other boards report that no table is expected. | CommonCLI.cpp (#2297) |
 
 The `safety partitions` output is what `scripts/ota-push.py`'s `verify_channel=serial` parses for pre/post OTA verification.
 
