@@ -234,7 +234,25 @@ void mesh_log_line(uint8_t level, const char* fmt, ...) {
   // #1069: subject to OFFBAND_LOG_MIRROR_LEVEL (see MeshLog.h), not only to the
   // runtime level above.
 #if defined(OFFBAND_LOG_MIRROR_UART) && OFFBAND_LOG_MIRROR_UART
-  if (wire) offband_log_mirror_write(line, total);
+  if (wire) {
+    offband_log_mirror_write(line, total);
+    // #2324: a stall is recorded where it can still be read -- the capture ring
+    // and the USB console -- since the wire that stalled can't carry it. When the
+    // wire comes back it says so itself ("[mirror] resumed ..."). The report is
+    // one nested call deep at most: the flag stops a wire that stalls again
+    // while the report is being written from nesting a second report; the next
+    // line picks up the new count.
+    static uint32_t s_reported_stalls = 0;
+    static bool s_reporting = false;
+    const offband::LogMirrorGate& g = offband_log_mirror_state();
+    if (!s_reporting && g.stalls != s_reported_stalls) {
+      s_reported_stalls = g.stalls;
+      s_reporting = true;
+      mesh_log_line(MLOG_BOOT, "[mirror] side-port wire stalled: stall=%lu status=0x%08lx, dropping until it drains\n",
+                    (unsigned long)g.stalls, (unsigned long)g.first_status);
+      s_reporting = false;
+    }
+  }
 #endif
 }
 
