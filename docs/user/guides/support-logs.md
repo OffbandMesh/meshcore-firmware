@@ -12,9 +12,10 @@ right status is often more useful than a large unreviewed log.
 
 Heltec V3/V4 observer and repeater reporting paths, source-checked against
 `offband-v1.6.0-beta1` and current source. Command availability and USB logging
-depend on image and build options. No new device capture or hardware trial was
-performed here. Use controls present in your installed image; other diagnostic
-surfaces may require a different build.
+depend on image and build options. The `[WIFI]` lines were checked in a serial
+capture from a Heltec V4 Wi-Fi telemetry repeater. The rest of this guide was
+checked against the source only. Use controls present in your installed image;
+other diagnostic surfaces may require a different build.
 
 ## Before you start
 
@@ -78,6 +79,35 @@ disrupt a deployment, agree on the capture method with support first. Do not
 enable `--no-redact`, add secret-returning commands, or wire a raw UART mirror
 as a routine workaround. Some native-USB early boot output is unavailable after
 the port opens.
+
+#### Wi-Fi lines on a Wi-Fi telemetry repeater
+
+A Heltec V4 repeater built with Wi-Fi telemetry prints one `[WIFI]` line for every
+station Wi-Fi event. It does this on every such image, with nothing to turn on.
+Include these lines when a report involves Wi-Fi, dropped telemetry or a restart.
+
+| Line | Meaning |
+|---|---|
+| `[WIFI] begin` / `[WIFI] end` | The repeater started or ended a Wi-Fi session. `from=` is a code address a maintainer can match to the image. |
+| `[WIFI] assoc rssi=-60` | Joined the access point, at that signal strength in dBm. |
+| `[WIFI] got_ip` / `lost_ip` | The network address was assigned or released. |
+| `[WIFI] disconnected reason=8(ASSOC_LEAVE)` | The station left the access point, with the standard reason code and its name. |
+
+Each line also carries elapsed times (`since_begin=`, `since_end=`, `since_assoc=`)
+and two counts: `joins=` sessions so far and `short=` sessions shorter than 2 s.
+
+How to read them:
+
+- **A normal burst-mode cycle** is one `begin`, one `assoc`, one `end` and one
+  `disconnected` every few minutes, with the session lasting several seconds.
+- **The repeater ended the session itself** when `disconnected` shows a small
+  `since_end=`, a few hundred milliseconds or less. That is the expected way a
+  cycle ends.
+- **The access point or the radio link ended it** when `disconnected` arrives
+  with `since_end=none` or a large `since_end=`. Reason codes such as
+  `BEACON_TIMEOUT` or `4WAY_HANDSHAKE_TIMEOUT` are worth reporting.
+- **A climbing `short=` count** means sessions keep ending within 2 s of joining.
+  Report it with the capture.
 
 ### 3. Review and share the smallest useful report
 

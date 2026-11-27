@@ -1,0 +1,14 @@
+schema_version: 1
+issue: 2232
+impact: updated
+guides:
+  - docs/user/guides/support-logs.md
+reason: >-
+  Wi-Fi telemetry repeaters now print a [WIFI] serial line for every station
+  Wi-Fi event: join, address, disconnect with its reason code, and the start and
+  end of each session. The lines are on by default. An owner sending a support
+  capture needs to know what they mean and which ones point to a fault, so the
+  support-logs guide gains a section on reading them. The other changes owners
+  will notice are less Wi-Fi traffic per cycle (one join instead of two) and
+  broker connections made only while Wi-Fi is up. Neither needs any action, and
+  there are no new commands or settings. Nothing changes on the wire.
