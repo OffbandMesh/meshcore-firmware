@@ -65,6 +65,7 @@ extern "C" bool verifyRollbackLater() { return true; }
 #include <string.h>
 #include "../../src/helpers/wifi_telemetry/WifiTelemetry.h"
 #include "../../src/helpers/wifi_telemetry/WifiMqttTransport.h"
+#include "../../src/helpers/wifi_telemetry/TelCoalesce.h"   // #2232 - one Wi-Fi session per cycle
 #include "../../src/helpers/wifi_telemetry/RemoteCommand.h"  // issue #86 - remote OTA trigger
 #include "../../src/helpers/wifi_telemetry/RepeaterMqttPool.h"  // #537 - multi-broker mesh-packet feed (self-guards on OFFBAND_MQTT_POOL)
 
@@ -190,6 +191,25 @@ static uint32_t g_cmd_poll_next_ms = 0;
 // Runtime-tunable burst-mode interval (CLI: `cmd_poll interval N`).
 // Initialized to default; range-checked by setter.
 static uint32_t g_cmd_poll_burst_interval_ms = WIFI_CMD_POLL_BURST_INTERVAL_DEFAULT_MS;
+
+// #2232: one Wi-Fi session per cycle (TelCoalesce.h). A trigger that finishes
+// keeps the link up for the other one when it is running or due within 30 s,
+// instead of tearing down and making the other rejoin seconds later. R2-SAW
+// crashed twice inside that sub-second session.
+static bool tel_hold_link_for_publish() {
+    return offband::telHoldLinkForOther(millis(), true,
+                                        g_pub_phase != TelPhase::Idle,
+                                        g_tel_next_publish_ms);
+}
+static bool tel_hold_link_for_poll() {
+#ifdef CMD_TRANSPORT_HTTP
+    return offband::telHoldLinkForOther(millis(), true,
+                                        g_poll_phase != TelPhase::Idle,
+                                        g_cmd_poll_next_ms);
+#else
+    return false;
+#endif
+}
 
 // LoRa#216: WiFi-on-time instrumentation. Rolling-window 24h average of how
 // much wall-clock time the device had WiFi associated (transport.isReady()
@@ -547,7 +567,8 @@ static void wifi_telemetry_collect_and_publish() {
     // PHASE 4 -- finish. Teardown is skipped in persistent mode (D2 / #56), and
     // gated on no OTHER trigger still needing the link.
     g_pub_phase = TelPhase::Idle;
-    if (g_tel_persistent_until_ms == 0 && !tel_cycle_active()) {
+    if (g_tel_persistent_until_ms == 0 && !tel_cycle_active()
+        && !tel_hold_link_for_poll()) {
         g_tel_transport->end();
         g_remote_cmd_subscribed = false;
     }
@@ -589,7 +610,21 @@ static void wifi_telemetry_loop() {
     }
 
     // Honor the admin kill-switch — skip everything when telemetry is disabled.
-    if (g_tel_disabled) return;
+    if (g_tel_disabled) {
+        // #2232: a burst link held open for the other trigger must not outlive
+        // the kill-switch -- nothing below would ever tear it down.
+        // Also covers a cycle disabled mid-connect, which left the station
+        // trying to join indefinitely. The cycles restart cleanly on re-enable.
+        if (g_tel_transport && g_tel_persistent_until_ms == 0
+            && g_tel_transport->linkState() != offband::LinkState::Idle) {
+            g_tel_transport->end();
+            g_remote_cmd_subscribed = false;
+            g_pub_phase = TelPhase::Idle;
+            g_poll_phase = TelPhase::Idle;
+            g_pub_second_sample_at = 0;
+        }
+        return;
+    }
 
     // D6 / issue #60: OTA active-upload extension.
     // Refresh the persistent-mode deadline whenever Update.progress() advances.
@@ -720,7 +755,7 @@ static void wifi_telemetry_loop() {
         // persistent mode — a dispatched cmd may have just promoted us. Use
         // CURRENT value of g_tel_persistent_until_ms, not the pre-poll snapshot.
         if (!was_ready_before && g_tel_persistent_until_ms == 0
-            && !tel_cycle_active()) {
+            && !tel_cycle_active() && !tel_hold_link_for_publish()) {
             g_tel_transport->end();
             // Issue #86: cmd-topic subscription is gone with the transport;
             // mark for re-subscribe on next connect.
@@ -753,8 +788,11 @@ static void wifi_telemetry_loop() {
     // So teardown also happens here, once both cycles are genuinely idle and
     // nothing is holding the link open. Idempotent: end() early-returns when
     // there is nothing connected.
+    // #2232: and not while the other trigger is due within the coalesce window,
+    // or the sweep would undo the hold on the very next pass.
     if (g_tel_transport != nullptr && !tel_cycle_active()
-        && g_tel_persistent_until_ms == 0 && g_tel_transport->isReady()) {
+        && g_tel_persistent_until_ms == 0 && g_tel_transport->isReady()
+        && !tel_hold_link_for_publish() && !tel_hold_link_for_poll()) {
         g_tel_transport->end();
         g_remote_cmd_subscribed = false;
     }
