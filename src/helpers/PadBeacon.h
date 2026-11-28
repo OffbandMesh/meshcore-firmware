@@ -67,7 +67,17 @@ inline void padBeaconTick(uint32_t now_ms) {
 
   if ((int32_t)(now_ms - next_ms) < 0) return;
   next_ms = now_ms + OFFBAND_PAD_BEACON_MS;
-  if (!offband_log_mirror_ok()) return;   // the mirror gave up after repeated timeouts
+  // #2324: while the mirror is down, probe it with one CR on its own pad before
+  // the scheduler is held, and skip the round if it is still down. This used to
+  // be a bare early return, and since this TU's gate recovers only through its
+  // own writes, that kept the pad beacon off for the rest of the boot. Now a
+  // probe goes out every OFFBAND_LOG_MIRROR_PROBE_EVERY rounds (~64 s) and costs
+  // at most one bounded byte wait, outside vTaskSuspendAll(). The skipped rounds
+  // cost nothing. A CR on the mirror pad is harmless to a line-based capture.
+  if (!offband_log_mirror_ok()) {
+    offband_log_mirror_putc('\r');
+    if (!offband_log_mirror_ok()) return;
+  }
 
   NRF_UARTE_Type* u = OFFBAND_LOG_MIRROR_NRF_DEV;
   offband_log_mirror_nrf_init();          // configured once, on the mirror's own pin

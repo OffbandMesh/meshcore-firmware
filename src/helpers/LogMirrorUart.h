@@ -102,27 +102,74 @@
 // bound: the estimated worst case is tens of minutes of stalled boot. That is
 // the failure class #741/#756 exist to prevent.
 //
-// Count CONSECUTIVE timeouts and give up after a few. The counter resets to zero
-// on any successful byte, which is the important half: a transient fault costs a
+// Count CONSECUTIVE timeouts and give up after a few. A transient fault costs a
 // few bytes, not the channel. An earlier attempt latched the transport dead for
 // the whole boot and was rejected for exactly that -- it turned a momentary
 // problem into permanent loss of the wire you depend on when things go wrong.
 //
 // Worst case becomes threshold x guard rather than 4080 x guard.
+//
+// #2324: and it latched anyway. putc() returned early once the wire was down,
+// so no byte was attempted again and the "reset on a good byte" could never
+// happen: tdeck-pro-1 lost its side-port log at a USB replug and never got it
+// back. The decisions now live in LogMirrorGate.h (pure, host-tested): while
+// down, a byte is a cheap PROBE every OFFBAND_LOG_MIRROR_PROBE_EVERY bytes and
+// skipped otherwise, a probe that finds the wire ready brings it back, and the
+// wire then carries a "[mirror] resumed" notice with what was lost.
 #ifndef OFFBAND_LOG_MIRROR_TIMEOUT_GIVEUP
   #define OFFBAND_LOG_MIRROR_TIMEOUT_GIVEUP 5
 #endif
-static uint8_t offband_log_mirror_timeouts = 0;
-
-// True while the transport is still considered usable. Callers that need to know
-// whether their bytes reached a wire -- rather than merely being handed over --
-// must ask, because putc() cannot report per-byte success.
-static inline bool offband_log_mirror_ok(void) {
-  return offband_log_mirror_timeouts < OFFBAND_LOG_MIRROR_TIMEOUT_GIVEUP;
-}
 
 #include <stdint.h>
 #include <stddef.h>
+#include "LogMirrorGate.h"
+
+// One gate per translation unit, as the #887 counter was: each TU that writes
+// the wire (MeshLog, CrashLog, the beacons in main) keeps its own. Zero is the
+// correct initial state, so this is usable from a constructor(101).
+static offband::LogMirrorGate offband_log_mirror_gate = {};
+
+// True while the transport is considered usable (fewer than GIVEUP timeouts in
+// a row). Callers that need to know whether their bytes reached a wire --
+// rather than merely being handed over -- must ask, because putc() cannot
+// report per-byte success. Being down is no longer permanent: the next writes
+// probe the wire and bring it back.
+static inline bool offband_log_mirror_ok(void) {
+  return !offband::mirrorDown(offband_log_mirror_gate, OFFBAND_LOG_MIRROR_TIMEOUT_GIVEUP);
+}
+
+// This TU's gate, read-only, for a caller that reports stalls (MeshLog).
+static inline const offband::LogMirrorGate& offband_log_mirror_state(void) {
+  return offband_log_mirror_gate;
+}
+
+// #2324: out of line, one copy per translation unit. Inlined, putc and the
+// notice path were copied into every caller's loop, which overflowed the QCC
+// badge diag image's flash. `inline` stays so a TU that never calls them gets
+// no unused-function warning; the attribute is what keeps them out of line.
+#define OFFBAND_LOG_MIRROR_NOINLINE inline __attribute__((noinline))
+
+static OFFBAND_LOG_MIRROR_NOINLINE void offband_log_mirror_putc(char c);
+
+// After a byte goes out: if it ended a loss, put the notice on the wire. The
+// notice's own bytes go through putc(), so a wire that drops and recovers again
+// mid-notice would start a notice inside the notice, and so on as long as it
+// keeps flapping. The busy flag stops that at one level: a loss during the
+// notice stays pending and is reported after the next byte instead.
+// (Like putc() itself, this is not reentrant across tasks; see #977 below.
+// Two tasks racing here can cost a duplicate notice, a late one, or a dropped
+// count that is off by the bytes lost during the race. Never a wait: no lock is
+// taken, on purpose, because CrashLog writes this wire from fault paths.)
+static OFFBAND_LOG_MIRROR_NOINLINE void offband_log_mirror_after_sent(void) {
+  static bool busy = false;
+  if (busy || !offband_log_mirror_gate.resume_pending) return;
+  busy = true;
+  const offband::MirrorResume r = offband::mirrorTakeResume(offband_log_mirror_gate);
+  char note[80];
+  const size_t n = offband::mirrorFormatResume(note, sizeof(note), r);
+  for (size_t i = 0; i < n; i++) offband_log_mirror_putc(note[i]);
+  busy = false;
+}
 
 // Baud. Applies to every back end; each maps it to whatever its hardware wants.
 #ifndef OFFBAND_LOG_MIRROR_BAUD
@@ -132,9 +179,10 @@ static inline bool offband_log_mirror_ok(void) {
 // ===========================================================================
 // ESP32 back end -- raw UART TX FIFO register writes.
 //
-// Behaviour here is deliberately UNCHANGED from the #740/#763 implementation.
-// RC32's diag envs are the regression check and their output must stay
-// byte-identical.
+// On a healthy wire, behaviour here is deliberately UNCHANGED from the
+// #740/#763 implementation. RC32's diag envs are the regression check and their
+// output must stay byte-identical. #2324 changed only what happens after a
+// stall: probe, resume, and the notice.
 // ===========================================================================
 #if defined(ESP32)
 
@@ -179,22 +227,36 @@ static inline bool offband_log_mirror_ok(void) {
 // then, and fix it by making the wait short enough to sit in a critical section
 // (or by queueing from ISR context) -- not by wrapping the loop as it stands.
 // ---------------------------------------------------------------------------
-static inline void offband_log_mirror_putc(char c) {
-  if (!offband_log_mirror_ok()) return;         // #887: too many in a row
+// #2324: while down, every byte is a probe. A probe here is one status read
+// with no wait, so it costs nothing measurable and the wire comes back on the
+// first byte after the FIFO drains.
+#ifndef OFFBAND_LOG_MIRROR_PROBE_EVERY
+  #define OFFBAND_LOG_MIRROR_PROBE_EVERY 1
+#endif
 
-  uint32_t guard = 2000000;   // BOUNDED -- see "THE ONE SAFETY RULE" above
+static OFFBAND_LOG_MIRROR_NOINLINE void offband_log_mirror_putc(char c) {
+  const offband::MirrorStep step = offband::mirrorNextStep(
+      offband_log_mirror_gate, OFFBAND_LOG_MIRROR_TIMEOUT_GIVEUP, OFFBAND_LOG_MIRROR_PROBE_EVERY);
+  if (step == offband::MirrorStep::Skip) return;
+
+  // Send: the full bounded wait, as before (BOUNDED -- see "THE ONE SAFETY
+  // RULE" above). Probe: the same check, once.
+  uint32_t guard = (step == offband::MirrorStep::Send) ? 2000000 : 1;
+  uint32_t status = 0;
   bool drained = false;
   while (guard--) {
-    uint32_t cnt = (READ_PERI_REG(UART_STATUS_REG(OFFBAND_LOG_MIRROR_ESP32_UART))
-                    >> UART_TXFIFO_CNT_S) & UART_TXFIFO_CNT_V;
+    status = READ_PERI_REG(UART_STATUS_REG(OFFBAND_LOG_MIRROR_ESP32_UART));
+    const uint32_t cnt = (status >> UART_TXFIFO_CNT_S) & UART_TXFIFO_CNT_V;
     if (cnt <= OFFBAND_LOG_MIRROR_FIFO_HIGHWATER) { drained = true; break; }
   }
   if (!drained) {                               // FIFO never drained; nothing is
-    offband_log_mirror_timeouts++;              // reading this wire
+    offband::mirrorOnTimeout(offband_log_mirror_gate,   // reading this wire
+                             OFFBAND_LOG_MIRROR_TIMEOUT_GIVEUP, status);
     return;                                     // (pre-#887 this wrote anyway)
   }
-  offband_log_mirror_timeouts = 0;              // a good byte clears the count
+  offband::mirrorOnSent(offband_log_mirror_gate);
   WRITE_PERI_REG(UART_FIFO_REG(OFFBAND_LOG_MIRROR_ESP32_UART), (uint32_t)(uint8_t)c);
+  offband_log_mirror_after_sent();              // #2324: report a loss, if this ended one
 }
 
 // Block until TX has drained. Serial.begin() software-resets the UART
@@ -359,8 +421,18 @@ static inline void offband_log_mirror_nrf_init(void) {
 // then, and fix it by making the wait short enough to sit in a critical section
 // (or by queueing from ISR context) -- not by wrapping the loop as it stands.
 // ---------------------------------------------------------------------------
-static inline void offband_log_mirror_putc(char c) {
-  if (!offband_log_mirror_ok()) return;         // #887: too many in a row
+// #2324: while down, a probe here is a real single-byte transfer with its
+// bounded wait (up to ~8 ms), so it runs once every 64 bytes rather than on
+// every byte. A 4080-byte crash ring sent to a dead wire then costs about 64
+// probes, not 4080 waits.
+#ifndef OFFBAND_LOG_MIRROR_PROBE_EVERY
+  #define OFFBAND_LOG_MIRROR_PROBE_EVERY 64
+#endif
+
+static OFFBAND_LOG_MIRROR_NOINLINE void offband_log_mirror_putc(char c) {
+  const offband::MirrorStep step = offband::mirrorNextStep(
+      offband_log_mirror_gate, OFFBAND_LOG_MIRROR_TIMEOUT_GIVEUP, OFFBAND_LOG_MIRROR_PROBE_EVERY);
+  if (step == offband::MirrorStep::Skip) return;
   offband_log_mirror_nrf_init();
 
   // EasyDMA source must be in RAM. `static volatile` puts it there and avoids
@@ -380,11 +452,14 @@ static inline void offband_log_mirror_putc(char c) {
   uint32_t guard = OFFBAND_LOG_MIRROR_BYTE_GUARD;   // #944 2.1 -- one byte, not 125 ms
   while (guard-- && u->EVENTS_ENDTX == 0) { }
   if (u->EVENTS_ENDTX == 0) {                   // #887: never completed
-    offband_log_mirror_timeouts++;
+    // The status word kept for the notice is ENABLE (8 = on): whether the
+    // peripheral was even enabled when the loss began.
+    offband::mirrorOnTimeout(offband_log_mirror_gate, OFFBAND_LOG_MIRROR_TIMEOUT_GIVEUP, u->ENABLE);
     return;
   }
-  offband_log_mirror_timeouts = 0;              // a good byte clears the count
+  offband::mirrorOnSent(offband_log_mirror_gate);
   u->EVENTS_ENDTX = 0;
+  offband_log_mirror_after_sent();              // #2324: report a loss, if this ended one
 
   // Deliberately NO TASKS_STOPTX here. STOPTX completes asynchronously and is
   // signalled by EVENTS_TXSTOPPED; issuing STARTTX for the next byte while a
