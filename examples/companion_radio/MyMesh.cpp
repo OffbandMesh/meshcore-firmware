@@ -23,6 +23,7 @@
 #include <helpers/AckTable.h>            // #999: what reusing a pending ACK slot costs
 #include <helpers/OffbandInfoAdvert.h>   // #1994: the 0xC5 0x1C capability advert
 #include <helpers/IndicatorCaps.h>      // #2068: what this radio may claim about its indicators
+#include <helpers/OffbandInfoPlan.h>    // #2214: which advert records, in which order
 #include <helpers/ChannelSlotGuard.h>   // #1865: no channel written over another
 #include <helpers/ChannelKeys.h>        // #1896: Public's key, for the slot guard
 #include <helpers/BlePin.h>             // #2222: a PIN set while running is used at once
@@ -3364,9 +3365,12 @@ void MyMesh::handleCmdFrame(size_t len) {
     // single exception is ACK_CAPACITY, which has no sub-code of its own.
     //
     // Contract: docs/offband_info_frame_contract.md. Registry: OFFBAND_INFO_TAG_* in
-    // OffbandConfigProtocol.h. Tag order here MUST ascend -- InfoAdvert enforces it,
-    // because the resume cursor names a tag and an unordered advert would make the
-    // cursor silently drop records.
+    // OffbandConfigProtocol.h. Tag order MUST ascend -- InfoAdvert enforces it, because the
+    // resume cursor names a tag and an unordered advert would make the cursor silently drop
+    // records. Since #2214 the order is not maintained here at all: it is the statement
+    // order of buildInfoPlan() in helpers/OffbandInfoPlan.h, which the host suite asserts
+    // ascending over every combination of inputs. A NEW TAG GOES IN THERE, at its numeric
+    // position. Appending one to the end of a list is the mistake that shipped in 1.7.1.
     if (sub == offband::OFFBAND_UI_INFO_GET) {
       // The writer mirrors the CONTINUE tag rather than including the companion-only
       // protocol header; tie the two so a drift breaks the build, not the behaviour.
@@ -3403,54 +3407,71 @@ void MyMesh::handleCmdFrame(size_t len) {
         return;
       }
 
-      offband::InfoAdvert advert(&out_frame[2], cap);
+      // #2214: the tag list and its ORDER live in helpers/OffbandInfoPlan.h, and the five
+      // mirrored tag values are tied to this registry so a drift breaks the build. They
+      // used to be five `if` blocks right here, appended to as tags were claimed, and that
+      // is how 1.7.1 went out emitting 0x01, 0x02, 0x04, 0x05, 0x03: add() refuses a
+      // non-ascending tag and returns false, this call site discarded the return, and every
+      // board with a display or a controllable LED sent an advert with ACK_CAPACITY missing
+      // and no CONTINUE record saying so.
+      static_assert(offband::kPlanTagChanNotify == offband::OFFBAND_INFO_TAG_CHAN_NOTIFY &&
+                    offband::kPlanTagDisplayRotation == offband::OFFBAND_INFO_TAG_DISPLAY_ROTATION &&
+                    offband::kPlanTagAckCapacity == offband::OFFBAND_INFO_TAG_ACK_CAPACITY &&
+                    offband::kPlanTagDisplayControl == offband::OFFBAND_INFO_TAG_DISPLAY_CONTROL &&
+                    offband::kPlanTagLedControl == offband::OFFBAND_INFO_TAG_LED_CONTROL,
+                    "advert plan tags drifted from the protocol registry");
 
-      // ---- tags, ascending. `cursor` skips what a previous round already delivered.
+      offband::InfoPlanInputs inputs;
 #ifdef PIN_BUZZER
-      // #606: per-channel notification modes. Gated on the buzzer, like the device-wide
-      // scope -- a board that cannot sound must not offer the control.
-      //
-      // PIN_BUZZER is a build flag, not a part that is fitted. See the longer note at
-      // the caps2 CHAN_NOTIFY bit: an unpopulated buzzer on a QCC pyramid badge is
-      // meant to be soldered on, so this tag stays permissive on purpose.
-      if (offband::OFFBAND_INFO_TAG_CHAN_NOTIFY >= cursor) {
-        advert.addFlag(offband::OFFBAND_INFO_TAG_CHAN_NOTIFY);
-      }
+      // #606: per-channel notification modes, gated on the buzzer like the device-wide
+      // scope -- a board that cannot sound must not offer the control. PIN_BUZZER is a
+      // build flag, not a part that is fitted; the permissiveness is deliberate and the
+      // reason is at the caps2 CHAN_NOTIFY bit.
+      inputs.buzzer_fitted = true;
 #endif
-      // #1990: display rotation advertises itself here; the value is read with 0x1A.
-      // Emitted only where the UI can actually rotate, so a fixed-orientation display
-      // omits the tag rather than claiming a capability it will refuse.
-      if (offband::OFFBAND_INFO_TAG_DISPLAY_ROTATION >= cursor && _ui != NULL &&
-          _ui->displaySupportsRotation()) {
-        advert.addFlag(offband::OFFBAND_INFO_TAG_DISPLAY_ROTATION);
-      }
-      // #2068: display control and LED control, as SEPARATE capabilities (#2067 claimed
-      // the tags). One caps2 bit answered both, so a board with a working screen and an
+      // #1990: emitted only where the UI can actually rotate, so a fixed-orientation
+      // display omits the tag rather than claiming a capability it will refuse.
+      inputs.supports_rotation = (_ui != NULL && _ui->displaySupportsRotation());
+      // #2068: display control and LED control are SEPARATE capabilities (#2067 claimed the
+      // tags). One caps2 bit answered both, so a board with a working screen and an
       // uncontrollable LED advertised LED control and then refused the write -- owner-seen
       // on a T096, a T1000-E and a QCC badge (#2065).
       //
       // `_has_display` rather than `#ifdef DISPLAY_CLASS`: NullDisplayDriver satisfies the
       // macro on 15 variants while reporting no screen. `canControlLed()` is the board's
-      // own answer and is false by default on MeshCore's base class, which is why only the
-      // two Heltec V4 classes advertise LED control today -- #2073 is what changes that.
-      if (offband::OFFBAND_INFO_TAG_DISPLAY_CONTROL >= cursor &&
-          offband::advertisesDisplayControl(_has_display)) {
-        advert.addFlag(offband::OFFBAND_INFO_TAG_DISPLAY_CONTROL);
-      }
-      if (offband::OFFBAND_INFO_TAG_LED_CONTROL >= cursor &&
-          offband::advertisesLedControl(board.canControlLed())) {
-        advert.addFlag(offband::OFFBAND_INFO_TAG_LED_CONTROL);
-      }
-      // #1001: outstanding-ACK capacity. Carries its byte by the contract's one exception
-      // -- one byte, fixed for the build, and no sub-code of its own to read it from.
-      // This replaces the byte feat/994-delivery-observability put at offset 87, and
-      // needs no FIRMWARE_VER_CODE bump: the tag's presence is the version.
-      if (offband::OFFBAND_INFO_TAG_ACK_CAPACITY >= cursor) {
-        advert.addByte(offband::OFFBAND_INFO_TAG_ACK_CAPACITY, (uint8_t)EXPECTED_ACK_TABLE_SIZE);
+      // own answer, and #2075 is what widened it past the two Heltec V4 classes.
+      inputs.has_display = _has_display;
+      inputs.can_control_led = board.canControlLed();
+      // #1001: outstanding-ACK capacity, carrying its byte by the contract's one exception
+      // -- one byte, fixed for the build, no sub-code of its own to read it from. This
+      // replaces the byte feat/994-delivery-observability put at offset 87, and needs no
+      // FIRMWARE_VER_CODE bump: the tag's presence is the version.
+      inputs.ack_capacity = (uint8_t)EXPECTED_ACK_TABLE_SIZE;
+
+      offband::InfoAdvert advert(&out_frame[2], cap);
+      offband::InfoRecord plan[offband::kInfoPlanMax];
+      const size_t planned = offband::buildInfoPlan(inputs, plan);
+      const offband::InfoPlanOutcome outcome =
+          offband::writeInfoPlan(advert, plan, planned, cursor);
+
+      if (outcome == offband::InfoPlanOutcome::Misordered) {
+        // add() refused a record while there was still room: a non-ascending tag, a zero
+        // tag, or a null value. All plan bugs, none of them anything the client did, and
+        // all of them excluded exhaustively by test_offband_info_plan over every
+        // combination of inputs -- so this is unreachable rather than merely unlikely.
+        //
+        // It is still answered, because the alternative is what shipped: an advert that is
+        // quietly one record short with nothing announcing it. Refusing is wrong in a way
+        // the client can see. Same reason code as the capacity cases below, and not
+        // MALFORMED for the same reason -- reason 5 to a zero-payload request is the
+        // contract's "this device predates the advert", and a client told that stops asking
+        // and falls back to the old absolute offsets permanently.
+        ui_err(offband::OFFBAND_UI_ERR_UNSUPPORTED_ACTION);
+        return;
       }
 
       const size_t area = advert.finish();
-      if (advert.stalled()) {
+      if (outcome == offband::InfoPlanOutcome::Stalled) {
         // Nothing fit at this capacity, so there is no cursor worth sending: a CONTINUE
         // here would name a tag the device refuses again at the same capacity, and a
         // client following the contract would re-request from it forever. Raising the
