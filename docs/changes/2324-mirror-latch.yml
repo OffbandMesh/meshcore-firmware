@@ -1,0 +1,17 @@
+schema_version: 1
+issue: 2324
+impact: none
+reason: >-
+  Bench diagnostics only. The side-port log mirror (OFFBAND_LOG_MIRROR_UART)
+  and the pad beacon are compiled into _diag sections only, and the
+  support-logs guide already tells owners not to wire a raw UART mirror as a
+  routine workaround. The fix changes what happens after the mirror's wire
+  stalls. Before it, five byte timeouts in a row turned the mirror off for the
+  rest of the boot. Now the wire is probed, the mirror resumes when the wire
+  drains, and the wire carries a "[mirror] resumed" line with the dropped-byte
+  count. A new "[mirror] side-port wire stalled" line goes to the capture ring
+  and the USB console once per stall. That line describes itself and only
+  appears when the bench wire stalls. No command, setting, client field or
+  over-the-air behavior changes, and nothing in a user guide describes the
+  mirror's stall handling, so no guide changes. The audience is whoever reads
+  a bench capture, and the PR body covers it.
